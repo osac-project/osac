@@ -27,8 +27,8 @@ rules:
   - get
   - list
   - watch
-{{- if .Values.ignition.trustIngressCA }}
 # Only read the OpenShift-managed ingress trust bundle (no Secret access).
+# ClusterOrder management Route probes use it independently of ignition trust.
 - apiGroups:
   - ""
   resources:
@@ -37,7 +37,6 @@ rules:
   - default-ingress-cert
   verbs:
   - get
-{{- end }}
 - apiGroups:
   - agent-install.openshift.io
   resources:
@@ -54,6 +53,8 @@ rules:
   - services
   verbs:
   - get
+  - list
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -126,6 +127,13 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - route.openshift.io
+  resources:
+  - routes
+  verbs:
+  - get
+  - list
 - apiGroups:
   - kubevirt.io
   resources:

@@ -449,3 +449,127 @@
         expect: final
         search: "is in another VPC than"
         writes: []
+      # ------------------------------------------------------ Cluster ingress
+      - label: path-ingress-reserve-existing-session
+        task: reserve_cluster_ingress_ip
+        job: nf_ingress_job
+        steps: "{{ nf_seed_vpc }}"
+        playbook: tests/integration/targets/netris_fabric/files/session_cookie.yml
+        no_auth: true
+        result: {cluster_ingress: {address: 10.20.1.32}}
+        writes: [POST /api/v2/ipam/subnet]
+      - label: path-ingress-reserve-no-vpc
+        task: reserve_cluster_ingress_ip
+        job: nf_ingress_job
+        expect: retryable
+        search: "Netris VPC .* does not exist yet; OSAC retries the ClusterOrder ingress reservation"
+        writes: []
+      - label: path-ingress-reserve-skips-gateway
+        task: reserve_cluster_ingress_ip
+        job: nf_ingress_job
+        steps: "{{ nf_seed_vpc }}"
+        merge:
+          ipam:
+            gateway_ipv4: "{{ nf_ipam.gateway_ipv4 }}"
+            lb_vip_ipv4_cidrs: [10.20.1.0/28]
+        result: {cluster_ingress: {address: 10.20.1.2}}
+        writes: [POST /api/v2/ipam/subnet]
+      - label: path-ingress-release-existing-session
+        task: release_cluster_ingress_ip
+        job: nf_ingress_job
+        playbook: tests/integration/targets/netris_fabric/files/session_cookie.yml
+        no_auth: true
+        steps: >-
+          {{ nf_seed_vpc + [{'path': 'seed', 'body': {'collection': 'ipam_subnets', 'objects': [
+               {'id': 701, 'name': 'osac-ci-' ~ nf_ids.cluster_order, 'prefix': '10.20.1.32/32',
+                'purpose': 'nat', 'sites': [{'id': 1}], 'tenant': {'id': 2}, 'vpc': {'id': 101}}]}}] }}
+        result: {}
+        writes: [DELETE /api/v2/ipam/subnet]
+      - label: path-ingress-release-no-vpc
+        task: release_cluster_ingress_ip
+        job: nf_ingress_job
+        playbook: tests/integration/targets/netris_fabric/files/session_cookie.yml
+        no_auth: true
+        steps: >-
+          {{ [{'path': 'seed', 'body': {'collection': 'ipam_subnets', 'objects': [
+               {'id': 701, 'name': 'osac-ci-' ~ nf_ids.cluster_order, 'prefix': '10.20.1.32/32',
+                'purpose': 'nat', 'sites': [{'id': 1}], 'tenant': {'id': 2}, 'vpc': {'id': 101}},
+               {'id': 702, 'name': 'osac-ci-other', 'prefix': '10.20.1.33/32',
+                'purpose': 'nat', 'sites': [{'id': 1}], 'tenant': {'id': 2}, 'vpc': {'id': 101}}]}}] }}
+        result: {}
+        writes: [DELETE /api/v2/ipam/subnet]
+        ipam_left: [osac-ci-other]
+      - label: stop-ingress-no-free-vip
+        task: reserve_cluster_ingress_ip
+        job: nf_ingress_job
+        steps: "{{ nf_seed_vpc }}"
+        merge: {ipam: {gateway_ipv4: "{{ nf_ipam.gateway_ipv4 }}", lb_vip_ipv4_cidrs: []}}
+        expect: final
+        search: "has no free address in ipam.lb_vip_ipv4_cidrs"
+        writes: []
+      - label: stop-ingress-foreign-reservation
+        task: reserve_cluster_ingress_ip
+        job: nf_ingress_job
+        steps: >-
+          {{ nf_seed_vpc + [{'path': 'seed', 'body': {'collection': 'ipam_subnets', 'objects': [
+               {'id': 701, 'name': 'osac-ci-' ~ nf_ids.cluster_order, 'prefix': '10.20.1.32/32',
+                'purpose': 'nat', 'sites': [{'id': 9}], 'tenant': {'id': 2}}]}}] }}
+        expect: final
+        search: "foreign or ambiguous owner"
+        writes: []
+      - label: stop-ingress-invalid-range
+        task: reserve_cluster_ingress_ip
+        job: nf_ingress_job
+        steps: "{{ nf_seed_vpc }}"
+        merge:
+          ipam:
+            gateway_ipv4: "{{ nf_ipam.gateway_ipv4 }}"
+            lb_vip_ipv4_cidrs: [10.21.0.0/28]
+        expect: final
+        search: "rejected the ClusterOrder ingress input or recorded Subnet layout"
+        writes: []
+      - label: stop-ingress-reserve-provider-4xx
+        task: reserve_cluster_ingress_ip
+        job: nf_ingress_job
+        steps: >-
+          {{ nf_seed_vpc + [{'path': 'faults', 'body': {'key': 'POST /api/v2/ipam/subnet', 'status': 400,
+               'body': {'message': 'invalid request', 'internal': 'LEAKED-BODY'}, 'sticky': true}}] }}
+        expect: final
+        search: "Netris rejected the ClusterOrder ingress reservation request. OSAC does not retry"
+        writes: [POST /api/v2/ipam/subnet]
+      - label: retry-ingress-reserve-provider-timeout
+        task: reserve_cluster_ingress_ip
+        job: nf_ingress_job
+        steps: >-
+          {{ nf_seed_vpc + [{'path': 'faults', 'body': {'key': 'POST /api/v2/ipam/subnet', 'status': 408,
+               'body': {'message': 'request timeout', 'internal': 'LEAKED-BODY'}, 'sticky': true}}] }}
+        expect: retryable
+        search: 'Stop on any other Netris ingress failure'
+        writes: [POST /api/v2/ipam/subnet]
+      - label: retry-ingress-reserve-provider-rate-limit
+        task: reserve_cluster_ingress_ip
+        job: nf_ingress_job
+        steps: >-
+          {{ nf_seed_vpc + [{'path': 'faults', 'body': {'key': 'POST /api/v2/ipam/subnet', 'status': 429,
+               'body': {'message': 'rate limited', 'internal': 'LEAKED-BODY'}, 'sticky': true}}] }}
+        expect: retryable
+        search: 'Stop on any other Netris ingress failure'
+        writes: [POST /api/v2/ipam/subnet]
+      - label: stop-ingress-reserve-provider-error
+        task: reserve_cluster_ingress_ip
+        job: nf_ingress_job
+        steps: >-
+          {{ nf_seed_vpc + [{'path': 'faults', 'body': {'key': 'GET /api/v2/ipam/subnets', 'status': 500,
+               'body': {'message': 'boom', 'internal': 'LEAKED-BODY'}, 'sticky': true}}] }}
+        expect: retryable
+        search: 'Stop on any other Netris ingress failure'
+        writes: []
+      - label: stop-ingress-release-provider-error
+        task: release_cluster_ingress_ip
+        job: nf_ingress_job
+        steps: >-
+          {{ nf_seed_vpc + [{'path': 'faults', 'body': {'key': 'GET /api/v2/ipam/subnets', 'status': 500,
+               'body': {'message': 'boom', 'internal': 'LEAKED-BODY'}, 'sticky': true}}] }}
+        expect: retryable
+        search: 'Stop on any other Netris ingress failure'
+        writes: []

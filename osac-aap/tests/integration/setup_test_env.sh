@@ -112,6 +112,29 @@ kubectl create namespace computeinstance-test-vm-gpu-work || true
 kubectl create namespace test-subnet || true
 kubectl create namespace openshift-cnv || true
 
+# ClusterOrder fixtures use the role's provider-default lookup instead of
+# carrying pull-secret material inline. Generate an unreachable-registry
+# placeholder at runtime; tests override cluster creation before an image pull.
+echo "Creating fake provider-default credentials for integration tests..."
+test_credentials_dir="$(mktemp -d)"
+python3 - "${test_credentials_dir}/pull_secret" <<'PY'
+import base64
+import json
+import secrets
+import sys
+
+auth = base64.b64encode(f"fixture:{secrets.token_urlsafe(32)}".encode()).decode()
+with open(sys.argv[1], "w", encoding="utf-8") as pull_secret_file:
+    json.dump({"auths": {"fixture.invalid": {"auth": auth}}}, pull_secret_file)
+PY
+printf '%s' 'fixture-ssh-public-key' >"${test_credentials_dir}/ssh_public_key"
+kubectl create secret generic cluster-credentials \
+  --namespace default \
+  --from-file=pull_secret="${test_credentials_dir}/pull_secret" \
+  --from-file=ssh_public_key="${test_credentials_dir}/ssh_public_key" \
+  --dry-run=client -o yaml | kubectl apply -f -
+rm -rf "${test_credentials_dir}"
+
 # 4. Create minimal HyperConverged CR for GPU passthrough tests
 echo "Creating HyperConverged CR for GPU passthrough tests..."
 # Created via v1, matching the version the ocp_virt_vm role's GPU passthrough

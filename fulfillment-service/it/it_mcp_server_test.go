@@ -824,7 +824,7 @@ var _ = Describe("MCP server", func() {
 	It("returns safe missing-Secret guidance from the real API boundary", func() {
 		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-missing-secret", userUsername)
 		missingSecretCatalogItemID := fmt.Sprintf("mcp-missing-secret-item-%s", uuid.New())
-		mockSecretValue := "mock-user-data-secret-value"
+		mockSecretValue := uuid.New()
 		missingSecretID := createCatalogItemSecretFixture(ctx, usersGroup,
 			privatev1.SecretType_SECRET_TYPE_USER_DATA,
 			map[string][]byte{"userdata": []byte(mockSecretValue)},

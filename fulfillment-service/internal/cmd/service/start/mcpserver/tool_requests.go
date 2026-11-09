@@ -101,6 +101,7 @@ func safeMissingPrerequisiteError(kind, id string) error {
 	return envelope
 }
 
+// safeMissingSecretReferenceError returns guidance for a missing Secret.
 func safeMissingSecretReferenceError(reference string) error {
 	envelope := newToolError(
 		"not_found",
@@ -112,6 +113,7 @@ func safeMissingSecretReferenceError(reference string) error {
 	return envelope
 }
 
+// missingSecretReferenceFromAPIError extracts a missing Secret reference.
 func missingSecretReferenceFromAPIError(err error) (string, bool) {
 	if status.Code(err) != codes.InvalidArgument {
 		return "", false

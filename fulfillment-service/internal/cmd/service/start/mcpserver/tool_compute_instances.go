@@ -568,6 +568,7 @@ func handleDeleteComputeInstance(
 	}
 }
 
+// safeComputeInstanceWriteAPIError maps write errors to safe MCP envelopes.
 func safeComputeInstanceWriteAPIError(err error) error {
 	if reference, ok := missingSecretReferenceFromAPIError(err); ok {
 		return safeMissingSecretReferenceError(reference)

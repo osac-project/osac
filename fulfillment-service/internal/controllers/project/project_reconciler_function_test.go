@@ -1094,10 +1094,13 @@ var _ = Describe("Deletion Cleanup", func() {
 		mockClient                   *MockProjectsClient
 		mockTenantsClient            *MockTenantsClient
 		mockProjectMembershipsClient *MockProjectMembershipsClient
+		mockSecretsClient            *MockSecretsClient
 		mockIdpClient                *idp.MockClientInterface
 		resourceManager              *idp.ProjectGroupManager
 		ctx                          context.Context
 		functionObj                  *function
+		secretsListResponse          *privatev1.SecretsListResponse
+		secretsListRequest           *privatev1.SecretsListRequest
 	)
 
 	BeforeEach(func() {
@@ -1105,8 +1108,10 @@ var _ = Describe("Deletion Cleanup", func() {
 		mockClient = NewMockProjectsClient(ctrl)
 		mockTenantsClient = NewMockTenantsClient(ctrl)
 		mockProjectMembershipsClient = NewMockProjectMembershipsClient(ctrl)
+		mockSecretsClient = NewMockSecretsClient(ctrl)
 		mockIdpClient = idp.NewMockClientInterface(ctrl)
 		ctx = context.Background()
+		secretsListResponse = &privatev1.SecretsListResponse{}
 
 		var err error
 		resourceManager, err = idp.NewProjectGroupManager().
@@ -1120,8 +1125,18 @@ var _ = Describe("Deletion Cleanup", func() {
 			projectsClient:           mockClient,
 			tenantsClient:            mockTenantsClient,
 			projectMembershipsClient: mockProjectMembershipsClient,
+			secretsClient:            mockSecretsClient,
 			projectGroupManager:      resourceManager,
+			maskCalculator:           masks.NewCalculator().Build(),
 		}
+		mockSecretsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, req *privatev1.SecretsListRequest,
+				_ ...grpc.CallOption) (*privatev1.SecretsListResponse, error) {
+				secretsListRequest = req
+				return secretsListResponse, nil
+			}).
+			AnyTimes()
 	})
 
 	AfterEach(func() {
@@ -1689,6 +1704,98 @@ var _ = Describe("Deletion Cleanup", func() {
 		Expect(err.Error()).To(ContainSubstring("failed to query for child projects"))
 		// Finalizer should NOT be removed on error
 		Expect(project.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+	})
+
+	Context("Cascade deletion of Secrets", func() {
+		It("should cascade-delete project secrets and wait for their removal", func() {
+			project := privatev1.Project_builder{
+				Id: "project-1",
+				Metadata: privatev1.Metadata_builder{
+					Name:       "test-project",
+					Tenant:     "acme",
+					Finalizers: []string{finalizers.Controller},
+				}.Build(),
+			}.Build()
+
+			secret1 := privatev1.Secret_builder{
+				Id: "secret-1",
+				Metadata: privatev1.Metadata_builder{
+					Project: "test-project",
+					Tenant:  "acme",
+				}.Build(),
+			}.Build()
+			secret2 := privatev1.Secret_builder{
+				Id: "secret-2",
+				Metadata: privatev1.Metadata_builder{
+					Project: "test-project",
+					Tenant:  "acme",
+				}.Build(),
+			}.Build()
+
+			mockClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsListResponse{Size: 0}, nil)
+			secretsListResponse = &privatev1.SecretsListResponse{
+				Items: []*privatev1.Secret{secret1, secret2},
+				Total: 2,
+				Size:  2,
+			}
+			mockSecretsClient.EXPECT().
+				Delete(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, req *privatev1.SecretsDeleteRequest,
+					_ ...grpc.CallOption) (*privatev1.SecretsDeleteResponse, error) {
+					Expect(req.GetId()).To(Or(Equal("secret-1"), Equal("secret-2")))
+					return &privatev1.SecretsDeleteResponse{}, nil
+				}).Times(2)
+
+			task := &task{r: functionObj, project: project}
+			Expect(task.delete(ctx)).To(Succeed())
+			Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_DELETING))
+			Expect(project.GetStatus().GetMessage()).To(Equal(
+				"Pending Secret deletion prior to project deletion"))
+			Expect(project.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+			Expect(secretsListRequest.GetFilter()).To(Equal(
+				`this.metadata.tenant == "acme" && this.metadata.project == "test-project"`))
+		})
+
+		It("should keep the project finalizer when deleting a secret fails", func() {
+			project := privatev1.Project_builder{
+				Id: "project-1",
+				Metadata: privatev1.Metadata_builder{
+					Name:       "test-project",
+					Tenant:     "acme",
+					Finalizers: []string{finalizers.Controller},
+				}.Build(),
+			}.Build()
+			secret := privatev1.Secret_builder{Id: "secret-1"}.Build()
+
+			mockClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsListResponse{Size: 0}, nil)
+			secretsListResponse = &privatev1.SecretsListResponse{
+				Items: []*privatev1.Secret{secret},
+				Total: 1,
+				Size:  1,
+			}
+			mockSecretsClient.EXPECT().
+				Delete(gomock.Any(), gomock.Any()).
+				Return(nil, status.Error(codes.FailedPrecondition, "secret is still referenced"))
+			mockClient.EXPECT().
+				Update(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, req *privatev1.ProjectsUpdateRequest,
+					_ ...grpc.CallOption) (*privatev1.ProjectsUpdateResponse, error) {
+					Expect(req.GetObject().GetStatus().GetState()).To(Equal(
+						privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED))
+					Expect(req.GetObject().GetStatus().GetMessage()).To(Equal(
+						"Secret deletion failed while deleting project."))
+					Expect(req.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+					return &privatev1.ProjectsUpdateResponse{}, nil
+				})
+
+			task := &task{r: functionObj, project: project}
+			Expect(task.delete(ctx)).To(MatchError(ContainSubstring("secret is still referenced")))
+			Expect(project.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		})
 	})
 
 	Context("Cascade deletion of ProjectMemberships", func() {

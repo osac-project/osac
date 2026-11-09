@@ -15,6 +15,7 @@ language governing permissions and limitations under the License.
 //go:generate mockgen -destination=tenants_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 TenantsClient
 //go:generate mockgen -destination=users_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 UsersClient
 //go:generate mockgen -destination=project_memberships_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 ProjectMembershipsClient
+//go:generate mockgen -destination=secrets_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 SecretsClient
 
 package project
 
@@ -105,6 +106,7 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		projectsClient:           privatev1.NewProjectsClient(b.connection),
 		tenantsClient:            privatev1.NewTenantsClient(b.connection),
 		projectMembershipsClient: privatev1.NewProjectMembershipsClient(b.connection),
+		secretsClient:            privatev1.NewSecretsClient(b.connection),
 		projectGroupManager:      b.projectGroupManager,
 		defaultNetwork:           b.defaultNetwork,
 		maskCalculator:           masks.NewCalculator().Build(),
@@ -118,6 +120,7 @@ type function struct {
 	projectsClient           privatev1.ProjectsClient
 	tenantsClient            privatev1.TenantsClient
 	projectMembershipsClient privatev1.ProjectMembershipsClient
+	secretsClient            privatev1.SecretsClient
 	projectGroupManager      *idp.ProjectGroupManager
 	defaultNetwork           defaultnetworking.Manager
 	maskCalculator           *masks.Calculator
@@ -464,6 +467,39 @@ func (t *task) delete(ctx context.Context) error {
 		return nil
 	}
 
+	// Cascade-delete Secrets scoped to this project
+	existingSecrets, err := t.deleteSecrets(ctx)
+	if err != nil {
+		t.r.logger.ErrorContext(ctx, "Secret deletion failed",
+			slog.String("project_id", t.project.GetId()),
+			slog.Any("error", err),
+		)
+		oldProject := proto.Clone(t.project).(*privatev1.Project)
+		if !t.project.HasStatus() {
+			t.project.SetStatus(&privatev1.ProjectStatus{})
+		}
+		t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED)
+		t.project.GetStatus().SetMessage("Secret deletion failed while deleting project.")
+		updateMask := t.r.maskCalculator.Calculate(oldProject, t.project)
+		if len(updateMask.GetPaths()) > 0 {
+			if _, updateErr := t.r.projectsClient.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
+				Object:     t.project,
+				UpdateMask: updateMask,
+			}.Build()); updateErr != nil {
+				return errors.Join(err, fmt.Errorf("failed to persist project deletion status: %w", updateErr))
+			}
+		}
+		return err
+	}
+	if existingSecrets {
+		if !t.project.HasStatus() {
+			t.project.SetStatus(&privatev1.ProjectStatus{})
+		}
+		t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_DELETING)
+		t.project.GetStatus().SetMessage("Pending Secret deletion prior to project deletion")
+		return nil
+	}
+
 	// Cascade-delete ProjectMemberships scoped to this project
 	existingMemberships, err := t.deleteProjectMemberships(ctx)
 	if err != nil {
@@ -531,6 +567,44 @@ func (t *task) delete(ctx context.Context) error {
 
 	t.removeFinalizer()
 	return nil
+}
+
+// deleteSecrets marks every Secret scoped to this project for deletion. It waits
+// for all listed Secrets to disappear before allowing the project to be archived,
+// which removes the project foreign-key references.
+func (t *task) deleteSecrets(ctx context.Context) (bool, error) {
+	secretFilter := fmt.Sprintf(
+		"this.metadata.tenant == %q && this.metadata.project == %q",
+		t.project.GetMetadata().GetTenant(), t.project.GetMetadata().GetName(),
+	)
+	listResp, err := t.r.secretsClient.List(ctx, privatev1.SecretsListRequest_builder{
+		Filter: new(secretFilter),
+	}.Build())
+	if err != nil {
+		return false, fmt.Errorf("failed to query for project secrets: %w", err)
+	}
+
+	if listResp.GetTotal() == 0 {
+		return false, nil
+	}
+
+	for _, secret := range listResp.GetItems() {
+		if secret.HasMetadata() && secret.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		t.r.logger.InfoContext(ctx, "Cascade-deleting project Secret",
+			slog.String("project_id", t.project.GetId()),
+			slog.String("secret_id", secret.GetId()),
+		)
+		_, err := t.r.secretsClient.Delete(ctx, privatev1.SecretsDeleteRequest_builder{
+			Id: secret.GetId(),
+		}.Build())
+		if err != nil && status.Code(err) != codes.NotFound {
+			return true, fmt.Errorf("failed to delete project Secret %s: %w", secret.GetId(), err)
+		}
+	}
+
+	return true, nil
 }
 
 // deleteProjectMemberships lists all ProjectMemberships scoped to this project, marks each for

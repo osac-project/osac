@@ -262,7 +262,8 @@ def test_cudn_is_an_evpn_layer2_primary_network_keyed_by_the_virtual_network() -
             "subnets": ["10.0.1.0/24"],
             "defaultGatewayIPs": ["10.0.1.1"],
             "infrastructureSubnets": ["10.0.1.1/32", "10.0.1.2/32"],
-            "reservedSubnets": ["10.0.1.192/26"],
+            "reservedSubnets": ["10.0.1.0/32", "10.0.1.3/32", "10.0.1.4/30", "10.0.1.8/29",
+                                "10.0.1.16/28", "10.0.1.32/27", "10.0.1.64/26", "10.0.1.192/26"],
             "ipam": {"mode": "Enabled", "lifecycle": "Persistent"},
         },
         "evpn": {
@@ -285,19 +286,26 @@ def test_namespace_selector_matches_the_namespace_labels() -> None:
         # plan 0.5 / 0.25 / 0.25
         ("10.0.1.0/24", {"gateway_ipv4": "10.0.1.1", "overlay_ipv4_cidrs": ["10.0.1.0/25"],
                          "physical_ipv4_cidrs": ["10.0.1.128/26"], "lb_vip_ipv4_cidrs": ["10.0.1.192/26"]},
-         ["10.0.1.128/25"]),
+         ["10.0.1.0/32", "10.0.1.3/32", "10.0.1.4/30", "10.0.1.8/29", "10.0.1.16/28",
+          "10.0.1.32/27", "10.0.1.64/26", "10.0.1.128/25"]),
         # plan 0.75 / 0.25 / 0 (VMaaS only)
-        ("10.0.1.0/24", IPAM, ["10.0.1.192/26"]),
-        # plan 1 / 0 / 0: nothing outside the overlay
+        ("10.0.1.0/24", IPAM,
+         ["10.0.1.0/32", "10.0.1.3/32", "10.0.1.4/30", "10.0.1.8/29", "10.0.1.16/28",
+          "10.0.1.32/27", "10.0.1.64/26", "10.0.1.192/26"]),
+        # plan 1 / 0 / 0: the first half is reserved for the Netris DHCP pool.
         ("10.0.1.0/24", {"gateway_ipv4": "10.0.1.1", "overlay_ipv4_cidrs": ["10.0.1.0/24"],
-                         "physical_ipv4_cidrs": [], "lb_vip_ipv4_cidrs": []}, []),
+                         "physical_ipv4_cidrs": [], "lb_vip_ipv4_cidrs": []},
+         ["10.0.1.0/32", "10.0.1.3/32", "10.0.1.4/30", "10.0.1.8/29", "10.0.1.16/28",
+          "10.0.1.32/27", "10.0.1.64/26"]),
         # plan 0.5 / 0.5 / 0 on a /20
         ("172.16.0.0/20", {"gateway_ipv4": "172.16.0.1", "overlay_ipv4_cidrs": ["172.16.0.0/21"],
                            "physical_ipv4_cidrs": ["172.16.8.0/21"], "lb_vip_ipv4_cidrs": []},
-         ["172.16.8.0/21"]),
+         ["172.16.0.0/32", "172.16.0.3/32", "172.16.0.4/30", "172.16.0.8/29",
+          "172.16.0.16/28", "172.16.0.32/27", "172.16.0.64/26", "172.16.0.128/25",
+          "172.16.1.0/24", "172.16.2.0/23", "172.16.4.0/22", "172.16.8.0/21"]),
     ],
 )
-def test_reserved_subnets_are_the_subnet_minus_the_overlay(subnet: str, ipam: dict, reserved: list) -> None:
+def test_reserved_subnets_are_the_subnet_minus_the_remaining_overlay(subnet: str, ipam: dict, reserved: list) -> None:
     layer2 = ce.layer2_addressing(subnet, ipam)
     assert layer2["reservedSubnets"] == reserved
     gateway = ipaddress.ip_address(ipam["gateway_ipv4"])
@@ -313,7 +321,9 @@ def test_infrastructure_addresses_are_inside_the_overlay_range() -> None:
         net = ipaddress.ip_network(infra)
         assert any(net.subnet_of(o) for o in overlay)
     assert layer2["defaultGatewayIPs"] == ["10.0.1.1"]
-    assert layer2["reservedSubnets"] == ["10.0.1.192/26"]
+    assert layer2["reservedSubnets"] == ["10.0.1.0/32", "10.0.1.3/32", "10.0.1.4/30", "10.0.1.8/29",
+                                         "10.0.1.16/28", "10.0.1.32/27", "10.0.1.64/26",
+                                         "10.0.1.192/26"]
 
 
 @pytest.mark.parametrize("missing", ["ingressRules", "egressRules"])
@@ -338,6 +348,8 @@ def test_reserved_and_infrastructure_never_overlap_and_cover_the_subnet() -> Non
     reserved = [ipaddress.ip_network(n) for n in layer2["reservedSubnets"]]
     infra = [ipaddress.ip_network(n) for n in layer2["infrastructureSubnets"]]
     overlay = [ipaddress.ip_network(n) for n in ipam["overlay_ipv4_cidrs"]]
+    dhcp_half = next(ipaddress.ip_network("10.0.1.0/24").subnets(prefixlen_diff=1))
+    overlay = [part for block in overlay for part in (block.address_exclude(dhcp_half) if dhcp_half.subnet_of(block) else [block])]
     assert not any(r.overlaps(i) for r in reserved for i in infra)
     # network + 2 is inside the overlay range, so only the gateway adds addresses.
     outside = [i for i in infra if not any(i.subnet_of(o) for o in overlay)]
@@ -345,19 +357,21 @@ def test_reserved_and_infrastructure_never_overlap_and_cover_the_subnet() -> Non
     assert total == 256
 
 
-def test_cudn_without_reserved_subnets_omits_the_field() -> None:
+def test_cudn_reserves_the_netris_dhcp_half_even_when_overlay_covers_subnet() -> None:
     ipam = {"gateway_ipv4": "10.0.1.1", "overlay_ipv4_cidrs": ["10.0.1.0/24"],
             "physical_ipv4_cidrs": [], "lb_vip_ipv4_cidrs": []}
     layer2 = plan("create_subnet", ipam=ipam)["cudn_manifest"]["spec"]["network"]["layer2"]
-    assert "reservedSubnets" not in layer2
+    assert layer2["reservedSubnets"] == ["10.0.1.0/32", "10.0.1.3/32", "10.0.1.4/30", "10.0.1.8/29",
+                                         "10.0.1.16/28", "10.0.1.32/27", "10.0.1.64/26"]
 
 
 def test_more_than_25_reserved_subnets_is_a_final_implementation_limit() -> None:
-    # 32 overlay /28 islands in a /22 leave 32 separate gaps to reserve.
-    overlay = [f"10.0.{i // 16}.{(i % 16) * 16}/28" for i in range(0, 64, 2)]
+    # A full first half satisfies the DHCP pool reservation; 32 overlay /28
+    # islands in the second half still leave more than 25 gaps to reserve.
+    overlay = ["10.0.0.0/21", *[f"10.0.{i // 16}.{(i % 16) * 16}/28" for i in range(128, 192, 2)]]
     ipam = {"gateway_ipv4": "10.0.0.1", "overlay_ipv4_cidrs": overlay,
             "physical_ipv4_cidrs": [], "lb_vip_ipv4_cidrs": []}
-    resource = snapshot("Subnet", SUBNET, {"ipv4Cidr": "10.0.0.0/22"})
+    resource = snapshot("Subnet", SUBNET, {"ipv4Cidr": "10.0.0.0/20"})
     err = error("create_subnet", ipam=ipam, resource=resource)
     assert err["retryable"] is False
     assert "implementation limit" in err["message"] and "25" in err["message"]

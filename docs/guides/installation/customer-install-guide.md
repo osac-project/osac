@@ -602,8 +602,10 @@ With the Netris Fabric Manager, also note:
   so a NetworkClass with Netris and `cudn_evpn` rejects ICMP: the fulfillment
   API answers `InvalidArgument` with "use protocol all, which includes ICMP".
   A NetworkClass with Netris alone (`k8sManager` empty) accepts ICMP.
-- DNS: VMs use the cluster DNS that OVN-Kubernetes DHCP gives them on the
-  primary UDN. OSAC has no DNS setting.
+- DNS: OVN-Kubernetes DHCP gives VMs the cluster DNS on the primary UDN. On
+  Netris EVPN, Netris also serves a disjoint DHCP range; verify which offer the
+  VM accepts and that its DNS option points to the cluster DNS. OSAC has no
+  per-VirtualNetwork DNS setting.
 
 #### Who does what
 

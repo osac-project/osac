@@ -453,7 +453,7 @@
               - _net.layer2.subnets == ['10.0.1.0/24']
               - _net.layer2.defaultGatewayIPs == ['10.0.1.1']
               - _net.layer2.infrastructureSubnets == ['10.0.1.1/32', '10.0.1.2/32']
-              - _net.layer2.reservedSubnets == ['10.0.1.192/26']
+              - _net.layer2.reservedSubnets == ['10.0.1.0/32', '10.0.1.3/32', '10.0.1.4/30', '10.0.1.8/29', '10.0.1.16/28', '10.0.1.32/27', '10.0.1.64/26', '10.0.1.192/26']
               - "_net.layer2.ipam == {'mode': 'Enabled', 'lifecycle': 'Persistent'}"
               - "ce_obj.spec.namespaceSelector.matchLabels == {'osac.openshift.io/virtualnetwork-id': ce_id.vn1, 'osac.openshift.io/tenant': sft_tenant}"
               - ce_obj.metadata.labels.evpn == 'true'

@@ -182,11 +182,14 @@ as follows:
   declares it although its SecurityGroup tasks are no-ops. The value is derived,
   so it has no Helm value. A class whose default rules use `icmp` without the
   capability fails resolution.
-- **DNS:** OSAC has no per-resource DNS. VMs get the cluster DNS that
-  OVN-Kubernetes DHCP gives on the primary UDN. Bare metal on Netris gets an
-  installation-level resolver (default `8.8.8.8`) from the Netris default DHCP
-  option set, a provider install step, not OSAC code; bare metal without
-  internet needs no DNS reachability. The settings `CUDN_EVPN_DNS_RESOLVERS`,
+- **DNS:** OSAC has no per-resource DNS. On Netris EVPN, Netris serves DHCP
+  from the first half of the Subnet and OVN-Kubernetes serves the remaining
+  overlay range; `cudn_evpn` reserves the Netris range from OVN allocation.
+  Which DHCP server answers a VM and the DNS options it receives still need a
+  data-plane lab check. Bare metal on Netris gets an installation-level
+  resolver (default `8.8.8.8`) from the Netris default DHCP option set, a
+  provider install step, not OSAC code; bare metal without internet needs no
+  DNS reachability. The settings `CUDN_EVPN_DNS_RESOLVERS`,
   `NETRIS_DNS_RESOLVERS`, `NETRIS_DNS_SNAT_CIDR` and the Netris per-VN DNS SNAT
   are removed.
 - **ExternalIPPool tenant:** as the unified design says, every ExternalIPPool

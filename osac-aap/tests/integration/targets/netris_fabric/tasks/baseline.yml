@@ -5,8 +5,9 @@
 # like an AAP job (-e @extravars), with the job pod's NETRIS_* settings as
 # environment variables pointing at fixtures/netris/fake_netris.py (a stateful
 # in-process fake of the Netris controller, started here as a background
-# process) and an unusable KUBECONFIG, which proves the manager needs no hub
-# access. The target creates no Kubernetes objects. Checks:
+# process) and the integration Kind API, which provides the read-only CUDN
+# preflight used by EVPN Subnet creation. A minimal CUDN CRD is installed for
+# the duration of this target; no CUDN instances are created. Checks:
 #   - lifecycle: all 21 tasks of the Fabric set run once with valid input and
 #     publish their contract result, or nothing for the documented no-ops;
 #   - VirtualNetwork / Subnet: result keys, VNIs, V-Net gateway and DHCP,
@@ -57,7 +58,9 @@
     nf_l3_vni: 10001
     nf_ipam:
       gateway_ipv4: 10.20.1.1
-      physical_ipv4_cidrs: ["10.20.1.8/29", "10.20.1.16/28"]
+      overlay_ipv4_cidrs: ["10.20.1.0/25", "10.20.1.128/26"]
+      physical_ipv4_cidrs: ["10.20.1.192/26"]
+      lb_vip_ipv4_cidrs: []
     # The job pod environment (ConfigMap/Secret network-fulfillment-ig).
     nf_settings:
       NETRIS_CONTROLLER_URL: "{{ nf.url }}"
@@ -70,9 +73,8 @@
       NETRIS_BM_PROVISIONING_VNET: provisioning
       NETRIS_RESOURCE_CLASS_MAP: '{"gpu": {"server_cluster_template_id": 7}}'
       NETRIS_PORT_SETTLE_SECONDS: "0"
-      # No hub API: a Netris task that reached for it would fail.
-      KUBECONFIG: /nonexistent/osac-no-hub/kubeconfig
-      K8S_AUTH_KUBECONFIG: /nonexistent/osac-no-hub/kubeconfig
+      KUBECONFIG: "{{ lookup('ansible.builtin.env', 'KUBECONFIG') }}"
+      K8S_AUTH_KUBECONFIG: "{{ lookup('ansible.builtin.env', 'KUBECONFIG') }}"
     nf_child_env:
       ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
       ANSIBLE_SHOW_CUSTOM_STATS: "true"
@@ -313,6 +315,40 @@
 
     - name: Run the cases
       block:
+        - name: Install the minimal CUDN CRD for the DHCP preflight
+          kubernetes.core.k8s:
+            state: present
+            wait: true
+            wait_condition:
+              type: Established
+              status: "True"
+            wait_timeout: 60
+            definition:
+              apiVersion: apiextensions.k8s.io/v1
+              kind: CustomResourceDefinition
+              metadata:
+                name: clusteruserdefinednetworks.k8s.ovn.org
+              spec:
+                group: k8s.ovn.org
+                scope: Cluster
+                names:
+                  plural: clusteruserdefinednetworks
+                  singular: clusteruserdefinednetwork
+                  kind: ClusterUserDefinedNetwork
+                  listKind: ClusterUserDefinedNetworkList
+                versions:
+                  - name: v1
+                    served: true
+                    storage: true
+                    schema:
+                      openAPIV3Schema:
+                        type: object
+                        properties:
+                          spec:
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+          tags: [always]
+
         - name: Start the fake Netris
           ansible.builtin.command:
             argv:
@@ -385,6 +421,15 @@
           tags: [paths]
 
       always:
+        - name: Remove the test CUDN CRD
+          kubernetes.core.k8s:
+            api_version: apiextensions.k8s.io/v1
+            kind: CustomResourceDefinition
+            name: clusteruserdefinednetworks.k8s.ovn.org
+            state: absent
+          failed_when: false
+          tags: [always]
+
         - name: Stop the fake Netris
           ansible.builtin.uri:
             url: "{{ nf.url }}/__admin/shutdown"

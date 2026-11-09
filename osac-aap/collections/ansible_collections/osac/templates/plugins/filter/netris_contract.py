@@ -270,15 +270,28 @@ def _dhcp_range(net: Any, gateway: Any, physical: list) -> tuple | None:
     return (start, end) if start <= end else None
 
 
+def _evpn_dhcp_range(net: Any, gateway: Any) -> tuple | None:
+    """The legacy EVPN DHCP pool: the first half of the Subnet, after infra."""
+    if net.prefixlen > 29:
+        return None
+    first_half = next(net.subnets(prefixlen_diff=1))
+    start = net.network_address + 3
+    if gateway in first_half:
+        start = max(start, gateway + 1)
+    end = first_half.broadcast_address
+    return (start, end) if start <= end else None
+
+
 def netris_vnet_plan(job: Any, mode: Any = "gateway_ipv4") -> dict:
     """Plan the gateway and DHCP range of the V-Net of a Subnet.
 
-    Returns {error, gateway, dhcp_start, dhcp_end}; "" means none. With a
-    network type DHCP is always off (OVN-K assigns the VM addresses) and
-    ``mode`` picks the gateway: gateway_ipv4 (ipam.gateway_ipv4/prefix, the
-    default), none, or physical_first (first address of the first
-    ipam.physical_ipv4_cidrs block). Without a network type the gateway is
-    ipam.gateway_ipv4/prefix and DHCP serves the physical blocks.
+    Returns {error, gateway, dhcp_start, dhcp_end}; "" means none. With an
+    EVPN network type, DHCP serves the first half of the Subnet after the
+    gateway and OVN management addresses; cudn_evpn reserves that range from
+    OVN allocation. ``mode`` picks the gateway: gateway_ipv4
+    (ipam.gateway_ipv4/prefix, the default), none, or physical_first (first
+    address of the first ipam.physical_ipv4_cidrs block). Without a network
+    type, DHCP serves the physical blocks.
     """
     job = job if isinstance(job, dict) else {}
     spec = (job.get("resource") or {}).get("spec") or {}
@@ -290,11 +303,34 @@ def netris_vnet_plan(job: Any, mode: Any = "gateway_ipv4") -> dict:
     evpn = job.get("network_type") == "evpn"
     if evpn and mode not in GATEWAY_MODES:
         return _plan(f"netris_evpn_vnet_gateway_mode must be one of {', '.join(GATEWAY_MODES)}, not {str(mode)[:30]!r}")
+    if evpn and net.prefixlen > 29:
+        return _plan("EVPN DHCP requires a Subnet prefix of /29 or shorter")
     physical = []
     for block in ipam.get("physical_ipv4_cidrs") or []:
         if not _ipv4_network_ok(block) or not ipaddress.ip_network(block).subnet_of(net):
             return _plan(f"ipam.physical_ipv4_cidrs {str(block)[:40]!r} is not an IPv4 block inside the Subnet CIDR")
         physical.append(ipaddress.ip_network(block))
+    if evpn:
+        overlay_values = ipam.get("overlay_ipv4_cidrs")
+        if not isinstance(overlay_values, list):
+            return _plan("ipam.overlay_ipv4_cidrs must be a list for EVPN DHCP")
+        overlay = []
+        for block in overlay_values:
+            if not _ipv4_network_ok(block) or not ipaddress.ip_network(block).subnet_of(net):
+                return _plan(f"ipam.overlay_ipv4_cidrs {str(block)[:40]!r} is not an IPv4 block inside the Subnet CIDR")
+            overlay.append(ipaddress.ip_network(block))
+        dhcp_half = next(net.subnets(prefixlen_diff=1))
+        if not any(dhcp_half.subnet_of(block) for block in overlay):
+            return _plan("the first half of the EVPN Subnet must be inside ipam.overlay_ipv4_cidrs")
+        for field in ("physical_ipv4_cidrs", "lb_vip_ipv4_cidrs"):
+            values = ipam.get(field) or []
+            if not isinstance(values, list):
+                return _plan(f"ipam.{field} must be a list")
+            for block in values:
+                if not _ipv4_network_ok(block) or not ipaddress.ip_network(block).subnet_of(net):
+                    return _plan(f"ipam.{field} {str(block)[:40]!r} is not an IPv4 block inside the Subnet CIDR")
+                if ipaddress.ip_network(block).overlaps(dhcp_half):
+                    return _plan(f"the first half of the EVPN Subnet overlaps ipam.{field}")
     if evpn and mode == "none":
         return _plan()
     if evpn and mode == "physical_first":
@@ -303,7 +339,10 @@ def netris_vnet_plan(job: Any, mode: Any = "gateway_ipv4") -> dict:
         first = next(physical[0].hosts())
         if first in (net.network_address, net.broadcast_address):
             return _plan("the first host address of ipam.physical_ipv4_cidrs[0] is the Subnet network or broadcast address")
-        return _plan(gateway=f"{first}/{net.prefixlen}")
+        rng = _evpn_dhcp_range(net, first)
+        if rng is None:
+            return _plan("the first half of the EVPN Subnet has no address available for Netris DHCP")
+        return _plan(gateway=f"{first}/{net.prefixlen}", start=str(rng[0]), end=str(rng[1]))
     try:
         gateway = ipaddress.ip_address(ipam.get("gateway_ipv4"))
     except ValueError:
@@ -313,12 +352,89 @@ def netris_vnet_plan(job: Any, mode: Any = "gateway_ipv4") -> dict:
     if gateway in (net.network_address, net.broadcast_address):
         return _plan("ipam.gateway_ipv4 must not be the Subnet network or broadcast address")
     gateway_cidr = f"{gateway}/{net.prefixlen}"
-    if evpn or not physical:
+    if evpn:
+        rng = _evpn_dhcp_range(net, gateway)
+        if rng is None:
+            return _plan("the first half of the EVPN Subnet has no address available for Netris DHCP")
+        return _plan(gateway=gateway_cidr, start=str(rng[0]), end=str(rng[1]))
+    if not physical:
         return _plan(gateway=gateway_cidr)
     rng = _dhcp_range(net, gateway, physical)
     if rng is None:
         return _plan(gateway=gateway_cidr)
     return _plan(gateway=gateway_cidr, start=str(rng[0]), end=str(rng[1]))
+
+
+def netris_evpn_cudn_dhcp_check(cudn: Any, job: Any) -> dict:
+    """Check that an existing CUDN reserves the Netris EVPN DHCP half-range."""
+
+    def blocked(message: str) -> dict:
+        return {"ready": False, "message": message}
+
+    if not isinstance(cudn, dict):
+        return blocked("the existing CUDN response is not an object")
+    job = job if isinstance(job, dict) else {}
+    resource = job.get("resource") if isinstance(job.get("resource"), dict) else {}
+    subnet_spec = resource.get("spec") if isinstance(resource.get("spec"), dict) else {}
+    vn = job.get("virtual_network") if isinstance(job.get("virtual_network"), dict) else {}
+    subnet_id, vn_id = resource.get("id"), vn.get("id")
+    cidr = subnet_spec.get("ipv4Cidr")
+    if not _ipv4_network_ok(cidr) or not isinstance(subnet_id, str) or not isinstance(vn_id, str):
+        return blocked("the Subnet or VirtualNetwork identity is invalid")
+    subnet = ipaddress.ip_network(cidr)
+    if subnet.prefixlen > 29:
+        return blocked("EVPN DHCP requires a Subnet prefix of /29 or shorter")
+    half = next(subnet.subnets(prefixlen_diff=1))
+
+    metadata = cudn.get("metadata") if isinstance(cudn.get("metadata"), dict) else {}
+    labels = metadata.get("labels") if isinstance(metadata.get("labels"), dict) else {}
+    annotations = metadata.get("annotations") if isinstance(metadata.get("annotations"), dict) else {}
+    if metadata.get("name") != f"osac-vn-{vn_id}":
+        return blocked("the existing CUDN does not match the Subnet's VirtualNetwork")
+    if (
+        labels.get("osac.openshift.io/virtualnetwork-id") != vn_id
+        or labels.get("osac.openshift.io/owner-kind") != "subnet"
+        or labels.get("osac.openshift.io/owner-id") != subnet_id
+        or annotations.get("osac.openshift.io/owner-subnet") != subnet_id
+    ):
+        return blocked("the existing CUDN is not owned by this Subnet and VirtualNetwork")
+    spec = cudn.get("spec") if isinstance(cudn.get("spec"), dict) else {}
+    network = spec.get("network") if isinstance(spec.get("network"), dict) else {}
+    layer2 = network.get("layer2") if isinstance(network.get("layer2"), dict) else {}
+    subnets = layer2.get("subnets")
+    if not isinstance(subnets, list) or str(subnet) not in subnets:
+        return blocked("the existing CUDN does not contain this Subnet CIDR")
+    if metadata.get("deletionTimestamp"):
+        return blocked("the existing CUDN is being deleted")
+
+    cover = []
+    for field in ("reservedSubnets", "infrastructureSubnets"):
+        values = layer2.get(field) or []
+        if not isinstance(values, list):
+            return blocked(f"the existing CUDN {field} field is not a list")
+        for value in values:
+            try:
+                block = ipaddress.ip_network(value, strict=True)
+            except (TypeError, ValueError):
+                return blocked(f"the existing CUDN has an invalid {field} entry")
+            if block.version != 4 or not block.subnet_of(subnet):
+                return blocked(f"the existing CUDN has an out-of-Subnet {field} entry")
+            cover.append(block)
+
+    remaining = [half]
+    for cut in cover:
+        out = []
+        for block in remaining:
+            if block.subnet_of(cut):
+                continue
+            if cut.subnet_of(block):
+                out.extend(block.address_exclude(cut))
+            else:
+                out.append(block)
+        remaining = out
+    if remaining:
+        return blocked("the existing CUDN can still allocate from the Netris DHCP range")
+    return {"ready": True, "message": ""}
 
 
 def netris_vni_check(value: Any, what: str = "object") -> dict:
@@ -647,6 +763,7 @@ class FilterModule:
             "netris_contract_result": netris_contract_result,
             "netris_vn_cidr_error": netris_vn_cidr_error,
             "netris_vnet_plan": netris_vnet_plan,
+            "netris_evpn_cudn_dhcp_check": netris_evpn_cudn_dhcp_check,
             "netris_vni_check": netris_vni_check,
             "netris_vnet_gateway_update": netris_vnet_gateway_update,
             "netris_attachment_plan": netris_attachment_plan,

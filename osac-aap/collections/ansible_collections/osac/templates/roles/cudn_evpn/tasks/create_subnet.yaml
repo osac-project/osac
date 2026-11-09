@@ -69,7 +69,8 @@
           message: >-
             cudn_evpn create_subnet: ClusterUserDefinedNetwork {{ cudn_evpn.cudn_name }} differs from
             this Subnet's address layout or network segment ({{ _cudn_evpn_assess.drift | join(', ') }}).
-            cudn_evpn does not change a network that VMs may use; a cluster administrator must restore it.
+            cudn_evpn does not change a network that VMs may use. For the legacy Netris DHCP pool,
+            stop VM workloads, then delete and recreate the Subnet and CUDN to migrate the address layout.
           retryable: false
 
     - name: Check the hub prerequisites before claiming or reconciling the network

@@ -53,21 +53,6 @@
 .github/workflows/fullsend.yaml @osac-project/wg-infra
 .fullsend/ @osac-project/wg-infra
 
-# Installer and Helm charts
-# The installer composes every component's chart and decides what a deployment looks like, and each component ships its
-# chart from its own folder. A change to them needs review from the infrastructure team. The rules below this block name
-# the paths that a working group owns inside them (CI values, networking templates, CRDs), and the last matching rule wins,
-# so this block has to stay above them. The operator-crds charts are left out: their templates are generated from the
-# operator CRDs and are owned by the working group of each API.
-/osac-installer/ @osac-project/wg-infra
-/osac-operator/charts/operator/ @osac-project/wg-infra
-/bare-metal-fulfillment-operator/charts/operator/ @osac-project/wg-infra
-/fulfillment-service/charts/ @osac-project/wg-infra
-/osac-aap/charts/ @osac-project/wg-infra
-/osac-csi-driver/charts/ @osac-project/wg-infra
-/osac-metering/charts/ @osac-project/wg-infra
-/osac-ui/charts/ @osac-project/wg-infra
-
 # CaaS (Cluster-as-a-Service) working group
 # Tests
 /tests/e2e/caas/ @osac-project/wg-caas

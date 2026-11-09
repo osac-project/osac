@@ -27,10 +27,90 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+var _ = Describe("Worker ClusterOrder event filtering", func() {
+	DescribeTable("admits worker inputs and ignores unrelated updates", func(change func(*v1alpha1.ClusterOrder), want bool) {
+		old := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "workers", Labels: map[string]string{}, Annotations: map[string]string{},
+		}}
+		current := old.DeepCopy()
+		change(current)
+		filter := predicate.And(namespacePredicate("workers"), workerClusterOrderChangedPredicate())
+		Expect(filter.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: current})).To(Equal(want))
+		Expect(filter.Update(event.UpdateEvent{ObjectOld: current, ObjectNew: old})).To(Equal(want), "reverse transition")
+	},
+		Entry("generation", func(co *v1alpha1.ClusterOrder) {
+			co.Generation++
+		}, true),
+		Entry("deletion timestamp", func(co *v1alpha1.ClusterOrder) {
+			now := metav1.Now()
+			co.DeletionTimestamp = &now
+		}, true),
+		Entry("finalizers", func(co *v1alpha1.ClusterOrder) {
+			co.Finalizers = []string{bmWorkerFinalizer}
+		}, true),
+		Entry("Cluster UUID", func(co *v1alpha1.ClusterOrder) {
+			co.Labels[clusterOrderIDLabel] = "cluster"
+		}, true),
+		Entry("tenant", func(co *v1alpha1.ClusterOrder) {
+			co.Annotations[tenantAnnotationKey] = "tenant"
+		}, true),
+		Entry("management state", func(co *v1alpha1.ClusterOrder) {
+			co.Annotations[managementStateAnnotation] = managementStateUnmanaged
+		}, true),
+		Entry("InfraEnv UID", func(co *v1alpha1.ClusterOrder) {
+			co.Annotations[infraEnvUIDAnnotation] = "uid"
+		}, true),
+		Entry("cluster reference", func(co *v1alpha1.ClusterOrder) {
+			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{Namespace: "workload", HostedClusterName: "cluster"}
+		}, true),
+		Entry("workers", func(co *v1alpha1.ClusterOrder) {
+			co.Status.Workers = []v1alpha1.WorkerStatus{{Name: "worker", Phase: workerPhaseProvisioning}}
+		}, true),
+		Entry("AWX history", func(co *v1alpha1.ClusterOrder) {
+			co.Status.ProvisioningJobs = []v1alpha1.JobStatus{{JobID: "42"}}
+		}, false),
+		Entry("main controller condition", func(co *v1alpha1.ClusterOrder) {
+			co.SetStatusCondition("Progressing", metav1.ConditionTrue, "running job", "Provisioning")
+		}, false),
+		Entry("worker condition", func(co *v1alpha1.ClusterOrder) {
+			co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionFalse, "invalid JSON", reasonIgnitionInvalid)
+		}, false),
+		Entry("aggregate counts", func(co *v1alpha1.ClusterOrder) {
+			count := int32(1)
+			co.Status.DesiredWorkers, co.Status.CurrentWorkers, co.Status.ReadyWorkers = &count, &count, &count
+		}, false),
+		Entry("unrelated label", func(co *v1alpha1.ClusterOrder) {
+			co.Labels["example.com/label"] = "value"
+		}, false),
+		Entry("unrelated annotation", func(co *v1alpha1.ClusterOrder) {
+			co.Annotations["example.com/annotation"] = "value"
+		}, false),
+		Entry("resource version", func(co *v1alpha1.ClusterOrder) {
+			co.ResourceVersion = "2"
+		}, false),
+		Entry("unchanged object", func(*v1alpha1.ClusterOrder) {}, false),
+	)
+
+	DescribeTable("preserves lifecycle events within the configured namespace", func(namespace string, want bool) {
+		co := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Namespace: namespace}}
+		filter := predicate.And(namespacePredicate("workers"), workerClusterOrderChangedPredicate())
+		Expect(filter.Create(event.CreateEvent{Object: co})).To(Equal(want))
+		Expect(filter.Delete(event.DeleteEvent{Object: co})).To(Equal(want))
+		current := co.DeepCopy()
+		current.Generation++
+		Expect(filter.Update(event.UpdateEvent{ObjectOld: co, ObjectNew: current})).To(Equal(want))
+	},
+		Entry("worker namespace", "workers", true),
+		Entry("other namespace", "other", false),
+	)
+})
 
 // These public reconciles deliberately stop at the pull-secret gate. Identity and
 // Agent repair must already be durable, without allocation or provisioning.
@@ -481,7 +561,7 @@ var _ = It("persists the worker summary before checking Create prerequisites", f
 	co.Status.ReadyWorkers = &stale
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
 	// The fixture InfraEnv is the object production creates: owned by this order.
-	r07CreateInfraEnv(r, r07InfraEnv(r, co, "infra-uid", "http://ignition.test"))
+	createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "infra-uid", "http://ignition.test"))
 	co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "ready", reasonInfraEnvReady)
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
 	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
@@ -579,16 +659,16 @@ func r07Harness(phase string) (*Reconciler, *workerReadClient, *v1alpha1.Cluster
 	return r, fc, co
 }
 
-// r07InfraEnv builds the object production creates: deterministic name, controller
+// workerInfraEnvFixture builds the object production creates: deterministic name, controller
 // owner reference to the ClusterOrder, and optional boot-artifact evidence.
-func r07InfraEnv(r *Reconciler, owner *v1alpha1.ClusterOrder, uid, ignitionURL string) *unstructured.Unstructured {
+func workerInfraEnvFixture(r *Reconciler, owner *v1alpha1.ClusterOrder, uid, ignitionURL string) *unstructured.Unstructured {
 	GinkgoHelper()
-	return r07InfraEnvNamed(r, owner, owner.Name+infraEnvNameSuffix, uid, ignitionURL)
+	return namedWorkerInfraEnvFixture(r, owner, owner.Name+infraEnvNameSuffix, uid, ignitionURL)
 }
 
-// r07InfraEnvNamed builds a controlled InfraEnv under an explicit name, so a
+// namedWorkerInfraEnvFixture builds a controlled InfraEnv under an explicit name, so a
 // same-name object controlled by a different ClusterOrder can be forged.
-func r07InfraEnvNamed(r *Reconciler, owner *v1alpha1.ClusterOrder, name, uid, ignitionURL string) *unstructured.Unstructured {
+func namedWorkerInfraEnvFixture(r *Reconciler, owner *v1alpha1.ClusterOrder, name, uid, ignitionURL string) *unstructured.Unstructured {
 	GinkgoHelper()
 	infra := &unstructured.Unstructured{}
 	infra.SetGroupVersionKind(infraEnvGVK)
@@ -606,7 +686,7 @@ func r07InfraEnvNamed(r *Reconciler, owner *v1alpha1.ClusterOrder, name, uid, ig
 	return infra
 }
 
-func r07CreateInfraEnv(r *Reconciler, infra *unstructured.Unstructured) {
+func createWorkerInfraEnv(r *Reconciler, infra *unstructured.Unstructured) {
 	GinkgoHelper()
 	Expect(r.Create(context.Background(), infra)).To(Succeed())
 }
@@ -649,7 +729,7 @@ var _ = It("derives InfraEnv lookup from resource evidence rather than the Ready
 				}
 				var created []unstructured.Unstructured
 				if present {
-					r07CreateInfraEnv(r, r07InfraEnv(r, co, "infra-uid", ""))
+					createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "infra-uid", ""))
 					created = r07InfraEnvObjects(r, co)
 					Expect(created).To(HaveLen(1), "fixture InfraEnv objects=%d", len(created))
 				}
@@ -695,7 +775,7 @@ var _ = It("rejects an existing InfraEnv owned by another cluster", func() {
 		},
 		"other ClusterOrder": func(r *Reconciler, co *v1alpha1.ClusterOrder) *unstructured.Unstructured {
 			foreign := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "other-order", Namespace: co.Namespace, UID: "other-uid"}}
-			return r07InfraEnvNamed(r, foreign, co.Name+infraEnvNameSuffix, "foreign-uid", "http://ignition.test")
+			return namedWorkerInfraEnvFixture(r, foreign, co.Name+infraEnvNameSuffix, "foreign-uid", "http://ignition.test")
 		},
 	} {
 		By(name)
@@ -704,7 +784,7 @@ var _ = It("rejects an existing InfraEnv owned by another cluster", func() {
 			ignition := &countingIgnition{}
 			r.ignition = ignition
 			foreign := build(r, co)
-			r07CreateInfraEnv(r, foreign)
+			createWorkerInfraEnv(r, foreign)
 			_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
 			Expect(err).To(HaveOccurred(), "err=%v, want a foreign-owner error", err)
 			Expect(strings.Contains(err.Error(), "not controlled by ClusterOrder")).To(BeTrue(), "err=%v, want a foreign-owner error", err)
@@ -767,7 +847,7 @@ func r07StaleOrder() (*Reconciler, *workerReadClient, *v1alpha1.ClusterOrder) {
 	Expect(r.Update(ctx, co)).To(Succeed())
 	co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "ready", reasonInfraEnvReady)
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
-	r07CreateInfraEnv(r, r07InfraEnv(r, co, "new", "http://ignition.test"))
+	createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "new", "http://ignition.test"))
 	return r, fc, co
 }
 
@@ -786,45 +866,45 @@ func (c *r07AnnotationPatchFault) Patch(ctx context.Context, obj client.Object, 
 	return c.Client.Patch(ctx, obj, p, opts...)
 }
 
-// r07IgnitionScripted returns fixed ignition bytes and an optional fetch failure for
+// ignitionFetcherStub returns fixed ignition bytes and an optional fetch failure for
 // the create stage's input path.
-type r07IgnitionScripted struct {
+type ignitionFetcherStub struct {
 	calls int
 	body  []byte
 	err   error
 }
 
-func (i *r07IgnitionScripted) FetchIgnition(context.Context, string) ([]byte, error) {
+func (i *ignitionFetcherStub) FetchIgnition(context.Context, string) ([]byte, error) {
 	i.calls++
 	return i.body, i.err
 }
 
-// r07CountingStatusClient counts optimistic status patches so a stable order can
+// statusPatchCountingClient counts optimistic status patches so a stable order can
 // prove it writes no status at all.
-type r07CountingStatusClient struct {
+type statusPatchCountingClient struct {
 	client.Client
 	patches int
 }
 
-func (c *r07CountingStatusClient) Status() client.SubResourceWriter {
-	return &r07CountingStatusWriter{SubResourceWriter: c.Client.Status(), c: c}
+func (c *statusPatchCountingClient) Status() client.SubResourceWriter {
+	return &statusPatchCountingWriter{SubResourceWriter: c.Client.Status(), c: c}
 }
 
-type r07CountingStatusWriter struct {
+type statusPatchCountingWriter struct {
 	client.SubResourceWriter
-	c *r07CountingStatusClient
+	c *statusPatchCountingClient
 }
 
-func (w *r07CountingStatusWriter) Patch(ctx context.Context, obj client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
+func (w *statusPatchCountingWriter) Patch(ctx context.Context, obj client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
 	w.c.patches++
 	return w.SubResourceWriter.Patch(ctx, obj, p, opts...)
 }
 
-// r07CreateHarness builds an order with no workers and a pull secret, so a BMI
+// workerCreationHarness builds an order with no workers and a pull secret, so a BMI
 // create is due as soon as the InfraEnv's discovery ignition resolves. Callers
 // place the InfraEnv evidence they want observed and then drive explicit
 // invocations.
-func r07CreateHarness() (*Reconciler, *workerReadClient, *v1alpha1.ClusterOrder) {
+func workerCreationHarness() (*Reconciler, *workerReadClient, *v1alpha1.ClusterOrder) {
 	GinkgoHelper()
 	ctx := context.Background()
 	r, fc, co := workerReadHarness()
@@ -836,47 +916,120 @@ func r07CreateHarness() (*Reconciler, *workerReadClient, *v1alpha1.ClusterOrder)
 	fc.bmis = nil
 	// The unit harness has no ignition fetcher; default to a valid empty artifact so
 	// an invocation never depends on a case's scripted fetcher.
-	r.ignition = &r07IgnitionScripted{body: []byte(`{}`)}
+	r.ignition = &ignitionFetcherStub{body: []byte(`{}`)}
 	return r, fc, co
 }
 
-// Only fetched, JSON-valid
-// discovery ignition authorizes a BMI create. A missing URL waits, and a fetch or
-// validation failure is reported without creating anything.
-var _ = It("does not create a BMI from invalid ignition", func() {
-	ctx := context.Background()
-	cases := map[string]struct {
-		ignitionURL string
-		body        []byte
-		fetchErr    error
-		wantErr     string
-	}{
-		"missing URL":   {wantErr: ""},
-		"invalid JSON":  {ignitionURL: "http://ignition.test", body: []byte("not-json"), wantErr: "not valid JSON"},
-		"fetch failure": {ignitionURL: "http://ignition.test", fetchErr: errors.New("tls: bad certificate"), wantErr: "fetching discovery ignition"},
-	}
-	for name, tc := range cases {
-		By(name)
-		func() {
-			r, fc, co := r07CreateHarness()
-			r07CreateInfraEnv(r, r07InfraEnv(r, co, "infra-uid", tc.ignitionURL))
-			ignition := &r07IgnitionScripted{body: tc.body, err: tc.fetchErr}
-			r.ignition = ignition
-			// A create is due (one requested node, no reserved slot): only validated
-			// ignition bytes may produce one, and the missing URL holds instead.
-			for i := range 2 {
-				_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
-				switch {
-				case tc.wantErr == "":
-					Expect(err).ToNot(HaveOccurred(), "invocation %d: err=%v, want a bounded wait for the missing URL", i, err)
-				case err == nil || !strings.Contains(err.Error(), tc.wantErr):
-					Fail(fmt.Sprintf("invocation %d: err=%v, want %q", i, err, tc.wantErr))
-				}
-			}
-			Expect(fc.names).To(BeEmpty(), "unenforceable ignition authorized a BMI create: %v", fc.names)
-			Expect(tc.ignitionURL == "" && ignition.calls != 0).To(BeFalse(), "missing URL was fetched anyway: %d call(s)", ignition.calls)
-		}()
-	}
+type workerImageClient struct {
+	*workerReadClient
+}
+
+func (c *workerImageClient) GetClusterVersion(context.Context, string) (*privatev1.ClusterVersion, error) {
+	return privatev1.ClusterVersion_builder{
+		Id: "cv",
+		Spec: privatev1.ClusterVersionSpec_builder{
+			DiskImage: privatev1.DiskImageReference_builder{Id: "image"}.Build(),
+		}.Build(),
+	}.Build(), nil
+}
+
+func (c *workerImageClient) GetDiskImage(context.Context, string) (*privatev1.DiskImage, error) {
+	return privatev1.DiskImage_builder{Id: "image"}.Build(), nil
+}
+
+var _ = Describe("Worker discovery ignition prerequisites", func() {
+	It("waits for a discovery ignition URL before creating a BMI", func() {
+		ctx := context.Background()
+		r, fc, co := workerCreationHarness()
+		co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "previously fetched", reasonInfraEnvReady)
+		Expect(r.Status().Update(ctx, co)).To(Succeed())
+		createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "infra-uid", ""))
+		ignition := &ignitionFetcherStub{}
+		r.ignition = ignition
+		res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.RequeueAfter).To(Equal(infraEnvRequeueInterval))
+		Expect(r.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+		cond := apimeta.FindStatusCondition(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal(reasonIgnitionPending))
+		Expect(fc.names).To(BeEmpty())
+		Expect(ignition.calls).To(BeZero())
+	})
+
+	DescribeTable("returns fetch errors without creating a BMI", func(fetchErr error) {
+		ctx := context.Background()
+		r, fc, co := workerCreationHarness()
+		createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "infra-uid", "http://ignition.test"))
+		r.ignition = &ignitionFetcherStub{err: fetchErr}
+		res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+		Expect(err).To(MatchError(fetchErr))
+		Expect(res.IsZero()).To(BeTrue())
+		Expect(fc.names).To(BeEmpty())
+	},
+		Entry("fetch failure", errors.New("tls: bad certificate")),
+		Entry("fetch timeout", context.DeadlineExceeded),
+	)
+
+	It("recovers on retry when its invalid-ignition condition updates are filtered", func() {
+		ctx := context.Background()
+		r, fc, co := workerCreationHarness()
+		r.fulfillment = &workerImageClient{workerReadClient: fc}
+		co.Annotations[infraEnvUIDAnnotation] = "infra-uid"
+		Expect(r.Update(ctx, co)).To(Succeed())
+		co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "previously fetched", reasonInfraEnvReady)
+		Expect(r.Status().Update(ctx, co)).To(Succeed())
+		createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "infra-uid", "http://ignition.test"))
+		ignition := &ignitionFetcherStub{body: []byte("not-json")}
+		r.ignition = ignition
+		request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)}
+		filter := workerClusterOrderChangedPredicate()
+
+		before := co.DeepCopy()
+		res, err := r.Reconcile(ctx, request)
+		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
+		Expect(res.IsZero()).To(BeTrue())
+		Expect(r.Get(ctx, request.NamespacedName, co)).To(Succeed())
+		Expect(filter.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: co})).To(BeFalse())
+		cond := apimeta.FindStatusCondition(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal(reasonIgnitionInvalid))
+		Expect(cond.Message).To(Equal("discovery ignition is not valid JSON"))
+		Expect(fc.names).To(BeEmpty())
+
+		counter := &statusPatchCountingClient{Client: r.Client}
+		r.Client = counter
+		res, err = r.Reconcile(ctx, request)
+		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
+		Expect(res.IsZero()).To(BeTrue())
+		Expect(counter.patches).To(BeZero(), "unchanged blocked evidence wrote status")
+
+		// Only the external response changes; explicit calls represent scheduled retries.
+		ignition.body = []byte(`{"ignition":{"version":"3.2.0"}}`)
+		res, err = r.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res).To(Equal(workerBoundaryRequeue()))
+		Expect(r.Get(ctx, request.NamespacedName, co)).To(Succeed())
+		Expect(co.Status.Workers).To(HaveLen(1))
+		Expect(co.Status.Workers[0].BMICreateState).To(Equal(v1alpha1.WorkerBMICreateStateReserved))
+		Expect(apimeta.IsStatusConditionTrue(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady)).To(BeTrue())
+
+		_, err = r.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fc.names).To(HaveLen(1))
+		Expect(fc.reservationMissing).To(BeFalse())
+	})
+
+	It("preserves condition-write errors for invalid ignition", func() {
+		r, _, co := workerCreationHarness()
+		r.ignition = &ignitionFetcherStub{body: []byte("not-json")}
+		r.Client = &bmiConflictClient{Client: r.Client, beforePatch: func() {}}
+		_, res, err := r.fetchDiscoveryIgnition(context.Background(), co, workerInfraEnvFixture(r, co, "infra-uid", "http://ignition.test"))
+		Expect(apierrors.IsConflict(err)).To(BeTrue())
+		Expect(res.IsZero()).To(BeTrue())
+	})
 })
 
 // A same-name object this
@@ -884,10 +1037,10 @@ var _ = It("does not create a BMI from invalid ignition", func() {
 // create is due.
 var _ = It("does not create a BMI from a foreign InfraEnv", func() {
 	ctx := context.Background()
-	r, fc, co := r07CreateHarness()
+	r, fc, co := workerCreationHarness()
 	foreign := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{Name: "other-order", Namespace: co.Namespace, UID: "other-uid"}}
-	r07CreateInfraEnv(r, r07InfraEnvNamed(r, foreign, co.Name+infraEnvNameSuffix, "foreign-uid", "http://ignition.test"))
-	ignition := &r07IgnitionScripted{body: []byte(`{}`)}
+	createWorkerInfraEnv(r, namedWorkerInfraEnvFixture(r, foreign, co.Name+infraEnvNameSuffix, "foreign-uid", "http://ignition.test"))
+	ignition := &ignitionFetcherStub{body: []byte(`{}`)}
 	r.ignition = ignition
 	for range 2 {
 		_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)})
@@ -904,7 +1057,7 @@ var _ = It("does not create a BMI from a foreign InfraEnv", func() {
 var _ = It("avoids status writes for a stable Ready order", func() {
 	ctx := context.Background()
 	r, _, co := r07Harness(workerPhaseReady)
-	r07CreateInfraEnv(r, r07InfraEnv(r, co, "infra-uid", "http://ignition.test"))
+	createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "infra-uid", "http://ignition.test"))
 	co.Annotations[infraEnvUIDAnnotation] = "infra-uid"
 	Expect(r.Update(ctx, co)).To(Succeed())
 	co.SetStatusCondition(v1alpha1.ConditionInfraEnvReady, metav1.ConditionTrue, "ready", reasonInfraEnvReady)
@@ -918,7 +1071,7 @@ var _ = It("avoids status writes for a stable Ready order", func() {
 			Fail(fmt.Sprintf("settling invocation: %v", err))
 		}
 	}
-	counter := &r07CountingStatusClient{Client: r.Client}
+	counter := &statusPatchCountingClient{Client: r.Client}
 	r.Client = counter
 	for i := range 2 {
 		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(co)}); err != nil {
@@ -942,7 +1095,7 @@ var _ = It("keeps the old InfraEnv UID when stale-ignition persistence fails", f
 	Expect(r.Status().Update(ctx, co)).To(Succeed())
 	// The replacement models the object the reconciler itself recreates: same
 	// deterministic name, owned by this order, new UID.
-	r07CreateInfraEnv(r, r07InfraEnv(r, co, "new", "http://ignition.test"))
+	createWorkerInfraEnv(r, workerInfraEnvFixture(r, co, "new", "http://ignition.test"))
 	fc.listed = []*privatev1.BareMetalInstance{ownedBMIFixture(co, "recorded-bmi", "recorded-id")}
 	fc.bmis = fc.listed
 	r.ignition = workerIgnition{}

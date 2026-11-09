@@ -34,6 +34,7 @@ const (
 	eventReasonIgnitionSizeWarning   = "DiscoveryIgnitionSizeWarning"
 	reasonInfraEnvReady              = "InfraEnvReady"
 	reasonIgnitionPending            = "IgnitionPending"
+	reasonIgnitionInvalid            = "IgnitionInvalid"
 	reasonIgnitionPendingMessage     = "waiting for discovery ignition URL"
 	infraEnvUIDAnnotation            = "osac.openshift.io/infraenv-uid"
 	eventReasonStaleIgnition         = "StaleIgnition"
@@ -236,8 +237,9 @@ func (r *Reconciler) createMissingInfraEnv(
 
 // fetchDiscoveryIgnition is the create stage's input reader: it fetches and
 // validates the observed InfraEnv's discovery ignition and reports Ready only for
-// bytes it actually verified. A missing URL reports pending evidence and waits;
-// a failed fetch or invalid JSON is an error and never a successful input.
+// bytes it actually verified. A missing URL reports pending evidence and waits.
+// Invalid JSON reports blocked evidence and an error; fetch and status-write
+// failures also remain errors.
 func (r *Reconciler) fetchDiscoveryIgnition(
 	ctx context.Context, co *v1alpha1.ClusterOrder, infraEnv *unstructured.Unstructured,
 ) ([]byte, ctrl.Result, error) {
@@ -259,6 +261,10 @@ func (r *Reconciler) fetchDiscoveryIgnition(
 		return nil, ctrl.Result{}, fmt.Errorf("fetching discovery ignition for %s: %w", key, err)
 	}
 	if !json.Valid(ignition) {
+		if err := r.setInfraEnvReady(ctx, co, metav1.ConditionFalse, reasonIgnitionInvalid,
+			"discovery ignition is not valid JSON"); err != nil {
+			return nil, ctrl.Result{}, err
+		}
 		return nil, ctrl.Result{}, fmt.Errorf("discovery ignition for %s is not valid JSON", key)
 	}
 	if len(ignition) > ignitionSizeWarningThreshold {

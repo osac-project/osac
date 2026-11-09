@@ -427,6 +427,68 @@ describe('createNetworkingImmutabilityInterceptor', () => {
     });
   });
 
+  it.each([
+    'cannot change number of network attachments',
+    'cannot change number of network attachments from 1 to 2',
+  ])('adds workload guidance to the tokenless ComputeInstances count error %s', async (message) => {
+    const original = new ConnectError(message, Code.InvalidArgument);
+
+    await expect(
+      invokeInterceptor(ComputeInstances.typeName, ComputeInstances.method.update.name, original),
+    ).rejects.toMatchObject({
+      code: Code.InvalidArgument,
+      rawMessage: `${original.rawMessage} ${WORKLOAD_GUIDANCE}`,
+    });
+  });
+
+  it('does not apply the tokenless count fallback to another workload service', async () => {
+    const original = new ConnectError(
+      'cannot change number of network attachments',
+      Code.InvalidArgument,
+    );
+
+    try {
+      await invokeInterceptor(
+        BareMetalInstances.typeName,
+        BareMetalInstances.method.update.name,
+        original,
+      );
+      expect.fail('expected the interceptor to reject');
+    } catch (error) {
+      expect(error).toBe(original);
+    }
+  });
+
+  it('does not apply the tokenless count fallback to a non-InvalidArgument error', async () => {
+    const original = new ConnectError('cannot change number of network attachments', Code.Internal);
+
+    try {
+      await invokeInterceptor(
+        ComputeInstances.typeName,
+        ComputeInstances.method.update.name,
+        original,
+      );
+      expect.fail('expected the interceptor to reject');
+    } catch (error) {
+      expect(error).toBe(original);
+    }
+  });
+
+  it('does not match a near-miss tokenless count message', async () => {
+    const original = new ConnectError('cannot change network attachments', Code.InvalidArgument);
+
+    try {
+      await invokeInterceptor(
+        ComputeInstances.typeName,
+        ComputeInstances.method.update.name,
+        original,
+      );
+      expect.fail('expected the interceptor to reject');
+    } catch (error) {
+      expect(error).toBe(original);
+    }
+  });
+
   it('recognizes camelCase attachment names in workload errors', async () => {
     const original = new ConnectError(
       'networkAttachment cannot be changed after creation',

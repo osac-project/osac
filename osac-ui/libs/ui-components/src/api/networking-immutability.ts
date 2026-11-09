@@ -184,6 +184,8 @@ const IMMUTABLE_WORDING =
 
 const DELETE_RECREATE_GUIDANCE = /\bdelete (?:and|or) recreate\b/i;
 
+const COMPUTE_ATTACHMENT_COUNT = /\bcannot change number of network attachments\b/i;
+
 const hasExactToken = (message: string, token: string): boolean =>
   new RegExp(`(^|[^A-Za-z0-9_])${token}($|[^A-Za-z0-9_])`).test(message);
 
@@ -214,7 +216,9 @@ const replacementGuidance = (
     workloadFields &&
     error.code === Code.InvalidArgument &&
     IMMUTABLE_WORDING.test(error.rawMessage) &&
-    mentionsProtectedWorkloadField(error.rawMessage, workloadFields)
+    (mentionsProtectedWorkloadField(error.rawMessage, workloadFields) ||
+      (serviceTypeName === ComputeInstances.typeName &&
+        COMPUTE_ATTACHMENT_COUNT.test(error.rawMessage)))
   ) {
     return workloadGuidance(t);
   }

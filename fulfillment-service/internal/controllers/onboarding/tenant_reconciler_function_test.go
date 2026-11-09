@@ -643,8 +643,31 @@ var _ = Describe("run", func() {
 			})
 		})
 
-		When("the status write conflicts after creating a Tenant CRD on a hub fails", func() {
-			It("returns the conflict together with the failure", func() {
+		When("the first pass adds finalizers and the write conflicts", func() {
+			It("returns the conflict itself", func() {
+				conflictErr := grpcstatus.Error(grpccodes.Aborted, "object has been modified")
+				mockTenants.EXPECT().
+					Update(gomock.Any(), gomock.Any(), gomock.Any()).
+					Return(nil, conflictErr)
+
+				tenant := privatev1.Tenant_builder{
+					Id: tenantID,
+					Metadata: privatev1.Metadata_builder{
+						Name:   tenantID,
+						Tenant: tenantName,
+					}.Build(),
+				}.Build()
+
+				f := newFunction(mockHubCache, mockHubs, mockTenants, mockProjects)
+				err := f.run(ctx, tenant)
+
+				Expect(err).To(Equal(conflictErr))
+				Expect(controllers.IsConflict(err)).To(BeTrue())
+			})
+		})
+
+		DescribeTable("the status write fails after creating a Tenant CRD on a hub fails",
+			func(writeErr error, expectConflict bool) {
 				fakeClient := fake.NewClientBuilder().
 					WithScheme(scheme).
 					WithInterceptorFuncs(interceptor.Funcs{
@@ -668,10 +691,9 @@ var _ = Describe("run", func() {
 					Get(gomock.Any(), hub1ID).
 					Return(&controllers.HubEntry{Namespace: namespace1, Client: fakeClient}, nil)
 
-				conflictErr := grpcstatus.Error(grpccodes.Aborted, "object has been modified")
 				mockTenants.EXPECT().
 					Update(gomock.Any(), gomock.Any(), gomock.Any()).
-					Return(nil, conflictErr)
+					Return(nil, writeErr)
 
 				tenant := privatev1.Tenant_builder{
 					Id: tenantID,
@@ -685,16 +707,20 @@ var _ = Describe("run", func() {
 				f := newFunction(mockHubCache, mockHubs, mockTenants, mockProjects)
 				err := f.run(ctx, tenant)
 
-				// The loop retries a conflict only if it can see one in the returned error, and the failure
-				// that preceded the write must not be lost either.
-				Expect(err).To(MatchError(conflictErr))
-				Expect(controllers.IsConflict(err)).To(BeTrue())
+				// Both errors are returned. The loop retries a conflict only if it can see one in the returned
+				// error, and it must not take any other write failure for a conflict.
+				Expect(err).To(MatchError(writeErr))
 				Expect(err).To(MatchError(ContainSubstring(hub1ID)))
+				Expect(controllers.IsConflict(err)).To(Equal(expectConflict))
 				Expect(tenant.GetStatus().GetState()).To(
 					Equal(privatev1.TenantState_TENANT_STATE_FAILED),
 				)
-			})
-		})
+			},
+			Entry("with a conflict",
+				grpcstatus.Error(grpccodes.Aborted, "object has been modified"), true),
+			Entry("with another error",
+				grpcstatus.Error(grpccodes.Unavailable, "database unavailable"), false),
+		)
 
 		When("creating a Tenant CRD on a hub fails", func() {
 			It("sets status to FAILED and returns the error for requeue", func() {
@@ -740,7 +766,8 @@ var _ = Describe("run", func() {
 				f := newFunction(mockHubCache, mockHubs, mockTenants, mockProjects)
 				err := f.run(ctx, tenant)
 
-				Expect(err).To(HaveOccurred())
+				Expect(err).To(MatchError(expectedErr))
+				Expect(controllers.IsConflict(err)).To(BeFalse())
 				Expect(tenant.GetStatus().GetState()).To(
 					Equal(privatev1.TenantState_TENANT_STATE_FAILED),
 				)

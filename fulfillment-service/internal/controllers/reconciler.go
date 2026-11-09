@@ -589,6 +589,7 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 					c.logger.ErrorContext(
 						ctx,
 						"Reconciliation failed",
+						slog.String("id", snapshot.GetId()),
 						slog.Any("error", err),
 					)
 				}

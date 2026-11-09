@@ -689,7 +689,7 @@ var _ = Describe("registered SSH key resolution", func() {
 		Expect(stored.Spec.SSHKey).To(Equal(publicKey))
 	})
 
-	It("returns the status write conflict together with the reconciliation failure", func() {
+	DescribeTable("returns a failed status write together with the reconciliation failure", func(writeErr error, expectConflict bool) {
 		const (
 			instanceID   = "new-vm-with-deleted-key-and-conflict"
 			hubID        = "conflict-ssh-key-hub"
@@ -718,11 +718,10 @@ var _ = Describe("registered SSH key resolution", func() {
 		secretsClient.EXPECT().
 			Get(gomock.Any(), gomock.Any()).
 			Return(nil, status.Error(codes.NotFound, "Secret is gone"))
-		conflictErr := status.Error(codes.Aborted, "object has been modified")
 		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
 		computeInstancesClient.EXPECT().
 			Update(gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(nil, conflictErr)
+			Return(nil, writeErr)
 
 		computeInstance := privatev1.ComputeInstance_builder{
 			Id: instanceID,
@@ -751,14 +750,17 @@ var _ = Describe("registered SSH key resolution", func() {
 		}
 
 		err := reconciler.run(ctx, computeInstance)
-		// The loop retries a conflict only if it can see one in the returned error, and the failure
-		// that preceded the write must not be lost either.
+		// Both errors are returned. The loop retries a conflict only if it can see one in the returned
+		// error, and it must not take any other write failure for a conflict.
 		Expect(err).To(MatchError(ContainSubstring("Secret is gone")))
-		Expect(err).To(MatchError(conflictErr))
-		Expect(controllers.IsConflict(err)).To(BeTrue())
+		Expect(err).To(MatchError(writeErr))
+		Expect(controllers.IsConflict(err)).To(Equal(expectConflict))
 		Expect(computeInstance.GetStatus().GetState()).To(
 			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
-	})
+	},
+		Entry("with a conflict", status.Error(codes.Aborted, "object has been modified"), true),
+		Entry("with another error", status.Error(codes.Unavailable, "database unavailable"), false),
+	)
 
 	It("marks initial reconciliation failed when the registered Secret is gone", func() {
 		const (
@@ -824,6 +826,7 @@ var _ = Describe("registered SSH key resolution", func() {
 
 		err := reconciler.run(ctx, computeInstance)
 		Expect(err).To(MatchError(ContainSubstring("Secret is gone")))
+		Expect(controllers.IsConflict(err)).To(BeFalse())
 		Expect(computeInstance.GetStatus().GetState()).To(
 			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
 		var provisioned *privatev1.ComputeInstanceCondition

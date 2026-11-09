@@ -162,6 +162,8 @@ var _ = Describe("conflict classification", func() {
 			&unavailableWrapper{cause: aborted()}, true),
 		Entry("Aborted requeued with an explicit delay",
 			RequeueAfter(aborted(), time.Second), true),
+		Entry("Aborted joined with a failure that is requeued with an explicit delay",
+			errors.Join(RequeueAfter(errors.New("x"), time.Second), aborted()), true),
 		Entry("plain error behind a node with a different status",
 			&unavailableWrapper{cause: errors.New("x")}, false),
 		Entry("node whose Unwrap returns no cause", nilCauseError{}, false),
@@ -171,6 +173,14 @@ var _ = Describe("conflict classification", func() {
 		Entry("Aborted joined with a node whose Unwrap returns an empty list",
 			errors.Join(aborted(), emptyJoinError{}), true),
 	)
+
+	It("keeps the retry interval of a failure that is joined with a conflict", func() {
+		joined := errors.Join(RequeueAfter(errors.New("x"), 5*time.Second), aborted())
+		Expect(IsRequeueable(joined)).To(BeTrue())
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(joined, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(5 * time.Second))
+	})
 
 	DescribeTable("isOnlyConflict",
 		func(err error, expected bool) {
@@ -185,6 +195,8 @@ var _ = Describe("conflict classification", func() {
 			errors.Join(status.Error(codes.Unavailable, "hub down"), aborted()), false),
 		Entry("Aborted joined with a plain error",
 			errors.Join(errors.New("x"), aborted()), false),
+		Entry("Aborted joined with a failure that is requeued with an explicit delay",
+			errors.Join(RequeueAfter(errors.New("x"), time.Second), aborted()), false),
 		Entry("Aborted requeued with an explicit delay",
 			RequeueAfter(aborted(), time.Second), true),
 		Entry("Aborted behind a node with a different status",

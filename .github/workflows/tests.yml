@@ -164,6 +164,10 @@ jobs:
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
           # The upload below takes this directory, so the diagnostics go to a file in it as well as to the log.
           mkdir -p fulfillment-service/logs/pods
+          # Cluster-internal host names (*.svc, *.svc.cluster.local, *.localhost) are replaced in everything that
+          # goes to the artifact, because the diagnostics need the finalizer values and the gRPC methods, not the
+          # names.
+          redact='s/[A-Za-z0-9._-]+\.(svc(\.cluster\.local)?|cluster\.local|localhost)/<redacted-host>/g'
           {
             echo "=== Pods ==="
             kubectl get pods -n osac -o wide
@@ -175,16 +179,14 @@ jobs:
             kubectl logs -n osac -l 'app in (fulfillment-console-proxy,fulfillment-controller,fulfillment-grpc-server,fulfillment-rest-gateway,fulfillment-ingress-proxy)' --tail=100 --all-containers
             echo "=== Events ==="
             kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
-          } 2>&1 | tee fulfillment-service/logs/diagnostics.txt
+          } 2>&1 | sed -E "$redact" | tee fulfillment-service/logs/diagnostics.txt
           # The complete log of every pod goes to the artifact only. A spec that fails in the middle of the
           # suite is far outside the 100 lines above by the time this step runs, and the controller's writes
           # are only visible here. Kind keeps up to 64Mi per container since its last rotation, see osac-installer/kind-config.yaml.
           # One listing gives every container that has started, with its restart count. Then one request per
           # container: kubectl stops at the first container that fails, which would lose the logs of the others,
           # and only a container that restarted has a previous log to ask for. A failure here must not fail the
-          # step. Cluster-internal host names (*.svc, *.svc.cluster.local, *.localhost) are replaced in each file
-          # before the upload, because the diagnostics need the finalizer values and the gRPC methods, not the names.
-          redact='s/[A-Za-z0-9._-]+\.(svc(\.cluster\.local)?|cluster\.local|localhost)/<redacted-host>/g'
+          # step. Each file is redacted after it is written.
           if pods=$(kubectl get pods -n osac -o json); then
             jq -r '
               .items[] | .metadata.name as $pod

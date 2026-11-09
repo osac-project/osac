@@ -53,6 +53,11 @@
 .github/workflows/fullsend.yaml @osac-project/wg-infra
 .fullsend/ @osac-project/wg-infra
 
+# Konflux build and release pipelines
+# The PipelineRuns decide how the images and the charts are built, signed and released, and the release ones start on an
+# osac-release tag. A change to them needs review from the infrastructure team.
+/.tekton/ @osac-project/wg-infra
+
 # Installer and Helm charts
 # The installer composes every component's chart and decides what a deployment looks like, and each component ships its
 # chart from its own folder. A change to them needs review from the infrastructure team. The rules below this block name

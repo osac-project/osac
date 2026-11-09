@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pathlib
+import secrets
 import subprocess
 import tempfile
 from urllib.parse import urlsplit, urlunsplit
@@ -28,9 +29,8 @@ CA_MOUNT_PATH = "/etc/fulfillment-grpc-server/billing-ca"
 def base_url_with_credentials() -> str:
     """Build a credential-bearing URL at runtime; no such literal is stored."""
     base = urlsplit(PROVIDER["baseUrl"])
-    return urlunsplit(
-        (base.scheme, f"test-user:test-password@{base.netloc}", base.path, "", "")
-    )
+    userinfo = f"{secrets.token_hex(4)}:{secrets.token_hex(8)}"
+    return urlunsplit((base.scheme, f"{userinfo}@{base.netloc}", base.path, "", ""))
 
 
 def provider_args(override: dict[str, str | None] | None = None) -> list[str]:
@@ -259,7 +259,7 @@ def check_invalid() -> None:
         ("https://billing.example.com/api\x01", "control character in path"),
     ):
         check_rejected(provider_args({"baseUrl": bad_url}), reason, "baseUrl")
-    extra = ["--set-string", "global.billing.provider.token=s"]
+    extra = ["--set-string", f"global.billing.provider.token={secrets.token_hex(8)}"]
     check_rejected(provider_args() + extra, "inline credential", "token")
     extra = ["--set-string", "global.billing.providers.second.key=m360"]
     check_rejected(provider_args() + extra, "second provider", "providers")

@@ -74,13 +74,13 @@ var _ = Describe("Billing provider status", Label("billing"), func() {
 // They restart the shared grpc-server, so they must not overlap other specs.
 var _ = Describe("Billing provider status with a stub M360", Label("billing"), Serial, func() {
 	const (
-		namespace      = "osac"
-		deployment     = "fulfillment-grpc-server"
-		container      = "grpc-server"
-		secretName     = "billing-stub-credential"
-		caSecretName   = "billing-stub-ca"
-		credentialFile = "/etc/fulfillment-grpc-server/billing/credential"
-		stubCredential = "stub-token"
+		namespace          = "osac"
+		deployment         = "fulfillment-grpc-server"
+		container          = "grpc-server"
+		secretName         = "billing-stub-credential"
+		caSecretName       = "billing-stub-ca"
+		credentialFile     = "/etc/fulfillment-grpc-server/billing/credential"
+		testStubCredential = "stub-token"
 	)
 
 	var (
@@ -136,7 +136,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 			}
 			Expect(entries).To(ContainElement(SatisfyAll(HaveKeyWithValue("msg", "Billing provider configured"),
 				HaveKeyWithValue("provider", "m360"))), "pod %s", pod.Name)
-			for _, absent := range []string{"configured but unusable", "failed to build", stubCredential, stubURL,
+			for _, absent := range []string{"configured but unusable", "failed to build", testStubCredential, stubURL,
 				credentialFile} {
 				Expect(string(raw)).ToNot(ContainSubstring(absent), "pod %s", pod.Name)
 			}
@@ -168,7 +168,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 				Expect(crclient.IgnoreNotFound(kube.Delete(ctx, secret))).To(Succeed())
 			})
 		}
-		createSecret(secretName, map[string][]byte{"token": []byte(stubCredential)})
+		createSecret(secretName, map[string][]byte{"token": []byte(testStubCredential)})
 		createSecret(caSecretName, map[string][]byte{"ca.crt": caPEM})
 
 		key := crclient.ObjectKey{Namespace: namespace, Name: deployment}
@@ -227,7 +227,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 		Expect(stub.Succeeded("HealthCheck")).To(BeNumerically(">", 0))
 		// The pod sends the mounted credential to the configured API path.
 		Expect(stub.Requests()).To(ContainElement(SatisfyAll(HaveField("Op", "HealthCheck"),
-			HaveField("Path", HavePrefix("/api/v1/external/")), HaveField("Authorization", "Bearer "+stubCredential))))
+			HaveField("Path", HavePrefix("/api/v1/external/")), HaveField("Authorization", "Bearer "+testStubCredential))))
 		Expect(stub.Writes()).To(BeEmpty())
 		expectCleanLog(ctx)
 	})

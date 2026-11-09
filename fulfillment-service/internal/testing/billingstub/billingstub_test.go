@@ -34,6 +34,11 @@ import (
 
 var ctx = context.Background()
 
+const (
+	testCredential    = "tok"
+	testAuthorization = "Bearer sent"
+)
+
 // fixture is the same JSON format billingfake.Load reads.
 const fixture = `{
   "accounts": [
@@ -51,7 +56,7 @@ func start(s billingfake.Scenario) (*billingstub.Stub, billing.Adapter) {
 	stub := billingstub.New(s)
 	ExpectWithOffset(1, stub.Start("127.0.0.1:0")).To(Succeed())
 	DeferCleanup(stub.Close)
-	adapter, err := m360.New(billing.Config{BaseURL: stub.URL() + "/api/v2/external", Credential: "tok", RetryCount: 3,
+	adapter, err := m360.New(billing.Config{BaseURL: stub.URL() + "/api/v2/external", Credential: testCredential, RetryCount: 3,
 		BreakerThreshold: 5, BreakerWindow: 30 * time.Second, BreakerOpen: 30 * time.Second}).Build()
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	return stub, adapter
@@ -238,11 +243,11 @@ var _ = Describe("Billing stub", func() {
 
 		request, err := http.NewRequest(http.MethodGet, stub.URL()+"/api/v2/external/accounts?size=1", nil)
 		Expect(err).ToNot(HaveOccurred())
-		request.Header.Set("Authorization", "Bearer sent")
+		request.Header.Set("Authorization", testAuthorization)
 		response, err := http.DefaultClient.Do(request)
 		Expect(err).ToNot(HaveOccurred())
 		_ = response.Body.Close()
-		Expect(stub.Requests()).To(ConsistOf(HaveField("Authorization", "Bearer sent")))
+		Expect(stub.Requests()).To(ConsistOf(HaveField("Authorization", testAuthorization)))
 	})
 
 	DescribeTable("serves TLS for the host with a certificate signed by the returned CA",

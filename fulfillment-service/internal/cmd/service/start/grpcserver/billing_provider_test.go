@@ -83,16 +83,20 @@ var _ = Describe("newBillingProvider", func() {
 
 	It("never logs an unrecognized provider value", func() {
 		var buffer bytes.Buffer
+		const (
+			testUser     = "test-user"
+			testPassword = "test-password"
+		)
 		unrecognized := url.URL{
 			Scheme: "https",
 			Host:   "evil.example",
-			User:   url.UserPassword("test-user", "test-password"),
+			User:   url.UserPassword(testUser, testPassword),
 		}
 		env["OSAC_BILLING_PROVIDER"] = unrecognized.String()
 		delete(env, "OSAC_BILLING_BASE_URL")
 		newBillingProvider(getenv, readOK, slog.New(slog.NewTextHandler(&buffer, nil)))
 		Expect(buffer.String()).To(ContainSubstring("unrecognized"))
-		Expect(buffer.String()).ToNot(ContainSubstring("test-password"))
+		Expect(buffer.String()).ToNot(ContainSubstring(testPassword))
 	})
 
 	It("logs the provider key when it is recognized", func() {

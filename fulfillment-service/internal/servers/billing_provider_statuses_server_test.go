@@ -144,10 +144,14 @@ var _ = Describe("Billing provider statuses server", func() {
 	})
 
 	It("never echoes an unrecognized provider key", func() {
+		const (
+			testUser     = "test-user"
+			testPassword = "test-password"
+		)
 		unrecognizedKey := url.URL{
 			Scheme: "https",
 			Host:   "evil.example",
-			User:   url.UserPassword("test-user", "test-password"),
+			User:   url.UserPassword(testUser, testPassword),
 		}
 		status := get(build(billing.NewProvider(unrecognizedKey.String(), nil,
 			&billing.Error{Reason: billing.ReasonNotConfigured, Op: "load config"})))

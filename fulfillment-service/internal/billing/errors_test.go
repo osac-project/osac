@@ -29,6 +29,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 )
 
+const testCredentialValue = "t"
+
 var _ = Describe("Error", func() {
 	It("renders reason and operation without any provider detail", func() {
 		err := &billing.Error{Reason: billing.ReasonUnavailable, Op: "GetAccount", Retryable: true}
@@ -102,8 +104,8 @@ var _ = Describe("Config", func() {
 			Expect(errors.As(err, &e)).To(BeTrue())
 			Expect(e.Reason).To(Equal(billing.ReasonNotConfigured))
 		},
-		Entry("complete", billing.Config{BaseURL: "https://x", Credential: "t"}, true),
-		Entry("missing url", billing.Config{Credential: "t"}, false),
+		Entry("complete", billing.Config{BaseURL: "https://x", Credential: testCredentialValue}, true),
+		Entry("missing url", billing.Config{Credential: testCredentialValue}, false),
 		Entry("missing credential", billing.Config{BaseURL: "https://x"}, false),
 	)
 })

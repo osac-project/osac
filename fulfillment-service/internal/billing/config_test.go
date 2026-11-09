@@ -198,15 +198,22 @@ var _ = Describe("LoadConfig", func() {
 
 // baseURLWithCredentials is built at runtime so the rejection case exercises
 // URL userinfo without storing a credential-bearing literal in the repository.
+// The non-secret userinfo values are held in test-named constants.
+const (
+	testUser     = "test-user"
+	testPassword = "test-password"
+	testToken    = "tok"
+)
+
 var baseURLWithCredentials = url.URL{
 	Scheme: "https",
 	Host:   "revos.example.com",
-	User:   url.UserPassword("test-user", "test-password"),
+	User:   url.UserPassword(testUser, testPassword),
 }
 
 var _ = DescribeTable("Config.Validate checks the base URL",
 	func(baseURL string, valid bool) {
-		cfg := billing.Config{BaseURL: baseURL, Credential: "tok"}
+		cfg := billing.Config{BaseURL: baseURL, Credential: testToken}
 		err := cfg.Validate()
 		if valid {
 			Expect(err).ToNot(HaveOccurred())

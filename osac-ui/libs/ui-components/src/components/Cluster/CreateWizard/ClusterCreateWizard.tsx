@@ -77,7 +77,6 @@ const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
       enableReinitialize
       validationSchema={schema}
       onSubmit={handleSubmit}
-      validateOnChange={false}
     >
       <FieldValidationProvider showErrors={validationAlert}>
         <LeaveFormConfirmation />

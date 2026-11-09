@@ -19,12 +19,9 @@ package controller
 import (
 	"context"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -66,40 +63,7 @@ func (d *mockNetBoxDevice) etag() string {
 }
 
 func (d *mockNetBoxDevice) response() map[string]any {
-	fields := make(map[string]any, len(d.CustomFields))
-	for key, value := range d.CustomFields {
-		fields[key] = value
-	}
-	return map[string]any{
-		"id":      d.ID,
-		"url":     fmt.Sprintf("/api/dcim/devices/%d/", d.ID),
-		"display": d.Name,
-		"name":    d.Name,
-		"device_type": map[string]any{
-			"id":      1,
-			"url":     "/api/dcim/device-types/1/",
-			"display": "Test device type",
-			"manufacturer": map[string]any{
-				"id": 1, "url": "/api/dcim/manufacturers/1/", "display": "Test manufacturer",
-				"name": "Test manufacturer", "slug": "test-manufacturer",
-			},
-			"model": "Test model",
-			"slug":  "test-device-type",
-		},
-		"role":                      map[string]any{"id": 1, "url": "/api/dcim/device-roles/1/", "display": "Server", "name": "Server", "slug": "server", "_depth": 0},
-		"site":                      map[string]any{"id": 1, "url": "/api/dcim/sites/1/", "display": "Test site", "name": "Test site", "slug": "test-site"},
-		"status":                    map[string]any{"value": d.Status, "label": strings.ToUpper(d.Status[:1]) + d.Status[1:]},
-		"custom_fields":             fields,
-		"console_port_count":        0,
-		"console_server_port_count": 0,
-		"power_port_count":          0,
-		"power_outlet_count":        0,
-		"front_port_count":          0,
-		"rear_port_count":           0,
-		"device_bay_count":          0,
-		"module_bay_count":          0,
-		"inventory_item_count":      0,
-	}
+	return netboxclient.DevicePayloadForTest(d.ID, d.Name, d.Status, d.CustomFields)
 }
 
 // recordedRequest keeps the parts of an API call the specs assert on.
@@ -371,23 +335,9 @@ func newNetBoxCredentialResolver(deviceIDs ...int) inventory.CredentialsReaderRe
 	return inventory.NewNetBoxCredentialResolver(&fakeSecretAPI{secrets: secrets})
 }
 
-// netboxAPIFor builds the production NetBox client against the mock server,
-// trusting its TLS certificate the same way the netboxclient tests do.
+// netboxAPIFor builds the NetBox client against the mock server.
 func netboxAPIFor(m *mockNetBox) inventory.NetBoxAPI {
-	dir := GinkgoT().TempDir()
-	caFile := filepath.Join(dir, "ca.pem")
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: m.server.Certificate().Raw})
-	Expect(os.WriteFile(caFile, caPEM, 0o600)).To(Succeed())
-	tokenFile := filepath.Join(dir, "token")
-	Expect(os.WriteFile(tokenFile, []byte(netboxTestToken+"\n"), 0o600)).To(Succeed())
-
-	api, err := netboxclient.New(netboxclient.Config{
-		Endpoint:  m.server.URL,
-		TokenFile: tokenFile,
-		CAFile:    caFile,
-	})
-	Expect(err).NotTo(HaveOccurred())
-	return api
+	return netboxclient.NewClientForTest(m.server.Client(), m.server.URL, netboxTestToken)
 }
 
 // newNetBoxReconciler wires the real NetBox adapter and BMH manager to the

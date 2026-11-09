@@ -52,7 +52,7 @@ describe('getInitialFormValues — node sets', () => {
     expect(values.spec.nodeSetRows.value[0]).toMatchObject({
       name: 'workers',
       hostType: { id: 'bmit-worker', name: 'worker' },
-      size: '2',
+      size: 2,
     });
   });
 
@@ -87,10 +87,10 @@ describe('getInitialFormValues — node sets', () => {
     expect(values.spec.nodeSetRows.locked).toBe(false);
     const workerRow = values.spec.nodeSetRows.value.find((row) => row.name === 'workers');
     expect(workerRow?.hostType).toMatchObject({ id: 'bmit-gpu', name: 'gpu-host' });
-    expect(workerRow?.size).toBe('3');
+    expect(workerRow?.size).toBe(3);
     const infraRow = values.spec.nodeSetRows.value.find((row) => row.name === 'infra');
     expect(infraRow?.hostType).toMatchObject({ id: 'bmit-worker', name: 'worker' });
-    expect(infraRow?.size).toBe('1');
+    expect(infraRow?.size).toBe(1);
   });
 
   it('keeps an empty unlocked row when the catalog does not govern node sets', () => {
@@ -101,7 +101,7 @@ describe('getInitialFormValues — node sets', () => {
     expect(values.spec.nodeSetRows.value[0]).toMatchObject({
       name: '',
       hostType: { id: '', name: '' },
-      size: '',
+      size: undefined,
     });
   });
 });

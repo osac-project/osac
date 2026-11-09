@@ -39,13 +39,13 @@ const guestOsFamilyLabel = (t: TFunction, value: GuestOSFamily | undefined): str
 const guestOsFamilyKey = (value: GuestOSFamily | undefined): GuestOSFamily =>
   value ?? GuestOSFamily.GUEST_OS_FAMILY_UNSPECIFIED;
 
-const bootDiskSizeLabel = (t: TFunction, value: string): string =>
-  value.trim() ? `${value.trim()} GiB` : t('Not set');
+const bootDiskSizeLabel = (t: TFunction, value: number | undefined): string =>
+  value !== undefined ? `${value} GiB` : t('Not set');
 
 const additionalDisksKey = (values: ComputeCatalogItemValues['additionalDisks']['value']) =>
   JSON.stringify(
     values.map((disk) => ({
-      sizeGib: disk.sizeGib.trim(),
+      sizeGib: disk.sizeGib,
       storageTier: catalogReviewResourceKey(disk.storageTier),
     })),
   );
@@ -57,7 +57,7 @@ const additionalDisksLabel = (
   values.length
     ? values
         .map((disk, index) => {
-          const size = disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : t('Not set');
+          const size = disk.sizeGib !== undefined ? `${disk.sizeGib} GiB` : t('Not set');
           const tier = catalogReviewValue(t, disk.storageTier.name);
           return `${t('Disk set {{number}}', { number: index + 1 })}: ${size} · ${tier}`;
         })
@@ -126,8 +126,8 @@ const catalogEditChanges = (
       label: t('Boot disk size'),
       before: bootDiskSizeLabel(t, initialValues.bootDiskSizeGib.value),
       after: bootDiskSizeLabel(t, values.bootDiskSizeGib.value),
-      beforeKey: initialValues.bootDiskSizeGib.value.trim(),
-      afterKey: values.bootDiskSizeGib.value.trim(),
+      beforeKey: initialValues.bootDiskSizeGib.value,
+      afterKey: values.bootDiskSizeGib.value,
     },
     {
       label: t('Boot disk size access'),
@@ -269,7 +269,7 @@ const VMCatalogReviewStep = ({ item }: VMCatalogReviewStepProps) => {
                     {values.additionalDisks.value.map((disk, index) => (
                       <StackItem key={`${disk.sizeGib}-${index}`}>
                         {`${t('Disk set {{number}}', { number: index + 1 })}: ${
-                          disk.sizeGib.trim() ? `${disk.sizeGib.trim()} GiB` : t('Not set')
+                          disk.sizeGib !== undefined ? `${disk.sizeGib} GiB` : t('Not set')
                         } · ${catalogReviewValue(t, disk.storageTier.name)}`}
                       </StackItem>
                     ))}

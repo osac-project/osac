@@ -20,9 +20,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"time"
 
+	vaultapi "github.com/hashicorp/vault/api"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
@@ -2425,15 +2427,20 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 	}, Entry("shared", auth.SharedTenant), Entry("system", auth.SystemTenant))
 
-	DescribeTable("safely reports and retries vault provisioning after an already-ready tenant fails", func(tenantName string, transportFailure bool) {
-		const syntheticHost = "synthetic-vault.example.invalid"
-		const syntheticBody = "synthetic-backend-body-marker"
+	DescribeTable("safely reports and retries vault provisioning after an already-ready tenant fails", func(tenantName string, transportFailure bool, responseStatus int, expectedCode grpccodes.Code) {
+		const testHost = "synthetic-vault.example.invalid"
+		const testBody = "synthetic-backend-body-marker"
 		const testToken = "synthetic-token-marker"
-		backendErr := fmt.Errorf("vault login returned status 403: %s %s %s", syntheticHost, syntheticBody, testToken)
+		backendErr := fmt.Errorf("vault login returned status 403: %s %s %s", testHost, testBody, testToken)
 		if transportFailure {
 			backendErr = fmt.Errorf("failed to login to vault: %w", &url.Error{
-				Op: "Post", URL: "https://" + syntheticHost + "/v1/auth/jwt/login",
-				Err: errors.New(syntheticBody + " " + testToken),
+				Op: "Post", URL: "https://" + testHost + "/v1/auth/jwt/login",
+				Err: errors.New(testBody + " " + testToken),
+			})
+		} else if responseStatus != 0 {
+			backendErr = fmt.Errorf("failed to login to vault: %w", &vaultapi.ResponseError{
+				HTTPMethod: http.MethodPost, URL: "https://" + testHost + "/v1/auth/jwt/login",
+				StatusCode: responseStatus, Errors: []string{testBody + " " + testToken},
 			})
 		}
 		var logs bytes.Buffer
@@ -2477,7 +2484,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(findCondition(persisted).GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 		Expect(findCondition(persisted).GetReason()).To(Equal("ProvisionFailed"))
 		Expect(persisted.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
-		for _, sentinel := range []string{syntheticHost, syntheticBody, testToken} {
+		for _, sentinel := range []string{testHost, testBody, testToken} {
 			Expect(logs.String()).ToNot(ContainSubstring(sentinel))
 			Expect(updates[0].String()).ToNot(ContainSubstring(sentinel))
 		}
@@ -2486,7 +2493,7 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(record).To(HaveKeyWithValue("msg", "Failed to provision vault namespace for tenant"))
 		Expect(record).To(HaveKeyWithValue("tenant_id", "synthetic-tenant-id"))
 		Expect(record).To(HaveKeyWithValue("tenant_name", tenantName))
-		Expect(record).To(HaveKeyWithValue("reason", "ProvisionFailed"))
+		Expect(record).To(HaveKeyWithValue("error_code", expectedCode.String()))
 		Expect(record).ToNot(HaveKey("error"))
 		Expect(findCondition(persisted).GetMessage()).To(Equal("Failed to provision vault namespace"))
 		Expect(reconciler.Run(ctx, proto.Clone(persisted).(*privatev1.Tenant))).To(Succeed())
@@ -2498,10 +2505,11 @@ var _ = Describe("Vault namespace provisioning", func() {
 		Expect(findCondition(updates[1].GetObject()).GetReason()).To(Equal("NamespaceReady"))
 		Expect(updates[1].GetObject().GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
 	},
-		Entry("ordinary tenant transport failure", "retry-transit", true),
-		Entry("system tenant transport failure", auth.SystemTenant, true),
-		Entry("ordinary tenant response failure", "retry-transit", false),
-		Entry("system tenant response failure", auth.SystemTenant, false),
+		Entry("ordinary tenant transport failure", "retry-transit", true, 0, grpccodes.Unavailable),
+		Entry("system tenant transport failure", auth.SystemTenant, true, 0, grpccodes.Unavailable),
+		Entry("ordinary tenant unrecognized failure", "retry-transit", false, 0, grpccodes.Internal),
+		Entry("system tenant unrecognized failure", auth.SystemTenant, false, 0, grpccodes.Internal),
+		Entry("wrapped forbidden Vault response", "retry-transit", false, http.StatusForbidden, grpccodes.PermissionDenied),
 	)
 	It("stays PENDING with condition FALSE when vault provisioning fails during initial sync", func() {
 		reconciler := &function{

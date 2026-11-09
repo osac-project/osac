@@ -64,6 +64,48 @@ func ClassifyHubError(err error) error {
 	return err
 }
 
+// IsConflict reports whether any error in the tree of err, joined errors included, has a gRPC Aborted status.
+// grpcstatus.Code only looks at the first status, which may not be the Aborted one.
+func IsConflict(err error) bool {
+	found, _ := scanConflicts(err)
+	return found
+}
+
+// isOnlyConflict reports whether err contains an Aborted status and every leaf error of its tree is one.
+func isOnlyConflict(err error) bool {
+	found, other := scanConflicts(err)
+	return found && !other
+}
+
+// scanConflicts reports whether any error in the tree has an Aborted status, and whether any leaf is something else.
+func scanConflicts(err error) (found, other bool) {
+	if err == nil {
+		return false, false
+	}
+	if node, ok := err.(interface{ GRPCStatus() *status.Status }); ok {
+		if st := node.GRPCStatus(); st != nil && st.Code() == codes.Aborted {
+			return true, false
+		}
+	}
+	if node, ok := err.(interface{ Unwrap() error }); ok {
+		if cause := node.Unwrap(); cause != nil {
+			return scanConflicts(cause)
+		}
+	}
+	if node, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := node.Unwrap()
+		for _, cause := range causes {
+			causeFound, causeOther := scanConflicts(cause)
+			found = found || causeFound
+			other = other || causeOther
+		}
+		if len(causes) > 0 {
+			return found, other
+		}
+	}
+	return false, true
+}
+
 // HandleK8sWriteError classifies a Kubernetes write error as permanent or transient.
 // If the error is an apierrors.IsInvalid validation failure, it logs a warning, calls
 // markFailed to let the reconciler set resource-specific FAILED state, and returns nil

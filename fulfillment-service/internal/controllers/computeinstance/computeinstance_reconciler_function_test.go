@@ -689,6 +689,77 @@ var _ = Describe("registered SSH key resolution", func() {
 		Expect(stored.Spec.SSHKey).To(Equal(publicKey))
 	})
 
+	It("returns the status write conflict together with the reconciliation failure", func() {
+		const (
+			instanceID   = "new-vm-with-deleted-key-and-conflict"
+			hubID        = "conflict-ssh-key-hub"
+			hubNamespace = "conflict-ssh-key-hub-ns"
+		)
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		hubClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: hubClient}, nil)
+		instanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		instanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 2, MemoryGib: 4}.Build(),
+				}.Build(),
+			}.Build(), nil)
+		secretsClient := NewMockSecretsClient(ctrl)
+		secretsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "Secret is gone"))
+		conflictErr := status.Error(codes.Aborted, "object has been modified")
+		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
+		computeInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, conflictErr)
+
+		computeInstance := privatev1.ComputeInstance_builder{
+			Id: instanceID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-a",
+			}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "osac.templates.ocp_virt_vm"}.Build(),
+				InstanceType: privatev1.InstanceTypeReference_builder{Id: "small"}.Build(),
+				RunStrategy:  privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+				SshKey:       privatev1.SecretReference_builder{Id: "deleted-secret", Name: "login"}.Build(),
+			}.Build(),
+			Status: privatev1.ComputeInstanceStatus_builder{
+				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+		reconciler := &function{
+			logger:                 logger,
+			hubCache:               hubCache,
+			computeInstancesClient: computeInstancesClient,
+			instanceTypesClient:    instanceTypesClient,
+			secretsClient:          secretsClient,
+			maskCalculator:         masks.NewCalculator().Build(),
+		}
+
+		err := reconciler.run(ctx, computeInstance)
+		// The loop retries a conflict only if it can see one in the returned error, and the failure
+		// that preceded the write must not be lost either.
+		Expect(err).To(MatchError(ContainSubstring("Secret is gone")))
+		Expect(err).To(MatchError(conflictErr))
+		Expect(controllers.IsConflict(err)).To(BeTrue())
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
+	})
+
 	It("marks initial reconciliation failed when the registered Secret is gone", func() {
 		const (
 			instanceID   = "new-vm-with-deleted-key"

@@ -24,6 +24,8 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -638,6 +640,59 @@ var _ = Describe("run", func() {
 				ns := &corev1.Namespace{}
 				Expect(fakeClient.Get(ctx, clnt.ObjectKey{Name: tenantID}, ns)).To(Succeed())
 				Expect(ns.Labels[labels.TenantRef]).To(Equal(tenantID))
+			})
+		})
+
+		When("the status write conflicts after creating a Tenant CRD on a hub fails", func() {
+			It("returns the conflict together with the failure", func() {
+				fakeClient := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithInterceptorFuncs(interceptor.Funcs{
+						Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+							return errors.New("create failed")
+						},
+					}).
+					Build()
+
+				mockHubs.EXPECT().
+					List(gomock.Any(), gomock.Any()).
+					Return(&privatev1.HubsListResponse{
+						Size:  1,
+						Total: 1,
+						Items: []*privatev1.Hub{
+							privatev1.Hub_builder{Id: hub1ID}.Build(),
+						},
+					}, nil)
+
+				mockHubCache.EXPECT().
+					Get(gomock.Any(), hub1ID).
+					Return(&controllers.HubEntry{Namespace: namespace1, Client: fakeClient}, nil)
+
+				conflictErr := grpcstatus.Error(grpccodes.Aborted, "object has been modified")
+				mockTenants.EXPECT().
+					Update(gomock.Any(), gomock.Any(), gomock.Any()).
+					Return(nil, conflictErr)
+
+				tenant := privatev1.Tenant_builder{
+					Id: tenantID,
+					Metadata: privatev1.Metadata_builder{
+						Name:       tenantID,
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+						Tenant:     tenantName,
+					}.Build(),
+				}.Build()
+
+				f := newFunction(mockHubCache, mockHubs, mockTenants, mockProjects)
+				err := f.run(ctx, tenant)
+
+				// The loop retries a conflict only if it can see one in the returned error, and the failure
+				// that preceded the write must not be lost either.
+				Expect(err).To(MatchError(conflictErr))
+				Expect(controllers.IsConflict(err)).To(BeTrue())
+				Expect(err).To(MatchError(ContainSubstring(hub1ID)))
+				Expect(tenant.GetStatus().GetState()).To(
+					Equal(privatev1.TenantState_TENANT_STATE_FAILED),
+				)
 			})
 		})
 

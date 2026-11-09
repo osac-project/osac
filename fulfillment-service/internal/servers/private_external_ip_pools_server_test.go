@@ -77,7 +77,7 @@ var _ = Describe("Private external IP pools server", func() {
 			poolsServer, err = NewPrivateExternalIPPoolsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
+				SetTenancyLogic(newAdminTenancy()).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -107,6 +107,51 @@ var _ = Describe("Private external IP pools server", func() {
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetSpec().GetCidrs()).To(ConsistOf("192.168.1.0/24"))
 			Expect(object.GetSpec().GetIpFamily()).To(Equal(privatev1.IPFamily_IP_FAMILY_IPV4))
+		})
+
+		Describe("Tenant placement", func() {
+			createPoolInTenant := func(tenant string) (*privatev1.ExternalIPPoolsCreateResponse, error) {
+				return poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
+					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+							Tenant: tenant,
+						}.Build(),
+						Spec: privatev1.ExternalIPPoolSpec_builder{
+							Cidrs:    []string{"192.168.1.0/24"},
+							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+						}.Build(),
+					}.Build(),
+				}.Build())
+			}
+
+			It("places a pool created without a tenant in the shared tenant", func() {
+				response, err := createPoolInTenant("")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
+			})
+
+			It("accepts the shared tenant", func() {
+				response, err := createPoolInTenant(auth.SharedTenant)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
+			})
+
+			DescribeTable(
+				"rejects any other tenant and stores nothing",
+				func(tenant string) {
+					_, err := createPoolInTenant(tenant)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+					Expect(err).To(MatchError(ContainSubstring(
+						fmt.Sprintf("objects cannot be placed in the '%s' tenant", tenant))))
+
+					list, err := poolsServer.List(ctx, privatev1.ExternalIPPoolsListRequest_builder{}.Build())
+					Expect(err).ToNot(HaveOccurred())
+					Expect(list.GetItems()).To(BeEmpty())
+				},
+				Entry("a tenant", testTenant),
+				Entry("the system tenant", auth.SystemTenant),
+			)
 		})
 
 		It("Lists pools", func() {
@@ -292,7 +337,7 @@ var _ = Describe("Private external IP pools server", func() {
 			poolsServer, err = NewPrivateExternalIPPoolsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
+				SetTenancyLogic(newAdminTenancy()).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -605,13 +650,29 @@ var _ = Describe("Private external IP pools server", func() {
 				Expect(err.Error()).To(ContainSubstring("immutable"))
 			})
 
-			It("rejects changing a stored ExternalIPPool's tenant and preserves the stored object", func() {
-				createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
-					Object: privatev1.ExternalIPPool_builder{
+			// seedTenantPool stores a pool in a tenant through the DAO, as the server accepted
+			// before pools were restricted to the shared tenant.
+			seedTenantPool := func(tenant string) string {
+				response, err := fixtureDAO[*privatev1.ExternalIPPool]().Create().SetObject(
+					privatev1.ExternalIPPool_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name:   "tenant-immutable-pool",
-							Tenant: testTenant,
+							Tenant: tenant,
 						}.Build(),
+						Spec: privatev1.ExternalIPPoolSpec_builder{
+							Cidrs:    []string{"10.0.0.0/24"},
+							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+						}.Build(),
+					}.Build(),
+				).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return response.GetObject().GetId()
+			}
+
+			It("rejects moving a shared ExternalIPPool into a tenant", func() {
+				createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
+					Object: privatev1.ExternalIPPool_builder{
+						Metadata: privatev1.Metadata_builder{Name: "shared-pool"}.Build(),
 						Spec: privatev1.ExternalIPPoolSpec_builder{
 							Cidrs:    []string{"10.0.0.0/24"},
 							IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -620,6 +681,44 @@ var _ = Describe("Private external IP pools server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				id := createResponse.GetObject().GetId()
+
+				_, err = poolsServer.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
+					Object: privatev1.ExternalIPPool_builder{
+						Id:       id,
+						Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+
+				stored, err := poolsServer.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
+			})
+
+			It("updates the status of an ExternalIPPool stored in a tenant", func() {
+				id := seedTenantPool(testTenant)
+
+				_, err := poolsServer.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
+					Object: privatev1.ExternalIPPool_builder{
+						Id: id,
+						Status: privatev1.ExternalIPPoolStatus_builder{
+							State: privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				stored, err := poolsServer.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+				Expect(stored.GetObject().GetStatus().GetState()).To(
+					Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY))
+			})
+
+			It("rejects changing a stored ExternalIPPool's tenant and preserves the stored object", func() {
+				id := seedTenantPool(testTenant)
 
 				// Tenant immutability is enforced by the database trigger, which aborts the
 				// current transaction, so the rejected update runs inside a savepoint.

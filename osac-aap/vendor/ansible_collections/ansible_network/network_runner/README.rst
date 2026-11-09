@@ -52,11 +52,17 @@ The following matrix indicates which features have been implmented.
 +--------------------+-------------+-------+------+-----+------+---------+----------+-----+
 | Config Trunk Port  |      N      |   Y   |  N   |  Y  |  Y   |    Y    |    N     |  Y  |
 +--------------------+-------------+-------+------+-----+------+---------+----------+-----+
-| List VLANs         |      N      |   N   |  N   |  N  |  N   |    N    |    N     |  N  |
+| List VLANs         |      N      |   N   |  N   |  N  |  N   |    Y    |    N     |  N  |
 +--------------------+-------------+-------+------+-----+------+---------+----------+-----+
 | Add Trunk VLAN     |      N      |   N   |  N   |  N  |  N   |    N    |    N     |  Y  |
 +--------------------+-------------+-------+------+-----+------+---------+----------+-----+
 | Delete Trunk VLAN  |      N      |   N   |  N   |  N  |  N   |    N    |    N     |  Y  |
 +--------------------+-------------+-------+------+-----+------+---------+----------+-----+
-| Get Port Conf      |      N      |   N   |  N   |  N  |  N   |    N    |    N     |  Y  |
+| Get Port Conf      |      N      |   N   |  N   |  N  |  N   |    Y    |    N     |  Y  |
 +--------------------+-------------+-------+------+-----+------+---------+----------+-----+
+| Set Deletion Guard |      N      |   N   |  N   |  N  |  N   |    Y    |    N     |  N  |
++--------------------+-------------+-------+------+-----+------+---------+----------+-----+
+
+``List VLANs``, ``Get Port Conf`` and ``Set Deletion Guard`` are normalized
+capabilities: a supporting provider returns the provider-neutral results
+documented in ``roles/switch/README.md``.

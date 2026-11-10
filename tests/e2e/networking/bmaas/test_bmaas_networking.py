@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 from collections.abc import Iterator
 from typing import Any, ClassVar
@@ -43,6 +44,26 @@ from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
 pytestmark = pytest.mark.regression
 
 _NETRIS_BMI_RUNNING_RETRIES = 240
+_DEFAULT_LABEL = "osac.openshift.io/default"
+_LOG = logging.getLogger(__name__)
+
+
+def _pool_holders(private_grpc: GRPCClient, pool_id: str) -> list[dict[str, Any]]:
+    """The live ExternalIPs of every tenant that hold addresses of `pool_id`."""
+    return [
+        item
+        for item in private_grpc.list_private_external_ips()
+        if item.get("spec", {}).get("pool", {}).get("id") == pool_id
+    ]
+
+
+def _is_default(item: dict[str, Any]) -> bool:
+    return (item.get("metadata", {}).get("labels") or {}).get(_DEFAULT_LABEL) == "true"
+
+
+def _describe(item: dict[str, Any]) -> str:
+    metadata = item.get("metadata", {})
+    return f"{metadata.get('name', '?')} ({item.get('id', '?')}, tenant {metadata.get('tenant', '?')})"
 
 
 def _require(state: dict[str, Any], *keys: str) -> None:
@@ -556,6 +577,21 @@ class TestBmaasNetworking:
     def test_19_delete_external_ip_pool(self, private_grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
         if "pool_id" not in self.state:
             pytest.skip("No ExternalIPPool to delete")
+
+        # Tenant default ExternalIPs (default-nat) take addresses from any READY pool, so they can hold the
+        # suite's pool. They belong to no test: leave the pool to them. Any other holder is a leak.
+        holders = _pool_holders(private_grpc, self.state["pool_id"])
+        others = [item for item in holders if not _is_default(item)]
+        assert not others, (
+            f"ExternalIPPool {self.state['pool_id']} is still held by: {', '.join(_describe(i) for i in others)}"
+        )
+        if holders:
+            _LOG.warning(
+                "ExternalIPPool %s is not deleted: it is held by tenant default ExternalIPs: %s",
+                self.state["pool_id"],
+                ", ".join(_describe(item) for item in holders),
+            )
+            return
 
         private_grpc.delete_external_ip_pool(pool_id=self.state["pool_id"])
         wait_for_external_ip_pool_deletion(k8s=k8s_hub_client, name=self.state["pool_cr"])

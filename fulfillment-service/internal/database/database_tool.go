@@ -508,6 +508,8 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 				'changes',
 				'installation_settings',
 				'project_membership_subjects',
+				'quota_default_limits',
+				'quota_outbox',
 				'schema_migrations',
 				'storage_tier_backends',
 				'tenant_domains'

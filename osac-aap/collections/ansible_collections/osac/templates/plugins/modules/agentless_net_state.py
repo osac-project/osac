@@ -517,19 +517,11 @@ def main() -> None:
             )
             switch_state = params["observed_switch_vlan_state"]
             if existing is None and not switch_state:
-                raise StateError("Cumulus VLAN discovery is required before Subnet allocation")
+                raise StateError("Switch VLAN discovery is required before Subnet allocation")
             observed_vlan_ids: set[int] = set()
             try:
                 for switch in switch_state:
-                    if not isinstance(switch, dict):
-                        raise SubnetProviderError("Cumulus VLAN discovery result is malformed")
-                    observed_vlan_ids.update(
-                        parse_switch_vlan_exclusions(
-                            switch.get("bridge_vlan_output"),
-                            switch.get("reserved_vlan_output"),
-                            switch.get("switchd_reserved_vlan_output"),
-                        )
-                    )
+                    observed_vlan_ids.update(parse_switch_vlan_exclusions(switch))
             except SubnetProviderError as error:
                 raise StateError(str(error)) from error
             subnet, changed = store.reserve_subnet(

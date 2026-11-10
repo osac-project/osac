@@ -51,14 +51,15 @@ const wireGoldenDir = "../../../tests/contract/network-task"
 
 // Fixed API IDs. They match the IDs the osac-aap tests use for the same kinds.
 const (
-	wireVN     = "3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10"
-	wireSubnet = "8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12"
-	wirePool   = "5d6a0f1e-2b3c-4d5e-8f90-a1b2c3d4e5f6"
-	wireEIP    = "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
-	wireEIPA   = "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
-	wireNATGW  = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
-	wireVM     = "0f1e2d3c-4b5a-4968-8776-655443322110"
-	wireSG     = "6a5b4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2e"
+	wireVN           = "3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10"
+	wireSubnet       = "8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12"
+	wireClusterOrder = "9f8e7d6c-5b4a-4321-8765-4c3b2a109876"
+	wirePool         = "5d6a0f1e-2b3c-4d5e-8f90-a1b2c3d4e5f6"
+	wireEIP          = "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+	wireEIPA         = "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+	wireNATGW        = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	wireVM           = "0f1e2d3c-4b5a-4968-8776-655443322110"
+	wireSG           = "6a5b4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2e"
 )
 
 const wireNamespace = "osac-networking"
@@ -275,5 +276,45 @@ var _ = Describe("Operator and AAP wire contract goldens", func() {
 				}
 			}
 		}
+	})
+
+	It("launches and accepts the ClusterOrder ingress reservation contract", func() {
+		h := newNetHarness(true)
+		g := newWireGolden(h.ns)
+		vn := h.readyVirtualNetwork(wireVN, false)
+		g.register(vn, "vn-3f1c9a2e", 1)
+		subnet := h.readySubnet(wireSubnet, wireVN, false, testPlan)
+		g.register(subnet, "subnet-8a2b4c6d", 2)
+		instance := &v1alpha1.ClusterOrder{
+			ObjectMeta: h.meta(kindClusterOrder, wireClusterOrder),
+			Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID: "test",
+				NetworkAttachment: &v1alpha1.ClusterNetworkAttachment{
+					SubnetRef: subnet.Name,
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+		g.register(instance, "clusterorder-9f8e7d6c", 8)
+
+		reconciler := &ClusterOrderReconciler{
+			Client:              k8sClient,
+			Engine:              h.engine,
+			NetworkingNamespace: h.ns,
+		}
+		out, err := reconciler.runReserveClusterIngress(ctx, instance, subnet, vn)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out.Entry.State).To(Equal(v1alpha1.NetworkJobStateRunning))
+		g.expectLaunch(h, networktask.ReserveClusterIngressIP, netFabric)
+
+		h.aap.finish(networktask.ReserveClusterIngressIP, netFabric, "successful",
+			wireResult(networktask.ReserveClusterIngressIP, netFabric))
+		out, err = reconciler.runReserveClusterIngress(ctx, instance, subnet, vn)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out.Succeeded()).To(BeTrue())
+		Expect(instance.Status.IngressAllocatedAddress).To(Equal("10.0.1.192"))
+		Expect(taskInput(instance)).To(HaveKeyWithValue("fabric_manager", HaveKeyWithValue(
+			"name", testFabricRef.Name)))
 	})
 })

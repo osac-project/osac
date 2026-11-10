@@ -230,6 +230,19 @@ def test_select_address_returns_first_eligible_host(cidr, reserved, expected):
         assert netris_eip.select_address(cidr, reserved) == expected
 
 
+def test_select_address_can_keep_nested_range_boundaries_for_vips():
+    cidr = "10.20.0.16/28"
+    occupied = [f"10.20.0.{address}/32" for address in range(16, 31)]
+
+    assert netris_eip.select_address(cidr, []) == "10.20.0.17"
+    assert netris_eip.select_address(
+        cidr, [], exclude_network_broadcast=False
+    ) == "10.20.0.16"
+    assert netris_eip.select_address(
+        cidr, occupied, exclude_network_broadcast=False
+    ) == "10.20.0.31"
+
+
 def test_select_address_jumps_broad_occupied_intervals_in_large_cidr():
     occupied = ["10.0.0.0/16"]
 
@@ -652,6 +665,7 @@ def test_client_maps_raw_provider_records_to_normalized_shape(monkeypatch):
             "purpose": "nat",
             "site_id": 3,
             "tenant_id": 7,
+            "vpc_id": 9,
         }
     ]
 
@@ -726,6 +740,10 @@ GOOD_RECORD = {
         ({**GOOD_RECORD, "sites": [{"id": "1"}]}, "omits its site id"),
         ({**GOOD_RECORD, "tenant": 7}, "omits its tenant"),
         ({**GOOD_RECORD, "tenant": {"id": True}}, "omits its tenant id"),
+        ({**GOOD_RECORD, "vpc": "bad"}, "malformed VPC"),
+        ({**GOOD_RECORD, "vpc": {"id": True}}, "numeric VPC id"),
+        ({**GOOD_RECORD, "vpc": {"id": False}}, "numeric VPC id"),
+        ({**GOOD_RECORD, "vpc": {"id": 0, "name": "default"}}, "numeric VPC id"),
         ({**GOOD_RECORD, "prefix": "10.20.0.1/24"}, "malformed prefix"),
         ({**GOOD_RECORD, "prefix": "fd00::1/128"}, "must be an IPv4 prefix"),
     ],
@@ -736,9 +754,42 @@ def test_a_malformed_provider_record_is_refused(record, message):
     assert caught.value.category == "malformed_response"
 
 
+@pytest.mark.parametrize("vpc", [{}, {"id": None}, {"id": 0}, {"id": 0, "name": ""}])
+def test_an_empty_provider_vpc_is_normalized_as_missing(vpc):
+    normalized = netris_eip._normalize_subnet_record({**GOOD_RECORD, "vpc": vpc})
+
+    assert "vpc_id" not in normalized
+
+
 def test_a_good_provider_record_is_normalized():
     assert netris_eip._normalize_subnet_record(GOOD_RECORD) == {
         "id": 5, "name": "reservation", "prefix": "10.20.0.1/32", "purpose": "nat", "site_id": 1, "tenant_id": 7,
+    }
+
+
+def test_create_subnet_uses_the_requested_vpc():
+    client = netris_eip.NetrisSubnetClient(None, "https://netris.example", "cookie")
+    captured = {}
+
+    def fake_request(method, path, body=None, success_codes=(200,)):
+        captured.update(method=method, path=path, body=body, success_codes=success_codes)
+        return {"data": {"id": 17}}
+
+    client._request = fake_request
+
+    assert client.create_subnet("reservation", "10.20.0.5/32", 1, 7, vpc_id=9) == 17
+    assert captured == {
+        "method": "POST",
+        "path": netris_eip.SUBNET_PATH,
+        "body": {
+            "name": "reservation",
+            "prefix": "10.20.0.5/32",
+            "purpose": "nat",
+            "sites": [{"id": 1}],
+            "tenant": {"id": 7},
+            "vpc": {"id": 9},
+        },
+        "success_codes": (200, 201),
     }
 
 

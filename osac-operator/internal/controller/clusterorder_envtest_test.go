@@ -677,6 +677,31 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 	})
 
 	Context("Field immutability", func() {
+		It("allows one-time migration of the automatic endpoint capability from unset to true", func() {
+			const name = "cluster-order-migrate-endpoint-capability"
+			instance := newTestClusterOrder(name)
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+			})
+
+			instance = getClusterOrder(name)
+			instance.Spec.SupportsAutomaticCaaSEndpoints = true
+			instance.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{
+				NodeSet: "workers", NumberOfNodes: 2,
+				BareMetal: &osacv1alpha1.BareMetalNodeSpec{InstanceType: "worker"},
+			}}
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed(),
+				"the new capability and unrelated spec updates must migrate together")
+
+			instance = getClusterOrder(name)
+			Expect(instance.Spec.SupportsAutomaticCaaSEndpoints).To(BeTrue())
+			instance.Spec.SupportsAutomaticCaaSEndpoints = false
+			err := k8sClient.Update(ctx, instance)
+			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "the migrated capability must remain immutable")
+			Expect(err.Error()).To(ContainSubstring("supportsAutomaticCaaSEndpoints is immutable"))
+		})
+
 		It("should reject updates to templateID", func() {
 			const name = "cluster-order-immutable-template"
 			instance := newTestClusterOrder(name)

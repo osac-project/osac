@@ -1,0 +1,43 @@
+---
+- name: Exercise AgentlessNet switch VLAN reconciliation
+  hosts: localhost
+  gather_facts: false
+  vars:
+    agentless_net_require_switches: true
+  tasks:
+    - name: Load the AgentlessNet node and switch inventory
+      ansible.builtin.include_role:
+        name: osac.templates.agentless_net
+        tasks_from: _load_network_node_inventory
+
+    - name: Initialize the observed switch VLAN state
+      ansible.builtin.set_fact:
+        _agentless_net_subnet_switch_vlan_state: []
+
+    - name: Discover the VLAN state of every AgentlessNet switch
+      ansible.builtin.include_role:
+        name: osac.templates.agentless_net
+        tasks_from: _discover_subnet_switch
+      loop: "{{ groups['agentless_net_subnet_switches'] }}"
+      loop_control:
+        loop_var: _agentless_net_switch_name
+        label: "{{ _agentless_net_switch_name }}"
+
+    - name: Save the normalized discovery result for the outer assertions
+      ansible.builtin.copy:
+        dest: "{{ switch_test_discovery_file }}"
+        mode: "0600"
+        content: "{{ _agentless_net_subnet_switch_vlan_state | to_json }}"
+      delegate_to: localhost
+
+    - name: Reconcile the Subnet VLAN on every AgentlessNet switch
+      ansible.builtin.include_role:
+        name: osac.templates.agentless_net
+        tasks_from: _reconcile_subnet_switch
+      loop: "{{ groups['agentless_net_subnet_switches'] }}"
+      loop_control:
+        loop_var: _agentless_net_switch_name
+        label: "{{ _agentless_net_switch_name }}"
+      vars:
+        _agentless_net_subnet: "{{ switch_test_subnet }}"
+        _agentless_net_subnet_action: "{{ switch_test_action }}"

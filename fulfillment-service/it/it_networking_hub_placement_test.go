@@ -189,7 +189,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 		_, err = poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
 				Id:       poolID,
-				Metadata: privatev1.Metadata_builder{Name: poolID, Tenant: usersGroup}.Build(),
+				Metadata: privatev1.Metadata_builder{Name: poolID}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{uniqueCIDR()},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,

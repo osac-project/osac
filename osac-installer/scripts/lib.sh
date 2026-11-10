@@ -141,14 +141,18 @@ split_argv() {
                 ;;
             '\')
                 if [[ -n ${nxt} ]]; then
+                    i=$((i + 1))
+                    # A backslash-newline is removed before tokenization, so
+                    # it must not start a word; every other escaped character
+                    # is part of the current word.
                     if [[ ${nxt} != $'\n' ]]; then
                         word+=${nxt}
+                        have_word=1
                     fi
-                    i=$((i + 1))
                 else
                     word+='\'
+                    have_word=1
                 fi
-                have_word=1
                 ;;
             *)
                 word+=${ch}
@@ -181,7 +185,10 @@ split_argv() {
 # the rendered hook -- matches the Secret the osac chart reads: a caller
 # override that diverges (for example bmf.netbox.tokenSecretKey) would
 # pass a bridged render yet fail the real install only after
-# install-infra changed the cluster, so a mismatch fails the gate instead.
+# install-infra changed the cluster. A mismatch is still accepted when the
+# diverging Secret already exists with the required key: `helm upgrade`
+# then reads that Secret through lookup, so the install succeeds even
+# though the seeded one goes unused.
 #
 # Pre-existing (not seeded): the token Secret can already exist in the
 # cluster -- created by a prior install or an operator -- and helm upgrade
@@ -199,7 +206,7 @@ split_argv() {
 render_osac_chart_offline() {
     local placeholder_token="$1"
     shift
-    local err bridged bridged_err_file
+    local err bridged bridged_err_file differing
     if err=$(helm template "$@" 2>&1 >/dev/null); then
         return 0
     fi
@@ -215,7 +222,21 @@ render_osac_chart_offline() {
             fi
             rm -f "${bridged_err_file}"
             if [ "${NETBOX_TOKEN_SEEDED:-0}" = "1" ]; then
-                netbox_seed_identity_matches "${bridged}" "${placeholder_token}"
+                if differing=$(netbox_seed_identity_differing "${bridged}" \
+                    "${placeholder_token}") && [ -z "${differing}" ]; then
+                    return 0
+                fi
+                # A caller override can point the osac chart at a different
+                # token Secret while the infra hook seeds its own. When that
+                # Secret already exists with the required key, helm upgrade
+                # reads it through lookup and the install succeeds, so the
+                # pre-existing Secret is the second legitimate source.
+                if netbox_existing_secret_matches "${bridged}" \
+                    "${placeholder_token}"; then
+                    return 0
+                fi
+                netbox_seed_identity_matches "${bridged}" \
+                    "${placeholder_token}"
                 return
             fi
             if ! netbox_existing_secret_matches "${bridged}" \
@@ -433,31 +454,47 @@ netbox_existing_secret_matches() {
     return 1
 }
 
-# Compare the NetBox token Secret identity the osac chart renders with the
-# seed hook's identity exported by netbox_seed_check. Any mismatch fails
-# the gate before a cluster change; the message names which identity
-# fields differ, never their values -- Secret names and keys are
-# customer-supplied and can carry internal identifiers, and the gate's
-# errors reach the terminal and CI logs.
-# Usage: netbox_seed_identity_matches RENDER PLACEHOLDER_TOKEN
-netbox_seed_identity_matches() {
+# Print the NetBox token Secret identity fields where the osac chart's
+# render diverges from the seed hook's (empty when they match), and return
+# 1 when the chart's identity cannot be determined. Callers decide whether
+# a difference is fatal: a pre-existing Secret under the chart's identity
+# still makes the install work, so render_osac_chart_offline tries that
+# before reporting a mismatch.
+# Usage: netbox_seed_identity_differing RENDER PLACEHOLDER_TOKEN
+netbox_seed_identity_differing() {
     local render="$1" placeholder="$2"
     local identity bmf_name bmf_ns bmf_key differing=""
     identity=$(netbox_render_secret_identity "${render}" "${placeholder}")
     bmf_name=$(printf '%s\n' "${identity}" | sed -n 1p)
     bmf_ns=$(printf '%s\n' "${identity}" | sed -n 2p)
     bmf_key=$(printf '%s\n' "${identity}" | sed -n 3p)
-    if [ -z "${bmf_name}" ] || [ -z "${bmf_key}" ]; then
-        echo "ERROR: could not determine which NetBox token Secret the osac chart reads; no cluster changes were made." >&2
-        return 1
-    fi
+    [ -n "${bmf_name}" ] && [ -n "${bmf_key}" ] || return 1
     [ "${bmf_name}" != "${NETBOX_SEED_SECRET_NAME}" ] && differing="name"
     [ "${bmf_ns}" != "${NETBOX_SEED_SECRET_NS}" ] \
         && differing="${differing:+${differing}, }namespace"
     [ "${bmf_key}" != "${NETBOX_SEED_SECRET_KEY}" ] \
         && differing="${differing:+${differing}, }key"
+    printf '%s\n' "${differing}"
+}
+
+# Compare the NetBox token Secret identity the osac chart renders with the
+# seed hook's identity exported by netbox_seed_check, after
+# render_osac_chart_offline has ruled out a pre-existing Secret. Any
+# remaining mismatch fails the gate before a cluster change; the message
+# names which identity fields differ, never their values -- Secret names
+# and keys are customer-supplied and can carry internal identifiers, and
+# the gate's errors reach the terminal and CI logs.
+# Usage: netbox_seed_identity_matches RENDER PLACEHOLDER_TOKEN
+netbox_seed_identity_matches() {
+    local render="$1" placeholder="$2"
+    local differing
+    if ! differing=$(netbox_seed_identity_differing "${render}" \
+        "${placeholder}"); then
+        echo "ERROR: could not determine which NetBox token Secret the osac chart reads; no cluster changes were made." >&2
+        return 1
+    fi
     if [ -n "${differing}" ]; then
-        echo "ERROR: NetBox token Secret identity mismatch (differing: ${differing}): the osac chart's NetBox token Secret settings (bmf.secrets.netboxToken, bmf.netbox.tokenSecretKey, and the release namespace) do not match the infra seed hook's (netbox.apiTokenSecret, osacNamespace); no cluster changes were made. Align the osac chart settings with the seed hook and retry. The differing values are deliberately not printed: they are customer-supplied Secret names and keys that can carry internal identifiers." >&2
+        echo "ERROR: NetBox token Secret identity mismatch (differing: ${differing}): the osac chart's NetBox token Secret settings (bmf.secrets.netboxToken, bmf.netbox.tokenSecretKey, and the release namespace) do not match the infra seed hook's (netbox.apiTokenSecret, osacNamespace); no cluster changes were made. Align the osac chart settings with the seed hook and retry, or pre-create the chart's Secret with the required key. The differing values are deliberately not printed: they are customer-supplied Secret names and keys that can carry internal identifiers." >&2
         return 1
     fi
     return 0

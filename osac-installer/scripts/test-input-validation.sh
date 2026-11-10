@@ -493,6 +493,62 @@ grep -Fxq $'helm\toperator.vendorControllers.other.description=three word value'
   || fail "extra-args-quoting: a single-quoted value did not reach Helm as one argument"
 assert_prevalidation_commands extra-args-quoting
 
+# A backslash-newline is removed before word splitting, so it must not
+# start a word: a value wrapped across lines (as a caller writes it in a
+# shell fragment) reaches Helm as the same arguments as the one-line form,
+# with no empty positional argument in between.
+echo "checking extra-args-continuation (a wrapped value keeps its boundaries)"
+extra_continuation_argv_log="${TMP_DIR}/extra-args-continuation-argv.log"
+: >"${LOG}"
+: >"${extra_continuation_argv_log}"
+continuation_args=$(printf '%s \\\n %s' \
+  '--set-string operator.vendorControllers.acme.description=api.example.test' \
+  '--set-string operator.vendorControllers.other.description=internal.example.test')
+if MOCK_LOG="${LOG}" MOCK_ARGV_LOG="${extra_continuation_argv_log}" \
+  PATH="${STUB_BIN}:${PATH}" REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    EXTRA_HELM_ARGS="${continuation_args}" \
+    >"${TMP_DIR}/extra-continuation.out" \
+    2>"${TMP_DIR}/extra-continuation.err"; then
+  :
+else
+  fail "extra-args-continuation: the gate rejected a wrapped EXTRA_HELM_ARGS value"
+fi
+grep -Fxq $'helm\toperator.vendorControllers.acme.description=api.example.test' \
+  "${extra_continuation_argv_log}" \
+  || fail "extra-args-continuation: the first option did not reach Helm as one argument"
+grep -Fxq $'helm\toperator.vendorControllers.other.description=internal.example.test' \
+  "${extra_continuation_argv_log}" \
+  || fail "extra-args-continuation: the wrapped option did not reach Helm as one argument"
+grep -Fxq $'helm\t' "${extra_continuation_argv_log}" \
+  && fail "extra-args-continuation: the continuation inserted an empty argument"
+assert_prevalidation_commands extra-args-continuation
+
+# Continuation-only input contains no words at all: the gate renders
+# without extra arguments instead of handing Helm an empty positional.
+echo "checking extra-args-continuation-only (only a continuation, no words)"
+extra_continuation_only_argv_log="${TMP_DIR}/extra-continuation-only-argv.log"
+: >"${LOG}"
+: >"${extra_continuation_only_argv_log}"
+if MOCK_LOG="${LOG}" MOCK_ARGV_LOG="${extra_continuation_only_argv_log}" \
+  PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  EXTRA_HELM_ARGS="$(printf '\\\n')" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    >"${TMP_DIR}/extra-continuation-only.out" \
+    2>"${TMP_DIR}/extra-continuation-only.err"; then
+  :
+else
+  fail "extra-args-continuation-only: the gate rejected continuation-only input"
+fi
+grep -q 'helm template osac ' "${LOG}" \
+  || fail "extra-args-continuation-only: the gate render never ran"
+grep -Fxq $'helm\t' "${extra_continuation_only_argv_log}" \
+  && fail "extra-args-continuation-only: continuation-only input passed an empty argument"
+assert_prevalidation_commands extra-args-continuation-only
+
 # The dry-run path parses the same input the same way: `make install
 # DRY_RUN=1` must not fail on a value that the gate accepted.
 echo "checking extra-args-quoting-dry-run (quoted whitespace in the dry-run path)"
@@ -981,7 +1037,9 @@ render_osac_chart_offline "${offline_token}" \
 # customer-supplied identifiers, and the gate's errors reach the terminal
 # and CI logs, so the values themselves must stay out of the message.
 echo "checking netbox-key-mismatch (seeded key differs from the chart's key)"
-if render_osac_chart_offline "${offline_token}" \
+: >"${netbox_cli_log}"
+if PATH="${netbox_cli_bin}:${PATH}" NETBOX_CLI_LOG="${netbox_cli_log}" \
+    NETBOX_TOKEN_SEEDED=1 render_osac_chart_offline "${offline_token}" \
     osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
     --namespace osac \
     "${NETBOX_PROFILE_ARGS[@]}" \
@@ -997,7 +1055,9 @@ grep -Fq 'token.netbox.internal.example.com' "${netbox_gate_err}" \
   && fail "netbox-key-mismatch: the failure echoed the divergent key"
 
 echo "checking netbox-name-mismatch (seeded name differs from the chart's name)"
-if render_osac_chart_offline "${offline_token}" \
+: >"${netbox_cli_log}"
+if PATH="${netbox_cli_bin}:${PATH}" NETBOX_CLI_LOG="${netbox_cli_log}" \
+    NETBOX_TOKEN_SEEDED=1 render_osac_chart_offline "${offline_token}" \
     osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
     --namespace osac \
     "${NETBOX_PROFILE_ARGS[@]}" \
@@ -1011,6 +1071,30 @@ grep -Fq 'differing: name' "${netbox_gate_err}" \
   || fail "netbox-name-mismatch: the failure did not name the differing field"
 grep -Fq 'netbox.internal.example.com' "${netbox_gate_err}" \
   && fail "netbox-name-mismatch: the failure echoed the divergent Secret name"
+
+# A diverging seed identity is not fatal when the Secret the chart reads
+# already exists with the required key: `helm upgrade` reads that Secret
+# through lookup, so the install succeeds even though the infra hook seeds
+# a different one. The stub answers for the chart's identity, not the seed
+# hook's, so the lookup alone decides it.
+echo "checking netbox-seed-existing-secret (a pre-existing chart Secret saves a mismatch)"
+: >"${netbox_cli_log}"
+if ! PATH="${netbox_cli_bin}:${PATH}" NETBOX_CLI_LOG="${netbox_cli_log}" \
+    NETBOX_CLI_SECRET_PRESENT=1 NETBOX_CLI_NAME=netbox.internal.example.com \
+    NETBOX_CLI_NS=osac NETBOX_CLI_KEY=token NETBOX_TOKEN_SEEDED=1 \
+    render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    --set bmf.secrets.netboxToken=netbox.internal.example.com \
+    2>"${netbox_gate_err}"; then
+  fail "netbox-seed-existing-secret: the gate rejected an existing chart Secret"
+fi
+grep -q 'kubectl get secret netbox.internal.example.com -n osac' \
+  "${netbox_cli_log}" \
+  || fail "netbox-seed-existing-secret: the lookup did not use the chart's Secret identity"
+grep -Eq 'kubectl (apply|create|delete|patch|replace|edit)' "${netbox_cli_log}" \
+  && fail "netbox-seed-existing-secret: the gate mutated the cluster"
 
 # Without the seed hook nothing creates the token Secret, so the same
 # lookup failure is a real input error unless the Secret already exists in

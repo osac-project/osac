@@ -20,6 +20,11 @@ const getVmDetailsStatus = (page: Page): Locator =>
 
 export type VmPowerAction = 'start' | 'stop' | 'restart';
 
+type VmPowerActionButton = readonly ['button', { name: string; exact: true }];
+
+const vmPowerActionButton = (action: VmPowerAction): VmPowerActionButton =>
+  VmDetailsActionButtons[action] as VmPowerActionButton;
+
 export interface VmResizeTarget {
   name: string;
   vcpus: number;
@@ -155,36 +160,15 @@ export const waitForVmDetailsStatus = async (
   status: string,
   timeout = 180_000,
 ): Promise<void> => {
-  await expect
-    .poll(
-      async () => {
-        try {
-          return await pollVmDetails(page, name, async () => {
-            const statusLabel = getVmDetailsStatus(page).filter({ hasText: exactText(status) });
-            return (await statusLabel.count()) > 0 ? status : '';
-          });
-        } catch {
-          return '';
-        }
-      },
-      { timeout, intervals: [1_000, 2_000, 5_000] },
-    )
-    .toBe(status);
+  await waitForVmDetails(page, name, status, timeout, async () => {
+    const statusLabel = getVmDetailsStatus(page).filter({ hasText: exactText(status) });
+    return (await statusLabel.count()) > 0 ? status : '';
+  });
 };
 
 /** Trigger a VM power action; the caller verifies the resulting lifecycle state. */
 export const runVmPowerAction = async (page: Page, action: VmPowerAction): Promise<void> => {
-  switch (action) {
-    case 'start':
-      await page.getByRole(...VmDetailsActionButtons.start).click();
-      break;
-    case 'stop':
-      await page.getByRole(...VmDetailsActionButtons.stop).click();
-      break;
-    case 'restart':
-      await page.getByRole(...VmDetailsActionButtons.restart).click();
-      break;
-  }
+  await page.getByRole(...vmPowerActionButton(action)).click();
 };
 
 const detailValue = (page: Page, label: string): Locator =>
@@ -224,14 +208,31 @@ export const waitForVmConditionStatus = async (
   status: string,
   timeout = 60_000,
 ): Promise<void> => {
+  await waitForVmDetails(page, name, status, timeout, async () => {
+    await expectVmConditionStatus(page, conditionType, status);
+    return status;
+  });
+};
+
+const waitForVmDetails = async (
+  page: Page,
+  name: string,
+  status: string,
+  timeout: number,
+  assertion: () => Promise<string>,
+): Promise<void> => {
   await expect
     .poll(
       async () => {
         try {
-          return await pollVmDetails(page, name, async () => {
-            await expectVmConditionStatus(page, conditionType, status);
-            return status;
-          });
+          if (/\/vms\/[^/]+$/.test(new URL(page.url()).pathname)) {
+            await page.reload();
+          } else {
+            await openVmsPage(page);
+            await openVmDetailsPage(page, name);
+          }
+          await expectVmDetailsPage(page, name);
+          return await assertion();
         } catch {
           return '';
         }
@@ -239,21 +240,6 @@ export const waitForVmConditionStatus = async (
       { timeout, intervals: [1_000, 2_000, 5_000] },
     )
     .toBe(status);
-};
-
-const pollVmDetails = async <T>(
-  page: Page,
-  name: string,
-  assertion: () => Promise<T>,
-): Promise<T> => {
-  if (/\/vms\/[^/]+$/.test(new URL(page.url()).pathname)) {
-    await page.reload();
-  } else {
-    await openVmsPage(page);
-    await openVmDetailsPage(page, name);
-  }
-  await expectVmDetailsPage(page, name);
-  return assertion();
 };
 
 /** Change the VM instance type through the details-page modal. */

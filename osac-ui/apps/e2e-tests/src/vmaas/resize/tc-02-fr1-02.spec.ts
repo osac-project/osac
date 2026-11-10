@@ -2,10 +2,9 @@ import { test } from '@playwright/test';
 
 import {
   baseInstanceType,
-  conditionTimeout,
   lifecycleTimeout,
   resizeInstanceType,
-  restartRequiredCondition,
+  restartVmAndVerify,
   useResizeVmLifecycle,
 } from './resize_test';
 import { expectComputeInstanceConfiguration } from '../../../../../libs/osac-cli/src/compute_instance';
@@ -14,7 +13,6 @@ import {
   expectVmConfiguration,
   resizeVmInstanceType,
   runVmPowerAction,
-  waitForVmConditionStatus,
   waitForVmDetailsStatus,
 } from '../../../../../libs/test-utils/src/vms.page';
 import { tenantNameOrSkip, vmTestName } from '../test_data';
@@ -53,20 +51,7 @@ test('TC-FR1-02 Resize a stopped VM from the UI, then start — new sizing is ap
       active: baseInstanceType,
     }),
   );
-  await testStep('vm-resize', 'Start the VM with the new sizing', async () => {
-    await runVmPowerAction(page, 'start');
-    await waitForVmDetailsStatus(page, vmTestName, 'Running', lifecycleTimeout);
-    await waitForVmConditionStatus(
-      page,
-      vmTestName,
-      restartRequiredCondition,
-      'False',
-      conditionTimeout,
-    );
-    await expectVmConfiguration(page, resizeInstanceType);
-    await expectComputeInstanceConfiguration(tenantName, vmTestName, {
-      desired: resizeInstanceType,
-      active: resizeInstanceType,
-    });
-  });
+  await testStep('vm-resize', 'Start the VM with the new sizing', () =>
+    restartVmAndVerify(page, tenantName, vmTestName, 'start', resizeInstanceType),
+  );
 });

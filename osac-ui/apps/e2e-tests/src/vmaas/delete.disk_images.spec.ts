@@ -1,16 +1,9 @@
 import { test } from '@playwright/test';
 
+import { deleteDiskImageFlow } from './delete_flows';
 import { diskImageNameOrSkip, diskImagesTestData } from './test_data';
-import {
-  deleteDiskImage,
-  ensureDiskImageExists,
-  expectDiskImageNotToExist,
-  includeObsoleteDiskImages,
-  openDiskImageDetails,
-} from '../../../../libs/test-utils/src/disk_images.page';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
-import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
 
 test(`deletes disk image ${diskImagesTestData.name}`, async ({ page }) => {
   // Allow image creation when needed, deletion, login, and UI actions to complete.
@@ -32,30 +25,7 @@ test(`deletes disk image ${diskImagesTestData.name}`, async ({ page }) => {
     ),
   );
 
-  await testStep('disk-image-delete', 'Open Infrastructure > Disk images', async () => {
-    await openDiskImagesPage(page);
-  });
-
-  await testStep(
-    'disk-image-delete',
-    `Verify disk image "${diskImageName}" exists before deletion`,
-    async () => {
-      await ensureDiskImageExists(page, { ...diskImagesTestData, name: diskImageName });
-    },
-  );
-
-  await testStep('disk-image-delete', 'Open the configured disk image', async () => {
-    await includeObsoleteDiskImages(page);
-    await openDiskImageDetails(page, diskImageName);
-  });
-
   await testStep('disk-image-delete', `Delete disk image "${diskImageName}"`, () =>
-    deleteDiskImage(page, diskImageName),
-  );
-
-  await testStep(
-    'disk-image-delete',
-    `Verify disk image "${diskImageName}" does not exist after deletion`,
-    () => expectDiskImageNotToExist(page, diskImageName),
+    deleteDiskImageFlow(page, { ...diskImagesTestData, name: diskImageName }),
   );
 });

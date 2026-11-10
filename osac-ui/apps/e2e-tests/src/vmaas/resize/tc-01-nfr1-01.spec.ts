@@ -3,9 +3,9 @@ import { test } from '@playwright/test';
 import {
   baseInstanceType,
   conditionTimeout,
-  lifecycleTimeout,
   resizeInstanceType,
   restartRequiredCondition,
+  restartVmAndVerify,
   useResizeVmLifecycle,
 } from './resize_test';
 import { expectComputeInstanceConfiguration } from '../../../../../libs/osac-cli/src/compute_instance';
@@ -13,9 +13,7 @@ import { logProgress, testStep } from '../../../../../libs/test-utils/src/genera
 import {
   expectVmConfiguration,
   resizeVmInstanceType,
-  runVmPowerAction,
   waitForVmConditionStatus,
-  waitForVmDetailsStatus,
 } from '../../../../../libs/test-utils/src/vms.page';
 import { tenantNameOrSkip, vmTestName } from '../test_data';
 
@@ -50,22 +48,9 @@ test('TC-NFR1-01 Resize a running VM from the UI — restart required', async ({
       active: baseInstanceType,
     }),
   );
-  await testStep('vm-resize', 'Restart the VM to apply the new sizing', async () => {
-    await runVmPowerAction(page, 'restart');
-    await waitForVmDetailsStatus(page, vmTestName, 'Running', lifecycleTimeout);
-    await waitForVmConditionStatus(
-      page,
-      vmTestName,
-      restartRequiredCondition,
-      'False',
-      conditionTimeout,
-    );
-    await expectVmConfiguration(page, resizeInstanceType);
-    await expectComputeInstanceConfiguration(tenantName, vmTestName, {
-      desired: resizeInstanceType,
-      active: resizeInstanceType,
-    });
-  });
+  await testStep('vm-resize', 'Restart the VM to apply the new sizing', () =>
+    restartVmAndVerify(page, tenantName, vmTestName, 'restart', resizeInstanceType),
+  );
 
   await testStep('vm-resize', 'Resize the running VM back to the base instance type', () =>
     resizeVmInstanceType(page, baseInstanceType),
@@ -79,20 +64,7 @@ test('TC-NFR1-01 Resize a running VM from the UI — restart required', async ({
       active: resizeInstanceType,
     }),
   );
-  await testStep('vm-resize', 'Restart the VM to apply the base sizing', async () => {
-    await runVmPowerAction(page, 'restart');
-    await waitForVmDetailsStatus(page, vmTestName, 'Running', lifecycleTimeout);
-    await waitForVmConditionStatus(
-      page,
-      vmTestName,
-      restartRequiredCondition,
-      'False',
-      conditionTimeout,
-    );
-    await expectVmConfiguration(page, baseInstanceType);
-    await expectComputeInstanceConfiguration(tenantName, vmTestName, {
-      desired: baseInstanceType,
-      active: baseInstanceType,
-    });
-  });
+  await testStep('vm-resize', 'Restart the VM to apply the base sizing', () =>
+    restartVmAndVerify(page, tenantName, vmTestName, 'restart', baseInstanceType),
+  );
 });

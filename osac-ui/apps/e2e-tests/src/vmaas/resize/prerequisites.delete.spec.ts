@@ -1,46 +1,16 @@
-import { expect, test } from '@playwright/test';
-import { access, rm } from 'node:fs/promises';
+import { test } from '@playwright/test';
+import { rm } from 'node:fs/promises';
 
+import {
+  deleteCatalogFlow,
+  deleteDiskImageFlow,
+  deleteInstanceTypeFlow,
+  deleteStorageTierFlow,
+  deleteTenantFlow,
+} from '../delete_flows';
 import { isResizeResourceOwned, removeResizeOwnershipMarker } from './ownership';
-import { deleteTenantSshKey } from '../../../../../libs/osac-cli/src/secret';
-import { deleteTenantAdmin } from '../../../../../libs/osac-cli/src/tenant_admin';
-import {
-  deleteCatalogItem,
-  expectCatalogItemNotListed,
-} from '../../../../../libs/test-utils/src/catalog.page';
-import {
-  deleteDiskImage,
-  ensureDiskImageExists,
-  expectDiskImageNotToExist,
-  includeObsoleteDiskImages,
-  openDiskImageDetails,
-} from '../../../../../libs/test-utils/src/disk_images.page';
 import { openAndLogin } from '../../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../../libs/test-utils/src/general/test_progress';
-import {
-  deleteInstanceType,
-  ensureInstanceTypeExists,
-  expectInstanceTypeNotToExist,
-} from '../../../../../libs/test-utils/src/instance_types.page';
-import {
-  openCatalogPage,
-  openDiskImagesPage,
-  openInstanceTypesPage,
-  openStorageTiersPage,
-  openTenantsPage,
-} from '../../../../../libs/test-utils/src/main.page';
-import {
-  deleteStorageTier,
-  ensureStorageTierExists,
-  expectStorageTierNotListed,
-} from '../../../../../libs/test-utils/src/storage.page';
-import {
-  deleteTenant,
-  expectTenantNotToExist,
-  expectTenantToExist,
-  readTenantCredentials,
-  tenantCredentialsFilePath,
-} from '../../../../../libs/test-utils/src/tenants.page';
 import {
   catalogOwnershipFilePath,
   catalogTestData,
@@ -89,14 +59,7 @@ test('deletes the resize prerequisites', async ({ page }) => {
       logProgress('resize-cleanup', 'Catalog is not owned by this run; leaving it untouched.');
       return;
     }
-    await openCatalogPage(page);
-    const catalogLink = page.getByRole('link', { name: catalogTestData.name, exact: true });
-    try {
-      await expect(catalogLink).toHaveCount(1, { timeout: 5_000 });
-      await deleteCatalogItem(page, catalogTestData.name);
-    } catch {
-      await expectCatalogItemNotListed(page, catalogTestData.name);
-    }
+    await deleteCatalogFlow(page, catalogTestData.name);
     await rm(catalogOwnershipFilePath(catalogTestData.name), { force: true });
     await removeResizeOwnershipMarker('catalog');
   });
@@ -109,16 +72,13 @@ test('deletes the resize prerequisites', async ({ page }) => {
       );
       return;
     }
-    await openInstanceTypesPage(page);
-    await ensureInstanceTypeExists(
+    await deleteInstanceTypeFlow(
       page,
       targetInstanceTypeName,
       resizeInstanceTypeTestData.description,
       resizeInstanceTypeTestData.vcpus,
       resizeInstanceTypeTestData.memoryGib,
     );
-    await deleteInstanceType(page, targetInstanceTypeName);
-    await expectInstanceTypeNotToExist(page, targetInstanceTypeName);
     await removeResizeOwnershipMarker('instance-type-target');
   });
 
@@ -130,8 +90,7 @@ test('deletes the resize prerequisites', async ({ page }) => {
       );
       return;
     }
-    await openInstanceTypesPage(page);
-    await ensureInstanceTypeExists(
+    await deleteInstanceTypeFlow(
       page,
       baseInstanceTypeName,
       instanceTypeTestData.description,
@@ -139,8 +98,6 @@ test('deletes the resize prerequisites', async ({ page }) => {
       instanceTypeTestData.memoryGib,
       instanceTypeTestData.gpu,
     );
-    await deleteInstanceType(page, baseInstanceTypeName);
-    await expectInstanceTypeNotToExist(page, baseInstanceTypeName);
     await removeResizeOwnershipMarker('instance-type-base');
   });
 
@@ -149,11 +106,7 @@ test('deletes the resize prerequisites', async ({ page }) => {
       logProgress('resize-cleanup', 'Storage tier is not owned by this run; leaving it untouched.');
       return;
     }
-    await openStorageTiersPage(page);
-    const storageTier = { ...storageTierTestData, name: storageTierName };
-    await ensureStorageTierExists(page, storageTier);
-    await deleteStorageTier(page, storageTierName);
-    await expectStorageTierNotListed(page, storageTierName);
+    await deleteStorageTierFlow(page, { ...storageTierTestData, name: storageTierName });
     await removeResizeOwnershipMarker('storage-tier');
   });
 
@@ -162,12 +115,7 @@ test('deletes the resize prerequisites', async ({ page }) => {
       logProgress('resize-cleanup', 'Disk image is not owned by this run; leaving it untouched.');
       return;
     }
-    await openDiskImagesPage(page);
-    await ensureDiskImageExists(page, { ...diskImagesTestData, name: diskImageName });
-    await includeObsoleteDiskImages(page);
-    await openDiskImageDetails(page, diskImageName);
-    await deleteDiskImage(page, diskImageName);
-    await expectDiskImageNotToExist(page, diskImageName);
+    await deleteDiskImageFlow(page, { ...diskImagesTestData, name: diskImageName });
     await removeResizeOwnershipMarker('disk-image');
   });
 
@@ -176,15 +124,7 @@ test('deletes the resize prerequisites', async ({ page }) => {
       logProgress('resize-cleanup', 'Tenant is not owned by this run; leaving it untouched.');
       return;
     }
-    const credentialsFile = tenantCredentialsFilePath(tenantName);
-    await openTenantsPage(page);
-    await expectTenantToExist(page, tenantName);
-    const tenantCredentials = await readTenantCredentials(credentialsFile);
-    await deleteTenantAdmin(tenantName, tenantCredentials.username);
-    await deleteTenantSshKey(tenantName);
-    await deleteTenant(page, tenantName);
-    await expectTenantNotToExist(page, tenantName);
-    await expect(access(credentialsFile)).rejects.toThrow();
+    await deleteTenantFlow(page, tenantName, '');
     await removeResizeOwnershipMarker('tenant');
   });
 });

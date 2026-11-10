@@ -63,6 +63,11 @@ eligible HostedCluster and provider networking enabled, the controller may
 still discover or reserve ingress, create automatic attachments, and publish
 DNS. Control the controller lifecycle separately in those tests.
 
+Leaving `install_step_external_access_override` unset keeps the template no-op
+and is the pattern used by `targets/caas_core_lifecycle` (OSAC-5998,
+GATE-CAAS-04) to prove core install/delete run with no provider networking
+role.
+
 ### Delete Flow (tasks/delete.yaml)
 
 **4 overrideable steps**.
@@ -80,7 +85,8 @@ override replaces only the AAP step; it does not disable the ClusterOrder
 controller's endpoint lifecycle. If a test runs the controller with an
 eligible HostedCluster and provider networking enabled, the controller may
 still remove automatic attachments and DNS. Control the controller lifecycle
-separately in those tests.
+separately in those tests. Leaving `delete_step_external_access_override` unset
+is the disabled-mode delete pattern used by `targets/caas_core_lifecycle`.
 
 ## CI Cluster Template: osac.templates.ocp_ci_small
 

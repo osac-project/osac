@@ -1,0 +1,7 @@
+---
+# Records the Ansible roles that ran in the workflow play. The role runs as the
+# workflow-complete hook, so the captured list covers every step of the install
+# or delete flow, including the template's external-access step.
+- name: Record the roles applied by the workflow
+  ansible.builtin.set_fact:
+    workflow_completed_roles: "{{ ansible_role_names }}"

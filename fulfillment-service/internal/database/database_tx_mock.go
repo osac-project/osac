@@ -76,6 +76,18 @@ func (mr *MockTxMockRecorder) Exec(ctx, query any, args ...any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Exec", reflect.TypeOf((*MockTx)(nil).Exec), varargs...)
 }
 
+// OnCommit mocks base method.
+func (m *MockTx) OnCommit(fn func()) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "OnCommit", fn)
+}
+
+// OnCommit indicates an expected call of OnCommit.
+func (mr *MockTxMockRecorder) OnCommit(fn any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OnCommit", reflect.TypeOf((*MockTx)(nil).OnCommit), fn)
+}
+
 // Query mocks base method.
 func (m *MockTx) Query(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
 	m.ctrl.T.Helper()

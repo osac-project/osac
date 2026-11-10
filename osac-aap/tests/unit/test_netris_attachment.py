@@ -209,6 +209,7 @@ def run(tmp_path: Path, server, job: dict, env_drop: tuple = ()) -> tuple[int, d
         "ANSIBLE_LOCALHOST_WARNING": "False",
         "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
         "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
+        "OSAC_LAUNCH_EXTRA_VARS_PATH": str(extra),
     })
     for name in env_drop:
         environ.pop(name, None)

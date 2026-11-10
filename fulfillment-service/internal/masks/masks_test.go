@@ -64,6 +64,69 @@ var _ = Describe("Calculator", func() {
 		})
 	})
 
+	Context("when metadata.version differs", func() {
+		It("should ignore a version change on its own", func() {
+			before := privatev1.Cluster_builder{
+				Metadata: privatev1.Metadata_builder{
+					Version:    1,
+					Finalizers: []string{"controller"},
+				}.Build(),
+			}.Build()
+
+			after := privatev1.Cluster_builder{
+				Metadata: privatev1.Metadata_builder{
+					Version:    2,
+					Finalizers: []string{"controller"},
+				}.Build(),
+			}.Build()
+
+			mask := calculator.Calculate(before, after)
+			Expect(mask.Paths).To(BeEmpty())
+		})
+
+		It("should report the other metadata changes without the version", func() {
+			before := privatev1.Cluster_builder{
+				Metadata: privatev1.Metadata_builder{
+					Version:    1,
+					Finalizers: []string{"controller"},
+				}.Build(),
+			}.Build()
+
+			after := privatev1.Cluster_builder{
+				Metadata: privatev1.Metadata_builder{
+					Version:    2,
+					Finalizers: []string{},
+				}.Build(),
+			}.Build()
+
+			mask := calculator.Calculate(before, after)
+			Expect(mask.Paths).To(ConsistOf("metadata.finalizers"))
+		})
+
+		It("should report a field named version outside metadata", func() {
+			before := privatev1.Cluster_builder{
+				Metadata: privatev1.Metadata_builder{
+					Version: 1,
+				}.Build(),
+				Spec: privatev1.ClusterSpec_builder{
+					Version: privatev1.ClusterVersionReference_builder{Name: "4.17"}.Build(),
+				}.Build(),
+			}.Build()
+
+			after := privatev1.Cluster_builder{
+				Metadata: privatev1.Metadata_builder{
+					Version: 2,
+				}.Build(),
+				Spec: privatev1.ClusterSpec_builder{
+					Version: privatev1.ClusterVersionReference_builder{Name: "4.18"}.Build(),
+				}.Build(),
+			}.Build()
+
+			mask := calculator.Calculate(before, after)
+			Expect(mask.Paths).To(ConsistOf("spec.version.name"))
+		})
+	})
+
 	Context("when scalar fields change", func() {
 		It("should detect state change", func() {
 			before := privatev1.Cluster_builder{

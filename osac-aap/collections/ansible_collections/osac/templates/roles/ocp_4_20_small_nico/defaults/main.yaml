@@ -1,1 +1,4 @@
-nico_ocp_release_image: quay.io/openshift-release-dev/ocp-release:4.20.0-multi
+nico_ocp_release_version: "4.20.0"
+external_access_resource_wait_retries: 360
+external_access_resource_wait_delay: 5
+external_access_dns_ttl: 1800

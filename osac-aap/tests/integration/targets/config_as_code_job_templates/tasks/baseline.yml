@@ -4,6 +4,8 @@
 #   - 21 networking templates <prefix>-<task with dashes>, one per Fabric task,
 #     each running playbook_osac_network_task.yml in the networking-operations
 #     instance group, with ask_labels_on_launch and a 3600 s timeout;
+#   - a separate ClusterOrder endpoint template in the cluster-fulfillment
+#     instance group; it does not run the generic manager-task playbook;
 #   - no other template runs the generic playbook and no backend-specific
 #     networking template remains;
 #   - the networking templates run outside every workflow;
@@ -46,6 +48,8 @@
       - reserve_cluster_ingress_ip
       - release_cluster_ingress_ip
     cac_generic_playbook: osac-aap/playbook_osac_network_task.yml
+    cac_cluster_endpoints_template: "{{ aap_prefix }}-cluster-endpoints"
+    cac_cluster_endpoints_playbook: osac-aap/playbook_osac_cluster_endpoints.yml
 
   tasks:
     - name: Load the config-as-code controller definitions
@@ -82,6 +86,20 @@
           {{ cac_generic_templates | map(attribute='name') | sort }};
           missing {{ cac_expected_network_names | difference(cac_generic_templates | map(attribute='name')) }},
           unexpected {{ cac_generic_templates | map(attribute='name') | difference(cac_expected_network_names) }}
+
+    - name: Check the ClusterOrder endpoint template uses the cluster-fulfillment group
+      ansible.builtin.assert:
+        that:
+          - cac_cluster_endpoints_template in cac_by_name
+          - cac_by_name[cac_cluster_endpoints_template].playbook == cac_cluster_endpoints_playbook
+          - cac_by_name[cac_cluster_endpoints_template].inventory == aap_prefix ~ '-cluster-fulfillment'
+          - cac_by_name[cac_cluster_endpoints_template].instance_groups == [aap_prefix ~ '-cluster-fulfillment-ig']
+          - cac_by_name[cac_cluster_endpoints_template].prevent_instance_group_fallback | bool
+          - cac_by_name[cac_cluster_endpoints_template].ask_labels_on_launch | bool
+          - cac_by_name[cac_cluster_endpoints_template].timeout == 3600
+        fail_msg: >-
+          {{ cac_cluster_endpoints_template }} must run the ClusterOrder endpoint
+          playbook in the cluster-fulfillment instance group with label prompting.
 
     - name: Check every expected networking template exists and runs the generic playbook
       ansible.builtin.assert:

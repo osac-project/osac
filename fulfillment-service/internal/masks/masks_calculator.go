@@ -43,7 +43,8 @@ func (b *CalculatorBuilder) Build() *Calculator {
 
 // Calculate returns a field mask of fields that changed between before and after.
 // This prevents updates from overwriting concurrent changes to fields not being modified.
-// Uses deep recursive comparison to detect changes at any level of nesting.
+// Uses deep recursive comparison to detect changes at any level of nesting. The `metadata.version`
+// field is never part of the result.
 func (c *Calculator) Calculate(before, after proto.Message) *fieldmaskpb.FieldMask {
 	paths := c.compareMessages(before.ProtoReflect(), after.ProtoReflect(), "")
 	return &fieldmaskpb.FieldMask{Paths: paths}
@@ -62,6 +63,11 @@ func (c *Calculator) compareMessages(before, after protoreflect.Message, prefix 
 		fieldPath := string(fd.Name())
 		if prefix != "" {
 			fieldPath = prefix + "." + fieldPath
+		}
+		// The server checks the request's version against the stored one and assigns the new version
+		// itself, so a version difference isn't a field to send.
+		if fieldPath == "metadata.version" {
+			continue
 		}
 
 		// For maps, Has() doesn't work as expected - always compare them

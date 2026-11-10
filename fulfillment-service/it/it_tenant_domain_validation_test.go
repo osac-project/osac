@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -373,6 +374,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 					Domains: []string{"upd-new-" + created.Object.Id + ".com", "upd-another-" + created.Object.Id + ".org"},
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
 		}.Build())
 
 		Expect(err).ToNot(HaveOccurred())
@@ -411,6 +413,7 @@ var _ = Describe("Tenant domain validation (protovalidate)", func() {
 					Domains: []string{"invalid"},
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
 		}.Build())
 
 		Expect(err).To(HaveOccurred())

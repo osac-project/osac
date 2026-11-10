@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -233,9 +234,13 @@ var _ = Describe("Volume lifecycle", func() {
 		volObj.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now()))
 		volObj.GetStatus().SetVendorVolumeId("test-vendor-vol-123")
 
+		// Mask out the finalizers, which the reconciler may change after the read.
 		_, err = volumesClient.Update(ctx,
 			privatev1.VolumesUpdateRequest_builder{
 				Object: volObj,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"status.state", "status.state_transition_time", "status.vendor_volume_id",
+				}},
 			}.Build())
 		Expect(err).ToNot(HaveOccurred())
 

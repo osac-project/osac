@@ -9,8 +9,8 @@ Since AAP runs in an OpenShift cluster, we expect the required credentials to be
 passed as environment variables. These environment variables are defined as
 `Secrets` in OpenShift, and used by a container group.
 
-We define 2 container groups in AAP, one used to reconcile the configuration of
-AAP itself, and one used for cluster fulfillment operations.
+AAP uses separate container groups for config-as-code, cluster fulfillment,
+networking operations, compute-instance operations, and storage operations.
 
 ### Config-as-code environment variables
 
@@ -38,28 +38,21 @@ variables are used (injected from the configured config-as-code Secret, named
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` | Name of the secret holding the kubeconfig for the remote cluster (compute instance and storage operations; not supported with provider networking enabled) | — |
 | `REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY` | Key within that secret for the kubeconfig file | `kubeconfig` |
 | `OSAC_PUBLISH_TEMPLATES_ENABLED` | Whether the periodic **publish-templates** schedule is enabled in Controller (`true`/`false`) | Helm sets this from `instanceGroups.publishTemplates.enabled`; if unset for a manually managed deployment, `true` |
-| `NETRIS_CONTROLLER_URL` | Netris controller URL of the CaaS Netris steps, set on the cluster-fulfillment container group | — |
-| `NETRIS_VALIDATE_CERTS` | Whether Netris TLS certificates are validated by CaaS Netris jobs | `true` |
-| `NETRIS_CA_CONFIGMAP` | Optional customer-created ConfigMap name containing `bundle.pem` in the AAP namespace | — |
+| `NETRIS_CA_CONFIGMAP` | Optional customer-created ConfigMap name containing `bundle.pem`; config-as-code uses it to render the networking worker's CA mount | — |
 
 These variables must be defined in the configured config-as-code Secret
 (`configAsCode.secret`, default `config-as-code-ig`) in the namespace where AAP
 is deployed.
 
-The three `NETRIS_*` variables are the installation-owned connection settings
-of the CaaS Netris steps (`NETWORK_CLASS=netris`). Config-as-code sets them as
-fixed environment variables of the cluster-fulfillment container group, with
-the `netris.controller.protected_linear` strategy that rejects launch-time
-overrides. When `NETRIS_CA_CONFIGMAP` is configured, it adds a required,
-read-only `bundle.pem` mount at `/etc/netris/ca/bundle.pem` and sets
-`NETRIS_CA_PATH`. The CA ConfigMap applies only to cluster-fulfillment (CaaS)
-jobs; the networking-operations container group neither mounts nor reads it.
-The installer reads these values from the Netris settings in
-`aap.instanceGroups.networkFulfillment.config` and fails the render unless the
-URL is `https://` and the validation flag is `true` or `false`; customers
-create the ConfigMap and the installer does not copy certificate contents into the
-execution-environment image. Networking jobs do not use these variables: they
-read the network managers' settings from `network-fulfillment-ig`.
+`NETRIS_CONTROLLER_URL`, `NETRIS_VALIDATE_CERTS`, and all Netris manager
+settings are read directly from `network-fulfillment-ig` by networking jobs.
+The installer validates the URL and certificate-validation flag. When
+`NETRIS_CA_CONFIGMAP` is configured, the networking worker mounts its
+`bundle.pem` read-only at `/etc/netris/ca/bundle.pem` and sets `NETRIS_CA_PATH`.
+The generic networking playbook selects the Netris protected strategy for
+Netris tasks, which rejects launch-time overrides of these transport inputs.
+Customers create the CA ConfigMap in the AAP namespace; the installer does not
+copy certificate contents into the execution-environment image.
 
 The content of license manifest file must be set in a secret named
 `config-as-code-manifest-ig` as `license.zip` in the namespace where AAP is
@@ -77,7 +70,6 @@ use case, e.g.:
 - `AWS_*`: AWS credentials
 - `OS_*`: OpenStack credentials
 - ...whatever in needed
-- `NETRIS_PASSWORD`: Netris password
 - `SERVER_SSH_KEY`: Private key used to SSH into bare-metal servers (base64-encoded)
 - `SERVER_SSH_BASTION_KEY`: Private key used to SSH into the bastion host (base64-encoded). Required only when `SERVER_SSH_BASTION_HOST` is configured
 
@@ -94,6 +86,21 @@ Networking jobs read the settings and credentials of the network managers from
 the ConfigMap and Secret named `network-fulfillment-ig` in the AAP namespace.
 Keys are prefixed with the registration name in upper case. Consult the
 selected manager's owner documentation for its settings.
+
+For Netris, place `NETRIS_CONTROLLER_URL`, `NETRIS_VALIDATE_CERTS`,
+`NETRIS_USERNAME`, `NETRIS_SITE_ID`, `NETRIS_TENANT_ID`,
+`NETRIS_MGMT_VPC_ID`, and other manager settings in the ConfigMap; place
+`NETRIS_PASSWORD` in the Secret. Set `NETRIS_CA_CONFIGMAP` to the name of a
+ConfigMap containing `bundle.pem` in the AAP namespace. Helm copies this value
+from `instanceGroups.networkFulfillment.config` to both the network manager
+configuration and the config-as-code Secret. For manually managed deployments,
+set the same key in the `network-fulfillment-ig` ConfigMap and the
+`config-as-code-ig` Secret; config-as-code reads it from that Secret to mount
+the CA bundle in its networking worker. See the
+[config-as-code environment variables](#config-as-code-environment-variables)
+section and
+[`config/base/configmap-network-fulfillment-ig-example.yaml`](../../../../config/base/configmap-network-fulfillment-ig-example.yaml)
+and [`config/base/secret-network-fulfillment-ig-example.yaml`](../../../../config/base/secret-network-fulfillment-ig-example.yaml).
 
 ### Compute instance operations environment variables
 

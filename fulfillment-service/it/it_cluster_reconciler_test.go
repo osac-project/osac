@@ -529,8 +529,12 @@ var _ = Describe("Cluster reconciler", func() {
 			privateCluster := privateClusterResponse.GetObject()
 			privateCluster.GetStatus().SetState(privatev1.ClusterState_CLUSTER_STATE_READY)
 			privateCluster.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now()))
+			// Mask out the finalizers, which the reconciler may change after the read.
 			_, err = privateClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privateCluster,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+					"status.state", "status.state_transition_time",
+				}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			_, err = privateClustersClient.Signal(ctx, privatev1.ClustersSignalRequest_builder{

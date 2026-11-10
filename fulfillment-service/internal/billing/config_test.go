@@ -75,7 +75,7 @@ var _ = Describe("LoadConfig", func() {
 		Expect(cfg.BreakerWindow).To(Equal(30 * time.Second))
 		Expect(cfg.BreakerOpen).To(Equal(20 * time.Second))
 		Expect(cfg.RootCAs).To(BeNil(), "no CA file means the system roots")
-		Expect(cfg.Validate()).To(Succeed())
+		Expect(cfg.ValidateConnectionConfig()).To(Succeed())
 	})
 
 	It("accepts zero retries", func() {
@@ -96,7 +96,7 @@ var _ = Describe("LoadConfig", func() {
 		Expect(cfg.BreakerThreshold).To(Equal(5))
 		Expect(cfg.BreakerWindow).To(Equal(30 * time.Second))
 		Expect(cfg.BreakerOpen).To(Equal(30 * time.Second))
-		Expect(cfg.Validate()).To(Succeed())
+		Expect(cfg.ValidateConnectionConfig()).To(Succeed())
 	})
 
 	It("means billing is off when the provider is unset", func() {
@@ -221,10 +221,10 @@ var baseURLWithCredentials = url.URL{
 	User:   url.UserPassword(testUser, testPassword),
 }
 
-var _ = DescribeTable("Config.Validate checks the base URL",
+var _ = DescribeTable("Config.ValidateConnectionConfig checks the base URL",
 	func(baseURL string, valid bool) {
 		cfg := billing.Config{BaseURL: baseURL, Credential: testToken}
-		err := cfg.Validate()
+		err := cfg.ValidateConnectionConfig()
 		if valid {
 			Expect(err).ToNot(HaveOccurred())
 			return

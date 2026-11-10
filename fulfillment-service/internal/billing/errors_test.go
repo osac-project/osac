@@ -95,7 +95,7 @@ var _ = Describe("Opaque refs", func() {
 var _ = Describe("Config", func() {
 	DescribeTable("validation",
 		func(cfg billing.Config, ok bool) {
-			err := cfg.Validate()
+			err := cfg.ValidateConnectionConfig()
 			if ok {
 				Expect(err).ToNot(HaveOccurred())
 				return

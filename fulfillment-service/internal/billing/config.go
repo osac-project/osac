@@ -23,8 +23,9 @@ import (
 	"time"
 )
 
-// Config is the provider connection settings, built by LoadConfig or supplied directly by the caller. Embedding
-// opaque keeps the credential out of logs and formatted output.
+// Config is the provider connection settings, built by LoadConfig or supplied directly by the caller. LoadConfig
+// validates every setting it reads; a Config built by hand must pass ValidateConnectionConfig and stay within the
+// ranges of the numeric tuning settings. Embedding opaque keeps the credential out of logs and formatted output.
 type Config struct {
 	opaque
 	BaseURL    string
@@ -39,11 +40,15 @@ type Config struct {
 	RootCAs *x509.CertPool
 }
 
-// Validate fails with a NOT_CONFIGURED *Error when the configuration is incomplete or the base URL would send the
-// credential in cleartext: it needs a host and the https scheme, except that http is accepted for loopback hosts.
-// Like the installer's values schema, the base URL may carry the path to the provider API, but no query, fragment,
-// credentials or percent escapes in the host. Well-formed percent escapes are allowed in the path.
-func (c Config) Validate() error {
+// ValidateConnectionConfig fails with a NOT_CONFIGURED *Error when the connection settings are incomplete or the base
+// URL would send the credential in cleartext: it needs a host and the https scheme, except that http is accepted for
+// loopback hosts. Like the installer's values schema, the base URL may carry the path to the provider API, but no
+// query, fragment, credentials or percent escapes in the host. Well-formed percent escapes are allowed in the path.
+// It validates the configuration only and makes no provider call, so it says nothing about whether a connection works.
+//
+// The numeric tuning settings are validated by LoadConfig, which also checks the provider, the base URL and the
+// credential file, and which always runs before this method on the deployment path.
+func (c Config) ValidateConnectionConfig() error {
 	if c.Credential == "" || !validBaseURL(c.BaseURL) {
 		return &Error{Reason: ReasonNotConfigured, Op: "configure"}
 	}
@@ -81,9 +86,13 @@ const (
 // OSAC_BILLING_CREDENTIAL_FILE (a mounted Secret file), the optional OSAC_BILLING_RETRY_COUNT and
 // OSAC_BILLING_PRICING_BREAKER_* settings, which fall back to the defaults above when absent, and the optional
 // OSAC_BILLING_CA_FILE (PEM roots trusted on top of the system ones). An unset provider means billing is off and
-// yields a zero Config with no error. Incomplete or invalid settings fail with NOT_CONFIGURED; an unreadable or empty
-// credential file, or a CA file without a certificate, fails with UNAVAILABLE. Errors never carry the credential,
-// path or URL.
+// yields a zero Config with no error.
+//
+// It validates every setting it reads: the base URL and the credential file must be present, each numeric setting
+// must parse and meet its minimum (a retry count may be zero, a breaker setting at least one), and the breaker window
+// and open seconds must fit in a time.Duration. Incomplete or invalid settings fail with NOT_CONFIGURED; an unreadable
+// or empty credential file, or a CA file without a certificate, fails with UNAVAILABLE. Errors never carry the
+// credential, path or URL.
 func LoadConfig(getenv func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
 	const op = "load config"
 	provider := getenv("OSAC_BILLING_PROVIDER")

@@ -36,9 +36,9 @@ func (b *Builder) SetLogger(value *slog.Logger) *Builder {
 	return b
 }
 
-// Build fails with a NOT_CONFIGURED *billing.Error when the configuration is incomplete.
+// Build fails with a NOT_CONFIGURED *billing.Error when the connection settings are incomplete.
 func (b *Builder) Build() (billing.Adapter, error) {
-	if err := b.cfg.Validate(); err != nil {
+	if err := b.cfg.ValidateConnectionConfig(); err != nil {
 		return nil, err
 	}
 	logger := b.logger

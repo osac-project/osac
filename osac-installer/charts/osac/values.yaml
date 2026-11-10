@@ -74,27 +74,24 @@ global:
         subnetIPv4CIDR: 10.200.0.0/20
         ingressRules: []
         egressRules:
-        - protocol: PROTOCOL_ALL
-          ipv4Cidr: 0.0.0.0/0
+          - protocol: PROTOCOL_ALL
+            ipv4Cidr: 0.0.0.0/0
       eastWestCapabilities:
         supportsEastWestEthernet: false
-      # Optional Subnet address plan; without it the installer derives one
-      # from the enabled services and k8sManager. Shares are multiples of
-      # 0.0625 that sum to 1.
-      # addressPlan:
-      #   overlay: 0.5
-      #   fabric: 0.25
-      #   lbVip: 0.25
-
+        # Optional Subnet address plan; without it the installer derives one
+        # from the enabled services and k8sManager. Shares are multiples of
+        # 0.0625 that sum to 1.
+        # addressPlan:
+        #   overlay: 0.5
+        #   fabric: 0.25
+        #   lbVip: 0.25
 # Used by the validation and CA identity hook Jobs. With Netris CA validation
 # enabled the image must provide kubectl, sh, grep, mktemp, rm and openssl (the
 # hooks fail with ERROR: NETRIS_CA_* instead of skipping the checks).
 cliImage: quay.io/openshift/origin-cli:4.20.0
-
 # Shared PostgreSQL host for the db-init hook.
 dbInit:
   host: "postgres.osac-infra.svc.cluster.local"
-
 # Kafka cluster coordinates for per-instance topic/user creation. Set enabled
 # to false when service.kafka.connection targets an external Kafka cluster.
 kafka:
@@ -102,17 +99,15 @@ kafka:
   clusterName: osac-kafka
   clusterNamespace: osac-kafka
   replicas: 3
-
 # --- Operator CRDs ---
 operatorCrds:
   install: true
-
 # --- Operator ---
 operator:
   enabled: true
   image:
-    repository: ghcr.io/osac-project/osac-operator
-    tag: sha-b900275
+    repository: registry.stage.redhat.io/cloud-extensions/osac-operator-rhel10
+    tag: 0.4.0-rc.3
     pullPolicy: Always
   replicaCount: 1
   resources:
@@ -168,7 +163,6 @@ operator:
   remoteClusterKubeconfigSecretKey: kubeconfig
   hubAccess:
     enabled: false
-
 # --- Fulfillment Service ---
 service:
   enabled: true
@@ -197,8 +191,8 @@ service:
         memory: 512Mi
   images:
     service:
-      repository: ghcr.io/osac-project/fulfillment-service
-      tag: sha-b900275
+      repository: registry.stage.redhat.io/cloud-extensions/fulfillment-service-rhel10
+      tag: 0.4.0-rc.3
       pullPolicy: Always
     envoy:
       repository: ghcr.io/osac-project/envoy
@@ -272,16 +266,15 @@ service:
   # already trusted.
   kafka:
     connection:
-    - secret:
-        name: fulfillment-service-kafka
-        items:
-        - key: brokers
-          param: brokers
-        - key: user
-          param: user
-        - key: password
-          param: password
-
+      - secret:
+          name: fulfillment-service-kafka
+          items:
+            - key: brokers
+              param: brokers
+            - key: user
+              param: user
+            - key: password
+              param: password
 # --- AAP ---
 aap:
   aap:
@@ -300,7 +293,7 @@ aap:
       imagePullPolicy: IfNotPresent
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:sha-b900275
+    image: registry.stage.redhat.io/cloud-extensions/osac-aap-rhel10:0.4.0-rc.3
     backoffLimit: 15
     readinessConsecutiveSuccesses: 3
     gateway:
@@ -312,7 +305,7 @@ aap:
     secret: "config-as-code-ig"
     # Maximum number of add-on operator jobs allowed to run concurrently.
     addonOperatorMaxConcurrentJobs: 50
-    eeImage: ghcr.io/osac-project/osac-aap:sha-b900275
+    eeImage: registry.stage.redhat.io/cloud-extensions/osac-aap-rhel10:0.4.0-rc.3
     projectGitUri: https://github.com/osac-project/osac
     projectGitBranch: b900275102ad7457fcdf1c0abc4bb3694bc63cae
     remoteClusterKubeconfigSecretName: ""
@@ -349,7 +342,6 @@ aap:
       config:
         OSAC_TEMPLATE_COLLECTIONS: "osac.templates"
         OSAC_FULFILLMENT_SERVICE_URI: "https://fulfillment-internal-api:8001"
-
 # --- UI ---
 ui:
   enabled: true
@@ -374,9 +366,8 @@ ui:
   log:
     level: info
   images:
-    ui: ghcr.io/osac-project/osac-ui:sha-b900275
+    ui: registry.stage.redhat.io/cloud-extensions/osac-ui-rhel10:0.4.0-rc.3
     pullPolicy: auto
-
 # --- Metering ---
 # Always deployed: billing is not optional. The event publisher writes usage
 # events unconditionally, so an install without metering silently loses
@@ -384,8 +375,8 @@ ui:
 # workload-db-secrets template creates for the configured DB host.
 metering:
   image:
-    repository: ghcr.io/osac-project/metering-service
-    tag: sha-b900275
+    repository: registry.stage.redhat.io/cloud-extensions/metering-service-rhel10
+    tag: 0.4.0-rc.3
     pullPolicy: Always
   # Outside systems that read every tenant's heartbeat topics with their own
   # credentials. Each entry names one reader and no tenant; the reader name is
@@ -397,29 +388,27 @@ metering:
   readers: []
   database:
     connection:
-    - secret:
-        name: osac-db-metering-config
-        items:
-        - key: url
-          param: url
-    - secret:
-        name: osac-db-metering-client-cert
-        items:
-        - key: tls.crt
-          param: sslcert
-        - key: tls.key
-          param: sslkey
-        - key: ca.crt
-          param: sslrootcert
-
+      - secret:
+          name: osac-db-metering-config
+          items:
+            - key: url
+              param: url
+      - secret:
+          name: osac-db-metering-client-cert
+          items:
+            - key: tls.crt
+              param: sslcert
+            - key: tls.key
+              param: sslkey
+            - key: ca.crt
+              param: sslrootcert
 # --- Bare Metal Fulfillment Operator CRDs ---
 bmfCrds: {}
-
 # --- Bare Metal Fulfillment Operator ---
 bmf:
   image:
-    repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-    tag: sha-b900275
+    repository: registry.stage.redhat.io/cloud-extensions/bare-metal-fulfillment-operator-rhel10
+    tag: 0.4.0-rc.3
     pullPolicy: Always
   replicaCount: 1
   resources:
@@ -484,7 +473,6 @@ bmf:
     # Namespace where Metal3 inventory reads BareMetalHost resources.
     namespace: ""
     hostClass: "metal3"
-
 # --- Install preflight ---
 # Checks run while Helm renders the chart (helm install, helm upgrade and
 # --dry-run=server) and stop the install before anything is created when a
@@ -493,7 +481,6 @@ bmf:
 # validation.enabled=false skips every check; the report still lists them.
 validation:
   enabled: true
-
 preflight:
   # enforce: blocking findings stop the install (default).
   # report:  findings are recorded but never stop the install; use with
@@ -505,10 +492,8 @@ preflight:
   #   skip:
   #     cert-issuer-ready: "the issuer is created by GitOps after this install"
   skip: {}
-
 hubAccess:
   enabled: false
-
 clusterVersions:
   enabled: false
   versions: []
@@ -527,7 +512,6 @@ clusterVersions:
   #     name: rhcos-4-22
   #     sourceRef: oci://quay.io/osac-project/rhcos:4.22.0
   #     architecture: [ARCHITECTURE_AMD64]
-
 lvms:
   # Register LVMS as a local StorageBackend + StorageTier in the fulfillment service
   # after install. For CI/development environments only — production deployments

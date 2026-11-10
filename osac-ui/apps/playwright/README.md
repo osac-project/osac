@@ -279,10 +279,13 @@ E2E coverage. They do not replace the documented VMaaS API/provider E2E case
 boundary remains an explicitly manual verification gap until a browser-capable
 CI suite is available.
 
-Validation evidence (2026-11-10): the command above completed 9 passed tests on
-a deployed OCP test cluster, including both resize cases and prerequisite/VM
-cleanup. The run used a temporary 4 vCPU/4 GiB target because the validation
-cluster could not schedule the checked-in 8 vCPU/16 GiB target.
+Validation evidence (2026-11-10): the baseline two-case flow completed 9
+passed tests on a deployed OCP test cluster, including both resize cases and
+prerequisite/VM cleanup. The run used a temporary 4 vCPU/4 GiB target because
+the validation cluster could not schedule the checked-in 8 vCPU/16 GiB target.
+The follow-up run containing the mixed-direction case was blocked during
+tenant-admin provisioning before either resize test; its teardown completed
+and removed the resources created before the timeout.
 
 ### Storage tier flow tests
 

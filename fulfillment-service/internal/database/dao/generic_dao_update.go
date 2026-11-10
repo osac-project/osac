@@ -119,8 +119,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		return
 	}
 
-	// Build the SQL statement. When optimistic locking is enabled add a version condition to the where clause
-	// so that the update only succeeds if the version matches.
+	// Build the SQL statement. It doesn't check the version: the generic server does that while holding the row lock.
 	var buffer strings.Builder
 	fmt.Fprintf(&buffer, `update %s set`, r.dao.table)
 	addColumn := func(name string, value any) {

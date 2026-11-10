@@ -640,6 +640,13 @@ message ThingsDeleteRequest {
 message ThingsDeleteResponse {}
 ```
 
+`Delete` sets `metadata.deletion_timestamp`. If the object has finalizers, it remains available
+while its controller performs cleanup; removing the finalizers allows the service to archive it.
+Without finalizers, deletion archives the object during the request. A deletion request is therefore
+not always the point at which the object has been fully removed. See
+[Controller deletion and cascade cleanup](CODEWALK.md#controller-deletion-and-cascade-cleanup) for
+the tenant and project cleanup order.
+
 ### Signal (private API only)
 
 The request contains only the `id`. The response is empty. This method has no REST transcoding

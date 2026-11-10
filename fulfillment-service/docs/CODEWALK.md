@@ -142,6 +142,45 @@ relist will eventually re-deliver the same state. Here it means the interesting 
 "lost update" (the periodic sync heals that) but "stale until the next sync", bounded by
 `syncInterval` when synchronization is enabled.
 
+## Controller deletion and cascade cleanup
+
+The private API's `Delete` sets `metadata.deletion_timestamp`. An object with finalizers remains in
+the database until its controller finishes cleanup and removes them; a delete without finalizers is
+archived immediately. Controllers therefore clean up dependencies before releasing the parent's
+finalizer. They use the private gRPC clients rather than writing rows directly, and reconciliation
+retries make cleanup resumable after a transient failure. See [API.md — Delete](API.md#delete) for
+the generic API behavior.
+
+Tenant deletion and project deletion follow the same dependency-first pattern, with different
+children and external resources:
+
+1. **Tenant cleanup** in
+   [`tenant_reconciler_function.go`](../internal/controllers/tenant/tenant_reconciler_function.go)
+   deletes the break-glass Secret and clears its reference, then removes tenant default networking.
+   It requests deletion of tenant users before requesting deletion of the tenant's projects. If a
+   user or project is already deleting, the tenant controller signals it again on a retry. Project
+   deletion can remain blocked until its own dependencies have been removed, so the tenant
+   controller keeps the tenant while any project record remains (including one whose deletion is
+   pending). Once every project is archived, it deletes the Vault namespace and the IdP tenant, then
+   removes the tenant finalizer. The IdP tenant is kept until projects are gone because project
+   cleanup still needs it to remove project groups.
+2. **Project cleanup** in
+   [`project_reconciler_function.go`](../internal/controllers/project/project_reconciler_function.go)
+   first prevents a parent project from being archived while child projects remain. It requests
+   deletion of project memberships, then deletes Secrets selected by both tenant and project. It
+   removes default networking for the tenant's root project, deletes the project's IdP groups, and
+   removes the project finalizer. Secret and membership lookups are scoped by resource metadata so
+   cleanup cannot cross tenant or project boundaries. A Secret delete normally archives
+   synchronously; a Secret with its own finalizer can remain pending.
+
+Across these workflows, cleanup order follows ownership and foreign-key dependencies: remove a
+referenced child before its parent, retain the parent finalizer while asynchronous descendants or
+external cleanup are outstanding, and retry transient errors. Delete helpers tolerate `NotFound` so
+replayed requests do not fail just because another reconciliation already removed the child. The
+controllers do not all use identical waiting mechanics: tenant deletion re-signals pending users and
+projects, while project cleanup coordinates membership completion through reconciliation and
+removes Secrets directly.
+
 ## End-to-end flow: `Create` for a `BareMetalInstance`
 
 ```text

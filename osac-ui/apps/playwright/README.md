@@ -52,10 +52,9 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
   --osac-ui-dir="$PWD" --kubeconfig="${KUBECONFIG:-}"
 
 export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=<keycloak-user>
-read -rs OSAC_ADMIN_PASSWORD && printf '\n'
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD && printf '\n'
 bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
-  --osac-ui-dir="$PWD" --tag=happy_basic \
-  --admin-password="$OSAC_ADMIN_PASSWORD"
+  --osac-ui-dir="$PWD" --tag=happy_basic
 unset OSAC_ADMIN_PASSWORD
 ```
 
@@ -68,9 +67,10 @@ allocatable memory/CPU or the configured instance type must be reduced; the
 script never changes cluster sizing automatically. The runner accepts the flow
 tags listed below, validates the deployment and VMaaS prerequisites, and keeps
 run-time credentials outside the setup step. The runner requires the admin
-password through its `--admin-password` argument and does not print it. For
-VMaaS flows, the runner also authenticates the OSAC CLI for the duration of the
-run using the same credentials; temporary CLI files are removed on exit.
+password through `OSAC_ADMIN_PASSWORD` or `--admin-password-file=PATH` and does
+not print it. For VMaaS flows, the runner also authenticates the OSAC CLI for
+the duration of the run using the same credentials; temporary CLI files are
+removed on exit.
 
 If the CLI is not already installed, provide a stable fulfillment-service
 version to download it, or pass an existing binary:

@@ -103,6 +103,7 @@ export const expectVmToBeRunning = async (
   name: string,
   timeout = 15_000,
 ): Promise<void> => {
+  await selectVmListView(page);
   const row = await expectVmToExist(page, name, timeout);
   await expect(row.locator(...VmsMainPage.vmStatusCell)).toHaveText('Running', { timeout });
 };

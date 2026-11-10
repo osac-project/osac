@@ -1,7 +1,7 @@
-import { type InstanceType, InstanceTypes } from '@osac/types';
+import { type InstanceType, InstanceTypeState, InstanceTypes } from '@osac/types';
+import { cel } from '@osac/ui-components/api/cel';
 import { formatInstanceTypeOptionLabel } from '@osac/ui-components/components/vm/utils';
 
-import { INSTANCE_TYPE_ACTIVE_LIST_FILTER } from '../../../../api/v1/instance-types';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import { ResourceSelectField } from '../../../Form/ResourceSelectField';
 import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
@@ -27,7 +27,11 @@ const ComputeInstanceTypeField = ({
       label={t('catalogProvision.vm.fields.instanceType')}
       fieldId={fieldId}
       service={InstanceTypes}
-      request={{ filter: INSTANCE_TYPE_ACTIVE_LIST_FILTER }}
+      request={{
+        filter: cel<InstanceType>((filter) =>
+          filter.field('spec.state').equals(InstanceTypeState.ACTIVE),
+        ),
+      }}
       isRequired={isRequired}
       isDisabled={isDisabled}
       labelInfo={labelInfo}

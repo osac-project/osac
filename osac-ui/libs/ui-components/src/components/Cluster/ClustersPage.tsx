@@ -14,13 +14,11 @@ import {
   ToolbarItem,
 } from '@patternfly/react-core';
 
-import { type Cluster, type ClusterVersion, Clusters } from '@osac/types';
+import { type Cluster, type ClusterVersion, ClusterVersions, Clusters } from '@osac/types';
 import { type CelFilter } from '@osac/ui-components/api/cel';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import { useClusters } from '@osac/ui-components/api/v1/cluster';
-import {
-  CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
-  useClusterVersions,
-} from '@osac/ui-components/api/v1/cluster-versions';
+import { CLUSTER_VERSION_ALL_STATES_LIST_FILTER } from '@osac/ui-components/api/v1/cluster-versions';
 import { buildClusterListFilter } from '@osac/ui-components/components/Cluster/ListPage/cluster-list-filter';
 import ClusterCard from '@osac/ui-components/components/Cluster/ListPage/ClusterCard';
 import ClusterStatusFilter from '@osac/ui-components/components/Cluster/ListPage/ClusterStatusFilter';
@@ -75,10 +73,11 @@ export const ClustersPage = () => {
 
   const { clusters, totalItems, isLoading: clustersLoading, error } = useClusters(listFilter);
 
-  const { data: clusterVersions = [], error: versionLoadError } = useClusterVersions({
+  const { data: clusterVersionReply, error: versionLoadError } = useListResource(ClusterVersions, {
     filter: CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
     limit: 1000,
   });
+  const clusterVersions = useMemo(() => clusterVersionReply?.items ?? [], [clusterVersionReply]);
 
   const clusterVersionById = useMemo(() => {
     const versionsById = new Map<string, ClusterVersion>();

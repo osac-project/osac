@@ -1,81 +1,240 @@
-import React, { type ReactNode, createElement } from 'react';
-import { create } from '@bufbuild/protobuf';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { clone, create } from '@bufbuild/protobuf';
+import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
+import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
-  type Cluster,
+  ClusterNodeSetSchema,
   ClusterSchema,
+  ClusterState,
+  ClusterUpgradeHistoryEntrySchema,
+  ClusterUpgradeState,
   ClusterVersionSchema,
   ClusterVersionState,
+  ClusterVersions,
 } from '@osac/types';
 
 import { ClusterConfigurationCard } from './ClusterConfigurationCard';
-import { ApiProvider } from '../../../api/api-context';
-import { createMockConnectTransport } from '../../../test-utils/createMockConnectTransport';
+import { useGetResource } from '../../../api/use-resource';
+import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-const obsoleteVersion = create(ClusterVersionSchema, {
-  id: 'v4.15',
-  metadata: { name: 'v4.15' },
-  spec: { version: '4.15.0', state: ClusterVersionState.OBSOLETE, enabled: true },
+const currentVersion = create(ClusterVersionSchema, {
+  id: 'version-4-17',
+  metadata: { name: 'ocp-4-17', tenant: 'shared', project: 'project-a' },
+  spec: { version: '4.17.0', state: ClusterVersionState.ACTIVE, enabled: true },
+});
+const targetVersion = create(ClusterVersionSchema, {
+  id: 'version-4-18',
+  metadata: { name: 'ocp-4-18', tenant: 'shared', project: 'project-a' },
+  spec: { version: '4.18.0', state: ClusterVersionState.ACTIVE, enabled: true },
+});
+const cluster = create(ClusterSchema, {
+  id: 'cl-1',
+  metadata: { creator: 'alice', tenant: 'tenant-a', project: 'project-a' },
+  spec: {
+    catalogItem: { id: 'catalog-1', name: 'Standard' },
+    version: { id: currentVersion.id, name: 'ocp-4-17', project: 'project-a' },
+  },
+  status: { state: ClusterState.READY, observedVersion: '4.17.0' },
 });
 
-const renderCard = (cluster: Cluster) => {
-  const transport = createMockConnectTransport({ clusterVersions: [obsoleteVersion] });
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  const wrapper = ({ children }: { children: ReactNode }) =>
-    createElement(
-      ApiProvider,
-      { transport } as React.ComponentProps<typeof ApiProvider>,
-      createElement(QueryClientProvider, { client: queryClient }, children),
-    );
-  return render(<ClusterConfigurationCard cluster={cluster} />, { wrapper });
+const RefreshVersion = () => {
+  const { refetch } = useGetResource(ClusterVersions, { id: currentVersion.id });
+  return <button onClick={() => void refetch()}>Refresh version</button>;
 };
 
-describe('ClusterConfigurationCard version join', () => {
-  it('shows a skeleton while loading, then the resolved version and lifecycle label', async () => {
-    const { container } = renderCard(
-      create(ClusterSchema, { id: 'cl-1', spec: { version: { id: 'v4.15', name: 'v4.15' } } }),
+describe('ClusterConfigurationCard', () => {
+  it('shows configuration and an inline available upgrade beside the observed version', async () => {
+    renderWithProviders(<ClusterConfigurationCard cluster={cluster} />, {
+      apiFixtures: { clusterVersions: [currentVersion, targetVersion] },
+    });
+
+    expect(screen.getByText('Cluster configuration')).toBeInTheDocument();
+    expect(screen.getByText('Standard')).toBeInTheDocument();
+    expect(screen.getByText('Creator')).toBeInTheDocument();
+    expect(screen.getByText('alice')).toBeInTheDocument();
+    expect(screen.getByText('Current version')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
     );
+    const availability = screen.getByText('Upgrade available');
+    const versionRow = screen.getByText('4.17.0').closest('dd');
+    expect(versionRow).toContainElement(availability);
+    expect(availability.closest('.pf-v6-c-label')).toHaveClass('pf-m-orange');
+    expect(screen.queryByText('Desired version')).not.toBeInTheDocument();
 
-    expect(container.querySelector('.pf-v6-c-skeleton')).not.toBeNull();
-
-    // Get resolves regardless of lifecycle state (obsolete included).
-    expect(await screen.findByText('4.15.0')).toBeInTheDocument();
-    expect(screen.getByText('Obsolete')).toBeInTheDocument();
+    const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
+    expect(upgradeButton).toHaveClass('pf-m-link', 'pf-m-inline');
+    expect(versionRow).toContainElement(upgradeButton);
+    expect(upgradeButton.querySelector('.pf-v6-c-button__icon')).toBeNull();
   });
 
-  it('falls back to the raw reference name with no label when unresolved', async () => {
-    renderCard(
-      create(ClusterSchema, {
-        id: 'cl-2',
-        spec: { version: { id: 'gone', name: '4.99.0-missing' } },
-      }),
+  it('shows a reason when upgrade eligibility is unavailable', () => {
+    renderWithProviders(
+      <ClusterConfigurationCard cluster={create(ClusterSchema, { id: 'cl-2' })} />,
     );
 
-    expect(await screen.findByText('4.99.0-missing')).toBeInTheDocument();
-    const versionGroup = screen
-      .getByText('4.99.0-missing')
-      .closest('.pf-v6-c-description-list__group');
-    expect(versionGroup?.querySelector('.pf-v6-c-label')).toBeNull();
+    const unavailable = screen.getByText('No upgrade available');
+    expect(unavailable.closest('dd')).toHaveTextContent('—');
+    expect(unavailable.closest('.pf-v6-c-label')).not.toHaveClass('pf-m-orange');
+    const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
+    expect(upgradeButton).toBeDisabled();
+    expect(upgradeButton).toHaveAccessibleDescription('Upgrade eligibility is unavailable.');
   });
 
-  it('falls back to the raw reference name with no label when the version id is empty (legacy cluster)', async () => {
-    renderCard(
-      create(ClusterSchema, {
-        id: 'cl-3',
-        spec: { version: { id: '', name: '4.14.0-legacy' } },
+  it('shows an ongoing upgrade beside the current version in blue', () => {
+    const upgrading = clone(ClusterSchema, cluster);
+    if (!upgrading.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    upgrading.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        state: ClusterUpgradeState.PROGRESSING,
+        message: 'Updating the control plane',
       }),
+    ];
+    renderWithProviders(<ClusterConfigurationCard cluster={upgrading} />);
+
+    const progress = screen.getByText('Upgrade in progress');
+    expect(screen.getByText('4.17.0').closest('dd')).toContainElement(progress);
+    expect(progress.closest('.pf-v6-c-label')).toHaveClass('pf-m-blue');
+    const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
+    expect(upgradeButton).toBeDisabled();
+    expect(screen.getByText('Updating the control plane')).toBeInTheDocument();
+    expect(upgradeButton).toHaveAccessibleDescription('Updating the control plane');
+  });
+
+  it('uses only the latest upgrade history entry', async () => {
+    const upgraded = clone(ClusterSchema, cluster);
+    if (!upgraded.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    upgraded.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, { state: ClusterUpgradeState.SUCCEEDED }),
+      create(ClusterUpgradeHistoryEntrySchema, {
+        state: ClusterUpgradeState.PROGRESSING,
+        message: 'An older upgrade is still running',
+      }),
+    ];
+    renderWithProviders(<ClusterConfigurationCard cluster={upgraded} />, {
+      apiFixtures: { clusterVersions: [currentVersion, targetVersion] },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
+    );
+    expect(screen.queryByText('An older upgrade is still running')).not.toBeInTheDocument();
+  });
+
+  it('shows the latest timed-out upgrade message without offering another upgrade', () => {
+    const timedOut = clone(ClusterSchema, cluster);
+    if (!timedOut.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    timedOut.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        state: ClusterUpgradeState.TIMED_OUT,
+        message: 'Control plane upgrade timed out',
+      }),
+    ];
+    renderWithProviders(<ClusterConfigurationCard cluster={timedOut} />);
+
+    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
+      'Control plane upgrade timed out',
+    );
+  });
+
+  it('uses the observed worker count for the downtime warning', async () => {
+    const observedSingleWorker = clone(ClusterSchema, cluster);
+    if (!observedSingleWorker.spec || !observedSingleWorker.status) {
+      throw new Error('The cluster fixture needs spec and status');
+    }
+    observedSingleWorker.spec.nodeSets.workers = create(ClusterNodeSetSchema, { size: 2 });
+    observedSingleWorker.status.nodeSets.workers = create(ClusterNodeSetSchema, {
+      size: 1,
+      observedVersion: '4.17.0',
+    });
+    const { user } = renderWithProviders(
+      <ClusterConfigurationCard cluster={observedSingleWorker} />,
+      { apiFixtures: { clusterVersions: [currentVersion, targetVersion] } },
     );
 
-    // Empty id disables the Get query; no skeleton, straight to the raw name.
-    expect(await screen.findByText('4.14.0-legacy')).toBeInTheDocument();
-    const versionGroup = screen
-      .getByText('4.14.0-legacy')
-      .closest('.pf-v6-c-description-list__group');
-    expect(versionGroup?.querySelector('.pf-v6-c-label')).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole('button', { name: 'Upgrade cluster' }));
+    const dialog = screen.getByRole('dialog', { name: 'Upgrade cluster' });
+    expect(
+      within(dialog).getByRole('checkbox', { name: 'I understand this may cause downtime' }),
+    ).toBeRequired();
+  });
+
+  it.each([ClusterState.FAILED, ClusterState.DELETING, ClusterState.DELETE_FAILED])(
+    'hides upgrade controls for cluster state %s',
+    (state) => {
+      const unavailable = clone(ClusterSchema, cluster);
+      if (!unavailable.status) {
+        throw new Error('The cluster fixture needs status');
+      }
+      unavailable.status.state = state;
+      renderWithProviders(<ClusterConfigurationCard cluster={unavailable} />);
+
+      expect(screen.getByText('4.17.0')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+      expect(screen.queryByText('No upgrade available')).not.toBeInTheDocument();
+    },
+  );
+
+  it('blocks an upgrade when a version refetch fails after a successful fetch', async () => {
+    let getCalls = 0;
+    const transport = createRouterTransport((router) => {
+      router.service(ClusterVersions, {
+        get: () => {
+          getCalls += 1;
+          if (getCalls > 1) {
+            throw new ConnectError('version removed', Code.NotFound);
+          }
+          return { object: currentVersion };
+        },
+        list: () => ({ items: [currentVersion, targetVersion], size: 2, total: 2 }),
+      });
+    });
+    const { user } = renderWithProviders(
+      <>
+        <ClusterConfigurationCard cluster={cluster} />
+        <RefreshVersion />
+      </>,
+      { transport },
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole('button', { name: 'Refresh version' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
+        'Could not load upgrade options.',
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
+  });
+
+  it('closes an open upgrade dialog when the cluster identity changes', async () => {
+    const { user, rerender } = renderWithProviders(<ClusterConfigurationCard cluster={cluster} />, {
+      apiFixtures: { clusterVersions: [currentVersion, targetVersion] },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole('button', { name: 'Upgrade cluster' }));
+    expect(screen.getByRole('dialog', { name: 'Upgrade cluster' })).toBeInTheDocument();
+
+    const anotherCluster = clone(ClusterSchema, cluster);
+    anotherCluster.id = 'cl-2';
+    rerender(<ClusterConfigurationCard cluster={anotherCluster} />);
+
+    expect(screen.queryByRole('dialog', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
   });
 });

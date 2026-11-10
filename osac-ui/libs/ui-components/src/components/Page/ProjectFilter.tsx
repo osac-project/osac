@@ -20,7 +20,9 @@ const ProjectFilter = () => {
   // gets one option per path: one Root, not one per tenant.
   const projectOptions = useMemo(
     () => [
-      ...new Map((data ?? []).map((project) => [project.metadata?.name ?? '', project])).values(),
+      ...new Map(
+        (data?.items ?? []).map((project) => [project.metadata?.name ?? '', project]),
+      ).values(),
     ],
     [data],
   );
@@ -54,7 +56,7 @@ const ProjectFilter = () => {
   const selectedProjects: Project[] = [];
 
   projects.forEach((p) => {
-    const project = data?.find((d) => d.metadata?.name === p);
+    const project = projectOptions.find((d) => d.metadata?.name === p);
     if (project) {
       selectedProjects.push(project);
     }

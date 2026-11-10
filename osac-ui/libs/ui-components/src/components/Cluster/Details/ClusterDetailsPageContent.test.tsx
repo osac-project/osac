@@ -19,6 +19,7 @@ const cluster = create(ClusterSchema, {
   metadata: { project: 'project-a' },
   status: {
     state: ClusterState.READY,
+    observedVersion: '4.17.0',
     apiEndpoint: 'api.example.com',
     ingressEndpoint: 'apps.example.com',
   },
@@ -48,6 +49,25 @@ const attachment = {
 } as unknown as ExternalIPAttachment;
 
 describe('ClusterDetailsPageContent', () => {
+  it('shows the observed version only on Overview with a safe unavailable reason', async () => {
+    const { user } = renderWithProviders(<ClusterDetailsPageContent cluster={cluster} />, {
+      apiFixtures: { externalIpAttachments: [] },
+    });
+
+    const configurationCard = screen.getByText('Cluster configuration').closest('.pf-v6-c-card');
+    expect(configurationCard).toHaveTextContent('4.17.0');
+    const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
+    expect(upgradeButton).toBeDisabled();
+    expect(upgradeButton).toHaveAccessibleDescription('Upgrade eligibility is unavailable.');
+
+    await user.click(screen.getByRole('tab', { name: 'Networking' }));
+    expect(screen.queryByText('Current version')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Node sets' }));
+    expect(screen.queryByText('Current version')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(screen.getByText('Current version')).toBeInTheDocument();
+  });
+
   it('shows conditions only on Overview and External IP endpoints in the Networking side card', async () => {
     const { user } = renderWithProviders(<ClusterDetailsPageContent cluster={cluster} />, {
       apiFixtures: { externalIpAttachments: [] },
@@ -55,14 +75,23 @@ describe('ClusterDetailsPageContent', () => {
 
     expect(screen.getByText('Conditions')).toBeInTheDocument();
     expect(screen.queryByText('External IP endpoints')).not.toBeInTheDocument();
+    const configurationCard = screen.getByText('Cluster configuration').closest('.pf-v6-c-card');
+    const conditionsCard = screen.getByText('Conditions').closest('.pf-v6-c-card');
+    expect(configurationCard).toContainElement(screen.getByText('Current version'));
+    expect(configurationCard).toContainElement(
+      screen.getByRole('button', { name: 'Upgrade cluster' }),
+    );
+    const configurationColumn = configurationCard?.closest('.pf-v6-l-grid__item');
+    const conditionsColumn = conditionsCard?.closest('.pf-v6-l-grid__item');
+    expect(configurationColumn).toHaveClass('pf-m-6-col-on-md');
+    expect(conditionsColumn).toHaveClass('pf-m-6-col-on-md');
+    expect(configurationColumn?.parentElement).toBe(conditionsColumn?.parentElement);
 
     await user.click(screen.getByRole('tab', { name: 'Networking' }));
-
     expect(screen.queryByText('Conditions')).not.toBeInTheDocument();
     expect(screen.getByText('External IP endpoints')).toBeInTheDocument();
 
     await user.click(screen.getByRole('tab', { name: 'Node sets' }));
-
     expect(screen.queryByText('Conditions')).not.toBeInTheDocument();
     expect(screen.queryByText('External IP endpoints')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Node sets' })).toHaveAttribute('aria-selected', 'true');

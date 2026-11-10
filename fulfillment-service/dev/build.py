@@ -134,29 +134,96 @@ def sync_cleanapi_version() -> None:
     _sync_cleanapi_version()
 
 
-def _strip_metering_annotations(proto_dir: pathlib.Path) -> None:
+def _skip_balanced_braces(text: str, start: int) -> int:
     """
-    Removes the metering field options from the generated public API.
+    Returns the index just after the balanced '{...}' group that starts at the given index.
+    """
+    if start >= len(text) or text[start] != "{":
+        raise ValueError("expected a brace group in generated proto")
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    raise ValueError("unbalanced braces in generated proto")
 
-    The metering options are private: their definition file is excluded from the public API with
-    `cleanapi.file.private`, and metering reads them from the private protos. However,
-    `protoc-gen-cleanapi` doesn't remove the text of options it doesn't know from the fields it
-    copies to the public API, so the annotations are removed here. Without this the public API
-    wouldn't compile, because the option isn't defined there.
+
+def _strip_private_annotations(proto_dir: pathlib.Path) -> None:
     """
-    annotation = re.compile(r",?\s*\(osac\.(?:public|private)\.v1\.metering\)\s*=\s*\{[^{}]*\}")
+    Removes the metering and quota options from the generated public API.
+
+    The metering and quota options are private: their definition files are excluded from the
+    public API with `cleanapi.file.private`, and the metering and quota registries read them
+    from the private protos. However, `protoc-gen-cleanapi` doesn't remove the text of options
+    it doesn't know from the elements it copies to the public API, so the annotations are
+    removed here. Without this the public API wouldn't compile, because the options aren't
+    defined there.
+
+    The quota options nest brace groups, so the option value is skipped by brace matching
+    rather than a flat pattern. A removed message option takes its 'option' keyword, the
+    comment lines attached to it, and the semicolon with it.
+    """
+    option = re.compile(r"\(osac\.(?:public|private)\.v1\.(?:metering|quota|quota_message)\)\s*=\s*")
     for file in (proto_dir / "public").rglob("*.proto"):
         content = file.read_text()
-        stripped = annotation.sub("", content)
-        if stripped == content:
+        pieces = []
+        position = 0
+        removed = False
+        for match in option.finditer(content):
+            end = _skip_balanced_braces(content, match.end())
+            start = match.start()
+            head = content[:start].rstrip()
+            if re.search(r"(?:^|\W)option$", head):
+                # A message option: take the keyword and the comment lines above it.
+                start = len(head) - len("option")
+                while True:
+                    line_start = content.rfind("\n", 0, start) + 1
+                    if line_start == 0:
+                        break
+                    previous_line = content[content.rfind("\n", 0, line_start - 1) + 1:line_start - 1].strip()
+                    if not previous_line.startswith("//"):
+                        break
+                    start = content.rfind("\n", 0, line_start - 1) + 1
+                # Take the semicolon and the whitespace after it, so the option's line
+                # disappears completely. The whitespace of the next content line, such as
+                # its indentation, stays:
+                while end < len(content) and content[end] in " \t":
+                    end += 1
+                if end < len(content) and content[end] == ";":
+                    end += 1
+                while end < len(content):
+                    if content[end] == "\n":
+                        end += 1
+                    elif content[end] in " \t":
+                        line_end = content.find("\n", end)
+                        if line_end < 0 or content[end:line_end].strip():
+                            break
+                        end = line_end + 1
+                    else:
+                        break
+            else:
+                # A field option: take the separator before it with it.
+                while start > 0 and content[start - 1] in " \t\n":
+                    start -= 1
+                if start > 0 and content[start - 1] == ",":
+                    start -= 1
+            pieces.append(content[position:start])
+            position = end
+            removed = True
+        if not removed:
             continue
+        pieces.append(content[position:])
+        stripped = "".join(pieces)
         # Remove the option brackets and separators left behind by the removed annotation:
         stripped = re.sub(r"\[\s*,\s*", "[", stripped)
         stripped = re.sub(r",\s*\]", "]", stripped)
         stripped = re.sub(r"\[\s*\]", "", stripped)
-        stripped = re.sub(r"\s+;", ";", stripped)
+        stripped = re.sub(r"[ \t]+;", ";", stripped)
         file.write_text(stripped)
-        logging.info(f"Removed metering annotations from {file.relative_to(proto_dir)}")
+        logging.info(f"Removed private annotations from {file.relative_to(proto_dir)}")
 
 
 @build.command()
@@ -251,7 +318,7 @@ def protos() -> None:
         check=True,
     )
 
-    _strip_metering_annotations(proto_dir)
+    _strip_private_annotations(proto_dir)
 
     logging.info(f"Public proto generation complete - processed {len(proto_files)} files")
     # TODO: Add functions to lint all proto files and generate Go code.

@@ -9,7 +9,7 @@ set -euo pipefail
 
 OSAC_UI_BASE_URL="${OSAC_UI_BASE_URL:-}"
 OSAC_ADMIN_USERNAME="${OSAC_ADMIN_USERNAME:-admin}"
-OSAC_ADMIN_PASSWORD="${OSAC_ADMIN_PASSWORD:-foobar}"
+OSAC_ADMIN_PASSWORD="${OSAC_ADMIN_PASSWORD:-}"
 OSAC_EXTRAVARS="${OSAC_EXTRAVARS:-}"
 OSAC_CLI_PATH="${OSAC_CLI_PATH:-osac}"
 OSAC_VM_FLOW_MODE="${OSAC_VM_FLOW_MODE:-full}"
@@ -30,13 +30,18 @@ PW_HEADED=""
 PW_LIST=false
 NO_DEPS=false
 MODE_FLAG_SET=false
+PROMPT_PASSWORD=false
 
 for arg in "$@"; do
   case $arg in
     --osac-ui-dir=*)    OSAC_UI_DIR="${arg#*=}" ;;
     --ignore-tls)       export IGNORE_HTTPS_ERRORS=true ;;
     --admin-user=*)     OSAC_ADMIN_USERNAME="${arg#*=}" ;;
-    --admin-password=*) OSAC_ADMIN_PASSWORD="${arg#*=}" ;;
+    --admin-password=*)
+      echo "Do not pass passwords on the command line. Set OSAC_ADMIN_PASSWORD or use --prompt-password." >&2
+      exit 1
+      ;;
+    --prompt-password)  PROMPT_PASSWORD=true ;;
     --run-smoke)        RUN_SMOKE=true; SETUP_ONLY=false ;;
     --test=*)           PW_TEST_PATH="${arg#*=}"; SETUP_ONLY=false ;;
     --project=*)        PW_PROJECT="${arg#*=}"; SETUP_ONLY=false ;;
@@ -75,7 +80,7 @@ Options:
   --mode=MODE            set OSAC_VM_FLOW_MODE to create, delete, or full
   --extravars=PATH       temporarily use a VMaaS extravars.yaml
   --admin-user=USER      Keycloak admin user (default: admin)
-  --admin-password=PW   Keycloak admin password (default: foobar)
+  --prompt-password      read the Keycloak admin password without echoing it
   --headed               run with a headed browser using the prepared Xvfb
   --run-smoke            run the setup and smoke projects
   --list                 list discovered tests without executing them
@@ -137,119 +142,46 @@ placeholder_login() {
   esac
 }
 
+declare -A FLOW_PROJECT=(
+  [all]=vmaas-full-flow-delete [happy_basic]=vmaas-full-flow-delete
+  [create_resources]=vmaas-full-flow-resources [resources_create]=vmaas-full-flow-resources
+  [delete_resources]=vmaas-full-flow-delete [resources_delete]=vmaas-full-flow-delete
+  [create_image]=vmaas-full-flow-resources [delete_image]=vmaas-disk-image-delete
+  [full_image]=vmaas-disk-image [create_storage]=vmaas-full-flow-resources
+  [delete_storage]=vmaas-storage-tier-delete [full_storage]=vmaas-storage-tier
+  [create_instance_type]=vmaas-full-flow-resources
+  [delete_instance_type]=vmaas-instance-type-delete [full_instance_type]=vmaas-instance-type
+  [create_tenant]=vmaas [delete_tenant]=vmaas-delete [full_tenant]=vmaas-delete
+  [create_catalog]=vmaas-full-flow-catalog [delete_catalog]=vmaas-catalog-delete
+  [full_catalog]=vmaas-catalog [create_vm]=vmaas-full-flow
+  [delete_vm]=vmaas-full-flow-vm-delete [full_vm]=vmaas-full-flow-vm-delete
+)
+declare -A FLOW_MODE=(
+  [all]=full [happy_basic]=full [create_resources]=create [resources_create]=create
+  [delete_resources]=delete [resources_delete]=delete [create_image]=create
+  [delete_image]=delete [full_image]=full [create_storage]=create
+  [delete_storage]=delete [full_storage]=full [create_instance_type]=create
+  [delete_instance_type]=delete [full_instance_type]=full [create_tenant]=create
+  [delete_tenant]=delete [full_tenant]=full [create_catalog]=create
+  [delete_catalog]=delete [full_catalog]=full [create_vm]=create [delete_vm]=delete
+  [full_vm]=full
+)
+declare -A FLOW_GREP=(
+  [create_image]='creates disk image' [create_storage]='creates a storage tier'
+  [create_instance_type]='creates an instance type'
+)
+declare -A FLOW_NO_DEPS=([delete_tenant]=true)
+
 if [[ -n "$FLOW_TAG" ]]; then
-  case "$FLOW_TAG" in
-    all|happy_basic)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-delete"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
-      ;;
-    create_resources|resources_create)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-resources"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
-      ;;
-    delete_resources|resources_delete)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-delete"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
-      ;;
-    create_image)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-resources"
-      [[ -n "$PW_GREP" ]] || PW_GREP='creates disk image'
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
-      ;;
-    delete_image)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-disk-image-delete"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
-      ;;
-    full_image)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-disk-image"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
-      ;;
-    create_storage)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-resources"
-      [[ -n "$PW_GREP" ]] || PW_GREP='creates a storage tier'
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
-      ;;
-    delete_storage)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-storage-tier-delete"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
-      ;;
-    full_storage)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-storage-tier"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
-      ;;
-    create_instance_type)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-resources"
-      [[ -n "$PW_GREP" ]] || PW_GREP='creates an instance type'
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
-      ;;
-    delete_instance_type)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-instance-type-delete"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
-      ;;
-    full_instance_type)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-instance-type"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
-      ;;
-    create_tenant)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
-      ;;
-    delete_tenant)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-delete"
-      NO_DEPS=true
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
-      ;;
-    full_tenant)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-delete"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
-      ;;
-    create_catalog)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-catalog"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
-      ;;
-    delete_catalog)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-catalog-delete"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
-      ;;
-    full_catalog)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-catalog"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
-      ;;
-    create_vm)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
-      ;;
-    delete_vm)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-vm-delete"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
-      ;;
-    full_vm)
-      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-vm-delete"
-      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
-      ;;
-    *) fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags." ;;
-  esac
+  [[ "$FLOW_TAG" =~ ^[a-z_]+$ ]] ||
+    fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags."
+  [[ -n "${FLOW_PROJECT[$FLOW_TAG]+set}" ]] ||
+    fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags."
+  [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+  [[ -n "$PW_PROJECT" ]] || PW_PROJECT="${FLOW_PROJECT[$FLOW_TAG]}"
+  [[ -n "$PW_GREP" ]] || PW_GREP="${FLOW_GREP[$FLOW_TAG]:-}"
+  [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="${FLOW_MODE[$FLOW_TAG]}"
+  [[ "${FLOW_NO_DEPS[$FLOW_TAG]:-false}" == true ]] && NO_DEPS=true
 fi
 
 [[ "$SETUP_ONLY" == false ]] || fail "Select a flow with --tag, --test, --project, or --run-smoke."
@@ -302,11 +234,30 @@ case "$OSAC_UI_BASE_URL" in
   *) fail "OSAC_UI_BASE_URL must use an HTTP or HTTPS URL." ;;
 esac
 
+is_loopback_url=false
+case "$OSAC_UI_BASE_URL" in
+  http://localhost|http://localhost:*|http://127.0.0.1|http://127.0.0.1:*|http://\[::1\]|http://\[::1\]:*)
+    is_loopback_url=true
+    ;;
+esac
+
+if [[ "$PROMPT_PASSWORD" == true ]]; then
+  [[ -t 0 ]] || fail "--prompt-password requires an interactive terminal."
+  IFS= read -r -s -p "OSAC admin password: " OSAC_ADMIN_PASSWORD ||
+    fail "Unable to read OSAC_ADMIN_PASSWORD."
+  printf '\n'
+elif [[ -z "$OSAC_ADMIN_PASSWORD" && "$is_loopback_url" == true ]]; then
+  OSAC_ADMIN_PASSWORD=foobar
+fi
+
 if [[ "$need_login" == true ]]; then
   [[ -n "$OSAC_ADMIN_USERNAME" ]] && ! placeholder_login "$OSAC_ADMIN_USERNAME" ||
     fail "Set OSAC_ADMIN_USERNAME to a real Keycloak test user before running tests."
   [[ -n "$OSAC_ADMIN_PASSWORD" ]] && ! placeholder_login "$OSAC_ADMIN_PASSWORD" ||
     fail "Set OSAC_ADMIN_PASSWORD to that user's real password before running tests."
+  if [[ "$is_loopback_url" == false && "$OSAC_ADMIN_PASSWORD" == foobar ]]; then
+    fail "Set an explicit OSAC_ADMIN_PASSWORD for non-loopback UI URLs."
+  fi
   if (( EUID == 0 )) && [[ "$OSAC_ALLOW_ROOT_E2E" != true ]]; then
     fail "Credentialed tests refuse to run as root. Use a non-root user or --allow-root-e2e."
   fi

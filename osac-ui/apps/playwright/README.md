@@ -48,16 +48,18 @@ not read credentials, select a flow, or run tests; the second command does.
 bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
   --osac-ui-dir="$PWD"
 
+export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=<keycloak-user>
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
 bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
-  --osac-ui-dir="$PWD" --tag=happy_basic \
-  --admin-user=<keycloak-user> --admin-password=<password>
+  --osac-ui-dir="$PWD" --tag=happy_basic
 ```
 
 The preparation helper installs Node.js, npm, pnpm, Playwright dependencies,
 and Chromium. The runner accepts the flow tags listed below, validates the
 deployment and VMaaS prerequisites, and keeps run-time credentials outside the
-setup step. Its default admin credentials are `admin`/`foobar` for local
-environments; pass explicit values for a real deployment.
+setup step. The local loopback default is `admin`/`foobar`; non-loopback
+deployments require an explicit password supplied through the environment or
+`--prompt-password`.
 
 ## Running
 

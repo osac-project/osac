@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from threading import Lock
 from urllib.parse import urlsplit
 
 REDACTED = "<redacted>"
 
 _ENDPOINT_HOSTS: frozenset[str] = frozenset()
+_ENDPOINT_LOCK = Lock()
 _ENDPOINT_ARG = re.compile(r"^(?:(?:https?|grpcs?)://|(?:\[[0-9a-fA-F:]+\]|[\w.-]+):[0-9]+$)")
 
 
@@ -20,8 +22,9 @@ def register_endpoint(address: str) -> None:
         host = parsed.hostname
     except ValueError:
         return
-    if host:
-        _ENDPOINT_HOSTS = _ENDPOINT_HOSTS.union((host, parsed.netloc.rsplit("@", 1)[-1]))
+    if host and host.rstrip("."):
+        with _ENDPOINT_LOCK:
+            _ENDPOINT_HOSTS = _ENDPOINT_HOSTS.union((host.rstrip("."), parsed.netloc.rsplit("@", 1)[-1]))
 
 
 _JWT = re.compile(r"eyJ[\w-]+\.eyJ[\w-]+\.[\w-]*")
@@ -42,7 +45,9 @@ def sanitize_text(text: str | bytes) -> str:
     """Scrub credentials and known endpoint hosts without masking unrelated dotted identifiers."""
     if isinstance(text, bytes):
         text = text.decode(errors="replace")
-    for host in sorted(_ENDPOINT_HOSTS, key=len, reverse=True):
+    with _ENDPOINT_LOCK:
+        hosts = _ENDPOINT_HOSTS
+    for host in sorted(hosts, key=len, reverse=True):
         text = re.sub(r"(?<![\w.-])" + re.escape(host) + r"(?![\w-]|\.[\w-])", REDACTED, text, flags=re.I)
     text = _JWT.sub(REDACTED, text)
     text = _AUTH_SCHEME.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
@@ -76,6 +81,9 @@ def sanitize_args(args: Iterable[object]) -> list[str]:
 
 
 def _dropped(key: object) -> bool:
+    """Apply the same secret and payload key policy to decoded and byte metadata."""
+    if isinstance(key, bytes):
+        key = key.decode(errors="replace")
     normalized = re.sub(r"[_-]", "", str(key)).lower()
     return normalized in _DROPPED_KEYS or normalized.endswith("secret")
 

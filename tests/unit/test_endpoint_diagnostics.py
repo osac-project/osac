@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
+from tests.e2e.core import failure_report as reporting
 from tests.e2e.core import runner
+from tests.e2e.core import sanitize as diagnostics
 from tests.e2e.core.failure_report import FailureReporter
 from tests.e2e.core.failure_snapshot import write_json
 from tests.e2e.core.failures import Kind, classify
@@ -24,6 +27,66 @@ ADDRESS = f"{HOST}:7443"
 METHOD = "osac.private.v1.ExternalIPPools/Create"
 TOKEN = "synthetic-only-token"
 DETAIL = f"Code: PermissionDenied\nMessage: denied at {ADDRESS}; host {HOST}."
+
+
+@pytest.fixture(autouse=True)
+def isolated_endpoint_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep synthetic endpoint learning independent of earlier and later unit tests."""
+    monkeypatch.setattr(diagnostics, "_ENDPOINT_HOSTS", frozenset())
+
+
+def test_absolute_dns_endpoint_redacts_resolver_normalized_hostname() -> None:
+    """Hide both an absolute DNS target and its spelling in resolver error output."""
+    GRPCClient(address=f"{HOST}.:7443")
+    error = runner.CommandFailed(7, ["grpcurl", f"{HOST}.:7443", METHOD], stderr=DETAIL)
+    assert HOST not in str(error) and HOST not in repr(error)
+    assert METHOD in str(error) and "PermissionDenied" in str(error)
+
+
+def test_nested_byte_secret_keys_preserve_payload_protection(tmp_path: Path) -> None:
+    """Byte metadata must not bypass existing dropped credential and payload keys."""
+    GRPCClient(address=ADDRESS)
+    metadata = {"nested": {b"token": TOKEN, b"user_data": "synthetic-payload", b"detail": DETAIL.encode()}}
+    write_json(tmp_path, "bytes.json", metadata)
+    rendered = (tmp_path / "bytes.json").read_text()
+    assert HOST not in rendered and TOKEN not in rendered and "synthetic-payload" not in rendered
+    assert "PermissionDenied" in rendered and metadata["nested"][b"token"] == TOKEN
+
+
+def test_concurrent_clients_retain_all_endpoint_registrations() -> None:
+    """Concurrent client creation must retain earlier endpoints for later failure rendering."""
+    addresses = [f"worker-{index}.synthetic.example.invalid:7443" for index in range(128)]
+
+    def register_and_render(address: str) -> str:
+        """Exercise concurrent writes and reads through actual client initialization."""
+        GRPCClient(address=address)
+        return sanitize_text(address)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert all("synthetic.example.invalid" not in value for value in pool.map(register_and_render, addresses))
+    for address in addresses:
+        host = address.split(":", 1)[0]
+        error = runner.CommandFailed(7, ["synthetic"], stderr=f"Code: PermissionDenied\nMessage: {address}")
+        assert host not in str(error) and "PermissionDenied" in str(error)
+
+
+@pytest.mark.parametrize("address", ["", ".", "[broken"])
+def test_unusable_endpoints_do_not_mask_ordinary_diagnostics(address: str) -> None:
+    """Malformed or empty endpoint learning must not create an empty redaction pattern."""
+    GRPCClient(address=address)
+    assert sanitize_text(f"Code: PermissionDenied {METHOD}") == f"Code: PermissionDenied {METHOD}"
+
+
+@pytest.mark.parametrize("address", ["API.synthetic.example.invalid:7443", "[2001:db8::1]:7443", "api:7443"])
+def test_endpoint_boundaries_preserve_rpc_and_unrelated_resource_identifiers(address: str) -> None:
+    """Hide configured authority spellings without treating suffixes or RPC names as endpoints."""
+    GRPCClient(address=address)
+    host = address.rsplit(":", 1)[0].strip("[]").lower()
+    cleaned = sanitize_text(f"{address} {host} {METHOD} FailedPrecondition")
+    assert host not in cleaned.lower() and METHOD in cleaned and "FailedPrecondition" in cleaned
+    if ":" not in host:
+        unrelated = f"other.{host} {host}-resource osac.private.v1"
+        assert sanitize_text(unrelated) == unrelated
 
 
 @pytest.mark.parametrize("as_bytes", [False, True])
@@ -169,9 +232,41 @@ def test_reporter_failure_names_and_ids_are_sanitized(tmp_path: Path, caplog: py
         for phase in ("setup", "call"):
             reporter._on_failure(None, error, {"test": HOST, "phase": phase}, 0)
     assert HOST not in caplog.text and "api-refused" in caplog.text
+    assert HOST not in reporter.snapshotter.take.call_args.args[0]
 
 
-def test_actual_disabled_pool_private_create_setup_failure_is_reported_safely(tmp_path: Path) -> None:
+@pytest.mark.parametrize("site", ["classification", "snapshot", "hook", "capture"])
+def test_reporter_internal_error_logs_scrub_tracebacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, site: str
+) -> None:
+    """Reporting errors retain useful traceback details without exposing configured hosts or tokens."""
+    GRPCClient(address=ADDRESS)
+    reporter = FailureReporter(Mock())
+    reporter.output_dir = tmp_path
+    reporter._path = tmp_path / "results-main.jsonl"
+    reporter.snapshotter = Mock()
+    reporter.snapshotter.take.return_value = None
+    internal_error = RuntimeError(f"{DETAIL} Authorization: Bearer {TOKEN}")
+    error = runner.CommandFailed(7, ["grpcurl", ADDRESS, METHOD], stderr=DETAIL)
+    if site == "classification":
+        monkeypatch.setattr(reporting, "classify", Mock(side_effect=internal_error))
+    elif site == "snapshot":
+        reporter.snapshotter.take.side_effect = internal_error
+    elif site == "hook":
+        monkeypatch.setattr(reporter, "_append", Mock(side_effect=internal_error))
+    config = Mock()
+    config.pluginmanager.get_plugin.side_effect = internal_error
+    with caplog.at_level(logging.WARNING):
+        if site == "capture":
+            reporting.capture_fixture_failure(config, error, "test_synthetic")
+        else:
+            reporter.capture_fixture_failure(error, "test_synthetic", 0)
+    assert HOST not in caplog.text and TOKEN not in caplog.text
+    assert "internal error" in caplog.text and "RuntimeError" in caplog.text and "PermissionDenied" in caplog.text
+
+
+@pytest.mark.parametrize("traceback", ["short", "long"])
+def test_actual_disabled_pool_private_create_setup_failure_is_reported_safely(tmp_path: Path, traceback: str) -> None:
     """Drive the real private pool fixture, runner and plugin through a failed pytest setup."""
     conftest = (
         CONFTEST
@@ -211,7 +306,7 @@ def ref_test_run_id():
             raise AssertionError("BODY-MUST-NOT-RUN")
     ''',
         conftest=conftest,
-        args=("--tb=short",),
+        args=(f"--tb={traceback}",),
     )
     assert result.returncode == 1
     assert "BODY-MUST-NOT-RUN" not in result.stdout

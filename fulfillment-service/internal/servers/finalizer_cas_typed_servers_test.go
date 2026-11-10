@@ -832,6 +832,33 @@ func publicFinalizerCases() []publicFinalizerCase {
 	return []publicFinalizerCase{
 		{privatev1.Volumes_ServiceDesc.ServiceName, newPublicVolumesOps},
 		{privatev1.Clusters_ServiceDesc.ServiceName, newPublicClustersOps},
+		{privatev1.QuotaLimits_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewQuotaLimitsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.QuotaLimitsGetResponse).GetObject,
+			)
+		}},
+		{privatev1.QuotaThresholds_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewQuotaThresholdsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.QuotaThresholdsGetResponse).GetObject,
+			)
+		}},
+		{privatev1.QuotaLimitRequests_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewQuotaLimitRequestsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.QuotaLimitRequestsGetResponse).GetObject,
+			)
+		}},
 		{privatev1.BareMetalInstances_ServiceDesc.ServiceName, func() publicFinalizerOps {
 			GinkgoHelper()
 			server, err := NewBareMetalInstancesServer().

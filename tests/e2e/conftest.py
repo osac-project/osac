@@ -395,9 +395,11 @@ def setup_organization_memberships(ensure_tenants: None, keycloak_url: str, keyc
 
 @pytest.fixture(scope="session")
 def k8s_hub_client(namespace: str) -> K8sClient:
+    impersonate = os.getenv("OSAC_TOKEN_IMPERSONATE", "system:admin")
     client = K8sClient(
         namespace=namespace,
-        as_system_admin=os.getenv("OSAC_TOKEN_IMPERSONATE", "system:admin") == "system:admin",
+        as_system_admin=False,
+        impersonate=impersonate or None,
     )
     # Fail on broken initial hub access before entering retrying polls.
     client.get_json(resource="namespace", name=namespace)

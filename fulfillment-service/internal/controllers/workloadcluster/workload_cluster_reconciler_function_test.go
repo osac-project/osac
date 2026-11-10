@@ -16,7 +16,6 @@ import (
 func TestObserveAvailableManagedClusterRecordsIdentity(t *testing.T) {
 	hub := fake.NewClientBuilder().WithObjects(
 		managedCluster("worker-1", "uid-1", true, true),
-		clusterClaim("worker-1", "uid-1"),
 	).Build()
 	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{ManagedClusterName: "worker-1"}}
 	status := &privatev1.WorkloadClusterStatus{}
@@ -31,7 +30,6 @@ func TestObserveAvailableManagedClusterRecordsIdentity(t *testing.T) {
 func TestObserveRetainsIdentityAndReportsMismatch(t *testing.T) {
 	hub := fake.NewClientBuilder().WithObjects(
 		managedCluster("worker-1", "uid-2", true, true),
-		clusterClaim("worker-1", "uid-2"),
 	).Build()
 	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{ManagedClusterName: "worker-1"}}
 	status := &privatev1.WorkloadClusterStatus{ManagedClusterUid: "uid-1"}
@@ -45,7 +43,7 @@ func TestObserveRetainsIdentityAndReportsMismatch(t *testing.T) {
 
 func TestObserveMissingIdentityDoesNotRecordUID(t *testing.T) {
 	hub := fake.NewClientBuilder().WithObjects(
-		managedCluster("worker-1", "uid-1", true, true),
+		managedCluster("worker-1", "", true, true),
 	).Build()
 	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{ManagedClusterName: "worker-1"}}
 	status := &privatev1.WorkloadClusterStatus{}
@@ -78,21 +76,11 @@ func managedCluster(name, uid string, accepted, available bool) *unstructured.Un
 				map[string]interface{}{"type": "HubAcceptedManagedCluster", "status": boolStatus(accepted)},
 				map[string]interface{}{"type": "ManagedClusterConditionAvailable", "status": boolStatus(available)},
 			},
+			"clusterClaims": []interface{}{map[string]interface{}{"name": "id.k8s.io", "value": uid}},
 		},
 	}}
 	object.SetGroupVersionKind(schema.GroupVersionKind{Group: managedClusterGroup, Version: managedClusterVersion, Kind: "ManagedCluster"})
 	object.SetUID(types.UID(uid))
-	return object
-}
-
-func clusterClaim(namespace, value string) *unstructured.Unstructured {
-	object := &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": managedClusterGroup + "/v1alpha1",
-		"kind":       "ClusterClaim",
-		"metadata":   map[string]interface{}{"name": clusterClaimName, "namespace": namespace},
-		"spec":       map[string]interface{}{"value": value},
-	}}
-	object.SetGroupVersionKind(clusterClaimGVK)
 	return object
 }
 

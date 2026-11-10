@@ -23,6 +23,7 @@ def _condition(object_: dict[str, Any], condition_type: str) -> dict[str, Any]:
 def test_import_available_managed_cluster(
     private_cli: OsacCLI,
     private_grpc: GRPCClient,
+    request: pytest.FixtureRequest,
 ) -> None:
     source_kubeconfig = os.environ.get("OSAC_SOURCE_HUB_KUBECONFIG")
     if not source_kubeconfig:
@@ -33,11 +34,18 @@ def test_import_available_managed_cluster(
     managed_cluster_name = f"e2e-import-{uuid.uuid4().hex[:8]}"
     cluster_uid = f"e2e-cluster-uid-{uuid.uuid4().hex}"
     hub_id = str(uuid.uuid4())
+    registered_hub_id = ""
     workload_cluster_name = f"e2e-workload-{uuid.uuid4().hex[:8]}"
     workload_cluster_id = ""
 
+    def cleanup_source_hub() -> None:
+        for resource, name in (("managedcluster", managed_cluster_name), ("namespace", managed_cluster_name)):
+            run(env("OSAC_OC_PATH", "oc"), "--kubeconfig", source_kubeconfig, "delete", resource, name, "--ignore-not-found=true", "--wait=true")
+
+    request.addfinalizer(cleanup_source_hub)
+
     # These are the ACM objects the real Hub would provide. The controller only
-    # needs the registration conditions and the namespaced identity claim.
+    # needs the registration conditions and the stable identity claim.
     source_hub.apply(
         manifest=json.dumps(
             {
@@ -61,14 +69,9 @@ def test_import_available_managed_cluster(
                             "conditions": [
                                 {"type": "HubAcceptedManagedCluster", "status": "True"},
                                 {"type": "ManagedClusterConditionAvailable", "status": "True"},
-                            ]
+                            ],
+                            "clusterClaims": [{"name": "id.k8s.io", "value": cluster_uid}],
                         },
-                    },
-                    {
-                        "apiVersion": "cluster.open-cluster-management.io/v1alpha1",
-                        "kind": "ClusterClaim",
-                        "metadata": {"name": "id.k8s.io", "namespace": managed_cluster_name},
-                        "spec": {"value": cluster_uid},
                     },
                 ],
             }
@@ -90,17 +93,18 @@ def test_import_available_managed_cluster(
                     "conditions": [
                         {"type": "HubAcceptedManagedCluster", "status": "True"},
                         {"type": "ManagedClusterConditionAvailable", "status": "True"},
-                    ]
+                    ],
+                    "clusterClaims": [{"name": "id.k8s.io", "value": cluster_uid}],
                 }
             }
         ),
     )
 
     try:
-        hub_id = private_cli.create_hub(hub_id=hub_id, kubeconfig=hub_credential_kubeconfig)
+        registered_hub_id = private_cli.create_hub(hub_id=hub_id, kubeconfig=hub_credential_kubeconfig)
         workload_cluster_id = private_cli.create_workload_cluster(
             name=workload_cluster_name,
-            source_hub_id=hub_id,
+            source_hub_id=registered_hub_id,
             managed_cluster_name=managed_cluster_name,
             supported_workloads=["maas"],
         )
@@ -121,7 +125,7 @@ def test_import_available_managed_cluster(
         )
         assert registered["metadata"]["name"] == workload_cluster_name
         assert registered["spec"] == {
-            "sourceHubId": hub_id,
+            "sourceHubId": registered_hub_id,
             "managedClusterName": managed_cluster_name,
             "supportedWorkloads": ["maas"],
         }
@@ -147,24 +151,11 @@ def test_import_available_managed_cluster(
             )
         )
         assert managed_cluster_json["metadata"]["name"] == managed_cluster_name
-        cluster_claim_json = json.loads(
-            run(
-                env("OSAC_OC_PATH", "oc"),
-                "--kubeconfig",
-                source_kubeconfig,
-                "get",
-                "clusterclaim",
-                "id.k8s.io",
-                "-n",
-                managed_cluster_name,
-                "-o",
-                "json",
-            )
-        )
-        assert cluster_claim_json["spec"]["value"] == cluster_uid
+        assert managed_cluster_json["status"]["clusterClaims"][0]["value"] == cluster_uid
     finally:
-        # WorkloadCluster deletion is intentionally deferred by the design, and
-        # the Hub cannot be deleted while it is referenced by the registration.
-        source_hub.delete(resource="clusterclaim", name="id.k8s.io", namespace=managed_cluster_name, wait=True)
+        if workload_cluster_id:
+            private_grpc.call(service=f"{PRIVATE_API}.WorkloadClusters/Delete", data={"id": workload_cluster_id})
+        if registered_hub_id:
+            private_grpc.call(service=f"{PRIVATE_API}.Hubs/Delete", data={"id": registered_hub_id})
         source_hub.delete(resource="managedcluster", name=managed_cluster_name, wait=True)
         source_hub.delete(resource="namespace", name=managed_cluster_name, wait=True)

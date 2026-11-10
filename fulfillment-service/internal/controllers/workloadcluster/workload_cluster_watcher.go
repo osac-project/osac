@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strconv"
+	"time"
 
 	"google.golang.org/grpc"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,7 +21,7 @@ import (
 // ensureWatcher starts one informer per referenced Hub. The informer is shared
 // by all WorkloadClusters registered against that Hub and only emits opaque
 // resource IDs through the private Signal RPC.
-func (r *function) ensureWatcher(hubID string) {
+func (r *function) ensureWatcher(parent context.Context, hubID string) {
 	if hubID == "" {
 		return
 	}
@@ -29,23 +30,26 @@ func (r *function) ensureWatcher(hubID string) {
 		r.watchersLock.Unlock()
 		return
 	}
-	r.watchers[hubID] = struct{}{}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
+	r.watchers[hubID] = cancel
 	r.watchersLock.Unlock()
 
 	go func() {
 		defer func() {
 			r.watchersLock.Lock()
+			if cancel := r.watchers[hubID]; cancel != nil {
+				cancel()
+			}
 			delete(r.watchers, hubID)
 			r.watchersLock.Unlock()
 		}()
-		if err := r.startWatcher(hubID); err != nil {
+		if err := r.startWatcher(ctx, hubID); err != nil && ctx.Err() == nil {
 			r.logger.Warn("workload cluster Hub watcher stopped", slog.String("component", "workload-cluster-controller"), slog.String("operation", "watch"), slog.String("reason", "HubUnreachable"))
 		}
 	}()
 }
 
-func (r *function) startWatcher(hubID string) error {
-	ctx := context.Background()
+func (r *function) startWatcher(ctx context.Context, hubID string) error {
 	hubResponse, err := privatev1.NewHubsClient(r.connection()).Get(ctx, privatev1.HubsGetRequest_builder{Id: hubID}.Build())
 	if err != nil {
 		return err
@@ -90,14 +94,26 @@ func (r *function) signalForEvent(hubID string, object interface{}) {
 	if meta == nil || meta.GetName() == "" {
 		return
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	filter := "this.spec.source_hub_id == " + strconv.Quote(hubID) + " && this.spec.managed_cluster_name == " + strconv.Quote(meta.GetName())
 	response, err := r.workloadClusters.List(ctx, privatev1.WorkloadClustersListRequest_builder{Filter: &filter}.Build())
 	if err != nil {
+		r.logger.Warn("Failed to find workload clusters for Hub event", slog.String("hub_id", hubID), slog.Any("error", err))
 		return
 	}
 	for _, item := range response.GetItems() {
-		_, _ = r.workloadClusters.Signal(ctx, privatev1.WorkloadClustersSignalRequest_builder{Id: item.GetId()}.Build())
+		var signalErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			_, signalErr = r.workloadClusters.Signal(ctx, privatev1.WorkloadClustersSignalRequest_builder{Id: item.GetId()}.Build())
+			if signalErr == nil || ctx.Err() != nil {
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		if signalErr != nil {
+			r.logger.Warn("Failed to signal workload cluster after Hub event", slog.String("workload_cluster_id", item.GetId()), slog.Any("error", signalErr))
+		}
 	}
 }
 

@@ -157,7 +157,7 @@ To create a hub:
 {{ bt 3 }}shell
 {{ binary }} create hub --name my-hub \
   --kubeconfig /path/to/kubeconfig \
-  --namespace osac-orders \\
+  --namespace osac-orders \
   --label ai-grid=true
 {{ bt 3 }}
 `

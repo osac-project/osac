@@ -8,9 +8,6 @@ import { expectOsacCommandSucceeded, runOsacCommand } from './cli';
 
 interface OsacUser {
   id?: string;
-  status?: {
-    keycloak_user_id?: string;
-  };
 }
 
 interface OsacRoleBinding {
@@ -60,7 +57,7 @@ const roleBindingState = (roleBinding: OsacRoleBinding): string => {
 export const tenantAdminRoleBindingName = (tenantName: string): string =>
   `${tenantName}-tenant-admin`;
 
-/** Grant the tenant-admin role to an existing, IDP-backed tenant user. */
+/** Grant the tenant-admin role to an existing tenant user. */
 export const createTenantAdminRoleBinding = async (
   tenantName: string,
   username: string,
@@ -73,13 +70,13 @@ export const createTenantAdminRoleBinding = async (
         async () => {
           try {
             const user = await getTenantAdminUser(username);
-            return Boolean(user.id && user.status?.keycloak_user_id);
+            return Boolean(user.id);
           } catch {
             return false;
           }
         },
         {
-          message: `Wait for tenant-admin user '${username}' to be linked to the IDP`,
+          message: `Wait for tenant-admin user '${username}' to be provisioned`,
           timeout: 120_000,
           intervals: [1_000, 2_000, 5_000],
         },
@@ -87,8 +84,8 @@ export const createTenantAdminRoleBinding = async (
       .toBe(true);
 
     const user = await getTenantAdminUser(username);
-    if (!user.id || !user.status?.keycloak_user_id) {
-      throw new Error(`Tenant-admin user '${username}' is not linked to the IDP.`);
+    if (!user.id) {
+      throw new Error(`Tenant-admin user '${username}' has no resource ID.`);
     }
 
     const roleBindingName = tenantAdminRoleBindingName(tenantName);

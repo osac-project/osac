@@ -8,6 +8,7 @@
 set -euo pipefail
 
 OSAC_UI_BASE_URL="${OSAC_UI_BASE_URL:-}"
+OSAC_API_BASE_URL="${OSAC_API_BASE_URL:-}"
 OSAC_ADMIN_USERNAME="${OSAC_ADMIN_USERNAME:-admin}"
 OSAC_ADMIN_PASSWORD=""
 OSAC_EXTRAVARS="${OSAC_EXTRAVARS:-}"
@@ -31,6 +32,11 @@ PW_LIST=false
 NO_DEPS=false
 MODE_FLAG_SET=false
 ADMIN_PASSWORD_SET=false
+
+if [[ "$OSAC_CLI_PATH" == osac ]] && ! command -v osac >/dev/null 2>&1 &&
+  [[ -x "${HOME}/.local/bin/osac" ]]; then
+  OSAC_CLI_PATH="${HOME}/.local/bin/osac"
+fi
 
 while (($# > 0)); do
   arg="$1"
@@ -119,6 +125,9 @@ cleanup() {
   fi
   [[ -n ${xauth_file:-} ]] && rm -f -- "$xauth_file"
   [[ -n ${xvfb_log:-} ]] && rm -f -- "$xvfb_log"
+  [[ -n ${cli_password_file:-} ]] && rm -f -- "$cli_password_file"
+  [[ -n ${cli_config_dir:-} ]] && rm -rf -- "$cli_config_dir"
+  [[ -n ${cli_cache_dir:-} ]] && rm -rf -- "$cli_cache_dir"
   if [[ ${extravars_linked:-false} == true ]]; then
     rm -f -- "$extravars_destination"
   fi
@@ -204,34 +213,42 @@ esac
 need_login=true
 [[ "$PW_LIST" == true && "$RUN_SMOKE" == false ]] && need_login=false
 
-if [[ -z "$KUBECONFIG_PATH" ]]; then
-  for candidate in \
-    /home/kni/clusterconfigs/auth/kubeconfig \
-    /root/kubeconfig \
-    /root/dev-scripts/ocp/ostest/auth/kubeconfig \
-    /root/.kube/config; do
-    if [[ -f "$candidate" ]]; then
-      if command -v oc >/dev/null 2>&1; then
-        timeout 10s env KUBECONFIG="$candidate" oc --request-timeout=5s \
-          get --raw=/version >/dev/null 2>&1 || continue
-      fi
+route_host=""
+api_route_host=""
+if command -v oc >/dev/null 2>&1; then
+  kubeconfig_candidates=()
+  [[ -n "$KUBECONFIG_PATH" ]] && kubeconfig_candidates+=("$KUBECONFIG_PATH")
+  kubeconfig_candidates+=(
+    /home/kni/clusterconfigs/auth/kubeconfig
+    /root/kubeconfig
+    /root/dev-scripts/ocp/ostest/auth/kubeconfig
+    /root/.kube/config
+  )
+  KUBECONFIG_PATH=""
+  route_host=""
+  for candidate in "${kubeconfig_candidates[@]}"; do
+    [[ -f "$candidate" ]] || continue
+    route_host=$(KUBECONFIG="$candidate" oc --request-timeout=10s \
+      -n osac get route osac-ui -o jsonpath='{.spec.host}' 2>/dev/null || true)
+    api_route_host=$(KUBECONFIG="$candidate" oc --request-timeout=10s \
+      -n osac get route fulfillment-api -o jsonpath='{.spec.host}' 2>/dev/null || true)
+    if [[ -n "$route_host" && ( "$needs_vmaas" != true || -n "$api_route_host" ) ]]; then
       KUBECONFIG_PATH="$candidate"
-      info "Using detected reachable KUBECONFIG: ${KUBECONFIG_PATH}"
+      info "Using a reachable KUBECONFIG with an OSAC UI route."
       break
     fi
   done
 fi
 
 if { [[ -z "$OSAC_UI_BASE_URL" ]] || placeholder_url "$OSAC_UI_BASE_URL"; } &&
-  command -v oc >/dev/null 2>&1 && [[ -n "$KUBECONFIG_PATH" ]]; then
-  route_host=$(KUBECONFIG="$KUBECONFIG_PATH" oc --request-timeout=10s \
-    -n osac get route osac-ui -o jsonpath='{.spec.host}' 2>/dev/null || true)
-  if [[ -n "$route_host" ]]; then
-    OSAC_UI_BASE_URL="https://${route_host}"
-  elif timeout 10s env KUBECONFIG="$KUBECONFIG_PATH" \
-    oc --request-timeout=5s get --raw=/version >/dev/null 2>&1; then
-    fail "Kubernetes is reachable, but namespace osac has no osac-ui route. Deploy OSAC before running UI E2E tests."
-  fi
+  [[ -n "$route_host" ]]; then
+  OSAC_UI_BASE_URL="https://${route_host}"
+elif { [[ -z "$OSAC_UI_BASE_URL" ]] || placeholder_url "$OSAC_UI_BASE_URL"; }; then
+  fail "Set OSAC_UI_BASE_URL, or provide a kubeconfig that can read the osac-ui route."
+fi
+
+if [[ -z "$OSAC_API_BASE_URL" && -n "$api_route_host" ]]; then
+  OSAC_API_BASE_URL="https://${api_route_host}"
 fi
 
 [[ -n "$OSAC_UI_BASE_URL" ]] && ! placeholder_url "$OSAC_UI_BASE_URL" ||
@@ -315,7 +332,28 @@ if [[ "$needs_vmaas" == true ]]; then
   fi
   "$OSAC_CLI_PATH" version >/dev/null 2>&1 || fail "Unable to execute OSAC CLI '${OSAC_CLI_PATH}'."
   if [[ "$PW_LIST" == false ]]; then
-    "$OSAC_CLI_PATH" whoami >/dev/null 2>&1 || fail "OSAC CLI is not authenticated."
+    if ! timeout 20s "$OSAC_CLI_PATH" whoami >/dev/null 2>&1; then
+      [[ "$need_login" == true ]] || fail "OSAC CLI is not authenticated."
+      [[ -n "$OSAC_API_BASE_URL" ]] || fail \
+        "OSAC CLI is not authenticated and no Fulfillment API route was found. Set OSAC_API_BASE_URL."
+      cli_password_file=$(mktemp /tmp/osac-ui-e2e-cli-password.XXXXXX)
+      chmod 600 "$cli_password_file"
+      printf '%s' "$OSAC_ADMIN_PASSWORD" >"$cli_password_file"
+      cli_config_dir=$(mktemp -d /tmp/osac-ui-e2e-cli-config.XXXXXX)
+      cli_cache_dir=$(mktemp -d /tmp/osac-ui-e2e-cli-cache.XXXXXX)
+      export OSAC_CONFIG="$cli_config_dir" OSAC_CACHE="$cli_cache_dir"
+      cli_login_flags=(
+        --flow=password
+        --user="$OSAC_ADMIN_USERNAME"
+        --password-file="$cli_password_file"
+      )
+      [[ "$IGNORE_HTTPS_ERRORS" == true ]] && cli_login_flags+=(--insecure)
+      timeout 30s "$OSAC_CLI_PATH" login "$OSAC_API_BASE_URL" "${cli_login_flags[@]}" \
+        >/dev/null 2>&1 || fail "OSAC CLI login failed."
+      timeout 20s "$OSAC_CLI_PATH" whoami >/dev/null 2>&1 ||
+        fail "OSAC CLI login completed, but authentication could not be verified."
+      ok "OSAC CLI authenticated for this run"
+    fi
   fi
 fi
 

@@ -36,11 +36,11 @@ export const tenantCredentialsFilePath = (tenantName: string): string =>
     `${safeTenantName(tenantName)}-break-glass-credentials.txt`,
   );
 
-const credentialFromFile = (contents: string, label: string, credentialsFile: string): string => {
+const credentialFromFile = (contents: string, label: string): string => {
   const line = contents.split(/\r?\n/).find((entry) => entry.startsWith(`${label}:`));
   const value = line?.slice(label.length + 1).trim();
   if (!value) {
-    throw new Error(`Tenant credentials file "${credentialsFile}" is missing ${label}.`);
+    throw new Error(`Tenant credentials file is missing ${label}.`);
   }
   return value;
 };
@@ -49,11 +49,11 @@ const credentialFromFile = (contents: string, label: string, credentialsFile: st
 export const readTenantCredentials = async (
   credentialsFile: string,
 ): Promise<TenantCredentials> => {
-  logProgress('tenant-credentials', `Reading credentials from ${credentialsFile}.`);
+  logProgress('tenant-credentials', 'Reading the generated tenant credentials.');
   const contents = await readFile(credentialsFile, 'utf8');
   return {
-    username: credentialFromFile(contents, 'Username', credentialsFile),
-    password: credentialFromFile(contents, 'Password', credentialsFile),
+    username: credentialFromFile(contents, 'Username'),
+    password: credentialFromFile(contents, 'Password'),
   };
 };
 
@@ -62,9 +62,9 @@ export const updateTenantCredentialsPassword = async (
   credentialsFile: string,
   password?: string,
 ): Promise<void> => {
-  logProgress('tenant-credentials', `Updating credentials in ${credentialsFile}.`);
+  logProgress('tenant-credentials', 'Updating the generated tenant credentials.');
   const contents = await readFile(credentialsFile, 'utf8');
-  const tenantName = credentialFromFile(contents, 'Tenant', credentialsFile);
+  const tenantName = credentialFromFile(contents, 'Tenant');
   const replacementPassword = password?.trim() || tenantName;
   logProgress(
     'tenant-credentials',
@@ -77,7 +77,7 @@ export const updateTenantCredentialsPassword = async (
     () => `Password: ${replacementPassword}`,
   );
   if (updatedContents === contents) {
-    throw new Error(`Tenant credentials file "${credentialsFile}" is missing Password.`);
+    throw new Error('Tenant credentials file is missing Password.');
   }
   await writeFile(credentialsFile, updatedContents, { encoding: 'utf8', mode: 0o600 });
 };

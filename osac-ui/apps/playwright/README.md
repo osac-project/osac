@@ -273,6 +273,12 @@ pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-resize
 ```
 
+These browser checks are manual deployed-cluster verification, not CI-tracked
+E2E coverage. They do not replace the documented VMaaS API/provider E2E case
+(`tests/e2e/vmaas/regression/test_compute_instance_instance_type.py`); the UI
+boundary remains an explicitly manual verification gap until a browser-capable
+CI suite is available.
+
 ### Storage tier flow tests
 
 The Storage tier specs read `storage_tier.name`, `description`, `backend`, and

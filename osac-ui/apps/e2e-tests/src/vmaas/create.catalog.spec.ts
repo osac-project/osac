@@ -133,9 +133,9 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
       );
     },
   );
+  if (test.info().project.name === 'vmaas-resize-catalog') {
+    await testStep('catalog-create', 'Record resize prerequisite ownership', () =>
+      markResizeResourceOwned('catalog'),
+    );
+  }
 });
-if (test.info().project.name === 'vmaas-resize-catalog') {
-  await testStep('catalog-create', 'Record resize prerequisite ownership', () =>
-    markResizeResourceOwned('catalog'),
-  );
-}

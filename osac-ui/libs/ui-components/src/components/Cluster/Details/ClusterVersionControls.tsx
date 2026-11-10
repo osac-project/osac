@@ -49,10 +49,10 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   const configuredVersionQuery = useGetResource(
     ClusterVersions,
     { id: configuredVersionId ?? '' },
-    { enabled: Boolean(configuredVersionId && !upgradeInProgress), retry: false },
+    { enabled: Boolean(configuredVersionId) },
   );
   const catalogQuery = useListAllResources(ClusterVersions, undefined, {
-    enabled: Boolean(configuredVersionId && !upgradeInProgress),
+    enabled: Boolean(configuredVersionId),
   });
   const configuredVersion = configuredVersionQuery.data?.object;
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import json
 import subprocess
 from pathlib import Path
 from typing import Any, cast
@@ -15,13 +14,7 @@ from tests.e2e.core.helpers import (
     wait_for_host_allocated,
     wait_for_host_powered,
 )
-from tests.e2e.core.inventory import (
-    Metal3Inventory,
-    NetBoxInventory,
-    load_netbox_fixture_spec,
-    make_inventory_backend,
-    netbox_settings_from_bmf,
-)
+from tests.e2e.core.inventory import Metal3Inventory, NetBoxInventory, make_inventory_backend, netbox_settings_from_bmf
 from tests.e2e.core.k8s_client import K8sClient
 
 _NETBOX_ENV_VARS = (
@@ -30,10 +23,6 @@ _NETBOX_ENV_VARS = (
     "OSAC_NETBOX_TOKEN",
     "OSAC_NETBOX_CA_FILE",
     "OSAC_NETBOX_INSECURE",
-    "OSAC_NETBOX_SITE",
-    "OSAC_NETBOX_DEVICE_TYPE",
-    "OSAC_NETBOX_ROLE",
-    "OSAC_NETBOX_FIXTURE_HOSTS",
 )
 
 
@@ -154,11 +143,8 @@ def test_metal3_ensure_available_hosts_requires_at_least_one() -> None:
     _metal3(FakeMetal3K8s(available_count=2)).ensure_available_hosts()
 
 
-def test_metal3_release_and_close_are_no_ops() -> None:
-    backend = _metal3(FakeMetal3K8s())
-
-    backend.release_created_hosts()
-    backend.close()
+def test_metal3_close_is_a_no_op() -> None:
+    _metal3(FakeMetal3K8s()).close()
 
 
 # Shared provisioning helpers (BMH, backend-agnostic) ------------------------------
@@ -282,18 +268,10 @@ def _claimed_device() -> dict[str, Any]:
     return {"id": "42", "status": "active", "custom_fields": {"osac_instance_id": "bmi-uid"}}
 
 
-def _netbox(
-    netbox: FakeNetBox,
-    *,
-    fixture_spec: list[dict[str, Any]] | None = None,
-    k8s: FakeDeviceK8s | None = None,
-    bmh_namespace: str = "",
-) -> NetBoxInventory:
+def _netbox(netbox: FakeNetBox, *, k8s: FakeDeviceK8s | None = None, bmh_namespace: str = "") -> NetBoxInventory:
     return NetBoxInventory(
         k8s=cast(K8sClient, k8s or FakeDeviceK8s("host-inventory/netbox-42")),
         netbox=cast(Any, netbox),
-        fixture_spec=fixture_spec or [],
-        name_prefix="run1",
         bmh_namespace=bmh_namespace,
     )
 
@@ -377,130 +355,14 @@ def test_netbox_wait_for_released_requires_bmh_deleted_and_device_staged(monkeyp
     backend.wait_for_released(host=host)
 
 
-def test_netbox_fixture_devices_are_created_idempotently_and_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
-    monkeypatch.setenv("OSAC_NETBOX_DEVICE_TYPE", "virtual-host")
-    netbox = FakeNetBox()
-    backend = _netbox(
-        netbox,
-        fixture_spec=[
-            {"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"},
-            {
-                "bmc_address": "redfish://10.0.0.2",
-                "boot_mac": "aa:bb:cc:dd:ee:02",
-                "interface_macs": {"data-0": "AA:BB:CC:DD:EE:02"},
-                "custom_fields": {"host-type": "default"},
-            },
-        ],
-    )
+def test_netbox_ensure_available_hosts_requires_at_least_one() -> None:
+    backend = _netbox(FakeNetBox())
 
-    backend.ensure_available_hosts()
-
-    assert [call["name"] for call in netbox.created] == ["run1-netbox-1", "run1-netbox-2"]
-    assert [call["site"] for call in netbox.created] == ["dc1", "dc1"]
-    # Default role when OSAC_NETBOX_ROLE is unset.
-    assert [call["role"] for call in netbox.created] == ["server", "server"]
-    first, second = netbox.created
-    assert first["custom_fields"] == {
-        "osac_managed": True,
-        "osac_bmc_address": "redfish://10.0.0.1",
-        "osac_boot_mac": "aa:bb:cc:dd:ee:01",
-        # The capability custom field the instance type's selector matches.
-        "host_type": "default",
-    }
-    assert second["custom_fields"]["osac_interface_macs"] == {"data-0": "AA:BB:CC:DD:EE:02"}
-    assert second["custom_fields"]["host_type"] == "default"
-
-    # Second ensure is a no-op: the run-prefixed devices already exist.
-    backend.ensure_available_hosts()
-    assert len(netbox.created) == 2
-
-    backend.release_created_hosts()
-    assert netbox.deleted == ["101", "102"]
-    # Teardown is idempotent.
-    backend.release_created_hosts()
-    assert netbox.deleted == ["101", "102"]
-
-
-def test_netbox_fixture_role_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
-    monkeypatch.setenv("OSAC_NETBOX_DEVICE_TYPE", "virtual-host")
-    monkeypatch.setenv("OSAC_NETBOX_ROLE", "compute")
-    netbox = FakeNetBox()
-    backend = _netbox(netbox, fixture_spec=[{"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"}])
-
-    backend.ensure_available_hosts()
-
-    assert netbox.created[0]["role"] == "compute"
-
-
-def test_netbox_fixture_requires_host_spec_site_and_device_type(monkeypatch: pytest.MonkeyPatch) -> None:
-    backend = _netbox(FakeNetBox(), fixture_spec=[])
-
-    with pytest.raises(RuntimeError, match="OSAC_NETBOX_FIXTURE_HOSTS is empty"):
+    with pytest.raises(AssertionError, match="at least 1 staged, unclaimed osac_managed device"):
         backend.ensure_available_hosts()
 
-    monkeypatch.setenv("OSAC_NETBOX_SITE", "")
-    backend2 = _netbox(FakeNetBox(), fixture_spec=[{"bmc_address": "redfish://x", "boot_mac": "aa:bb:cc:dd:ee:01"}])
-    with pytest.raises(RuntimeError, match="OSAC_NETBOX_SITE"):
-        backend2.ensure_available_hosts()
-
-    monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
-    monkeypatch.setenv("OSAC_NETBOX_DEVICE_TYPE", "")
-    with pytest.raises(RuntimeError, match="OSAC_NETBOX_DEVICE_TYPE"):
-        backend2.ensure_available_hosts()
-
-
-def test_netbox_fixture_creation_failure_cleans_up_created_devices(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
-    monkeypatch.setenv("OSAC_NETBOX_DEVICE_TYPE", "virtual-host")
-
-    class ExplodingNetBox(FakeNetBox):
-        def create_device(
-            self, *, name: str, role: str, site: str, device_type: str, custom_fields: dict[str, Any] | None = None
-        ) -> str:
-            device_id = super().create_device(
-                name=name, role=role, site=site, device_type=device_type, custom_fields=custom_fields
-            )
-            if len(self.created) == 2:
-                raise RuntimeError("boom")
-            return device_id
-
-    netbox = ExplodingNetBox()
-    backend = _netbox(
-        netbox,
-        fixture_spec=[
-            {"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"},
-            {"bmc_address": "redfish://10.0.0.2", "boot_mac": "aa:bb:cc:dd:ee:02"},
-        ],
-    )
-
-    with pytest.raises(RuntimeError, match="boom"):
-        backend.ensure_available_hosts()
-
-    # Device 1 was created before the failure and must be cleaned up.
-    assert netbox.deleted == ["101"]
-    assert backend._created_device_ids == []
-
-
-def test_netbox_release_created_hosts_aggregates_deletion_failures() -> None:
-    class ExplodingNetBox(FakeNetBox):
-        def delete_device(self, device_id: str) -> None:
-            raise RuntimeError(f"boom {device_id}")
-
-    netbox = ExplodingNetBox()
-    backend = _netbox(netbox, fixture_spec=[{"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"}])
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setenv("OSAC_NETBOX_SITE", "dc1")
-    monkeypatch.setenv("OSAC_NETBOX_DEVICE_TYPE", "virtual-host")
-    try:
-        backend.ensure_available_hosts()
-        with pytest.raises(RuntimeError, match="1 NetBox fixture device deletion failure"):
-            backend.release_created_hosts()
-        # Failed deletions are not retried on a second teardown call.
-        backend.release_created_hosts()
-    finally:
-        monkeypatch.undo()
+    staged = [{"id": "7", "name": "virtual-bmh-1", "status": "staged", "custom_fields": {}}]
+    _netbox(FakeNetBox(staged)).ensure_available_hosts()
 
 
 def test_netbox_close_closes_the_client() -> None:
@@ -711,37 +573,9 @@ def test_settings_propagate_non_not_found_secret_errors() -> None:
 # Fixture spec and factory -----------------------------------------------------------
 
 
-def test_fixture_spec_empty_when_unset() -> None:
-    assert load_netbox_fixture_spec() == []
-
-
-def test_fixture_spec_parses_and_validates() -> None:
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setenv(
-        "OSAC_NETBOX_FIXTURE_HOSTS",
-        json.dumps([{"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"}]),
-    )
-    try:
-        assert load_netbox_fixture_spec() == [{"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"}]
-
-        monkeypatch.setenv("OSAC_NETBOX_FIXTURE_HOSTS", "{not json")
-        with pytest.raises(RuntimeError, match="not valid JSON"):
-            load_netbox_fixture_spec()
-
-        monkeypatch.setenv("OSAC_NETBOX_FIXTURE_HOSTS", json.dumps({"bmc_address": "redfish://x"}))
-        with pytest.raises(RuntimeError, match="must be a JSON list"):
-            load_netbox_fixture_spec()
-
-        monkeypatch.setenv("OSAC_NETBOX_FIXTURE_HOSTS", json.dumps([{"bmc_address": "redfish://x"}]))
-        with pytest.raises(RuntimeError, match="missing 'boot_mac'"):
-            load_netbox_fixture_spec()
-    finally:
-        monkeypatch.undo()
-
-
 def test_make_inventory_backend_defaults_to_metal3() -> None:
     backend = make_inventory_backend(
-        k8s=cast(K8sClient, FakeMetal3K8s()), namespace="osac", bmh_namespace="host-inventory", test_run_id="run1"
+        k8s=cast(K8sClient, FakeMetal3K8s()), namespace="osac", bmh_namespace="host-inventory"
     )
 
     assert isinstance(backend, Metal3Inventory)
@@ -749,21 +583,12 @@ def test_make_inventory_backend_defaults_to_metal3() -> None:
 
 def test_make_inventory_backend_netbox_uses_bmf_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSAC_INVENTORY_BACKEND", "netbox")
-    monkeypatch.setenv(
-        "OSAC_NETBOX_FIXTURE_HOSTS",
-        json.dumps([{"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"}]),
-    )
 
     backend = make_inventory_backend(
-        k8s=cast(K8sClient, FakeSecretsK8s(_bmf_secrets())),
-        namespace="osac",
-        bmh_namespace="host-inventory",
-        test_run_id="run1",
+        k8s=cast(K8sClient, FakeSecretsK8s(_bmf_secrets())), namespace="osac", bmh_namespace="host-inventory"
     )
 
     assert isinstance(backend, NetBoxInventory)
-    assert backend.fixture_spec == [{"bmc_address": "redfish://10.0.0.1", "boot_mac": "aa:bb:cc:dd:ee:01"}]
-    assert backend.name_prefix == "run1"
     assert backend.bmh_namespace == "host-inventory"
     backend.close()
 
@@ -772,6 +597,4 @@ def test_make_inventory_backend_rejects_unknown_backend(monkeypatch: pytest.Monk
     monkeypatch.setenv("OSAC_INVENTORY_BACKEND", "bcm")
 
     with pytest.raises(RuntimeError, match="valid values: metal3, netbox"):
-        make_inventory_backend(
-            k8s=cast(K8sClient, FakeMetal3K8s()), namespace="osac", bmh_namespace="host-inventory", test_run_id="run1"
-        )
+        make_inventory_backend(k8s=cast(K8sClient, FakeMetal3K8s()), namespace="osac", bmh_namespace="host-inventory")

@@ -42,7 +42,7 @@ def bmh_namespace() -> str:
 
 @pytest.fixture(scope="session")
 def inventory_backend(
-    k8s_hub_client: K8sClient, namespace: str, bmh_namespace: str, test_run_id: str
+    k8s_hub_client: K8sClient, namespace: str, bmh_namespace: str
 ) -> Generator[InventoryBackend, None, None]:
     """Inventory backend selected by OSAC_INVENTORY_BACKEND (default metal3).
 
@@ -50,26 +50,23 @@ def inventory_backend(
     configuration (Secrets in the OSAC namespace), with OSAC_NETBOX_* env
     vars as debug overrides only.
     """
-    backend = make_inventory_backend(
-        k8s=k8s_hub_client, namespace=namespace, bmh_namespace=bmh_namespace, test_run_id=test_run_id
-    )
+    backend = make_inventory_backend(k8s=k8s_hub_client, namespace=namespace, bmh_namespace=bmh_namespace)
     yield backend
     backend.close()
 
 
 @pytest.fixture(scope="session")
-def inventory_hosts(inventory_backend: InventoryBackend) -> Generator[None, None, None]:
-    """Ensure inventory has available hosts; release fixture-created ones after.
+def inventory_hosts(inventory_backend: InventoryBackend) -> Iterator[None]:
+    """Assert the pre-staged inventory has an available host.
 
-    metal3: asserts the BMH pool is non-empty — BMHs are enrolled by the
-    lab/CI infrastructure (the netris Ansible backend) or the platform
-    admin, never by the tests or the OSAC operators.
-    netbox: idempotently creates fixture devices from OSAC_NETBOX_FIXTURE_HOSTS
-    and deletes them on teardown.
+    Both backends stage their inventory before the suite starts — metal3
+    BMHs are enrolled by the lab/CI infrastructure (the netris Ansible
+    backend) or the platform admin; netbox devices are staged by the
+    provider reconcile (setup-virtual-netbox-devices.sh) — never by the
+    tests or the OSAC operators.
     """
     inventory_backend.ensure_available_hosts()
     yield
-    inventory_backend.release_created_hosts()
 
 
 @pytest.fixture(scope="session")

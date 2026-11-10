@@ -206,11 +206,13 @@ another storage system's LUNs. Change the existing configuration instead:
 it needs `find_multipaths no`, and NetApp LUNs (vendor `NETAPP`, product
 `LUN`) must not be blacklisted.
 
-**1. The multipath configuration.** Save it as `multipath.conf`. This is
-what Trident's own node preparation writes on a node that has no
-`/etc/multipath.conf`:
+**1. Generate the MachineConfig.** It writes `/etc/multipath.conf` and
+enables `multipathd`. A MachineConfig carries a file's contents as an
+encoded `data:` URL, so the first command encodes the multipath
+configuration and the second writes the MachineConfig around it:
 
-```text
+```shell
+MULTIPATH_CONF=$(base64 <<'EOF' | tr -d '\n'
 defaults {
     find_multipaths no
 }
@@ -226,18 +228,8 @@ blacklist_exceptions {
         product "LUN"
     }
 }
-```
-
-With `find_multipaths no`, multipath claims every path device that is not
-blacklisted, local disks included. The blacklist with the NetApp exception
-limits it to NetApp LUNs.
-
-**2. The MachineConfig.** It writes that file and enables `multipathd`. A
-MachineConfig carries a file's contents as an encoded `data:` URL, so
-generate it from `multipath.conf`:
-
-```shell
-MULTIPATH_CONF=$(base64 < multipath.conf | tr -d '\n')
+EOF
+)
 
 cat > 99-worker-netapp-multipath.yaml <<EOF
 apiVersion: machineconfiguration.openshift.io/v1
@@ -267,17 +259,22 @@ spec:
 EOF
 ```
 
+The multipath configuration is what Trident's own node preparation writes
+on a node that has no `/etc/multipath.conf`. With `find_multipaths no`,
+multipath claims every path device that is not blacklisted, local disks
+included. The blacklist with the NetApp exception limits it to NetApp LUNs.
+
 To read back what the generated MachineConfig writes:
 
 ```shell
-grep -o 'base64,.*' 99-worker-netapp-multipath.yaml | cut -d, -f2 | base64 -d
+grep -o 'base64,.*' 99-worker-netapp-multipath.yaml | cut -d, -f2 | base64 --decode
 ```
 
 The example targets the `worker` MachineConfigPool. On single-node and
 compact three-node clusters the nodes are in the `master` pool; change the
 role label and the name to match.
 
-**3. Apply it.** By default the Machine Config Operator drains and reboots
+**2. Apply it.** By default the Machine Config Operator drains and reboots
 the nodes of the pool, one at a time. Apply it before the cluster carries
 tenant workloads, or in a maintenance window.
 

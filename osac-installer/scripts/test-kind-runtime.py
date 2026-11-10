@@ -955,6 +955,22 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
         self.assertIn("--label-filter 'compute-storage'", result.stdout)
         self.assertNotIn("service.enabled=false", result.stdout)
 
+    def test_operator_phase_uses_the_aap_recorder(self):
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=operator", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        self.assertIn("osac-operator:it", result.stdout)
+        self.assertIn("global.networking.provisioningEnabled=false", result.stdout)
+        # The operator points at the recorder the spec installs before it
+        # creates a ComputeInstance; the same inline override shape the
+        # compute-storage phase uses.
+        self.assertIn("operator.aap.url=http://osac-aap-recorder.osac.svc.cluster.local:8080/api", result.stdout)
+        self.assertIn("operator.aap.statusPollInterval=1s", result.stdout)
+        self.assertIn("IT_TEST_SUITE=operator", result.stdout)
+
     def test_service_only_phase_excludes_compute_storage_specs(self):
         result = subprocess.run(
             ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",

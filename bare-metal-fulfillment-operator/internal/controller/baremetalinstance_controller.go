@@ -53,9 +53,10 @@ type BareMetalInstanceReconciler struct {
 	InventoryClient      inventory.Client
 	ManagementClient     management.Client
 	ProvisioningProvider provisioning.ProvisioningProvider
-	// NetworkingNamespace is the namespace of the NetworkAttachments, BMF's own
-	// namespace. Empty when networking provisioning is disabled.
-	NetworkingNamespace                  string
+	// NetworkingEnabled reports whether BMF attaches hosts to tenant networks
+	// through NetworkAttachments, which it creates next to each
+	// BareMetalInstance.
+	NetworkingEnabled                    bool
 	NoFreeHostsPollIntervalDuration      time.Duration
 	TryLockFailPollIntervalDuration      time.Duration
 	ManagementRecheckIntervalDuration    time.Duration
@@ -73,7 +74,7 @@ func NewBareMetalInstanceReconciler(
 	inventoryClient inventory.Client,
 	managementClient management.Client,
 	provisioningProvider provisioning.ProvisioningProvider,
-	networkingNamespace string,
+	networkingEnabled bool,
 	noFreeHostsPollIntervalDuration time.Duration,
 	tryLockFailPollIntervalDuration time.Duration,
 	managementRecheckIntervalDuration time.Duration,
@@ -108,7 +109,7 @@ func NewBareMetalInstanceReconciler(
 		TryLockFailPollIntervalDuration:      tryLockFailPollIntervalDuration,
 		ManagementClient:                     managementClient,
 		ProvisioningProvider:                 provisioningProvider,
-		NetworkingNamespace:                  networkingNamespace,
+		NetworkingEnabled:                    networkingEnabled,
 		ManagementRecheckIntervalDuration:    managementRecheckIntervalDuration,
 		ProvisionPollIntervalDuration:        provisionPollIntervalDuration,
 		HostAvailabilityPollIntervalDuration: hostAvailabilityPollIntervalDuration,
@@ -367,11 +368,6 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	}
 
 	bareMetalInstance.Spec.HostClass = inventoryHost.HostClass
-	// A host assigned without FindFreeHost gets its name here. The name is part
-	// of the provisioning input, so it is set only before provisioning starts.
-	if bareMetalInstance.Spec.ExternalHostName == "" && len(bareMetalInstance.Status.ProvisioningJobs) == 0 {
-		bareMetalInstance.Spec.ExternalHostName = inventoryHost.Name
-	}
 	if err = r.Update(ctx, bareMetalInstance); err != nil {
 		log.Error(err, "Failed to update BareMetalInstance CR with HostClass", "HostClass", inventoryHost.HostClass)
 		return ctrl.Result{}, err
@@ -748,7 +744,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if !r.networkingEnabled() {
+	if !r.NetworkingEnabled {
 		log.Info("Networking provisioning disabled, skipping network-handoff reboot")
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
 			metav1.ConditionTrue, "Skipped", "Networking provisioning disabled")
@@ -1070,7 +1066,7 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	// Power off BEFORE moving the port back to the provisioning network — ensures tenant
 	// workloads never run on the provisioning network. Only needed when networking
 	// provisioning is enabled (port was actually moved to the tenant network).
-	if len(bareMetalInstance.Spec.NetworkAttachments) > 0 && r.ManagementClient != nil && r.networkingEnabled() {
+	if len(bareMetalInstance.Spec.NetworkAttachments) > 0 && r.ManagementClient != nil && r.NetworkingEnabled {
 		result, err = r.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
 		if err != nil {
 			return result, err

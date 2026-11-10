@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"net"
+	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -54,13 +55,19 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 
-	if !r.networkingEnabled() {
+	if !r.NetworkingEnabled {
 		log.Info("Networking provisioning disabled, skipping IP discovery")
 		setIPDiscoveryComplete(bareMetalInstance, metav1.ConditionTrue, "Skipped", "Networking provisioning disabled")
 		return ctrl.Result{}, nil
 	}
 
-	key, ok := r.networkAttachmentKey(bareMetalInstance)
+	attachment := primaryNetworkAttachment(bareMetalInstance)
+	if attachment == nil {
+		setIPDiscoveryComplete(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed,
+			"the BareMetalInstance has no primary network attachment")
+		return ctrl.Result{}, nil
+	}
+	key, ok := networkAttachmentKey(bareMetalInstance, attachment)
 	if !ok {
 		setIPDiscoveryComplete(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed,
 			"the BareMetalInstance has no NetworkAttachment")
@@ -78,7 +85,12 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 
 	if lease := na.Status.DHCPLease; lease != nil && net.ParseIP(lease.IPAddress) != nil {
 		r.initNetworkAttachmentStatuses(bareMetalInstance)
-		bareMetalInstance.Status.NetworkAttachmentStatuses[0].IPAddress = lease.IPAddress
+		// Status entries are keyed by the immutable subnetRef, like the spec list.
+		for i := range bareMetalInstance.Status.NetworkAttachmentStatuses {
+			if bareMetalInstance.Status.NetworkAttachmentStatuses[i].SubnetRef == attachment.SubnetRef {
+				bareMetalInstance.Status.NetworkAttachmentStatuses[i].IPAddress = lease.IPAddress
+			}
+		}
 		log.Info("Discovered IP for attachment", "interface", na.Spec.Interface.Name, "subnet", na.Spec.Subnet,
 			"ip", lease.IPAddress)
 		setIPDiscoveryComplete(bareMetalInstance, metav1.ConditionTrue, "Succeeded", "DHCP lease discovery completed")
@@ -106,21 +118,24 @@ func queryDHCPLeaseJob(na *opv1alpha1.NetworkAttachment) *opv1alpha1.NetworkJobS
 	return nil
 }
 
-// initNetworkAttachmentStatuses ensures statuses exist for all attachments and syncs
-// SubnetRef, Interface, and Primary from spec to status without overwriting
-// any IP addresses already discovered.
+// initNetworkAttachmentStatuses ensures a status entry exists for every
+// attachment, matched by the immutable subnetRef, and syncs Interface and
+// Primary from spec to status without overwriting a discovered IP address.
 func (r *BareMetalInstanceReconciler) initNetworkAttachmentStatuses(
 	bareMetalInstance *v1alpha1.BareMetalInstance,
 ) {
-	for i, na := range bareMetalInstance.Spec.NetworkAttachments {
-		if i >= len(bareMetalInstance.Status.NetworkAttachmentStatuses) {
-			bareMetalInstance.Status.NetworkAttachmentStatuses = append(
-				bareMetalInstance.Status.NetworkAttachmentStatuses,
-				v1alpha1.BareMetalNetworkAttachmentStatus{},
-			)
+	primary := primaryNetworkAttachment(bareMetalInstance)
+	for i := range bareMetalInstance.Spec.NetworkAttachments {
+		attachment := &bareMetalInstance.Spec.NetworkAttachments[i]
+		statuses := &bareMetalInstance.Status.NetworkAttachmentStatuses
+		j := slices.IndexFunc(*statuses, func(s v1alpha1.BareMetalNetworkAttachmentStatus) bool {
+			return s.SubnetRef == attachment.SubnetRef
+		})
+		if j < 0 {
+			*statuses = append(*statuses, v1alpha1.BareMetalNetworkAttachmentStatus{SubnetRef: attachment.SubnetRef})
+			j = len(*statuses) - 1
 		}
-		bareMetalInstance.Status.NetworkAttachmentStatuses[i].SubnetRef = na.SubnetRef
-		bareMetalInstance.Status.NetworkAttachmentStatuses[i].Interface = na.Interface
-		bareMetalInstance.Status.NetworkAttachmentStatuses[i].Primary = na.Primary
+		(*statuses)[j].Interface = attachment.Interface
+		(*statuses)[j].Primary = attachment == primary
 	}
 }

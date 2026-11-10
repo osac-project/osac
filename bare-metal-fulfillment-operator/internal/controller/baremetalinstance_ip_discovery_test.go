@@ -18,8 +18,8 @@ package controller
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -64,13 +64,13 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		bmiID = fmt.Sprintf("ipd-%d", CurrentSpecReport().LeafNodeLocation.LineNumber)
+		bmiID = uuid.NewString()
 		attachment = nil
 		reconciler = &BareMetalInstanceReconciler{
 			Client:                        k8sClient,
 			APIReader:                     k8sClient,
 			Scheme:                        k8sClient.Scheme(),
-			NetworkingNamespace:           namespace,
+			NetworkingEnabled:             true,
 			ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 		}
 	})
@@ -82,7 +82,7 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 	})
 
 	createAttachment := func(lease *opv1alpha1.NetworkAttachmentDHCPLease, jobs ...opv1alpha1.NetworkJobStatus) {
-		attachment = newTestNetworkAttachment(namespace, bmiID)
+		attachment = newTestNetworkAttachment(namespace, bmiID, "data-0")
 		Expect(k8sClient.Create(ctx, attachment)).To(Succeed())
 		attachment.Status.DHCPLease = lease
 		setTestNetworkAttachmentReady(ctx, attachment, jobs...)
@@ -109,7 +109,7 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 	It("skips when networking provisioning is disabled", func() {
 		bmi = newBMI(attachments)
 		handoffComplete(bmi)
-		reconciler.NetworkingNamespace = ""
+		reconciler.NetworkingEnabled = false
 		_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
 		Expect(err).NotTo(HaveOccurred())
 		cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)

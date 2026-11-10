@@ -321,14 +321,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// NetworkAttachments live in the OSAC release namespace, BMF's own namespace.
-	networkingNamespace := ""
-	if networkingProvisioningEnabled {
-		networkingNamespace = bareMetalFulfillmentNamespace
-	}
-
 	if err := setupBareMetalInstanceController(
-		ctx, mgr, provisioningProvider, networkingNamespace,
+		ctx, mgr, provisioningProvider, networkingProvisioningEnabled,
 	); err != nil {
 		setupLog.Error(err, "unable to setup controller", "controller", "BareMetalInstance")
 		os.Exit(1)
@@ -434,7 +428,7 @@ func setupBareMetalInstanceController(
 	ctx context.Context,
 	mgr ctrl.Manager,
 	provisioningProvider provisioning.ProvisioningProvider,
-	networkingNamespace string,
+	networkingEnabled bool,
 ) error {
 	// Read and parse inventory configuration
 	inventoryConfigPath := helpers.GetEnvWithDefault(envInventoryConfigPath, "/etc/osac/inventory/inventory.yaml")
@@ -512,7 +506,7 @@ func setupBareMetalInstanceController(
 		inventoryClient,
 		managementClient,
 		provisioningProvider,
-		networkingNamespace,
+		networkingEnabled,
 		noFreeHostsPollInterval,
 		tryLockFailPollInterval,
 		managementRecheckInterval,

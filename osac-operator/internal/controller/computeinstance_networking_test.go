@@ -120,7 +120,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 				_ = k8sClient.Delete(ctx, current)
 			}
 			na := &osacv1alpha1.NetworkAttachment{}
-			naKey := types.NamespacedName{Namespace: ns, Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, id)}
+			naKey := types.NamespacedName{Namespace: ns, Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, id, "")}
 			if k8sClient.Get(ctx, naKey, na) == nil {
 				na.Finalizers = nil
 				_ = k8sClient.Update(ctx, na)
@@ -136,7 +136,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 		GinkgoHelper()
 		na := &osacv1alpha1.NetworkAttachment{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns,
-			Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, f.id)}, na)).To(Succeed())
+			Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, f.id, "")}, na)).To(Succeed())
 		return na
 	}
 
@@ -807,7 +807,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 		})
 		Expect(f.aap.last(computeInstanceProvisionTask).vars["vm_network"]).To(Equal(disabledVMNetwork(ns, f.id)))
 		err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns,
-			Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, f.id)}, &osacv1alpha1.NetworkAttachment{})
+			Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, f.id, "")}, &osacv1alpha1.NetworkAttachment{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no NetworkAttachment with provider networking disabled")
 
 		f.aap.finish(computeInstanceProvisionTask, "successful", "")
@@ -881,7 +881,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		}, 15*time.Second, 100*time.Millisecond).Should(Succeed())
 		err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns,
-			Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, f.id)}, &osacv1alpha1.NetworkAttachment{})
+			Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, f.id, "")}, &osacv1alpha1.NetworkAttachment{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
 

@@ -95,8 +95,8 @@ func newMetal3Reconciler() *BareMetalInstanceReconciler {
 		k8sClient.Scheme(),
 		invClient,
 		mgmtClient,
-		nil, // provisioning provider
-		"",  // networking namespace (networking disabled)
+		nil,   // provisioning provider
+		false, // networking namespace (networking disabled)
 		0, 0, 0, 0, 0,
 	)
 }
@@ -299,10 +299,11 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 			bmi = getBMI(bmiName)
 			Expect(bmi.Finalizers).To(ContainElement(BareMetalInstanceInventoryFinalizer))
 
-			// Reconcile 2: FindFreeHost → set ExternalHostID
+			// Reconcile 2: FindFreeHost → set ExternalHostID and the inventory host name
 			reconcileN(reconciler, bmiName, 1)
 			bmi = getBMI(bmiName)
 			Expect(bmi.Spec.ExternalHostID).To(Equal(metal3TestNS + "/" + bmhName))
+			Expect(bmi.Spec.ExternalHostName).To(Equal(bmhName))
 
 			// Reconcile 3: AssignHost → set HostClass, status persisted as Progressing
 			reconcileN(reconciler, bmiName, 1)
@@ -755,7 +756,7 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 				k8sClient.Scheme(),
 				inventory.NewMetal3ClientForTest(k8sClient, metal3TestNS, metal3HostClass),
 				management.NewMetal3ClientForTest(k8sClient, metal3TestNS),
-				nil, "",
+				nil, false,
 				0, 0, 0, 0, 0,
 			)
 

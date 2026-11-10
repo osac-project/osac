@@ -18,8 +18,9 @@ package controller
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,12 +33,12 @@ import (
 	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
-// newTestNetworkAttachment returns the physical NetworkAttachment of the
-// BareMetalInstance with API ID bmiID.
-func newTestNetworkAttachment(namespace, bmiID string, finalizers ...string) *opv1alpha1.NetworkAttachment {
+// newTestNetworkAttachment returns the physical NetworkAttachment of interface
+// iface of the BareMetalInstance with API ID bmiID.
+func newTestNetworkAttachment(namespace, bmiID, iface string, finalizers ...string) *opv1alpha1.NetworkAttachment {
 	return &opv1alpha1.NetworkAttachment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, bmiID),
+			Name:       opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, bmiID, iface),
 			Namespace:  namespace,
 			Finalizers: finalizers,
 		},
@@ -45,7 +46,7 @@ func newTestNetworkAttachment(namespace, bmiID string, finalizers ...string) *op
 			Target: opv1alpha1.NetworkAttachmentTarget{Kind: opv1alpha1.NetworkAttachmentTargetBareMetalInstance, ID: bmiID},
 			Subnet: "subnet-1",
 			Interface: opv1alpha1.NetworkAttachmentInterface{
-				Type: opv1alpha1.NetworkInterfacePhysical, Name: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff",
+				Type: opv1alpha1.NetworkInterfacePhysical, Name: iface, MACAddress: "aa:bb:cc:dd:ee:ff",
 			},
 			SecurityGroups: []string{"sg-1"},
 		},
@@ -70,6 +71,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 		bmi        *v1alpha1.BareMetalInstance
 		bmiID      string
 		macs       map[string]string
+		macsErr    error
 	)
 
 	newBMI := func(attachments []v1alpha1.BareMetalNetworkAttachment) *v1alpha1.BareMetalInstance {
@@ -96,7 +98,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 	attachmentKey := func() client.ObjectKey {
 		return client.ObjectKey{
 			Namespace: namespace,
-			Name:      opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, bmiID),
+			Name:      "baremetalinstance-" + bmiID + "-data-0",
 		}
 	}
 
@@ -130,18 +132,19 @@ var _ = Describe("BareMetalInstance Networking", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		bmiID = fmt.Sprintf("bmi-%d", GinkgoRandomSeed()+int64(CurrentSpecReport().LeafNodeLocation.LineNumber))
+		bmiID = uuid.NewString()
 		macs = map[string]string{"data-0": "AA-BB-CC-DD-EE-FF"}
+		macsErr = nil
 		reconciler = &BareMetalInstanceReconciler{
 			Client:    k8sClient,
 			APIReader: k8sClient,
 			Scheme:    k8sClient.Scheme(),
 			InventoryClient: &mockInventoryClient{
 				getHostLogicalPortMACsFunc: func(_ context.Context, _ string) (map[string]string, error) {
-					return macs, nil
+					return macs, macsErr
 				},
 			},
-			NetworkingNamespace:           namespace,
+			NetworkingEnabled:             true,
 			ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 		}
 	})
@@ -169,7 +172,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 		It("skips when networking provisioning is disabled", func() {
 			bmi = newBMI(attachments)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			reconciler.NetworkingNamespace = ""
+			reconciler.NetworkingEnabled = false
 
 			result, err := reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
@@ -240,11 +243,67 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 
+		It("treats a single attachment without primary as the primary one", func() {
+			bmi = newBMI([]v1alpha1.BareMetalNetworkAttachment{{
+				SubnetRef: "subnet-1", Interface: "data-0", SecurityGroupRefs: []string{"sg-1"},
+			}})
+			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			_, err := reconciler.reconcileNetworking(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			na, err := getAttachment()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(na.Spec.Interface.Name).To(Equal("data-0"))
+		})
+
+		It("retries when the inventory backend fails", func() {
+			bmi = newBMI(attachments)
+			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+			macsErr = errors.New("netbox unavailable")
+
+			_, err := reconciler.reconcileNetworking(ctx, bmi)
+			Expect(err).To(MatchError(ContainSubstring("netbox unavailable")))
+			Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)).To(BeNil())
+			_, err = getAttachment()
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+
+		It("fails the attachment when the BareMetalInstance has no tenant", func() {
+			bmi = newBMI(attachments)
+			delete(bmi.Annotations, tenantAnnotation)
+			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			result, err := reconciler.reconcileNetworking(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonTemplateFailed))
+			Expect(cond.Message).To(ContainSubstring(tenantAnnotation))
+			_, err = getAttachment()
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+
+		It("fails the attachment when the interface name is not a DNS label", func() {
+			bmi = newBMI([]v1alpha1.BareMetalNetworkAttachment{{SubnetRef: "subnet-1", Interface: "Data_0", Primary: true}})
+			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			result, err := reconciler.reconcileNetworking(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonTemplateFailed))
+			Expect(cond.Message).To(ContainSubstring(`"Data_0"`))
+		})
+
 		It("mirrors a Ready NetworkAttachment", func() {
 			bmi = newBMI(attachments)
 			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			na := newTestNetworkAttachment(namespace, bmiID, BareMetalInstanceNetworkingFinalizer)
+			na := newTestNetworkAttachment(namespace, bmiID, "data-0", BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, na)).To(Succeed())
 			setTestNetworkAttachmentReady(ctx, na)
 
@@ -260,7 +319,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			bmi = newBMI(attachments)
 			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			na := newTestNetworkAttachment(namespace, bmiID, BareMetalInstanceNetworkingFinalizer)
+			na := newTestNetworkAttachment(namespace, bmiID, "data-0", BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, na)).To(Succeed())
 			meta.SetStatusCondition(&na.Status.Conditions, metav1.Condition{
 				Type: opv1alpha1.NetworkConditionReady, Status: metav1.ConditionFalse,
@@ -284,7 +343,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			bmi = newBMI(attachments)
 			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			na := newTestNetworkAttachment(namespace, bmiID,
+			na := newTestNetworkAttachment(namespace, bmiID, "data-0",
 				BareMetalInstanceNetworkingFinalizer, "osac.openshift.io/networkattachment")
 			Expect(k8sClient.Create(ctx, na)).To(Succeed())
 

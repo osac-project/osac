@@ -601,6 +601,9 @@ class TestBmaasNetworking:
             resource_id=pool_id,
         )
 
+        # Decide on the holders after the poll: a default ExternalIP can be
+        # released or allocated while the allocation count settles.
+        holders = _pool_external_ips(private_grpc, pool_id)
         other_holders = [item for item in holders if not _is_default_external_ip(item)]
         assert not other_holders, (
             f"ExternalIPPool {pool_id} is still held by: "

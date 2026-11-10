@@ -87,3 +87,22 @@ def test_bmaas_pool_cleanup_keeps_default_holder_race(monkeypatch: pytest.Monkey
 
     assert grpc.deleted == ["pool-1"]
     assert grpc.pool_ids == ["pool-1"]
+
+
+class _ReleasingPrivateGRPC(_PrivateGRPC):
+    """The last default ExternalIP is released after the first holder lookup."""
+
+    def list_private_external_ips(self) -> list[dict[str, Any]]:
+        current = list(self.external_ips)
+        self.external_ips = []
+        return current
+
+
+def test_bmaas_pool_cleanup_rechecks_holders_after_the_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_pool_state(monkeypatch)
+    grpc = _ReleasingPrivateGRPC([_external_ip(name="default-nat", default=True)])
+
+    test_module.TestBmaasNetworking().test_19_delete_external_ip_pool(grpc, object())
+
+    assert grpc.deleted == ["pool-1"]
+    assert grpc.pool_ids == []

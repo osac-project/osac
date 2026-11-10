@@ -135,6 +135,8 @@ evpn:
     # [REQUIRED when enabled] Fabric loopback ranges (remote VTEPs). Only /32
     # routes inside these ranges are accepted from the fabric.
     acceptPrefixes: []
+    # Allow up to 16 eligible IPv4 BGP paths for active-active forwarding.
+    activeActive: false
     # Fail the install when sessions are not Established within the timeout.
     waitForEstablished: true
     timeoutSeconds: 900

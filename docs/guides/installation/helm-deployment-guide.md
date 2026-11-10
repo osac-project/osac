@@ -478,6 +478,7 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 | `evpn.vtepCIDR` | Required VTEP address range, assigned with the fabric admin. |
 | `evpn.bgp.asn` | Required default node ASN, assigned with the fabric admin. |
 | `evpn.bgp.acceptPrefixes` | Required fabric loopback IPv4 ranges supplied by the fabric admin. Only /32 routes are accepted. |
+| `evpn.bgp.activeActive` | Optional; defaults to `false`. Set `true` to allow up to 16 eligible IPv4 paths (`as-path multipath-relax`). |
 | `evpn.bgp.waitForEstablished` | Fails installation if a configured BGP session does not become Established. |
 | `evpn.bgp.timeoutSeconds` | Maximum wait per BGP session. |
 | `evpn.bgp.bfdProfile` | Optional FRR-K8s BFD profile applied to every EVPN uplink; empty disables BFD. |

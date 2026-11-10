@@ -410,9 +410,34 @@ def test_multiple_nodes() -> None:
     assert second["spec"]["bgp"]["routers"][0]["asn"] == 4209999998
     raw = named(frr, "FRRConfiguration", "osac-evpn-raw-worker-1")
     raw_config = raw["spec"]["raw"]["rawConfig"]
+    assert "bgp bestpath as-path multipath-relax" not in raw_config
+    assert "maximum-paths 16" not in raw_config
     assert "neighbor 169.254.134.1 activate" in raw_config
     assert "neighbor 169.254.135.1 activate" in raw_config
     assert len(data["peers.txt"].splitlines()) == 3
+
+
+def test_active_active_bgp() -> None:
+    values = base_values(
+        [node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")])]
+    )
+    values["evpn"]["bgp"]["activeActive"] = True
+    with tempfile.TemporaryDirectory(prefix="evpn-values-") as temp:
+        values_file = write_values(pathlib.Path(temp), "active-active.yaml", values)
+        infra = render("osac-infra", INFRA_CHART, "--values", str(values_file))
+
+    raw = named(
+        parse_documents(config_data(infra)["frr.yaml"]),
+        "FRRConfiguration",
+        "osac-evpn-raw-worker-0",
+    )
+    raw_config = raw["spec"]["raw"]["rawConfig"]
+    assert "bgp bestpath as-path multipath-relax" in raw_config
+    assert (
+        "address-family ipv4 unicast\n    maximum-paths 16\n  exit-address-family"
+        in raw_config
+    )
+    assert "address-family l2vpn evpn" in raw_config
 
 
 def test_uplink_without_address() -> None:
@@ -528,6 +553,7 @@ def main() -> None:
     test_prune_listing_failure_is_fatal()
     test_single_node()
     test_multiple_nodes()
+    test_active_active_bgp()
     test_uplink_without_address()
     test_nmstate_install_disabled()
     test_invalid_values()

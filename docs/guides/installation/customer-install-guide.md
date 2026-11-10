@@ -660,6 +660,7 @@ With the Netris Fabric Manager, also note:
 | `evpn.vtepCIDR` | Required. The range that holds every node's VTEP address. Fixed after installation. | Agreed with the fabric admin |
 | `evpn.bgp.asn` | Required. The node ASN; a node can override it. It must match the ASN that the fabric admin configured for the node's BGP neighbors. | Agreed with the fabric admin |
 | `evpn.bgp.acceptPrefixes` | Required. The fabric loopback (remote VTEP) ranges. Only /32 routes inside them are accepted. | Fabric admin |
+| `evpn.bgp.activeActive` | Optional. Defaults to `false`; set `true` to allow up to 16 eligible IPv4 BGP paths. FRR still applies its other multipath eligibility checks. | You |
 | `evpn.bgp.waitForEstablished` | Fails the installation unless every BGP session becomes `Established`. Default `true`. | You |
 | `evpn.bgp.timeoutSeconds` | Maximum wait for each BGP session, at least 60. Default `900`. | You |
 | `evpn.nodes[].name` | Kubernetes node name. Add one entry for every node that runs VMs. | Cluster admin |

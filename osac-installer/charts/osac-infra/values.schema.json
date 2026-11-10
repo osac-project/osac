@@ -245,6 +245,11 @@
               },
               "default": []
             },
+            "activeActive": {
+              "type": "boolean",
+              "description": "Allow up to 16 eligible IPv4 BGP paths for active-active forwarding.",
+              "default": false
+            },
             "waitForEstablished": {
               "type": "boolean",
               "description": "Fail installation unless every configured BGP session is Established.",

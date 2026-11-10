@@ -215,6 +215,12 @@ data:
         priority: 5
         rawConfig: |
           router bgp {{ int64 $nodeASN }}
+{{ if $.Values.evpn.bgp.activeActive }}
+            bgp bestpath as-path multipath-relax
+            address-family ipv4 unicast
+              maximum-paths 16
+            exit-address-family
+{{ end }}
             address-family l2vpn evpn
     {{- range $uplink := $node.uplinks }}
               neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} activate

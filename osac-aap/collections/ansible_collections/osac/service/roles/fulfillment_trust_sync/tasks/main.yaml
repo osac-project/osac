@@ -70,7 +70,7 @@
   ansible.builtin.assert:
     that:
       - _fulfillment_trust_config_map.resources | length == 1
-      - _fulfillment_trust_config_map.resources[0].data == {fulfillment_trust_sync_bundle_data_key: osac_job_vars.fulfillment_trust.bundle_pem}
+      - "_fulfillment_trust_config_map.resources[0].data == {fulfillment_trust_sync_bundle_data_key: osac_job_vars.fulfillment_trust.bundle_pem}"
       - _fulfillment_trust_config_map.resources[0].metadata.annotations == _fulfillment_trust_expected_annotations
   no_log: true
 

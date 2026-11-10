@@ -73,7 +73,6 @@ describe('VolumeWizard', () => {
     expect(screen.getByRole('button', { name: 'Review' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Name' })).toBeEnabled();
-    expect(screen.getByRole('textbox', { name: 'Description' })).toBeEnabled();
     expect(
       screen.queryByRole('button', {
         name: (_name, element) => element.id === 'metadata.project',

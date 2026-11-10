@@ -27,15 +27,6 @@ spec:
         - name: kube-api-access
           mountPath: /var/run/secrets/kubernetes.io/serviceaccount
           readOnly: true
-        - name: agentless-net-inventory
-          mountPath: /var/config/agentless-net
-          readOnly: true
-{% if netris_ca_config_map_name %}
-        - name: netris-ca-bundle
-          mountPath: {{ netris_ca_path }}
-          subPath: bundle.pem
-          readOnly: true
-{% endif %}
       env:
         - name: POD_NAMESPACE
           valueFrom:
@@ -49,25 +40,12 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
-        - name: NETRIS_CONTROLLER_URL
-          value: "{{ netris_controller_url }}"
-        - name: NETRIS_VALIDATE_CERTS
-          value: "{{ netris_validate_certs | string | lower }}"
-        - name: NETRIS_CA_PATH
-          value: "{{ netris_ca_path }}"
-        - name: ANSIBLE_STRATEGY
-          value: netris.controller.protected_linear
-        - name: OSAC_LAUNCH_EXTRA_VARS_PATH
-          value: /runner/env/extravars
       envFrom:
         - configMapRef:
             name: cluster-fulfillment-ig
             optional: true
         - secretRef:
             name: cluster-fulfillment-ig
-        - secretRef:
-            name: netris-credentials
-            optional: true
   volumes:
     - name: kube-api-access
       projected:
@@ -92,16 +70,3 @@ spec:
                 - key: service-ca.crt
                   path: service-ca.crt
         defaultMode: 420
-    - name: agentless-net-inventory
-      configMap:
-        name: agentless-net-inventory
-        optional: true
-{% if netris_ca_config_map_name %}
-    - name: netris-ca-bundle
-      configMap:
-        name: {{ netris_ca_config_map_name }}
-        items:
-          - key: bundle.pem
-            path: bundle.pem
-        optional: false
-{% endif %}

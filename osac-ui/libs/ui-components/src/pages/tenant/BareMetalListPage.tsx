@@ -22,9 +22,9 @@ import { isBareMetalPowerStateFilter } from '@osac/ui-components/components/Bare
 import { buildBareMetalListFilter } from '@osac/ui-components/components/BareMetalInstance/ListPage/baremetal-instance-list-filter';
 import BareMetalInstanceCard from '@osac/ui-components/components/BareMetalInstance/ListPage/BareMetalInstanceCard';
 import { BareMetalTable } from '@osac/ui-components/components/BareMetalInstance/ListPage/BareMetalTable';
-import BareMetalDiskImageFilter from '@osac/ui-components/components/BareMetalInstance/ListPage/Filters/BareMetalDiskImageFilter';
 import BareMetalInstanceTypeFilter from '@osac/ui-components/components/BareMetalInstance/ListPage/Filters/BareMetalInstanceTypeFilter';
 import BareMetalPowerStateFilter from '@osac/ui-components/components/BareMetalInstance/ListPage/Filters/BareMetalPowerStateFilter';
+import DiskImageFilter from '@osac/ui-components/components/DiskImage/DiskImageFilter';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
 import ListPageToolbar from '@osac/ui-components/components/Page/ListPageToolbar';
@@ -162,7 +162,7 @@ export const BareMetalListPage = () => {
                   />
                 </ToolbarItem>
                 <ToolbarItem>
-                  <BareMetalDiskImageFilter
+                  <DiskImageFilter
                     selected={diskImageFilterParam.trim()}
                     onChange={(value) => setDiskImageFilterParam(value ?? '')}
                   />

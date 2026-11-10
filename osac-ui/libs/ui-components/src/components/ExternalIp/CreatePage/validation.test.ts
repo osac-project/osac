@@ -7,7 +7,7 @@ describe('getExternalIpSchema', () => {
   it('allows an empty project the same way secrets do for Default', async () => {
     await expect(
       getExternalIpSchema(t).isValid({
-        metadata: { name: 'edge-ip', project: '', description: '' },
+        metadata: { name: 'edge-ip', project: '' },
         pool: { id: 'pool-1', name: 'public-edge' },
       }),
     ).resolves.toBe(true);
@@ -16,7 +16,7 @@ describe('getExternalIpSchema', () => {
   it('still requires a name and pool', async () => {
     await expect(
       getExternalIpSchema(t).isValid({
-        metadata: { name: '', project: '', description: '' },
+        metadata: { name: '', project: '' },
         pool: { id: '', name: '' },
       }),
     ).resolves.toBe(false);

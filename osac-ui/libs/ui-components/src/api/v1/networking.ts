@@ -132,6 +132,9 @@ export const externalIpIdsFilter = (ids: readonly string[]) =>
 export const virtualNetworkScopeFilter = (virtualNetworkId: string) =>
   cel<Subnet>((filter) => filter.field('spec.virtualNetwork.id').equals(virtualNetworkId));
 
+export const virtualNetworksScopeFilter = (virtualNetworkIds: string[]) =>
+  cel<Subnet>((filter) => filter.field('spec.virtualNetwork.id').isIn(virtualNetworkIds));
+
 const buildExternalIpAddressById = (externalIps: readonly ExternalIP[]) => {
   const byId: Record<string, string> = {};
   for (const ip of externalIps) {

@@ -234,7 +234,7 @@ func cleanupBCMBMI(name string) { cleanupBMIInNS(bcmTestNS, name) }
 
 func cleanupBCMBMH(name string) { cleanupBMHInNS(bcmTestNS, name) }
 
-// markBMHReady flips a BMH's status to available+OK so IsBMHReady returns true.
+// markBMHReady flips a BMH's status to available+OK so IsBMHAvailable returns true.
 // It stands in for the Metal3 baremetal-operator, which is not running in
 // envtest (mirrors the Metal3 suite's "simulate BMO reconciliation" step).
 func markBMHReady(name string) {
@@ -270,11 +270,11 @@ func createBCMBMI(name, resourceClass string) {
 // finalizer → FindFreeHost → AssignHost(create BMH, not ready) and then, after
 // the BMH is marked ready, one more reconcile to reach HostClass/Progressing.
 func driveToAllocated(reconciler *BareMetalInstanceReconciler, bmiName, hostname string) {
-	// finalizer, FindFreeHost (sets ExternalHostID), AssignHost (creates BMH, Ready=false)
+	// finalizer, FindFreeHost (sets ExternalHostID), AssignHost (creates BMH, Available=false)
 	reconcileBCM(reconciler, bmiName, 3)
 	ExpectWithOffset(1, bmhExistsInNS(hostname)).To(BeTrue(), "AssignHost should have created the BMH")
 	markBMHReady(hostname)
-	// AssignHost again: IsBMHReady=true → HostClass set → Progressing
+	// AssignHost again: IsBMHAvailable=true → HostClass set → Progressing
 	reconcileBCM(reconciler, bmiName, 1)
 }
 
@@ -366,7 +366,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 			// Poll while not ready: HostClass stays empty and reconcile requeues
 			result := reconcileBCM(reconciler, bmiName, 1)
 			Expect(getBCMBMI(bmiName).Spec.HostClass).To(BeEmpty())
-			Expect(result.RequeueAfter).To(Equal(DefaultHostReadinessPollIntervalDuration))
+			Expect(result.RequeueAfter).To(Equal(DefaultHostAvailabilityPollIntervalDuration))
 
 			// Transition the BMH to ready → allocation completes
 			markBMHReady(hostname)

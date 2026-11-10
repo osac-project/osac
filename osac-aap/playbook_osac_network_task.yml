@@ -5,6 +5,16 @@
 - name: Run one network manager task
   hosts: localhost
   gather_facts: false
+  # The protected strategy validates the original AAP launch input before any
+  # Netris task can read its transport settings. Other managers use linear.
+  strategy: >-
+    {{ 'netris.controller.protected_linear'
+       if osac_job_vars is defined
+       and osac_job_vars is mapping
+       and osac_job_vars.manager is defined
+       and osac_job_vars.manager is mapping
+       and osac_job_vars.manager.ansible_role | default('') == 'osac.templates.netris'
+       else 'linear' }}
 
   vars:
     osac_network_fabric_tasks:

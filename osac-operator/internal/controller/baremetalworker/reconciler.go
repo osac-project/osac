@@ -17,9 +17,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
+	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -28,11 +30,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const (
@@ -56,6 +60,13 @@ type Reconciler struct {
 	recorder              events.EventRecorder
 	clusterOrderNamespace string
 	macResolver           MACResolver
+	secrets               SecretsClient
+}
+
+// SecretsClient is the Secrets.Get subset used to materialize a registered
+// SSH key when creating an InfraEnv.
+type SecretsClient interface {
+	Get(context.Context, *privatev1.SecretsGetRequest, ...grpc.CallOption) (*privatev1.SecretsGetResponse, error)
 }
 
 // NewReconciler builds the bare-metal worker reconciler.
@@ -85,6 +96,15 @@ func NewReconciler(
 // reconcile-local BMI observation; tests can inject a stub resolver before use.
 func (r *Reconciler) SetMACResolver(resolver MACResolver) {
 	r.macResolver = resolver
+}
+
+// SetSecretsClient sets the client used to resolve the Cluster's registered
+// SSH-key Secret through the fulfillment private API. The resolved material
+// feeds only the InfraEnv's authorized key; child BMIs receive the Secret
+// reference, never the bytes. When nil, a referenced key holds InfraEnv
+// creation with an SSHKeyResolutionPending condition.
+func (r *Reconciler) SetSecretsClient(client SecretsClient) {
+	r.secrets = client
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch
@@ -149,6 +169,30 @@ func namespacePredicate(namespace string) predicate.Predicate {
 	})
 }
 
+// workerClusterOrderChangedPredicate admits worker inputs and lifecycle changes.
+// Worker condition and count writes complete in the current invocation or use
+// explicit requeues to continue convergence.
+func workerClusterOrderChangedPredicate() predicate.Predicate {
+	return predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			old := e.ObjectOld.(*v1alpha1.ClusterOrder)
+			current := e.ObjectNew.(*v1alpha1.ClusterOrder)
+			if !old.DeletionTimestamp.Equal(current.DeletionTimestamp) ||
+				!reflect.DeepEqual(old.Finalizers, current.Finalizers) ||
+				old.Labels[clusterOrderIDLabel] != current.Labels[clusterOrderIDLabel] {
+				return true
+			}
+			for _, key := range []string{tenantAnnotationKey, managementStateAnnotation, infraEnvUIDAnnotation} {
+				if old.Annotations[key] != current.Annotations[key] {
+					return true
+				}
+			}
+			return !reflect.DeepEqual(old.Status.ClusterReference, current.Status.ClusterReference) ||
+				!workerSlicesEqual(old.Status.Workers, current.Status.Workers)
+		},
+	})
+}
+
 // SetupWithManager registers the reconciler, watching ClusterOrder in the configured namespace.
 // Agent and NodePool watches are gated on CRD presence to avoid hard startup dependencies.
 func (r *Reconciler) SetupWithManager(mgr mcmanager.Manager) error {
@@ -160,7 +204,9 @@ func (r *Reconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	log := ctrl.Log.WithName("baremetalworker")
 	bld := ctrl.NewControllerManagedBy(localMgr).
 		Named("baremetalworker").
-		For(&v1alpha1.ClusterOrder{}, builder.WithPredicates(namespacePredicate(r.clusterOrderNamespace)))
+		For(&v1alpha1.ClusterOrder{}, builder.WithPredicates(
+			namespacePredicate(r.clusterOrderNamespace), workerClusterOrderChangedPredicate(),
+		))
 
 	if crdExists(mgr, agentGVK) {
 		agentObj := &unstructured.Unstructured{}

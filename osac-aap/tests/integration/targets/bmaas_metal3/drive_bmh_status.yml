@@ -1,0 +1,32 @@
+---
+# Background status driver for the Metal3 lifecycle test. Polls the
+# BareMetalHost spec image URL (play vars test_bmh_name and test_namespace)
+# until it equals bmh_expected_image_url -- an empty value waits for the
+# image to be cleared -- then patches the status subresource to
+# bmh_status_state, reporting bmh_status_image_url as the provisioned image
+# when set. The caller runs the role under test between this include and
+# check_bmh_status_driver.yml. The patch payload stays inline because a
+# JSON-shaped string passed through a variable would be converted to a
+# mapping and rendered back as a Python repr, not JSON.
+- name: Drive the BareMetalHost status once its image reaches the expected value
+  ansible.builtin.shell: |
+    set -euo pipefail
+    until [ "$(kubectl get baremetalhost "{{ test_bmh_name }}" \
+      --namespace "{{ test_namespace }}" \
+      -o jsonpath='{.spec.image.url}')" = "{{ bmh_expected_image_url }}" ]; do
+      sleep 1
+    done
+    image_fragment=""
+    if [ -n "{{ bmh_status_image_url }}" ]; then
+      image_fragment=',"image":{"url":"{{ bmh_status_image_url }}"}'
+    fi
+    kubectl patch baremetalhost "{{ test_bmh_name }}" \
+      --namespace "{{ test_namespace }}" \
+      --subresource=status --type=merge \
+      --patch '{"status":{"operationalStatus":"OK","provisioning":{"state":"{{ bmh_status_state }}"'"${image_fragment}"'}}}'
+  args:
+    executable: /bin/bash
+  async: 60
+  poll: 0
+  changed_when: true
+  register: bmh_status_driver

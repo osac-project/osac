@@ -24,7 +24,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     cli, grpc, private = (clients[name] for name in ("cli", "grpc", "private_grpc"))
     cli.create_cluster.return_value = "cluster-id"
     private.ensure_disk_image.return_value = "disk-id"
-    private.ensure_cluster_version.return_value = {"name": "version-name"}
+    private.ensure_cluster_version.return_value = {"id": "version-id", "name": "version-name"}
     grpc.list_cluster_ids.return_value = ["cluster-id"]
     grpc.get_cluster.return_value = {
         "object": {
@@ -61,7 +61,11 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         labels = {**selector, "osac.openshift.io/instance_type": instance_type}
         agents.append(
             {
-                "metadata": {"name": f"{bmi_id}-agent", "namespace": "osac", "labels": labels},
+                "metadata": {
+                    "name": f"{bmi_id}-agent",
+                    "namespace": "osac",
+                    "labels": {**labels, "infraenvs.agent-install.openshift.io": "order-a-infraenv"},
+                },
                 "status": {"conditions": [{"type": "Installed", "status": "True"}]},
             }
         )
@@ -116,6 +120,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
     ):
         monkeypatch.setattr(scenario, name, Mock())
     monkeypatch.setattr(scenario, "snapshot_cluster_deletion", Mock(return_value=[]))
+    monkeypatch.setattr(scenario, "wait_for_guest_cluster_health", Mock())
     monkeypatch.setattr(runner.time, "sleep", Mock())
     monkeypatch.setattr(
         helpers,
@@ -127,7 +132,7 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
 
 def _run_scenario(clients: dict[str, Mock]) -> None:
     regression.test_cluster_create_with_two_node_sets(
-        **clients, cluster_template="template", pull_secret_name="pull-secret", ssh_public_key_path="/tmp/key.pub"
+        **clients, cluster_template="template", pull_secret_name="pull-secret", ssh_key_secret="test-ssh-key-secret"
     )
 
 
@@ -160,6 +165,14 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
     two_node_set_clients["cli"].delete_cluster.assert_has_calls([call(uuid="cluster-id"), call(uuid="cluster-id")])
     for name in ("patch", "apply", "delete"):
         getattr(two_node_set_clients["k8s_hub_client"], name).assert_not_called()
+
+
+def test_two_node_set_scenario_checks_guest_health_for_every_worker(two_node_set_clients: dict[str, Mock]) -> None:
+    _run_scenario(two_node_set_clients)
+
+    scenario.wait_for_guest_cluster_health.assert_called_once_with(
+        k8s=two_node_set_clients["k8s_hub_client"], co_name="order-a", expected_workers=2
+    )
 
 
 def test_two_node_set_scenario_rejects_foreign_worker_before_teardown(two_node_set_clients: dict[str, Mock]) -> None:

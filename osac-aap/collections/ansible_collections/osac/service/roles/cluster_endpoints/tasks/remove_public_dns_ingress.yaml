@@ -1,0 +1,25 @@
+---
+- name: Set ingress DNS removal inputs
+  ansible.builtin.set_fact:
+    _cluster_endpoint_dns_domain: "{{ hosted_cluster_base_domain }}"
+    _cluster_endpoint_dns_supported_domains: "{{ external_access_supported_base_domains | default([]) }}"
+    _cluster_endpoint_dns_zone: "{{ dns_zone | default(hosted_cluster_base_domain) }}"
+  no_log: true
+
+- name: Require a supported domain before removing ingress DNS
+  ansible.builtin.assert:
+    that:
+      - _cluster_endpoint_dns_domain in _cluster_endpoint_dns_supported_domains
+    fail_msg: >-
+      Cluster endpoint DNS cleanup requires the HostedCluster DNS base domain
+      to be listed in EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS.
+
+- name: Remove ingress wildcard DNS record
+  ansible.builtin.include_role:
+    name: "{{ dns_class }}"
+    tasks_from: delete
+  vars:
+    dns_zone: "{{ _cluster_endpoint_dns_zone }}"
+    dns_record_name: "*.apps.{{ hosted_cluster_name }}.{{ _cluster_endpoint_dns_domain }}"
+    dns_record_type: A
+  no_log: true

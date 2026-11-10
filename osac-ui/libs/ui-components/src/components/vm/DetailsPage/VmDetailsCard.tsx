@@ -101,6 +101,7 @@ const VmDetailsCard = ({
   const memoryGib = instanceType?.spec?.memoryGib;
   const gpu = instanceType?.spec?.gpu;
   const hasWindowsGuest = guestOsFamily === GuestOSFamily.GUEST_OS_FAMILY_WINDOWS;
+  const userDataAccessLabel = hasWindowsGuest ? t('Sysprep (Unattend.xml)') : t('Cloud-init');
   const canEdit = canEditInstanceType(vm);
   const editButton = (
     <Button
@@ -196,25 +197,21 @@ const VmDetailsCard = ({
             <StackItem>
               <DescriptionList isCompact>
                 <VmExternalIpSection vm={vm} />
-                {hasWindowsGuest ? (
-                  <DetailRow label={t('Sysprep (Unattend.xml)')}>{EMPTY_VALUE}</DetailRow>
-                ) : (
-                  <>
-                    <DetailRow label={t('SSH public key')}>
-                      {sshKey?.id && sshKeyLabel ? (
-                        <ResourceLink basePath="/secrets" id={sshKey.id} name={sshKeyLabel} />
-                      ) : (
-                        displayVmValue(sshKeyLabel)
-                      )}
-                    </DetailRow>
-                    <DetailRow label={t('Cloud-init')}>
-                      <UserDataDetailValue
-                        userData={vm.spec?.userDataSource}
-                        emptyValue={EMPTY_VALUE}
-                      />
-                    </DetailRow>
-                  </>
+                {!hasWindowsGuest && (
+                  <DetailRow label={t('SSH public key')}>
+                    {sshKey?.id && sshKeyLabel ? (
+                      <ResourceLink basePath="/secrets" id={sshKey.id} name={sshKeyLabel} />
+                    ) : (
+                      displayVmValue(sshKeyLabel)
+                    )}
+                  </DetailRow>
                 )}
+                <DetailRow label={userDataAccessLabel}>
+                  <UserDataDetailValue
+                    userData={vm.spec?.userDataSource}
+                    emptyValue={t('Not configured')}
+                  />
+                </DetailRow>
               </DescriptionList>
             </StackItem>
           </Stack>

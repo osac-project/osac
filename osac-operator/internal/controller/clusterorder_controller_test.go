@@ -25,6 +25,9 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -37,6 +40,12 @@ import (
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+)
+
+const (
+	standardCaaSTemplateID = "osac.templates.ocp_small"
+	maasCaaSTemplateID     = "osac.templates.ocp_4_20_ai_maas"
 )
 
 func readyClusterOrderNodePool(instanceType string, replicas int32) hypershiftv1beta1.NodePool {
@@ -2333,38 +2342,260 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 	})
 
-	Context("VIP endpoint reconciliation", func() {
-		It("copies VIP annotations to status", func() {
+	Context("ClusterOrder endpoint discovery", func() {
+		It("selects the shared endpoint lifecycle from the resolved template capability", func() {
+			standard := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID:                     standardCaaSTemplateID,
+				SupportsAutomaticCaaSEndpoints: true,
+			}}
+			maas := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID:                     maasCaaSTemplateID,
+				SupportsAutomaticCaaSEndpoints: true,
+			}}
+			customCaaS := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID:                     "provider.templates.custom_caas",
+				SupportsAutomaticCaaSEndpoints: true,
+			}}
+			ci := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID: "osac.templates.ocp_ci_small",
+			}}
+			unqualifiedCI := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID: "ocp_ci_small",
+			}}
+			nico := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID: "osac.templates.ocp_4_20_small_nico",
+			}}
+
+			Expect(clusterOrderUsesEndpointLifecycle(standard)).To(BeTrue())
+			Expect(clusterOrderUsesEndpointLifecycle(maas)).To(BeTrue())
+			Expect(clusterOrderUsesEndpointLifecycle(customCaaS)).To(BeTrue())
+			Expect(clusterOrderUsesEndpointLifecycle(ci)).To(BeFalse())
+			Expect(clusterOrderUsesEndpointLifecycle(unqualifiedCI)).To(BeFalse())
+			Expect(clusterOrderUsesEndpointLifecycle(nico)).To(BeFalse())
+
+			Expect(clusterOrderUsesAutomaticEndpointLifecycle(standard, true)).To(BeTrue())
+			Expect(clusterOrderUsesAutomaticEndpointLifecycle(maas, true)).To(BeTrue())
+			Expect(clusterOrderUsesAutomaticEndpointLifecycle(standard, false)).To(BeFalse(),
+				"legacy CaaS orders without automatic ExternalIP ownership keep annotation endpoints")
+			Expect(clusterOrderUsesAutomaticEndpointLifecycle(ci, true)).To(BeFalse())
+		})
+
+		It("keeps annotation endpoint discovery for legacy templates", func() {
 			instance := &v1alpha1.ClusterOrder{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-vip",
-					Namespace: "default",
-					Annotations: map[string]string{
-						"osac.openshift.io/api-endpoint":     "10.0.1.240",
-						"osac.openshift.io/ingress-endpoint": "10.0.1.241",
-					},
-				},
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+					osacAPIEndpointAnnotation:     "10.0.1.240",
+					osacIngressEndpointAnnotation: "10.0.1.241",
+				}},
 			}
 
 			reconcileVIPEndpoints(instance)
+
 			Expect(instance.Status.ApiEndpoint).To(Equal("10.0.1.240"))
 			Expect(instance.Status.IngressEndpoint).To(Equal("10.0.1.241"))
 		})
 
-		It("does nothing when annotations are absent", func() {
-			instance := &v1alpha1.ClusterOrder{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-no-vip",
-					Namespace: "default",
+		It("gates API attachments on management readiness for CaaS templates and wrappers", func() {
+			standard := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID:                     standardCaaSTemplateID,
+					SupportsAutomaticCaaSEndpoints: true,
 				},
+				Status: v1alpha1.ClusterOrderStatus{ApiEndpoint: "192.0.2.10"},
+			}
+			Expect(clusterAPIEndpointAvailableForAttachment(standard)).To(BeFalse())
+			standard.SetStatusCondition(string(v1alpha1.ClusterOrderConditionManagementPublicationReady),
+				metav1.ConditionTrue, "", endpointReasonAsExpected)
+			Expect(clusterAPIEndpointAvailableForAttachment(standard)).To(BeTrue())
+
+			maas := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID:                     maasCaaSTemplateID,
+					SupportsAutomaticCaaSEndpoints: true,
+				},
+				Status: v1alpha1.ClusterOrderStatus{ApiEndpoint: "192.0.2.12"},
+			}
+			Expect(clusterAPIEndpointAvailableForAttachment(maas)).To(BeFalse())
+			maas.SetStatusCondition(string(v1alpha1.ClusterOrderConditionManagementPublicationReady),
+				metav1.ConditionTrue, "", endpointReasonAsExpected)
+			Expect(clusterAPIEndpointAvailableForAttachment(maas)).To(BeTrue())
+
+			ci := &v1alpha1.ClusterOrder{Status: v1alpha1.ClusterOrderStatus{ApiEndpoint: "192.0.2.11"}}
+			Expect(clusterAPIEndpointAvailableForAttachment(ci)).To(BeTrue())
+		})
+
+		It("accepts one API Service IPv4 VIP with the configured frontend port", func() {
+			service := &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Type:  corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{{Name: "https", Port: 6443}},
+				},
+				Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
+					Ingress: []corev1.LoadBalancerIngress{{IP: "192.0.2.10"}},
+				}},
 			}
 
-			reconcileVIPEndpoints(instance)
-			Expect(instance.Status.ApiEndpoint).To(BeEmpty())
-			Expect(instance.Status.IngressEndpoint).To(BeEmpty())
+			address, port, check := managementAPIVIP(service, 6443)
+			Expect(address.String()).To(Equal("192.0.2.10"))
+			Expect(port).To(Equal(int32(6443)))
+			Expect(check.ready).To(BeTrue())
+		})
+
+		It("does not accept a hostname as an API VIP", func() {
+			service := &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Type:  corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{{Name: "https", Port: 6443}},
+				},
+				Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
+					Ingress: []corev1.LoadBalancerIngress{{Hostname: "api.example.test"}},
+				}},
+			}
+
+			address, port, check := managementAPIVIP(service, 6443)
+			Expect(address.IsValid()).To(BeFalse())
+			Expect(port).To(BeZero())
+			Expect(check.ready).To(BeFalse())
+			Expect(check.reason).To(Equal(managementPublicationPending))
+		})
+
+		It("fails when the API Service frontend port differs from the controlPlaneEndpoint", func() {
+			service := &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Type:  corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{{Name: "https", Port: 6443}},
+				},
+				Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
+					Ingress: []corev1.LoadBalancerIngress{{IP: "192.0.2.10"}},
+				}},
+			}
+
+			_, _, check := managementAPIVIP(service, 7443)
+			Expect(check.ready).To(BeFalse())
+			Expect(check.reason).To(Equal(managementPublicationFailed))
+		})
+
+		It("reports provider networking disabled without creating endpoint jobs", func() {
+			instance := &v1alpha1.ClusterOrder{}
+			reconciler := &ClusterOrderReconciler{}
+
+			Expect(reconciler.reconcileClusterEndpointLifecycle(ctx, instance, nil, true)).To(Succeed())
+			condition := apimeta.FindStatusCondition(instance.Status.Conditions,
+				string(v1alpha1.ClusterOrderConditionEndpointsReady))
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+			Expect(condition.Reason).To(Equal(endpointReasonProvisioningDisabled))
+			Expect(instance.Status.Jobs).To(BeEmpty())
 		})
 	})
 
+	Context("SSH key resolution for AAP launches", func() {
+		newSSHKeyTestOrder := func(sshKey *v1alpha1.FulfillmentSecretReference) *v1alpha1.ClusterOrder {
+			return &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ssh-key-launch",
+					Namespace: "default",
+					Annotations: map[string]string{
+						"osac.openshift.io/tenant": "tenant1",
+					},
+				},
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "test",
+					SSHKey:     sshKey,
+				},
+			}
+		}
+
+		newSSHKeyTestReconciler := func(provider *extraVarsCaptureProvider, secrets SecretsClient) *ClusterOrderReconciler {
+			fakeReader := fake.NewClientBuilder().WithScheme(k8sClient.Scheme()).Build()
+			return &ClusterOrderReconciler{
+				Client:               fakeReader,
+				apiReader:            fakeReader,
+				Scheme:               k8sClient.Scheme(),
+				ProvisioningProvider: provider,
+				StatusPollInterval:   time.Minute,
+				MaxJobHistory:        provisioning.DefaultMaxJobHistory,
+				SecretsClient:        secrets,
+			}
+		}
+
+		It("launches with the resolved key as a top-level ssh_public_key variable", func() {
+			provider := &extraVarsCaptureProvider{JobID: "job-1"}
+			instance := newSSHKeyTestOrder(&v1alpha1.FulfillmentSecretReference{ID: "key-id"})
+
+			reconciler := newSSHKeyTestReconciler(provider, &stubSSHKeyClient{key: launchTestKey})
+
+			result, err := reconciler.handleProvisioning(context.Background(), instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.launched).To(BeTrue())
+			Expect(provider.extraVars).To(HaveKeyWithValue("ssh_public_key", launchTestKey))
+			Expect(result.RequeueAfter).To(Equal(time.Minute))
+		})
+
+		It("launches without the ssh_public_key variable when no reference is set", func() {
+			provider := &extraVarsCaptureProvider{JobID: "job-2"}
+			instance := newSSHKeyTestOrder(nil)
+
+			reconciler := newSSHKeyTestReconciler(provider, &stubSSHKeyClient{})
+
+			_, err := reconciler.handleProvisioning(context.Background(), instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.launched).To(BeTrue())
+			Expect(provider.extraVars).NotTo(HaveKey("ssh_public_key"))
+		})
+
+		It("holds provisioning when the Secret cannot be resolved", func() {
+			provider := &extraVarsCaptureProvider{JobID: "job-3"}
+			instance := newSSHKeyTestOrder(&v1alpha1.FulfillmentSecretReference{ID: "missing-key"})
+
+			reconciler := newSSHKeyTestReconciler(provider,
+				&stubSSHKeyClient{err: stderrors.New("ssh key secret 'missing-key' not found")})
+
+			result, err := reconciler.handleProvisioning(context.Background(), instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.launched).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.Status).To(Equal(metav1.ConditionTrue))
+			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonSSHKeyResolutionPending))
+			Expect(progressing.Message).To(ContainSubstring("missing-key"))
+		})
+
+		It("holds provisioning when the resolved Secret has no public key", func() {
+			provider := &extraVarsCaptureProvider{JobID: "job-empty-key"}
+			instance := newSSHKeyTestOrder(&v1alpha1.FulfillmentSecretReference{ID: "empty-key"})
+			reconciler := newSSHKeyTestReconciler(provider, &stubSSHKeyClient{})
+
+			result, err := reconciler.handleProvisioning(context.Background(), instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.launched).To(BeFalse())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			progressing := apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.Reason).To(Equal(v1alpha1.ReasonSSHKeyResolutionPending))
+			Expect(progressing.Message).To(ContainSubstring("empty-key"))
+		})
+
+		It("does not resolve the Secret while an existing job is polled", func() {
+			provider := &extraVarsCaptureProvider{JobID: "job-4"}
+			instance := newSSHKeyTestOrder(&v1alpha1.FulfillmentSecretReference{ID: "key-id"})
+			instance.Status.ProvisioningJobs = []v1alpha1.JobStatus{{
+				JobID:         "existing-job",
+				Type:          v1alpha1.JobTypeProvision,
+				State:         v1alpha1.JobStateRunning,
+				ConfigVersion: "",
+			}}
+
+			keyClient := &countingSSHKeyClient{inner: &stubSSHKeyClient{key: launchTestKey}}
+			reconciler := newSSHKeyTestReconciler(provider, keyClient)
+
+			_, err := reconciler.handleProvisioning(context.Background(), instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(provider.launched).To(BeFalse(), "polling an existing job must not launch")
+			Expect(keyClient.calls).To(BeZero(), "the Secret must not be read while polling")
+		})
+	})
 })
 
 var _ = Describe("ClusterOrder phase transition time", func() {
@@ -2400,3 +2631,62 @@ var _ = Describe("ClusterOrder phase transition time", func() {
 		Expect(instance.Status.PhaseTransitionTime.Time).To(Equal(stamped.Time))
 	})
 })
+
+// extraVarsCaptureProvider records the extra variables supplied at launch.
+type extraVarsCaptureProvider struct {
+	noopProvisioningProvider
+	JobID     string
+	extraVars map[string]any
+	launched  bool
+}
+
+func (p *extraVarsCaptureProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+	return p.TriggerProvisionWithExtraVars(ctx, resource, nil)
+}
+
+func (p *extraVarsCaptureProvider) TriggerProvisionWithExtraVars(_ context.Context, _ client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
+	p.launched = true
+	p.extraVars = extraVars
+	return &provisioning.ProvisionResult{JobID: p.JobID, InitialState: v1alpha1.JobStatePending}, nil
+}
+
+func (p *extraVarsCaptureProvider) GetProvisionStatusWithExtraVars(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+	return provisioning.ProvisionStatusWithExtraVars{
+		ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: v1alpha1.JobStateRunning},
+	}, nil
+}
+
+// launchTestKey is a short stand-in for already-validated material returned by
+// Fulfillment for transient AAP launch input.
+const launchTestKey = "ssh-ed25519 launch-key"
+
+// stubSSHKeyClient resolves any requested ID to a fixed key or error.
+type stubSSHKeyClient struct {
+	key string
+	err error
+}
+
+func (s *stubSSHKeyClient) Get(_ context.Context, in *privatev1.SecretsGetRequest, _ ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+	if s.err != nil {
+		return nil, status.Error(codes.NotFound, s.err.Error())
+	}
+	return privatev1.SecretsGetResponse_builder{
+		Object: privatev1.Secret_builder{
+			Id:       in.GetId(),
+			Metadata: privatev1.Metadata_builder{Name: "key", Tenant: "tenant1"}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Data:     map[string][]byte{"public_key": []byte(s.key)},
+		}.Build(),
+	}.Build(), nil
+}
+
+// countingSSHKeyClient counts Secret reads.
+type countingSSHKeyClient struct {
+	inner SecretsClient
+	calls int
+}
+
+func (c *countingSSHKeyClient) Get(ctx context.Context, in *privatev1.SecretsGetRequest, opts ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
+	c.calls++
+	return c.inner.Get(ctx, in, opts...)
+}

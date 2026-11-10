@@ -13,6 +13,7 @@ rules:
   resources:
   - configmaps
   - pods
+  - services
   verbs:
   - get
   - list
@@ -201,6 +202,13 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - route.openshift.io
+  resources:
+  - routes
+  verbs:
+  - get
+  - list
 - apiGroups:
   - storage.k8s.io
   resources:

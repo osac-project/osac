@@ -12,6 +12,7 @@ import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/C
 import { OSACWizardFooter } from '@osac/ui-components/components/Wizard/OSACWizardFooter';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
+import BareMetalAccessStep from './BareMetalAccessStep';
 import BareMetalConfigurationStep from './BareMetalConfigurationStep';
 import BareMetalGeneralStep from './BareMetalGeneralStep';
 import { BareMetalNetworkingStep } from './BareMetalNetworkingStep';
@@ -36,14 +37,14 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
     { enabled: Boolean(initialCatalogItemId) },
   );
   const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>('catalog');
-  const [validationAlert, setValidationAlert] = useState(false);
   const [selectedCatalogItem, setSelectedCatalogItem] = useState<BareMetalInstanceCatalogItem>();
-  const steps = ['catalog', 'general', 'configuration', 'networking', 'review'] as const;
+  const steps = ['catalog', 'general', 'configuration', 'networking', 'access', 'review'] as const;
   const stepLabels: Record<BareMetalWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),
     configuration: t('Configuration'),
     networking: t('Networking'),
+    access: t('Access & initial run'),
     review: t('Review'),
   };
 
@@ -83,17 +84,13 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
       enableReinitialize
       validationSchema={schema}
       onSubmit={handleSubmit}
-      validateOnChange={false}
     >
-      <FieldValidationProvider showErrors={validationAlert}>
+      <FieldValidationProvider>
         <LeaveFormConfirmation />
         <PageSection hasBodyWrapper={false} type={PageSectionTypes.wizard}>
           <Wizard
             isVisitRequired
-            onStepChange={(_, step) => {
-              setActiveStep(String(step.id) as BareMetalWizardStepId);
-              setValidationAlert(false);
-            }}
+            onStepChange={(_, step) => setActiveStep(String(step.id) as BareMetalWizardStepId)}
             footer={
               <OSACWizardFooter
                 onCancel={onClosed}
@@ -103,9 +100,14 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
               />
             }
           >
-            {steps.map((step) => (
-              <WizardStep key={step} id={step} name={stepLabels[step]}>
-                {activeStep === step && step === 'catalog' && (
+            {steps.map((step, index) => (
+              <WizardStep
+                key={step}
+                id={step}
+                name={stepLabels[step]}
+                isDisabled={index > steps.indexOf(activeStep)}
+              >
+                {activeStep === 'catalog' && (
                   <CatalogStep<BareMetalInstanceCatalogItem, BareMetalInstanceWizardValues>
                     catalogService={BareMetalInstanceCatalogItems}
                     isInitializing={Boolean(initialCatalogItemId) && catalogItemQuery.isPending}
@@ -113,10 +115,11 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
                     onCatalogItemSelected={setSelectedCatalogItem}
                   />
                 )}
-                {activeStep === step && step === 'general' && <BareMetalGeneralStep />}
-                {activeStep === step && step === 'configuration' && <BareMetalConfigurationStep />}
-                {activeStep === step && step === 'networking' && <BareMetalNetworkingStep />}
-                {activeStep === step && step === 'review' && <BareMetalReviewStep />}
+                {activeStep === 'general' && <BareMetalGeneralStep />}
+                {activeStep === 'configuration' && <BareMetalConfigurationStep />}
+                {activeStep === 'networking' && <BareMetalNetworkingStep />}
+                {activeStep === 'access' && <BareMetalAccessStep />}
+                {activeStep === 'review' && <BareMetalReviewStep />}
               </WizardStep>
             ))}
           </Wizard>

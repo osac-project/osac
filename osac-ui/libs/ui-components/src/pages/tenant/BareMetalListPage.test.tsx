@@ -149,7 +149,7 @@ describe('BareMetalListPage', () => {
       expect(screen.getByRole('link', { name: 'worker-01' })).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole('button', { name: 'Filter bare metal by disk image' }));
+    await user.click(screen.getByRole('button', { name: 'Disk image filter by All disk images' }));
     await user.click(screen.getByRole('option', { name: 'RHEL 9.4' }));
 
     const expected = buildBareMetalListFilter({ diskImage: 'RHEL 9.4' });

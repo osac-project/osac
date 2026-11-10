@@ -2,11 +2,6 @@
 argument_specs:
   main:
     options:
-      external_access_state:
-        type: str
-        choices:
-          - present
-          - absent
       external_access_base_domain:
         type: str
         required: true
@@ -16,10 +11,6 @@ argument_specs:
       external_access_name:
         type: str
         required: true
-      network_steps_collection:
-        type: str
-        required: false
-        description: "Ansible collection providing generic network-specific steps"
       external_access_agent_namespace:
         type: str
         required: false
@@ -48,9 +39,6 @@ argument_specs:
       external_access_dns_wait_use_authoritative:
         type: bool
         required: false
-      cluster_working_namespace:
-        type: str
-        required: true
       cluster_order:
         type: dict
         required: true

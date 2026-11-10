@@ -1,5 +1,5 @@
 ---
-- name: "Delete DNS record via Route 53 - {{ dns_record_name }}"
+- name: Delete DNS record via Route 53
   amazon.aws.route53:
     state: absent
     zone: "{{ dns_zone }}"

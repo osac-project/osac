@@ -12,8 +12,29 @@
         body:
           key: "POST /api/v2/vpc"
           status: 503
-          body: {message: "overlap connect.sid=fake-session; boom", internal: LEAKED-BODY}
+          body: {message: "overlap connect.sid={{ nf_session_cookie }}; password={{ nf_test_password }}; boom", internal: LEAKED-BODY}
           sticky: true
+
+- name: Errors - the fake state snapshot retains fault metadata but omits fault bodies
+  ansible.builtin.slurp:
+    src: "{{ nf.root }}/state.json"
+  register: _nf_state_snapshot
+  no_log: true
+
+- name: Errors - the state snapshot does not contain fault credentials
+  ansible.builtin.assert:
+    that:
+      - "(_nf_state_snapshot.content | b64decode | from_json).faults | length == 1"
+      - >-
+        (_nf_state_snapshot.content | b64decode | from_json).faults[0].key
+        == 'POST /api/v2/vpc'
+      - >-
+        (_nf_state_snapshot.content | b64decode | from_json).faults[0].body is not defined
+      - "nf_session_cookie not in (_nf_state_snapshot.content | b64decode)"
+      - "nf_test_password not in (_nf_state_snapshot.content | b64decode)"
+      - "'LEAKED-BODY' not in (_nf_state_snapshot.content | b64decode)"
+    quiet: true
+  no_log: true
 
 - name: Errors - a 5xx from Netris is retryable
   ansible.builtin.include_tasks: run_task.yaml
@@ -35,7 +56,7 @@
         body:
           key: "POST /api/v2/ipam/allocation"
           status: 400
-          body: {message: "overlap connect.sid=fake-session; boom", internal: LEAKED-BODY}
+          body: {message: "overlap connect.sid={{ nf_session_cookie }}; password={{ nf_test_password }}; boom", internal: LEAKED-BODY}
           sticky: true
 
 - name: Errors - a 400 is final and names the CIDR
@@ -59,7 +80,7 @@
         body:
           key: "POST /api/auth"
           status: 500
-          body: {message: "overlap connect.sid=fake-session; boom", internal: LEAKED-BODY}
+          body: {message: "overlap connect.sid={{ nf_session_cookie }}; password={{ nf_test_password }}; boom", internal: LEAKED-BODY}
           sticky: true
 
 - name: Errors - the login fails with 500

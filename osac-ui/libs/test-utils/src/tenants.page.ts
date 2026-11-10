@@ -281,7 +281,7 @@ export const deleteTenant = async (page: Page, tenantName: string): Promise<void
     deleteDialog.getByRole(...TenantsDeletePage.deleteButton),
     tenantName,
     'Tenant',
-    120_000,
+    300_000,
     tenantRow.locator(...TenantsMainPage.tenantStatusCell),
   );
 

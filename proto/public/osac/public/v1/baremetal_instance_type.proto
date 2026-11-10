@@ -58,16 +58,11 @@ message BareMetalInstanceSpec {
   // This can't be modified after the bare metal instance is created.
   BareMetalInstanceCatalogItemReference catalog_item = 1 [(google.api.field_behavior) = IMMUTABLE];
 
-  // SSH public key injected into the OS at provisioning time. Immutable after creation.
-  // Must be a valid SSH public key in OpenSSH format (ssh-rsa, ssh-ed25519, etc.).
-  // Invalid keys are rejected at create time with a 400 error.
-  //
-  // Deprecated: use `ssh_key` with a registered SSH public-key Secret instead.
-  // Mutually exclusive with `ssh_key`.
-  optional string ssh_public_key = 2 [
-    (google.api.field_behavior) = IMMUTABLE,
-    deprecated = true
-  ];
+  // Reserved field numbers and names for removed fields. Callers must use
+  // `ssh_key` with a registered SSH public-key Secret instead of the removed
+  // inline `ssh_public_key`.
+  reserved 2;
+  reserved "ssh_public_key";
 
   reserved 3;
   reserved "user_data";
@@ -163,9 +158,7 @@ message BareMetalInstanceSpec {
 
   // Reference to a tenant-scoped Secret containing an OpenSSH public key for bare metal access.
   // The Secret must have type SECRET_TYPE_SSH_PUBLIC_KEY and a non-empty data["public_key"] entry.
-  // The reference is resolved to its canonical ID, name, and project during creation and cannot be changed afterwards.
-  //
-  // Mutually exclusive with `ssh_public_key`.
+  // The reference is resolved to its canonical values and is immutable after creation.
   SecretReference ssh_key = 15 [(google.api.field_behavior) = IMMUTABLE];
 }
 

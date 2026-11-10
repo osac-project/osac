@@ -1,14 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isValidSshPublicKey, trimSshPublicKey } from './credentialValidation';
-
-describe('trimSshPublicKey', () => {
-  it('trims lines and removes empty rows', () => {
-    expect(trimSshPublicKey('  ssh-ed25519 AAAA  user@host\n\n')).toBe(
-      'ssh-ed25519 AAAA  user@host',
-    );
-  });
-});
+import { isValidSshPublicKey } from './credentialValidation';
 
 describe('isValidSshPublicKey', () => {
   it('accepts empty values', () => {

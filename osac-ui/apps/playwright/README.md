@@ -41,6 +41,24 @@ pnpm install
 pnpm --filter @osac/playwright exec playwright install chromium
 ```
 
+For a fresh RHEL 9 host, use the two-stage helper instead. Preparation does
+not read credentials, select a flow, or run tests; the second command does.
+
+```bash
+bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
+  --osac-ui-dir="$PWD"
+
+bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
+  --osac-ui-dir="$PWD" --tag=happy_basic \
+  --admin-user=<keycloak-user> --admin-password=<password>
+```
+
+The preparation helper installs Node.js, npm, pnpm, Playwright dependencies,
+and Chromium. The runner accepts the flow tags listed below, validates the
+deployment and VMaaS prerequisites, and keeps run-time credentials outside the
+setup step. Its default admin credentials are `admin`/`foobar` for local
+environments; pass explicit values for a real deployment.
+
 ## Running
 
 Environment variables:

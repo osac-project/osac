@@ -38,6 +38,9 @@ import (
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmh"
+	netboxcredentials "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/netbox"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
@@ -47,10 +50,9 @@ import (
 const (
 	netboxTestNS = "netbox-test"
 	// netboxTestToken is a synthetic marker, not a credential.
-	netboxTestToken     = "test-netbox-token"
-	netboxBMCSecretName = "netbox-42-bmc-secret"
-	netboxDeviceBMC     = "redfish-virtualmedia+https://192.168.1.42/redfish/v1/Systems/1"
-	netboxDeviceMAC     = "aa:bb:cc:dd:ee:42"
+	netboxTestToken = "test-netbox-token"
+	netboxDeviceBMC = "redfish-virtualmedia+https://192.168.1.42/redfish/v1/Systems/1"
+	netboxDeviceMAC = "aa:bb:cc:dd:ee:42"
 )
 
 // mockNetBoxDevice is one dcim.device as the NetBox API would return it.
@@ -320,7 +322,7 @@ func (f *fakeSecretAPI) Get(_ context.Context, id string) (secretapi.Secret, err
 
 func (f *fakeSecretAPI) Close() error { return nil }
 
-func newNetBoxCredentialResolver(deviceID int) inventory.CredentialsReaderRepository {
+func newNetBoxCredentialsReader(deviceID int) credentials.Reader {
 	secret := secretapi.Secret{
 		ID:     fmt.Sprintf("secret-%d", deviceID),
 		Tenant: "system",
@@ -330,15 +332,16 @@ func newNetBoxCredentialResolver(deviceID int) inventory.CredentialsReaderReposi
 			"password": []byte("bmc-password"),
 		},
 	}
-	return inventory.NewNetBoxCredentialResolver(&fakeSecretAPI{secrets: []secretapi.Secret{secret}})
+	return netboxcredentials.NewReader(&fakeSecretAPI{secrets: []secretapi.Secret{secret}})
 }
 
 // newNetBoxReconciler wires the real NetBox adapter and BMH manager to the
 // shared envtest API server, mirroring newBCMReconciler.
-func newNetBoxReconciler(m *mockNetBox, credentials inventory.CredentialsReaderRepository) *BareMetalInstanceReconciler {
+func newNetBoxReconciler(m *mockNetBox, reader credentials.Reader) *BareMetalInstanceReconciler {
 	bmhManager := baremetalhost.NewManager(k8sClient, k8sClient, netboxTestNS)
+	secretWriter := bmh.NewSecretWriter(k8sClient, netboxTestNS)
 	api := netboxclient.NewClientForTest(m.server.Client(), m.server.URL, netboxTestToken)
-	inventoryClient := inventory.NewNetBoxClient(api, bmhManager, metal3HostClass, credentials)
+	inventoryClient := inventory.NewNetBoxClient(api, bmhManager, secretWriter, metal3HostClass, reader)
 	return newTestReconciler(inventoryClient, netboxTestNS)
 }
 
@@ -361,7 +364,7 @@ func netboxBMH(name string) *metal3api.BareMetalHost {
 func cleanupNetBoxHost(bmiName, hostname string) {
 	cleanupBMIInNS(netboxTestNS, bmiName)
 	cleanupBMHInNS(netboxTestNS, hostname)
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: hostname + "-bmc-secret", Namespace: netboxTestNS}}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: baremetalhost.CredentialsSecretName(hostname), Namespace: netboxTestNS}}
 	ExpectWithOffset(1, client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).NotTo(HaveOccurred())
 }
 
@@ -397,7 +400,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 		It("TC-INT-001 allocates a matching staged NetBox device", func() {
 			mock.addDevice(42, "staged", netboxDeviceFields(16))
 			mock.addDevice(43, "staged", netboxDeviceFields(8))
-			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialResolver(42))
+			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialsReader(42))
 
 			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"})
 
@@ -431,14 +434,14 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 
 			bmh := netboxBMH(hostname)
 			Expect(bmh.Spec.BMC.Address).To(Equal(netboxDeviceBMC))
-			Expect(bmh.Spec.BMC.CredentialsName).To(Equal(netboxBMCSecretName))
+			Expect(bmh.Spec.BMC.CredentialsName).To(Equal(baremetalhost.CredentialsSecretName(hostname)))
 			Expect(bmh.Spec.BootMACAddress).To(Equal(netboxDeviceMAC))
 			Expect(bmh.Spec.ConsumerRef).NotTo(BeNil())
 			Expect(bmh.Spec.ConsumerRef.Kind).To(Equal("BareMetalInstance"))
 			Expect(bmh.Spec.ConsumerRef.Name).To(Equal(string(bmi.UID)))
 
 			secret := &corev1.Secret{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: netboxBMCSecretName, Namespace: netboxTestNS}, secret)).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: baremetalhost.CredentialsSecretName(hostname), Namespace: netboxTestNS}, secret)).To(Succeed())
 			Expect(secret.Data["username"]).To(Equal([]byte("bmc-user")))
 			Expect(secret.Data["password"]).To(Equal([]byte("bmc-password")))
 			Expect(secret.Labels["osac.openshift.io/managed-by"]).To(Equal(shared.OsacDefaultManagedByValue))
@@ -458,7 +461,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 
 		It("TC-INT-002 releases the NetBox claim on deletion", func() {
 			mock.addDevice(42, "staged", netboxDeviceFields(16))
-			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialResolver(42))
+			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialsReader(42))
 
 			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"})
 			driveToAllocatedIn(reconciler, netboxTestNS, bmiName, hostname)
@@ -478,7 +481,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(bmhExistsInNS(netboxTestNS, hostname)).To(BeFalse())
 
 			secret := &corev1.Secret{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: netboxBMCSecretName, Namespace: netboxTestNS}, secret)
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: baremetalhost.CredentialsSecretName(hostname), Namespace: netboxTestNS}, secret)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 			patches := mock.requestsFor(http.MethodPatch, "/api/dcim/devices/42/")
@@ -512,7 +515,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			}
 			Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
 
-			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialResolver(42))
+			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialsReader(42))
 			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"})
 
 			// Finalizer and selection.

@@ -15,7 +15,8 @@
 #     on an EVPN Subnet, DHCP lease lookup by MAC, ports moved back on delete;
 #   - ExternalIPPool / ExternalIP / ExternalIPAttachment / NATGateway names,
 #     /32 address, refused deletes on an address mismatch;
-#   - FabricDomain, cluster ingress (final "not supported" and a no-op);
+#   - FabricDomain and ClusterOrder ingress reservation/release using the
+#     Subnet's recorded LB VIP range;
 #   - ordered, absent-tolerant deletes and the VNIs freed last;
 #   - 5xx is retryable, 4xx is final, error messages carry no response body
 #     and no cookie;
@@ -46,6 +47,7 @@
       eipa: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
       natgw: 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
       fd: 6e1d2c3b-4a59-4f68-8b7a-9c0d1e2f3a4b
+      cluster_order: 9f8e7d6c-5b4a-4321-8765-4c3b2a109876
     nf_vpc_name: "osac-vn-{{ nf_ids.vn }}"
     nf_sn_name: "osac-sn-{{ nf_ids.subnet }}"
     nf_vn_cidr: 10.20.0.0/16
@@ -58,11 +60,12 @@
     nf_ipam:
       gateway_ipv4: 10.20.1.1
       physical_ipv4_cidrs: ["10.20.1.8/29", "10.20.1.16/28"]
+      lb_vip_ipv4_cidrs: ["10.20.1.32/28"]
     # The job pod environment (ConfigMap/Secret network-fulfillment-ig).
     nf_settings:
       NETRIS_CONTROLLER_URL: "{{ nf.url }}"
       NETRIS_USERNAME: osac
-      NETRIS_PASSWORD: pw-not-a-secret
+      NETRIS_PASSWORD: "{{ nf_test_password }}"
       NETRIS_VALIDATE_CERTS: "false"
       NETRIS_SITE_ID: "1"
       NETRIS_TENANT_ID: "2"
@@ -209,9 +212,17 @@
       virtual_network: "{{ nf_vn_res }}"
     nf_ingress_job:
       task: "{{ nf_task }}"
+      cluster_id: "{{ nf_ids.cluster_order }}"
       tenant: "{{ nf_tenant }}"
-      resource: "{{ nf_subnet_res | combine({'id': nf_ids.fd}) }}"
+      resource:
+        apiVersion: osac.openshift.io/v1alpha1
+        kind: ClusterOrder
+        id: "{{ nf_ids.cluster_order }}"
+        metadata: {name: cluster, namespace: clusters, uid: "{{ nf_uid }}", generation: 1}
+        spec: {networkAttachment: {subnetRef: "{{ nf_subnet_res.metadata.name }}"}}
+      subnet: "{{ nf_subnet_res }}"
       virtual_network: "{{ nf_vn_res }}"
+      ipam: "{{ nf_ipam }}"
     # Fixtures the fake serves: a registered bare-metal host with two fabric
     # ports on the provisioning V-Net, two servers for a FabricDomain.
     nf_seed_host:
@@ -281,9 +292,9 @@
       - {name: attach_external_ip, task: attach_external_ip, job: nf_eipa_job, result: {}}
       - {name: create_nat_gateway, task: create_nat_gateway, job: nf_natgw_job, result: {}}
       - {name: create_fabric_domain, task: create_fabric_domain, job: nf_fd_job, result: {backend_id: "601"}}
-      - {name: reserve_cluster_ingress_ip, task: reserve_cluster_ingress_ip, job: nf_ingress_job, expect: final,
-         search: "not supported by the Netris Fabric Manager yet"}
-      - {name: release_cluster_ingress_ip, noreq: true, task: release_cluster_ingress_ip, job: nf_ingress_job, result: {}}
+      - {name: reserve_cluster_ingress_ip, task: reserve_cluster_ingress_ip, job: nf_ingress_job,
+         result: {cluster_ingress: {address: 10.20.1.32}}}
+      - {name: release_cluster_ingress_ip, task: release_cluster_ingress_ip, job: nf_ingress_job, result: {}}
       - {name: delete_nat_gateway, task: delete_nat_gateway, job: nf_natgw_job, result: {}}
       - {name: detach_external_ip, task: detach_external_ip, job: nf_eipa_job, result: {}}
       - {name: delete_external_ip, task: delete_external_ip, job: nf_eip_job, result: {}}
@@ -296,6 +307,13 @@
       - {name: delete_subnet, task: delete_subnet, job: nf_subnet_job, evpn: true, result: {}}
       - {name: delete_virtual_network, task: delete_virtual_network, job: nf_vn_job, evpn: true, result: {}}
   tasks:
+    - name: Generate a session cookie for the fake Netris server
+      ansible.builtin.set_fact:
+        nf_session_cookie: "{{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+        nf_test_password: "{{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}"
+      no_log: true
+      tags: [always]
+
     - name: Prepare a working directory
       ansible.builtin.tempfile:
         state: directory
@@ -313,6 +331,14 @@
 
     - name: Run the cases
       block:
+        - name: Write the fake Netris session cookie
+          ansible.builtin.copy:
+            dest: "{{ nf.root }}/session_cookie"
+            content: "{{ nf_session_cookie }}"
+            mode: "0600"
+          no_log: true
+          tags: [always]
+
         - name: Start the fake Netris
           ansible.builtin.command:
             argv:
@@ -322,10 +348,13 @@
               - "{{ nf.root }}/port"
               - --state-file
               - "{{ nf.root }}/state.json"
+              - --cookie-file
+              - "{{ nf.root }}/session_cookie"
           async: 7200
           poll: 0
           register: _nf_server
           changed_when: false
+          no_log: true
           tags: [always]
 
         - name: Wait for the fake Netris port

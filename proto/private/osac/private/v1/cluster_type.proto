@@ -225,6 +225,10 @@ message ClusterSpec {
 
   // Current server-owned upgrade attempt for each named node set.
   map<string, string> node_set_attempt_ids = 14 [(cleanapi.field).private = true];
+
+  // Resolved from the selected ClusterTemplate so the operator can select the
+  // matching ClusterOrder endpoint lifecycle without depending on template IDs.
+  bool supports_automatic_caas_endpoints = 16 [(cleanapi.field).private = true];
 }
 
 // The per-operator status contains the installation state of one add-on operator.

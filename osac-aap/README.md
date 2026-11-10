@@ -34,6 +34,9 @@ User ─► fulfillment-service (API) ─► osac-operator (watches K8s CRs) ─
    as entry points of the AgentlessNet tests until that manager adopts the
    contract.
 
+For deployment environment variables and hosted-cluster DNS zone setup, see
+the [AAP configuration guide](docs/aap-configuration.md).
+
 ## What it provisions
 
 ### Networking

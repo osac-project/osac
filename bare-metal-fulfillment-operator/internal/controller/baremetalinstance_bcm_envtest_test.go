@@ -34,6 +34,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmh"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
@@ -196,7 +197,8 @@ func (m *mockBCM) handle(w http.ResponseWriter, r *http.Request) {
 func newBCMReconciler(mock *mockBCM) *BareMetalInstanceReconciler {
 	bcmAPI := bcmclient.NewClientForTest(mock.server.Client(), mock.server.URL)
 	bmhMgr := baremetalhost.NewManager(k8sClient, k8sClient, bcmTestNS)
-	return newTestReconciler(inventory.NewBCMClient(bcmAPI, bmhMgr, bcmHostClass), bcmTestNS)
+	secretWriter := bmh.NewSecretWriter(k8sClient, bcmTestNS)
+	return newTestReconciler(inventory.NewBCMClient(bcmAPI, bmhMgr, secretWriter, bcmHostClass), bcmTestNS)
 }
 
 // These are thin, namespace-bound aliases over the shared integration helpers
@@ -287,7 +289,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 
 			// Operator-managed BMC secret was created with correct credentials
 			secret := &corev1.Secret{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostname + "-bmc-secret", Namespace: bcmTestNS}, secret)).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: baremetalhost.CredentialsSecretName(hostname), Namespace: bcmTestNS}, secret)).To(Succeed())
 			Expect(secret.Data).To(HaveKeyWithValue("username", []byte("root")))
 			Expect(secret.Data).To(HaveKeyWithValue("password", []byte("calvin")))
 
@@ -365,7 +367,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 			Expect(ev).NotTo(HaveKey("osac_instance_id"))
 			// BMH and operator secret deleted
 			Expect(bmhExistsInNS(bcmTestNS, hostname)).To(BeFalse())
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: hostname + "-bmc-secret", Namespace: bcmTestNS}, &corev1.Secret{})
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: baremetalhost.CredentialsSecretName(hostname), Namespace: bcmTestNS}, &corev1.Secret{})
 			Expect(client.IgnoreNotFound(err)).To(Succeed())
 			Expect(err).To(HaveOccurred())
 

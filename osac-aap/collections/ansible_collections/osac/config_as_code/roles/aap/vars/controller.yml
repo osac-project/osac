@@ -46,6 +46,21 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     allow_simultaneous: true
     ask_variables_on_launch: true
     verbosity: 0
+  - name: "{{ aap_prefix }}-cluster-endpoints"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_cluster_endpoints.yml"
+    inventory: "{{ aap_prefix }}-cluster-fulfillment"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-cluster-fulfillment-ig"
+    prevent_instance_group_fallback: true
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    ask_labels_on_launch: true
+    timeout: 3600
+    verbosity: 0
   - name: "{{ aap_prefix }}-config-as-code"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"

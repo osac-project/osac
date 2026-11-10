@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: network-fulfillment-ig
+data:
+  # Replace values with the selected Fabric Manager's settings.
+  NETRIS_CONTROLLER_URL: "https://netris.example.com"
+  NETRIS_VALIDATE_CERTS: "true"
+  NETRIS_USERNAME: "netris"
+  NETRIS_SITE_ID: "5"
+  NETRIS_TENANT_ID: "1"
+  NETRIS_MGMT_VPC_ID: "4"
+  NETRIS_RESOURCE_CLASS_MAP: '{"fc430": {"server_cluster_template_id": 89}}'
+  # NETRIS_CA_CONFIGMAP: customer-netris-ca
+  # Helm copies this value into the config-as-code Secret as well. For manual
+  # deployments, set it in the configured config-as-code Secret (default
+  # config-as-code-ig) too; config-as-code reads it to mount the CA bundle.

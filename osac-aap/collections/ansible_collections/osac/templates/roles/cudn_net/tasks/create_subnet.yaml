@@ -91,7 +91,8 @@
           topology: "Layer2"
           layer2:
             role: "{{ default_layer2_role }}"
-            ipamLifecycle: "{{ default_ipam_lifecycle }}"
+            ipam:
+              lifecycle: "{{ default_ipam_lifecycle }}"
             subnets: "{{ cudn_subnets }}"
   register: cudn_result
 

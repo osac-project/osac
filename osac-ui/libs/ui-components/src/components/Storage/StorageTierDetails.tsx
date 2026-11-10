@@ -16,16 +16,14 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import type { StorageTier } from '@osac/types/private';
+import { StorageBackend, StorageBackends, type StorageTier } from '@osac/types/private';
+import { cel } from '@osac/ui-components/api/cel';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 
 import { StorageTierBackendAssociationsTable } from './StorageTierBackendAssociationsTable';
 import { protocolLabel, uniqueBackendIds } from './storageTierBackendResolution';
 import { StorageTierDetailActionButtons } from './StorageTierDetailActionButtons';
 import { StorageTierStatusLabel } from './StorageTierStatusLabel';
-import {
-  storageBackendIdsFilter,
-  usePrivateStorageBackends,
-} from '../../api/v1/private/storage-backends';
 import { useTranslation } from '../../hooks/useTranslation';
 import { displayValue } from '../../utils/detailFormatters';
 import { getErrorMessage } from '../../utils/error';
@@ -43,13 +41,14 @@ export const StorageTierDetails = ({ tier }: StorageTierDetailsProps) => {
   const protocolLabels = protocolLabel(t);
 
   const backendIds = useMemo(() => uniqueBackendIds([tier]), [tier]);
-  const { data: backends = [], error: backendsError } = usePrivateStorageBackends(
-    { filter: storageBackendIdsFilter(backendIds) },
+  const { data: backends, error: backendsError } = useListResource(
+    StorageBackends,
+    { filter: cel<StorageBackend>((filter) => filter.field('id').isIn(backendIds)) },
     { enabled: backendIds.length > 0 },
   );
   const backendsById = useMemo(
-    () => new Map(backends.map((backend) => [backend.id, backend])),
-    [backends],
+    () => new Map((backends?.items || []).map((backend) => [backend.id, backend])),
+    [backends?.items],
   );
 
   return (

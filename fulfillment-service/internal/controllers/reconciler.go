@@ -97,6 +97,9 @@ type scheduledRetry struct {
 
 const maxRequeueDelay = time.Minute
 
+// conflictRetryDelay is the initial delay before retrying a reconciliation that failed with an update conflict.
+const conflictRetryDelay = time.Second
+
 // ReconcilerBuilder contains the data and logic needed to create a controller. Don't create instances f this directly,
 // use the NewReconciler function instead.
 type ReconcilerBuilder[O dao.Object] struct {
@@ -515,6 +518,10 @@ func (c *Reconciler[O]) getObject(ctx context.Context, id string) (result O, err
 }
 
 // Start starts the controller. To stop it cancel the context.
+//
+// Each reconciliation starts from a fresh read, and retries use a copy taken before the function ran. Conflicts
+// (Aborted) without their own retry interval are retried after conflictRetryDelay with exponential backoff. A
+// conflict-only failure logs at DEBUG until the backoff is capped, then at WARN; anything else logs at ERROR.
 func (c *Reconciler[O]) Start(ctx context.Context) error {
 	defer c.stopRetries()
 
@@ -540,6 +547,7 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 		case object := <-c.objectChannel:
 			fresh, err := c.getObject(ctx, object.GetId())
 			if grpcstatus.Code(err) == grpccodes.NotFound {
+				c.cancelRetry(object.GetId())
 				continue
 			}
 			if err != nil {
@@ -555,19 +563,51 @@ func (c *Reconciler[O]) Start(ctx context.Context) error {
 			c.logger.DebugContext(ctx, "Reconciling object",
 				slog.String("id", fresh.GetId()),
 			)
+			snapshot := proto.Clone(fresh).(O)
 			err = c.function(ctx, fresh)
 			if err != nil {
-				c.logger.ErrorContext(
-					ctx,
-					"Reconciliation failed",
-					slog.Any("error", err),
-				)
-				c.requeue(ctx, fresh, err)
+				conflict := !IsRequeueable(err) && IsConflict(err)
+				if conflict && isOnlyConflict(err) {
+					level := c.conflictLogLevel(snapshot.GetId())
+					message := "Reconciliation conflicted with a concurrent update, will retry"
+					if level >= slog.LevelWarn {
+						message = "Reconciliation keeps conflicting with concurrent updates, will retry"
+					}
+					c.logger.Log(
+						ctx,
+						level,
+						message,
+						slog.String("id", snapshot.GetId()),
+						slog.Any("error", err),
+					)
+				} else {
+					c.logger.ErrorContext(
+						ctx,
+						"Reconciliation failed",
+						slog.String("id", snapshot.GetId()),
+						slog.Any("error", err),
+					)
+				}
+				if conflict {
+					err = RequeueAfter(err, conflictRetryDelay)
+				}
+				c.requeue(ctx, snapshot, err)
 			} else {
 				c.cancelRetry(fresh.GetId())
 			}
 		}
 	}
+}
+
+// conflictLogLevel returns DEBUG while the retry of the object is still backing off, and WARN once it is capped.
+func (c *Reconciler[O]) conflictLogLevel(id string) slog.Level {
+	c.retryMu.Lock()
+	attempt := c.retryAttempts[id]
+	c.retryMu.Unlock()
+	if requeueDelay(conflictRetryDelay, attempt) >= maxRequeueDelay {
+		return slog.LevelWarn
+	}
+	return slog.LevelDebug
 }
 
 func (c *Reconciler[O]) requeue(ctx context.Context, object O, err error) {

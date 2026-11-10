@@ -1,0 +1,55 @@
+---
+- name: Validate the DNS domain before publishing ClusterOrder records
+  when: osac_job_vars.task in ['publish_public_dns_api', 'publish_public_dns_ingress']
+  block:
+    - name: Require a supported base domain before publishing ClusterOrder DNS
+      ansible.builtin.assert:
+        that:
+          - >-
+            hosted_cluster_base_domain is defined
+            and hosted_cluster_base_domain | length > 0
+            and hosted_cluster_base_domain in
+            (external_access_supported_base_domains | default([]))
+        fail_msg: >-
+          Cluster endpoint DNS publication rejected before DNS writes because
+          the HostedCluster DNS base domain is not listed in
+          EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS.
+  rescue:
+    - name: Report unsupported DNS publication before any provider writes
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data:
+          osac_error:
+            message: >-
+              Cluster endpoint DNS publication rejected before DNS writes:
+              the HostedCluster DNS base domain is not supported.
+            retryable: false
+
+    - name: Stop after reporting unsupported DNS publication
+      ansible.builtin.fail:
+        msg: >-
+          Cluster endpoint DNS publication rejected before DNS writes:
+          the HostedCluster DNS base domain is not supported.
+
+- name: Run the fixed ClusterOrder endpoint task
+  block:
+    - name: Dispatch the endpoint operation
+      ansible.builtin.include_tasks: "{{ osac_job_vars.task }}.yaml"
+  rescue:
+    - name: Report the endpoint operation as retryable
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data:
+          osac_error:
+            message: >-
+              ClusterOrder endpoint task {{ osac_job_vars.task }} failed;
+              OSAC will retry.
+            retryable: true
+
+    - name: Stop after reporting the retryable endpoint failure
+      ansible.builtin.fail:
+        msg: >-
+          ClusterOrder endpoint task {{ osac_job_vars.task }} failed;
+          OSAC will retry.

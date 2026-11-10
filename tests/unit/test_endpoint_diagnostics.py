@@ -118,6 +118,41 @@ def test_unambiguous_transport_arguments_learn_hosts_for_later_diagnostics(addre
     assert host not in str(error) and METHOD in str(error)
 
 
+@pytest.mark.parametrize("program", ["grpcurl", "osac"])
+@pytest.mark.parametrize("as_bytes", [False, True])
+def test_endpoint_named_after_api_program_preserves_failure_classification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, program: str, as_bytes: bool
+) -> None:
+    """A redacted executable spelling must not change a real command failure's API classification."""
+    address = f"{program}:7443"
+    GRPCClient(address=address)
+    detail = f"Code: PermissionDenied\nMessage: denied at {address}"
+    raw = detail.encode() if as_bytes else detail
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        Mock(side_effect=subprocess.CalledProcessError(7, [program, address, METHOD], output=raw, stderr=raw)),
+    )
+    with pytest.raises(runner.CommandFailed) as caught:
+        runner.run(program, address, METHOD)
+    error = caught.value
+    assert error.cmd[0] == diagnostics.REDACTED
+    assert error.stdout == raw and error.stderr == raw
+    classified = classify(error)
+    assert classified.kind == Kind.API_REFUSED
+    reporter = FailureReporter(Mock())
+    reporter.snapshotter = Mock()
+    reporter.snapshotter.take.return_value = None
+    reporter._path = tmp_path / "results-main.jsonl"
+    reporter.capture_fixture_failure(error, "fixture-api-program", 0)
+    saved = json.loads(reporter._path.read_text())
+    assert saved["kind"] == "api-refused" and saved["outcome"] == "failed"
+    assert METHOD in saved["summary"] and "PermissionDenied" in saved["summary"]
+    for rendered in (str(error), repr(error), str(error.cmd), str(error.args), reporter._path.read_text()):
+        assert address not in rendered and METHOD in rendered
+    assert error.stdout == raw and error.stderr == raw
+
+
 def test_absolute_dns_endpoint_redacts_resolver_normalized_hostname() -> None:
     """Hide both an absolute DNS target and its spelling in resolver error output."""
     GRPCClient(address=f"{HOST}.:7443")
@@ -351,7 +386,7 @@ def test_reporter_internal_error_logs_scrub_tracebacks(
 
 
 @pytest.mark.parametrize("traceback", ["short", "long"])
-@pytest.mark.parametrize("endpoint_host", [HOST, "password"])
+@pytest.mark.parametrize("endpoint_host", [HOST, "password", "grpcurl"])
 def test_actual_disabled_pool_private_create_setup_failure_is_reported_safely(
     tmp_path: Path, traceback: str, endpoint_host: str
 ) -> None:

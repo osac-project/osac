@@ -12,7 +12,6 @@ from tests.e2e.core.sanitize import sanitize_text
 
 _SUMMARY_LIMIT = 1000
 _CHAIN_LIMIT = 6
-_API_PROGRAMS = frozenset({"grpcurl", "osac"})
 _GRPC_LINE = re.compile(r"(?m)^\s*(Code|Message):\s*(.+?)\s*$")
 
 
@@ -75,8 +74,7 @@ def _kind_of(exc: BaseException) -> Kind | None:
     if isinstance(tag, Kind):
         return tag
     if isinstance(exc, CommandFailed):
-        program = str(exc.cmd[0]).rsplit("/", 1)[-1] if exc.cmd else ""
-        return Kind.API_REFUSED if program in _API_PROGRAMS else None
+        return Kind.API_REFUSED if exc.is_api_command else None
     if isinstance(exc, StuckState):
         return Kind.STUCK_STATE
     if isinstance(exc, AssertionError):

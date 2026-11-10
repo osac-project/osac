@@ -35,6 +35,7 @@ _PROGRESS_LOG_INTERVAL_S = 30
 
 _OUTPUT_TAIL = 2000
 _SCALAR_SUMMARY_LIMIT = 120
+_API_PROGRAMS = frozenset({"grpcurl", "osac"})
 
 
 def _text(value: str | bytes | None) -> str:
@@ -49,6 +50,7 @@ class CommandFailed(subprocess.CalledProcessError):
     def __init__(
         self, returncode: int, cmd: Sequence[str], output: str | bytes | None = None, stderr: str | bytes | None = None
     ) -> None:
+        self.is_api_command = bool(cmd and str(cmd[0]).rsplit("/", 1)[-1] in _API_PROGRAMS)
         super().__init__(returncode, sanitize_args(cmd), output, stderr)
         # Exception repr and pickling use args, which would otherwise hold the raw stderr.
         self.args = (str(self),)

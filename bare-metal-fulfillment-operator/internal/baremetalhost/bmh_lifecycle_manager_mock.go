@@ -69,20 +69,6 @@ func (mr *MockBMHLifecycleManagerMockRecorder) CreateBMH(ctx, params any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateBMH", reflect.TypeOf((*MockBMHLifecycleManager)(nil).CreateBMH), ctx, params)
 }
 
-// DeleteBMCSecret mocks base method.
-func (m *MockBMHLifecycleManager) DeleteBMCSecret(ctx context.Context, name, ownerUID string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteBMCSecret", ctx, name, ownerUID)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// DeleteBMCSecret indicates an expected call of DeleteBMCSecret.
-func (mr *MockBMHLifecycleManagerMockRecorder) DeleteBMCSecret(ctx, name, ownerUID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteBMCSecret", reflect.TypeOf((*MockBMHLifecycleManager)(nil).DeleteBMCSecret), ctx, name, ownerUID)
-}
-
 // DeleteBMH mocks base method.
 func (m *MockBMHLifecycleManager) DeleteBMH(ctx context.Context, name, ownerUID string) error {
 	m.ctrl.T.Helper()
@@ -95,20 +81,6 @@ func (m *MockBMHLifecycleManager) DeleteBMH(ctx context.Context, name, ownerUID 
 func (mr *MockBMHLifecycleManagerMockRecorder) DeleteBMH(ctx, name, ownerUID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteBMH", reflect.TypeOf((*MockBMHLifecycleManager)(nil).DeleteBMH), ctx, name, ownerUID)
-}
-
-// EnsureBMCSecret mocks base method.
-func (m *MockBMHLifecycleManager) EnsureBMCSecret(ctx context.Context, name, username, password, ownerUID string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "EnsureBMCSecret", ctx, name, username, password, ownerUID)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// EnsureBMCSecret indicates an expected call of EnsureBMCSecret.
-func (mr *MockBMHLifecycleManagerMockRecorder) EnsureBMCSecret(ctx, name, username, password, ownerUID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnsureBMCSecret", reflect.TypeOf((*MockBMHLifecycleManager)(nil).EnsureBMCSecret), ctx, name, username, password, ownerUID)
 }
 
 // GetHardwareNICs mocks base method.

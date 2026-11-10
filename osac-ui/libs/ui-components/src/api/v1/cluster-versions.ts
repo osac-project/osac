@@ -1,13 +1,6 @@
-import { type ClusterVersion, ClusterVersionState, ClusterVersions } from '@osac/types';
+import { type ClusterVersion, ClusterVersionState } from '@osac/types';
 
-import { useApiFetch } from '../api-context';
 import { cel } from '../cel';
-import { type ListParams, apiQueryKey } from '../types';
-import { useApiQuery } from '../use-api-query';
-
-type ClusterVersionsQueryOptions = {
-  enabled?: boolean;
-};
 
 export const CLUSTER_VERSION_ACTIVE_LIST_FILTER = cel<ClusterVersion>((filter) =>
   filter.and(
@@ -53,26 +46,3 @@ export const clusterVersionNamesFilter = (names: string[]) =>
   cel<ClusterVersion>((filter) =>
     filter.and(filter.field('metadata.name').isIn(names), CLUSTER_VERSION_ALL_STATES_LIST_FILTER),
   );
-
-export const useClusterVersions = (
-  params: ListParams = {},
-  options: ClusterVersionsQueryOptions = {},
-) => {
-  const client = useApiFetch(ClusterVersions);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/cluster_versions', undefined, params),
-    queryFn: () => client.list(params),
-    select: (data) => data.items,
-    enabled: options.enabled ?? true,
-  });
-};
-
-export const useClusterVersion = (id: string | undefined) => {
-  const client = useApiFetch(ClusterVersions);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/cluster_versions', id ? [id] : undefined),
-    queryFn: () => client.get({ id: id ?? '' }),
-    select: (data) => data.object,
-    enabled: Boolean(id),
-  });
-};

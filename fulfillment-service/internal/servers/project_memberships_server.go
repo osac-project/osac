@@ -23,16 +23,18 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // ProjectMembershipsServerBuilder is a builder for creating instances of ProjectMembershipsServer.
 type ProjectMembershipsServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
+	logger              *slog.Logger
+	attributionLogic    auth.AttributionLogic
+	tenancyLogic        auth.TenancyLogic
+	metricsRegisterer   prometheus.Registerer
+	userReferenceLookup references.ReferenceLookupFunc
 }
 
 var _ publicv1.ProjectMembershipsServer = (*ProjectMembershipsServer)(nil)
@@ -77,6 +79,14 @@ func (b *ProjectMembershipsServerBuilder) SetMetricsRegisterer(value prometheus.
 	return b
 }
 
+// SetUserReferenceLookup configures ID-only UserReference resolution for public response redaction.
+func (b *ProjectMembershipsServerBuilder) SetUserReferenceLookup(
+	value references.ReferenceLookupFunc,
+) *ProjectMembershipsServerBuilder {
+	b.userReferenceLookup = value
+	return b
+}
+
 // Build creates the public project memberships server from the builder configuration.
 func (b *ProjectMembershipsServerBuilder) Build() (result *ProjectMembershipsServer, err error) {
 	if b.logger == nil {
@@ -98,6 +108,7 @@ func (b *ProjectMembershipsServerBuilder) Build() (result *ProjectMembershipsSer
 	outMapper, err := NewGenericMapper[*privatev1.ProjectMembership, *publicv1.ProjectMembership]().
 		SetLogger(b.logger).
 		SetStrict(false).
+		SetUserReferenceLookup(b.userReferenceLookup).
 		Build()
 	if err != nil {
 		return

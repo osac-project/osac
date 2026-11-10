@@ -130,8 +130,13 @@ func (r *function) run(ctx context.Context, tenant *privatev1.Tenant) error {
 			UpdateMask: updateMask,
 			Lock:       true,
 		}.Build())
-		if err == nil {
-			err = updateErr
+		// Return the write error too, so the reconciler loop can retry a conflict.
+		if updateErr != nil {
+			if err == nil {
+				err = updateErr
+			} else {
+				err = errors.Join(err, updateErr)
+			}
 		}
 	}
 	return err

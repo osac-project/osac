@@ -94,8 +94,17 @@ func registerReferenceLookups(
 	if err != nil {
 		return fmt.Errorf("failed to create ExternalIPPool DAO for reference lookups: %w", err)
 	}
-	references.RegisterDAOLookup(validator, "osac.private.v1.ExternalIPPoolReference", externalIPPoolsDAO)
-	references.RegisterDAOLookup(validator, "osac.public.v1.ExternalIPPoolReference", externalIPPoolsDAO)
+	// ExternalIPPools are platform-scoped; searches are limited to caller-visible pools.
+	references.RegisterPlatformScopedDAOLookup(
+		validator,
+		"osac.private.v1.ExternalIPPoolReference",
+		externalIPPoolsDAO,
+	)
+	references.RegisterPlatformScopedDAOLookup(
+		validator,
+		"osac.public.v1.ExternalIPPoolReference",
+		externalIPPoolsDAO,
+	)
 
 	// Compute references
 	computeInstancesDAO, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().

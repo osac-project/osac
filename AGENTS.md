@@ -85,6 +85,7 @@ tool surface and setup; later MCP epics own the supported host setup surface.
 - After changing protos, regenerate ONCE: `make -C proto generate`, then commit `proto/private/` (or `proto/tests/`), `proto/public/`, and `proto/gen/`. See [`proto/AGENTS.md`](proto/AGENTS.md). Never hand-edit `proto/public/` or `proto/gen/`.
 - Cross-component architecture and dependency conventions are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md).
 - E2E tests belong under [`tests/e2e/`](tests/e2e/) and follow [`tests/e2e/AGENTS.md`](tests/e2e/AGENTS.md).
+- Code that writes fulfillment `metadata.finalizers` must change an object it read in the same pass and send its `metadata.version`; the server rejects a stale finalizer change with `Aborted`. Reconciler functions return that error so the loop re-reads and retries. See [`fulfillment-service/docs/API.md`](fulfillment-service/docs/API.md#update-when-supported).
 - Bootstrap-created sibling checkouts are separate repositories; do not include their changes in a mono-repo PR. The `osac-ux/` checkout is read-only. The tracked `osac-ui/` component is part of this mono-repo.
 
 

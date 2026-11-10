@@ -86,10 +86,9 @@ var _ = Describe("BareMetalHost Manager", func() {
 			mgr := newTestManager()
 
 			err := mgr.CreateBMH(ctx, CreateParams{
-				Name:              "node001",
-				BMCAddress:        "redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1",
-				CredentialsSecret: "bmc-creds",
-				BootMACAddress:    "aa:bb:cc:dd:ee:01",
+				Name:           "node001",
+				BMCAddress:     "redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1",
+				BootMACAddress: "aa:bb:cc:dd:ee:01",
 				ConsumerRef: &corev1.ObjectReference{
 					APIVersion: "osac.openshift.io/v1alpha1",
 					Kind:       "BareMetalInstance",
@@ -105,7 +104,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}, bmh)).To(Succeed())
 
 			Expect(bmh.Spec.BMC.Address).To(Equal("redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1"))
-			Expect(bmh.Spec.BMC.CredentialsName).To(Equal("bmc-creds"))
+			Expect(bmh.Spec.BMC.CredentialsName).To(Equal("node001-bmc-secret"))
 			Expect(bmh.Spec.BootMACAddress).To(Equal("aa:bb:cc:dd:ee:01"))
 			Expect(bmh.Spec.Online).To(BeFalse())
 			Expect(bmh.Spec.ConsumerRef).NotTo(BeNil())
@@ -445,138 +444,6 @@ var _ = Describe("BareMetalHost Manager", func() {
 			exists, err := mgr.BMHExists(ctx, "nonexistent")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(exists).To(BeFalse())
-		})
-	})
-
-	Describe("EnsureBMCSecret", func() {
-		It("should create a labeled Secret with username and password", func() {
-			mgr := newTestManager()
-
-			Expect(mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "s3cret", "bmi-A")).To(Succeed())
-
-			secret := &corev1.Secret{}
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
-			Expect(string(secret.Data["username"])).To(Equal("admin"))
-			Expect(string(secret.Data["password"])).To(Equal("s3cret"))
-			Expect(secret.Labels).To(HaveKeyWithValue(bmcSecretManagedByLabel, bmcSecretManagedByValue))
-			Expect(secret.Labels).To(HaveKeyWithValue(bmcSecretOwnerLabel, "bmi-A"))
-		})
-
-		It("should update an existing Secret's credentials idempotently", func() {
-			mgr := newTestManager()
-			Expect(mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "old", "bmi-A")).To(Succeed())
-			Expect(mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "new", "bmi-A")).To(Succeed())
-
-			secret := &corev1.Secret{}
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
-			Expect(string(secret.Data["password"])).To(Equal("new"))
-		})
-
-		It("should refuse to overwrite a pre-existing Secret it does not own", func() {
-			foreign := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "node001-bmc-secret",
-					Namespace: testNamespace,
-				},
-				Data: map[string][]byte{"username": []byte("someone"), "password": []byte("else")},
-			}
-			mgr := newTestManager(foreign)
-
-			err := mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "s3cret", "bmi-A")
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not operator-managed"))
-
-			// The foreign Secret must be left untouched.
-			secret := &corev1.Secret{}
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
-			Expect(string(secret.Data["password"])).To(Equal("else"))
-			Expect(secret.Labels).NotTo(HaveKey(bmcSecretManagedByLabel))
-		})
-	})
-
-	Describe("DeleteBMCSecret", func() {
-		It("should delete an operator-managed Secret", func() {
-			mgr := newTestManager()
-			Expect(mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "s3cret", "bmi-A")).To(Succeed())
-
-			Expect(mgr.DeleteBMCSecret(ctx, "node001-bmc-secret", "bmi-A")).To(Succeed())
-
-			secret := &corev1.Secret{}
-			err := mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)
-			Expect(err).To(HaveOccurred())
-		})
-
-		It("should NOT delete an admin-created (unlabeled) Secret", func() {
-			adminSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "admin-bmc-secret",
-					Namespace: testNamespace,
-				},
-				Data: map[string][]byte{"username": []byte("admin"), "password": []byte("s3cret")},
-			}
-			mgr := newTestManager(adminSecret)
-
-			Expect(mgr.DeleteBMCSecret(ctx, "admin-bmc-secret", "bmi-A")).To(HaveOccurred())
-
-			secret := &corev1.Secret{}
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "admin-bmc-secret"}, secret)).To(Succeed())
-		})
-
-		It("should be idempotent when the Secret does not exist", func() {
-			mgr := newTestManager()
-			Expect(mgr.DeleteBMCSecret(ctx, "nonexistent", "bmi-A")).To(Succeed())
-		})
-	})
-
-	Describe("owned BMC Secrets", func() {
-		It("updates credentials only for the same BMI", func() {
-			mgr := newTestManager()
-			Expect(mgr.EnsureBMCSecret(ctx, "netbox-46-bmc-secret", "admin", "old", "bmi-A")).To(Succeed())
-			Expect(mgr.EnsureBMCSecret(ctx, "netbox-46-bmc-secret", "admin", "new", "bmi-A")).To(Succeed())
-			Expect(mgr.EnsureBMCSecret(ctx, "netbox-46-bmc-secret", "admin", "foreign", "bmi-B")).To(MatchError(ContainSubstring("not owned by this BMI")))
-
-			secret := &corev1.Secret{}
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "netbox-46-bmc-secret"}, secret)).To(Succeed())
-			Expect(secret.Labels[bmcSecretOwnerLabel]).To(Equal("bmi-A"))
-			Expect(string(secret.Data["password"])).To(Equal("new"))
-		})
-
-		It("adopts an ownerless managed Secret only for its BMH consumer", func() {
-			bmh := &metal3api.BareMetalHost{
-				ObjectMeta: metav1.ObjectMeta{Name: "netbox-46", Namespace: testNamespace},
-				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-A"}},
-			}
-			legacy := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-				Name: "netbox-46-bmc-secret", Namespace: testNamespace,
-				Labels: map[string]string{bmcSecretManagedByLabel: bmcSecretManagedByValue},
-			}, Data: map[string][]byte{"password": []byte("original")}}
-			mgr := newTestManager(bmh, legacy)
-			Expect(mgr.EnsureBMCSecret(ctx, legacy.Name, "admin", "foreign", "bmi-B")).To(MatchError(ContainSubstring("not owned by this BMI")))
-			Expect(mgr.EnsureBMCSecret(ctx, legacy.Name, "admin", "replacement", "bmi-A")).To(Succeed())
-			secret := &corev1.Secret{}
-			Expect(mgr.client.Get(ctx, client.ObjectKeyFromObject(legacy), secret)).To(Succeed())
-			Expect(secret.Labels[bmcSecretOwnerLabel]).To(Equal("bmi-A"))
-			Expect(string(secret.Data["password"])).To(Equal("replacement"))
-		})
-
-		It("deletes a legacy Secret after its BMH is gone", func() {
-			legacy := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-				Name: "node001-bmc-secret", Namespace: testNamespace,
-				Labels: map[string]string{bmcSecretManagedByLabel: bmcSecretManagedByValue},
-			}}
-			mgr := newTestManager(legacy)
-			Expect(mgr.DeleteBMCSecret(ctx, legacy.Name, "bmi-A")).To(Succeed())
-			Expect(mgr.client.Get(ctx, client.ObjectKeyFromObject(legacy), &corev1.Secret{})).NotTo(Succeed())
-		})
-
-		It("deletes only its own Secret and tolerates an absent Secret", func() {
-			mgr := newTestManager()
-			Expect(mgr.EnsureBMCSecret(ctx, "netbox-46-bmc-secret", "admin", "original", "bmi-A")).To(Succeed())
-			Expect(mgr.DeleteBMCSecret(ctx, "netbox-46-bmc-secret", "bmi-B")).To(MatchError(ContainSubstring("not owned by this BMI")))
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "netbox-46-bmc-secret"}, &corev1.Secret{})).To(Succeed())
-			Expect(mgr.DeleteBMCSecret(ctx, "netbox-46-bmc-secret", "bmi-A")).To(Succeed())
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "netbox-46-bmc-secret"}, &corev1.Secret{})).NotTo(Succeed())
-			Expect(mgr.DeleteBMCSecret(ctx, "netbox-46-bmc-secret", "bmi-A")).To(Succeed())
 		})
 	})
 

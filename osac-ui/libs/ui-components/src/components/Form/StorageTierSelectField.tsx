@@ -6,7 +6,6 @@ import { StorageProtocol, type StorageTier, StorageTierState, StorageTiers } fro
 
 import { ResourceSelectField } from './ResourceSelectField';
 import { cel } from '../../api/cel';
-import { STORAGE_TIER_ACTIVE_LIST_FILTER } from '../../api/v1/storage-tiers';
 import { useTranslation } from '../../hooks/useTranslation';
 
 const STORAGE_TIER_ACTIVE_BLOCK_LIST_FILTER = cel<StorageTier>((filter) =>
@@ -14,6 +13,10 @@ const STORAGE_TIER_ACTIVE_BLOCK_LIST_FILTER = cel<StorageTier>((filter) =>
     filter.field('status.state').equals(StorageTierState.ACTIVE),
     filter.field('spec.protocol').equals(StorageProtocol.BLOCK),
   ),
+);
+
+const STORAGE_TIER_ACTIVE_LIST_FILTER = cel<StorageTier>((filter) =>
+  filter.field('status.state').equals(StorageTierState.ACTIVE),
 );
 
 export interface StorageTierSelectFieldProps {

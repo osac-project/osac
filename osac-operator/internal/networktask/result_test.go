@@ -256,8 +256,14 @@ func TestParseClusterIngress(t *testing.T) {
 	}
 	_, err := ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.255"}}`), "10.0.1.0/24", ipam, "")
 	expectReject(t, err, "cluster_ingress.address is the Subnet's broadcast address")
+	networkIPAM := &v1alpha1.SubnetIPAM{LBVIPIPv4CIDRs: []string{"10.0.1.0/26"}}
+	_, err = ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.0"}}`), "10.0.1.0/24", networkIPAM, "")
+	expectReject(t, err, "cluster_ingress.address is the Subnet's network address")
 	_, err = ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.10"}}`), "10.0.1.0/24", ipam, "")
 	expectReject(t, err, "cluster_ingress.address is not in lb_vip_ipv4_cidrs")
+	gatewayIPAM := &v1alpha1.SubnetIPAM{GatewayIPv4: "10.0.1.193", LBVIPIPv4CIDRs: []string{"10.0.1.192/26"}}
+	_, err = ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.193"}}`), "10.0.1.0/24", gatewayIPAM, "")
+	expectReject(t, err, "cluster_ingress.address is the Subnet's gateway address")
 	_, err = ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.194"}}`), "10.0.1.0/24", ipam, "10.0.1.193")
 	expectReject(t, err, "cluster_ingress.address differs from the address already accepted for the cluster")
 }

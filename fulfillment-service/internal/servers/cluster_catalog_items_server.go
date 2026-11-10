@@ -233,18 +233,14 @@ func (s *ClusterCatalogItemsServer) Update(ctx context.Context,
 		return nil, publicInputMappingError(err, "failed to process cluster catalog item")
 	}
 
-	if request.GetUpdateMask() == nil {
-		// Preserve private metadata under a row lock so a concurrent finalizer update cannot be lost.
+	if request.GetUpdateMask() == nil && privateCatalogItem.GetMetadata() == nil {
+		// A nil-mask update without metadata would clear the stored name, labels and annotations, so copy
+		// them from the locked row.
 		current, err := getLockedReferenceResource(ctx, s.delegate.generic.dao, id)
 		if err != nil {
 			return nil, resourceLookupError(err, "catalog item", id, "", grpccodes.NotFound)
 		}
-		metadata := cloneMessage(current.GetMetadata())
-		if privateCatalogItem.GetMetadata() == nil {
-			privateCatalogItem.SetMetadata(metadata)
-		} else {
-			privateCatalogItem.GetMetadata().SetFinalizers(metadata.GetFinalizers())
-		}
+		privateCatalogItem.SetMetadata(cloneMessage(current.GetMetadata()))
 	}
 
 	privateRequest := &privatev1.ClusterCatalogItemsUpdateRequest{}

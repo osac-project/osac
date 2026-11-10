@@ -28,7 +28,7 @@ import (
 )
 
 // referenceScope identifies where a name is looked up. A local reference must also belong to
-// this exact tenant and project; a full reference may select a shared tenant or another project.
+// this exact tenant and project; a full reference may select another tenant or project.
 type referenceScope struct {
 	tenant  string
 	project string
@@ -48,11 +48,13 @@ type resourceReference interface {
 	SetName(string)
 }
 
-// fullResourceReference adds shared-tenant and project selectors to resource identity.
+// fullResourceReference adds tenant and project selectors to resource identity.
 type fullResourceReference interface {
 	resourceReference
+	GetTenant() string
 	GetShared() bool
 	GetProject() string
+	SetTenant(string)
 	SetShared(bool)
 	SetProject(string)
 }
@@ -62,6 +64,7 @@ func canonicalizeResourceReference(reference resourceReference, object reference
 	reference.SetName(object.GetMetadata().GetName())
 	if fullReference, ok := reference.(fullResourceReference); ok {
 		fullReference.SetProject(object.GetMetadata().GetProject())
+		fullReference.SetTenant(object.GetMetadata().GetTenant())
 		fullReference.SetShared(object.GetMetadata().GetTenant() == auth.SharedTenant)
 	}
 }
@@ -77,6 +80,7 @@ func validateImmutableReferenceIdentity[T interface {
 	if !current.ProtoReflect().IsValid() || !candidate.ProtoReflect().IsValid() ||
 		identityChanged ||
 		(candidate.GetName() != "" && candidate.GetName() != current.GetName()) ||
+		(candidate.GetTenant() != "" && current.GetTenant() != "" && candidate.GetTenant() != current.GetTenant()) ||
 		(candidate.GetProject() != "" && candidate.GetProject() != current.GetProject()) ||
 		(candidate.GetShared() && !current.GetShared()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -177,14 +181,14 @@ func resolveAndCanonicalizeReferenceWithGet[O referenceResource](
 	return object, nil
 }
 
-// resolveFullResourceReference loads a full reference without modifying it. With a name,
-// shared and project select the lookup scope. With an ID, those selectors are ignored, but
-// a supplied name must still match. The target must belong to the owner's tenant or shared.
+// resolveFullResourceReference loads a full reference without modifying it. An explicit tenant
+// selects the target tenant for both ID and name lookups. With an omitted tenant, the legacy
+// shared selector retains its previous behavior. A supplied name must match an ID lookup.
 // The caller checks deletion/readiness and copies stored values into the reference if needed.
 //
-// For an owner in acme/apps, {name: "vm-base", shared: true, project: "templates"}
-// selects shared/templates. An explicit ID may select any caller-visible project in acme
-// or shared, but cannot select another tenant's object just because the caller can see it.
+// For an owner in acme/apps, {name: "vm-base", tenant: "shared", project: "templates"}
+// selects shared/templates. During the compatibility period, {name: "vm-base", shared: true,
+// project: "templates"} selects the same scope.
 //
 // Parameters:
 //   - ctx carries caller authorization and the database transaction; resourceDao enforces visibility.
@@ -230,13 +234,22 @@ func resolveFullResourceReferenceWithGet[O referenceResource](
 	notFoundCode grpccodes.Code,
 	get referenceGetFunc[O],
 ) (O, error) {
+	scope, err := selectedReferenceScope(
+		ownerScope, reference.GetTenant(), reference.GetShared(), reference.GetProject(),
+	)
+	if err != nil {
+		var zero O
+		return zero, err
+	}
+
 	if reference.GetId() == "" {
-		scope := selectedReferenceScope(ownerScope, reference.GetShared(), reference.GetProject())
 		object, err := resolveResourceInScopeWithGet(
 			ctx, resourceDao, scope, "", reference.GetName(), kind, source, notFoundCode, get,
 		)
 		if err == nil {
-			err = validateDependencyOwnerScope(ownerScope, object.GetMetadata(), kind, source)
+			err = validateDependencyOwnerScope(
+				ownerScope, object.GetMetadata(), reference.GetTenant(), kind, source,
+			)
 		}
 		return object, err
 	}
@@ -259,7 +272,7 @@ func resolveFullResourceReferenceWithGet[O referenceResource](
 			kind, source,
 		)
 	}
-	if err := validateDependencyOwnerScope(ownerScope, metadata, kind, source); err != nil {
+	if err := validateDependencyOwnerScope(ownerScope, metadata, reference.GetTenant(), kind, source); err != nil {
 		var zero O
 		return zero, err
 	}
@@ -361,47 +374,70 @@ func resolveResourceInScopeWithGet[O referenceResource](
 	return object, nil
 }
 
-// selectedReferenceScope builds the lookup scope for a global (full) reference.
-// shared=true selects the shared tenant; otherwise the owner's tenant is kept.
+// selectedReferenceScope builds the lookup scope for a full reference.
+// An explicit tenant takes precedence; shared=true is the legacy fallback.
 // The reference's project is always used directly: an empty project selects the
 // tenant's default/root project rather than inheriting the owner's project.
 // Code that needs owner-project inheritance (for example, template defaults)
 // must call inheritReferenceScope before resolution so the reference carries
 // the intended project explicitly.
-func selectedReferenceScope(scope referenceScope, shared bool, project string) referenceScope {
+func selectedReferenceScope(scope referenceScope, tenant string, shared bool, project string) (referenceScope, error) {
+	if tenant != "" && shared && tenant != auth.SharedTenant {
+		return referenceScope{}, grpcstatus.Error(
+			grpccodes.InvalidArgument,
+			"reference has conflicting tenant and shared selectors",
+		)
+	}
+
 	result := scope
-	if shared {
+	if tenant != "" {
+		result.tenant = tenant
+	} else if shared {
 		result.tenant = auth.SharedTenant
 	}
 	result.project = project
-	return result
+	return result, nil
 }
 
 // inheritReferenceScope updates ref when a default was copied from the object described by
-// owner. It carries that object's tenant/project into later name lookup. For example, an image
-// default from a shared Template must still select the shared image when used by an acme VM.
-// An explicitly shared ref is left alone; otherwise the shared flag is set from owner and
-// only an omitted project is filled. This function does not look up or validate the target.
+// owner. Name-based defaults need the owner's tenant/project to disambiguate the target. ID-based
+// defaults keep their selectors unchanged so later validation can retain the compatibility rule
+// that an ID may refer to an owner-tenant or shared target. An explicitly scoped ref is left alone.
+// This function does not look up or validate the target.
 func inheritReferenceScope(ref interface {
+	GetId() string
+	GetTenant() string
 	GetShared() bool
+	SetTenant(string)
 	SetShared(bool)
 	GetProject() string
 	SetProject(string)
 }, owner *privatev1.Metadata) {
-	if ref.GetShared() {
+	if ref.GetId() != "" || ref.GetTenant() != "" || ref.GetShared() {
 		return
 	}
+	ref.SetTenant(owner.GetTenant())
 	ref.SetShared(owner.GetTenant() == auth.SharedTenant)
 	if ref.GetProject() == "" {
 		ref.SetProject(owner.GetProject())
 	}
 }
 
-// validateDependencyOwnerScope checks target's tenant against owner, independently of what
-// the caller can see. An acme owner may use acme or shared targets; a shared owner may use
-// only shared targets. Project checks for local references belong to resolveResourceInScope.
+// validateDependencyOwnerScope checks that the target belongs to the explicit tenant when
+// one is selected. Without one, the compatibility behavior allows targets in the owner's or
+// shared tenant. Project checks for local references belong to resolveResourceInScope.
 // kind names the referenced type in errors; source adds the referencing field, or is empty.
-func validateDependencyOwnerScope(owner referenceScope, target *privatev1.Metadata, kind, source string) error {
+func validateDependencyOwnerScope(owner referenceScope, target *privatev1.Metadata, tenant, kind, source string) error {
+	if tenant != "" {
+		if target.GetTenant() != tenant {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"%s reference%s must belong to the selected tenant",
+				kind, source,
+			)
+		}
+		return nil
+	}
 	if target.GetTenant() != auth.SharedTenant && target.GetTenant() != owner.tenant {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must belong to the owning tenant or shared tenant", kind, source)
 	}
@@ -410,12 +446,17 @@ func validateDependencyOwnerScope(owner referenceScope, target *privatev1.Metada
 
 // validatePlatformReference rejects a reference to a platform-scoped resource that does not
 // target the shared tenant. Platform-scoped resources (for example bare metal instance types)
-// always live in the shared tenant, so callers must set shared=true and must not set a project;
-// the reference then resolves against the shared scope through the generic resolver.
+// always live in the shared tenant, so callers must select shared and must not set a project.
 // kind names the referenced type in errors; source adds the referencing field, or is empty.
 func validatePlatformReference(reference fullResourceReference, kind, source string) error {
-	if !reference.GetShared() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must set shared=true", kind, source)
+	scope, err := selectedReferenceScope(
+		referenceScope{}, reference.GetTenant(), reference.GetShared(), reference.GetProject(),
+	)
+	if err != nil {
+		return err
+	}
+	if scope.tenant != auth.SharedTenant {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must select the shared tenant", kind, source)
 	}
 	if reference.GetProject() != "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s reference%s must not set project", kind, source)
@@ -485,55 +526,60 @@ func resourceLookupError(err error, kind, identifier, source string, notFoundCod
 }
 
 // canonicalComputeInstanceTemplateReference copies the resolved object's ID, name,
-// project, and shared-tenant selector into a new reference.
+// tenant, project, and compatibility shared selector into a new reference.
 func canonicalComputeInstanceTemplateReference(resolved *privatev1.ComputeInstanceTemplate) *privatev1.ComputeInstanceTemplateReference {
 	return privatev1.ComputeInstanceTemplateReference_builder{
 		Id:      resolved.GetId(),
 		Name:    resolved.GetMetadata().GetName(),
+		Tenant:  resolved.GetMetadata().GetTenant(),
 		Project: resolved.GetMetadata().GetProject(),
 		Shared:  resolved.GetMetadata().GetTenant() == auth.SharedTenant,
 	}.Build()
 }
 
-// canonicalClusterTemplateReference copies the resolved object's ID, name, project,
-// and shared-tenant selector into a new reference.
+// canonicalClusterTemplateReference copies the resolved object's ID, name, tenant,
+// project, and compatibility shared selector into a new reference.
 func canonicalClusterTemplateReference(resolved *privatev1.ClusterTemplate) *privatev1.ClusterTemplateReference {
 	return privatev1.ClusterTemplateReference_builder{
 		Id:      resolved.GetId(),
 		Name:    resolved.GetMetadata().GetName(),
+		Tenant:  resolved.GetMetadata().GetTenant(),
 		Project: resolved.GetMetadata().GetProject(),
 		Shared:  resolved.GetMetadata().GetTenant() == auth.SharedTenant,
 	}.Build()
 }
 
 // canonicalBareMetalInstanceTemplateReference copies the resolved object's ID, name,
-// project, and shared-tenant selector into a new reference.
+// tenant, project, and compatibility shared selector into a new reference.
 func canonicalBareMetalInstanceTemplateReference(resolved *privatev1.BareMetalInstanceTemplate) *privatev1.BareMetalInstanceTemplateReference {
 	return privatev1.BareMetalInstanceTemplateReference_builder{
 		Id:      resolved.GetId(),
 		Name:    resolved.GetMetadata().GetName(),
+		Tenant:  resolved.GetMetadata().GetTenant(),
 		Project: resolved.GetMetadata().GetProject(),
 		Shared:  resolved.GetMetadata().GetTenant() == auth.SharedTenant,
 	}.Build()
 }
 
-// canonicalInstanceTypeReference copies the resolved object's ID, name, project, and
-// shared-tenant selector into a new reference.
+// canonicalInstanceTypeReference copies the resolved object's ID, name, tenant, project,
+// and compatibility shared selector into a new reference.
 func canonicalInstanceTypeReference(resolved *privatev1.InstanceType) *privatev1.InstanceTypeReference {
 	return privatev1.InstanceTypeReference_builder{
 		Id:      resolved.GetId(),
 		Name:    resolved.GetMetadata().GetName(),
+		Tenant:  resolved.GetMetadata().GetTenant(),
 		Project: resolved.GetMetadata().GetProject(),
 		Shared:  resolved.GetMetadata().GetTenant() == auth.SharedTenant,
 	}.Build()
 }
 
-// canonicalDiskImageReference copies the resolved object's ID, name, project, and
-// shared-tenant selector into a new reference.
+// canonicalDiskImageReference copies the resolved object's ID, name, tenant, project,
+// and compatibility shared selector into a new reference.
 func canonicalDiskImageReference(resolved *privatev1.DiskImage) *privatev1.DiskImageReference {
 	return privatev1.DiskImageReference_builder{
 		Id:      resolved.GetId(),
 		Name:    resolved.GetMetadata().GetName(),
+		Tenant:  resolved.GetMetadata().GetTenant(),
 		Project: resolved.GetMetadata().GetProject(),
 		Shared:  resolved.GetMetadata().GetTenant() == auth.SharedTenant,
 	}.Build()
@@ -549,12 +595,13 @@ func canonicalSecretLocalReference(resolved *privatev1.Secret) *privatev1.Secret
 	return privatev1.SecretLocalReference_builder{Id: resolved.GetId(), Name: resolved.GetMetadata().GetName()}.Build()
 }
 
-// canonicalBareMetalInstanceTypeReference copies the resolved object's ID, name, project,
-// and shared-tenant selector into a new reference.
+// canonicalBareMetalInstanceTypeReference copies the resolved object's ID, name, tenant,
+// project, and compatibility shared selector into a new reference.
 func canonicalBareMetalInstanceTypeReference(resolved *privatev1.BareMetalInstanceType) *privatev1.BareMetalInstanceTypeReference {
 	return privatev1.BareMetalInstanceTypeReference_builder{
 		Id:      resolved.GetId(),
 		Name:    resolved.GetMetadata().GetName(),
+		Tenant:  resolved.GetMetadata().GetTenant(),
 		Project: resolved.GetMetadata().GetProject(),
 		Shared:  resolved.GetMetadata().GetTenant() == auth.SharedTenant,
 	}.Build()

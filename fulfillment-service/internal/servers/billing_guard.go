@@ -21,18 +21,39 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 )
 
-// billingNotConfiguredReason is the stable reason carried in the ErrorInfo detail of the disabled-mode error.
-const billingNotConfiguredReason = "BILLING_NOT_CONFIGURED"
+// Stable reasons carried in the ErrorInfo detail of the provider-dependent billing failures.
+const (
+	// billingNotConfiguredReason reports that the deployment has no billing provider.
+	billingNotConfiguredReason = "BILLING_NOT_CONFIGURED"
 
-// requireBilling is the guard every provider-dependent billing handler calls first, before any validation that
-// could reveal provider state. It fails with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED, HTTP 400 over REST, when
-// no provider is configured. The message names neither the provider URL nor a Secret.
-func requireBilling(provider *billing.Provider) error {
-	if provider.IsConfigured() {
-		return nil
+	// billingProviderUnavailableReason reports that a provider is configured but unusable, for example because its
+	// credential Secret is unreadable.
+	billingProviderUnavailableReason = "BILLING_PROVIDER_UNAVAILABLE"
+)
+
+// requireAdapter is the guard every provider-dependent billing handler calls first. It returns the adapter to use, so
+// a handler never holds a nil adapter, and fails with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED (HTTP 400 over REST)
+// when billing is off, or UNAVAILABLE/BILLING_PROVIDER_UNAVAILABLE (HTTP 503 over REST) when the adapter could not be
+// built. Neither failure names the provider URL, a Secret, or the cause. Only the provider status server reads the
+// provider directly, because it reports the two states separately instead of failing.
+func requireAdapter(provider *billing.Provider) (billing.Adapter, error) {
+	if !provider.IsConfigured() {
+		return nil, billingFailure(codes.FailedPrecondition, "billing is not configured",
+			billingNotConfiguredReason)
 	}
-	result := status.New(codes.FailedPrecondition, "billing is not configured")
-	if detailed, err := result.WithDetails(&errdetails.ErrorInfo{Reason: billingNotConfiguredReason}); err == nil {
+	adapter, err := provider.Adapter()
+	if err != nil || adapter == nil {
+		return nil, billingFailure(codes.Unavailable, "billing provider is unavailable",
+			billingProviderUnavailableReason)
+	}
+	return adapter, nil
+}
+
+// billingFailure builds a status error carrying the stable reason as an ErrorInfo detail, falling back to the plain
+// status error when the detail cannot be attached.
+func billingFailure(code codes.Code, message, reason string) error {
+	result := status.New(code, message)
+	if detailed, err := result.WithDetails(&errdetails.ErrorInfo{Reason: reason}); err == nil {
 		result = detailed
 	}
 	return result.Err()

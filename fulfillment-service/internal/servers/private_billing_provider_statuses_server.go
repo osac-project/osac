@@ -99,6 +99,7 @@ func (s *PrivateBillingProviderStatusesServer) Get(ctx context.Context,
 	status.SetSupportedCapabilities([]privatev1.BillingProviderCapability{
 		privatev1.BillingProviderCapability_BILLING_PROVIDER_CAPABILITY_PRICING,
 	})
+	// This server reports the two states instead of failing, so it reads the provider directly.
 	adapter, err := s.provider.Adapter()
 	if err == nil {
 		err = adapter.HealthCheck(ctx)

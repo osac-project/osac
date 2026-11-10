@@ -15,6 +15,7 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -171,17 +172,25 @@ var _ = Describe("Billing provider statuses server", func() {
 })
 
 var _ = Describe("Billing guard", func() {
-	It("lets a configured deployment through", func() {
-		Expect(requireBilling(billing.NewProvider("m360", nil, nil))).To(Succeed())
-	})
+	// restBody passes an error through the gateway handler a REST client actually hits, and returns the status code
+	// and body it produces.
+	restBody := func(err error) (int, string) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/fulfillment/v1/billing/accounts", nil)
+		runtime.DefaultHTTPErrorHandler(ctx, runtime.NewServeMux(), &runtime.JSONPb{}, recorder, request, err)
+		return recorder.Code, recorder.Body.String()
+	}
 
-	It("lets a configured deployment through even when its Secret is unreadable", func() {
-		cause := &billing.Error{Reason: billing.ReasonUnavailable, Op: "load config"}
-		Expect(requireBilling(billing.NewProvider("m360", nil, cause))).To(Succeed())
+	It("returns the adapter of a configured deployment", func() {
+		adapter := &countingAdapter{}
+		got, err := requireAdapter(billing.NewProvider("m360", adapter, nil))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(BeIdenticalTo(adapter))
 	})
 
 	It("fails with FAILED_PRECONDITION and the stable reason when billing is off", func() {
-		err := requireBilling(billing.NewProvider("", nil, nil))
+		adapter, err := requireAdapter(billing.NewProvider("", nil, nil))
+		Expect(adapter).To(BeNil())
 		st, ok := status.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(st.Code()).To(Equal(codes.FailedPrecondition))
@@ -189,15 +198,40 @@ var _ = Describe("Billing guard", func() {
 		Expect(st.Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal("BILLING_NOT_CONFIGURED"))
 	})
 
-	It("is HTTP 400 over REST with the reason in the details", func() {
-		err := requireBilling(billing.NewProvider("", nil, nil))
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/api/fulfillment/v1/billing/accounts", nil)
-		runtime.DefaultHTTPErrorHandler(ctx, runtime.NewServeMux(), &runtime.JSONPb{}, recorder, request, err)
-		Expect(recorder.Code).To(Equal(http.StatusBadRequest))
-		body := recorder.Body.String()
+	It("is HTTP 400 over REST when billing is off, with the reason in the details", func() {
+		_, err := requireAdapter(billing.NewProvider("", nil, nil))
+		code, body := restBody(err)
+		Expect(code).To(Equal(http.StatusBadRequest))
 		Expect(body).To(ContainSubstring(`"reason":"BILLING_NOT_CONFIGURED"`))
 		Expect(strings.ToLower(body)).ToNot(ContainSubstring("secret"))
 		Expect(strings.ToLower(body)).ToNot(ContainSubstring("http"))
+	})
+
+	It("fails with UNAVAILABLE, not the disabled reason, when the adapter could not be built", func() {
+		cause := &billing.Error{Reason: billing.ReasonUnavailable, Op: "load config"}
+		adapter, err := requireAdapter(billing.NewProvider("m360", nil, cause))
+		Expect(adapter).To(BeNil())
+		st, ok := status.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(st.Code()).To(Equal(codes.Unavailable))
+		Expect(st.Details()).To(HaveLen(1))
+		Expect(st.Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal("BILLING_PROVIDER_UNAVAILABLE"))
+	})
+
+	It("is HTTP 503 over REST when the adapter could not be built, without the cause", func() {
+		// The cause stands in for deployment detail, such as a path or a Secret name, that must stay server side.
+		cause := errors.New("open /var/run/osac/billing/credentials: permission denied")
+		_, err := requireAdapter(billing.NewProvider("m360", nil, cause))
+		code, body := restBody(err)
+		Expect(code).To(Equal(http.StatusServiceUnavailable))
+		Expect(body).To(ContainSubstring(`"reason":"BILLING_PROVIDER_UNAVAILABLE"`))
+		Expect(body).ToNot(ContainSubstring("permission denied"))
+		Expect(body).ToNot(ContainSubstring("credentials"))
+	})
+
+	It("never returns a nil adapter for a configured deployment that has none", func() {
+		adapter, err := requireAdapter(billing.NewProvider("m360", nil, nil))
+		Expect(adapter).To(BeNil())
+		Expect(status.Code(err)).To(Equal(codes.Unavailable))
 	})
 })

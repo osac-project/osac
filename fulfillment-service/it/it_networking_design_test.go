@@ -21,8 +21,11 @@ package it
 // operator's feedback controllers would. The CI deployment has global.networking.provisioningEnabled=false.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/netip"
 	"slices"
 	"strings"
@@ -32,6 +35,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	appsv1 "k8s.io/api/apps/v1"
@@ -1235,20 +1239,38 @@ var _ = Describe("Networking design: provider networking disabled", Label("netwo
 			pool := ndCreatePool(ctx, c, ndPoolBase()+"/28")
 			ndSetPoolState(ctx, c, pool.GetId(), privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY)
 
-			By("creating an ExternalIP from the READY pool through the public API")
 			name := ndUniqueName("nd-eip")
-			_, err := c.publicExternalIPs.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
-				Object: publicv1.ExternalIP_builder{
-					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-					Spec: publicv1.ExternalIPSpec_builder{
-						Pool: publicv1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
-					}.Build(),
+			assertNoAllocation := func() {
+				GinkgoHelper()
+				filter := fmt.Sprintf("this.metadata.name == %q", name)
+				list, err := c.externalIPs.List(ctx, privatev1.ExternalIPsListRequest_builder{Filter: &filter}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(list.GetItems()).To(BeEmpty())
+				response, err := c.pools.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: pool.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				ndLog("Pool accounting", response.GetObject())
+				Expect(response.GetObject().GetStatus().GetAllocated()).To(BeZero())
+				Expect(response.GetObject().GetStatus().GetAvailable()).To(Equal(int64(14)))
+			}
+			assertNoAllocation()
+
+			By("creating an ExternalIP from the READY pool through the public API")
+			object := publicv1.ExternalIP_builder{
+				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+				Spec: publicv1.ExternalIPSpec_builder{
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
 				}.Build(),
+			}.Build()
+			publicResponse, err := c.publicExternalIPs.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+				Object: object,
 			}.Build())
+			Expect(publicResponse).To(BeNil())
 			ndExpectCode(err, grpccodes.FailedPrecondition, "provider networking is disabled")
+			Expect(grpcstatus.Convert(err).Message()).To(Equal("provider networking is disabled"))
+			assertNoAllocation()
 
 			By("creating it through the private API as the administrator")
-			_, err = c.externalIPs.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
+			privateResponse, err := c.externalIPs.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Name: name, Tenant: usersGroup}.Build(),
 					Spec: privatev1.ExternalIPSpec_builder{
@@ -1256,18 +1278,30 @@ var _ = Describe("Networking design: provider networking disabled", Label("netwo
 					}.Build(),
 				}.Build(),
 			}.Build())
+			Expect(privateResponse).To(BeNil())
 			ndExpectCode(err, grpccodes.FailedPrecondition, "provider networking is disabled")
+			Expect(grpcstatus.Convert(err).Message()).To(Equal("provider networking is disabled"))
+			assertNoAllocation()
 
-			By("checking that no ExternalIP was stored and the pool reserved nothing")
-			filter := fmt.Sprintf("this.metadata.name == %q", name)
-			list, err := c.externalIPs.List(ctx, privatev1.ExternalIPsListRequest_builder{Filter: &filter}.Build())
+			By("creating it through the authenticated public REST gateway")
+			body, err := protojson.Marshal(object)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(list.GetItems()).To(BeEmpty())
-			response, err := c.pools.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: pool.GetId()}.Build())
+			request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+				"/api/fulfillment/v1/external_ips", bytes.NewReader(body))
 			Expect(err).ToNot(HaveOccurred())
-			ndLog("Pool after the rejected creates", response.GetObject())
-			Expect(response.GetObject().GetStatus().GetAllocated()).To(BeZero())
-			Expect(response.GetObject().GetStatus().GetAvailable()).To(Equal(int64(14)))
+			request.Header.Set("Content-Type", "application/json")
+			response, err := tool.ExternalView().UserClient().Do(request)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(response.Body.Close)
+			Expect(response.StatusCode).To(Equal(http.StatusBadRequest))
+			var status struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			}
+			Expect(json.NewDecoder(response.Body).Decode(&status)).To(Succeed())
+			Expect(status.Code).To(Equal(int(grpccodes.FailedPrecondition)))
+			Expect(status.Message).To(Equal("provider networking is disabled"))
+			assertNoAllocation()
 		})
 
 	It("TC-DISABLED-02 rejects ExternalIPAttachment requests with unresolved references",

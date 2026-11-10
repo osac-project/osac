@@ -9,7 +9,7 @@ set -euo pipefail
 
 OSAC_UI_BASE_URL="${OSAC_UI_BASE_URL:-}"
 OSAC_ADMIN_USERNAME="${OSAC_ADMIN_USERNAME:-admin}"
-OSAC_ADMIN_PASSWORD="${OSAC_ADMIN_PASSWORD:-}"
+OSAC_ADMIN_PASSWORD=""
 OSAC_EXTRAVARS="${OSAC_EXTRAVARS:-}"
 OSAC_CLI_PATH="${OSAC_CLI_PATH:-osac}"
 OSAC_VM_FLOW_MODE="${OSAC_VM_FLOW_MODE:-full}"
@@ -30,18 +30,25 @@ PW_HEADED=""
 PW_LIST=false
 NO_DEPS=false
 MODE_FLAG_SET=false
-PROMPT_PASSWORD=false
+ADMIN_PASSWORD_SET=false
 
-for arg in "$@"; do
+while (($# > 0)); do
+  arg="$1"
+  shift
   case $arg in
     --osac-ui-dir=*)    OSAC_UI_DIR="${arg#*=}" ;;
     --ignore-tls)       export IGNORE_HTTPS_ERRORS=true ;;
     --admin-user=*)     OSAC_ADMIN_USERNAME="${arg#*=}" ;;
-    --admin-password=*)
-      echo "Do not pass passwords on the command line. Set OSAC_ADMIN_PASSWORD or use --prompt-password." >&2
-      exit 1
+    --admin-password=*) OSAC_ADMIN_PASSWORD="${arg#*=}"; ADMIN_PASSWORD_SET=true ;;
+    --admin-password)
+      if (($# == 0)); then
+        echo "--admin-password requires a value." >&2
+        exit 1
+      fi
+      OSAC_ADMIN_PASSWORD="$1"
+      ADMIN_PASSWORD_SET=true
+      shift
       ;;
-    --prompt-password)  PROMPT_PASSWORD=true ;;
     --run-smoke)        RUN_SMOKE=true; SETUP_ONLY=false ;;
     --test=*)           PW_TEST_PATH="${arg#*=}"; SETUP_ONLY=false ;;
     --project=*)        PW_PROJECT="${arg#*=}"; SETUP_ONLY=false ;;
@@ -80,7 +87,7 @@ Options:
   --mode=MODE            set OSAC_VM_FLOW_MODE to create, delete, or full
   --extravars=PATH       temporarily use a VMaaS extravars.yaml
   --admin-user=USER      Keycloak admin user (default: admin)
-  --prompt-password      read the Keycloak admin password without echoing it
+  --admin-password=PASS  Keycloak admin password (required for credentialed runs)
   --headed               run with a headed browser using the prepared Xvfb
   --run-smoke            run the setup and smoke projects
   --list                 list discovered tests without executing them
@@ -241,18 +248,11 @@ case "$OSAC_UI_BASE_URL" in
   *) fail "OSAC_UI_BASE_URL must use an HTTP or HTTPS URL." ;;
 esac
 
-if [[ "$PROMPT_PASSWORD" == true ]]; then
-  [[ -t 0 ]] || fail "--prompt-password requires an interactive terminal."
-  IFS= read -r -s -p "OSAC admin password: " OSAC_ADMIN_PASSWORD ||
-    fail "Unable to read OSAC_ADMIN_PASSWORD."
-  printf '\n'
-fi
-
 if [[ "$need_login" == true ]]; then
   [[ -n "$OSAC_ADMIN_USERNAME" ]] && ! placeholder_username "$OSAC_ADMIN_USERNAME" ||
     fail "Set OSAC_ADMIN_USERNAME to a real Keycloak test user before running tests."
-  [[ -n "$OSAC_ADMIN_PASSWORD" ]] ||
-    fail "Set OSAC_ADMIN_PASSWORD or use --prompt-password before running tests."
+  [[ "$ADMIN_PASSWORD_SET" == true && -n "$OSAC_ADMIN_PASSWORD" ]] ||
+    fail "Pass the admin password with --admin-password for credentialed runs."
   if (( EUID == 0 )) && [[ "$OSAC_ALLOW_ROOT_E2E" != true ]]; then
     fail "Credentialed tests refuse to run as root. Use a non-root user or --allow-root-e2e."
   fi

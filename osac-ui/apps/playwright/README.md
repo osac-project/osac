@@ -49,16 +49,18 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
   --osac-ui-dir="$PWD"
 
 export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=<keycloak-user>
-read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
+read -rs OSAC_ADMIN_PASSWORD && printf '\n'
 bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
-  --osac-ui-dir="$PWD" --tag=happy_basic
+  --osac-ui-dir="$PWD" --tag=happy_basic \
+  --admin-password="$OSAC_ADMIN_PASSWORD"
+unset OSAC_ADMIN_PASSWORD
 ```
 
 The preparation helper installs Node.js, npm, pnpm, Playwright dependencies,
 and Chromium. The runner accepts the flow tags listed below, validates the
 deployment and VMaaS prerequisites, and keeps run-time credentials outside the
-setup step. Supply the admin password through the environment or
-`--prompt-password`.
+setup step. The runner requires the admin password through its
+`--admin-password` argument and does not print it.
 
 ## Running
 

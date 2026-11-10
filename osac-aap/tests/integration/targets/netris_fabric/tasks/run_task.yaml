@@ -2,8 +2,8 @@
 # Run one Netris Fabric Manager task through playbook_osac_network_task.yml in
 # a child ansible-playbook process, as AAP runs a networking job
 # (-e @extravars), with the job pod's NETRIS_* settings as environment
-# variables pointing at the fake Netris and the Kind kubeconfig for the EVPN
-# CUDN preflight. Then read the fake's state and the requests this run sent.
+# variables pointing at the fake Netris. Then read the fake's state and the
+# requests this run sent.
 # Input:
 #   sft_label, sft_expect, sft_message, sft_message_search   (parse_job.yaml)
 #   nf_job       osac_job_vars without manager (added here)

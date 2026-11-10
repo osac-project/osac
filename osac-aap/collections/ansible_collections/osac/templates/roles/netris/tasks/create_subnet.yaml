@@ -5,11 +5,9 @@
 # virtual_network.status.l3Vni. The gateway and DHCP follow netris_vnet_plan
 # (see netris_evpn_vnet_gateway_mode in defaults). Get-or-create by name; a
 # V-Net whose gateway or DHCP differs is updated with the full body. For EVPN,
-# Netris serves the first half of the Subnet and cudn_evpn reserves that half
-# from OVN allocation. Before changing an existing fabric, verify that its CUDN
-# already carries the reservation; Subnets with the older layout need a safe
-# delete/recreate migration. A DHCP range switched by a physical attachment is
-# preserved on rerun.
+# OVN serves VM DHCP from overlay_ipv4_cidrs. Netris DHCP stays off until a
+# physical attachment enables the physical_ipv4_cidrs range. Preserve that
+# range on rerun, while removing any other EVPN DHCP pool.
 - name: Create the Subnet on Netris
   block:
     - name: Check the settings
@@ -144,39 +142,6 @@
       when: _netris_vnets_owned | length == 0 and _netris_vnets_foreign | length > 0
       ansible.builtin.include_tasks: _fail.yaml
 
-    - name: Check an existing EVPN CUDN before enabling Netris DHCP
-      when:
-        - netris_network_type == 'evpn'
-        - _netris_plan.dhcp_start | length > 0
-      block:
-        - name: Read the CUDN for the VirtualNetwork
-          kubernetes.core.k8s_info:
-            api_version: k8s.ovn.org/v1
-            kind: ClusterUserDefinedNetwork
-            name: "osac-vn-{{ netris_in.virtual_network_id }}"
-          register: _netris_cudn
-
-        - name: Check whether the existing CUDN reserves the DHCP range
-          ansible.builtin.set_fact:
-            _netris_cudn_dhcp: >-
-              {{ _netris_cudn.resources[0]
-                 | osac.templates.netris_evpn_cudn_dhcp_check(osac_job_vars) }}
-          when: _netris_cudn.resources | length > 0
-
-        - name: Stop before creating a DHCP pool that overlaps OVN allocation
-          vars:
-            netris_fail:
-              message: >-
-                Netris EVPN DHCP cannot be enabled for Subnet {{ netris_in.resource_id }}:
-                {{ _netris_cudn_dhcp.message }}. The existing CUDN must reserve the first
-                half of the Subnet before Netris DHCP is enabled. Stop VM workloads, then
-                delete and recreate the Subnet and CUDN to migrate the address layout.
-              retryable: false
-          when:
-            - _netris_cudn.resources | length > 0
-            - not _netris_cudn_dhcp.ready
-          ansible.builtin.include_tasks: _fail.yaml
-
     - name: Create the IPAM subnet
       ansible.builtin.include_role:
         name: netris.controller.ipam
@@ -220,15 +185,20 @@
         name: netris.controller.vnet
         tasks_from: read_by_id
 
+    - name: Check whether EVPN DHCP still matches the physical range
+      when: netris_network_type == 'evpn'
+      ansible.builtin.set_fact:
+        _netris_physical_dhcp: >-
+          {{ netris_vnet_detail
+             | osac.templates.netris_vnet_dhcp_update(osac_job_vars, _netris_plan.gateway) }}
+
     - name: Compare the gateway of the V-Net with the plan
-      vars:
-        _existing_gateway: "{{ (netris_vnet_detail.gateways | default([]) | first) | default({}) }}"
       ansible.builtin.set_fact:
         _netris_gateway: >-
           {{ netris_vnet_detail
              | osac.templates.netris_vnet_gateway_update(
                  _netris_plan,
-                 netris_network_type == 'evpn' and (_existing_gateway.dhcpEnabled | default(false) | bool)
+                 netris_network_type == 'evpn' and (_netris_physical_dhcp.dhcp_matches | default(false))
                ) }}
 
     - name: Update the gateway and DHCP of an existing V-Net

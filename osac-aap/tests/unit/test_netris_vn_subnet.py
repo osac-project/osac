@@ -11,10 +11,7 @@ import json
 import os
 import subprocess
 import sys
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 import pytest
 
@@ -49,9 +46,9 @@ def plan_job(network_type=None, ipam=IPAM, cidr=SUBNET_CIDR) -> dict:
     return job
 
 
-def test_evpn_default_mode_keeps_the_gateway_and_enables_dhcp() -> None:
+def test_evpn_default_mode_keeps_the_gateway_and_leaves_dhcp_off() -> None:
     plan = nc.netris_vnet_plan(plan_job("evpn"), "gateway_ipv4")
-    assert plan == {"error": "", "gateway": "10.20.1.1/24", "dhcp_start": "10.20.1.3", "dhcp_end": "10.20.1.127"}
+    assert plan == {"error": "", "gateway": "10.20.1.1/24", "dhcp_start": "", "dhcp_end": ""}
 
 
 def test_evpn_none_mode_has_no_gateway() -> None:
@@ -62,7 +59,7 @@ def test_evpn_none_mode_has_no_gateway() -> None:
 def test_evpn_physical_first_mode() -> None:
     plan = nc.netris_vnet_plan(plan_job("evpn"), "physical_first")
     assert plan["gateway"] == "10.20.1.193/24"
-    assert (plan["dhcp_start"], plan["dhcp_end"]) == ("10.20.1.3", "10.20.1.127")
+    assert (plan["dhcp_start"], plan["dhcp_end"]) == ("", "")
     empty = nc.netris_vnet_plan(plan_job("evpn", {**EVPN_IPAM, "physical_ipv4_cidrs": []}), "physical_first")
     assert "physical_ipv4_cidrs" in empty["error"]
 
@@ -204,114 +201,26 @@ def netris():
     server.server_close()
 
 
-class _CUDNHandler(BaseHTTPRequestHandler):
-    def _send(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self) -> None:  # noqa: N802
-        path = urlsplit(self.path).path
-        group = {
-            "name": "k8s.ovn.org",
-            "versions": [{"groupVersion": "k8s.ovn.org/v1", "version": "v1"}],
-            "preferredVersion": {"groupVersion": "k8s.ovn.org/v1", "version": "v1"},
-        }
-        if path == "/version":
-            return self._send(200, {"major": "1", "minor": "30", "gitVersion": "v1.30.0"})
-        if path == "/api":
-            return self._send(200, {"kind": "APIVersions", "apiVersion": "v1", "versions": ["v1"]})
-        if path == "/apis":
-            return self._send(200, {"kind": "APIGroupList", "apiVersion": "v1", "groups": [group]})
-        if path == "/apis/k8s.ovn.org":
-            return self._send(200, {"kind": "APIGroup", "apiVersion": "v1", **group})
-        if path == "/apis/k8s.ovn.org/v1":
-            return self._send(200, {
-                "kind": "APIResourceList", "apiVersion": "v1", "groupVersion": "k8s.ovn.org/v1",
-                "resources": [{"name": "clusteruserdefinednetworks", "singularName": "", "namespaced": False,
-                               "kind": "ClusterUserDefinedNetwork", "verbs": ["get", "list"]}],
-            })
-        prefix = "/apis/k8s.ovn.org/v1/clusteruserdefinednetworks/"
-        if path.startswith(prefix):
-            name = unquote(path[len(prefix):])
-            resource = self.server.resources.get(name)
-            if resource is not None:
-                return self._send(200, resource)
-            return self._send(404, {"apiVersion": "v1", "kind": "Status", "status": "Failure",
-                                    "reason": "NotFound", "code": 404})
-        self._send(404, {"apiVersion": "v1", "kind": "Status", "status": "Failure",
-                         "reason": "NotFound", "code": 404})
-
-    def log_message(self, *args) -> None:
-        pass
-
-
-class _CUDNAPI(ThreadingHTTPServer):
-    daemon_threads = True
-    allow_reuse_address = True
-
-    def __init__(self, resources: list[dict]):
-        super().__init__(("127.0.0.1", 0), _CUDNHandler)
-        self.resources = {item["metadata"]["name"]: item for item in resources}
-
-
-class _Kubeconfig:
-    def __init__(self, tmp_path: Path, resources: list[dict]):
-        self.path = tmp_path / "kubeconfig.json"
-        self.server = _CUDNAPI(resources)
-
-    def __enter__(self) -> str:
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.path.write_text(json.dumps({
-            "apiVersion": "v1", "kind": "Config", "current-context": "test",
-            "clusters": [{"name": "test", "cluster": {"server": f"http://127.0.0.1:{self.server.server_port}"}}],
-            "contexts": [{"name": "test", "context": {"cluster": "test", "user": "test"}}],
-            "users": [{"name": "test", "user": {}}],
-        }))
-        return str(self.path)
-
-    def __exit__(self, *args) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-
-
-def _cudn(reserved: list[str]) -> dict:
-    return {
-        "apiVersion": "k8s.ovn.org/v1", "kind": "ClusterUserDefinedNetwork",
-        "metadata": {
-            "name": f"osac-vn-{VN}",
-            "labels": {"osac.openshift.io/virtualnetwork-id": VN, "osac.openshift.io/owner-kind": "subnet",
-                       "osac.openshift.io/owner-id": SUBNET},
-            "annotations": {"osac.openshift.io/owner-subnet": SUBNET},
-        },
-        "spec": {"network": {"layer2": {"subnets": [SUBNET_CIDR], "reservedSubnets": reserved}}},
-    }
-
-
-def run(tmp_path: Path, server: Netris, job: dict, cudns: list[dict] | None = None) -> tuple[int, dict]:
+def run(tmp_path: Path, server: Netris, job: dict) -> tuple[int, dict]:
     extra = tmp_path / "extravars.json"
     extra.write_text(json.dumps({"osac_job_vars": job}))
     environ = {k: v for k, v in os.environ.items() if not k.startswith("NETRIS_")}
     environ.update(GOOD_ENV)
-    with _Kubeconfig(tmp_path, cudns or []) as kubeconfig:
-        environ.update({
-            "NETRIS_CONTROLLER_URL": server.url,
-            "NETRIS_VALIDATE_CERTS": "false",
-            "KUBECONFIG": kubeconfig,
-            "K8S_AUTH_KUBECONFIG": kubeconfig,
-            "ANSIBLE_STDOUT_CALLBACK": "ansible.posix.json",
-            "ANSIBLE_SHOW_CUSTOM_STATS": "true",
-            "ANSIBLE_LOCALHOST_WARNING": "False",
-            "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
-            "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
-        })
-        proc = subprocess.run(
-            [str(ANSIBLE_PLAYBOOK), "-i", "localhost,", "-c", "local", "playbook_osac_network_task.yml", "-e", f"@{extra}"],
-            cwd=ROOT, env=environ, capture_output=True, text=True, timeout=300,
-        )
+    environ.pop("KUBECONFIG", None)
+    environ.pop("K8S_AUTH_KUBECONFIG", None)
+    environ.update({
+        "NETRIS_CONTROLLER_URL": server.url,
+        "NETRIS_VALIDATE_CERTS": "false",
+        "ANSIBLE_STDOUT_CALLBACK": "ansible.posix.json",
+        "ANSIBLE_SHOW_CUSTOM_STATS": "true",
+        "ANSIBLE_LOCALHOST_WARNING": "False",
+        "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
+        "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
+    })
+    proc = subprocess.run(
+        [str(ANSIBLE_PLAYBOOK), "-i", "localhost,", "-c", "local", "playbook_osac_network_task.yml", "-e", f"@{extra}"],
+        cwd=ROOT, env=environ, capture_output=True, text=True, timeout=300,
+    )
     assert "{" in proc.stdout, proc.stdout + proc.stderr
     doc = json.loads(proc.stdout[proc.stdout.index("{"):])
     return proc.returncode, doc.get("global_custom_stats") or {}
@@ -413,15 +322,14 @@ def test_create_subnet_with_network_type_returns_the_segment(tmp_path, netris) -
     assert ipam["name"] == f"osac-sn-{SUBNET}" and ipam["prefix"] == SUBNET_CIDR and ipam["purpose"] == "common"
     vnet = netris.state["vnets"][0]
     assert vnet["name"] == f"osac-sn-{SUBNET}" and vnet["vpc"] == {"id": 101}
-    assert vnet["gateways"] == [{"prefix": "10.20.1.1/24", "dhcpEnabled": True,
-                                 "dhcpStartIp": "10.20.1.3", "dhcpEndIp": "10.20.1.127"}]
+    assert vnet["gateways"] == [{"prefix": "10.20.1.1/24"}]
 
 
 def test_create_subnet_rerun_makes_no_write(tmp_path, netris) -> None:
     prepare_vn(tmp_path, netris)
     first = ok(*run(tmp_path, netris, subnet_job("create_subnet", "evpn")))
     netris.calls.clear()
-    assert ok(*run(tmp_path, netris, subnet_job("create_subnet", "evpn"), [_cudn(["10.20.1.0/25"])])) == first
+    assert ok(*run(tmp_path, netris, subnet_job("create_subnet", "evpn"))) == first
     assert netris.writes() == []
 
 
@@ -440,14 +348,18 @@ def test_create_subnet_without_physical_ranges_has_no_dhcp(tmp_path, netris) -> 
     assert netris.state["vnets"][0]["gateways"] == [{"prefix": "10.20.1.1/24"}]
 
 
-def test_create_subnet_blocks_a_legacy_cudn_that_can_allocate_from_the_dhcp_range(tmp_path, netris) -> None:
+def test_create_subnet_disables_a_legacy_evpn_dhcp_pool(tmp_path, netris) -> None:
     prepare_vn(tmp_path, netris)
     ok(*run(tmp_path, netris, subnet_job("create_subnet", "evpn")))
-    netris.state["vnets"][0]["gateways"] = [{"id": 7, "prefix": "10.20.1.9/24", "dhcpEnabled": False}]
+    netris.state["vnets"][0]["gateways"] = [{
+        "id": 7, "prefix": "10.20.1.1/24", "dhcpEnabled": True,
+        "dhcpStartIp": "10.20.1.3", "dhcpEndIp": "10.20.1.127",
+    }]
     netris.calls.clear()
-    message = err(*run(tmp_path, netris, subnet_job("create_subnet", "evpn"), [_cudn([])]), retryable=False)
-    assert "existing CUDN can still allocate from the Netris DHCP range" in message
-    assert netris.writes() == []
+    result = ok(*run(tmp_path, netris, subnet_job("create_subnet", "evpn")))
+    assert result == {"network_segment": {"type": "evpn", "l2_vni": 10101}}
+    assert netris.state["vnets"][0]["gateways"] == [{"id": 7, "prefix": "10.20.1.1/24", "dhcpEnabled": False}]
+    assert len(netris.writes()) == 1
 
 
 def test_create_subnet_l3_vni_mismatch_is_final(tmp_path, netris) -> None:

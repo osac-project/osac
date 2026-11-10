@@ -47,8 +47,12 @@
     nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
 
 - name: Attachment - nothing was written for the unknown interface
+  vars:
+    _vnet: "{{ nf_state.vnets | selectattr('name', 'equalto', nf_sn_name) | first }}"
   ansible.builtin.assert:
-    that: nf_writes == []
+    that:
+      - nf_writes == []
+      - not (_vnet.gateways[0].dhcpEnabled | default(false))
     quiet: true
 
 - name: Attachment - a Subnet without a physical range cannot serve DHCP (final, no write)

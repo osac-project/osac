@@ -5,12 +5,11 @@
 # like an AAP job (-e @extravars), with the job pod's NETRIS_* settings as
 # environment variables pointing at fixtures/netris/fake_netris.py (a stateful
 # in-process fake of the Netris controller, started here as a background
-# process) and the integration Kind API, which provides the read-only CUDN
-# preflight used by EVPN Subnet creation. A minimal CUDN CRD is installed for
-# the duration of this target; no CUDN instances are created. Checks:
+# process). Checks:
 #   - lifecycle: all 21 tasks of the Fabric set run once with valid input and
 #     publish their contract result, or nothing for the documented no-ops;
-#   - VirtualNetwork / Subnet: result keys, VNIs, V-Net gateway and DHCP,
+#   - VirtualNetwork / Subnet: result keys, VNIs, V-Net gateway, EVPN DHCP off
+#     until a physical attachment, and plain Subnet physical-range DHCP;
 #     reruns that write nothing, a parent l3Vni that differs from the VPC;
 #   - NetworkAttachment: physical port move with DHCP over the physical range
 #     on an EVPN Subnet, DHCP lease lookup by MAC, ports moved back on delete;
@@ -315,40 +314,6 @@
 
     - name: Run the cases
       block:
-        - name: Install the minimal CUDN CRD for the DHCP preflight
-          kubernetes.core.k8s:
-            state: present
-            wait: true
-            wait_condition:
-              type: Established
-              status: "True"
-            wait_timeout: 60
-            definition:
-              apiVersion: apiextensions.k8s.io/v1
-              kind: CustomResourceDefinition
-              metadata:
-                name: clusteruserdefinednetworks.k8s.ovn.org
-              spec:
-                group: k8s.ovn.org
-                scope: Cluster
-                names:
-                  plural: clusteruserdefinednetworks
-                  singular: clusteruserdefinednetwork
-                  kind: ClusterUserDefinedNetwork
-                  listKind: ClusterUserDefinedNetworkList
-                versions:
-                  - name: v1
-                    served: true
-                    storage: true
-                    schema:
-                      openAPIV3Schema:
-                        type: object
-                        properties:
-                          spec:
-                            type: object
-                            x-kubernetes-preserve-unknown-fields: true
-          tags: [always]
-
         - name: Start the fake Netris
           ansible.builtin.command:
             argv:
@@ -421,15 +386,6 @@
           tags: [paths]
 
       always:
-        - name: Remove the test CUDN CRD
-          kubernetes.core.k8s:
-            api_version: apiextensions.k8s.io/v1
-            kind: CustomResourceDefinition
-            name: clusteruserdefinednetworks.k8s.ovn.org
-            state: absent
-          failed_when: false
-          tags: [always]
-
         - name: Stop the fake Netris
           ansible.builtin.uri:
             url: "{{ nf.url }}/__admin/shutdown"

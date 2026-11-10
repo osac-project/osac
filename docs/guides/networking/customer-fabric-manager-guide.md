@@ -1058,8 +1058,8 @@ Rules:
 - Read the lists. Never compute ranges from the Subnet CIDR or the plan.
 - The plan never changes after installation, and a recorded layout never changes, so no address moves.
 - Any list may be `[]`, and every task accepts it. With an empty `physical_ipv4_cidrs`, use no Subnet address for a fabric device.
-- **DHCP.** OSAC's Netris manager serves `network address + 3` through the broadcast address of the first half of an EVPN Subnet. `cudn_evpn` reserves that half from OVN allocation, so the two DHCP pools do not overlap. A custom Fabric Manager must either use a disjoint pool and reserve it from OVN allocation, or leave VM DHCP to OVN-Kubernetes.
-- VMs get their address, the Subnet's prefix, and `gateway_ipv4` as router (for example `10.0.1.17/24` via `10.0.1.1`). Netris and OVN-Kubernetes can both answer DHCP on the shared segment; check which response the VM accepts and that it receives the cluster DNS option.
+- **DHCP.** `cudn_evpn` uses OVN-Kubernetes DHCP for VM addresses from `overlay_ipv4_cidrs`. OSAC's Netris manager enables DHCP only for `physical_ipv4_cidrs`, before moving a physical attachment to the Subnet, and keeps that pool enabled after the attachment is removed. A custom Fabric Manager must follow the same split: reserve addresses outside the overlay from OVN allocation and serve DHCP to its physical interfaces from the physical range.
+- VMs get their address from OVN-Kubernetes DHCP, with the Subnet's prefix and `gateway_ipv4` as router (for example `10.0.1.17/24` via `10.0.1.1`), plus cluster DNS. Netris DHCP cannot filter by MAC, so a physical-range offer can reach VMs on the shared segment; whether a VM accepts it remains an open lab check.
 - Allocate only from your own range. Never use the network address or broadcast address for a fabric device.
 - Use `gateway_ipv4` only to serve the Subnet's gateway under the [Gateway rule](#gateway). Every other address for your own Subnet devices comes from `physical_ipv4_cidrs`.
 - Every CIDR of a layout has at least 16 addresses. OSAC rejects a Subnet whose prefix is too long for the plan (/26 for 0.75/0.25/0).

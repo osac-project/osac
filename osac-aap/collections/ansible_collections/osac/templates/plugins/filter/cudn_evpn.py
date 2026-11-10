@@ -216,30 +216,22 @@ def _subtract(base: list[ipaddress.IPv4Network], remove: list[ipaddress.IPv4Netw
 def layer2_addressing(subnet_cidr: str, ipam: dict) -> dict:
     """The CUDN Layer2 addressing of a Subnet from its recorded layout.
 
-    Netris DHCP serves the first half of the Subnet, beginning at network + 3.
-    OVN-Kubernetes must not allocate that range, so it is removed from the
-    overlay ranges before computing reservedSubnets. OVN serves the gateway
-    (defaultGatewayIPs) and uses network + 2 as its management-port address;
-    both are infrastructure addresses (EP #427), so OVN excludes them from VM
-    allocation. The layout places the overlay range first, so both lie inside
-    it. reservedSubnets is every other part of the Subnet, including the Netris
-    DHCP range and the physical/LB VIP ranges; the CRD forbids an overlap with
+    OVN-Kubernetes serves VM DHCP from the overlay ranges. It serves the
+    gateway (defaultGatewayIPs) and uses network + 2 as its management-port
+    address; both are infrastructure addresses (EP #427), so OVN excludes
+    them from VM allocation. reservedSubnets is every part of the Subnet
+    outside the overlay ranges and infrastructure addresses, including the
+    physical and LB VIP ranges. The CRD forbids an overlap with
     infrastructureSubnets.
     """
     subnet = ipaddress.ip_network(subnet_cidr)
     if subnet.version != 4 or subnet.prefixlen > 29:
-        raise _InputError("cudn_evpn EVPN DHCP requires an IPv4 Subnet with prefix length /29 or shorter")
+        raise _InputError("cudn_evpn EVPN requires an IPv4 Subnet with prefix length /29 or shorter")
     gateway = ipaddress.ip_network(f"{ipam['gateway_ipv4']}/32")
     management = ipaddress.ip_network(f"{subnet.network_address + 2}/32")
     overlay = [ipaddress.ip_network(c) for c in ipam["overlay_ipv4_cidrs"]]
-    netris_dhcp = next(subnet.subnets(prefixlen_diff=1))
-    if not any(netris_dhcp.subnet_of(block) for block in overlay):
-        raise _InputError(
-            "cudn_evpn Netris DHCP range must be inside ipam.overlay_ipv4_cidrs so VM addresses remain in the overlay range"
-        )
     infrastructure = [gateway, management]
-    ovn_overlay = _subtract(overlay, [netris_dhcp])
-    reserved = _subtract([subnet], ovn_overlay + infrastructure)
+    reserved = _subtract([subnet], overlay + infrastructure)
     if len(reserved) > MAX_RESERVED_SUBNETS:
         raise _LimitError(
             f"cudn_evpn implementation limit: the Subnet's address layout needs "

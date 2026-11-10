@@ -39,6 +39,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmh"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/directclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
@@ -119,7 +120,7 @@ var _ = Describe("NetBox inventory client", func() {
 			Expect(api).NotTo(BeNil())
 
 			ctrl := gomock.NewController(GinkgoT())
-			manager := baremetalhost.NewManager(nil, nil, "metal3-system")
+			manager := newTestBMHManager("metal3-system")
 			writer := NewMockWriter(ctrl)
 			credentialsReader := &fakeCredentialsReaderRepository{}
 			client := NewNetBoxClient(api, manager, writer, testNetBoxHostClass, credentialsReader)
@@ -325,7 +326,7 @@ var _ = Describe("NetBox inventory client", func() {
 				Finalizers: []string{"test.osac.openshift.io/hold"},
 			}, Spec: metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-123"}}}
 			k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bareMetalHost).Build()
-			manager := baremetalhost.NewManager(k8sClient, k8sClient, "metal3-system")
+			manager := baremetalhost.NewManager(k8sClient, directclient.Wrap(k8sClient), "metal3-system")
 			secretKey := client.ObjectKey{Namespace: "metal3-system", Name: "netbox-46-bmc-secret"}
 			writer := bmh.NewSecretWriter(k8sClient, "metal3-system")
 			Expect(writer.Create(ctx, credentials.Reference{HostID: "netbox-46", BMIID: "bmi-123"}, credentials.BMC{
@@ -545,7 +546,7 @@ func newNetBoxResourceManager(objects ...client.Object) (*baremetalhost.Manager,
 	Expect(corev1.AddToScheme(scheme)).To(Succeed())
 	Expect(metal3api.AddToScheme(scheme)).To(Succeed())
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
-	return baremetalhost.NewManager(k8sClient, k8sClient, "metal3-system"), k8sClient
+	return baremetalhost.NewManager(k8sClient, directclient.Wrap(k8sClient), "metal3-system"), k8sClient
 }
 
 func newTestNetBoxClientWithCredentials(api NetBoxAPI) *NetBoxClient {
@@ -561,7 +562,7 @@ var _ = Describe("NetBox selector query", func() {
 	Describe("FindFreeHost", func() {
 		It("returns an error when the Metal3 namespace is missing without querying NetBox", func() {
 			api := &selectorQueryTestAPI{}
-			client := newNetBoxClient(api, baremetalhost.NewManager(nil, nil, ""), testNetBoxHostClass, nil)
+			client := newNetBoxClient(api, newTestBMHManager(""), testNetBoxHostClass, nil)
 
 			host, err := client.FindFreeHost(context.Background(), nil)
 
@@ -1030,7 +1031,14 @@ func expectedTestNetBoxAssignedHost(instanceID string) *Host {
 }
 
 func testNetBoxSelectorBMHManager() *baremetalhost.Manager {
-	return baremetalhost.NewManager(nil, nil, "metal3-system")
+	return newTestBMHManager("metal3-system")
+}
+
+// newTestBMHManager returns a BMH manager backed by an empty fake client. It
+// is for tests that exercise wiring rather than BMH or Secret behavior.
+func newTestBMHManager(namespace string) *baremetalhost.Manager {
+	k8sClient := fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
+	return baremetalhost.NewManager(k8sClient, directclient.Wrap(k8sClient), namespace)
 }
 
 var _ = Describe("NetBox GetHostNICs", func() {

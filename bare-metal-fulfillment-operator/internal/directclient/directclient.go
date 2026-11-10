@@ -1,0 +1,84 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+// Package directclient provides a Kubernetes client that reads straight from
+// the API server instead of the controller-runtime cache.
+//
+// Some operations must observe current cluster state rather than whatever an
+// informer has seen so far: confirming that a deletion took effect, and
+// reading or updating Secrets without paying for a cluster-wide Secret
+// informer. Those operations need a client that is guaranteed uncached, which
+// a plain client.Client argument cannot express — a cached client satisfies
+// the same interface.
+//
+// Client seals that guarantee at compile time: its marker method is
+// unexported, so only this package can implement it.
+package directclient
+
+import (
+	"errors"
+
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+// Client is a Kubernetes client whose reads go directly to the API server and
+// never to the controller-runtime cache.
+//
+// The interface is sealed: a cache-backed client such as mgr.GetClient()
+// cannot be passed where a Client is expected.
+type Client interface {
+	client.Client
+
+	// direct is unexported on purpose. It stops any other package from
+	// satisfying Client with a cache-backed implementation.
+	direct()
+}
+
+// directClient marks a client.Client as direct. It adds no behavior of its
+// own; the guarantee comes from how the embedded client was built.
+type directClient struct {
+	client.Client
+}
+
+func (directClient) direct() {}
+
+// New builds a direct client from a REST configuration. The returned client
+// reads from the API server and never starts or consults a cache. It is the
+// only way production code can obtain a Client.
+func New(cfg *rest.Config, opts client.Options) (Client, error) {
+	if cfg == nil {
+		return nil, errors.New("rest config is required to build a direct client")
+	}
+	c, err := client.New(cfg, opts)
+	if err != nil {
+		return nil, err
+	}
+	return directClient{Client: c}, nil
+}
+
+// Wrap marks an existing client as direct.
+//
+// Callers must only pass a client known to read through to the API server: a
+// value built with client.New, an envtest client, or a fake client in tests.
+// Never pass mgr.GetClient(), whose reads are served by the cache. Production
+// code should use New instead.
+func Wrap(c client.Client) Client {
+	if c == nil {
+		panic("directclient: Wrap called with a nil client")
+	}
+	return directClient{Client: c}
+}

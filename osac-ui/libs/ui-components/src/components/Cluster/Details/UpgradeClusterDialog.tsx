@@ -158,7 +158,7 @@ const UpgradeClusterDialog = ({
                   role="alert"
                   title={t('Could not request the cluster upgrade')}
                 >
-                  {getErrorMessage(updateCluster.error, t)}
+                  {getErrorMessage(updateCluster.error)}
                 </Alert>
               ) : null}
             </ModalBody>

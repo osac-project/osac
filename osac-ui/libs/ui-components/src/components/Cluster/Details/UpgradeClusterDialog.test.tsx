@@ -314,9 +314,7 @@ describe('UpgradeClusterDialog', () => {
     await selectTarget(user, '4.18.0');
     await user.click(screen.getByRole('button', { name: /Upgrade cluster/ }));
 
-    expect(
-      await screen.findByText('You are not authorized to access this resource.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('permission denied')).toBeInTheDocument();
     expect(requests).toHaveLength(1);
     expect(onClose).not.toHaveBeenCalled();
   });

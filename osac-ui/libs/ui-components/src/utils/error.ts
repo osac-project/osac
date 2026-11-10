@@ -1,6 +1,3 @@
-import { Code, ConnectError } from '@connectrpc/connect';
-import type { TFunction } from 'i18next';
-
 const readJsonMessage = (value: unknown): string | undefined => {
   if (!value || typeof value !== 'object') {
     return undefined;
@@ -24,16 +21,7 @@ export const parseHttpErrorBody = (body: string): string | undefined => {
   }
 };
 
-export const getErrorMessage = (error: unknown, t?: TFunction): string => {
-  if (t && error instanceof ConnectError) {
-    if (error.code === Code.PermissionDenied) {
-      return t('You are not authorized to access this resource.');
-    }
-    if (error.code === Code.Internal) {
-      return t('Unexpected error occurred');
-    }
-  }
-
+export const getErrorMessage = (error: unknown): string => {
   let errMsg = '';
 
   if (error instanceof Error) {

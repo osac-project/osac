@@ -38,28 +38,40 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   const [openClusterId, setOpenClusterId] = useState<string>();
   const dialogOpen = openClusterId === cluster.id;
   const configuredVersionId = cluster.spec?.version?.id;
+  const hideUpgradeControls =
+    cluster.status?.state === ClusterState.FAILED ||
+    cluster.status?.state === ClusterState.DELETING ||
+    cluster.status?.state === ClusterState.DELETE_FAILED;
+  const latestUpgrade = cluster.status?.upgradeHistory[0];
   const upgradeInProgress =
-    cluster.status?.state !== ClusterState.FAILED &&
-    cluster.status?.state !== ClusterState.DELETING &&
-    cluster.status?.state !== ClusterState.DELETE_FAILED &&
-    cluster.status?.upgradeHistory.some(
-      ({ state }) =>
-        state === ClusterUpgradeState.PENDING || state === ClusterUpgradeState.PROGRESSING,
-    );
+    latestUpgrade?.state === ClusterUpgradeState.PENDING ||
+    latestUpgrade?.state === ClusterUpgradeState.PROGRESSING;
+  const upgradeDidNotComplete =
+    latestUpgrade?.state === ClusterUpgradeState.TIMED_OUT ||
+    latestUpgrade?.state === ClusterUpgradeState.FAILED;
   const configuredVersionQuery = useGetResource(
     ClusterVersions,
     { id: configuredVersionId ?? '' },
-    { enabled: Boolean(configuredVersionId) },
+    { enabled: Boolean(configuredVersionId) && !hideUpgradeControls },
   );
   const catalogQuery = useListAllResources(ClusterVersions, undefined, {
-    enabled: Boolean(configuredVersionId),
+    enabled: Boolean(configuredVersionId) && !hideUpgradeControls,
   });
   const configuredVersion = configuredVersionQuery.data?.object;
+
+  if (hideUpgradeControls) {
+    return <>{cluster.status?.observedVersion || '—'}</>;
+  }
 
   let choices: ClusterUpgradeChoiceResult = { eligibleTargets: [] };
   let action: UpgradeActionState;
   if (upgradeInProgress) {
     action = { kind: 'in-progress' };
+  } else if (upgradeDidNotComplete) {
+    action = {
+      kind: 'blocked',
+      reason: latestUpgrade?.message || t('The latest upgrade did not complete.'),
+    };
   } else if (!configuredVersionId) {
     action = { kind: 'blocked', reason: t('Upgrade eligibility is unavailable.') };
   } else if (
@@ -71,12 +83,7 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   } else if (configuredVersionQuery.isError || catalogQuery.isError) {
     action = { kind: 'blocked', reason: t('Could not load upgrade options.') };
   } else {
-    choices = resolveClusterUpgradeChoices(
-      cluster,
-      configuredVersion,
-      catalogQuery.data?.items ?? [],
-      t,
-    );
+    choices = resolveClusterUpgradeChoices(configuredVersion, catalogQuery.data?.items ?? [], t);
     action = choices.blockedReason
       ? { kind: 'blocked', reason: choices.blockedReason }
       : { kind: 'available' };
@@ -87,7 +94,9 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
       ? action.reason
       : action.kind === 'loading'
         ? t('Checking upgrade options')
-        : undefined;
+        : action.kind === 'in-progress'
+          ? latestUpgrade?.message
+          : undefined;
 
   return (
     <>
@@ -103,7 +112,7 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
           </FlexItem>
         ) : action.kind === 'in-progress' ? (
           <FlexItem>
-            <Label color="blue" id={reasonId}>
+            <Label color="blue" id={unavailableReason ? undefined : reasonId}>
               {t('Upgrade in progress')}
             </Label>
           </FlexItem>

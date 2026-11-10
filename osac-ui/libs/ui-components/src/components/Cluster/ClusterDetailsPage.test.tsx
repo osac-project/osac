@@ -72,7 +72,7 @@ const renderPage = (
   );
 
 describe('ClusterDetailsPage upgrade availability', () => {
-  it('offers the upgrade after resolving the configured version and observed components', async () => {
+  it('offers the upgrade after resolving the configured version and catalog targets', async () => {
     renderPage(readyCluster, [currentVersion, targetVersion]);
 
     await waitFor(() =>
@@ -80,23 +80,6 @@ describe('ClusterDetailsPage upgrade availability', () => {
     );
     expect(screen.getByText('Upgrade available')).toBeInTheDocument();
     expect(screen.getByText('4.17.0')).toBeInTheDocument();
-  });
-
-  it('explains why a provisioning cluster cannot upgrade yet', async () => {
-    const provisioning = clone(ClusterSchema, readyCluster);
-    if (!provisioning.status) {
-      throw new Error('The cluster fixture needs status');
-    }
-    provisioning.status.state = ClusterState.PROGRESSING;
-    provisioning.status.observedVersion = '';
-    provisioning.status.nodeSets.workers.observedVersion = '';
-    renderPage(provisioning, [currentVersion, targetVersion]);
-
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-        'The current control plane version is not available yet.',
-      ),
-    );
   });
 
   it.each([ClusterUpgradeState.PENDING, ClusterUpgradeState.PROGRESSING])(
@@ -113,11 +96,15 @@ describe('ClusterDetailsPage upgrade availability', () => {
           state,
           sourceVersion: '4.17.0',
           targetVersion: '4.18.0',
+          message: 'Upgrade accepted and running',
         }),
       ];
       renderPage(upgrading, [currentVersion, targetVersion]);
 
       await waitFor(() => expect(screen.getByText('Upgrade in progress')).toBeInTheDocument());
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
+        'Upgrade accepted and running',
+      );
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
     },
   );
@@ -217,7 +204,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     );
   });
 
-  it('disables an open dialog when a refreshed cluster is no longer converged', async () => {
+  it('disables an open dialog when the latest status reports an upgrade in progress', async () => {
     let returnedCluster = clone(ClusterSchema, readyCluster);
     let updateCalls = 0;
     const { user } = renderPage(readyCluster, [currentVersion, targetVersion], {
@@ -241,7 +228,12 @@ describe('ClusterDetailsPage upgrade availability', () => {
     if (!returnedCluster.status) {
       throw new Error('The cluster fixture needs status');
     }
-    returnedCluster.status.observedVersion = '4.16.0';
+    returnedCluster.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        state: ClusterUpgradeState.PENDING,
+        message: 'Waiting for the control plane',
+      }),
+    ];
     await user.click(screen.getByText('Refresh cluster'));
 
     await waitFor(() =>
@@ -250,7 +242,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     expect(updateCalls).toBe(0);
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-      'The control plane is at 4.16.0; wait for 4.17.0.',
+      'Waiting for the control plane',
     );
   });
 
@@ -275,6 +267,12 @@ describe('ClusterDetailsPage upgrade availability', () => {
           project: 'project-a',
         });
         returnedCluster.status.state = ClusterState.PROGRESSING;
+        returnedCluster.status.upgradeHistory = [
+          create(ClusterUpgradeHistoryEntrySchema, {
+            state: ClusterUpgradeState.PENDING,
+            message: 'Waiting for the control plane',
+          }),
+        ];
         return { object: returnedCluster };
       },
     });
@@ -294,7 +292,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     await waitFor(() => expect(getCalls).toBeGreaterThan(1));
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-        'The control plane is at 4.17.0; wait for 4.18.0.',
+        'Waiting for the control plane',
       ),
     );
     expect(screen.queryByRole('dialog', { name: 'Upgrade cluster' })).not.toBeInTheDocument();

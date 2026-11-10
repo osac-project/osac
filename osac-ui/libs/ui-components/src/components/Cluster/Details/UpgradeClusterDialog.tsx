@@ -19,10 +19,11 @@ import { type ClusterVersion, Clusters } from '@osac/types';
 
 import { useUpdateResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { getApiErrorMessage } from '../../../utils/error';
+import { getErrorMessage } from '../../../utils/error';
 import { CheckboxField } from '../../Form/CheckboxField';
 import OsacForm from '../../Form/OsacForm';
 import { SelectField } from '../../Form/SelectField';
+import ExternalLink from '../../Primitives/ExternalLink';
 import { isDeprecatedVersion, versionDisplayName } from '../CreateWizard/versionUtils';
 
 export interface UpgradeClusterDialogProps {
@@ -61,17 +62,18 @@ const UpgradeClusterDialog = ({
     };
   });
 
-  const handleSubmit = async ({ targetVersionId, acknowledgeDowntime }: FormValues) => {
-    if (
-      !eligibleVersions.some((version) => version.id === targetVersionId) ||
-      (requiresDowntimeAcknowledgement && !acknowledgeDowntime)
-    ) {
+  const canSubmit = ({ targetVersionId, acknowledgeDowntime }: FormValues) =>
+    eligibleVersions.some((version) => version.id === targetVersionId) &&
+    (!requiresDowntimeAcknowledgement || acknowledgeDowntime);
+
+  const handleSubmit = async (values: FormValues) => {
+    if (!canSubmit(values)) {
       return;
     }
     updateCluster.reset();
     try {
       await updateCluster.mutateAsync({
-        object: { id: clusterId, spec: { version: { id: targetVersionId } } },
+        object: { id: clusterId, spec: { version: { id: values.targetVersionId } } },
         updateMask: { paths: ['spec.version'] },
       });
       onClose();
@@ -87,16 +89,11 @@ const UpgradeClusterDialog = ({
       onSubmit={handleSubmit}
     >
       {({ submitForm, isSubmitting, values }) => {
-        const pending = isSubmitting;
-        const selectedTargetExists = eligibleVersions.some(
-          (version) => version.id === values.targetVersionId,
-        );
-
         return (
           <Modal
             variant="small"
             isOpen
-            onClose={pending ? undefined : onClose}
+            onClose={isSubmitting ? undefined : onClose}
             aria-labelledby="upgrade-cluster-dialog-title"
           >
             <ModalHeader title={t('Upgrade cluster')} labelId="upgrade-cluster-dialog-title" />
@@ -114,7 +111,7 @@ const UpgradeClusterDialog = ({
                   fieldId="upgrade-cluster-target-version"
                   options={options}
                   isRequired
-                  isDisabled={pending || eligibleVersions.length === 0}
+                  isDisabled={isSubmitting || eligibleVersions.length === 0}
                   placeholder={t('Select a target version')}
                   helperText={t('Choose a target version to continue.')}
                   popperProps={{ appendTo: 'inline' }}
@@ -133,7 +130,7 @@ const UpgradeClusterDialog = ({
                       label={t('I understand this may cause downtime')}
                       fieldId="upgrade-cluster-downtime-acknowledgement"
                       isRequired
-                      isDisabled={pending}
+                      isDisabled={isSubmitting}
                     />
                   </>
                 )}
@@ -146,16 +143,9 @@ const UpgradeClusterDialog = ({
                   'The control plane upgrades first. Node sets automatically follow to the same version.',
                 )}
               </Content>
-              <Button
-                component="a"
-                variant="link"
-                isInline
-                href="https://access.redhat.com/labs/ocpupgradegraph/update_path/"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
+              <ExternalLink href="https://access.redhat.com/labs/ocpupgradegraph/update_path/">
                 {t('Check upgrade path and risks')}
-              </Button>
+              </ExternalLink>
               <Alert
                 variant="warning"
                 isInline
@@ -168,23 +158,19 @@ const UpgradeClusterDialog = ({
                   role="alert"
                   title={t('Could not request the cluster upgrade')}
                 >
-                  {getApiErrorMessage(updateCluster.error, t)}
+                  {getErrorMessage(updateCluster.error, t)}
                 </Alert>
               ) : null}
             </ModalBody>
             <ModalFooter>
-              <Button variant="link" onClick={onClose} isDisabled={pending}>
+              <Button variant="link" onClick={onClose} isDisabled={isSubmitting}>
                 {t('Cancel')}
               </Button>
               <Button
                 variant="primary"
                 onClick={submitForm}
-                isDisabled={
-                  pending ||
-                  !selectedTargetExists ||
-                  (requiresDowntimeAcknowledgement && !values.acknowledgeDowntime)
-                }
-                isLoading={pending}
+                isDisabled={isSubmitting || !canSubmit(values)}
+                isLoading={isSubmitting}
               >
                 {t('Upgrade cluster')}
               </Button>

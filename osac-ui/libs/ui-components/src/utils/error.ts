@@ -24,7 +24,16 @@ export const parseHttpErrorBody = (body: string): string | undefined => {
   }
 };
 
-export const getErrorMessage = (error: unknown): string => {
+export const getErrorMessage = (error: unknown, t?: TFunction): string => {
+  if (t && error instanceof ConnectError) {
+    if (error.code === Code.PermissionDenied) {
+      return t('You are not authorized to access this resource.');
+    }
+    if (error.code === Code.Internal) {
+      return t('Unexpected error occurred');
+    }
+  }
+
   let errMsg = '';
 
   if (error instanceof Error) {
@@ -41,23 +50,4 @@ export const getErrorMessage = (error: unknown): string => {
     errMsg = error.toString();
   }
   return errMsg || 'Unexpected error';
-};
-
-/** Map fulfillment API errors to translated user-facing messages. */
-export const getApiErrorMessage = (error: unknown, t: TFunction): string => {
-  if (!(error instanceof ConnectError)) {
-    return getErrorMessage(error);
-  }
-
-  switch (error.code) {
-    case Code.InvalidArgument:
-    case Code.AlreadyExists:
-      return getErrorMessage(error);
-    case Code.PermissionDenied:
-      return t('You are not authorized to access this resource.');
-    case Code.Internal:
-      return t('Unexpected error occurred');
-    default:
-      return getErrorMessage(error);
-  }
 };

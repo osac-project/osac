@@ -88,7 +88,10 @@ describe('ClusterConfigurationCard', () => {
       throw new Error('The cluster fixture needs status');
     }
     upgrading.status.upgradeHistory = [
-      create(ClusterUpgradeHistoryEntrySchema, { state: ClusterUpgradeState.PROGRESSING }),
+      create(ClusterUpgradeHistoryEntrySchema, {
+        state: ClusterUpgradeState.PROGRESSING,
+        message: 'Updating the control plane',
+      }),
     ];
     renderWithProviders(<ClusterConfigurationCard cluster={upgrading} />);
 
@@ -97,7 +100,49 @@ describe('ClusterConfigurationCard', () => {
     expect(progress.closest('.pf-v6-c-label')).toHaveClass('pf-m-blue');
     const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
     expect(upgradeButton).toBeDisabled();
-    expect(upgradeButton).toHaveAccessibleDescription('Upgrade in progress');
+    expect(screen.getByText('Updating the control plane')).toBeInTheDocument();
+    expect(upgradeButton).toHaveAccessibleDescription('Updating the control plane');
+  });
+
+  it('uses only the latest upgrade history entry', async () => {
+    const upgraded = clone(ClusterSchema, cluster);
+    if (!upgraded.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    upgraded.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, { state: ClusterUpgradeState.SUCCEEDED }),
+      create(ClusterUpgradeHistoryEntrySchema, {
+        state: ClusterUpgradeState.PROGRESSING,
+        message: 'An older upgrade is still running',
+      }),
+    ];
+    renderWithProviders(<ClusterConfigurationCard cluster={upgraded} />, {
+      apiFixtures: { clusterVersions: [currentVersion, targetVersion] },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
+    );
+    expect(screen.queryByText('An older upgrade is still running')).not.toBeInTheDocument();
+  });
+
+  it('shows the latest timed-out upgrade message without offering another upgrade', () => {
+    const timedOut = clone(ClusterSchema, cluster);
+    if (!timedOut.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    timedOut.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        state: ClusterUpgradeState.TIMED_OUT,
+        message: 'Control plane upgrade timed out',
+      }),
+    ];
+    renderWithProviders(<ClusterConfigurationCard cluster={timedOut} />);
+
+    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
+      'Control plane upgrade timed out',
+    );
   });
 
   it('uses the observed worker count for the downtime warning', async () => {
@@ -125,26 +170,21 @@ describe('ClusterConfigurationCard', () => {
     ).toBeRequired();
   });
 
-  it('names the node set and versions when observations have not converged', async () => {
-    const laggingWorker = clone(ClusterSchema, cluster);
-    if (!laggingWorker.spec || !laggingWorker.status) {
-      throw new Error('The cluster fixture needs spec and status');
-    }
-    laggingWorker.spec.nodeSets.workers = create(ClusterNodeSetSchema, { size: 1 });
-    laggingWorker.status.nodeSets.workers = create(ClusterNodeSetSchema, {
-      size: 1,
-      observedVersion: '4.16.0',
-    });
-    renderWithProviders(<ClusterConfigurationCard cluster={laggingWorker} />, {
-      apiFixtures: { clusterVersions: [currentVersion, targetVersion] },
-    });
+  it.each([ClusterState.FAILED, ClusterState.DELETING, ClusterState.DELETE_FAILED])(
+    'hides upgrade controls for cluster state %s',
+    (state) => {
+      const unavailable = clone(ClusterSchema, cluster);
+      if (!unavailable.status) {
+        throw new Error('The cluster fixture needs status');
+      }
+      unavailable.status.state = state;
+      renderWithProviders(<ClusterConfigurationCard cluster={unavailable} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-        'Node set workers is at 4.16.0; wait for 4.17.0.',
-      ),
-    );
-  });
+      expect(screen.getByText('4.17.0')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+      expect(screen.queryByText('No upgrade available')).not.toBeInTheDocument();
+    },
+  );
 
   it('blocks an upgrade when a version refetch fails after a successful fetch', async () => {
     let getCalls = 0;

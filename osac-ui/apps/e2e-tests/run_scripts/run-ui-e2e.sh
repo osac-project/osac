@@ -219,7 +219,13 @@ if { [[ -z "$OSAC_UI_BASE_URL" ]] || placeholder_url "$OSAC_UI_BASE_URL"; } &&
   command -v oc >/dev/null 2>&1 && [[ -n "$KUBECONFIG_PATH" ]]; then
   route_host=$(KUBECONFIG="$KUBECONFIG_PATH" oc --request-timeout=10s \
     -n osac get route osac-ui -o jsonpath='{.spec.host}' 2>/dev/null || true)
-  [[ -n "$route_host" ]] && OSAC_UI_BASE_URL="https://${route_host}"
+  if [[ -n "$route_host" ]]; then
+    OSAC_UI_BASE_URL="https://${route_host}"
+  elif timeout 10s env KUBECONFIG="$KUBECONFIG_PATH" \
+    oc --request-timeout=5s get --raw=/version >/dev/null 2>&1; then
+    fail "Kubernetes is reachable, but namespace osac has no osac-ui route. "\
+      "Deploy OSAC before running UI E2E tests."
+  fi
 fi
 
 [[ -n "$OSAC_UI_BASE_URL" ]] && ! placeholder_url "$OSAC_UI_BASE_URL" ||

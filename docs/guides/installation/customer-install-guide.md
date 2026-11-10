@@ -204,9 +204,13 @@ no networking job: networking resources become `READY` without connectivity,
 and workloads use the fallback of their service. You set it at the first
 install, and it never changes.
 
-In this release, provider networking is supported for VMaaS only. CaaS and
-BMaaS run with provider networking disabled; provider networking for them
-comes in a later release.
+Provider networking is supported for VMaaS and for the CaaS endpoint lifecycle.
+CaaS endpoint reservation and managed endpoint DNS require
+`global.networking.provisioningEnabled: true`. With it disabled, ClusterOrder
+creates no endpoint reservation, automatic ExternalIP resources or attachments,
+or endpoint DNS; configure CaaS reachability and DNS separately. BMaaS-only
+installations may still run with provider networking disabled; BMaaS-specific
+provider networking remains unsupported.
 
 The installer also creates an admission policy. It rejects any create, update
 (also of `status`), or delete of an OSAC networking custom resource
@@ -422,21 +426,21 @@ Required for CaaS:
 - **The CaaS prerequisites** that OSAC does not create: the management
   publication on the hub (MetalLB and routes), the BMaaS provisioning network,
   and, with `dns.route53.dns`, the public DNS zone `DNS_ZONE`.
-- **Provider networking disabled.** In this release, CaaS runs with provider
-  networking disabled, so you also need routes, for every Cluster, from where
-  clients connect to the management API VIP and to the guest routers on the
-  workers; and a provisioning network that carries each Cluster's own traffic
-  (between its workers, from the workers to the management endpoints, and
-  inbound to its routers and API) despite the BMaaS host-isolation filters.
-  OSAC does not check these. With `dns.route53.dns`, OSAC publishes `api` and
-  `api-int` to the management API VIP and `*.apps` to one worker's address
-  ([Section 6.2](#62-installing-osac-for-caas)); with `dns.noop.dns`, you
-  create these records ([Section 8.4](#84-installing-without-dns-management)).
-- **Coming with CaaS networking in a later release:** provider routes and DNS
-  from the NATGateway ExternalIPs to the management endpoints, and the hosted
-  cluster's OAuth `Route` host resolvable and reachable from wherever
-  ExternalIPs are reachable. Each hosted cluster will also reach its operator
-  catalog through its NATGateway, to install MetalLB.
+- **CaaS endpoint networking.** Set
+  `global.networking.provisioningEnabled: true` for the managed endpoint
+  lifecycle. The NetworkClass address plan needs a non-empty `lbVip` share, and
+  automatic API and ingress ExternalIP attachments need a `READY`
+  ExternalIPPool. The ClusterOrder controller reserves the guest ingress VIP,
+  waits for the automatic endpoint attachments, and then publishes DNS. With
+  provider networking disabled, it creates no ingress reservation, automatic
+  ExternalIP resources or attachments, or endpoint DNS. In that mode, configure
+  the routes and DNS records yourself.
+- **Netris CaaS worker attachments.** If Netris is the Fabric Manager and
+  workers use physical network attachments, set `NETRIS_BM_PROVISIONING_VNET`
+  in `aap.instanceGroups.networkFulfillment.config` to the existing V-Net
+  carrying their provisioning ports. The physical apply and cleanup tasks
+  require this setting; if it is missing, those tasks report a retryable
+  configuration error. See [Section 4.4.3](#443-setting-the-networking-helm-values).
 
 Required for networking, for every service:
 
@@ -505,8 +509,9 @@ networking resources exist is not supported (see
   MetalLB or another `LoadBalancer`-class implementation; a DNS backend; the
   CaaS prerequisites in
   [Section 2.4](#24-credentials-and-external-services); and
-  `aap.instanceGroups.clusterFulfillment` configuration. In this release, CaaS
-  runs with provider networking disabled.
+  `aap.instanceGroups.clusterFulfillment` configuration. The managed endpoint
+  lifecycle requires provider networking enabled, a non-empty `lbVip` address
+  share, and a `READY` ExternalIPPool for automatic API and ingress attachments.
   Hosted control planes provision etcd persistent volume claims from the
   hub's default storage class (see [Section 2.1](#21-cluster-and-access)).
   For more information,
@@ -516,8 +521,10 @@ networking resources exist is not supported (see
   `Provisioning` custom resource with `spec.watchAllNamespaces: true` when
   either `bmf.metal3.enabled` or `bmf.netbox.enabled` is `true`, and the
   BMaaS prerequisites in
-  [Section 2.4](#24-credentials-and-external-services). In this release,
-  BMaaS runs with provider networking disabled.
+  [Section 2.4](#24-credentials-and-external-services). A BMaaS-only
+  installation may run with provider networking disabled. When BMaaS is
+  installed with CaaS, use the CaaS networking setting from
+  [Section 6.2](#62-installing-osac-for-caas).
 
 ### 2.6 EVPN host networking for VMaaS
 
@@ -594,8 +601,9 @@ With the Netris Fabric Manager, also note:
   rule is repaired.
 - A FabricDomain is a Netris Server Cluster `osac-fd-<id>`. Its template is
   the one distinct `server_cluster_template_id` in `NETRIS_RESOURCE_CLASS_MAP`
-  (known limitation: two different templates fail as final). Reserving a
-  cluster ingress address is not supported on Netris: the task fails as final.
+  (known limitation: two different templates fail as final). CaaS ingress
+  addresses are reserved from the Subnet's recorded `lb_vip_ipv4_cidrs` range;
+  configure a non-empty `lbVip` share in the Subnet address plan for CaaS.
 - ICMP SecurityGroup rules need the registration capability
   `security_group_icmp`. Netris declares it, although its SecurityGroup tasks
   are no-ops. `cudn_evpn` does not, because a NetworkPolicy cannot match ICMP,
@@ -996,12 +1004,14 @@ registration and runs no networking job. You need no registration, no EVPN
 host networking, and no provider image, settings, or secrets. The
 `NetworkClass` becomes `READY` without managers.
 
-In this release, provider networking is supported for VMaaS only. When you
-enable CaaS or BMaaS, set `provisioningEnabled: false`; provider networking for
-them comes in a later release. `provisioningEnabled` never changes after the
-first install, and enabling BMaaS or CaaS after networking resources exist is
-not supported (Table 4.2). So adding CaaS or BMaaS to a VMaaS deployment with
-provider networking means reinstalling with provider networking disabled.
+Provider networking supports VMaaS and the CaaS endpoint lifecycle. Set
+`provisioningEnabled: true` for CaaS endpoint reservation, automatic ExternalIP
+attachments, and managed endpoint DNS. A BMaaS-only installation may use
+`provisioningEnabled: false`; BMaaS-specific provider networking is not
+supported. This value never changes after the first install, and enabling
+BMaaS or CaaS after networking resources exist is not supported (Table 4.2).
+Adding CaaS to an installation with provider networking disabled requires a
+reinstall with it enabled.
 
 The provider's side (building, verifying, and handing over the Fabric Manager)
 is in the [Fabric Manager Guide](../networking/customer-fabric-manager-guide.md). The
@@ -1206,17 +1216,23 @@ retryable with "Missing or malformed setting in network-fulfillment-ig".
 | `NETRIS_USERNAME` | `config` | Every task. |
 | `NETRIS_PASSWORD` | `secret` | Every task. |
 | `NETRIS_SITE_ID`, `NETRIS_TENANT_ID` | `config` | Every task. Positive integers. |
-| `NETRIS_MGMT_VPC_ID` | `config` | NATGateways and ExternalIP attach and detach. A positive integer. |
+| `NETRIS_MGMT_VPC_ID` | `config` | NATGateways, ExternalIP attach and detach, and `provider_management` destinations such as the CaaS API endpoint. A positive integer. |
 | `NETRIS_VALIDATE_CERTS` | `config` | Optional. `"true"` (the default) or `"false"`; the chart rejects other values. |
-| `NETRIS_CA_PATH` | `config` | Optional. The path of a CA file inside the job pod. |
+| `NETRIS_CA_CONFIGMAP` | `config` | Optional. Name of an AAP-namespace ConfigMap with `bundle.pem`. The networking job mounts it read-only and sets `NETRIS_CA_PATH`. |
 | `NETRIS_PORT_SETTLE_SECONDS` | `config` | Optional. Default `15`. |
-| `NETRIS_BM_PROVISIONING_VNET`, `NETRIS_RESOURCE_CLASS_MAP` | `config` | BMaaS and FabricDomains only, so not used in this release: the provisioning V-Net name, and a non-empty JSON object that maps each resource class to its Netris server cluster template. |
+| `NETRIS_BM_PROVISIONING_VNET` | `config` | Required for CaaS workers with physical attachments, BMaaS, and FabricDomains: the Netris provisioning V-Net name. |
+| `NETRIS_RESOURCE_CLASS_MAP` | `config` | BMaaS and FabricDomains only, so not used in this release: a non-empty JSON object that maps each resource class to its Netris server cluster template. |
 
-The networking jobs mount no CA for Netris. `NETRIS_CA_CONFIGMAP` applies only
-to the CaaS cluster-fulfillment jobs. With a Netris controller certificate from
-a private CA, either set `NETRIS_VALIDATE_CERTS: "false"`, or build an image on
-the `osac-aap` image with the CA in it, set it as `eeImage`, and set
-`NETRIS_CA_PATH` to the CA's path in the image. For every key, see
+When `NETRIS_CA_CONFIGMAP` is set, the networking operations job mounts its
+`bundle.pem` read-only at `/etc/netris/ca/bundle.pem`. With a Netris controller
+certificate from a private CA, create that ConfigMap in the AAP namespace and
+set `NETRIS_CA_CONFIGMAP`. When installer validation is enabled, the ConfigMap
+must be immutable and contain a non-empty, parseable `bundle.pem`; follow the
+[Netris CA ConfigMap creation procedure](../../../osac-installer/docs/network-backend.md#netris-ca-configmap-lifecycle).
+Certificate verification is controlled separately by `NETRIS_VALIDATE_CERTS`,
+which defaults to `"true"`; the CA ConfigMap does not override an explicit
+`"false"` value. For private-CA configurations that require verification, keep
+`NETRIS_VALIDATE_CERTS` set to `"true"`. For every key, see
 [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md).
 
 Keep AAP job records at least as long as networking resources exist: OSAC
@@ -1242,7 +1258,7 @@ be updated. Restore the earlier value and roll out again.
 | `networkClass.addressPlan` | Never changes. The installer compares the plan in force with the stored one at every rollout. With `addressPlan` set, that is your plan. Unset, the installer derives it again from the enabled services and `k8sManager` ([Table 4.1](#table-41-default-address-plan)), so enabling or disabling CaaS or BMaaS changes it. To change it, see [Section 4.4.8](#448-replacing-the-networkclass). To disable a service without replacing the `NetworkClass`, first set `addressPlan` to the stored plan. | The installer: "NetworkClass spec.address_plan cannot change after installation; see Replacing the NetworkClass". A plan that breaks a rule fails earlier with the rule's message, for example "global.networking.networkClass.addressPlan.lbVip must be greater than 0 when CaaS is enabled". |
 | `excludedIpv4Cidrs` | You can add ranges that overlap none of these: the default `virtualNetworkIPv4CIDR`, a VirtualNetwork, or an ExternalIPPool. | The fulfillment service refuses to start: "excludedIpv4Cidrs range <CIDR> overlaps <kind> <ID or CIDR>". |
 | Node ASN, VTEP range and VNI range (`evpn.bgp.asn` and `evpn.nodes[].asn`, `evpn.vtepCIDR`, the Fabric Manager's VNI setting; none for Netris) | Fixed. To change them, reinstall. You can add or remove VMaaS nodes ([Section 2.6](#26-evpn-host-networking-for-vmaas)). | Nothing: agree on both sides before the first install ([Section 4.4.2](#442-prerequisites-for-provider-networking)). |
-| CaaS `EXTERNAL_ACCESS_BASE_DOMAIN`, `DNS_ZONE`, and `DNS_CLASS` | Do not change them while any Cluster exists. | Nothing in this release. Coming with CaaS networking in a later release: the installer checks it. |
+| CaaS `EXTERNAL_ACCESS_BASE_DOMAIN`, `HOSTED_CLUSTER_BASE_DOMAIN`, `DNS_ZONE`, and `DNS_CLASS` | Do not change them while any Cluster exists. Keep each in-use HostedCluster base domain in `EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS` until all Clusters using it are deleted. | The endpoint jobs reject unsupported publication domains; removing a published domain blocks DNS cleanup and holds its automatic endpoint IPs until the domain is supported again. |
 | OSAC release | Patch releases (x.y.z) of the same minor release roll out in place. Another minor release, up or down, does not: delete all workloads and networking resources, or reinstall. | While any VirtualNetwork, ExternalIPPool, or workload exists, the fulfillment service refuses to start: "in-place upgrade or downgrade between minor releases is not supported; delete all workloads and networking resources or reinstall". |
 
 The installer's checks run in the post-installation and post-upgrade Job
@@ -1370,7 +1386,9 @@ Read the `NetworkClass` through the private API of the Fulfillment Service.
 ExternalIPs and NATGateways, including each tenant's default NATGateway
 ExternalIP `default-nat`, take their addresses from an ExternalIPPool. Create
 the pools after the `NetworkClass` is `READY` and before the first Tenant:
-tenant onboarding waits for a `READY` pool.
+tenant onboarding waits for a `READY` pool. Every pool is shared by all
+tenants: OSAC places it in the `shared` tenant and rejects a pool that names
+another tenant with `PERMISSION_DENIED`.
 
 **Procedure**
 
@@ -1390,8 +1408,10 @@ tenant onboarding waits for a `READY` pool.
   VirtualNetwork, and no Cluster pod or service CIDR. Size the pools for one
   `default-nat` address per Tenant, plus one address per ExternalIP; a Tenant
   whose onboarding finds every pool full gets `DefaultNetworkingReady`
-  `False`. Coming with CaaS networking in a later release: Cluster
-  ExternalIPs, for a Cluster's API and ingress.
+  `False`. A CaaS Cluster requesting automatic external access needs two
+  available addresses in the same `READY` pool at create time, one each for the
+  API and ingress endpoints. Capacity split across pools does not meet this
+  requirement.
 
 **Verification**
 
@@ -1554,6 +1574,8 @@ configured by the `evpn` values of the phase-1 releases
 | `service.kafka.connection` | schema | ConfigMap/Secret mappings for the required `brokers`, `user`, and `password` parameters. Supply resources in the OSAC namespace. | `fulfillment-service-kafka` Secret |
 | `metering.database.connection` | schema | Metering service database connection. The metering service is always deployed: billing is not optional, and the event publisher writes usage events unconditionally. Requires Strimzi-managed Kafka, a database connection, and `global.osacDeploymentId` (see [Table 5.1](#table-51-service-enablement-my-valuesyaml) and [Kafka configuration](kafka-configuration.md#metering)). | Secret-based default |
 | `metering.heartbeat.interval`, `metering.m360Adapter.enabled`, `metering.m360Adapter.m360.apiUrl`, `metering.m360Adapter.m360.apiKeySecret` | subchart | Heartbeat round interval and the Monetize360 billing adapter. | Not applicable |
+| `metering.readers[]` | schema | Outside systems allowed to read every tenant's heartbeat topics. Each entry has a unique `name` and no tenant; the chart renders a read-only Strimzi `KafkaUser` with a read and describe ACL on the `osac.metering.heartbeat.` topic prefix, deny ACLs on the `system` and `shared` heartbeat topics, and a consumer group named after the reader. The prefix covers tenants created later, so the entry does not change when a tenant is onboarded. Add or remove entries to grant or revoke; no OSAC service restarts. | `[]` |
+| `kafka.exporter.enabled`, `kafka.exporter.lagThreshold` | `osac-infra` | Enables Strimzi's Kafka Exporter, its PodMonitor, and the `MeteringConsumerLag` alert. The alert covers every consumer group reading a heartbeat topic. Strimzi adds the exporter to the broker's super users, so the exporter stays off unless you turn it on for lag monitoring. `lagThreshold` is the number of records a group may fall behind. | `false` and `15` |
 | `validation.enabled` | schema | Runs the install preflight. When `false`, every check is skipped and recorded as skipped in the report. | `true` |
 | `preflight.mode` | schema | `enforce` stops the installation on a blocking problem. `report` records problems without stopping. `strict` also stops on warnings. See [Section 11.1](#111-the-install-preflight-stops-the-installation). | `enforce` |
 | `preflight.skip.<check_id>` | schema | Skips one preflight check. The value is the reason, which the report records. | `{}` |
@@ -1676,10 +1698,15 @@ the cluster. Every workflow also needs the networking values and steps of
 ### 6.2 Installing OSAC for CaaS
 
 The AWS Route 53 DNS backend is the default; it's independent of the Fabric
-Manager. CaaS workers are bare-metal instances, so CaaS also needs BMaaS. In
-this release, CaaS runs with provider networking disabled. Coming with CaaS
-networking in a later release: CaaS with provider networking and a Fabric
-Manager such as Netris.
+Manager. CaaS workers are bare-metal instances, so CaaS also needs BMaaS. The
+managed endpoint lifecycle requires provider networking enabled and a Cluster
+template that advertises the `supports_automatic_caas_endpoints` capability.
+For such templates, you can omit `auto_external_ip_attachment`; Fulfillment
+enables it automatically. OSAC reserves the guest ingress VIP, allocates API
+and ingress ExternalIPs, creates their attachments, and publishes endpoint DNS
+after they are ready. The Subnet address plan must have a non-empty `lbVip`
+share. With provider networking disabled, these endpoint jobs do not run, so
+configure endpoint routes and DNS outside OSAC.
 
 **Prerequisites**
 
@@ -1696,7 +1723,7 @@ Manager such as Netris.
   ([Section 8.4](#84-installing-without-dns-management)).
 - The CaaS prerequisites in
   [Section 2.4](#24-credentials-and-external-services), including those for
-  provider networking disabled, are in place.
+  provider networking, are in place.
 - Every BareMetalInstanceType used for workers has a network port with role
   `fabric` ([Section 6.3](#63-installing-osac-for-bmaas)).
 
@@ -1713,8 +1740,8 @@ Manager such as Netris.
    global:
      services: { caas: { enabled: true }, vmaas: { enabled: false }, bmaas: { enabled: true }, maas: { enabled: false } }
      networking:
-       provisioningEnabled: false   # fixed at the first install
-       fabricManager: acme_fabric   # required also with provider networking disabled
+       provisioningEnabled: true    # required for the CaaS endpoint lifecycle
+       fabricManager: acme_fabric
        k8sManager: ""               # set cudn_evpn when VMaaS is or will be enabled too
    clusterVersions:
      enabled: true
@@ -1742,26 +1769,33 @@ Manager such as Netris.
            HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: "HighlyAvailable"
    ```
 
-   - OSAC publishes each cluster's `api` and `api-int` records, to the
-     management API VIP, and `*.apps`, to one worker's address, in the public
-     zone `DNS_ZONE`, which defaults to `EXTERNAL_ACCESS_BASE_DOMAIN`. The job
-     then waits up to 30 minutes for them to resolve.
+   - After the automatic API ExternalIP attachment is ready, OSAC publishes
+     `api` and `api-int` to the API ExternalIP. After ingress is configured and
+     its ExternalIP attachment is ready, OSAC publishes `*.apps` to the ingress
+     ExternalIP. Both use `DNS_ZONE`, which defaults to
+     `EXTERNAL_ACCESS_BASE_DOMAIN`. The endpoint jobs wait for the records to
+     resolve.
    - `EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS` must contain
-     `EXTERNAL_ACCESS_BASE_DOMAIN`. Otherwise OSAC creates no records and does
-     not wait for them, without an error.
-   - Set `HOSTED_CLUSTER_BASE_DOMAIN` to the same value as
-     `EXTERNAL_ACCESS_BASE_DOMAIN`. The hosted cluster takes its names from the
-     first and the records from the second, so different values give records
-     that do not match the cluster. Unset, `HOSTED_CLUSTER_BASE_DOMAIN`
-     defaults to `hosted.` followed by the hub's apps domain without its
-     `apps.` prefix, so set it.
-   - Do not change `EXTERNAL_ACCESS_BASE_DOMAIN`, `DNS_ZONE`, or `DNS_CLASS`
-     while any Cluster exists. OSAC does not check this in this release.
-   - Add `networkClass.defaults` from
-     [Section 4.4.3](#443-setting-the-networking-helm-values), and the `bmf`
-     values from [Section 6.3](#63-installing-osac-for-bmaas). With provider
-     networking disabled, you need no image, Fabric Manager settings, or
-     registration.
+     `HOSTED_CLUSTER_BASE_DOMAIN`. The endpoint jobs use this value for the
+     HostedCluster API and ingress record names and reject an unsupported value
+     before contacting the DNS provider.
+   - `DNS_ZONE` defaults to `EXTERNAL_ACCESS_BASE_DOMAIN`; configure it to
+     contain the HostedCluster record names. In the common case, set
+     `HOSTED_CLUSTER_BASE_DOMAIN` and `EXTERNAL_ACCESS_BASE_DOMAIN` to the same
+     value. Unset, `HOSTED_CLUSTER_BASE_DOMAIN` defaults to `hosted.` followed
+     by the hub's apps domain without its `apps.` prefix, so set it.
+   - Do not change `EXTERNAL_ACCESS_BASE_DOMAIN`, `HOSTED_CLUSTER_BASE_DOMAIN`,
+     `DNS_ZONE`, or `DNS_CLASS` while any Cluster exists. Keep each in-use
+     HostedCluster base domain in `EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS` until
+     all Clusters using it are deleted. Removing a domain earlier makes DNS
+     cleanup retry and holds the automatic endpoint IPs until the domain is
+     supported again.
+   - Add `networkClass.defaults` and the `bmf` values from
+     [Section 6.3](#63-installing-osac-for-bmaas). Confirm the derived address
+     plan has a non-empty `lbVip` share ([Section 4.4.1](#441-choosing-the-networking-settings),
+     [Table 4.1](#table-41-default-address-plan)).
+     With provider networking enabled, apply the Fabric Manager registration,
+     configure its settings, and set the execution-environment image.
 
 2. Put the AWS credentials in a separate values file that is excluded
    from version control:
@@ -1782,9 +1816,11 @@ Manager such as Netris.
    and
    [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md).
 
-4. Check the `NetworkClass`
-   ([Section 4.4.6](#446-checking-the-networkclass)). With provider networking
-   disabled, OSAC creates no ExternalIPs, so you create no ExternalIPPools.
+4. Check the `NetworkClass` and create a `READY` ExternalIPPool with at least
+   two available addresses in one pool before creating a Cluster with automatic
+   external access. See
+   [Sections 4.4.6](#446-checking-the-networkclass) and
+   [4.4.7](#447-creating-the-externalippools).
 
 **Verification**
 
@@ -1801,7 +1837,7 @@ Manager such as Netris.
 - The BMaaS prerequisites in
   [Section 2.4](#24-credentials-and-external-services) are in place.
 - Every BareMetalInstanceType has at least one network port with role
-  `fabric`, also with provider networking disabled. Every BareMetalInstance
+  `fabric`. Every BareMetalInstance
   and Cluster gets a default network attachment on the first `fabric` port,
   and without one, creating them fails with "has no fabric-role network port"
   or "has no network port with role 'fabric'". Use the port names of the
@@ -1809,9 +1845,9 @@ Manager such as Netris.
 
 **Procedure**
 
-1. In `my-values.yaml`, enable the BMaaS tier and the Metal3 backend. In this
-   release, BMaaS runs with provider networking disabled, so hosts stay on the
-   provisioning network and OSAC runs no networking job:
+1. In `my-values.yaml`, enable the BMaaS tier and the Metal3 backend. This
+   example is for a BMaaS-only installation, where provider networking stays
+   disabled and hosts stay on the provisioning network:
 
    ```yaml
    global:
@@ -1835,10 +1871,11 @@ Manager such as Netris.
    ```
 
    `fabricManager` is required even with provider networking disabled; you
-   apply no registration. The installer does not check that
-   `provisioningEnabled` is `false` with BMaaS or CaaS. With `true`, every
-   BareMetalInstance, and so every CaaS worker, fails at its network step in
-   this release.
+   apply no registration. This BMaaS-only sample is not the CaaS configuration:
+   CaaS uses the ClusterOrder endpoint lifecycle in
+   [Section 6.2](#62-installing-osac-for-caas), which requires the shared
+   `provisioningEnabled` setting to be `true`. The standalone BareMetalInstance
+   networking path remains unsupported with provider networking enabled.
    Setting `publishTemplates.enabled` to `false` is safe here
    because a BMaaS-only deployment does not consume templates
    published by this hook. Set `bmf.metal3.namespace` to the
@@ -2399,8 +2436,43 @@ Cluster exists.
        | grep -E 'DNS_CLASS|EXTERNAL_ACCESS|HOSTED_CLUSTER'
    ```
 
-4. Create these DNS records yourself; `dns.noop.dns` stops OSAC from managing
-   DNS, it does not create records for you:
+4. This manual DNS procedure requires provider networking enabled and
+   automatic API and ingress ExternalIPs. With provider networking disabled,
+   OSAC allocates no ExternalIPs; provision and manage endpoint addresses and
+   DNS outside this procedure.
+
+   Find the ClusterOrder name and endpoint addresses on the hub. Set the Cluster
+   ID from the Fulfillment Cluster record:
+
+   ```bash
+   CLUSTERS_JSON=$(osac get clusters --filter 'this.metadata.name == "my-cluster"' -o json) || exit 1
+   CLUSTER_COUNT=$(jq 'length' <<<"$CLUSTERS_JSON") || exit 1
+   if [ "$CLUSTER_COUNT" -ne 1 ]; then
+     echo "Expected one Cluster named my-cluster; scope the query by tenant and project." >&2
+     exit 1
+   fi
+   CLUSTER_ID=$(jq -r '.[0].id' <<<"$CLUSTERS_JSON") || exit 1
+   oc get clusterorders -A \
+     -l "osac.openshift.io/clusterorder-uuid=${CLUSTER_ID}" \
+     -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name
+   selector="osac.openshift.io/auto-created=true,osac.openshift.io/auto-created-kind=cluster"
+   selector="${selector},osac.openshift.io/auto-created-for=${CLUSTER_ID}"
+   for endpoint in api ingress; do
+     oc get externalips -A \
+       -l "${selector},osac.openshift.io/auto-created-endpoint=${endpoint}" \
+       -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,ADDRESS:.status.address
+   done
+   ```
+
+   Use the ClusterOrder `metadata.name` as `<cluster>` in the records below,
+   and each ExternalIP `status.address` for its matching endpoint. An empty
+   address means allocation is still pending; query again until it appears.
+
+   As soon as the API ExternalIP is allocated, create the API DNS records; do
+   not wait for the ingress attachment or a Ready guest node. `dns.noop.dns`
+   does not create or remove records, so point each record to its corresponding
+   ExternalIP address. Create the ingress record when its ExternalIP is
+   allocated:
 
    ```text
    api.<cluster>.<guest_domain>       -> API endpoint
@@ -2414,8 +2486,12 @@ Cluster exists.
    `default-router.apps.<cluster>.<guest_domain>` do not resolve from the AAP
    execution environment within 30 minutes.
 
-Do not change `DNS_CLASS`, `DNS_ZONE`, or `EXTERNAL_ACCESS_BASE_DOMAIN` while
-any Cluster exists (see
+   Before deleting the Cluster or its automatic ExternalIP attachments, remove
+   these manually managed records. The no-op DNS backend cannot confirm their
+   removal, and OSAC may release the ExternalIP after its cleanup job succeeds.
+
+Do not change `DNS_CLASS`, `DNS_ZONE`, `EXTERNAL_ACCESS_BASE_DOMAIN`, or
+`HOSTED_CLUSTER_BASE_DOMAIN` while any Cluster exists (see
 [Table 4.2](#table-42-settings-fixed-at-installation)).
 
 ### 8.5 Additional resources
@@ -2453,10 +2529,12 @@ any Cluster exists (see
   through `service.auth` and `service.idp`.
 - A single hub cluster.
 - Networking in a connected deployment, with one `NetworkClass`, IPv4 only.
-  Provider networking is supported for VMaaS only, and only with a Fabric
-  Manager that passes the networking conformance suite's `vm` profile against
-  this OSAC release. Until that suite is available, the provider's lab
-  verification stands in for it (see part 6 of the
+  Provider networking supports VMaaS and the standard CaaS endpoint lifecycle
+  only with a Fabric Manager that passes the networking conformance suite
+  profiles for each enabled service against this OSAC release. For CaaS, the
+  verification must include `reserve_cluster_ingress_ip` and
+  `release_cluster_ingress_ip`. Until the conformance suite covers those tasks,
+  the provider's lab verification stands in for it (see part 6 of the
   [Fabric Manager Guide](../networking/customer-fabric-manager-guide.md#6-verify-in-a-lab-and-go-live)).
   OSAC does not enforce this.
 
@@ -2487,8 +2565,8 @@ any Cluster exists (see
   on a separate workload cluster
   (`make prepare-remote-cluster ... EVPN_VALUES=...`), but OSAC provider
   networking with VMs on a separate cluster is not supported in this release.
-- Provider networking for CaaS and BMaaS. Coming with CaaS networking and
-  with BMaaS networking in a later release.
+- BMaaS-specific provider networking beyond the CaaS worker and endpoint flow
+  described in [Section 6.2](#62-installing-osac-for-caas).
 - East-west FabricDomains with fabric configuration, which need BMaaS
   networking, and the FabricDomain types InfiniBand and NVLink (the API answers
   `Unimplemented`).

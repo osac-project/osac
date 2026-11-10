@@ -18,8 +18,6 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
   id: 'catalog-rhel-9',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: 'catalog-rhel-9',
     annotations: {},
     creator: 'foo',
@@ -97,7 +95,6 @@ describe('buildComputeInstanceCreatePayload', () => {
           },
         ],
         autoExternalIpAttachment: false,
-        userDataSource: { source: { case: 'inline', value: '' } },
       },
     });
   });
@@ -169,9 +166,10 @@ describe('buildComputeInstanceCreatePayload', () => {
 
     expect(payload.spec).not.toHaveProperty('userData');
     expect(payload.spec).not.toHaveProperty('userDataSecret');
+    expect(payload.spec).not.toHaveProperty('userDataSource');
   });
 
-  it('sends an explicit empty inline source when an editable default is cleared', () => {
+  it('omits an empty inline source when an editable default is cleared', () => {
     const values = baseValues();
     values.spec.userData = provisioningFieldValue({ source: 'inline', inline: '', secret: '' });
     const catalogItem = create(ComputeInstanceCatalogItemSchema, {
@@ -186,9 +184,9 @@ describe('buildComputeInstanceCreatePayload', () => {
       },
     });
 
-    expect(buildComputeInstanceCreatePayload(values, catalogItem).spec?.userDataSource).toEqual({
-      source: { case: 'inline', value: '' },
-    });
+    const payload = buildComputeInstanceCreatePayload(values, catalogItem);
+
+    expect(payload.spec).not.toHaveProperty('userDataSource');
   });
 
   it('omits a locked user data source so the catalog policy can apply it', () => {

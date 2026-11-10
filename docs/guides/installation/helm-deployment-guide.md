@@ -516,6 +516,42 @@ longer needs them. The VTEP range, the fabric loopback ranges and the uplink
 ranges must not overlap tenant address space. Add them to
 `global.networking.excludedIpv4Cidrs` in the `osac` chart.
 
+### Adding CA roots to the shared bundle at runtime
+
+The `ca-bundle` trust-manager Bundle includes the `ca.crt` key from every
+Secret in the `cert-manager` namespace labeled
+`osac.openshift.io/ca-bundle=additional`. Create one Secret per CA root:
+
+```bash
+oc create secret generic partner-ca \
+    --namespace cert-manager \
+    --from-file=ca.crt=/path/to/partner-root.pem
+oc label secret partner-ca osac.openshift.io/ca-bundle=additional \
+    --namespace cert-manager
+```
+
+Trust-manager adds matching Secrets to the `ca-bundle` ConfigMaps in the
+`osac-infra` and OSAC namespaces, and in `keycloak` when Keycloak is enabled.
+The next `osac-infra` install or upgrade applies the selector to the Bundle.
+After that, creating, updating, labeling, or deleting a matching Secret
+updates the bundle without another Helm upgrade. The source must contain only
+public CA certificates in `ca.crt`; the Bundle selects that key specifically.
+During CA rotation, keep both roots in the source until certificates and
+clients have moved to the new root.
+
+For Keycloak's outbound OIDC provider trust, set
+`keycloak.oidcIdpTrust.caPem` with `--set-file` when installing or upgrading
+`osac-infra`. The chart creates a labeled Secret in `cert-manager` from that
+value. On install or upgrade, the CA bundle hook waits for trust-manager to
+publish the current bundle before updating Keycloak's truststore checksum and
+waiting for its rollout. Trust-manager updates from labeled Secret changes
+outside Helm do not restart Keycloak automatically; apply them with an
+`osac-infra` upgrade or restart Keycloak after the bundle updates:
+
+```bash
+oc rollout restart deployment/keycloak-service --namespace keycloak
+```
+
 ## When Prerequisites Already Exist
 
 If some or all of the prerequisite Operators and infrastructure already exist

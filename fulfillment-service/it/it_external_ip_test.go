@@ -324,6 +324,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV6,
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.ip_family"}},
 		}.Build())
 		Expect(err).To(HaveOccurred())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
@@ -338,6 +339,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 					Cidrs: []string{uniqueCIDR()},
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.cidrs"}},
 		}.Build())
 		Expect(err).To(HaveOccurred())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
@@ -402,8 +404,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 			Object: privatev1.ExternalIPPool_builder{
 				Id: poolId,
 				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
-					Tenant: usersGroup,
+					Name: fmt.Sprintf("test-pool-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{uniqueCIDR()},

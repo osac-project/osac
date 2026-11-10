@@ -27,6 +27,7 @@ class KindRuntimeTests(unittest.TestCase):
         self.bin.mkdir()
         self.log = self.directory / "commands.log"
         self.cache = self.directory / "sudo-cache"
+        self.cluster_name = "osac-dev"
         self.env = {
             **os.environ,
             "PATH": f"{self.bin}:/usr/bin:/bin",
@@ -40,7 +41,7 @@ class KindRuntimeTests(unittest.TestCase):
             "MOCK_AUTH_DENIED": "0",
             "MOCK_NOPASSWD": "0",
             "MOCK_FORCE_ROOTLESS": "0",
-            "MOCK_KIND_NODES": "osac-dev-control-plane",
+            "MOCK_KIND_NODES": f"{self.cluster_name}-control-plane",
             "MOCK_KIND_NODES_FAILURE": "0",
             "MOCK_KIND_DELETE_FAILURE": "0",
             "MOCK_KIND_CREATED": str(self.directory / "kind-created"),
@@ -52,9 +53,15 @@ class KindRuntimeTests(unittest.TestCase):
             "MOCK_READY_FAILURES": "0",
             "MOCK_READY_COUNT": str(self.directory / "ready-count"),
             "MOCK_DOCKER_INFO_FAILURE": "0",
+            "MOCK_PID_DIR": str(self.directory),
+            "MOCK_PID_LIMIT": "65536",
+            "MOCK_PID_INSPECT_FAILURE": "0",
+            "MOCK_PID_UPDATE_FAILURE": "0",
+            "MOCK_PID_UPDATE_NOOP": "0",
+            "MOCK_PID_VERIFY_FAILURE": "0",
             "GOTOOLCHAIN": "local",
         }
-        for name in ("CONTAINER_HOST", "MOCK_AS_ROOT", "PROFILE"):
+        for name in ("CONTAINER_HOST", "CONTAINER_CONNECTION", "MOCK_AS_ROOT", "PROFILE"):
             self.env.pop(name, None)
         self.write_command("uname", 'if [[ "${1:-}" == -m ]]; then echo x86_64; else echo "$MOCK_OS"; fi')
         self.write_command("id", 'echo "$MOCK_UID"')
@@ -97,7 +104,18 @@ elif [[ "${MOCK_AS_ROOT:-0}" == 1 || "$MOCK_UID" == 0 ]]; then
   mode=root
 fi
 printf 'podman %s %s\n' "$mode" "$*" >> "$MOCK_LOG"
-if [[ "${1:-}" == info ]]; then
+if [[ "${1:-}" == inspect && "${3:-}" == '{{.HostConfig.PidsLimit}}' ]]; then
+  [[ "$MOCK_PID_INSPECT_FAILURE" == 0 ]] || exit 1
+  if [[ -f "$MOCK_PID_DIR/$4.pids" ]]; then
+    [[ "$MOCK_PID_VERIFY_FAILURE" == 0 ]] || exit 1
+    cat "$MOCK_PID_DIR/$4.pids"
+  else
+    echo "$MOCK_PID_LIMIT"
+  fi
+elif [[ "${1:-}" == update && "${2:-}" == --pids-limit ]]; then
+  [[ "$MOCK_PID_UPDATE_FAILURE" == 0 ]] || exit 1
+  if [[ "$MOCK_PID_UPDATE_NOOP" == 0 ]]; then echo "$3" > "$MOCK_PID_DIR/$4.pids"; fi
+elif [[ "${1:-}" == info ]]; then
   if [[ "$mode" != user && "$MOCK_FORCE_ROOTLESS" != 1 ]]; then echo false; else echo true; fi
 elif [[ "${1:-}" == load && -n "${MOCK_LOAD_PATH:-}" ]]; then
   cat > "$MOCK_LOAD_PATH"
@@ -114,21 +132,43 @@ fi
 """)
         self.write_command("kind", """
 printf 'kind %s %s\n' "${MOCK_AS_ROOT:-0}" "$*" >> "$MOCK_LOG"
-if [[ "$*" == 'get nodes --name osac-dev' ]]; then
+printf 'kind context provider=%s host=%s connection=%s\n' "${KIND_EXPERIMENTAL_PROVIDER:-unset}" "${CONTAINER_HOST:-unset}" "${CONTAINER_CONNECTION:-unset}" >> "$MOCK_LOG"
+cluster_name=kind
+previous=
+for argument in "$@"; do
+  if [[ "$previous" == --name ]]; then cluster_name="$argument"; fi
+  previous="$argument"
+done
+if [[ "${MOCK_PROVIDER_STATE:-0}" == 1 ]]; then
+  provider="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
+  state="$MOCK_PID_DIR/cluster-$provider-$cluster_name"
+  printf 'provider=%s %s\\n' "$provider" "$*" >> "$MOCK_LOG"
+  case "$1 $2" in
+    'create cluster') touch "$state" ;;
+    'get nodes') if [[ -f "$state" ]]; then echo "$cluster_name-control-plane"; fi ;;
+    'load docker-image')
+      docker image inspect "$3"
+      [[ -f "$state" ]] || { echo 'ERROR: no nodes found for cluster' >&2; exit 1; }
+      docker save "$3" >/dev/null ;;
+    'delete cluster') rm -f "$state" ;;
+  esac
+  exit 0
+fi
+if [[ "$1 $2" == 'get nodes' ]]; then
   if [[ "$MOCK_KIND_NODES_FAILURE" == 1 ]]; then
     printf '%s\n' "$MOCK_KIND_NODES"
     exit 1
   fi
   if [[ -f "$MOCK_KIND_CREATED" ]]; then
-    echo osac-dev-control-plane
+    if [[ "$(cat "$MOCK_KIND_CREATED")" == "$cluster_name" ]]; then echo "$cluster_name-control-plane"; fi
   else
     printf '%s\n' "$MOCK_KIND_NODES"
   fi
 elif [[ "${1:-}" == create ]]; then
-  touch "$MOCK_KIND_CREATED"
-elif [[ "$*" == 'get kubeconfig --name osac-dev' ]]; then
+  printf '%s\n' "$cluster_name" > "$MOCK_KIND_CREATED"
+elif [[ "$1 $2" == 'get kubeconfig' ]]; then
   echo 'stub kubeconfig'
-elif [[ "$*" == 'delete cluster --name osac-dev' && "$MOCK_KIND_DELETE_FAILURE" == 1 ]]; then
+elif [[ "$1 $2" == 'delete cluster' && "$MOCK_KIND_DELETE_FAILURE" == 1 ]]; then
   exit 1
 elif [[ "${1:-}" == load ]]; then
   [[ "$(cat "$3")" == 'stub archive' ]]
@@ -435,6 +475,214 @@ check_topolvm_cluster_mounts() {{
 }}
 create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
 ''')
+
+    def run_direct_infra(self, cluster_name=None):
+        self.write_command("helm", '''
+if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >> "$MOCK_LOG"; fi
+''')
+        self.write_command("kubectl", 'printf "kubectl %s\\n" "$*" >> "$MOCK_LOG"')
+        return subprocess.run(
+            ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER), "-o", "helm-infra-deps",
+             "install-infra", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
+             f"KIND_CLUSTER_NAME={cluster_name or self.cluster_name}",
+             f"KIND_KUBECONFIG={self.directory / 'cluster.kubeconfig'}"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+
+    def test_direct_podman_create_and_reuse_raise_and_verify_pid_limits(self):
+        self.assert_direct_podman_create_and_reuse()
+
+    def assert_direct_podman_create_and_reuse(self):
+        for existing in ("", f"{self.cluster_name}-control-plane\n{self.cluster_name}-worker"):
+            with self.subTest(existing=bool(existing)):
+                self.log.unlink(missing_ok=True)
+                (self.directory / "kind-created").unlink(missing_ok=True)
+                for state in self.directory.glob("*.pids"):
+                    state.unlink()
+                self.env["MOCK_KIND_NODES"] = existing
+                self.env["MOCK_PID_LIMIT"] = "2048"
+                self.env["CONTAINER_CONNECTION"] = "test-connection"
+                self.assert_success(self.run_direct_infra())
+                commands = self.commands()
+                self.assertEqual(any(cmd.startswith("kind 0 create cluster") for cmd in commands), not bool(existing))
+                if not existing:
+                    self.assertTrue(any(cmd.startswith(f"kind 0 create cluster --name {self.cluster_name} ") for cmd in commands))
+                nodes = existing.splitlines() or [f"{self.cluster_name}-control-plane"]
+                for node in nodes:
+                    inspect = f"podman user inspect --format {{{{.HostConfig.PidsLimit}}}} {node}"
+                    update = f"podman user update --pids-limit 65536 {node}"
+                    self.assertEqual(commands.count(inspect), 2)
+                    self.assertLess(commands.index(inspect), commands.index(update))
+                    self.assertGreater(len(commands) - 1 - commands[::-1].index(inspect), commands.index(update))
+                self.assertIn("kind context provider=podman host=unset connection=test-connection", commands)
+                self.assertFalse(any(cmd.startswith("sudo ") or "podman user info" in cmd for cmd in commands))
+                self.assertTrue(any(cmd.startswith("helm upgrade") for cmd in commands))
+
+    def test_direct_nondefault_cluster_create_and_reuse(self):
+        self.cluster_name = "review-cluster"
+        self.assert_direct_podman_create_and_reuse()
+        self.assertNotIn("create cluster", "\n".join(self.commands()))
+        self.assertIn(f"kind 0 get nodes --name {self.cluster_name}", self.commands())
+        self.assertTrue(any(cmd.startswith(f"kind 0 export kubeconfig --name {self.cluster_name} ")
+                            for cmd in self.commands()))
+        self.assertNotIn("osac-dev", "\n".join(self.commands()))
+
+    def test_direct_auto_podman_pins_kind_without_changing_connection(self):
+        self.cluster_name = "socket-cluster"
+        self.env["MOCK_KIND_NODES"] = f"{self.cluster_name}-control-plane"
+        self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+        self.env["CONTAINER_HOST"] = "unix:///test-podman.sock"
+        self.env["MOCK_PID_LIMIT"] = "2048"
+        self.assert_success(self.run_direct_infra())
+        self.assertIn("kind context provider=podman host=unix:///test-podman.sock connection=unset", self.commands())
+        self.assertIn(f"podman socket update --pids-limit 65536 {self.cluster_name}-control-plane", self.commands())
+
+    def test_direct_provider_survives_separate_load_and_delete_invocations(self):
+        self.cluster_name = "provider-cluster"
+        self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+        self.env["MOCK_PROVIDER_STATE"] = "1"
+        self.env["CONTAINER_TOOL"] = "docker"
+        self.write_command("ginkgo", 'echo "application test stub" >> "$MOCK_LOG"')
+        self.assert_success(self.run_direct_infra())
+        cluster = self.directory / f"cluster-podman-{self.cluster_name}"
+        self.assertTrue(cluster.exists())
+        args = ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER),
+                f"OSAC_CHART={self.directory / 'chart'}", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
+                f"KIND_CLUSTER_NAME={self.cluster_name}"]
+        result = subprocess.run(args + ["test", "SUITE=operator"], env=self.env,
+                                text=True, capture_output=True, timeout=15)
+        self.assert_success(result)
+        self.assertIn(f"provider=podman load docker-image localhost/osac-operator:it --name {self.cluster_name}",
+                      self.commands())
+        self.assertIn("docker image inspect localhost/osac-operator:it", self.commands())
+        self.assertIn("docker save localhost/osac-operator:it", self.commands())
+        self.assertEqual(self.commands().count("application test stub"), 2)
+        result = subprocess.run(args + ["uninstall-infra"], env=self.env,
+                                text=True, capture_output=True, timeout=15)
+        self.assert_success(result)
+        self.assertFalse(cluster.exists())
+        self.assertFalse(any(cmd.startswith("provider=docker ") for cmd in self.commands()))
+
+    def test_direct_provider_export_reaches_recursive_make_and_honors_overrides(self):
+        self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+        probe = self.directory / "provider.mk"
+        probe.write_text("parent:\n\t$(MAKE) -f Makefile -f " + str(probe)
+                         + " child\nchild:\n\t@echo provider=$${KIND_EXPERIMENTAL_PROVIDER-unset}\n")
+        for selection, expected in ((None, "podman"), ("", "podman"),
+                                    ("docker", "docker"), ("nerdctl", "nerdctl")):
+            with self.subTest(selection=selection):
+                args = ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER),
+                        "-f", "Makefile", "-f", str(probe), "parent", "PLATFORM=kind",
+                        "PROFILE=dev", "NS=osac"]
+                if selection is not None:
+                    args.append(f"KIND_EXPERIMENTAL_PROVIDER={selection}")
+                result = subprocess.run(args, env=self.env, text=True, capture_output=True, timeout=15)
+                self.assert_success(result)
+                self.assertIn(f"provider={expected}\n", result.stdout)
+
+    def test_reusable_ci_pins_provider_for_make_and_raw_kind_steps(self):
+        workflow = (REPO / ".github/workflows/tests.yml").read_text()
+        job = workflow.split("jobs:\n  run:\n", 1)[1].split("    steps:", 1)[0]
+        self.assertRegex(job, r"(?m)^    env:\n      KIND_EXPERIMENTAL_PROVIDER: docker$")
+        self.assertIn("kind load docker-image localhost/fulfillment-service:it --name osac-dev", workflow)
+
+    def test_direct_non_podman_selection_has_no_pid_operations(self):
+        for provider in ("docker", "nerdctl", "unset"):
+            with self.subTest(provider=provider):
+                self.log.unlink(missing_ok=True)
+                if provider == "unset":
+                    self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+                    (self.bin / "podman").unlink()
+                    for command in ("bash", "env", "awk", "sed", "basename", "dirname", "grep", "mktemp", "rm"):
+                        (self.bin / command).symlink_to(shutil.which(command))
+                    self.env["PATH"] = str(self.bin)
+                else:
+                    self.env["KIND_EXPERIMENTAL_PROVIDER"] = provider
+                self.assert_success(self.run_direct_infra())
+                self.assertIn(f"kind context provider={provider} host=unset connection=unset", self.commands())
+                self.assertFalse(any(cmd.startswith(("podman ", "docker ", "sudo ")) for cmd in self.commands()))
+
+    def test_direct_non_podman_lookup_failure_preserves_creation_fallback(self):
+        for provider in ("docker", "nerdctl"):
+            with self.subTest(provider=provider):
+                self.log.unlink(missing_ok=True)
+                (self.directory / "kind-created").unlink(missing_ok=True)
+                self.env["KIND_EXPERIMENTAL_PROVIDER"] = provider
+                self.env["MOCK_KIND_NODES_FAILURE"] = "1"
+                self.assert_success(self.run_direct_infra())
+                self.assertTrue(any(cmd.startswith("kind 0 create cluster ") for cmd in self.commands()))
+                self.assertIn("kind 0 export kubeconfig --name osac-dev --kubeconfig "
+                              + str(self.directory / "cluster.kubeconfig"), self.commands())
+                self.assertTrue(any(cmd.startswith("helm upgrade") for cmd in self.commands()))
+                self.assertFalse(any(cmd.startswith(("podman ", "docker ", "sudo ")) for cmd in self.commands()))
+
+    def test_podman_sufficient_and_unlimited_pid_limits_are_preserved(self):
+        for limit in ("65536", "131072", "0", "-1"):
+            with self.subTest(limit=limit):
+                self.log.unlink(missing_ok=True)
+                self.env["MOCK_PID_LIMIT"] = limit
+                self.assert_success(self.run_direct_infra())
+                self.assertFalse(any(" update " in cmd for cmd in self.commands()))
+
+    def test_direct_pid_errors_stop_before_helm(self):
+        cases = (("MOCK_KIND_NODES_FAILURE", "1", "Could not list Podman Kind nodes"),
+                 ("MOCK_PID_INSPECT_FAILURE", "1", "inspect"),
+                 ("MOCK_PID_LIMIT", "invalid", "inspect"),
+                 ("MOCK_PID_UPDATE_FAILURE", "1", "raise"),
+                 ("MOCK_PID_UPDATE_NOOP", "1", "verification"),
+                 ("MOCK_PID_VERIFY_FAILURE", "1", "verification"))
+        for setting, value, diagnostic in cases:
+            with self.subTest(setting=setting):
+                self.log.unlink(missing_ok=True)
+                self.env["MOCK_PID_LIMIT"] = "2048"
+                self.env[setting] = value
+                result = self.run_direct_infra()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(diagnostic, result.stderr)
+                self.assertFalse(any(cmd.startswith("helm upgrade") for cmd in self.commands()))
+                self.env[setting] = "0"
+                for state in self.directory.glob("*.pids"):
+                    state.unlink()
+
+    def test_wrapper_pid_hook_uses_existing_dispatch_on_create_and_reuse(self):
+        for existing in ("", "osac-dev-control-plane\nosac-dev-worker"):
+            with self.subTest(existing=bool(existing)):
+                self.log.unlink(missing_ok=True)
+                (self.directory / "kind-created").unlink(missing_ok=True)
+                for state in self.directory.glob("*.pids"):
+                    state.unlink()
+                self.env["MOCK_KIND_NODES"] = existing
+                self.env["MOCK_PID_LIMIT"] = "2048"
+                self.assert_success(self.run_create_cluster())
+                for node in existing.splitlines() or ["osac-dev-control-plane"]:
+                    self.assertIn(f"podman root update --pids-limit 65536 {node}", self.commands())
+                self.assertFalse(any(cmd.startswith("podman user update") for cmd in self.commands()))
+
+    def test_wrapper_pid_hook_preserves_desktop_connection_and_kubeconfig_on_error(self):
+        self.env["MOCK_OS"] = "Darwin"
+        self.env["CONTAINER_CONNECTION"] = "test-desktop"
+        self.env["MOCK_PID_LIMIT"] = "2048"
+        self.env["MOCK_PID_UPDATE_FAILURE"] = "1"
+        result = self.run_create_cluster()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Could not raise Podman PID limit", result.stderr)
+        self.assertIn("podman user update --pids-limit 65536 osac-dev-control-plane", self.commands())
+        self.assertIn("kind context provider=podman host=unset connection=test-desktop", self.commands())
+        self.assertFalse(any(cmd.startswith("sudo ") or "get kubeconfig" in cmd for cmd in self.commands()))
+
+    def test_wrapper_loads_pid_helper_only_when_needed_and_reuses_it(self):
+        self.env["KIND_EXPERIMENTAL_PROVIDER"] = "docker"
+        self.env["OC_IMPERSONATE"] = "test-user"
+        self.assert_success(self.run_shell('! declare -F oc; [[ -z "${POSTGRES_INSTALL_DOC+x}" ]]'))
+        self.env["KIND_EXPERIMENTAL_PROVIDER"] = "podman"
+        self.env["KIND_PROFILE"] = "dev"
+        self.env["MOCK_PID_LIMIT"] = "2048"
+        result = self.run_shell(f'''
+source "${{SCRIPT_DIR}}/../lib.sh"
+create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.kubeconfig'))}
+''')
+        self.assert_success(result)
+        self.assertIn("podman user update --pids-limit 65536 osac-dev-control-plane", self.commands())
 
     def test_create_keeps_credentials_when_cluster_lookup_fails(self):
         self.env["MOCK_KIND_NODES_FAILURE"] = "1"
@@ -885,6 +1133,23 @@ exec /usr/bin/mktemp "$@"
         self.assertTrue(any(cmd.startswith("kind 0 load image-archive ") for cmd in self.commands()))
         self.assertFalse(any(cmd.startswith("sudo ") for cmd in self.commands()))
 
+    def test_devfull_arm64_preflight_requires_uv(self):
+        """Fail before setup when the ARM64 image build lacks uv."""
+        self.env["KIND_EXPERIMENTAL_PROVIDER"] = "docker"
+        self.env["KIND_REQUIRE_UV"] = "true"
+        self.env["MOCK_OS"] = "Darwin"
+        for tool in ("curl", "openssl", "python3"):
+            self.write_command(tool, "exit 0")
+        (self.bin / "dirname").symlink_to(shutil.which("dirname"))
+        self.env["PATH"] = str(self.bin)
+        result = subprocess.run(
+            ["/bin/bash", str(RUNTIME), "check"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Missing required tools: uv", result.stderr)
+        self.assertFalse(any(line.startswith("docker info") for line in self.commands()))
+
     def test_installer_ui_load_propagates_the_selected_profile(self):
         result = subprocess.run(
             ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "kind-load-images", "PLATFORM=kind", "PROFILE=dev-full", "NS=osac"],
@@ -892,6 +1157,107 @@ exec /usr/bin/mktemp "$@"
         )
         self.assert_success(result)
         self.assertIn('KIND_PROFILE=dev-full KIND_OSAC_NAMESPACE=osac', result.stdout)
+        metering_load = result.stdout.find(
+            'kind-load-image.sh" "ghcr.io/osac-project/metering-service:latest"'
+        )
+        ui_load = result.stdout.find('kind-load-image.sh" "ghcr.io/osac-project/osac-ui:latest"')
+        self.assertGreaterEqual(metering_load, 0, result.stdout)
+        self.assertGreater(ui_load, metering_load, result.stdout)
+
+    def test_arm64_devfull_install_builds_and_loads_all_images_before_osac(self):
+        """Check the Apple Silicon install builds and loads all local images first."""
+        result = subprocess.run(
+            [
+                "make", "--no-print-directory", "-n", "-C", str(INSTALLER), "install",
+                "PLATFORM=kind", "PROFILE=dev-full", "NS=osac",
+                "CONTAINER_TOOL=docker", "KIND_EXPERIMENTAL_PROVIDER=docker",
+                "HOST_IS_MAC_ARM=true",
+            ],
+            env=self.env, text=True, capture_output=True, timeout=30,
+        )
+        self.assert_success(result)
+
+        output = result.stdout
+        builds = [
+            "image-build IMG=ghcr.io/osac-project/fulfillment-service:latest",
+            "image-build IMG=ghcr.io/osac-project/osac-operator:latest",
+            "image-build IMG=ghcr.io/osac-project/metering-service:latest",
+            "execution-environment-build IMG=ghcr.io/osac-project/osac-aap:latest",
+            "build -f ../osac-ui/Containerfile -t ghcr.io/osac-project/osac-ui:latest ..",
+        ]
+        build_positions = [output.find(command) for command in builds]
+        self.assertTrue(all(position >= 0 for position in build_positions), output)
+        osac_install = output.find("helm upgrade --install osac ")
+        devstack_install = output.find("helm upgrade --install osac-devstack ")
+        self.assertGreater(osac_install, max(build_positions), output)
+        self.assertGreater(devstack_install, osac_install, output)
+        self.assertIn("kind-build-load-images", output)
+        self.assertIn("KIND_REQUIRE_UV=true", output)
+        self.assertNotIn("container save quay.io/openshift/origin-cli:4.19", output)
+        preflight = output.find("scripts/dev-full/kind-runtime.sh check")
+        cluster_create = output.find("scripts/dev-full/kind-runtime.sh create-cluster")
+        preflight_line = next(
+            (line for line in output.splitlines() if "scripts/dev-full/kind-runtime.sh check" in line),
+            "",
+        )
+        self.assertGreaterEqual(preflight, 0, output)
+        self.assertIn("KIND_REQUIRE_UV=true", preflight_line)
+        self.assertGreater(cluster_create, preflight, output)
+        aap_cli_image = output.find(
+            "build-arm64-cli-image.sh osac-dev quay.io/openshift/origin-cli:4.19 4.19.0"
+        )
+        aap_build = output.find(
+            "execution-environment-build IMG=ghcr.io/osac-project/osac-aap:latest"
+        )
+        self.assertGreaterEqual(aap_cli_image, 0, output)
+        self.assertGreater(aap_build, aap_cli_image, output)
+        self.assertIn(
+            'kind-load-image.sh" "ghcr.io/osac-project/metering-service:latest"',
+            output,
+        )
+        self.assertIn(
+            'kind-load-image.sh" "ghcr.io/osac-project/osac-ui:latest"',
+            output,
+        )
+        for image in (
+            "kind-load-image IMG=ghcr.io/osac-project/fulfillment-service:latest",
+            "kind-load-image IMG=ghcr.io/osac-project/osac-operator:latest",
+            "kind-load-image IMG=ghcr.io/osac-project/osac-aap:latest",
+        ):
+            self.assertIn(image, output)
+
+        mixed_runtime_result = subprocess.run(
+            [
+                "make", "--no-print-directory", "-n", "-C", str(INSTALLER), "install",
+                "PLATFORM=kind", "PROFILE=dev-full", "NS=osac",
+                "CONTAINER_TOOL=docker", "KIND_EXPERIMENTAL_PROVIDER=podman",
+                "HOST_IS_MAC_ARM=true",
+            ],
+            env=self.env, text=True, capture_output=True, timeout=30,
+        )
+        self.assert_success(mixed_runtime_result)
+        mixed_output = mixed_runtime_result.stdout
+        copy_out = mixed_output.find("container save quay.io/openshift/origin-cli:4.19")
+        copy_in = mixed_output.find("docker load -i")
+        mixed_aap_build = mixed_output.find(
+            "execution-environment-build IMG=ghcr.io/osac-project/osac-aap:latest"
+        )
+        self.assertGreaterEqual(copy_out, 0, mixed_output)
+        self.assertGreater(copy_in, copy_out, mixed_output)
+        self.assertGreater(mixed_aap_build, copy_in, mixed_output)
+
+        linux_result = subprocess.run(
+            [
+                "make", "--no-print-directory", "-n", "-C", str(INSTALLER), "install",
+                "PLATFORM=kind", "PROFILE=dev-full", "NS=osac",
+                "CONTAINER_TOOL=docker", "HOST_IS_MAC_ARM=false",
+            ],
+            env=self.env, text=True, capture_output=True, timeout=30,
+        )
+        self.assert_success(linux_result)
+        self.assertNotIn("kind-build-load-images", linux_result.stdout)
+        self.assertNotIn("metering-service:latest", linux_result.stdout)
+        self.assertNotIn("origin-cli:4.19", linux_result.stdout)
 
 
 if __name__ == "__main__":

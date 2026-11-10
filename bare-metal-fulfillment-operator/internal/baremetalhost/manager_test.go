@@ -18,6 +18,7 @@ package baremetalhost
 
 import (
 	"context"
+	"errors"
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -47,6 +48,25 @@ func newTestManager(objects ...client.Object) *Manager {
 	return NewManager(k8sClient, k8sClient, testNamespace)
 }
 
+type replacementOnDeleteClient struct {
+	client.Client
+	replacement client.Object
+}
+
+func (c *replacementOnDeleteClient) Delete(ctx context.Context, object client.Object, options ...client.DeleteOption) error {
+	if err := c.Client.Delete(ctx, object); err != nil {
+		return err
+	}
+	if err := c.Client.Create(ctx, c.replacement); err != nil {
+		return err
+	}
+	preconditions := (&client.DeleteOptions{}).ApplyOptions(options).Preconditions
+	if preconditions != nil && preconditions.UID != nil && *preconditions.UID != c.replacement.GetUID() {
+		return errors.New("UID precondition rejects replacement")
+	}
+	return c.Client.Delete(ctx, object, options...)
+}
+
 var _ = Describe("BareMetalHost Manager", func() {
 	var ctx context.Context
 
@@ -66,10 +86,9 @@ var _ = Describe("BareMetalHost Manager", func() {
 			mgr := newTestManager()
 
 			err := mgr.CreateBMH(ctx, CreateParams{
-				Name:              "node001",
-				BMCAddress:        "redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1",
-				CredentialsSecret: "bmc-creds",
-				BootMACAddress:    "aa:bb:cc:dd:ee:01",
+				Name:           "node001",
+				BMCAddress:     "redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1",
+				BootMACAddress: "aa:bb:cc:dd:ee:01",
 				ConsumerRef: &corev1.ObjectReference{
 					APIVersion: "osac.openshift.io/v1alpha1",
 					Kind:       "BareMetalInstance",
@@ -85,7 +104,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}, bmh)).To(Succeed())
 
 			Expect(bmh.Spec.BMC.Address).To(Equal("redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1"))
-			Expect(bmh.Spec.BMC.CredentialsName).To(Equal("bmc-creds"))
+			Expect(bmh.Spec.BMC.CredentialsName).To(Equal("node001-bmc-secret"))
 			Expect(bmh.Spec.BootMACAddress).To(Equal("aa:bb:cc:dd:ee:01"))
 			Expect(bmh.Spec.Online).To(BeFalse())
 			Expect(bmh.Spec.ConsumerRef).NotTo(BeNil())
@@ -167,10 +186,11 @@ var _ = Describe("BareMetalHost Manager", func() {
 					Name:      "node001",
 					Namespace: testNamespace,
 				},
+				Spec: metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-A"}},
 			}
 			mgr := newTestManager(existing)
 
-			Expect(mgr.DeleteBMH(ctx, "node001")).To(Succeed())
+			Expect(mgr.DeleteBMH(ctx, "node001", "bmi-A")).To(Succeed())
 
 			bmh := &metal3api.BareMetalHost{}
 			err := mgr.client.Get(ctx, client.ObjectKey{
@@ -181,7 +201,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 
 		It("should be idempotent for not found", func() {
 			mgr := newTestManager()
-			Expect(mgr.DeleteBMH(ctx, "nonexistent")).To(Succeed())
+			Expect(mgr.DeleteBMH(ctx, "nonexistent", "bmi-A")).To(Succeed())
 		})
 	})
 
@@ -278,7 +298,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 		})
 	})
 
-	Describe("IsBMHReady", func() {
+	Describe("IsBMHAvailable", func() {
 		It("should return true when available and OK", func() {
 			bmh := &metal3api.BareMetalHost{
 				ObjectMeta: metav1.ObjectMeta{
@@ -294,7 +314,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}
 			mgr := newTestManager(bmh)
 
-			ready, err := mgr.IsBMHReady(ctx, "node001")
+			ready, err := mgr.IsBMHAvailable(ctx, "node001")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeTrue())
 		})
@@ -314,7 +334,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}
 			mgr := newTestManager(bmh)
 
-			ready, err := mgr.IsBMHReady(ctx, "node001")
+			ready, err := mgr.IsBMHAvailable(ctx, "node001")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 		})
@@ -334,7 +354,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}
 			mgr := newTestManager(bmh)
 
-			ready, err := mgr.IsBMHReady(ctx, "node001")
+			ready, err := mgr.IsBMHAvailable(ctx, "node001")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 		})
@@ -354,7 +374,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}
 			mgr := newTestManager(bmh)
 
-			ready, err := mgr.IsBMHReady(ctx, "node001")
+			ready, err := mgr.IsBMHAvailable(ctx, "node001")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 		})
@@ -375,7 +395,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}
 			mgr := newTestManager(bmh)
 
-			_, err := mgr.IsBMHReady(ctx, "node001")
+			_, err := mgr.IsBMHAvailable(ctx, "node001")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("error status"))
 		})
@@ -385,7 +405,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			// instead of erroring on a just-created BMH the cache hasn't seen yet.
 			mgr := newTestManager()
 
-			ready, err := mgr.IsBMHReady(ctx, "nonexistent")
+			ready, err := mgr.IsBMHAvailable(ctx, "nonexistent")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ready).To(BeFalse())
 		})
@@ -427,82 +447,45 @@ var _ = Describe("BareMetalHost Manager", func() {
 		})
 	})
 
-	Describe("EnsureBMCSecret", func() {
-		It("should create a labeled Secret with username and password", func() {
-			mgr := newTestManager()
-
-			Expect(mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "s3cret")).To(Succeed())
-
-			secret := &corev1.Secret{}
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
-			Expect(string(secret.Data["username"])).To(Equal("admin"))
-			Expect(string(secret.Data["password"])).To(Equal("s3cret"))
-			Expect(secret.Labels).To(HaveKeyWithValue(bmcSecretManagedByLabel, bmcSecretManagedByValue))
-		})
-
-		It("should update an existing Secret's credentials idempotently", func() {
-			mgr := newTestManager()
-			Expect(mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "old")).To(Succeed())
-			Expect(mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "new")).To(Succeed())
-
-			secret := &corev1.Secret{}
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
-			Expect(string(secret.Data["password"])).To(Equal("new"))
-		})
-
-		It("should refuse to overwrite a pre-existing Secret it does not own", func() {
-			foreign := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "node001-bmc-secret",
-					Namespace: testNamespace,
-				},
-				Data: map[string][]byte{"username": []byte("someone"), "password": []byte("else")},
+	Describe("DeleteBMH", func() {
+		It("deletes a matching BMH and tolerates its absence", func() {
+			bmh := &metal3api.BareMetalHost{
+				ObjectMeta: metav1.ObjectMeta{Name: "netbox-46", Namespace: testNamespace, UID: "host-A"},
+				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-A"}},
 			}
-			mgr := newTestManager(foreign)
-
-			err := mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "s3cret")
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not operator-managed"))
-
-			// The foreign Secret must be left untouched.
-			secret := &corev1.Secret{}
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)).To(Succeed())
-			Expect(string(secret.Data["password"])).To(Equal("else"))
-			Expect(secret.Labels).NotTo(HaveKey(bmcSecretManagedByLabel))
-		})
-	})
-
-	Describe("DeleteBMCSecret", func() {
-		It("should delete an operator-managed Secret", func() {
-			mgr := newTestManager()
-			Expect(mgr.EnsureBMCSecret(ctx, "node001-bmc-secret", "admin", "s3cret")).To(Succeed())
-
-			Expect(mgr.DeleteBMCSecret(ctx, "node001-bmc-secret")).To(Succeed())
-
-			secret := &corev1.Secret{}
-			err := mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}, secret)
-			Expect(err).To(HaveOccurred())
+			mgr := newTestManager(bmh)
+			Expect(mgr.DeleteBMH(ctx, "netbox-46", "bmi-A")).To(Succeed())
+			Expect(mgr.client.Get(ctx, client.ObjectKeyFromObject(bmh), &metal3api.BareMetalHost{})).NotTo(Succeed())
+			Expect(mgr.DeleteBMH(ctx, "netbox-46", "bmi-A")).To(Succeed())
 		})
 
-		It("should NOT delete an admin-created (unlabeled) Secret", func() {
-			adminSecret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "admin-bmc-secret",
-					Namespace: testNamespace,
-				},
-				Data: map[string][]byte{"username": []byte("admin"), "password": []byte("s3cret")},
+		It("does not delete a replacement BMH with the same name", func() {
+			original := &metal3api.BareMetalHost{
+				ObjectMeta: metav1.ObjectMeta{Name: "netbox-46", Namespace: testNamespace, UID: "host-old"},
+				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-A"}},
 			}
-			mgr := newTestManager(adminSecret)
+			replacement := original.DeepCopy()
+			replacement.UID = "host-new"
+			base := newTestManager(original)
+			manager := NewManager(base.client, &replacementOnDeleteClient{Client: base.client, replacement: replacement}, testNamespace)
 
-			Expect(mgr.DeleteBMCSecret(ctx, "admin-bmc-secret")).To(Succeed())
-
-			secret := &corev1.Secret{}
-			Expect(mgr.client.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "admin-bmc-secret"}, secret)).To(Succeed())
+			Expect(manager.DeleteBMH(ctx, "netbox-46", "bmi-A")).To(HaveOccurred())
+			current := &metal3api.BareMetalHost{}
+			Expect(base.client.Get(ctx, client.ObjectKeyFromObject(original), current)).To(Succeed())
+			Expect(current.UID).To(Equal(replacement.UID))
 		})
 
-		It("should be idempotent when the Secret does not exist", func() {
-			mgr := newTestManager()
-			Expect(mgr.DeleteBMCSecret(ctx, "nonexistent")).To(Succeed())
-		})
+		DescribeTable("preserves a BMH without the expected consumerRef", func(ref *corev1.ObjectReference) {
+			bmh := &metal3api.BareMetalHost{
+				ObjectMeta: metav1.ObjectMeta{Name: "netbox-46", Namespace: testNamespace},
+				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: ref},
+			}
+			mgr := newTestManager(bmh)
+			Expect(mgr.DeleteBMH(ctx, "netbox-46", "bmi-B")).To(MatchError(ContainSubstring("not owned by this BMI")))
+			Expect(mgr.client.Get(ctx, client.ObjectKeyFromObject(bmh), &metal3api.BareMetalHost{})).To(Succeed())
+		},
+			Entry("foreign", &corev1.ObjectReference{Name: "bmi-A"}),
+			Entry("ownerless", nil),
+		)
 	})
 })

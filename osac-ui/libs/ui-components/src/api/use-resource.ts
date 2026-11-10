@@ -75,7 +75,9 @@ const buildUpdateRequest = <Input extends DescMessage, Output extends DescMessag
     updateMask: {
       paths:
         explicitPaths ??
-        buildUpdateMaskPaths(requestRecord.object, { schema: objectField.message }),
+        buildUpdateMaskPaths(requestRecord.object, { schema: objectField.message }).filter(
+          (path) => path !== 'id',
+        ),
     },
   };
 };

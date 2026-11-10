@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -147,6 +148,77 @@ var _ = Describe("Public external IPs server", func() {
 			Expect(getResp.GetObject().GetId()).To(Equal(createResp.GetObject().GetId()))
 		})
 
+		DescribeTable("honors provider networking settings on Create",
+			func(settings *NetworkingSettings, dryRun bool) {
+				builder := NewExternalIPsServer().
+					SetLogger(logger).
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(tenancy)
+				if settings != nil {
+					builder.SetNetworkingSettings(*settings)
+				}
+				server, err := builder.Build()
+				Expect(err).ToNot(HaveOccurred())
+				externalIPDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				poolID := getPoolID()
+				poolBefore, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				recordsBefore, err := externalIPDao.List().Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(recordsBefore.GetItems()).To(BeEmpty())
+
+				callCtx := ctx
+				if dryRun {
+					callCtx = dryRunCtx()
+				}
+				response, err := server.Create(callCtx, publicv1.ExternalIPsCreateRequest_builder{
+					Object: publicv1.ExternalIP_builder{
+						Metadata: publicv1.Metadata_builder{Name: "settings-eip", Tenant: testTenant}.Build(),
+						Spec: publicv1.ExternalIPSpec_builder{
+							Pool: publicv1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				enabled := settings == nil || settings.ProvisioningEnabled
+				if enabled {
+					Expect(err).ToNot(HaveOccurred())
+					Expect(response).ToNot(BeNil())
+					Expect(response.GetObject().GetStatus().GetState()).To(
+						Equal(publicv1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+				} else {
+					Expect(response).To(BeNil())
+					Expect(grpcstatus.Code(err)).To(Equal(codes.FailedPrecondition))
+					Expect(grpcstatus.Convert(err).Message()).To(Equal("provider networking is disabled"))
+				}
+
+				recordsAfter, err := externalIPDao.List().Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				poolAfter, err := externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				if enabled {
+					Expect(recordsAfter.GetItems()).To(HaveLen(1))
+					Expect(recordsAfter.GetItems()[0].GetId()).To(Equal(response.GetObject().GetId()))
+					Expect(recordsAfter.GetItems()[0].GetStatus().GetState()).To(
+						Equal(privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING))
+					Expect(poolAfter.GetObject().GetStatus().GetAllocated()).To(
+						Equal(poolBefore.GetObject().GetStatus().GetAllocated() + 1))
+					Expect(poolAfter.GetObject().GetStatus().GetAvailable()).To(
+						Equal(poolBefore.GetObject().GetStatus().GetAvailable() - 1))
+				} else {
+					Expect(recordsAfter.GetItems()).To(BeEmpty())
+					Expect(proto.Equal(poolAfter.GetObject(), poolBefore.GetObject())).To(BeTrue())
+				}
+			},
+			Entry("disabled", &NetworkingSettings{ProvisioningEnabled: false}, false),
+			Entry("disabled dry-run", &NetworkingSettings{ProvisioningEnabled: false}, true),
+			Entry("enabled", &NetworkingSettings{ProvisioningEnabled: true}, false),
+			Entry("default enabled", (*NetworkingSettings)(nil), false),
+		)
+
 		It("lists ExternalIPs", func() {
 			poolID := getPoolID()
 			for range 3 {
@@ -200,8 +272,17 @@ var _ = Describe("Public external IPs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("rejects caller-supplied output status on Create", func() {
-			_, err := publicServer.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+		DescribeTable("rejects caller-supplied output status on Create", func(settings *NetworkingSettings) {
+			builder := NewExternalIPsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy)
+			if settings != nil {
+				builder.SetNetworkingSettings(*settings)
+			}
+			server, err := builder.Build()
+			Expect(err).ToNot(HaveOccurred())
+			response, err := server.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 				Object: publicv1.ExternalIP_builder{
 					Metadata: publicv1.Metadata_builder{Name: "output-on-create", Tenant: testTenant}.Build(),
 					Spec:     publicv1.ExternalIPSpec_builder{Pool: publicv1.ExternalIPPoolReference_builder{Id: getPoolID()}.Build()}.Build(),
@@ -211,8 +292,17 @@ var _ = Describe("Public external IPs server", func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
+			Expect(response).To(BeNil())
 			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
-		})
+
+			response, err = server.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
+		},
+			Entry("disabled", &NetworkingSettings{ProvisioningEnabled: false}),
+			Entry("enabled", &NetworkingSettings{ProvisioningEnabled: true}),
+			Entry("default enabled", (*NetworkingSettings)(nil)),
+		)
 
 		It("creates an ExternalIP from a shared pool given by name and returns its name and ID", func() {
 			validator, err := references.NewReferenceValidator().SetLogger(logger).Build()
@@ -243,7 +333,7 @@ var _ = Describe("Public external IPs server", func() {
 			poolsServer, err := NewPrivateExternalIPPoolsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
+				SetTenancyLogic(newAdminTenancy()).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			privateServer, err := NewPrivateExternalIPsServer().

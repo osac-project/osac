@@ -129,11 +129,20 @@ func (m *txManager) Run(ctx context.Context, task any, args ...any) error {
 
 func (t *managedTx) End(ctx context.Context) error {
 	if t.real == nil {
+		// Nothing was sent to the database, which counts as a commit when there are no errors.
+		if len(t.errs) == 0 {
+			t.runCommitHooks(ctx)
+		}
 		return nil
 	}
 	if len(t.errs) == 0 {
 		t.manager.logger.DebugContext(ctx, "Committing transaction")
-		return t.real.Commit(ctx)
+		err := t.real.Commit(ctx)
+		if err != nil {
+			return err
+		}
+		t.runCommitHooks(ctx)
+		return nil
 	}
 	t.manager.logger.DebugContext(
 		ctx,
@@ -150,6 +159,48 @@ type managedTx struct {
 	manager *txManager
 	real    pgx.Tx
 	errs    []error
+	hooks   []func()
+
+	// parent is set when a savepoint is released; later OnCommit calls go to it.
+	parent *managedTx
+}
+
+// OnCommit implements Tx.OnCommit.
+func (t *managedTx) OnCommit(fn func()) {
+	if fn == nil {
+		return
+	}
+	if t.parent != nil {
+		t.parent.OnCommit(fn)
+		return
+	}
+	t.hooks = append(t.hooks, fn)
+}
+
+// runCommitHooks runs the OnCommit functions once, including ones they register. The transaction is already
+// committed, so a panic is logged instead of failing the request.
+func (t *managedTx) runCommitHooks(ctx context.Context) {
+	for len(t.hooks) > 0 {
+		hooks := t.hooks
+		t.hooks = nil
+		for _, hook := range hooks {
+			t.runCommitHook(ctx, hook)
+		}
+	}
+}
+
+// runCommitHook runs one OnCommit function, logging a panic.
+func (t *managedTx) runCommitHook(ctx context.Context, hook func()) {
+	defer func() {
+		if fault := recover(); fault != nil {
+			t.manager.logger.ErrorContext(
+				ctx,
+				"Function registered to run after commit panicked",
+				slog.Any("panic", fault),
+			)
+		}
+	}()
+	hook()
 }
 
 func (t *managedTx) Query(ctx context.Context, query string, args ...any) (result pgx.Rows, err error) {
@@ -210,7 +261,16 @@ func (t *managedTx) Savepoint(ctx context.Context, fn func(ctx context.Context) 
 		_ = spTx.Rollback(ctx)
 		return err
 	}
-	return spTx.Commit(ctx)
+	err = spTx.Commit(ctx)
+	if err != nil {
+		return err
+	}
+
+	// A released savepoint isn't stored yet, so its functions wait for the enclosing transaction:
+	t.hooks = append(t.hooks, spManaged.hooks...)
+	spManaged.hooks = nil
+	spManaged.parent = t
+	return nil
 }
 
 // ensureReal makes sure that the real transaction exists, creating it if needed.

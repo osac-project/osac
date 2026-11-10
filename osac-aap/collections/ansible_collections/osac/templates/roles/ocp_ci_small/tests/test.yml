@@ -14,9 +14,6 @@
               instanceType: bm.large
     cluster_working_namespace: test-work
     ocp_release_image: example.test/release:latest
-    template_parameters:
-      pull_secret: test-secret
-      ssh_public_key: ssh-rsa
     delete_step_hosted_cluster_override:
       name: osac.workflows.workflow_helpers
       tasks_from: noop.yml
@@ -24,6 +21,14 @@
       name: osac.workflows.workflow_helpers
       tasks_from: noop.yml
   tasks:
+    - name: Generate fixture-only cluster credentials
+      ansible.builtin.set_fact:
+        template_parameters:
+          pull_secret: >-
+            {{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}
+          ssh_public_key: "fixture-ssh-public-key"
+      no_log: true
+
     - name: Run CI cluster delete without external calls
       ansible.builtin.include_role:
         name: osac.templates.ocp_ci_small

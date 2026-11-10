@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -36,10 +37,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 func seedClusterVersion(ctx context.Context, cv *privatev1.ClusterVersion) {
@@ -467,6 +470,42 @@ var _ = Describe("Private clusters server", func() {
 				).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			for _, template := range []struct {
+				id           string
+				capabilities map[string]bool
+			}{
+				{
+					id: "osac.templates.ocp_small",
+					capabilities: map[string]bool{
+						supportsAutomaticCAASEndpointsCapability: true,
+					},
+				},
+				{
+					id: "osac.templates.ocp_4_20_ai_maas",
+					capabilities: map[string]bool{
+						supportsAutomaticCAASEndpointsCapability: true,
+					},
+				},
+				{id: "osac.templates.ocp_ci_small"},
+				{
+					id: "acme.templates.caas-capable",
+					capabilities: map[string]bool{
+						supportsAutomaticCAASEndpointsCapability: true,
+					},
+				},
+			} {
+				_, err = templatesDao.Create().SetObject(privatev1.ClusterTemplate_builder{
+					Id: template.id,
+					Metadata: privatev1.Metadata_builder{
+						Name:   template.id,
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Title:        template.id,
+					Description:  template.id,
+					Capabilities: template.capabilities,
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
 
 			// Create a second template for missing-node-set cases:
 			_, err = templatesDao.Create().
@@ -905,7 +944,92 @@ var _ = Describe("Private clusters server", func() {
 			Expect(stored.GetItems()).To(BeEmpty())
 		})
 
-		It("creates automatic ExternalIPs without attachments and cleans them up", func() {
+		It("skips automatic ExternalIPs and pool reservations when provider networking is disabled", func() {
+			server.settings.ProvisioningEnabled = false
+
+			poolID := "disabled-auto-eip-pool"
+			_, err := server.externalIPPoolDao.Create().SetObject(privatev1.ExternalIPPool_builder{
+				Id:       poolID,
+				Metadata: privatev1.Metadata_builder{Name: poolID, Tenant: auth.SharedTenant}.Build(),
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+				}.Build(),
+				Status: privatev1.ExternalIPPoolStatus_builder{
+					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+					Total:     5,
+					Available: 5,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			createWithoutExternalIPs := func(name string) {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template:                 privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							AutoExternalIpAttachment: proto.Bool(true),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+
+				clusterID := response.GetObject().GetId()
+				eips, err := server.externalIPDao.List().
+					SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, clusterID)).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(eips.GetItems()).To(BeEmpty())
+			}
+
+			poolResponse, err := server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			available := poolResponse.GetObject().GetStatus().GetAvailable()
+			allocated := poolResponse.GetObject().GetStatus().GetAllocated()
+
+			createWithoutExternalIPs(fmt.Sprintf("disabled-auto-eip-%s", uuid.New()[24:32]))
+			poolResponse, err = server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+
+			// No READY pool is available, but the cluster request still succeeds.
+			pool := poolResponse.GetObject()
+			pool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
+			_, err = server.externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			createWithoutExternalIPs(fmt.Sprintf("disabled-auto-eip-%s", uuid.New()[24:32]))
+			poolResponse, err = server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+		})
+
+		It("rejects false automatic endpoint requests for templates that require CaaS endpoints", func() {
+			name := fmt.Sprintf("disabled-endpoints-%s", uuid.New()[24:32])
+			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template:                 privatev1.ClusterTemplateReference_builder{Id: "acme.templates.caas-capable"}.Build(),
+						AutoExternalIpAttachment: proto.Bool(false),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("spec.auto_external_ip_attachment must be omitted or true"))
+
+			clustersDao, err := dao.NewGenericDAO[*privatev1.Cluster]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := clustersDao.List().SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetItems()).To(BeEmpty())
+		})
+
+		It("creates automatic ExternalIPs when a template declares CaaS endpoint support", func() {
 			poolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -929,13 +1053,14 @@ var _ = Describe("Private clusters server", func() {
 				Object: privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("deferred-%s", uuid.New()[24:32])}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
-						Template:                 privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-						AutoExternalIpAttachment: proto.Bool(true),
+						Template: privatev1.ClusterTemplateReference_builder{Id: "acme.templates.caas-capable"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			clusterID := response.GetObject().GetId()
+			Expect(response.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
+			Expect(response.GetObject().GetSpec().GetSupportsAutomaticCaasEndpoints()).To(BeTrue())
 
 			eipDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 			Expect(err).ToNot(HaveOccurred())
@@ -964,6 +1089,95 @@ var _ = Describe("Private clusters server", func() {
 			eipList, err = eipDao.List().SetFilter(filter).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(BeEmpty())
+		})
+
+		It("keeps automatic ExternalIPs while an attachment finalizer holds public deletion", func() {
+			poolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = poolDao.Create().SetObject(privatev1.ExternalIPPool_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					Cidrs: []string{"198.51.100.0/24"}, IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+				}.Build(),
+				Status: privatev1.ExternalIPPoolStatus_builder{
+					State: privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, Total: 5, Available: 5,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			created, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{Object: privatev1.Cluster_builder{
+				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("dns-hold-%s", uuid.New()[24:32])}.Build(),
+				Spec: privatev1.ClusterSpec_builder{
+					Template: privatev1.ClusterTemplateReference_builder{Id: "osac.templates.ocp_small"}.Build(),
+				}.Build(),
+			}.Build()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			clusterID := created.GetObject().GetId()
+			eipFilter := fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, clusterID)
+			eips, err := server.externalIPDao.List().SetFilter(eipFilter).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(eips.GetItems()).To(HaveLen(2))
+			var apiEIP *privatev1.ExternalIP
+			for _, item := range eips.GetItems() {
+				if item.GetMetadata().GetLabels()[autoCreatedEndpointLabel] == "api" {
+					apiEIP = item
+				}
+			}
+			Expect(apiEIP).NotTo(BeNil())
+
+			attachment, err := server.externalIPAttachmentDao.Create().SetObject(privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    fmt.Sprintf("dns-hold-%s", uuid.New()[24:32]),
+					Tenant:  created.GetObject().GetMetadata().GetTenant(),
+					Creator: systemCreator,
+					Labels: map[string]string{
+						autoCreatedLabel:         "true",
+						autoCreatedForLabel:      clusterID,
+						autoCreatedEndpointLabel: "api",
+					},
+					Finalizers: []string{finalizers.Controller},
+				}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: apiEIP.GetId()}.Build(),
+					Cluster:        privatev1.ClusterLocalReference_builder{Id: clusterID}.Build(),
+					TargetEndpoint: privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
+				}.Build(),
+				Status: privatev1.ExternalIPAttachmentStatus_builder{
+					State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			publicServer := &ClustersServer{private: server}
+			_, err = publicServer.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: clusterID}.Build())
+			Expect(err).NotTo(HaveOccurred())
+
+			storedAttachment, err := server.externalIPAttachmentDao.Get().SetId(attachment.GetObject().GetId()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(storedAttachment.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+			Expect(storedAttachment.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(
+				finalizers.Controller))
+
+			storedIP, err := server.externalIPDao.Get().SetId(apiEIP.GetId()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(storedIP.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse(),
+				"the attached IP remains allocated while its attachment finalizer is present")
+		})
+
+		It("leaves the CI template automatic-access setting unchanged", func() {
+			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("ci-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template: privatev1.ClusterTemplateReference_builder{Id: "osac.templates.ocp_ci_small"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeFalse())
 		})
 
 		It("Preserves direct add-on operators through create and get", func() {
@@ -3280,6 +3494,181 @@ var _ = Describe("Private clusters server", func() {
 			})
 		})
 
+		Describe("Tenant-default networking", func() {
+			var defaultSubnetID, defaultGroupID string
+
+			BeforeEach(func() {
+				subnet, err := findDefaultSubnet(ctx, logger, fixtureDAO[*privatev1.Subnet](), testTenant, "")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(subnet).NotTo(BeNil())
+				defaultSubnetID = subnet.GetId()
+				group, err := findDefaultSecurityGroup(ctx, logger, fixtureDAO[*privatev1.SecurityGroup](),
+					subnet.GetSpec().GetVirtualNetwork().GetId(), testTenant, "")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(group).NotTo(BeNil())
+				defaultGroupID = group.GetId()
+			})
+			setSubnetDefaultState := func(state string) {
+				subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				getResponse, err := subnetsDao.Get().SetId(defaultSubnetID).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				subnet := getResponse.GetObject()
+				switch state {
+				case "missing":
+					subnet.GetMetadata().SetLabels(map[string]string{})
+				case "pending":
+					subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
+				case "failed":
+					subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
+				case "deleting":
+					subnet.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+				}
+				_, err = subnetsDao.Update().SetObject(subnet).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				if state == "deleting" {
+					_, err = subnetsDao.Delete().SetId(defaultSubnetID).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+			}
+
+			setSecurityGroupDefaultState := func(state string) {
+				securityGroupsDao, err := dao.NewGenericDAO[*privatev1.SecurityGroup]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				getResponse, err := securityGroupsDao.Get().SetId(defaultGroupID).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				securityGroup := getResponse.GetObject()
+				switch state {
+				case "missing":
+					securityGroup.GetMetadata().SetLabels(map[string]string{})
+				case "pending":
+					securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING)
+				case "failed":
+					securityGroup.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED)
+				case "deleting":
+					securityGroup.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+				}
+				_, err = securityGroupsDao.Update().SetObject(securityGroup).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				if state == "deleting" {
+					_, err = securityGroupsDao.Delete().SetId(defaultGroupID).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+			}
+
+			newOmittedAttachmentRequest := func() *privatev1.ClustersCreateRequest {
+				return privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id: uuid.New(),
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build()
+			}
+
+			newExplicitAttachmentRequest := func() *privatev1.ClustersCreateRequest {
+				request := newOmittedAttachmentRequest()
+				request.GetObject().GetSpec().SetNetworkAttachment(privatev1.ClusterNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-2"}.Build(),
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+						privatev1.SecurityGroupLocalReference_builder{Id: "sg-2"}.Build(),
+					},
+				}.Build())
+				return request
+			}
+
+			expectNoStoredCluster := func(request *privatev1.ClustersCreateRequest) {
+				_, getErr := server.Get(ctx, privatev1.ClustersGetRequest_builder{
+					Id: request.GetObject().GetId(),
+				}.Build())
+				Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+			}
+
+			DescribeTable("classifies an omitted attachment with an unusable default",
+				func(configure func(), code grpccodes.Code, reason string) {
+					configure()
+					request := newOmittedAttachmentRequest()
+					response, err := server.Create(ctx, request)
+					Expect(err).To(HaveOccurred())
+					Expect(response).To(BeNil())
+					st, ok := grpcstatus.FromError(err)
+					Expect(ok).To(BeTrue())
+					Expect(st.Code()).To(Equal(code))
+					Expect(st.Message()).To(ContainSubstring(reason))
+					expectNoStoredCluster(request)
+				},
+				Entry("missing default Subnet", func() { setSubnetDefaultState("missing") },
+					grpccodes.InvalidArgument, "default subnet is required"),
+				Entry("pending default Subnet", func() { setSubnetDefaultState("pending") },
+					grpccodes.FailedPrecondition, "SUBNET_STATE_PENDING"),
+				Entry("failed default Subnet", func() { setSubnetDefaultState("failed") },
+					grpccodes.FailedPrecondition, "SUBNET_STATE_FAILED"),
+				Entry("deleting default Subnet", func() { setSubnetDefaultState("deleting") },
+					grpccodes.FailedPrecondition, "is being deleted"),
+				Entry("missing default SecurityGroup", func() { setSecurityGroupDefaultState("missing") },
+					grpccodes.InvalidArgument, "default security group is required"),
+				Entry("pending default SecurityGroup", func() { setSecurityGroupDefaultState("pending") },
+					grpccodes.FailedPrecondition, "SECURITY_GROUP_STATE_PENDING"),
+				Entry("failed default SecurityGroup", func() { setSecurityGroupDefaultState("failed") },
+					grpccodes.FailedPrecondition, "SECURITY_GROUP_STATE_FAILED"),
+				Entry("deleting default SecurityGroup", func() { setSecurityGroupDefaultState("deleting") },
+					grpccodes.FailedPrecondition, "is being deleted"),
+			)
+
+			It("resolves ready defaults and stores both references", func() {
+				response, err := server.Create(ctx, newOmittedAttachmentRequest())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+				attachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(attachment.GetSubnet().GetId()).To(Equal(defaultSubnetID))
+				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal(defaultGroupID))
+				Expect(response.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).
+					To(Equal("data-0"))
+
+				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{
+					Id: response.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				storedAttachment := stored.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(storedAttachment.GetSubnet().GetId()).To(Equal(defaultSubnetID))
+				Expect(storedAttachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(storedAttachment.GetSecurityGroups()[0].GetId()).To(Equal(defaultGroupID))
+			})
+
+			It("preserves a complete explicit attachment without labelled defaults", func() {
+				setSubnetDefaultState("missing")
+				setSecurityGroupDefaultState("missing")
+				request := newExplicitAttachmentRequest()
+				response, err := server.Create(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+				attachment := response.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(attachment.GetSubnet().GetId()).To(Equal("subnet-2"))
+				Expect(attachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(attachment.GetSecurityGroups()[0].GetId()).To(Equal("sg-2"))
+
+				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{
+					Id: request.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				storedAttachment := stored.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(storedAttachment.GetSubnet().GetId()).To(Equal("subnet-2"))
+				Expect(storedAttachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(storedAttachment.GetSecurityGroups()[0].GetId()).To(Equal("sg-2"))
+			})
+		})
+
 		Describe("Catalog item", func() {
 			var catalogItemsDao *dao.GenericDAO[*privatev1.ClusterCatalogItem]
 
@@ -3585,7 +3974,7 @@ var _ = Describe("Private clusters server", func() {
 			})
 
 			It("Rejects user value for non-editable field", func() {
-				createCatalogItem("cat-noneditable", true, privatev1.ClusterCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Locked: proto.String("forced-key")}.Build()}.Build())
+				createCatalogItem("cat-noneditable", true, privatev1.ClusterCatalogItemFields_builder{Network: privatev1.ClusterNetworkFieldPolicies_builder{PodCidr: privatev1.StringFieldPolicy_builder{Locked: proto.String("10.132.0.0/14")}.Build()}.Build()}.Build())
 
 				_, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
@@ -3593,8 +3982,8 @@ var _ = Describe("Private clusters server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
 						}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
-							CatalogItem:  privatev1.ClusterCatalogItemReference_builder{Id: "cat-noneditable"}.Build(),
-							SshPublicKey: new("user-key"),
+							CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: "cat-noneditable"}.Build(),
+							Network:     privatev1.ClusterNetwork_builder{PodCidr: new("10.200.0.0/14")}.Build(),
 						}.Build(),
 						Status: privatev1.ClusterStatus_builder{
 							Hub: "my-hub-id",
@@ -3608,9 +3997,9 @@ var _ = Describe("Private clusters server", func() {
 				Expect(status.Message()).To(ContainSubstring("not editable"))
 			})
 
-			DescribeTable("validates editable SSH public keys",
+			DescribeTable("validates editable pod CIDRs",
 				func(catID string, value string, expectError bool) {
-					createCatalogItem(catID, true, privatev1.ClusterCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build()}.Build())
+					createCatalogItem(catID, true, privatev1.ClusterCatalogItemFields_builder{Network: privatev1.ClusterNetworkFieldPolicies_builder{PodCidr: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{}.Build()}.Build()}.Build()}.Build())
 
 					response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 						Object: privatev1.Cluster_builder{
@@ -3618,8 +4007,8 @@ var _ = Describe("Private clusters server", func() {
 								Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
 							}.Build(),
 							Spec: privatev1.ClusterSpec_builder{
-								CatalogItem:  privatev1.ClusterCatalogItemReference_builder{Id: catID}.Build(),
-								SshPublicKey: new(value),
+								CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: catID}.Build(),
+								Network:     privatev1.ClusterNetwork_builder{PodCidr: new(value)}.Build(),
 							}.Build(),
 							Status: privatev1.ClusterStatus_builder{
 								Hub: "my-hub-id",
@@ -3631,19 +4020,18 @@ var _ = Describe("Private clusters server", func() {
 						status, ok := grpcstatus.FromError(err)
 						Expect(ok).To(BeTrue())
 						Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-						Expect(status.Message()).To(ContainSubstring("spec.ssh_public_key"))
-						Expect(status.Message()).To(ContainSubstring("invalid OpenSSH public key"))
+						Expect(status.Message()).To(ContainSubstring("pod_cidr"))
 					} else {
 						Expect(err).ToNot(HaveOccurred())
-						Expect(response.GetObject().GetSpec().GetSshPublicKey()).To(Equal(value))
+						Expect(response.GetObject().GetSpec().GetNetwork().GetPodCidr()).To(Equal(value))
 					}
 				},
-				Entry("rejects malformed value", "cat-ssh-invalid", "short-val", true),
-				Entry("accepts an OpenSSH public key", "cat-ssh-valid", testSSHPublicKey, false),
+				Entry("rejects malformed value", "cat-cidr-invalid", "300.0.0.0/8", true),
+				Entry("accepts a valid CIDR", "cat-cidr-valid", "10.128.0.0/14", false),
 			)
 
 			It("Applies default for editable field when not provided", func() {
-				createCatalogItem("cat-default", true, privatev1.ClusterCatalogItemFields_builder{SshPublicKey: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{DefaultValue: proto.String(testSSHPublicKey)}.Build()}.Build()}.Build())
+				createCatalogItem("cat-default", true, privatev1.ClusterCatalogItemFields_builder{Network: privatev1.ClusterNetworkFieldPolicies_builder{PodCidr: privatev1.StringFieldPolicy_builder{Editable: privatev1.EditableStringField_builder{DefaultValue: proto.String("10.132.0.0/14")}.Build()}.Build()}.Build()}.Build())
 
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
@@ -3660,7 +4048,7 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				object := response.GetObject()
-				Expect(object.GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
+				Expect(object.GetSpec().GetNetwork().GetPodCidr()).To(Equal("10.132.0.0/14"))
 			})
 
 			It("Applies spec defaults from template when created via catalog item", func() {
@@ -3681,7 +4069,7 @@ var _ = Describe("Private clusters server", func() {
 							Title:       "Template with defaults",
 							Description: "Template with spec defaults",
 							SpecDefaults: privatev1.ClusterTemplateSpecDefaults_builder{
-								SshPublicKey: proto.String(testSSHPublicKey),
+								Network: privatev1.ClusterNetwork_builder{PodCidr: proto.String("10.132.0.0/14")}.Build(),
 							}.Build(),
 						}.Build(),
 					).
@@ -3703,7 +4091,7 @@ var _ = Describe("Private clusters server", func() {
 				).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				// Create a cluster via catalog item without specifying ssh_public_key:
+				// Create a cluster via catalog item without specifying a pod CIDR:
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -3724,7 +4112,7 @@ var _ = Describe("Private clusters server", func() {
 				object := response.GetObject()
 
 				// Verify spec defaults from template are applied:
-				Expect(object.GetSpec().GetSshPublicKey()).To(Equal(testSSHPublicKey))
+				Expect(object.GetSpec().GetNetwork().GetPodCidr()).To(Equal("10.132.0.0/14"))
 
 				// Verify the explicit Cluster node sets remain populated:
 				nodeSets := object.GetSpec().GetNodeSets()
@@ -4547,9 +4935,9 @@ var _ = Describe("Private clusters server", func() {
 			metadataOnly, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Id:       clusterID,
-					Metadata: privatev1.Metadata_builder{Description: "edited"}.Build(),
+					Metadata: privatev1.Metadata_builder{Labels: map[string]string{"env": "test"}}.Build(),
 				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.description"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(proto.Equal(metadataOnly.GetObject().GetSpec(), created.GetObject().GetSpec())).To(BeTrue())
@@ -5728,6 +6116,33 @@ var _ = Describe("Private clusters server", func() {
 				Expect(updated.GetStatus().GetNodeSets()["compute"].GetObservedVersion()).To(Equal("4.17.0"))
 			})
 
+			It("persists independent observed-version feedback without changing upgrade intent or history", func() {
+				cluster := createCluster()
+				initialSpec := proto.Clone(cluster.GetSpec())
+				initialHistory := proto.Clone(cluster.GetStatus()).(*privatev1.ClusterStatus).GetUpgradeHistory()
+				incomingStatus := proto.Clone(cluster.GetStatus()).(*privatev1.ClusterStatus)
+				incomingStatus.SetObservedVersion("4.17.1")
+				for _, nodeSet := range incomingStatus.GetNodeSets() {
+					nodeSet.SetObservedVersion("4.17.1")
+				}
+				updated, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{Id: cluster.GetId(), Status: incomingStatus}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+						"status.observed_version", "status.node_sets",
+					}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updated.GetObject().GetStatus().GetObservedVersion()).To(Equal("4.17.1"))
+				for _, nodeSet := range updated.GetObject().GetStatus().GetNodeSets() {
+					Expect(nodeSet.GetObservedVersion()).To(Equal("4.17.1"))
+				}
+				stored, err := server.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject().GetSpec(), initialSpec)).To(BeTrue())
+				Expect(stored.GetObject().GetStatus().GetUpgradeHistory()).To(Equal(initialHistory))
+				Expect(stored.GetObject().GetStatus().GetState()).To(Equal(cluster.GetStatus().GetState()))
+			})
+
 			It("keeps independent component IDs and newest-first history", func() {
 				cluster := createCluster()
 				seedNextVersion()
@@ -6576,6 +6991,7 @@ var _ = Describe("Private clusters server", func() {
 				_, err = tenantDao.Update().SetObject(tenant).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
+				By("rejecting the omitted attachment while the readiness reads False")
 				const name = "default-network-not-ready"
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
@@ -6601,6 +7017,27 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(listed.GetTotal()).To(BeZero(), "a rejected Cluster Create must not persist the Cluster")
+
+				By("storing a complete explicit attachment despite the not-ready defaults")
+				created, err := server.Create(ctx, newCaaSNodeSetCreateRequest("explicit-network-after-readiness-reset",
+					map[string]*privatev1.ClusterNodeSet{
+						"compute": privatev1.ClusterNodeSet_builder{
+							Size: proto.Int32(3),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+								Id: "bmit-fabric-id", Shared: true,
+							}.Build(),
+						}.Build(),
+					}, privatev1.ClusterNetworkAttachment_builder{
+						Subnet:         privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+						SecurityGroups: []*privatev1.SecurityGroupLocalReference{privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build()},
+					}.Build()))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(created).ToNot(BeNil())
+				Expect(created.GetObject().GetId()).ToNot(BeEmpty())
+				storedAttachment := created.GetObject().GetSpec().GetNetworkAttachment()
+				Expect(storedAttachment.GetSubnet().GetId()).To(Equal("subnet-1"))
+				Expect(storedAttachment.GetSecurityGroups()).To(HaveLen(1))
+				Expect(storedAttachment.GetSecurityGroups()[0].GetId()).To(Equal("default-sg"))
 			})
 
 			It("Resolves tenant defaults when provider networking is disabled", func() {
@@ -6611,7 +7048,7 @@ var _ = Describe("Private clusters server", func() {
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{Name: "networking-disabled"}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
-							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							Template: privatev1.ClusterTemplateReference_builder{Id: "osac.templates.ocp_small"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
 									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
@@ -6625,11 +7062,17 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 
 				Expect(err).NotTo(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
 				networkAttachment := response.GetObject().GetSpec().GetNetworkAttachment()
 				Expect(networkAttachment.GetSubnet().GetId()).To(Equal(defaults.subnetID))
 				Expect(networkAttachment.GetSecurityGroups()).To(HaveLen(1))
 				Expect(networkAttachment.GetSecurityGroups()[0].GetId()).To(Equal(defaults.securityGroupID))
 				Expect(response.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).To(Equal("data-0"))
+				autoIPs, err := server.externalIPDao.List().SetFilter(fmt.Sprintf(
+					"this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, response.GetObject().GetId(),
+				)).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(autoIPs.GetItems()).To(BeEmpty())
 			})
 
 			It("Selects the first fabric port when multiple exist", func() {
@@ -6831,6 +7274,249 @@ var _ = Describe("Private clusters server", func() {
 				}
 
 			})
+		})
+
+		Describe("Cluster SSH key reference", func() {
+			seedSSHKeySecretInProject := func(name string, tenant string, project string, secretType privatev1.SecretType, data map[string][]byte) *privatev1.Secret {
+				GinkgoHelper()
+				secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				created, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant, Project: project}.Build(),
+					Type:     secretType,
+					Data:     data,
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return created.GetObject()
+			}
+
+			seedSSHKeySecret := func(name string, tenant string, secretType privatev1.SecretType, data map[string][]byte) *privatev1.Secret {
+				GinkgoHelper()
+				return seedSSHKeySecretInProject(name, tenant, "", secretType, data)
+			}
+
+			createCluster := func(sshKey *privatev1.SecretReference) (*privatev1.Cluster, error) {
+				GinkgoHelper()
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
+						}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							SshKey:   sshKey,
+						}.Build(),
+						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
+					}.Build(),
+				}.Build())
+				if err != nil {
+					return nil, err
+				}
+				return response.GetObject(), nil
+			}
+
+			updateClusterSSHKey := func(id string, sshKey *privatev1.SecretReference, paths ...string) (*privatev1.Cluster, error) {
+				GinkgoHelper()
+				if len(paths) == 0 {
+					paths = []string{"spec.ssh_key"}
+				}
+				response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id:   id,
+						Spec: privatev1.ClusterSpec_builder{SshKey: sshKey}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
+				}.Build())
+				if err != nil {
+					return nil, err
+				}
+				return response.GetObject(), nil
+			}
+
+			It("canonicalizes a named SSH key Secret and stores no key material", func() {
+				secret := seedSSHKeySecret(
+					fmt.Sprintf("cluster-key-%s", uuid.New()[24:32]),
+					testTenant,
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+
+				object, err := createCluster(privatev1.SecretReference_builder{Name: secret.GetMetadata().GetName()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()))
+				Expect(object.GetSpec().GetSshKey().GetName()).To(Equal(secret.GetMetadata().GetName()))
+				Expect(object.GetSpec().GetSshKey().GetShared()).To(BeFalse())
+
+				encoded, err := protojson.Marshal(object)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(string(encoded)).NotTo(ContainSubstring(testSSHPublicKey))
+			})
+
+			It("canonicalizes an SSH key Secret selected by ID", func() {
+				secret := seedSSHKeySecret(
+					fmt.Sprintf("cluster-key-id-%s", uuid.New()[24:32]),
+					testTenant,
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+
+				object, err := createCluster(privatev1.SecretReference_builder{Id: secret.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()))
+			})
+
+			It("resolves Cluster SSH-key references from any tenant project", func() {
+				projects, err := dao.NewGenericDAO[*privatev1.Project]().
+					SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				for _, project := range []string{"cluster-key-project", "cluster-key-other-project"} {
+					_, err = projects.Create().SetObject(privatev1.Project_builder{
+						Id:       project,
+						Metadata: privatev1.Metadata_builder{Name: project, Tenant: testTenant}.Build(),
+					}.Build()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+
+				keyName := fmt.Sprintf("cluster-cross-project-key-%s", uuid.New()[24:32])
+				rootSecret := seedSSHKeySecret(keyName, testTenant,
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)})
+				projectSecret := seedSSHKeySecretInProject(keyName, testTenant, "cluster-key-project",
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)})
+				otherSecret := seedSSHKeySecretInProject(keyName, testTenant, "cluster-key-other-project",
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)})
+				Expect(rootSecret.GetId()).NotTo(Equal(projectSecret.GetId()))
+				Expect(projectSecret.GetId()).NotTo(Equal(otherSecret.GetId()))
+
+				By("selecting the named key from the tenant's default project")
+				object, err := createCluster(privatev1.SecretReference_builder{Name: keyName}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(object.GetSpec().GetSshKey().GetId()).To(Equal(rootSecret.GetId()))
+
+				By("selecting the named key from an explicit project of the tenant")
+				object, err = createCluster(privatev1.SecretReference_builder{
+					Name: keyName, Project: "cluster-key-other-project",
+				}.Build())
+				Expect(err).ToNot(HaveOccurred(),
+					"an explicit project may differ from the cluster's own project")
+				Expect(object.GetSpec().GetSshKey().GetId()).To(Equal(otherSecret.GetId()))
+				Expect(object.GetSpec().GetSshKey().GetProject()).To(Equal("cluster-key-other-project"))
+				Expect(projectSecret.GetId()).NotTo(Equal(otherSecret.GetId()),
+					"the explicit project selector must win over the default project's same-name key")
+			})
+
+			It("rejects an SSH key reference without id or name", func() {
+				_, err := createCluster(privatev1.SecretReference_builder{}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("must specify id or name"))
+			})
+
+			It("rejects a shared SSH key Secret reference", func() {
+				secret := seedSSHKeySecret(
+					fmt.Sprintf("cluster-shared-key-%s", uuid.New()[24:32]),
+					auth.SharedTenant,
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+
+				_, err := createCluster(privatev1.SecretReference_builder{Id: secret.GetId(), Shared: true}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("must be tenant-scoped"))
+			})
+
+			It("rejects a cross-tenant SSH key Secret reference", func() {
+				tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
+					SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tenantsDao.Create().SetObject(privatev1.Tenant_builder{
+					Id:       "other-tenant",
+					Metadata: privatev1.Metadata_builder{Name: "other-tenant", Tenant: "other-tenant"}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				secret := seedSSHKeySecret(
+					fmt.Sprintf("cluster-other-key-%s", uuid.New()[24:32]),
+					"other-tenant",
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+
+				_, err = createCluster(privatev1.SecretReference_builder{Id: secret.GetId()}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found or is not visible"))
+			})
+
+			It("rejects a missing SSH key Secret reference", func() {
+				_, err := createCluster(privatev1.SecretReference_builder{Name: "no-such-key"}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found or is not visible"))
+			})
+
+			DescribeTable("rejects unusable SSH key Secrets without exposing material",
+				func(secretType privatev1.SecretType, data map[string][]byte, messagePart string) {
+					secret := seedSSHKeySecret(
+						fmt.Sprintf("cluster-bad-key-%s", uuid.New()[24:32]),
+						testTenant,
+						secretType,
+						data,
+					)
+
+					_, err := createCluster(privatev1.SecretReference_builder{Id: secret.GetId()}.Build())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(messagePart))
+					Expect(err.Error()).NotTo(ContainSubstring(testSSHPublicKey))
+				},
+				Entry("wrong type", privatev1.SecretType_SECRET_TYPE_USER_DATA, map[string][]byte{"userdata": []byte("#cloud-config")}, "type"),
+				Entry("missing public key entry", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY, nil, "public_key"),
+				Entry("malformed OpenSSH data", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY, map[string][]byte{"public_key": []byte("not-a-key")}, "invalid OpenSSH public key"),
+			)
+
+			It("rejects changing the SSH key reference", func() {
+				secretA := seedSSHKeySecret(
+					fmt.Sprintf("cluster-ready-a-%s", uuid.New()[24:32]),
+					testTenant, privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+				secretB := seedSSHKeySecret(
+					fmt.Sprintf("cluster-ready-b-%s", uuid.New()[24:32]),
+					testTenant, privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+
+				object, err := createCluster(privatev1.SecretReference_builder{Id: secretA.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = updateClusterSSHKey(object.GetId(), privatev1.SecretReference_builder{Id: secretB.GetId()}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("ssh_key is immutable"))
+			})
+
+			It("keeps a stale reference on unrelated updates after the Secret was deleted", func() {
+				secret := seedSSHKeySecret(
+					fmt.Sprintf("cluster-stale-%s", uuid.New()[24:32]),
+					testTenant, privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)})
+
+				object, err := createCluster(privatev1.SecretReference_builder{Id: secret.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+					SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = secretsDao.Delete().SetId(secret.GetId()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				updated, err := updateClusterSSHKey(object.GetId(), nil, "spec.version")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updated.GetSpec().GetSshKey()).NotTo(BeNil())
+				Expect(updated.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()))
+			})
+
 		})
 	})
 })

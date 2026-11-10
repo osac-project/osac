@@ -13,6 +13,7 @@
   until: metallb_bgp_advertisement is successful
   retries: 60
   delay: 10
+  no_log: true
 
 - name: Create BGPPeer resources for each worker node
   kubernetes.core.k8s:
@@ -28,6 +29,7 @@
   until: metallb_bgp_peers is successful
   retries: 60
   delay: 10
+  no_log: true
 
 - name: Log BGP configuration summary
   ansible.builtin.debug:

@@ -94,6 +94,7 @@ jobs:
     secrets:
       OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
       BUF_TOKEN: ${{ secrets.BUF_TOKEN }}
+      CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
       KONFLUX_SA_TOKEN: ${{ secrets.KONFLUX_SA_TOKEN }}
     with:
       mode: release

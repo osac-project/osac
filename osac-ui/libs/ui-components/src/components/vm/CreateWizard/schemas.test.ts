@@ -16,8 +16,6 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
   id: 'catalog-rhel-9',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: 'catalog-rhel-9',
     annotations: {},
     creator: 'foo',
@@ -251,7 +249,7 @@ describe('buildComputeInstanceStepSchema', () => {
       },
     });
     expect(errors).toEqual({
-      spec: { userData: { value: { inline: 'Cloud-init must not exceed 64 KB.' } } },
+      spec: { userData: { value: { inline: 'User data must not exceed 64 KB.' } } },
     });
 
     await expect(

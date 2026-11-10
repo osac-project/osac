@@ -22,6 +22,7 @@ import StorageBackendDetailsActionButtons from '../../components/Storage/Storage
 import StorageBackendStatusLabel from '../../components/Storage/StorageBackendStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
 import { displayValue } from '../../utils/detailFormatters';
+import { getStorageBackendProviderLabel } from '../../utils/storageBackendProvider';
 
 const BACKENDS_LIST_PATH = '/admin/infrastructure/storage/backends';
 
@@ -99,7 +100,7 @@ export const StorageBackendDetailsPage = () => {
               <DescriptionListGroup>
                 <DescriptionListTerm>{t('Provider')}</DescriptionListTerm>
                 <DescriptionListDescription>
-                  {displayValue(backend.spec?.provider)}
+                  {displayValue(getStorageBackendProviderLabel(backend.spec?.provider ?? '', t))}
                 </DescriptionListDescription>
               </DescriptionListGroup>
               <DescriptionListGroup>

@@ -1,0 +1,188 @@
+suite: metering reader grants
+templates:
+  - templates/readers.yaml
+tests:
+  - it: renders nothing when no readers are configured
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders one read-only KafkaUser for one reader
+    set:
+      readers:
+        - name: billing-reader
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: KafkaUser
+      - equal:
+          path: metadata.name
+          value: billing-reader
+      - equal:
+          path: metadata.namespace
+          value: osac-kafka
+      - equal:
+          path: metadata.labels["strimzi.io/cluster"]
+          value: osac-kafka
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: metering-reader
+      - equal:
+          path: spec.authentication.type
+          value: scram-sha-512
+      - equal:
+          path: spec.authorization.type
+          value: simple
+      # Exactly four ACLs: read and describe on the heartbeat topic prefix,
+      # deny on the two built-in tenant topics, and read on the consumer
+      # group. No write, no other topic.
+      - equal:
+          path: spec.authorization.acls
+          value:
+            - resource:
+                type: topic
+                name: osac.metering.heartbeat.
+                patternType: prefix
+              operations:
+                - Read
+                - Describe
+              host: "*"
+            - resource:
+                type: topic
+                name: osac.metering.heartbeat.system
+                patternType: literal
+              operations:
+                - Read
+                - Describe
+              type: deny
+              host: "*"
+            - resource:
+                type: topic
+                name: osac.metering.heartbeat.shared
+                patternType: literal
+              operations:
+                - Read
+                - Describe
+              type: deny
+              host: "*"
+            - resource:
+                type: group
+                name: billing-reader
+                patternType: literal
+              operations:
+                - Read
+              host: "*"
+
+  - it: reads the same topic prefix from every reader's own group
+    set:
+      readers:
+        - name: billing-reader
+        - name: audit-reader
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: billing-reader
+        documentIndex: 0
+      - equal:
+          path: spec.authorization.acls[0].resource.name
+          value: osac.metering.heartbeat.
+        documentIndex: 0
+      - equal:
+          path: spec.authorization.acls[0].resource.patternType
+          value: prefix
+        documentIndex: 0
+      - equal:
+          path: spec.authorization.acls[3].resource.name
+          value: billing-reader
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: audit-reader
+        documentIndex: 1
+      - equal:
+          path: spec.authorization.acls[0].resource.name
+          value: osac.metering.heartbeat.
+        documentIndex: 1
+      - equal:
+          path: spec.authorization.acls[3].resource.name
+          value: audit-reader
+        documentIndex: 1
+
+  - it: renders only the readers still in the values
+    set:
+      readers:
+        - name: audit-reader
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: audit-reader
+
+  - it: rejects two readers with the same name
+    set:
+      readers:
+        - name: billing-reader
+        - name: billing-reader
+    asserts:
+      - failedTemplate:
+          errorPattern: 'duplicate metering reader "billing-reader": each reader name must be unique'
+
+  - it: rejects a reader name that is not a lowercase DNS name
+    set:
+      readers:
+        - name: Billing_Reader
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "Billing_Reader" must be a lowercase DNS name'
+
+  - it: rejects a reader name that collides with an OSAC KafkaUser
+    set:
+      readers:
+        - name: osac-metering
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac-metering" is a KafkaUser OSAC owns'
+
+  - it: rejects the echo adapter KafkaUser name
+    set:
+      readers:
+        - name: osac-metering-echo-adapter
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac-metering-echo-adapter" is a KafkaUser OSAC owns'
+
+  - it: rejects the m360 adapter KafkaUser name
+    set:
+      readers:
+        - name: osac-metering-m360-adapter
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac-metering-m360-adapter" is a KafkaUser OSAC owns'
+
+  - it: rejects any reader name in the reserved osac- prefix
+    set:
+      readers:
+        - name: osac-billing-reader
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac-billing-reader" uses the reserved osac- or osac. name prefix'
+
+  - it: rejects any reader name in the reserved osac. prefix
+    set:
+      readers:
+        - name: osac.billing-reader
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "osac.billing-reader" uses the reserved osac- or osac. name prefix'
+
+  - it: rejects a reader name longer than a KafkaUser name
+    set:
+      readers:
+        - name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - failedTemplate:
+          errorPattern: 'metering reader "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" must be at most 253 characters'

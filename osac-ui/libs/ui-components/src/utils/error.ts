@@ -24,23 +24,23 @@ export const parseHttpErrorBody = (body: string): string | undefined => {
   }
 };
 
-export const formatHttpApiErrorMessage = (status: number, body: string, statusText = ''): string =>
-  parseHttpErrorBody(body) ?? `API ${status}: ${body || statusText}`;
-
 export const getErrorMessage = (error: unknown): string => {
+  let errMsg = '';
+
   if (error instanceof Error) {
     if ('rawMessage' in error && typeof error.rawMessage === 'string') {
-      return error.rawMessage;
+      errMsg = error.rawMessage;
+    } else {
+      errMsg = error.message;
     }
-    return error.message || '';
   }
   if (typeof error === 'string') {
-    return error;
+    errMsg = error;
   }
   if (error instanceof String) {
-    return error.toString();
+    errMsg = error.toString();
   }
-  return 'Unexpected error';
+  return errMsg || 'Unexpected error';
 };
 
 /** Map fulfillment API errors to translated user-facing messages. */

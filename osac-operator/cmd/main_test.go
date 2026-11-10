@@ -136,6 +136,34 @@ var _ = Describe("discovery ignition TLS", func() {
 		Expect(string(body)).To(Equal(`{"ignition":true}`))
 	})
 
+	It("uses the ingress CA for management TLS when discovery trust is disabled", func() {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"management":true}`))
+		}))
+		defer srv.Close()
+		Expect(os.Setenv(envIgnitionTrustIngressCA, "false")).To(Succeed())
+		bundle := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+		reader := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).WithObjects(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "default-ingress-cert", Namespace: "openshift-config-managed"},
+			Data:       map[string]string{"ca-bundle.crt": string(bundle)},
+		}).Build()
+
+		roots, err := newManagementTrustRootCAs(reader)
+		Expect(err).NotTo(HaveOccurred())
+		fetcher, err := newDiscoveryIgnitionFetcherWithRoots(roots)
+		Expect(err).NotTo(HaveOccurred())
+		body, err := fetcher.FetchIgnition(context.Background(), srv.URL)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(body)).To(Equal(`{"management":true}`))
+	})
+
+	It("uses system roots when the OpenShift ingress CA ConfigMap is absent", func() {
+		reader := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build()
+		roots, err := newManagementTrustRootCAs(reader)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(roots).NotTo(BeNil())
+	})
+
 	It("fails closed when the ingress CA ConfigMap is missing", func() {
 		Expect(os.Setenv(envIgnitionTrustIngressCA, "true")).To(Succeed())
 		_, err := newDiscoveryIgnitionFetcher(fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).Build())

@@ -1,8 +1,47 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { Secrets } from '@osac/types';
+import { type Cluster, Clusters, Secrets } from '@osac/types';
+import { type CelFilter, cel } from '@osac/ui-components/api/cel';
+import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
 
 import { useApiFetch } from '../api-context';
+import { useListResource } from '../use-resource';
+
+const combineClusterListFilter = (
+  projectFilter: CelFilter<Cluster> | undefined,
+  filters?: CelFilter<Cluster>,
+): CelFilter<Cluster> | undefined => {
+  const expression = cel<Cluster>((builder) => builder.and(projectFilter, filters));
+  return expression === '' ? undefined : expression;
+};
+
+export const useClusters = (
+  filters?: CelFilter<Cluster>,
+  enabled = true,
+): {
+  clusters: Cluster[];
+  totalItems: number;
+  isLoading: boolean;
+  error: unknown;
+} => {
+  const projectFilter = useProjectFilterQuery<Cluster>();
+  const filter = combineClusterListFilter(projectFilter, filters);
+  const totalsFilter = projectFilter;
+
+  const filteredClustersQuery = useListResource(Clusters, filter ? { filter } : {}, { enabled });
+  const totalClustersQuery = useListResource(
+    Clusters,
+    totalsFilter ? { filter: totalsFilter, limit: 0 } : { limit: 0 },
+    { enabled },
+  );
+
+  return {
+    clusters: filteredClustersQuery.data?.items ?? [],
+    totalItems: totalClustersQuery.data?.total ?? 0,
+    isLoading: filteredClustersQuery.isLoading || totalClustersQuery.isLoading,
+    error: filteredClustersQuery.error ?? totalClustersQuery.error,
+  };
+};
 
 const triggerDownload = (content: string, filename: string) => {
   const blob = new Blob([content], { type: 'application/octet-stream' });

@@ -106,14 +106,25 @@ def _occupied_intervals(cidr: ipaddress.IPv4Network, reserved_prefixes) -> list[
     return merged
 
 
-def select_address(cidr: str, reserved_prefixes: list[str]) -> str:
-    """Return the first unused eligible IPv4 host, or raise ValueError on exhaustion."""
+def select_address(
+    cidr: str,
+    reserved_prefixes: list[str],
+    *,
+    exclude_network_broadcast: bool = True,
+) -> str:
+    """Return the first unused IPv4 address, or raise ValueError on exhaustion.
+
+    Ordinary address pools exclude their CIDR network and broadcast addresses.
+    Range consumers such as CaaS ingress can disable that rule when nested
+    CIDRs partition a parent Subnet; they must reserve any disallowed parent
+    boundary addresses explicitly in ``reserved_prefixes``.
+    """
     network = _canonical_ipv4(cidr, "pool CIDR")
     merged = _occupied_intervals(network, reserved_prefixes)
 
     first_host = int(network.network_address)
     last_host = int(network.broadcast_address)
-    if network.prefixlen <= 30:
+    if exclude_network_broadcast and network.prefixlen <= 30:
         first_host += 1
         last_host -= 1
 
@@ -253,7 +264,7 @@ def _normalize_subnet_record(record) -> dict:
             "Netris API subnet record must be an IPv4 prefix",
             category="malformed_response",
         )
-    return {
+    normalized = {
         "id": subnet_id,
         "name": name,
         "prefix": str(network),
@@ -261,6 +272,33 @@ def _normalize_subnet_record(record) -> dict:
         "site_id": site_id,
         "tenant_id": tenant_id,
     }
+    vpc = record.get("vpc")
+    if vpc is not None:
+        if not isinstance(vpc, dict):
+            raise NetrisExternalIPError(
+                "Netris API subnet record carries a malformed VPC",
+                category="malformed_response",
+            )
+        vpc_id = vpc.get("id")
+        if (
+            vpc.get("name") in (None, "")
+            and (
+                vpc_id is None
+                or (
+                    isinstance(vpc_id, int)
+                    and not isinstance(vpc_id, bool)
+                    and vpc_id == 0
+                )
+            )
+        ):
+            return normalized
+        if isinstance(vpc_id, bool) or not isinstance(vpc_id, int) or vpc_id <= 0:
+            raise NetrisExternalIPError(
+                "Netris API subnet record omits its numeric VPC id",
+                category="malformed_response",
+            )
+        normalized["vpc_id"] = vpc_id
+    return normalized
 
 
 class NetrisSubnetClient:
@@ -341,7 +379,10 @@ class NetrisSubnetClient:
             )
         return [_normalize_subnet_record(record) for record in data]
 
-    def create_subnet(self, name: str, prefix: str, site_id: int, tenant_id: int):
+    def create_subnet(
+        self, name: str, prefix: str, site_id: int, tenant_id: int,
+        vpc_id: int | None = None,
+    ):
         """Create a nat reservation subnet and return its provider id."""
         body = {
             "name": name,
@@ -350,6 +391,8 @@ class NetrisSubnetClient:
             "sites": [{"id": int(site_id)}],
             "tenant": {"id": int(tenant_id)},
         }
+        if vpc_id is not None:
+            body["vpc"] = {"id": int(vpc_id)}
         parsed = self._request("POST", SUBNET_PATH, body=body, success_codes=(200, 201))
         data = parsed.get("data")
         if isinstance(data, dict):

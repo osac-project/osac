@@ -109,8 +109,8 @@ func markLegacyNodePoolProgress(pool *hypershiftv1beta1.NodePool, id string,
 	}
 }
 
-// controlPlaneUpgradeObservation requires HyperShift to have observed the
-// current spec generation before attributing its version history to this ID.
+// controlPlaneUpgradeObservation classifies the selected attempt from both
+// HyperShift version histories and current HostedCluster health.
 func controlPlaneUpgradeObservation(order *v1alpha1.ClusterOrder,
 	hc *hypershiftv1beta1.HostedCluster, id string) *v1alpha1.UpgradeObservation {
 	if id == "" || hc.Annotations[v1alpha1.UpgradeAttemptIDAnnotation] != id ||
@@ -118,44 +118,60 @@ func controlPlaneUpgradeObservation(order *v1alpha1.ClusterOrder,
 		return nil
 	}
 	observation := &v1alpha1.UpgradeObservation{AttemptID: id}
-	if rejected := currentHostedClusterCondition(hc, string(hypershiftv1beta1.ValidReleaseImage)); rejected != nil && rejected.Status == metav1.ConditionFalse && terminalReleaseReason(rejected.Reason) {
-		observation.State = v1alpha1.UpgradeObservationFailed
-		observation.Message = "Control-plane release image was rejected: " + rejected.Reason
-	}
-	if !hostedClusterObservedRelease(hc, order.Spec.ReleaseImage) {
+	completedControlPlane := controlPlaneVersionAtState(&hc.Status.ControlPlaneVersion, configv1.CompletedUpdate)
+	completedGuest := versionAtState(hc.Status.Version, configv1.CompletedUpdate)
+	if completedControlPlane != "" && completedControlPlane == completedGuest &&
+		currentHostedClusterConditionStatus(hc, string(hypershiftv1beta1.HostedClusterAvailable), metav1.ConditionTrue) &&
+		currentHostedClusterConditionStatus(hc, string(hypershiftv1beta1.HostedClusterDegraded), metav1.ConditionFalse) &&
+		currentHostedClusterConditionStatus(hc, string(hypershiftv1beta1.ClusterVersionSucceeding), metav1.ConditionTrue) &&
+		currentHostedClusterConditionStatus(hc, string(hypershiftv1beta1.ClusterVersionProgressing), metav1.ConditionFalse) {
+		observation.State = v1alpha1.UpgradeObservationSucceeded
+		observation.Version = completedControlPlane
 		return observation
 	}
-	if len(hc.Status.Version.History) > 0 && hc.Status.Version.History[0].Image == order.Spec.ReleaseImage {
-		applyControlPlaneHistoryObservation(hc, hc.Status.Version.History[0], observation)
+	partialControlPlane := controlPlaneVersionAtState(&hc.Status.ControlPlaneVersion, configv1.PartialUpdate)
+	partialClusterVersion := versionAtState(hc.Status.Version, configv1.PartialUpdate)
+	// The order carries no target version with which to disambiguate conflicting
+	// partial histories; feedback must not attribute either one to the attempt.
+	if partialControlPlane != "" && partialClusterVersion != "" && partialControlPlane != partialClusterVersion {
+		return observation
 	}
-	if currentHostedClusterConditionTrue(hc, string(hypershiftv1beta1.ClusterVersionProgressing)) && observation.State == "" {
+	if partialControlPlane != "" {
 		observation.State = v1alpha1.UpgradeObservationProgressing
+		observation.Version = partialControlPlane
+	} else if partialClusterVersion != "" {
+		observation.State = v1alpha1.UpgradeObservationProgressing
+		observation.Version = partialClusterVersion
 	}
 	return observation
 }
 
-// hostedClusterObservedRelease reports whether HyperShift has
-// observed the requested release.
-func hostedClusterObservedRelease(hc *hypershiftv1beta1.HostedCluster, image string) bool {
-	return hc.Status.Version != nil && hc.Status.Version.ObservedGeneration >= hc.Generation &&
-		hc.Status.Version.Desired.Image == image
+// versionAtState returns the desired semver only when the newest
+// HostedCluster status.version history entry reports it in the requested state.
+func versionAtState(status *hypershiftv1beta1.ClusterVersionStatus, state configv1.UpdateState) string {
+	if status == nil || len(status.History) == 0 {
+		return ""
+	}
+	latest := status.History[0]
+	return historyVersionAtState(status.Desired.Version, latest.Version, latest.State, state)
 }
 
-// applyControlPlaneHistoryObservation requires current HostedCluster health
-// before treating a completed HyperShift update as successful.
-func applyControlPlaneHistoryObservation(hc *hypershiftv1beta1.HostedCluster,
-	history configv1.UpdateHistory, observation *v1alpha1.UpgradeObservation) {
-	if history.State == configv1.CompletedUpdate {
-		observation.Version = history.Version
-		if currentHostedClusterConditionTrue(hc, string(hypershiftv1beta1.HostedClusterAvailable)) &&
-			!currentHostedClusterConditionTrue(hc, string(hypershiftv1beta1.HostedClusterDegraded)) {
-			observation.State = v1alpha1.UpgradeObservationSucceeded
-		}
+// controlPlaneVersionAtState applies the same phase gate to the control-plane
+// component history.
+func controlPlaneVersionAtState(status *hypershiftv1beta1.ControlPlaneVersionStatus, state configv1.UpdateState) string {
+	if status == nil || len(status.History) == 0 {
+		return ""
 	}
-	if (history.State == configv1.PartialUpdate || history.State == configv1.CompletedUpdate) &&
-		observation.State == "" {
-		observation.State = v1alpha1.UpgradeObservationProgressing
+	latest := status.History[0]
+	return historyVersionAtState(status.Desired.Version, latest.Version, latest.State, state)
+}
+
+func historyVersionAtState(desiredVersion, latestVersion string,
+	latestState, state configv1.UpdateState) string {
+	if desiredVersion == "" || latestVersion != desiredVersion || latestState != state {
+		return ""
 	}
+	return latestVersion
 }
 
 // nodePoolUpgradeObservation classifies only the NodePool stamped for the
@@ -167,47 +183,26 @@ func nodePoolUpgradeObservation(order *v1alpha1.ClusterOrder,
 		return nil
 	}
 	observation := &v1alpha1.UpgradeObservation{AttemptID: id, Version: pool.Status.Version}
-	if reason := nodePoolRejectedReleaseReason(pool); reason != "" {
-		observation.State = v1alpha1.UpgradeObservationFailed
-		observation.Message = "Node-pool release image was rejected: " + reason
-	}
 	updating := currentNodePoolCondition(pool, hypershiftv1beta1.NodePoolUpdatingVersionConditionType)
-	if updating != nil && updating.Status == corev1.ConditionTrue && observation.State == "" {
+	if updating != nil && updating.Status == corev1.ConditionTrue {
 		observation.State = v1alpha1.UpgradeObservationProgressing
 	}
-	if observation.State != v1alpha1.UpgradeObservationFailed && nodePoolReadyAtVersion(pool) {
+	if nodePoolReadyAtVersion(pool) {
 		observation.ReadyAtVersion = true
 		observation.State = v1alpha1.UpgradeObservationSucceeded
 	}
 	return observation
 }
 
-// nodePoolRejectedReleaseReason returns the terminal reason for
-// a rejected NodePool release.
-func nodePoolRejectedReleaseReason(pool *hypershiftv1beta1.NodePool) string {
-	reason := ""
-	for _, kind := range []string{hypershiftv1beta1.NodePoolValidReleaseImageConditionType,
-		hypershiftv1beta1.NodePoolValidPlatformImageType} {
-		if rejected := currentNodePoolCondition(pool, kind); rejected != nil &&
-			rejected.Status == corev1.ConditionFalse && terminalReleaseReason(rejected.Reason) {
-			reason = rejected.Reason
-		}
-	}
-	return reason
-}
-
-// nodePoolReadyAtVersion reports whether every NodePool replica
-// is ready at the reported version.
+// nodePoolReadyAtVersion reports the current completion signals for a
+// NodePool with a nonempty reported version.
 func nodePoolReadyAtVersion(pool *hypershiftv1beta1.NodePool) bool {
 	if pool.Status.Version == "" {
 		return false
 	}
-	if updating := nodePoolCondition(pool, hypershiftv1beta1.NodePoolUpdatingVersionConditionType); updating != nil &&
-		updating.Status == corev1.ConditionTrue {
-		return false
-	}
-	return nodePoolIsReady(pool) &&
-		(pool.Spec.Replicas == nil || pool.Status.Replicas == *pool.Spec.Replicas)
+	return currentNodePoolConditionStatus(pool, hypershiftv1beta1.NodePoolUpdatingVersionConditionType, corev1.ConditionFalse) &&
+		currentNodePoolConditionStatus(pool, hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, corev1.ConditionTrue) &&
+		currentNodePoolConditionStatus(pool, hypershiftv1beta1.NodePoolReadyConditionType, corev1.ConditionTrue)
 }
 
 // nodePoolUpgradeBaseline records the UpdatingVersion transition seen before
@@ -231,11 +226,12 @@ func currentHostedClusterCondition(hc *hypershiftv1beta1.HostedCluster, kind str
 	return condition
 }
 
-// currentHostedClusterConditionTrue reports whether the current
-// condition is true.
-func currentHostedClusterConditionTrue(hc *hypershiftv1beta1.HostedCluster, kind string) bool {
+// currentHostedClusterConditionStatus requires a condition from the current
+// HostedCluster generation with the specified status.
+func currentHostedClusterConditionStatus(hc *hypershiftv1beta1.HostedCluster, kind string,
+	status metav1.ConditionStatus) bool {
 	condition := currentHostedClusterCondition(hc, kind)
-	return condition != nil && condition.Status == metav1.ConditionTrue
+	return condition != nil && condition.Status == status
 }
 
 // currentNodePoolCondition returns a NodePool condition observed
@@ -248,6 +244,14 @@ func currentNodePoolCondition(pool *hypershiftv1beta1.NodePool, kind string) *hy
 	return condition
 }
 
+// currentNodePoolConditionStatus requires a condition from the current
+// NodePool generation with the specified status.
+func currentNodePoolConditionStatus(pool *hypershiftv1beta1.NodePool, kind string,
+	status corev1.ConditionStatus) bool {
+	condition := currentNodePoolCondition(pool, kind)
+	return condition != nil && condition.Status == status
+}
+
 // nodePoolCondition returns the NodePool condition of the requested kind.
 func nodePoolCondition(pool *hypershiftv1beta1.NodePool, kind string) *hypershiftv1beta1.NodePoolCondition {
 	for i := range pool.Status.Conditions {
@@ -257,17 +261,6 @@ func nodePoolCondition(pool *hypershiftv1beta1.NodePool, kind string) *hypershif
 		}
 	}
 	return nil
-}
-
-// terminalReleaseReason reports whether a release-image
-// rejection reason is terminal.
-func terminalReleaseReason(reason string) bool {
-	switch reason {
-	case "ValidationFailed", "UnsupportedReleaseImage", "InvalidReleaseImage", "UnsupportedVersion", "VersionSkew", "DowngradeNotSupported":
-		return true
-	default:
-		return false
-	}
 }
 
 // nodeSetRequested reports whether the order explicitly requests the node set.

@@ -84,6 +84,13 @@ spec:
 			`"bareMetal":{"instanceType":"test"},"upgradeObservation":{"attemptID":"np-id","state":"Unknown"}}]}}`)
 		Expect(err).To(HaveOccurred())
 		Expect(readState("{.status.nodeRequests[0].upgradeObservation.state}")).To(Equal("Succeeded"))
+
+		_, err = patchStatus(`{"status":{"observedVersion":"4.22.1","nodeRequests":[{` +
+			`"nodeSet":"workers","numberOfNodes":1,"bareMetal":{"instanceType":"test"},` +
+			`"observedVersion":"4.22.0"}]}}`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(readState("{.status.observedVersion}")).To(Equal("4.22.1"))
+		Expect(readState("{.status.nodeRequests[0].observedVersion}")).To(Equal("4.22.0"))
 	})
 
 	It("passes the configured upgrade deadlines to the installed manager", func() {

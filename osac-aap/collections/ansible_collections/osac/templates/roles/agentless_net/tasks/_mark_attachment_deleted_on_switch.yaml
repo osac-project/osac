@@ -1,21 +1,17 @@
 ---
-- name: Write the NetworkAttachment tombstone on its switch under the NVUE lock
-  ansible.builtin.raw: |
-    flock /tmp/nvue.lock sh -s -- {{ osac_job_vars.resource.id }} <<'SH'
-    set -eu
-    id="$1"
-    directory=/var/lib/osac/agentless-net-v1/tombstones
-    install -d -m 0700 "$directory"
-    umask 077
-    : >"$directory/network-attachment-$id"
-    SH
-  delegate_to: "{{ _agentless_net_switch_name }}"
-  become: true
+- name: Record the NetworkAttachment deletion on its switch
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: set_deletion_guard
+    apply:
+      delegate_to: "{{ _agentless_net_switch_name }}"
+      become: true
   vars:
     ansible_connection: ssh
     ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
     ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
     ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port | default(22) }}"
-    ansible_network_os: cumulus
-  changed_when: true
+    ansible_network_os: "{{ hostvars[_agentless_net_switch_name].ansible_network_os }}"
+    guard_scope: "{{ _agentless_net_deletion_guard_scope }}"
+    guard_key: "network-attachment-{{ osac_job_vars.resource.id }}"
   no_log: true

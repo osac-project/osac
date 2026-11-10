@@ -295,10 +295,34 @@ const matchesProjectSearchFilter = (filter: string | undefined, project: Project
   );
 };
 
+const matchesVirtualNetworkIdInFilter = (
+  filter: string | undefined,
+  virtualNetwork: string | undefined,
+): boolean => {
+  const inMarker = 'this.spec.virtual_network.id in ';
+  const inIndex = filter?.indexOf(inMarker) ?? -1;
+  if (inIndex < 0) {
+    return true;
+  }
+  if (!filter) {
+    return false;
+  }
+  const afterIn = filter.slice(inIndex + inMarker.length);
+  const bracketEnd = afterIn.indexOf(']');
+  if (bracketEnd < 0) {
+    return false;
+  }
+  const ids = JSON.parse(afterIn.slice(0, bracketEnd + 1)) as string[];
+  return virtualNetwork !== undefined && ids.includes(virtualNetwork);
+};
+
 const matchesVirtualNetworkScopeFilter = (
   filter: string | undefined,
   virtualNetwork: string | undefined,
 ): boolean => {
+  if (!matchesVirtualNetworkIdInFilter(filter, virtualNetwork)) {
+    return false;
+  }
   return matchesStringEqualityFilter(filter, 'this.spec.virtual_network.id', virtualNetwork);
 };
 
@@ -563,6 +587,8 @@ export type MockTransportOverrides = {
   onDiskImageUpdate?: (req: DiskImagesUpdateRequest) => DiskImagesUpdateResponse;
   onDiskImageDelete?: (req: DiskImagesDeleteRequest) => DiskImagesDeleteResponse;
   onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet };
+  onSubnetList?: (req: unknown) => void;
+  onSecurityGroupList?: (req: unknown) => void;
   onNatGatewayList?: (req: NATGatewaysListRequest) => void;
   onNatGatewayCreate?: (
     req: NATGatewaysCreateRequest,
@@ -802,26 +828,33 @@ export const createMockConnectTransport = (
       });
 
       router.service(VirtualNetworks, {
-        list: (req) => ({
-          items: virtualNetworks.filter(
+        list: (req) => {
+          const items = virtualNetworks.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
               matchesVirtualNetworkScopeFilter(req.filter, undefined),
-          ),
-        }),
+          );
+          const total = virtualNetworks.length;
+          if (req.limit === 0) {
+            return { items: [], size: 0, total };
+          }
+          return { items, size: items.length, total };
+        },
         get: (req) => ({
           object: virtualNetworks.find((i) => i.id === req.id),
         }),
       });
 
       router.service(Subnets, {
-        list: (req) => ({
-          items: subnets.filter(
+        list: (req) => {
+          overrides.onSubnetList?.(req);
+          const items = subnets.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
               matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
-          ),
-        }),
+          );
+          return { items, size: items.length, total: items.length };
+        },
         get: (req) => {
           if (overrides.onSubnetGet) {
             return overrides.onSubnetGet(req);
@@ -833,13 +866,15 @@ export const createMockConnectTransport = (
       });
 
       router.service(SecurityGroups, {
-        list: (req) => ({
-          items: securityGroups.filter(
+        list: (req) => {
+          overrides.onSecurityGroupList?.(req);
+          const items = securityGroups.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
               matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
-          ),
-        }),
+          );
+          return { items, size: items.length, total: items.length };
+        },
       });
 
       router.service(InstanceTypes, {

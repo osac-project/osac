@@ -136,7 +136,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     );
   });
 
-  it('resolves by ID and offers tenant targets across projects and shared targets', async () => {
+  it('resolves by ID and offers server-visible targets across projects', async () => {
     const cluster = clone(ClusterSchema, readyCluster);
     const foreignConfigured = clone(ClusterVersionSchema, currentVersion);
     const foreignTarget = clone(ClusterVersionSchema, targetVersion);
@@ -188,8 +188,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
     );
-    expect(catalogFilter).toContain('this.metadata.tenant == "tenant-a"');
-    expect(catalogFilter).toContain('this.metadata.tenant == "shared"');
+    expect(catalogFilter).toBe('');
     await user.click(screen.getByRole('button', { name: 'Upgrade cluster' }));
     const dialog = screen.getByRole('dialog', { name: 'Upgrade cluster' });
     await user.click(within(dialog).getByLabelText(/^Target version/));
@@ -198,7 +197,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     expect(within(dialog).queryByRole('option', { name: '4.20.0' })).not.toBeInTheDocument();
   });
 
-  it('does not use a configured version from another tenant', async () => {
+  it('uses the configured version returned by ID without a client tenant check', async () => {
     const cluster = clone(ClusterSchema, readyCluster);
     const foreignConfigured = clone(ClusterVersionSchema, currentVersion);
     if (!cluster.spec || !foreignConfigured.metadata) {
@@ -214,9 +213,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     renderPage(cluster, [foreignConfigured, targetVersion]);
 
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-        'The configured cluster version could not be found.',
-      ),
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
     );
   });
 

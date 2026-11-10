@@ -23,8 +23,6 @@ const testVolume: Volume = {
       seconds: 1767225600n,
       nanos: 0,
     },
-    displayName: '',
-    description: '',
     annotations: {},
     labels: {},
     version: 1,

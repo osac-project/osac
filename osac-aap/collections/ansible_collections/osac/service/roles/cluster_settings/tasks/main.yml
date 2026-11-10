@@ -2,6 +2,7 @@
 - name: Get template parameters from cluster order
   ansible.builtin.set_fact:
     cluster_settings_template_parameters: "{{ cluster_order.spec.templateParameters | default('{}') | from_json }}"
+  no_log: true
 
 # Resolve pull_secret: explicit CR field > templateParameters > provider default Secret
 # The second argument (true) ensures empty strings and nulls also fall through.
@@ -12,12 +13,14 @@
          | default(cluster_settings_template_parameters.pull_secret | default('', true), true) }}
   no_log: true
 
-# Resolve ssh_public_key: explicit CR field > templateParameters > provider default Secret
-- name: Resolve ssh_public_key from explicit field or template parameters
+# Resolve ssh_public_key: launch input only — the operator supplies the resolved
+# Cluster SSH-key Secret as a top-level AAP variable at job launch. The legacy
+# ClusterOrder field and inline template parameters are no longer trusted
+# inputs; the provider default Secret remains the final fallback.
+- name: Resolve ssh_public_key from the launch variable
   ansible.builtin.set_fact:
-    cluster_settings_ssh_public_key: >-
-      {{ cluster_order.spec.sshPublicKey
-         | default(cluster_settings_template_parameters.ssh_public_key | default('', true), true) }}
+    cluster_settings_ssh_public_key: "{{ ssh_public_key | default('', true) }}"
+  no_log: true
 
 # Resolve release_image: explicit CR field > templateParameters > template default
 - name: Resolve release_image from explicit field or template parameters
@@ -52,6 +55,7 @@
     namespace: "{{ cluster_settings_default_credentials_secret_namespace }}"
   failed_when: false
   register: default_cluster_credentials
+  no_log: true
 
 - name: Apply provider defaults for missing credentials
   when: (default_cluster_credentials.resources | default([]) | length > 0)
@@ -66,6 +70,7 @@
       when: not cluster_settings_ssh_public_key
       ansible.builtin.set_fact:
         cluster_settings_ssh_public_key: "{{ default_cluster_credentials.resources[0].data.ssh_public_key | b64decode }}"
+      no_log: true
 
 - name: Fail if pull_secret could not be resolved
   ansible.builtin.fail:

@@ -241,8 +241,19 @@ whole set together to the **staging** registry
 (`registry.stage.redhat.io`, under `cloud-extensions/<component>-rhel10`).
 This wait set is fixed regardless of what `component_versions` actually
 bumped this run; `osac-aap` has no Konflux image component yet and is
-never included. This is currently staging only — there is no automated
-path to a production release yet.
+never included.
+
+A separate, manually-dispatched workflow, `osac-promote-to-prod.yaml`,
+promotes an already-staged release to `registry.redhat.io` once it's
+ready. Images promote with no rebuild — the same built digest is
+multi-homed into `registry.redhat.io` by `cloud-extensions-prod`'s own
+`ReleasePlanAdmission`. The chart cannot: its own `values.yaml` has
+`registry.stage.redhat.io` baked into every component image reference at
+build time, so the already-built staging chart is only ever correct for
+stage. Promoting it re-stamps that exact same source commit with
+`registry.redhat.io` (only the hostname changes) and pushes it through a
+real, independent Konflux build — expect the chart side of a production
+promotion to take meaningfully longer than the image side as a result.
 
 A component only reaches staging if its Konflux build passes Red Hat's
 Enterprise Contract policy — a set of supply-chain and security checks
@@ -293,6 +304,26 @@ explicitly excluded from Latest. Cancellation prevents the umbrella release
 and success notification jobs from starting; a release publication failure
 reaches the failure notification instead of a success message. Optional
 Konflux staging remains independent of this GHCR publication path.
+
+**GitHub's "Re-run failed jobs" does not recover a confirmed staging
+failure.** GHCR image and chart publication (`promote-and-publish`,
+`publish-umbrella`) runs before Konflux staging even starts, so those
+artifacts can remain published after a confirmed staging failure — only
+the GitHub Releases (component and umbrella) and fulfillment-service's
+binaries/proto wait for the real Konflux image staging release to have
+actually succeeded, never on a cancelled or timed-out run, only on a
+confirmed failure of `trigger-konflux-staging-release` itself. Rolling
+tags back after a
+confirmed failure, combined with `cleanup` always deleting the temp branch
+once `tag` succeeds, means a "Re-run failed jobs" attempt afterward has
+neither the tags `create-component-releases` would reference nor the
+branch `stamp-and-release-charts` would need to check out. Dispatch a fresh
+`osac-release.yaml` run with a new `release_version` instead — don't retry
+a release whose staging has already confirmed failed. A cancelled or
+timed-out staging attempt is left alone on purpose (the underlying Konflux
+Release it created may still be progressing and could still succeed) and
+needs manual reconciliation: check whether that Release actually completed
+before deciding to delete anything by hand.
 
 The version inventory is not an upgrade compatibility guarantee. Before an
 upgrade, compare the installed and target inventories, read the affected

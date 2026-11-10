@@ -1,8 +1,10 @@
+import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
-import type { ExternalIP, NATGateway, Subnet, VirtualNetwork } from '@osac/types';
-import { ExternalIPState, SubnetState, VirtualNetworkState } from '@osac/types';
+import type { ExternalIP, NATGateway, SecurityGroup, Subnet, VirtualNetwork } from '@osac/types';
+import { ExternalIPState, SecurityGroupState, SubnetState, VirtualNetworkState } from '@osac/types';
+import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 
 import { VirtualNetworksListPage } from './VirtualNetworksListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
@@ -31,6 +33,15 @@ const subnets = [
   },
 ] as Subnet[];
 
+const securityGroups = [
+  {
+    id: 'sg-1',
+    metadata: { name: 'sg-web' },
+    spec: { virtualNetwork: { id: 'vn-1' }, ingress: [], egress: [] },
+    status: { state: SecurityGroupState.READY },
+  },
+] as unknown as SecurityGroup[];
+
 const natGateways = [
   {
     id: 'nat-1',
@@ -51,30 +62,52 @@ const externalIps = [
   },
 ] as ExternalIP[];
 
-const renderPage = (overrides?: {
-  virtualNetworks?: VirtualNetwork[];
-  natGateways?: NATGateway[];
-  onNatGatewayList?: (req: unknown) => void;
-}) =>
+const renderPage = (
+  overrides?: {
+    virtualNetworks?: VirtualNetwork[];
+    natGateways?: NATGateway[];
+    onNatGatewayList?: (req: unknown) => void;
+    onSubnetList?: (req: unknown) => void;
+    onSecurityGroupList?: (req: unknown) => void;
+  },
+  routerEntries?: string[],
+) =>
   renderWithProviders(<VirtualNetworksListPage />, {
     apiFixtures: {
       virtualNetworks: overrides?.virtualNetworks ?? virtualNetworks,
       subnets,
+      securityGroups,
       natGateways: overrides?.natGateways ?? natGateways,
       externalIps,
     },
     transportOverrides: {
       onNatGatewayList: overrides?.onNatGatewayList,
+      onSubnetList: overrides?.onSubnetList,
+      onSecurityGroupList: overrides?.onSecurityGroupList,
     },
+    routerEntries,
   });
 
+const getTableCellByLabel = (row: HTMLElement, label: string) => {
+  const cell = within(row)
+    .getAllByRole('cell')
+    .find((c) => c.getAttribute('data-label') === label);
+  expect(cell).toBeDefined();
+  return cell as HTMLElement;
+};
+
 describe('VirtualNetworksListPage', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   it('renders the section label, title, and create button', async () => {
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'Virtual networks' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create virtual network' })).toBeInTheDocument();
     await screen.findByRole('link', { name: 'vn-prod' });
+    expect(await screen.findByText('2 virtual networks')).toBeInTheDocument();
   });
 
   it('renders virtual network names as details links', async () => {
@@ -86,16 +119,55 @@ describe('VirtualNetworksListPage', () => {
     );
   });
 
-  it('shows empty state when no virtual networks exist', async () => {
+  it('shows an empty state when no virtual networks exist', async () => {
     renderPage({ virtualNetworks: [] });
 
-    expect(await screen.findByText(/No virtual networks yet/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', { name: 'No virtual networks found', level: 2 }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByText('No virtual networks are available yet.')).toBeInTheDocument();
+  });
+
+  it('shows a filter-specific empty state when the search matches nothing', async () => {
+    renderPage({ virtualNetworks: [] }, ['/?search=no-such-vn']);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', {
+          name: 'No virtual networks match your filters',
+          level: 2,
+        }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByText('Try a different state or search term.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+  });
+
+  it('renders the state filter toggle', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'All states' })).toBeInTheDocument();
+    });
+  });
+
+  it('renders the list and card view switcher', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Card view' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'List view' })).toBeInTheDocument();
+    });
   });
 
   it('shows the NAT gateway name and address, or a dash when none is attached', async () => {
+    localStorage.setItem(getViewTypePrefKey('virtual-networks'), 'list');
     renderPage();
 
-    expect(await screen.findByText('NAT gateway')).toBeInTheDocument();
+    expect(await screen.findByText('nat-egress')).toBeInTheDocument();
+    expect(screen.getByText('203.0.113.10')).toBeInTheDocument();
     const table = screen.getByRole('grid');
     const rows = within(table).getAllByRole('row');
     const prodRow = rows.find((row) => within(row).queryByRole('link', { name: 'vn-prod' }));
@@ -103,11 +175,64 @@ describe('VirtualNetworksListPage', () => {
     expect(prodRow).toBeDefined();
     expect(devRow).toBeDefined();
 
-    const prodNatCell = within(prodRow as HTMLElement).getAllByRole('cell')[4];
+    const prodNatCell = getTableCellByLabel(prodRow as HTMLElement, 'NAT gateway');
     expect(within(prodNatCell).getByText('nat-egress')).toBeInTheDocument();
     expect(within(prodNatCell).getByText('203.0.113.10')).toBeInTheDocument();
     expect(within(prodNatCell).queryByText('Ready')).not.toBeInTheDocument();
-    expect(within(devRow as HTMLElement).getByText('—')).toBeInTheDocument();
+    const devNatCell = getTableCellByLabel(devRow as HTMLElement, 'NAT gateway');
+    expect(devNatCell).toHaveTextContent('—');
+  });
+
+  it('shows subnet and security group counts in the table', async () => {
+    localStorage.setItem(getViewTypePrefKey('virtual-networks'), 'list');
+    renderPage();
+
+    await screen.findByRole('link', { name: 'vn-prod' });
+    const table = screen.getByRole('grid');
+    const prodRow = within(table)
+      .getAllByRole('row')
+      .find((row) => within(row).queryByRole('link', { name: 'vn-prod' }));
+    expect(prodRow).toBeDefined();
+
+    await waitFor(() => {
+      expect(getTableCellByLabel(prodRow as HTMLElement, 'Subnets')).toHaveTextContent('1');
+    });
+    expect(getTableCellByLabel(prodRow as HTMLElement, 'Security groups')).toHaveTextContent('1');
+  });
+
+  it('shows unavailable subnet and security group counts when list requests fail', async () => {
+    localStorage.setItem(getViewTypePrefKey('virtual-networks'), 'list');
+    renderPage({
+      onSubnetList: () => {
+        throw new ConnectError('subnets unavailable', Code.Unavailable);
+      },
+      onSecurityGroupList: () => {
+        throw new ConnectError('security groups unavailable', Code.Unavailable);
+      },
+    });
+
+    await screen.findByRole('link', { name: 'vn-prod' });
+    const table = screen.getByRole('grid');
+    const prodRow = within(table)
+      .getAllByRole('row')
+      .find((row) => within(row).queryByRole('link', { name: 'vn-prod' }));
+    expect(prodRow).toBeDefined();
+
+    const prodRowElement = prodRow as HTMLElement;
+
+    await waitFor(() => {
+      expect(
+        within(prodRowElement).getByRole('button', { name: 'Failed to load subnets' }),
+      ).toBeInTheDocument();
+      expect(
+        within(prodRowElement).getByRole('button', { name: 'Failed to load security groups' }),
+      ).toBeInTheDocument();
+    });
+
+    const subnetsCell = getTableCellByLabel(prodRowElement, 'Subnets');
+    const securityGroupsCell = getTableCellByLabel(prodRowElement, 'Security groups');
+    expect(within(subnetsCell).queryByText('0')).not.toBeInTheDocument();
+    expect(within(securityGroupsCell).queryByText('0')).not.toBeInTheDocument();
   });
 
   it('fetches NAT gateways once for the table', async () => {

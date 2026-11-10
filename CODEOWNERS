@@ -53,6 +53,26 @@
 .github/workflows/fullsend.yaml @osac-project/wg-infra
 .fullsend/ @osac-project/wg-infra
 
+# Konflux build and release pipelines
+# The PipelineRuns decide how the images and the charts are built, signed and released, and the release ones start on an
+# osac-release tag. A change to them needs review from the infrastructure team.
+/.tekton/ @osac-project/wg-infra
+
+# Installer and Helm charts
+# The installer composes every component's chart and decides what a deployment looks like, and each component ships its
+# chart from its own folder. A change to them needs review from the infrastructure team. The rules below this block name
+# the paths that a working group owns inside them (CI values, networking templates, CRDs), and the last matching rule wins,
+# so this block has to stay above them. The operator-crds charts are left out: their templates are generated from the
+# operator CRDs and are owned by the working group of each API.
+/osac-installer/ @osac-project/wg-infra
+/osac-operator/charts/operator/ @osac-project/wg-infra
+/bare-metal-fulfillment-operator/charts/operator/ @osac-project/wg-infra
+/fulfillment-service/charts/ @osac-project/wg-infra
+/osac-aap/charts/ @osac-project/wg-infra
+/osac-csi-driver/charts/ @osac-project/wg-infra
+/osac-metering/charts/ @osac-project/wg-infra
+/osac-ui/charts/ @osac-project/wg-infra
+
 # CaaS (Cluster-as-a-Service) working group
 # Tests
 /tests/e2e/caas/ @osac-project/wg-caas
@@ -83,7 +103,6 @@
 # Operator: ClusterOrder API, CRDs, controllers and tests
 /osac-operator/api/v1alpha1/clusterorder_*.go @osac-project/wg-caas
 /osac-operator/config/crd/bases/osac.openshift.io_clusterorders.yaml @osac-project/wg-caas
-/osac-operator/charts/operator-crds/templates/osac.openshift.io_clusterorders.yaml @osac-project/wg-caas
 /osac-operator/config/crd/fakes/hypershift.openshift.io_*.yaml @osac-project/wg-caas
 /osac-operator/internal/controller/clusterorder_*.go @osac-project/wg-caas
 /osac-operator/internal/controller/multicluster_common.go @osac-project/wg-caas
@@ -115,7 +134,6 @@
 ## Operator
 /osac-operator/config/crd/bases/osac.openshift.io_computeinstances.yaml @osac-project/wg-vmaas
 /osac-operator/internal/controller/computeinstance_*.go @osac-project/wg-vmaas
-/osac-operator/charts/operator-crds/templates/osac.openshift.io_computeinstances.yaml @osac-project/wg-vmaas
 /osac-operator/api/v1alpha1/computeinstance_*.go @osac-project/wg-vmaas
 ## Fulfillment Integration
 /fulfillment-service/it/it_compute_instance_*.go @osac-project/wg-vmaas
@@ -153,12 +171,6 @@
 /osac-operator/config/crd/bases/*natgateway*.yaml @osac-project/wg-connectivity
 /osac-operator/config/crd/bases/*securitygroup*.yaml @osac-project/wg-connectivity
 /osac-operator/config/crd/bases/*fabricdomain*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*network*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*subnet*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*externalip*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*natgateway*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*securitygroup*.yaml @osac-project/wg-connectivity
-/osac-operator/charts/operator-crds/templates/*fabricdomain*.yaml @osac-project/wg-connectivity
 /osac-operator/config/samples/network-manager-fabric-netris.yaml @osac-project/wg-connectivity
 ## Operator controllers and fabric backends
 /osac-operator/internal/controller/networking_*.go @osac-project/wg-connectivity

@@ -318,16 +318,20 @@
     that: nf_writes == []
     quiet: true
 
-- name: Ingress - reserve_cluster_ingress_ip is final and calls Netris not at all
+- name: Ingress - reserve_cluster_ingress_ip allocates from the recorded LB VIP range
   ansible.builtin.include_tasks: run_task.yaml
   vars:
     nf_task: reserve_cluster_ingress_ip
     sft_label: ingress-reserve
-    sft_expect: final
-    sft_message_search: "not supported by the Netris Fabric Manager yet"
+    sft_expect: success
     nf_job: "{{ nf_ingress_job }}"
+    nf_result: {cluster_ingress: {address: 10.20.1.32}}
 
-- name: Ingress - release_cluster_ingress_ip is a no-op that calls Netris not at all
+- name: Record the reservation write before the next case clears the request log
+  ansible.builtin.set_fact:
+    nf_ingress_reserve_writes: "{{ nf_write_kinds }}"
+
+- name: Ingress - release_cluster_ingress_ip removes the reservation
   ansible.builtin.include_tasks: run_task.yaml
   vars:
     nf_task: release_cluster_ingress_ip
@@ -336,7 +340,12 @@
     nf_job: "{{ nf_ingress_job }}"
     nf_result: {}
 
-- name: Ingress - neither call reached Netris
+- name: Ingress - reservation lifecycle wrote one create and one delete
   ansible.builtin.assert:
-    that: nf_calls == []
+    that:
+      - nf_ingress_reserve_writes + nf_write_kinds == ["POST /api/v2/ipam/subnet", "DELETE /api/v2/ipam/subnet"]
+      - >-
+        nf_state.ipam_subnets
+        | selectattr('name', 'equalto', 'osac-ci-' ~ nf_ids.cluster_order)
+        | list | length == 0
     quiet: true

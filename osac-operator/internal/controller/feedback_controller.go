@@ -195,6 +195,7 @@ func newClusterOrderSyncUpdate(hubClient clnt.Client,
 			return err
 		}
 		syncClusterOrderNodeRequests(ctx, clusterOrder, remote)
+		syncClusterOrderObservedVersions(clusterOrder, remote)
 		syncClusterOrderUpgradeObservationsAt(clusterOrder, remote, time.Now(), timeouts)
 		if err := syncRemovedNodeSetUpgrades(ctx, hubClient, clusterOrder, remote); err != nil {
 			return err
@@ -238,9 +239,6 @@ func syncControlPlaneUpgradeObservationAt(observation *ckv1alpha1.UpgradeObserva
 			continue
 		}
 		syncUpgradeEntry(entry, observation, now)
-		if shouldRecordObservedUpgradeVersion(observation, entry) {
-			remote.GetStatus().SetObservedVersion(observation.Version)
-		}
 		return
 	}
 }
@@ -257,11 +255,6 @@ func syncNodeSetUpgradeObservationAt(request ckv1alpha1.NodeRequestStatus, remot
 			continue
 		}
 		syncUpgradeEntry(entry, observation, now)
-		if shouldRecordObservedUpgradeVersion(observation, entry) {
-			if nodeSet := remote.GetStatus().GetNodeSets()[request.NodeSet]; nodeSet != nil {
-				nodeSet.SetObservedVersion(observation.Version)
-			}
-		}
 		return
 	}
 }
@@ -272,15 +265,6 @@ func nodeSetObservationMatchesCurrentAttempt(request ckv1alpha1.NodeRequestStatu
 	currentID := remote.GetSpec().GetNodeSetAttemptIds()[request.NodeSet]
 	return currentID == request.UpgradeObservation.AttemptID ||
 		(currentID == "" && remote.GetSpec().GetNodeSets()[request.NodeSet] == nil)
-}
-
-// shouldRecordObservedUpgradeVersion accepts a legacy entry without a target,
-// or a successful entry whose reported version matches its selected target.
-func shouldRecordObservedUpgradeVersion(observation *ckv1alpha1.UpgradeObservation,
-	entry *privatev1.ClusterUpgradeHistoryEntry) bool {
-	return observation.Version != "" && (entry.GetTargetVersion() == "" ||
-		(entry.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED &&
-			observation.Version == entry.GetTargetVersion()))
 }
 
 // syncUpgradeEntry advances history from component feedback. A timed-out entry
@@ -322,9 +306,13 @@ func observationSucceededAtTarget(observation *ckv1alpha1.UpgradeObservation,
 // proves progress toward the target.
 func observationShowsProgress(observation *ckv1alpha1.UpgradeObservation,
 	entry *privatev1.ClusterUpgradeHistoryEntry) bool {
-	return observation.State == ckv1alpha1.UpgradeObservationProgressing ||
-		(observation.State != ckv1alpha1.UpgradeObservationFailed && observation.Version != "" &&
-			observation.Version == entry.GetTargetVersion())
+	if observation.State != ckv1alpha1.UpgradeObservationProgressing {
+		return false
+	}
+	if entry.GetComponent().GetControlPlane() != nil {
+		return observation.Version != "" && observation.Version == entry.GetTargetVersion()
+	}
+	return true
 }
 
 // applyUpgradeTimeouts marks overdue current attempts as timed
@@ -465,9 +453,8 @@ func markRemovedNodeSetHistory(remote *privatev1.Cluster, name string) {
 	}
 }
 
-// syncClusterOrderVIPEndpoints copies MetalLB VIP addresses from ClusterOrder status
-// to the Cluster proto. The VIPs are written by the CaaS template and consumed by the
-// ExternalIPAttachment controller and the fulfillment-service API surface.
+// syncClusterOrderVIPEndpoints copies the observed management API and guest ingress
+// addresses from ClusterOrder status to the Fulfillment Cluster.
 func syncClusterOrderVIPEndpoints(clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	if clusterOrder.Status.ApiEndpoint != "" {
 		remote.GetStatus().SetApiEndpoint(clusterOrder.Status.ApiEndpoint)
@@ -647,9 +634,11 @@ var clusterOrderDegradedConditionSources = map[string]struct{}{
 //   - Deleting is reported through the DELETING state (see syncClusterOrderPhase and
 //     syncClusterOrderDelete), not as a condition.
 var clusterOrderUnsurfacedConditions = map[string]struct{}{
-	ckv1alpha1.ConditionNamespaceCreated:                          {},
-	ckv1alpha1.ConditionDeleting:                                  {},
-	string(ckv1alpha1.ClusterOrderConditionFulfillmentTrustReady): {},
+	ckv1alpha1.ConditionNamespaceCreated:                               {},
+	ckv1alpha1.ConditionDeleting:                                       {},
+	string(ckv1alpha1.ClusterOrderConditionFulfillmentTrustReady):      {},
+	string(ckv1alpha1.ClusterOrderConditionManagementPublicationReady): {},
+	string(ckv1alpha1.ClusterOrderConditionEndpointsReady):             {},
 }
 
 func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
@@ -974,10 +963,18 @@ func syncClusterOrderURLs(ctx context.Context, hubClient clnt.Client, clusterOrd
 	}
 
 	clusterStatus := remote.GetStatus()
-	if apiURL := calculateAPIURL(hostedCluster); apiURL != "" {
+	apiURL := clusterOrder.Status.APIURL
+	if apiURL == "" {
+		apiURL = calculateAPIURL(hostedCluster)
+	}
+	if apiURL != "" {
 		clusterStatus.SetApiUrl(apiURL)
 	}
-	if consoleURL := calculateConsoleURL(hostedCluster); consoleURL != "" {
+	consoleURL := clusterOrder.Status.ConsoleURL
+	if consoleURL == "" {
+		consoleURL = calculateConsoleURL(hostedCluster)
+	}
+	if consoleURL != "" {
 		clusterStatus.SetConsoleUrl(consoleURL)
 	}
 	return nil

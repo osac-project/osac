@@ -2572,6 +2572,73 @@ var _ = Describe("Private compute instances server", func() {
 		})
 
 		Context("Required network fields", func() {
+			DescribeTable("classifies an existing non-ready tenant default without storing a VM",
+				func(kind, state, reason string) {
+					subnet := createTestSubnet(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY, true)
+					if kind == "subnet" {
+						switch state {
+						case "pending":
+							subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_PENDING)
+						case "failed":
+							subnet.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_FAILED)
+						case "deleting":
+							subnet.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+						}
+						subnets := fixtureDAO[*privatev1.Subnet]()
+						_, err := subnets.Update().SetObject(subnet).Do(ctx)
+						Expect(err).NotTo(HaveOccurred())
+						if state == "deleting" {
+							_, err = subnets.Delete().SetId(subnet.GetId()).Do(ctx)
+							Expect(err).NotTo(HaveOccurred())
+						}
+					} else {
+						group, err := findDefaultSecurityGroup(ctx, logger, fixtureDAO[*privatev1.SecurityGroup](),
+							virtualNetwork.GetId(), testTenant, "")
+						Expect(err).NotTo(HaveOccurred())
+						Expect(group).NotTo(BeNil())
+						switch state {
+						case "pending":
+							group.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING)
+						case "failed":
+							group.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED)
+						case "deleting":
+							group.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+						}
+						groups := fixtureDAO[*privatev1.SecurityGroup]()
+						_, err = groups.Update().SetObject(group).Do(ctx)
+						Expect(err).NotTo(HaveOccurred())
+						if state == "deleting" {
+							_, err = groups.Delete().SetId(group.GetId()).Do(ctx)
+							Expect(err).NotTo(HaveOccurred())
+						}
+					}
+
+					id := uuid.NewString()
+					response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+						Object: privatev1.ComputeInstance_builder{
+							Id: id,
+							Metadata: privatev1.Metadata_builder{
+								Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+							}.Build(),
+							Spec: privatev1.ComputeInstanceSpec_builder{
+								Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build())
+					Expect(response).To(BeNil())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(reason))
+					_, getErr := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+					Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+				},
+				Entry("pending Subnet", "subnet", "pending", "SUBNET_STATE_PENDING"),
+				Entry("failed Subnet", "subnet", "failed", "SUBNET_STATE_FAILED"),
+				Entry("deleting Subnet", "subnet", "deleting", "is being deleted"),
+				Entry("pending SecurityGroup", "security group", "pending", "SECURITY_GROUP_STATE_PENDING"),
+				Entry("failed SecurityGroup", "security group", "failed", "SECURITY_GROUP_STATE_FAILED"),
+				Entry("deleting SecurityGroup", "security group", "deleting", "is being deleted"),
+			)
+
 			It("Should reject when network_attachments is missing and no default subnet exists", func() {
 				instanceID := uuid.NewString()
 				vm := privatev1.ComputeInstance_builder{
@@ -4654,7 +4721,7 @@ var _ = Describe("Private compute instances server", func() {
 				Object: privatev1.ComputeInstance_builder{
 					Metadata: privatev1.Metadata_builder{
 						Tenant: testTenant,
-						Name:   "auto-eip-test",
+						Name:   fmt.Sprintf("auto-eip-test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "auto-eip-template"}.Build(),
@@ -4671,6 +4738,44 @@ var _ = Describe("Private compute instances server", func() {
 				}.Build(),
 			}.Build()
 		}
+
+		It("skips automatic ExternalIPs and pool reservations when provider networking is disabled", func() {
+			server.settings.ProvisioningEnabled = false
+			createPool("pool-1", 5)
+
+			createWithoutExternalIP := func() string {
+				response, err := server.Create(ctx, createRequest(true))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+
+				ciID := response.GetObject().GetId()
+				eipList, err := externalIPDao.List().
+					SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, ciID)).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(eipList.GetItems()).To(BeEmpty())
+				return ciID
+			}
+
+			createWithoutExternalIP()
+			poolResponse, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(int64(5)))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+
+			// A pool that is not READY must not block workload creation when provider
+			// networking is disabled.
+			pool := poolResponse.GetObject()
+			pool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
+			_, err = externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			createWithoutExternalIP()
+			poolResponse, err = externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(int64(5)))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+		})
 
 		It("creates an auto ExternalIP on ComputeInstance create and defers its attachment", func() {
 			createPool("pool-1", 5)

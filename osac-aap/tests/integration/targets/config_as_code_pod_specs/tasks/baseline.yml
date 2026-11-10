@@ -6,6 +6,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: ""
     _template_path: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/compute-instance-operations-ig.j2
@@ -56,6 +57,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
@@ -78,6 +80,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: ""
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
@@ -113,6 +116,7 @@
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
@@ -150,18 +154,15 @@
           Storage operations must mount and export the configured remote kubeconfig
           without including compute-instance credentials.
 
-- name: Networking operations pod spec carries no Netris facade
+- name: Networking operations pod spec receives manager settings and CA mount
   hosts: localhost
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
     remote_cluster_kubeconfig_secret_key: kubeconfig
-    # Config-as-code defines these for cluster fulfillment; the networking
-    # pod spec must ignore them.
-    netris_controller_url: https://managed.example
     netris_ca_config_map_name: customer-netris-ca
-    netris_validate_certs: true
     netris_ca_path: /etc/netris/ca/bundle.pem
     _templates_dir: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates
@@ -193,199 +194,142 @@
           - _networking_pod.spec.serviceAccountName == 'osac-sa'
         fail_msg: Networking jobs must read the ConfigMap (optional) and the required Secret network-fulfillment-ig.
 
-    - name: Assert the networking pod spec keeps no Netris facade or remote cluster kubeconfig
-      ansible.builtin.assert:
-        that:
-          - "_networking_pod_spec is not search('NETRIS_')"
-          - "_networking_pod_spec is not search('netris')"
-          - "_networking_pod_spec is not search('protected_linear')"
-          - "_networking_pod_spec is not search('OSAC_LAUNCH_EXTRA_VARS_PATH')"
-          - "_networking_pod_spec is not search('agentless-net-inventory')"
-          - "_networking_pod_spec is not search('remote-cluster-kubeconfig')"
-        fail_msg: >-
-          Networking jobs must not carry Netris or AgentlessNet settings and
-          must reach only the hub.
-
-- name: Cluster fulfillment pod spec without a Netris CA
-  hosts: localhost
-  gather_facts: false
-  vars:
-    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
-    netris_controller_url: https://managed.example
-    netris_ca_config_map_name: ""
-    netris_validate_certs: true
-    netris_ca_path: ""
-    _template_path: >-
-      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/cluster-fulfillment-ig.j2
-
-  tasks:
-    - name: Render cluster-fulfillment pod spec without a Netris CA
-      ansible.builtin.set_fact:
-        _cluster_pod: "{{ lookup('ansible.builtin.template', _template_path) | from_yaml }}"
-
-    - name: Assert the CaaS Netris settings, inventory and credentials reach cluster fulfillment
+    - name: Assert networking jobs load only the manager settings and secrets
       ansible.builtin.assert:
         that:
           - >-
-            _cluster_pod.spec.containers[0].env
-            | selectattr('name', 'equalto', 'NETRIS_CONTROLLER_URL')
-            | selectattr('value', 'equalto', 'https://managed.example')
-            | list | length == 1
-          - >-
-            _cluster_pod.spec.containers[0].env
-            | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')
-            | selectattr('value', 'equalto', 'true')
-            | list | length == 1
-          - >-
-            _cluster_pod.spec.containers[0].env
+            _networking_pod.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
-            | selectattr('value', 'equalto', '')
+            | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
             | list | length == 1
           - >-
-            _cluster_pod.spec.containers[0].env
+            _networking_pod.spec.containers[0].env
             | selectattr('name', 'equalto', 'ANSIBLE_STRATEGY')
-            | selectattr('value', 'equalto', 'netris.controller.protected_linear')
-            | list | length == 1
+            | list | length == 0
           - >-
-            _cluster_pod.spec.containers[0].env
+            _networking_pod.spec.containers[0].env
             | selectattr('name', 'equalto', 'OSAC_LAUNCH_EXTRA_VARS_PATH')
             | selectattr('value', 'equalto', '/runner/env/extravars')
             | list | length == 1
           - >-
-            _cluster_pod.spec.containers[0].envFrom
-            | selectattr('secretRef', 'defined')
-            | map(attribute='secretRef')
-            | selectattr('name', 'equalto', 'netris-credentials')
-            | selectattr('optional', 'equalto', true)
-            | list | length == 1
-          - >-
-            _cluster_pod.spec.containers[0].volumeMounts
-            | selectattr('name', 'equalto', 'agentless-net-inventory')
-            | selectattr('mountPath', 'equalto', '/var/config/agentless-net')
-            | selectattr('readOnly', 'equalto', true)
-            | list | length == 1
-          - >-
-            (_cluster_pod.spec.volumes
-             | selectattr('name', 'equalto', 'agentless-net-inventory')
-             | list | first).configMap.optional == true
-          - >-
-            _cluster_pod.spec.volumes
-            | selectattr('name', 'equalto', 'netris-ca-bundle')
-            | list | length == 0
-        fail_msg: >-
-          Cluster fulfillment without a configured CA must keep the Netris
-          settings, protected strategy, optional credentials and AgentlessNet
-          inventory, and omit the CA path and volume.
-
-- name: Cluster fulfillment pod spec with a Netris CA
-  hosts: localhost
-  gather_facts: false
-  vars:
-    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
-    netris_controller_url: https://managed.example
-    netris_ca_config_map_name: customer-netris-ca
-    netris_validate_certs: true
-    netris_ca_path: /etc/netris/ca/bundle.pem
-    _template_path: >-
-      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/cluster-fulfillment-ig.j2
-
-  tasks:
-    - name: Render cluster-fulfillment pod spec with a Netris CA
-      ansible.builtin.set_fact:
-        _cluster_pod_spec_with_ca: "{{ lookup('ansible.builtin.template', _template_path) }}"
-
-    - name: Parse cluster-fulfillment pod spec with a Netris CA
-      ansible.builtin.set_fact:
-        _cluster_pod_with_ca: "{{ _cluster_pod_spec_with_ca | from_yaml }}"
-
-    - name: Assert cluster fulfillment receives the Netris CA contract
-      ansible.builtin.assert:
-        that:
-          - >-
-            _cluster_pod_with_ca.spec.containers[0].volumeMounts
+            _networking_pod.spec.containers[0].volumeMounts
             | selectattr('name', 'equalto', 'netris-ca-bundle')
             | selectattr('mountPath', 'equalto', '/etc/netris/ca/bundle.pem')
             | selectattr('readOnly', 'equalto', true)
             | list | length == 1
           - >-
-            (_cluster_pod_with_ca.spec.volumes
+            (_networking_pod.spec.volumes
              | selectattr('name', 'equalto', 'netris-ca-bundle')
              | list | first).configMap.name == 'customer-netris-ca'
           - >-
-            (_cluster_pod_with_ca.spec.volumes
-             | selectattr('name', 'equalto', 'netris-ca-bundle')
-             | list | first).configMap['items'][0].key == 'bundle.pem'
-          - >-
-            (_cluster_pod_with_ca.spec.volumes
-             | selectattr('name', 'equalto', 'netris-ca-bundle')
-             | list | first).configMap['items'][0].path == 'bundle.pem'
-          - >-
-            (_cluster_pod_with_ca.spec.volumes
+            (_networking_pod.spec.volumes
              | selectattr('name', 'equalto', 'netris-ca-bundle')
              | list | first).configMap.optional == false
-          - >-
-            _cluster_pod_with_ca.spec.containers[0].env
-            | selectattr('name', 'equalto', 'NETRIS_CONTROLLER_URL')
-            | selectattr('value', 'equalto', 'https://managed.example')
-            | list | length == 1
-          - >-
-            _cluster_pod_with_ca.spec.containers[0].env
-            | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')
-            | selectattr('value', 'equalto', 'true')
-            | list | length == 1
-          - >-
-            _cluster_pod_with_ca.spec.containers[0].env
-            | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
-            | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
-            | list | length == 1
-          - >-
-            _cluster_pod_with_ca.spec.containers[0].env
-            | selectattr('name', 'equalto', 'ANSIBLE_STRATEGY')
-            | selectattr('value', 'equalto', 'netris.controller.protected_linear')
-            | list | length == 1
-          - >-
-            _cluster_pod_with_ca.spec.containers[0].env
-            | selectattr('name', 'equalto', 'OSAC_LAUNCH_EXTRA_VARS_PATH')
-            | selectattr('value', 'equalto', '/runner/env/extravars')
-            | list | length == 1
+          - "_networking_pod_spec is not search('agentless-net-inventory')"
+          - "_networking_pod_spec is not search('remote-cluster-kubeconfig')"
         fail_msg: >-
-          Cluster fulfillment must mount the Netris CA read-only and export
-          NETRIS_CA_PATH while keeping certificate validation enabled.
+          Networking jobs must load their settings from network-fulfillment-ig,
+          and mount the configured CA bundle.
 
-- name: Cluster fulfillment pod spec with certificate validation disabled
+- name: Networking operations pod spec without a Netris CA
   hosts: localhost
   gather_facts: false
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
-    netris_controller_url: https://managed.example
+    osac_sa_name: osac-sa
+    netris_ca_config_map_name: ""
+    netris_ca_path: ""
+    _template_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/networking-operations-ig.j2
+
+  tasks:
+    - name: Render networking pod spec without a Netris CA
+      ansible.builtin.set_fact:
+        _networking_pod_no_ca: "{{ lookup('ansible.builtin.template', _template_path) | from_yaml }}"
+
+    - name: Assert networking has no CA mount when none is configured
+      ansible.builtin.assert:
+        that:
+          - >-
+            _networking_pod_no_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
+            | selectattr('value', 'equalto', '')
+            | list | length == 1
+          - >-
+            _networking_pod_no_ca.spec.volumes
+            | selectattr('name', 'equalto', 'netris-ca-bundle')
+            | list | length == 0
+        fail_msg: >-
+          Networking jobs without a configured CA must export an empty CA path
+          and omit the CA volume.
+
+- name: Cluster fulfillment pod spec has no provider-specific network settings
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
     netris_ca_config_map_name: customer-netris-ca
-    netris_validate_certs: false
     netris_ca_path: /etc/netris/ca/bundle.pem
     _template_path: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/cluster-fulfillment-ig.j2
 
   tasks:
-    - name: Render cluster-fulfillment pod spec with certificate validation disabled
+    - name: Render cluster-fulfillment pod spec
       ansible.builtin.set_fact:
-        _disabled_tls_pod: "{{ lookup('ansible.builtin.template', _template_path) | from_yaml }}"
+        _cluster_pod_spec: "{{ lookup('ansible.builtin.template', _template_path) }}"
 
-    - name: Assert disabled validation is propagated without dropping the CA
+    - name: Parse cluster-fulfillment pod spec
+      ansible.builtin.set_fact:
+        _cluster_pod: "{{ _cluster_pod_spec | from_yaml }}"
+
+    - name: Assert cluster fulfillment does not receive manager settings or credentials
       ansible.builtin.assert:
         that:
-          - >-
-            _disabled_tls_pod.spec.containers[0].env
-            | selectattr('name', 'equalto', 'NETRIS_VALIDATE_CERTS')
-            | selectattr('value', 'equalto', 'false')
-            | list | length == 1
-          - >-
-            _disabled_tls_pod.spec.containers[0].env
-            | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
-            | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
-            | list | length == 1
-          - >-
-            _disabled_tls_pod.spec.volumes
-            | selectattr('name', 'equalto', 'netris-ca-bundle')
-            | list | length == 1
+          - "_cluster_pod_spec is not search('NETRIS_')"
+          - "_cluster_pod_spec is not search('netris-ca-bundle')"
+          - "_cluster_pod_spec is not search('netris-credentials')"
+          - "_cluster_pod_spec is not search('agentless-net-inventory')"
         fail_msg: >-
-          Cluster fulfillment must preserve the configured CA while propagating
-          NETRIS_VALIDATE_CERTS=false.
+          Cluster fulfillment must not carry network-manager settings, secrets,
+          or the AgentlessNet inventory.
+
+- name: Config-as-code pod specs honor the configured OSAC service account
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: customer-aap-sa
+    remote_cluster_kubeconfig_secret_name: ""
+    remote_cluster_kubeconfig_secret_key: kubeconfig
+    netris_controller_url: https://managed.example
+    netris_ca_config_map_name: ""
+    netris_validate_certs: true
+    netris_ca_path: ""
+    _templates_dir: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates
+
+  tasks:
+    - name: Render every config-as-code pod spec with a configured service account
+      ansible.builtin.set_fact:
+        _sa_pod_specs: >-
+          {{ _sa_pod_specs | default([]) + [
+             {'name': item,
+              'pod': lookup('ansible.builtin.template', _templates_dir ~ '/' ~ item) | from_yaml}
+          ] }}
+      loop:
+        - cluster-fulfillment-ig.j2
+        - compute-instance-operations-ig.j2
+        - networking-operations-ig.j2
+        - storage-operations-ig.j2
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every pod spec uses the configured service account
+      ansible.builtin.assert:
+        that:
+          - item.pod.spec.serviceAccountName == 'customer-aap-sa'
+        fail_msg: "{{ item.name }} must use the configured OSAC service account"
+      loop: "{{ _sa_pod_specs }}"
+      loop_control:
+        label: "{{ item.name }}"

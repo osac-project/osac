@@ -428,6 +428,9 @@ check_prerequisites() {
   for cmd in kind helm kubectl jq curl openssl python3; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
+  if [[ "${KIND_REQUIRE_UV:-false}" == "true" ]]; then
+    command -v uv >/dev/null 2>&1 || missing+=("uv")
+  fi
   if [[ "$KIND_PROVIDER" == "docker" ]]; then
     command -v docker >/dev/null 2>&1 || missing+=("docker")
   else
@@ -587,16 +590,11 @@ create_cluster() {
     fi
     log "Creating kind cluster '${name}' (${KIND_PROVIDER})..."
     kind_cmd create cluster --name "${name}" --config "${config}" --wait 60s
+  fi
 
-    # podman defaults pids_limit to 2048/container; KubeVirt install jobs need more.
-    if [[ "$KIND_PROVIDER" == "podman" ]]; then
-      log "Raising cgroup PID limit on Kind node containers (podman default is too low for KubeVirt)..."
-      local node
-      for node in $(kind_cmd get nodes --name "${name}" 2>/dev/null); do
-        container_cmd update --pids-limit 4096 "${node}" >/dev/null 2>&1 || \
-          warn "Could not raise PID limit on ${node} — KubeVirt may fail to install"
-      done
-    fi
+  if [[ "$KIND_PROVIDER" == "podman" ]]; then
+    declare -F ensure_podman_pid_limits >/dev/null || source "${SCRIPT_DIR}/../lib.sh"
+    ensure_podman_pid_limits "${name}" kind_cmd container_cmd || return 1
   fi
 
   # Keep the previous kubeconfig intact if Kind finds a node container whose

@@ -2,14 +2,12 @@ import { useMemo } from 'react';
 import {
   Alert,
   Button,
-  FormGroup,
   Modal,
   ModalBody,
   ModalFooter,
   ModalHeader,
   Stack,
   StackItem,
-  TextInput,
 } from '@patternfly/react-core';
 import { Formik } from 'formik';
 import * as Yup from 'yup';
@@ -17,10 +15,7 @@ import * as Yup from 'yup';
 import type { Subnet, VirtualNetwork } from '@osac/types';
 import { useCreateSubnet } from '@osac/ui-components/api/v1/networking';
 
-import {
-  FormFieldHelper,
-  getFormFieldHelperDescribedBy,
-} from '../../components/Form/FormFieldHelper';
+import { InputField } from '../../components/Form/InputField';
 import OsacForm from '../../components/Form/OsacForm';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
@@ -109,7 +104,7 @@ export const SubnetCreateModal = ({
         }
       }}
     >
-      {({ values, errors, touched, handleChange, handleBlur, handleSubmit, isSubmitting }) => (
+      {({ handleSubmit, isSubmitting }) => (
         <Modal
           variant="small"
           isOpen
@@ -129,27 +124,13 @@ export const SubnetCreateModal = ({
                   </p>
                   <NameField />
                   {hasIPv4 && (
-                    <FormGroup label={t('IPv4 CIDR')} isRequired fieldId="subnet-ipv4-cidr">
-                      <TextInput
-                        id="subnet-ipv4-cidr"
-                        name="ipv4Cidr"
-                        value={values.ipv4Cidr}
-                        placeholder="10.0.1.0/24"
-                        onChange={(_, value) =>
-                          handleChange({ target: { name: 'ipv4Cidr', value } })
-                        }
-                        onBlur={handleBlur}
-                        validated={touched.ipv4Cidr && errors.ipv4Cidr ? 'error' : 'default'}
-                        aria-describedby={getFormFieldHelperDescribedBy(
-                          'subnet-ipv4-cidr',
-                          touched.ipv4Cidr ? errors.ipv4Cidr : undefined,
-                        )}
-                      />
-                      <FormFieldHelper
-                        fieldId="subnet-ipv4-cidr"
-                        error={touched.ipv4Cidr ? errors.ipv4Cidr : undefined}
-                      />
-                    </FormGroup>
+                    <InputField
+                      name="ipv4Cidr"
+                      label={t('IPv4 CIDR')}
+                      fieldId="subnet-ipv4-cidr"
+                      placeholder="10.0.1.0/24"
+                      isRequired
+                    />
                   )}
                 </OsacForm>
               </StackItem>

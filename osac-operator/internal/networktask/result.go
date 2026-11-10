@@ -189,6 +189,35 @@ func AcceptNoOutput(_ context.Context, result Result) error {
 	return result.checkKeys(nil)
 }
 
+// AcceptSubnetEligibility records the optional Kubernetes create_subnet eligibility
+// result. Older managers with no output support VM attachments by default; the
+// attachment task remains authoritative before any VM resources are created.
+func AcceptSubnetEligibility(subnet *v1alpha1.Subnet, result Result) error {
+	if err := result.checkKeys([]string{"compute_instance_supported", "compute_instance_unsupported_reason"}); err != nil {
+		return err
+	}
+	supported := true
+	if raw, ok := result["compute_instance_supported"]; ok {
+		if err := strictUnmarshal(raw, &supported); err != nil {
+			return Reject("compute_instance_supported must be a boolean")
+		}
+	}
+	reason := ""
+	if raw, ok := result["compute_instance_unsupported_reason"]; ok {
+		var err error
+		reason, err = stringField(raw, "compute_instance_unsupported_reason")
+		if err != nil {
+			return err
+		}
+	}
+	if supported && reason != "" {
+		return Reject("supported Subnet cannot have an unsupported reason")
+	}
+	subnet.Status.ComputeInstanceSupported = &supported
+	subnet.Status.ComputeInstanceUnsupportedReason = reason
+	return nil
+}
+
 // ParseBackendID reads the optional backend_id of create_fabric_domain.
 func ParseBackendID(result Result) (string, error) {
 	if err := result.checkKeys([]string{"backend_id"}); err != nil {
@@ -359,8 +388,8 @@ func ParseExternalIP(result Result, poolCIDR string) (string, error) {
 }
 
 // ParseClusterIngress reads the cluster_ingress of reserve_cluster_ingress_ip:
-// a canonical address in lb_vip_ipv4_cidrs, not the Subnet broadcast address,
-// equal to accepted when an address was already accepted.
+// a canonical address in lb_vip_ipv4_cidrs, not the Subnet network, broadcast
+// or gateway address, equal to accepted when an address was already accepted.
 func ParseClusterIngress(result Result, subnetCIDR string, ipam *v1alpha1.SubnetIPAM, accepted string) (string, error) {
 	if err := result.checkKeys([]string{"cluster_ingress"}, "cluster_ingress"); err != nil {
 		return "", err
@@ -380,8 +409,18 @@ func ParseClusterIngress(result Result, subnetCIDR string, ipam *v1alpha1.Subnet
 	if ipam == nil || !inCIDRs(addr, ipam.LBVIPIPv4CIDRs) {
 		return "", Reject("cluster_ingress.address is not in lb_vip_ipv4_cidrs")
 	}
-	if _, broadcast, err := networkAndBroadcast(subnetCIDR); err == nil && addr == broadcast {
+	network, broadcast, err := networkAndBroadcast(subnetCIDR)
+	if err != nil {
+		return "", err
+	}
+	if addr == network {
+		return "", Reject("cluster_ingress.address is the Subnet's network address")
+	}
+	if addr == broadcast {
 		return "", Reject("cluster_ingress.address is the Subnet's broadcast address")
+	}
+	if addr.String() == ipam.GatewayIPv4 {
+		return "", Reject("cluster_ingress.address is the Subnet's gateway address")
 	}
 	if accepted != "" && accepted != address {
 		return "", Reject("cluster_ingress.address differs from the address already accepted for the cluster")

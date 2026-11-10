@@ -12,6 +12,7 @@ language governing permissions and limitations under the License.
 */
 
 //go:generate mockgen -destination=projects_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 ProjectsClient
+//go:generate mockgen -destination=users_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 UsersClient
 //go:generate mockgen -destination=network_classes_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 NetworkClassesClient
 //go:generate mockgen -destination=virtual_networks_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 VirtualNetworksClient
 //go:generate mockgen -destination=subnets_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 SubnetsClient
@@ -144,6 +145,7 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		logger:                b.logger,
 		tenantsClient:         privatev1.NewTenantsClient(b.connection),
 		projectsClient:        privatev1.NewProjectsClient(b.connection),
+		usersClient:           privatev1.NewUsersClient(b.connection),
 		networkClassesClient:  privatev1.NewNetworkClassesClient(b.connection),
 		virtualNetworksClient: privatev1.NewVirtualNetworksClient(b.connection),
 		subnetsClient:         privatev1.NewSubnetsClient(b.connection),
@@ -167,6 +169,7 @@ type function struct {
 	logger                *slog.Logger
 	tenantsClient         privatev1.TenantsClient
 	projectsClient        privatev1.ProjectsClient
+	usersClient           privatev1.UsersClient
 	networkClassesClient  privatev1.NetworkClassesClient
 	virtualNetworksClient privatev1.VirtualNetworksClient
 	subnetsClient         privatev1.SubnetsClient
@@ -553,6 +556,13 @@ func (t *task) delete(ctx context.Context) error {
 		}
 	}
 
+	// Users are tenant-owned and reference their project, including the root
+	// project. Remove them before requesting project deletion so they cannot
+	// block the project foreign key.
+	if err := t.deleteTenantUsers(ctx); err != nil {
+		return err
+	}
+
 	// Delete every project in the tenant. Project controllers enforce child-first
 	// archival, while this reconciler signals deleting projects again on each
 	// retry so parents continue after their children have been archived.
@@ -670,6 +680,86 @@ func (t *task) countRemainingProjects(ctx context.Context) (int32, error) {
 		return 0, err
 	}
 	return listResp.GetTotal(), nil
+}
+
+// deleteTenantUsers requests deletion of every user in the tenant. Users are
+// paginated because tenants may have many users; existing deletion requests are
+// signaled again on retries so their finalizers can make progress.
+func (t *task) deleteTenantUsers(ctx context.Context) error {
+	if t.r.usersClient == nil {
+		return nil
+	}
+
+	tenantName := t.tenant.GetMetadata().GetName()
+	filter := fmt.Sprintf("this.metadata.tenant == %q", tenantName)
+	limit := int32(100)
+	var (
+		offset int32
+		users  []*privatev1.User
+		total  *int32
+	)
+	for {
+		listResp, err := t.r.usersClient.List(ctx, privatev1.UsersListRequest_builder{
+			Filter: &filter,
+			Limit:  &limit,
+			Offset: &offset,
+		}.Build())
+		if err != nil {
+			return fmt.Errorf("failed to list users for tenant deletion: %w", err)
+		}
+		if listResp == nil || listResp.GetSize() < 0 ||
+			int64(listResp.GetSize()) != int64(len(listResp.GetItems())) ||
+			listResp.GetTotal() < 0 {
+			return errors.New("user listing returned an invalid page")
+		}
+		pageTotal := listResp.GetTotal()
+		if total == nil {
+			total = &pageTotal
+		} else if *total != pageTotal {
+			return errors.New("user listing total changed during tenant deletion")
+		}
+		users = append(users, listResp.GetItems()...)
+		if int64(len(users)) > int64(*total) {
+			return errors.New("user listing returned more items than its total")
+		}
+		if int64(len(users)) == int64(*total) {
+			break
+		}
+		if listResp.GetSize() == 0 {
+			return errors.New("user listing returned an incomplete page")
+		}
+		offset += listResp.GetSize()
+	}
+
+	var deletionErrors []error
+	for _, user := range users {
+		if user.GetMetadata().HasDeletionTimestamp() {
+			_, err := t.r.usersClient.Signal(ctx, privatev1.UsersSignalRequest_builder{
+				Id: user.GetId(),
+			}.Build())
+			if err != nil && grpcstatus.Code(err) != grpccodes.NotFound {
+				deletionErrors = append(deletionErrors,
+					fmt.Errorf("failed to signal user %s for tenant deletion: %w", user.GetId(), err))
+			}
+			continue
+		}
+		_, err := t.r.usersClient.Delete(ctx, privatev1.UsersDeleteRequest_builder{
+			Id: user.GetId(),
+		}.Build())
+		if err != nil {
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				continue
+			}
+			deletionErrors = append(deletionErrors,
+				fmt.Errorf("failed to delete user %s: %w", user.GetId(), err))
+			continue
+		}
+		t.r.logger.DebugContext(ctx, "Requested user deletion for tenant",
+			slog.String("tenant_id", t.tenant.GetId()),
+			slog.String("user_id", user.GetId()),
+		)
+	}
+	return errors.Join(deletionErrors...)
 }
 
 // deleteTenantProjects requests deletion of every project in the tenant. Existing

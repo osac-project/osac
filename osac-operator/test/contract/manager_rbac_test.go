@@ -26,6 +26,7 @@ import (
 var (
 	logicalVolumeVerbs  = []string{"create", "delete", "get", "list", "watch"}
 	storageClassROVerbs = []string{"get", "list", "watch"}
+	serviceWatchVerbs   = []string{"get", "list", "watch"}
 )
 
 // TestManagerRoleGrantsLogicalVolumeLifecycle verifies that the kustomize
@@ -54,6 +55,14 @@ func TestManagerHelmClusterRoleGrantsAgentCleanup(t *testing.T) {
 		"agent-install.openshift.io", []string{"agents"},
 		[]string{"get", "list", "patch", "update", "watch"},
 	)
+}
+
+// TestManagerHelmClusterRoleWatchesServices verifies that the ClusterOrder
+// Service informer has the list/watch verbs required by controller-runtime.
+func TestManagerHelmClusterRoleWatchesServices(t *testing.T) {
+	rolePath := filepath.Join(repoRoot(), "osac-operator/charts/operator/templates/clusterrole.yaml")
+	role := loadHelmClusterRoleTemplate(t, rolePath)
+	assertClusterRoleRuleVerbs(t, role, rolePath, "", []string{"services"}, serviceWatchVerbs)
 }
 
 // TestManagerRoleGrantsStorageClassReadOnly verifies that the kustomize

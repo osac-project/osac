@@ -1,7 +1,6 @@
 import { Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { useTranslation } from '../../hooks/useTranslation';
-import { InputField } from '../Form/InputField';
 import NameField from '../Form/NameField';
 import OsacForm from '../Form/OsacForm';
 
@@ -18,12 +17,6 @@ const GeneralStep = () => {
       <StackItem>
         <OsacForm>
           <NameField />
-          <InputField
-            name="metadata.description"
-            label={t('Description')}
-            fieldId="metadata-description"
-            multiline
-          />
         </OsacForm>
       </StackItem>
     </Stack>

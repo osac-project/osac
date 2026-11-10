@@ -2,45 +2,32 @@ import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ComputeInstance } from '@osac/types';
-import { ComputeInstanceState } from '@osac/types';
+import {
+  ComputeInstanceState,
+  ComputeInstances,
+  ExternalIPAttachments,
+  InstanceTypes,
+} from '@osac/types';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import { mockQueryResult } from '@osac/ui-components/test-utils/query';
 
 import { VmListPage } from './VmListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-vi.mock('@osac/ui-components/api/v1/compute-instance', () => ({
-  useComputeInstances: vi.fn(),
-}));
-
-vi.mock('@osac/ui-components/api/v1/instance-types', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@osac/ui-components/api/v1/instance-types')>();
+vi.mock('@osac/ui-components/api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@osac/ui-components/api/use-resource')>();
   return {
     ...actual,
-    useInstanceTypes: vi.fn(),
+    useListResource: vi.fn(),
   };
 });
-
-vi.mock('../../components/vm/VmActionsMenu', () => ({
-  VmActionsMenu: () => <button type="button">Actions</button>,
-}));
-
-vi.mock('../../components/vm/VmInstanceTypeLabel', () => ({
-  VmInstanceTypeLabel: ({
-    instanceTypeId,
-    instanceType,
-  }: {
-    instanceTypeId?: string;
-    instanceType?: { metadata?: { name?: string } };
-  }) => <span>{instanceType?.metadata?.name ?? instanceTypeId ?? '—'}</span>,
-}));
-
-const { useComputeInstances } = await import('@osac/ui-components/api/v1/compute-instance');
-const { useInstanceTypes } = await import('@osac/ui-components/api/v1/instance-types');
 
 const vm = {
   id: 'vm-1',
   metadata: { name: 'web-01' },
-  spec: { instanceType: { id: 'standard-4-8' } },
+  spec: {
+    instanceType: { id: 'standard-4-8', name: 'Standard 4 vCPU / 8 GiB' },
+  },
   status: {
     state: ComputeInstanceState.RUNNING,
     internalIpAddress: '10.0.0.5',
@@ -48,52 +35,94 @@ const vm = {
   },
 } as ComputeInstance;
 
+const mockComputeListSuccess = () =>
+  mockQueryResult({
+    data: { items: [vm], total: 1 },
+    isLoading: false,
+    error: null,
+  });
+
+const mockComputeTotalsSuccess = () =>
+  mockQueryResult({
+    data: { items: [], total: 1 },
+    isLoading: false,
+    error: null,
+  });
+
+const mockEmptyListSuccess = () =>
+  mockQueryResult({
+    data: { items: [] },
+    isLoading: false,
+    error: null,
+  });
+
+const setupDefaultListMocks = () => {
+  vi.mocked(useListResource).mockImplementation((service, request) => {
+    if (service === ComputeInstances) {
+      const limit = (request as { limit?: number })?.limit;
+      return limit === 0 ? mockComputeTotalsSuccess() : mockComputeListSuccess();
+    }
+    if (service === InstanceTypes) {
+      return mockEmptyListSuccess();
+    }
+    if (service === ExternalIPAttachments) {
+      return mockEmptyListSuccess();
+    }
+    return mockEmptyListSuccess();
+  });
+};
+
 const renderPage = () => renderWithProviders(<VmListPage />, { session: { role: 'tenant-user' } });
 
 describe('VmListPage', () => {
   beforeEach(() => {
-    vi.mocked(useComputeInstances).mockReturnValue({
-      data: [vm],
-      isLoading: false,
-      error: null,
-    } as ReturnType<typeof useComputeInstances>);
-
-    vi.mocked(useInstanceTypes).mockReturnValue({
-      data: [{ id: 'standard-4-8', metadata: { name: 'Standard 4 vCPU / 8 GiB' } }],
-      isLoading: false,
-      error: null,
-    } as ReturnType<typeof useInstanceTypes>);
+    setupDefaultListMocks();
   });
 
   it('shows an alert and still renders the table when instance types fail to load', async () => {
-    vi.mocked(useInstanceTypes).mockReturnValue(
-      mockQueryResult({
-        data: [],
-        isLoading: false,
-        error: new Error('Instance types unavailable'),
-      }),
+    vi.mocked(useListResource).mockImplementation((service, request) => {
+      if (service === InstanceTypes) {
+        return mockQueryResult({
+          data: undefined,
+          isLoading: false,
+          error: new Error('Instance types unavailable'),
+        });
+      }
+      if (service === ComputeInstances) {
+        const limit = (request as { limit?: number })?.limit;
+        return limit === 0 ? mockComputeTotalsSuccess() : mockComputeListSuccess();
+      }
+      return mockEmptyListSuccess();
+    });
+
+    const { user } = renderPage();
+
+    expect(await screen.findByRole('link', { name: 'web-01' })).toBeInTheDocument();
+    expect(screen.getByText('Standard 4 vCPU / 8 GiB')).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole('button', { name: 'Filter instance type by All instance types' }),
     );
 
-    renderPage();
-
-    expect(await screen.findByText('Could not load instance types')).toBeInTheDocument();
+    expect(screen.getByText('Unable to load instance types')).toBeInTheDocument();
     expect(screen.getByText('Instance types unavailable')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Create virtual machine' })).toHaveAttribute(
       'href',
       '/vms/create',
     );
-    expect(screen.getByRole('link', { name: 'web-01' })).toBeInTheDocument();
-    expect(screen.getByText('standard-4-8')).toBeInTheDocument();
   });
 
   it('keeps compute instance failures on the page-level error path', async () => {
-    vi.mocked(useComputeInstances).mockReturnValue(
-      mockQueryResult({
-        data: [],
-        isLoading: false,
-        error: new Error('VMs unavailable'),
-      }),
-    );
+    vi.mocked(useListResource).mockImplementation((service) => {
+      if (service === ComputeInstances) {
+        return mockQueryResult({
+          data: { items: [] },
+          isLoading: false,
+          error: new Error('VMs unavailable'),
+        });
+      }
+      return mockEmptyListSuccess();
+    });
 
     renderPage();
 

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 import { type Project, Projects } from '@osac/types';
@@ -16,6 +16,16 @@ const ProjectFilter = () => {
     cel<Project>((builder) => builder.field('metadata.tenant').notEquals('shared')),
   );
   const [searchParams, setSearchParams] = useSearchParams();
+  // The filter selects by project path, so a provider admin, who sees every tenant's projects,
+  // gets one option per path: one Root, not one per tenant.
+  const projectOptions = useMemo(
+    () => [
+      ...new Map(
+        (data?.items ?? []).map((project) => [project.metadata?.name ?? '', project]),
+      ).values(),
+    ],
+    [data],
+  );
 
   useEffect(() => {
     if (projects !== undefined) {
@@ -46,7 +56,7 @@ const ProjectFilter = () => {
   const selectedProjects: Project[] = [];
 
   projects.forEach((p) => {
-    const project = data?.items.find((d) => d.metadata?.name === p);
+    const project = projectOptions.find((d) => d.metadata?.name === p);
     if (project) {
       selectedProjects.push(project);
     }
@@ -65,7 +75,7 @@ const ProjectFilter = () => {
   return (
     <ProjectSelect
       mode="multiple"
-      projects={data?.items ?? []}
+      projects={projectOptions}
       selected={projects}
       onChange={setProjects}
       isLoading={isLoading}

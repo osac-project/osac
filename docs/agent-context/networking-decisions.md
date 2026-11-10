@@ -189,6 +189,12 @@ as follows:
   internet needs no DNS reachability. The settings `CUDN_EVPN_DNS_RESOLVERS`,
   `NETRIS_DNS_RESOLVERS`, `NETRIS_DNS_SNAT_CIDR` and the Netris per-VN DNS SNAT
   are removed.
+- **ExternalIPPool tenant:** as the unified design says, every ExternalIPPool
+  is shared by all tenants and lives in the `shared` tenant. A create that
+  omits the tenant gets `shared`; a create or update that names another tenant
+  is rejected with `PERMISSION_DENIED`. Automatic ExternalIP pool selection
+  does not check the pool's tenant, so it relies on this rule. Pools stored in
+  a tenant before this rule keep it, because the tenant is immutable.
 - **NetworkClass and NetworkAttachment CRDs:** the fulfillment reconciler
   creates the single NetworkClass CR, which resolves its managers from the
   registrations. BMaaS (BMF) and VMaaS create a NetworkAttachment per
@@ -212,6 +218,32 @@ as follows:
   NetworkAttachment, and ExternalIP, ExternalIPAttachment and NATGateway are
   not offered. The fulfillment service refuses to start when the stored value
   changes.
+- **CaaS endpoint lifecycle:** CaaS ClusterOrders using this shared lifecycle
+  discover the management API and guest ingress endpoints, request automatic
+  ExternalIPAttachments after each target is ready and its ExternalIP is
+  allocated, and own DNS publication/removal. Ingress reservation and release
+  use the generic Fabric Manager task contract selected from the Subnet; the
+  selected manager role is not hardcoded. The selected ClusterTemplate declares
+  the `supports_automatic_caas_endpoints` capability; Fulfillment stores that
+  resolved capability on the Cluster and projects it to the ClusterOrder, whose
+  controller uses it to select this lifecycle instead of matching template IDs.
+  With provider networking disabled,
+  ClusterOrder creates no endpoint jobs, reservations, DNS, or automatic
+  ExternalIP resources and reports `ProvisioningDisabled`. Templates that do
+  not declare the capability, including CI and NICo, keep their existing
+  endpoint flows. Neither flow uses a generic Fabric-Manager external-access
+  dispatcher.
+  DNS publication uses the HostedCluster's base domain and rejects it if it is
+  not in the configured supported-domain list before contacting
+  the DNS provider. DNS cleanup fails retryably when its domain is no longer
+  configured as supported, so automatic endpoint IPs remain held until record
+  removal succeeds for DNS backends that manage their records. `dns.noop.dns`
+  does not remove manually managed records; when it is used, operators must
+  remove manual endpoint records before deleting the Cluster or its automatic
+  ExternalIP attachments. Operational endpoint-task failures use the retryable
+  task path.
+  Retry-safe persistence and orphan cleanup remain tracked by
+  [OSAC-6655](https://redhat.atlassian.net/browse/OSAC-6655).
 - **CaaS workers:** worker BareMetalInstances live in tenant `system` and
   record their Cluster in status. The agent registration timeout (30 minutes)
   starts at the latest of the attempt start, the BMI network-ready time and
@@ -242,3 +274,18 @@ The other AgentlessNet tasks (VirtualNetwork, Subnet, ExternalIPPool, ExternalIP
 ExternalIPAttachment) still read the per-kind playbook inputs, and AgentlessNet
 has no valid manager registration. NATGateway therefore cannot run on a deployed
 AgentlessNet until the role adopts the contract.
+
+## Subnet compute eligibility
+
+The Kubernetes `create_subnet` result additionally accepts optional
+`compute_instance_supported` (boolean) and
+`compute_instance_unsupported_reason` (string). The operator persists these
+with the successful task and reports them through Subnet status to the API
+and VM wizard. `cudn_evpn` reports true for the CUDN owner and false with a
+reason for a fabric-only sibling; both Subnets remain Ready. A manager returning
+no output defaults to supported. A Subnet without a Kubernetes manager is
+unsupported. With provider networking disabled, VMs use the cluster default
+pod network and the Subnet is supported. The `apply_network_attachment` task still validates current
+ownership before VM provisioning, including after the owner is removed.
+This is a local extension to the manager result contract; the matching
+accepted-design amendment remains to be published.

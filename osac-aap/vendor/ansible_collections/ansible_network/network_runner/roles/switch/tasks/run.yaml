@@ -8,6 +8,32 @@
         - "{{ playbook_dir }}/providers/{{ ansible_network_os }}"
         - "/etc/ansible/network_runner/providers/{{ ansible_network_os }}"
         - "{{ role_path }}/providers/{{ ansible_network_os }}"
+- name: check the provider supports the requested deletion guard
+  fail:
+    msg: "deletion guards are not implemented for {{ ansible_network_os }}"
+  when:
+    - guard_scope | default('', true) | length > 0
+    - not (_supports_deletion_guard | default(false))
+- name: check the deletion guard inputs are complete
+  fail:
+    msg: >-
+      deletion guard scope and key must both be set or both be empty
+  when: >-
+    (guard_scope | default('', true) | length > 0)
+    != (guard_key | default('', true) | length > 0)
+  delegate_to: localhost
+- name: check the deletion guard inputs use only safe characters
+  fail:
+    msg: >-
+      deletion guard scope and key may only contain letters, digits, dots,
+      dashes and underscores
+  when: >-
+    ((guard_scope | default('', true) | length > 0)
+     and not (guard_scope is match('^[A-Za-z0-9_.-]{1,64}$')))
+    or
+    ((guard_key | default('', true) | length > 0)
+     and not (guard_key is match('^[A-Za-z0-9_.-]{1,64}$')))
+  delegate_to: localhost
 - name: include device role specific tasks
   include_tasks: "{{ item }}"
   with_first_found:

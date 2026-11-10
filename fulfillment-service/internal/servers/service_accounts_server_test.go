@@ -123,7 +123,6 @@ var _ = Describe("Service account management", func() {
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	}, Entry("status", "status"), Entry("client secret", "status.client_secret"),
 		Entry("state", "status.state"), Entry("message", "status.message"), Entry("finalizers", "metadata.finalizers"),
-		Entry("display name", "metadata.display_name"), Entry("description", "metadata.description"),
 		Entry("tenant", "metadata.tenant"), Entry("project", "metadata.project"), Entry("annotations", "metadata.annotations"))
 	It("allows private status updates from controllers", func() {
 		response, err := private.Update(tenantCtx, privatev1.ServiceAccountsUpdateRequest_builder{

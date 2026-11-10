@@ -31,7 +31,7 @@ var _ = Describe("volumes command", func() {
 		for _, sub := range cmd.Commands() {
 			names = append(names, sub.Name())
 		}
-		Expect(names).To(ContainElements("list", "get", "create", "update", "delete"))
+		Expect(names).To(ContainElements("list", "get", "create", "delete"))
 	})
 
 	It("should have proper short help", func() {
@@ -44,7 +44,6 @@ var _ = Describe("volumes command", func() {
 		Expect(cmd.Long).To(ContainSubstring("volumes list"))
 		Expect(cmd.Long).To(ContainSubstring("volumes get"))
 		Expect(cmd.Long).To(ContainSubstring("volumes create"))
-		Expect(cmd.Long).To(ContainSubstring("volumes update"))
 		Expect(cmd.Long).To(ContainSubstring("volumes delete"))
 	})
 })

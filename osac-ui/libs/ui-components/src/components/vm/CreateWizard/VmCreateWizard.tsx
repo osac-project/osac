@@ -55,7 +55,7 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
     configuration: t('Compute configuration'),
     storage: t('Storage'),
     networking: t('Networking'),
-    access: t('Access & initial run'),
+    access: t('Access & Initial run'),
     review: t('Review'),
   };
 
@@ -98,7 +98,6 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
       enableReinitialize
       validationSchema={schema}
       onSubmit={handleSubmit}
-      validateOnChange={false}
     >
       <FieldValidationProvider showErrors={validationAlert}>
         <LeaveFormConfirmation />

@@ -18,7 +18,7 @@ const ReviewStep = () => {
   const { t } = useTranslation();
   const {
     values: {
-      metadata: { name, description },
+      metadata: { name },
       spec: { storageTier, sizeGib, accessMode },
     },
   } = useFormikContext<VolumeFormValues>();
@@ -35,10 +35,6 @@ const ReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Name')}</DescriptionListTerm>
             <DescriptionListDescription>{displayValue(name)}</DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Description')}</DescriptionListTerm>
-            <DescriptionListDescription>{displayValue(description)}</DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Storage tier')}</DescriptionListTerm>

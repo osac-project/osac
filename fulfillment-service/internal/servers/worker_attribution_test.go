@@ -132,10 +132,10 @@ var _ = Describe("Worker attribution", func() {
 					Project: project,
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					DiskImage:    privatev1.DiskImageReference_builder{Id: "worker-disk-image"}.Build(),
-					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
-					InstanceType: bareMetalInstanceTypeReference("worker-type"),
-					SshPublicKey: new(testSSHPublicKey),
+					DiskImage:      privatev1.DiskImageReference_builder{Id: "worker-disk-image"}.Build(),
+					CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
+					InstanceType:   bareMetalInstanceTypeReference("worker-type"),
+					UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 				}.Build(),
 				Status: privatev1.BareMetalInstanceStatus_builder{
 					Cluster: ownerRef,
@@ -243,7 +243,7 @@ var _ = Describe("Worker attribution", func() {
 					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{
 						Id: "worker-type", Shared: true,
 					}.Build(),
-					SshPublicKey: new(testSSHPublicKey),
+					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 				}.Build(),
 				Status: publicv1.BareMetalInstanceStatus_builder{
 					Cluster: publicv1.ClusterLocalReference_builder{Id: cluster.GetId()}.Build(),

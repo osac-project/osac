@@ -1,0 +1,68 @@
+suite: kafka exporter consumer lag rule
+templates:
+  - templates/kafka-exporter-rule.yaml
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1/PrometheusRule
+tests:
+  - it: alerts on any consumer group behind a heartbeat topic
+    set:
+      kafka.enabled: true
+      kafka.exporter.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PrometheusRule
+      - equal:
+          path: metadata.name
+          value: osac-kafka-exporter
+      - equal:
+          path: metadata.namespace
+          value: osac-kafka
+      - lengthEqual:
+          path: spec.groups[0].rules
+          count: 1
+      - equal:
+          path: spec.groups[0].rules[0].alert
+          value: MeteringConsumerLag
+      - equal:
+          path: spec.groups[0].rules[0].expr
+          value: 'kafka_consumergroup_lag{topic=~"osac[.]metering[.]heartbeat[.].*"} > 15 and delta(kafka_consumergroup_lag{topic=~"osac[.]metering[.]heartbeat[.].*"}[15m]) >= 0'
+      - equal:
+          path: spec.groups[0].rules[0].for
+          value: 15m
+      - equal:
+          path: spec.groups[0].rules[0].labels.severity
+          value: warning
+      - matchRegex:
+          path: spec.groups[0].rules[0].annotations.summary
+          pattern: '\$labels\.consumergroup'
+      - matchRegex:
+          path: spec.groups[0].rules[0].annotations.description
+          pattern: '\$labels\.topic'
+
+  - it: uses the configured lag threshold
+    set:
+      kafka.enabled: true
+      kafka.exporter.enabled: true
+      kafka.exporter.lagThreshold: 5
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[0].expr
+          value: 'kafka_consumergroup_lag{topic=~"osac[.]metering[.]heartbeat[.].*"} > 5 and delta(kafka_consumergroup_lag{topic=~"osac[.]metering[.]heartbeat[.].*"}[15m]) >= 0'
+
+  - it: renders no rule when lag monitoring is off
+    set:
+      kafka.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no rule when Kafka is disabled
+    set:
+      kafka.enabled: false
+      kafka.exporter.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

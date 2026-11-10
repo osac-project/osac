@@ -6,6 +6,7 @@ import {
   type VmPowerAction,
   type VmResizeTarget,
   expectVmConfiguration,
+  resizeVmInstanceType,
   runVmPowerAction,
   waitForVmConditionStatus,
   waitForVmDetailsStatus,
@@ -53,4 +54,20 @@ export const restartVmAndVerify = async (
     desired: target,
     active: target,
   });
+};
+
+export const resizeRunningVmAndVerify = async (
+  page: Parameters<typeof runVmPowerAction>[0],
+  tenantName: string,
+  vmName: string,
+  activeBefore: VmResizeTarget,
+  target: VmResizeTarget,
+): Promise<void> => {
+  await resizeVmInstanceType(page, target);
+  await waitForVmConditionStatus(page, vmName, restartRequiredCondition, 'True', conditionTimeout);
+  await expectComputeInstanceConfiguration(tenantName, vmName, {
+    desired: target,
+    active: activeBefore,
+  });
+  await restartVmAndVerify(page, tenantName, vmName, 'restart', target);
 };

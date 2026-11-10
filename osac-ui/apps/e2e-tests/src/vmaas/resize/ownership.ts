@@ -36,9 +36,12 @@ export const markResizeOwnershipIfApplicable = async (
   if (!applicableProjects.includes(projectName)) {
     return;
   }
-  await testStep(stepCategory, 'Record resize prerequisite ownership', () =>
-    markResizeResourceOwned(resource),
-  );
+  await testStep(stepCategory, 'Record resize prerequisite ownership', async () => {
+    if (await isResizeResourceOwned(resource)) {
+      throw new Error(`Resize resource "${resource}" already has an ownership marker.`);
+    }
+    await markResizeResourceOwned(resource);
+  });
 };
 
 export const isResizeResourceOwned = async (resource: ResizeOwnedResource): Promise<boolean> => {

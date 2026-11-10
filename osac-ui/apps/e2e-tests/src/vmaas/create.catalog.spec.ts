@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { isResizeResourceOwned, markResizeResourceOwned } from './resize/ownership';
+import { markResizeOwnershipIfApplicable } from './resize/ownership';
 import { catalogTestData } from './test_data';
 import { CatalogCreatePage } from '../../../../libs/locators/catalog';
 import {
@@ -34,14 +34,6 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     `Verify catalog item "${catalogTestData.name}" does not exist before creation`,
     () => expectCatalogItemNotListed(page, catalogTestData.name),
   );
-
-  await testStep('catalog-create', 'Verify catalog ownership marker is not present', async () => {
-    if (await isResizeResourceOwned('catalog')) {
-      throw new Error(
-        `Catalog item "${catalogTestData.name}" already has an ownership marker for this run.`,
-      );
-    }
-  });
 
   await testStep('catalog-create', 'Open the catalog item creation wizard', () =>
     openCreateCatalogItemPage(page),
@@ -94,7 +86,6 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     await expect(page).toHaveURL(
       (url) => /^\/catalog\/vm\/[^/]+$/.test(url.pathname) && url.pathname !== '/catalog/vm/create',
     );
-    await markResizeResourceOwned('catalog');
     await expect(
       page.getByRole('heading', { name: catalogTestData.name, exact: true }),
     ).toBeVisible();
@@ -121,5 +112,12 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
         },
       );
     },
+  );
+
+  await markResizeOwnershipIfApplicable(
+    test.info().project.name,
+    ['vmaas-full-flow-catalog', 'vmaas-resize-catalog'],
+    'catalog',
+    'catalog-create',
   );
 });

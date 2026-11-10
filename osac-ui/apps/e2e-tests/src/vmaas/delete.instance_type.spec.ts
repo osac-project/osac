@@ -1,9 +1,14 @@
 import { test } from '@playwright/test';
 
-import { deleteInstanceTypeFlow } from './delete_flows';
 import { instanceTypeNameOrSkip, instanceTypeTestData } from './test_data';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
+import {
+  deleteInstanceType,
+  ensureInstanceTypeExists,
+  expectInstanceTypeNotToExist,
+} from '../../../../libs/test-utils/src/instance_types.page';
+import { openInstanceTypesPage } from '../../../../libs/test-utils/src/main.page';
 
 test('deletes the requested instance type', async ({ page }) => {
   test.setTimeout(120_000);
@@ -24,14 +29,32 @@ test('deletes the requested instance type', async ({ page }) => {
     ),
   );
 
+  await testStep('instance-type-delete', 'Open Infrastructure > Instance types', () =>
+    openInstanceTypesPage(page),
+  );
+
+  await testStep(
+    'instance-type-delete',
+    `Verify instance type "${instanceTypeName}" exists before deletion`,
+    async () => {
+      await ensureInstanceTypeExists(
+        page,
+        instanceTypeName,
+        instanceTypeTestData.description,
+        instanceTypeTestData.vcpus,
+        instanceTypeTestData.memoryGib,
+        instanceTypeTestData.gpu,
+      );
+    },
+  );
+
   await testStep('instance-type-delete', `Delete instance type "${instanceTypeName}"`, () =>
-    deleteInstanceTypeFlow(
-      page,
-      instanceTypeName,
-      instanceTypeTestData.description,
-      instanceTypeTestData.vcpus,
-      instanceTypeTestData.memoryGib,
-      instanceTypeTestData.gpu,
-    ),
+    deleteInstanceType(page, instanceTypeName),
+  );
+
+  await testStep(
+    'instance-type-delete',
+    `Verify instance type "${instanceTypeName}" does not exist after deletion`,
+    () => expectInstanceTypeNotToExist(page, instanceTypeName),
   );
 });

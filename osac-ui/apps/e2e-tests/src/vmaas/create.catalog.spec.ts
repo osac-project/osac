@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
+import { access, writeFile } from 'node:fs/promises';
 
 import { markResizeOwnershipIfApplicable } from './resize/ownership';
-import { catalogTestData } from './test_data';
+import { catalogOwnershipFilePath, catalogTestData } from './test_data';
 import { CatalogCreatePage } from '../../../../libs/locators/catalog';
 import {
   expectCatalogItemListed,
@@ -34,6 +35,20 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     `Verify catalog item "${catalogTestData.name}" does not exist before creation`,
     () => expectCatalogItemNotListed(page, catalogTestData.name),
   );
+
+  const ownershipFile = catalogOwnershipFilePath(catalogTestData.name);
+  await testStep('catalog-create', 'Verify catalog ownership marker is not present', async () => {
+    try {
+      await access(ownershipFile);
+      throw new Error(
+        `Catalog item "${catalogTestData.name}" already has an ownership marker for this run.`,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  });
 
   await testStep('catalog-create', 'Open the catalog item creation wizard', () =>
     openCreateCatalogItemPage(page),
@@ -89,6 +104,11 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     await expect(
       page.getByRole('heading', { name: catalogTestData.name, exact: true }),
     ).toBeVisible();
+    await writeFile(ownershipFile, '', {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
   });
 
   await testStep('catalog-create', 'Publish the catalog item', async () => {
@@ -116,7 +136,7 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
 
   await markResizeOwnershipIfApplicable(
     test.info().project.name,
-    ['vmaas-full-flow-catalog', 'vmaas-resize-catalog'],
+    ['vmaas-resize-catalog'],
     'catalog',
     'catalog-create',
   );

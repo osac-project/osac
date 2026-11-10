@@ -1,14 +1,7 @@
 import { test } from '@playwright/test';
 
 import { markResizeOwnershipIfApplicable } from './resize/ownership';
-import {
-  instanceTypeNameOrSkip,
-  instanceTypeTestData,
-  resizeInstanceTypeNameOrSkip,
-  resizeInstanceTypeTestData,
-  resizeMixedInstanceTypeNameOrSkip,
-  resizeMixedInstanceTypeTestData,
-} from './test_data';
+import { instanceTypeNameOrSkip, instanceTypeTestData } from './test_data';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import {
@@ -22,19 +15,7 @@ import { openInstanceTypesPage } from '../../../../libs/test-utils/src/main.page
 test('creates an instance type from Infrastructure', async ({ page }) => {
   // Allow login and page navigation to complete on a remote cluster.
   test.setTimeout(120_000);
-  const projectName = test.info().project.name;
-  const isResizeTargetProject = projectName === 'vmaas-resize-target-instance-type';
-  const isResizeMixedProject = projectName === 'vmaas-resize-mixed-instance-type';
-  const instanceTypeName = isResizeTargetProject
-    ? resizeInstanceTypeNameOrSkip()
-    : isResizeMixedProject
-      ? resizeMixedInstanceTypeNameOrSkip()
-      : instanceTypeNameOrSkip();
-  const instanceTypeData = isResizeTargetProject
-    ? { ...resizeInstanceTypeTestData, gpu: undefined }
-    : isResizeMixedProject
-      ? { ...resizeMixedInstanceTypeTestData, gpu: undefined }
-      : instanceTypeTestData;
+  const instanceTypeName = instanceTypeNameOrSkip();
   if (!instanceTypeName) {
     logProgress('instance-type-create', 'Skipped: instance_type.name is not configured.');
     return;
@@ -69,24 +50,16 @@ test('creates an instance type from Infrastructure', async ({ page }) => {
     createInstanceType(
       page,
       instanceTypeName,
-      instanceTypeData.description,
-      instanceTypeData.vcpus,
-      instanceTypeData.memoryGib,
-      instanceTypeData.gpu,
+      instanceTypeTestData.description,
+      instanceTypeTestData.vcpus,
+      instanceTypeTestData.memoryGib,
+      instanceTypeTestData.gpu,
     ),
   );
   await markResizeOwnershipIfApplicable(
     test.info().project.name,
-    [
-      'vmaas-resize-target-instance-type',
-      'vmaas-resize-mixed-instance-type',
-      'vmaas-resize-prerequisites',
-    ],
-    isResizeTargetProject
-      ? 'instance-type-target'
-      : isResizeMixedProject
-        ? 'instance-type-mixed'
-        : 'instance-type-base',
+    ['vmaas-resize-prerequisites'],
+    'instance-type-base',
     'instance-type-create',
   );
 

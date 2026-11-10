@@ -1,5 +1,6 @@
 import { test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
@@ -420,6 +421,12 @@ export const catalogTestData: CatalogTestData = {
   type: rawCatalog.type,
   usage: rawCatalog.usage,
 };
+
+const safeCatalogName = (name: string): string =>
+  name.replace(/[^a-zA-Z0-9._-]/g, '_') || 'catalog';
+
+export const catalogOwnershipFilePath = (name: string): string =>
+  path.join(tmpdir(), `osac-catalog-${safeCatalogName(name)}-${catalogTestRunId}.created`);
 
 export const vmTestName = `vm-e2e-${catalogTestRunId}`;
 

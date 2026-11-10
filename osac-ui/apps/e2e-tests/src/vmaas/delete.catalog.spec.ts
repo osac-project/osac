@@ -1,19 +1,34 @@
 import { test } from '@playwright/test';
+import { access, rm } from 'node:fs/promises';
 
-import { deleteCatalogFlow } from './delete_flows';
-import { isResizeResourceOwned, removeResizeOwnershipMarker } from './resize/ownership';
-import { catalogTestData } from './test_data';
+import { catalogOwnershipFilePath, catalogTestData } from './test_data';
+import {
+  deleteCatalogItem,
+  expectCatalogItemNotListed,
+} from '../../../../libs/test-utils/src/catalog.page';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
+import { openCatalogPage } from '../../../../libs/test-utils/src/main.page';
 
 test('deletes a catalog item through the Catalog UI', async ({ page }) => {
   test.setTimeout(180_000);
   logProgress('catalog-delete', `Starting flow for "${catalogTestData.name}".`);
 
+  const ownershipFile = catalogOwnershipFilePath(catalogTestData.name);
   const createdByThisRun = await testStep(
     'catalog-delete',
     `Verify catalog item "${catalogTestData.name}" belongs to this run`,
-    () => isResizeResourceOwned('catalog'),
+    async () => {
+      try {
+        await access(ownershipFile);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return false;
+        }
+        throw error;
+      }
+    },
   );
   if (!createdByThisRun) {
     test.skip(
@@ -33,11 +48,19 @@ test('deletes a catalog item through the Catalog UI', async ({ page }) => {
     ),
   );
 
+  await testStep('catalog-delete', 'Open the Catalog page', () => openCatalogPage(page));
+
   await testStep('catalog-delete', 'Delete the catalog item through the UI', () =>
-    deleteCatalogFlow(page, catalogTestData.name),
+    deleteCatalogItem(page, catalogTestData.name),
+  );
+
+  await testStep(
+    'catalog-delete',
+    `Verify catalog item "${catalogTestData.name}" is absent from the UI`,
+    () => expectCatalogItemNotListed(page, catalogTestData.name),
   );
 
   await testStep('catalog-delete', 'Remove catalog ownership marker', () =>
-    removeResizeOwnershipMarker('catalog'),
+    rm(ownershipFile, { force: true }),
   );
 });

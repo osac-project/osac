@@ -162,9 +162,11 @@ func (s *PrivateWorkloadClustersServer) Update(ctx context.Context,
 	return response, err
 }
 
-func (s *PrivateWorkloadClustersServer) Delete(context.Context,
-	*privatev1.WorkloadClustersDeleteRequest) (*privatev1.WorkloadClustersDeleteResponse, error) {
-	return nil, grpcstatus.Error(grpccodes.Unimplemented, "workload cluster deletion is not implemented")
+func (s *PrivateWorkloadClustersServer) Delete(ctx context.Context,
+	request *privatev1.WorkloadClustersDeleteRequest) (*privatev1.WorkloadClustersDeleteResponse, error) {
+	var response *privatev1.WorkloadClustersDeleteResponse
+	err := s.generic.Delete(ctx, request, &response)
+	return response, err
 }
 
 func (s *PrivateWorkloadClustersServer) Signal(ctx context.Context,

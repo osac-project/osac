@@ -55,12 +55,11 @@ func listCmd() *cobra.Command {
 				return err
 			}
 			defer conn.Close()
-			response, err := client.List(ctx, privatev1.HubsListRequest_builder{}.Build())
+			hubs, err := listAll(ctx, client)
 			if err != nil {
 				return fmt.Errorf("failed to list hubs: %w", err)
 			}
-			renderHubList(terminal.ConsoleFromContext(ctx), response.GetItems())
-			return nil
+			return renderHubList(terminal.ConsoleFromContext(ctx), hubs)
 		},
 	}
 }
@@ -108,13 +107,32 @@ func connect(ctx context.Context, cmd *cobra.Command) (privatev1.HubsClient, int
 	return privatev1.NewHubsClient(conn), conn, nil
 }
 
-func renderHubList(w io.Writer, hubs []*privatev1.Hub) {
-	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(writer, "ID\tNAME\tNAMESPACE")
-	for _, hub := range hubs {
-		fmt.Fprintf(writer, "%s\t%s\t%s\n", hub.GetId(), hub.GetMetadata().GetName(), hub.GetSpec().GetNamespace())
+func listAll(ctx context.Context, client privatev1.HubsClient) ([]*privatev1.Hub, error) {
+	const pageSize int32 = 100
+	var result []*privatev1.Hub
+	for offset := int32(0); ; offset += pageSize {
+		response, err := client.List(ctx, privatev1.HubsListRequest_builder{Offset: proto.Int32(offset), Limit: proto.Int32(pageSize)}.Build())
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, response.GetItems()...)
+		if int32(len(result)) >= response.GetTotal() || len(response.GetItems()) == 0 {
+			return result, nil
+		}
 	}
-	_ = writer.Flush()
+}
+
+func renderHubList(w io.Writer, hubs []*privatev1.Hub) error {
+	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(writer, "ID\tNAME\tNAMESPACE"); err != nil {
+		return err
+	}
+	for _, hub := range hubs {
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\n", hub.GetId(), hub.GetMetadata().GetName(), hub.GetSpec().GetNamespace()); err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
 }
 
 func renderHub(w io.Writer, hub *privatev1.Hub) error {

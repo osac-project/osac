@@ -36,10 +36,11 @@ var _ = Describe("Hub CLI", func() {
 	})
 
 	It("renders Hub identity without credentials", func() {
+		testKubeconfig := []byte("secret")
 		hub := privatev1.Hub_builder{
 			Id:       "hub-1",
 			Metadata: privatev1.Metadata_builder{Name: "ai-grid-hub"}.Build(),
-			Spec:     privatev1.HubSpec_builder{Namespace: "osac-orders", Kubeconfig: []byte("secret")}.Build(),
+			Spec:     privatev1.HubSpec_builder{Namespace: "osac-orders", Kubeconfig: testKubeconfig}.Build(),
 		}.Build()
 		output := &bytes.Buffer{}
 		Expect(renderHub(output, hub)).To(Succeed())

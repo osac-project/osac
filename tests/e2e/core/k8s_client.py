@@ -44,17 +44,19 @@ def _watch_lines(path: Path) -> list[str]:
 
 
 class K8sClient:
-    def __init__(self, *, namespace: str, kubeconfig: str | None = None, as_system_admin: bool = True) -> None:
+    def __init__(self, *, namespace: str, kubeconfig: str | None = None, as_system_admin: bool = True, impersonate: str | None = None) -> None:
         self.namespace: str = namespace
         self.kubeconfig: str | None = kubeconfig
         self.as_system_admin: bool = as_system_admin
+        self.impersonate: str | None = impersonate
 
     def _base(self) -> list[str]:
         args: list[str] = ["kubectl"]
         if self.kubeconfig is not None:
             args.extend(["--kubeconfig", self.kubeconfig])
-        if self.as_system_admin:
-            args.extend(["--as", "system:admin"])
+        identity = self.impersonate or ("system:admin" if self.as_system_admin else "")
+        if identity:
+            args.extend(["--as", identity])
         return args
 
     def base_args(self) -> list[str]:

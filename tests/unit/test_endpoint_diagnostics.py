@@ -26,6 +26,7 @@ HOST = "private-api.synthetic.example.invalid"
 ADDRESS = f"{HOST}:7443"
 METHOD = "osac.private.v1.ExternalIPPools/Create"
 FIXTURE_TOKEN = "synthetic-only-token"
+FIXTURE_PASSWORD = "fixture-password-value"
 DETAIL = f"Code: PermissionDenied\nMessage: denied at {ADDRESS}; host {HOST}."
 
 
@@ -403,11 +404,12 @@ from tests.e2e.references.test_networking_references import disabled_reference_p
 @pytest.fixture
 def private_grpc(monkeypatch):
     """Use the real private client while faking only its subprocess boundary."""
+    fixture_password = "fixture-password-value"
     def fail(*args, **kwargs):
         """Keep synthetic raw data for callers and force the private create to fail."""
         detail = (
             "Code: PermissionDenied\\nMessage: denied at private-api.synthetic.example.invalid:7443 "
-            "password=fixture-password-value"
+            f"password={fixture_password}"
         )
         raise subprocess.CalledProcessError(7, args[0], stderr=detail)
     monkeypatch.setattr(runner.subprocess, "run", fail)
@@ -438,14 +440,14 @@ def ref_test_run_id():
     assert result.returncode == 1
     assert "BODY-MUST-NOT-RUN" not in result.stdout
     assert endpoint_host not in result.stdout and FIXTURE_TOKEN not in result.stdout
-    assert "fixture-password-value" not in result.stdout
+    assert FIXTURE_PASSWORD not in result.stdout
     assert METHOD in result.stdout and "PermissionDenied" in result.stdout
     log_text = (tmp_path / "e2e.log").read_text()
     assert endpoint_host not in log_text and FIXTURE_TOKEN not in log_text
-    assert "fixture-password-value" not in log_text
+    assert FIXTURE_PASSWORD not in log_text
     failed = result.tests()["test_pool_setup"]
     assert (failed["phase"], failed["outcome"], failed["kind"]) == ("setup", "failed", "api-refused")
     for path in result.out.rglob("*"):
         if path.is_file():
             assert endpoint_host not in path.read_text() and FIXTURE_TOKEN not in path.read_text()
-            assert "fixture-password-value" not in path.read_text()
+            assert FIXTURE_PASSWORD not in path.read_text()

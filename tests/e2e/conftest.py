@@ -291,7 +291,7 @@ def _wait_for_default_networking_ready(
     """
     # OSAC-5564: subnet readiness alone does not guarantee the matching default
     # SecurityGroup is READY, which Cluster Create now requires for defaulting.
-    wait_for_tenant_default_networking_ready(grpc=private_grpc, tenant_name="tenant1")
+    wait_for_tenant_default_networking_ready(grpc=private_grpc, tenant_name=jwt_tenant)
 
     # Timeout must exceed 2x the operator's statusPollInterval (30s) to
     # accommodate two sequential polling cycles (VirtualNetwork -> Subnet).

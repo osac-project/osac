@@ -523,6 +523,21 @@ var _ = Describe("Private clusters server", func() {
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			_, err = server.natGatewaysDao.Create().SetObject(privatev1.NATGateway_builder{
+				Id: "test-nat-gateway",
+				Metadata: privatev1.Metadata_builder{
+					Name: "test-nat-gateway", Tenant: testTenant,
+					Annotations: map[string]string{"osac.openshift.io/owner-reference": "test-vnet"},
+				}.Build(),
+				Spec: privatev1.NATGatewaySpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: "test-vnet"}.Build(),
+				}.Build(),
+				Status: privatev1.NATGatewayStatus_builder{
+					State: privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY,
+					Hub:   "network-hub-a",
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
 
 			subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
 				SetLogger(logger).
@@ -3052,7 +3067,7 @@ var _ = Describe("Private clusters server", func() {
 			})
 
 			It("Rejects replacing the resolved default network_attachment", func() {
-				defaults := seedReadyDefaultNetworking(testTenant, 0)
+				defaults := seedReadyDefaultNetworkingWithNAT(testTenant)
 				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{Name: "test-cluster"}.Build(),
@@ -6935,6 +6950,75 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err.Error()).ToNot(ContainSubstring("security_groups are required"))
 			})
 
+			It("Returns InvalidArgument when the required default VirtualNetwork is missing", func() {
+				virtualNetwork, err := server.virtualNetworksDao.Get().SetId("test-vnet").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				virtualNetwork.GetObject().GetMetadata().SetLabels(nil)
+				_, err = server.virtualNetworksDao.Update().SetObject(virtualNetwork.GetObject()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Create(ctx, newCaaSNodeSetCreateRequest("na-missing-default-vnet", baseNodeSets(), nil))
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("has no default VirtualNetwork"))
+			})
+
+			It("Rejects explicit and tenant-defaulted attachments without a NATGateway", func() {
+				_, err := server.natGatewaysDao.Delete().SetId("test-nat-gateway").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				requests := []struct {
+					name       string
+					attachment *privatev1.ClusterNetworkAttachment
+				}{
+					{
+						name: "na-explicit-no-nat",
+						attachment: privatev1.ClusterNetworkAttachment_builder{
+							Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+							SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+								privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build(),
+							},
+						}.Build(),
+					},
+					{name: "na-defaulted-no-nat"},
+				}
+				for _, request := range requests {
+					_, err := server.Create(ctx, newCaaSNodeSetCreateRequest(request.name, baseNodeSets(), request.attachment))
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+					Expect(err.Error()).To(ContainSubstring("does not have a READY NATGateway"))
+
+					stored, listErr := server.List(ctx, privatev1.ClustersListRequest_builder{
+						Filter: new(fmt.Sprintf("this.metadata.name == %q", request.name)),
+					}.Build())
+					Expect(listErr).ToNot(HaveOccurred())
+					Expect(stored.GetItems()).To(BeEmpty())
+				}
+			})
+
+			DescribeTable("Rejects creation unless the NATGateway is READY",
+				func(state privatev1.NATGatewayState) {
+					gateway, err := server.natGatewaysDao.Get().SetId("test-nat-gateway").Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					gateway.GetObject().GetStatus().SetState(state)
+					gateway.GetObject().GetStatus().SetStateTransitionTime(timestamppb.New(time.Now().Add(time.Second)))
+					_, err = server.natGatewaysDao.Update().SetObject(gateway.GetObject()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+
+					_, err = server.Create(ctx, newCaaSNodeSetCreateRequest("na-nonready-nat", baseNodeSets(),
+						privatev1.ClusterNetworkAttachment_builder{
+							Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+							SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+								privatev1.SecurityGroupLocalReference_builder{Id: "default-sg"}.Build(),
+							},
+						}.Build()))
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+					Expect(err.Error()).To(ContainSubstring("does not have a READY NATGateway"))
+				},
+				Entry("unspecified", privatev1.NATGatewayState_NAT_GATEWAY_STATE_UNSPECIFIED),
+				Entry("pending", privatev1.NATGatewayState_NAT_GATEWAY_STATE_PENDING),
+				Entry("failed", privatev1.NATGatewayState_NAT_GATEWAY_STATE_FAILED),
+				Entry("deleting", privatev1.NATGatewayState_NAT_GATEWAY_STATE_DELETING),
+			)
+
 			It("Fills the tenant default security group for a Cluster in a project", func() {
 				const project = "project-default-vn-without-subnet"
 				projectsDao, err := dao.NewGenericDAO[*privatev1.Project]().
@@ -7372,6 +7456,8 @@ var _ = Describe("Private clusters server", func() {
 
 			It("Resolves tenant defaults when provider networking is disabled", func() {
 				server.settings.ProvisioningEnabled = false
+				_, err := server.natGatewaysDao.Delete().SetId("test-nat-gateway").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
 				defaults := seedReadyDefaultNetworking(testTenant, 0)
 
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{

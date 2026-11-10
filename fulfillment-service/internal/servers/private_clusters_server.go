@@ -64,6 +64,7 @@ type PrivateClustersServer struct {
 	virtualNetworksDao        *dao.GenericDAO[*privatev1.VirtualNetwork]
 	subnetsDao                *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
+	natGatewaysDao            *dao.GenericDAO[*privatev1.NATGateway]
 	externalIPPoolDao         *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao             *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao   *dao.GenericDAO[*privatev1.ExternalIPAttachment]
@@ -225,6 +226,15 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		return
 	}
 
+	natGatewaysDao, err := dao.NewGenericDAO[*privatev1.NATGateway]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	// Create the ExternalIP DAOs:
 	externalIPPoolDaoBuilder := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
 		SetLogger(b.logger).
@@ -300,6 +310,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		virtualNetworksDao:        virtualNetworksDao,
 		subnetsDao:                subnetsDao,
 		securityGroupsDao:         securityGroupsDao,
+		natGatewaysDao:            natGatewaysDao,
 		externalIPPoolDao:         externalIPPoolDao,
 		externalIPDao:             externalIPDao,
 		externalIPAttachmentDao:   externalIPAttachmentDao,
@@ -409,6 +420,9 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	}
 
 	if err = s.validateNetworkAttachmentState(ctx, candidate); err != nil {
+		return
+	}
+	if err = s.validateClusterNATGatewayReady(ctx, candidate); err != nil {
 		return
 	}
 	// The resolved creation reference is the initial observed baseline until
@@ -1218,7 +1232,7 @@ func (s *PrivateClustersServer) resolveClusterDefaultSubnet(ctx context.Context,
 		return nil, nil, err
 	}
 	if defaultVirtualNetwork == nil {
-		return nil, nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		return nil, nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"tenant default networking is misconfigured: default subnet %q has no default VirtualNetwork",
 			defaultSubnet.GetId())
 	}
@@ -1385,6 +1399,53 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 		return err
 	}
 	return validateNetworkingHubReferences(canonicalHubID, hubReferences...)
+}
+
+// validateClusterNATGatewayReady enforces the CaaS create gate when provider
+// networking is enabled. This runs after attachment defaulting and validation,
+// so explicit and defaulted attachments use the same readiness check.
+func (s *PrivateClustersServer) validateClusterNATGatewayReady(ctx context.Context, cluster *privatev1.Cluster) error {
+	if !s.settings.ProvisioningEnabled || cluster == nil || cluster.GetSpec() == nil ||
+		cluster.GetSpec().GetNetworkAttachment() == nil {
+		return nil
+	}
+
+	attachment := cluster.GetSpec().GetNetworkAttachment()
+	subnetKey := refKey(attachment.GetSubnet())
+	subnet, err := resolveNetworkingReference(ctx, s.subnetsDao, cluster.GetMetadata(), attachment.GetSubnet(),
+		"subnet", grpccodes.NotFound, true)
+	if err != nil {
+		return err
+	}
+	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
+	if virtualNetworkID == "" {
+		return grpcstatus.Errorf(grpccodes.Internal,
+			"spec.network_attachment: subnet '%s' has no virtual network reference", subnetKey)
+	}
+	// NATGateway deletion locks the VirtualNetwork before checking Cluster references.
+	// Take the same lock so a concurrent delete cannot pass its reference check while this
+	// Cluster is still being prepared.
+	if _, err := lockRecord(ctx, s.virtualNetworksDao, virtualNetworkID); err != nil {
+		return err
+	}
+
+	gateways, err := s.natGatewaysDao.List().SetFilter(fmt.Sprintf(
+		"this.spec.virtual_network.id == %q", virtualNetworkID)).Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "failed to check Cluster NATGateway readiness", slog.Any("error", err))
+		return grpcstatus.Error(grpccodes.Internal, "failed to check Cluster NATGateway readiness")
+	}
+	for _, gateway := range gateways.GetItems() {
+		if gateway.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if gateway.GetStatus().GetState() == privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY {
+			return nil
+		}
+	}
+
+	return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		"spec.network_attachment: VirtualNetwork '%s' does not have a READY NATGateway", virtualNetworkID)
 }
 
 // validateAutoExternalIPImmutability prevents changing auto_external_ip_attachment after creation.

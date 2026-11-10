@@ -54,9 +54,9 @@ var _ = Describe("Tenancy logic", func() {
 		}
 		createTenant("my-tenant")
 		createTenant("your-tenant")
-		seedReadyDefaultNetworking("my-tenant", 0)
-		seedReadyDefaultNetworking("your-tenant", 0)
-		seedReadyDefaultNetworking(auth.SharedTenant, 0)
+		seedReadyDefaultNetworkingWithNAT("my-tenant")
+		seedReadyDefaultNetworkingWithNAT("your-tenant")
+		seedReadyDefaultNetworkingWithNAT(auth.SharedTenant)
 
 		// Create a default cluster version for version resolution:
 		seedClusterVersion(ctx, privatev1.ClusterVersion_builder{

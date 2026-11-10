@@ -2,16 +2,12 @@ global:
   networking:
     # Shared provider-networking setting, independent of service/controller enablement.
     provisioningEnabled: true
-
 fullnameOverride: "bmf-operator"
-
 image:
   repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-  tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+  tag: sha-b900275 # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
   pullPolicy: Always
-
 replicaCount: 1
-
 resources:
   limits:
     cpu: 500m
@@ -19,11 +15,9 @@ resources:
   requests:
     cpu: 10m
     memory: 64Mi
-
 serviceAccount:
   create: true
   name: ""
-
 secrets:
   inventoryConfig: "osac-inventory-config"
   managementConfig: "osac-management-config"
@@ -31,16 +25,13 @@ secrets:
   bcmCerts: "osac-bcm-certs"
   netboxToken: "osac-netbox-token"
   netboxCA: "osac-netbox-ca"
-
 configMaps:
   profiles: "osac-profiles"
-
 env:
   aapUrl: ""
   aapTokenSecretName: "osac-aap-api-token"
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
-
 secretAPI:
   url: "https://fulfillment-internal-api:8001"
   # Must match the OIDC issuer configured for the Fulfillment Service.
@@ -51,7 +42,6 @@ secretAPI:
     # set the existing ConfigMap here before rollout.
     configMap: ""
     key: "bundle.pem"
-
 netbox:
   enabled: false
   # BMH namespace used for Metal3 management and BMC Secret RBAC in NetBox mode.
@@ -61,7 +51,6 @@ netbox:
   tokenValue: ""
   caCert: ""
   allowInsecureHTTP: false
-
 bcm:
   enabled: false
   url: ""
@@ -71,7 +60,6 @@ bcm:
   insecureSkipVerify: false
   hostClass: "bcm"
   bmhNamespace: ""
-
 metal3:
   enabled: false
   namespace: ""

@@ -32,7 +32,9 @@ Preparing NetApp storage for OSAC involves:
 3. **Transport** between the VMaaS target cluster's hosts and the SVM:
    Fibre Channel or iSCSI for block volumes, Ethernet for NFS. Zoning,
    networking, and multipathing are configured and validated by the storage
-   operator. OSAC does not validate the transport (see below).
+   operator, including on every worker node (see
+   [Worker node preparation](#worker-node-preparation)). OSAC does not
+   validate the transport (see below).
 4. **Trident CSI operator** installed and operated on the VMaaS target
    cluster. OSAC does not install or operate Trident.
 5. **TridentBackendConfig** connecting Trident to the SVM and its pools. In
@@ -66,6 +68,183 @@ OSAC's readiness check verifies **StorageClass presence only**. It does not
 validate Fibre Channel zoning, iSCSI networking, the SVM's health, or
 Trident's operational state. Transport validation remains with the storage
 operator.
+
+## Worker node preparation
+
+Block volumes reach a worker node over Fibre Channel or iSCSI through
+DM-Multipath. Trident checks the node every time it attaches a block
+volume, and the attach fails unless:
+
+- `multipathd` is running on the node, and
+- `find_multipaths` is `no` in `/etc/multipath.conf`. Trident rejects `yes`
+  and `smart`.
+
+Fibre Channel also needs the worker's HBA ports zoned to the SVM's FC LIFs
+on the switch. iSCSI also needs `iscsid` enabled on the worker.
+
+This is node configuration on the VMaaS target cluster, done once per
+cluster by whoever operates it (the CSP in the CSP-managed model). OSAC
+does not apply it and does not check it. NetApp's
+[worker node preparation guide](https://docs.netapp.com/us-en/trident/trident-use/worker-node-prep.html)
+is the reference for every transport; this section covers the multipath
+part on OpenShift.
+
+### What happens on an unprepared node
+
+Nothing fails until a workload uses a volume. Binding the
+TridentBackendConfig and creating a volume go through Trident's controller
+and the ONTAP management interface, not through the worker, so OSAC's
+readiness check passes and volumes are provisioned. The pod that mounts the
+volume then stays in `ContainerCreating`, and its events carry Trident's
+message:
+
+```text
+multipathd is not running
+```
+
+or, when `find_multipaths` is `yes`:
+
+```text
+multipathd: unsupported find_multipaths: yes value; please set the value to no in /etc/multipath.conf file
+```
+
+With Fibre Channel and no zoning between the worker and the SVM, the
+message is `no matching WWPN found for node <node>`.
+
+The fix is on the node; the kubelet retries the mount on its own. The check
+runs per node, so a cluster with only some workers prepared fails only for
+VMs that land on an unprepared one. Prepare every worker that can run
+tenant VMs, including live-migration targets.
+
+### iSCSI: Trident node preparation
+
+For iSCSI, Trident can configure and enable `iscsid` and `multipathd` on
+the workers itself. Set `nodePrep` on the TridentOrchestrator:
+
+```yaml
+spec:
+  nodePrep:
+    - iscsi
+```
+
+`iscsi` is the only value `nodePrep` supports, and on OpenShift 4.19 and
+later it needs Trident 25.06.1 or later (see NetApp's
+[operator installation options](https://docs.netapp.com/us-en/trident/trident-install/kubernetes-customize-deploy.html)).
+On a node that already has an `/etc/multipath.conf`, Trident adds the
+NetApp device exception but does not change an existing `defaults` section:
+node preparation fails there unless that section sets `find_multipaths no`.
+
+### Fibre Channel: MachineConfig
+
+Trident has no node preparation for Fibre Channel. On OpenShift, apply the
+multipath configuration with a MachineConfig. The same MachineConfig works
+for iSCSI when `nodePrep` is not used.
+
+**1. Check what the nodes have today.** A MachineConfig replaces the whole
+file; nothing merges it with an existing one.
+
+```shell
+# MachineConfigs that already manage /etc/multipath.conf
+oc get machineconfig -o json | jq -r '.items[]
+  | select(any(.spec.config.storage.files[]?; .path == "/etc/multipath.conf"))
+  | .metadata.name'
+
+# The file on a node, if there is one
+oc debug node/<node> -- chroot /host cat /etc/multipath.conf
+
+# Multipath devices already in use on a node
+oc debug node/<node> -- chroot /host multipath -ll
+```
+
+If no MachineConfig manages the file, the file does not exist, and no
+multipath devices are in use, the example below can be applied as it is.
+Otherwise do not apply it as it is: it replaces the existing configuration,
+and its blacklist excludes every device that is not a NetApp LUN, including
+a multipath boot device or another storage system's LUNs. Change the
+existing configuration instead: it needs `find_multipaths no`, and NetApp
+LUNs (vendor `NETAPP`, product `LUN`) must not be blacklisted.
+
+**2. The multipath configuration.** This is what Trident's own node
+preparation writes on a node that has no `/etc/multipath.conf`:
+
+```text
+defaults {
+    find_multipaths no
+}
+blacklist {
+    device {
+        vendor ".*"
+        product ".*"
+    }
+}
+blacklist_exceptions {
+    device {
+        vendor "NETAPP"
+        product "LUN"
+    }
+}
+```
+
+With `find_multipaths no`, multipath claims every path device that is not
+blacklisted, local disks included. The blacklist with the NetApp exception
+limits it to NetApp LUNs.
+
+**3. The MachineConfig.** It writes that file and enables `multipathd`:
+
+```yaml
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 99-worker-netapp-multipath
+  labels:
+    machineconfiguration.openshift.io/role: worker
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      files:
+        - path: /etc/multipath.conf
+          mode: 420  # 0644
+          overwrite: true
+          contents:
+            # base64 of the multipath configuration above
+            source: data:text/plain;charset=utf-8;base64,ZGVmYXVsdHMgewogICAgZmluZF9tdWx0aXBhdGhzIG5vCn0KYmxhY2tsaXN0IHsKICAgIGRldmljZSB7CiAgICAgICAgdmVuZG9yICIuKiIKICAgICAgICBwcm9kdWN0ICIuKiIKICAgIH0KfQpibGFja2xpc3RfZXhjZXB0aW9ucyB7CiAgICBkZXZpY2UgewogICAgICAgIHZlbmRvciAiTkVUQVBQIgogICAgICAgIHByb2R1Y3QgIkxVTiIKICAgIH0KfQo=
+    systemd:
+      units:
+        - name: multipathd.service
+          enabled: true
+        # iSCSI without Trident nodePrep only:
+        # - name: iscsid.service
+        #   enabled: true
+```
+
+The example targets the `worker` MachineConfigPool. On single-node and
+compact three-node clusters the nodes are in the `master` pool; change the
+role label and the name to match.
+
+**4. Apply it.** By default the Machine Config Operator drains and reboots
+the nodes of the pool, one at a time. Apply it before the cluster carries
+tenant workloads, or in a maintenance window.
+
+```shell
+oc apply -f 99-worker-netapp-multipath.yaml
+
+# Done when UPDATED is True
+oc get machineconfigpool worker
+```
+
+### Verifying a node
+
+Run this for each worker that can run tenant VMs:
+
+```shell
+oc debug node/<node> -- chroot /host sh -c \
+  'systemctl is-active multipathd; multipathd show config | grep -w find_multipaths'
+```
+
+Expect `active` and `find_multipaths "off"`; `multipathd` reports `no` as
+`off`. Trident's check reads the same `multipathd show config` output.
 
 ## StorageClass contract
 

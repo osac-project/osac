@@ -21,6 +21,8 @@ Before tenants consume CSP-managed storage, the CSP:
   virtual machines).
 - Installs and operates the vendor CSI driver on the target cluster (for
   example, Trident).
+- Prepares the target cluster's worker nodes for the storage transport (for
+  example, DM-Multipath for NetApp block volumes).
 - Configures the CSI backend (for example, a shared TridentBackendConfig).
 - Creates one StorageClass per offered tier, labeled
   `osac.openshift.io/tenant=csp-managed` and

@@ -309,7 +309,10 @@ worker node preparation sets `find_multipaths no` in `/etc/multipath.conf`); `fc
 also needs FC switch zoning between the worker and SVM WWPNs. The role's own steps
 (`TridentBackendConfig` binding, `StorageClass` creation) and volume provisioning
 succeed without this, so missing node preparation first shows up when a VM or pod
-attaches a disk.
+attaches a disk. The
+[NetApp provider page](../../../../../docs/storage/providers/netapp.md#worker-node-preparation)
+has the failure messages, an example MachineConfig for the multipath
+configuration, and the per-node check.
 
 No OSAC workflow calls this role yet. Three separate changes gate it: the service
 dispatcher routes the `netapp` product key to `osac_csi_storage`, osac-operator does

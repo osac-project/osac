@@ -24,8 +24,8 @@ export const openVmsPage = async (page: Page): Promise<void> => {
   await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
 };
 
-/** Return the VM names currently visible in the tenant VM list. */
-export const listVmNames = async (page: Page): Promise<string[]> => {
+/** Wait until the tenant VM list reports a loaded table or empty state. */
+const waitForVmListReady = async (page: Page): Promise<Locator> => {
   const table = page.getByRole(...VmsMainPage.vmsTable);
   const emptyState = page.getByText(...VmsMainPage.emptyState);
   const filteredEmptyState = page.getByText(...VmsMainPage.filteredEmptyState);
@@ -54,6 +54,12 @@ export const listVmNames = async (page: Page): Promise<string[]> => {
       { timeout: 15_000, intervals: [250, 500, 1_000] },
     )
     .toBeTruthy();
+  return table;
+};
+
+/** Return the VM names currently visible in the tenant VM list. */
+export const listVmNames = async (page: Page): Promise<string[]> => {
+  const table = await waitForVmListReady(page);
   if ((await table.count()) === 0) {
     return [];
   }
@@ -169,34 +175,7 @@ export const waitForVmToBeDeleted = async (
         await expect(page).toHaveURL((url) => url.pathname === '/vms');
         await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
 
-        const table = page.getByRole(...VmsMainPage.vmsTable);
-        const emptyState = page.getByText(...VmsMainPage.emptyState);
-        const filteredEmptyState = page.getByText(...VmsMainPage.filteredEmptyState);
-        const noMatchingState = page.getByText(...VmsMainPage.noMatchingState);
-        const errorState = page.getByRole(...VmsMainPage.errorState);
-        await expect
-          .poll(
-            async () => {
-              if (await errorState.isVisible().catch(() => false)) {
-                throw new Error('The tenant VM list reported an API error while loading.');
-              }
-              if (await table.isVisible().catch(() => false)) {
-                return 'table';
-              }
-              if (await emptyState.isVisible().catch(() => false)) {
-                return 'empty';
-              }
-              if (await filteredEmptyState.isVisible().catch(() => false)) {
-                return 'filtered-empty';
-              }
-              if (await noMatchingState.isVisible().catch(() => false)) {
-                return 'no-matching';
-              }
-              return '';
-            },
-            { timeout: 15_000, intervals: [250, 500, 1_000] },
-          )
-          .toBeTruthy();
+        const table = await waitForVmListReady(page);
         if ((await table.count()) === 0) {
           return 0;
         }

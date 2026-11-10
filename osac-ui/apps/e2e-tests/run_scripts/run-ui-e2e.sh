@@ -142,46 +142,44 @@ placeholder_login() {
   esac
 }
 
-declare -A FLOW_PROJECT=(
-  [all]=vmaas-full-flow-delete [happy_basic]=vmaas-full-flow-delete
-  [create_resources]=vmaas-full-flow-resources [resources_create]=vmaas-full-flow-resources
-  [delete_resources]=vmaas-full-flow-delete [resources_delete]=vmaas-full-flow-delete
-  [create_image]=vmaas-full-flow-resources [delete_image]=vmaas-disk-image-delete
-  [full_image]=vmaas-disk-image [create_storage]=vmaas-full-flow-resources
-  [delete_storage]=vmaas-storage-tier-delete [full_storage]=vmaas-storage-tier
-  [create_instance_type]=vmaas-full-flow-resources
-  [delete_instance_type]=vmaas-instance-type-delete [full_instance_type]=vmaas-instance-type
-  [create_tenant]=vmaas [delete_tenant]=vmaas-delete [full_tenant]=vmaas-delete
-  [create_catalog]=vmaas-full-flow-catalog [delete_catalog]=vmaas-catalog-delete
-  [full_catalog]=vmaas-catalog [create_vm]=vmaas-full-flow
-  [delete_vm]=vmaas-full-flow-vm-delete [full_vm]=vmaas-full-flow-vm-delete
+declare -A FLOW_CONFIG=(
+  [all]='vmaas-full-flow-delete|full||false'
+  [happy_basic]='vmaas-full-flow-delete|full||false'
+  [create_resources]='vmaas-full-flow-resources|create||false'
+  [resources_create]='vmaas-full-flow-resources|create||false'
+  [delete_resources]='vmaas-full-flow-delete|delete||false'
+  [resources_delete]='vmaas-full-flow-delete|delete||false'
+  [create_image]='vmaas-full-flow-resources|create|creates disk image|false'
+  [delete_image]='vmaas-disk-image-delete|delete||false'
+  [full_image]='vmaas-disk-image|full||false'
+  [create_storage]='vmaas-full-flow-resources|create|creates a storage tier|false'
+  [delete_storage]='vmaas-storage-tier-delete|delete||false'
+  [full_storage]='vmaas-storage-tier|full||false'
+  [create_instance_type]='vmaas-full-flow-resources|create|creates an instance type|false'
+  [delete_instance_type]='vmaas-instance-type-delete|delete||false'
+  [full_instance_type]='vmaas-instance-type|full||false'
+  [create_tenant]='vmaas|create||false'
+  [delete_tenant]='vmaas-delete|delete||true'
+  [full_tenant]='vmaas-delete|full||false'
+  [create_catalog]='vmaas-full-flow-catalog|create||false'
+  [delete_catalog]='vmaas-catalog-delete|delete||false'
+  [full_catalog]='vmaas-catalog|full||false'
+  [create_vm]='vmaas-full-flow|create||false'
+  [delete_vm]='vmaas-full-flow-vm-delete|delete||false'
+  [full_vm]='vmaas-full-flow-vm-delete|full||false'
 )
-declare -A FLOW_MODE=(
-  [all]=full [happy_basic]=full [create_resources]=create [resources_create]=create
-  [delete_resources]=delete [resources_delete]=delete [create_image]=create
-  [delete_image]=delete [full_image]=full [create_storage]=create
-  [delete_storage]=delete [full_storage]=full [create_instance_type]=create
-  [delete_instance_type]=delete [full_instance_type]=full [create_tenant]=create
-  [delete_tenant]=delete [full_tenant]=full [create_catalog]=create
-  [delete_catalog]=delete [full_catalog]=full [create_vm]=create [delete_vm]=delete
-  [full_vm]=full
-)
-declare -A FLOW_GREP=(
-  [create_image]='creates disk image' [create_storage]='creates a storage tier'
-  [create_instance_type]='creates an instance type'
-)
-declare -A FLOW_NO_DEPS=([delete_tenant]=true)
 
 if [[ -n "$FLOW_TAG" ]]; then
   [[ "$FLOW_TAG" =~ ^[a-z_]+$ ]] ||
     fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags."
-  [[ -n "${FLOW_PROJECT[$FLOW_TAG]+set}" ]] ||
+  [[ -n "${FLOW_CONFIG[$FLOW_TAG]+set}" ]] ||
     fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags."
+  IFS='|' read -r flow_project flow_mode flow_grep flow_no_deps <<<"${FLOW_CONFIG[$FLOW_TAG]}"
   [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
-  [[ -n "$PW_PROJECT" ]] || PW_PROJECT="${FLOW_PROJECT[$FLOW_TAG]}"
-  [[ -n "$PW_GREP" ]] || PW_GREP="${FLOW_GREP[$FLOW_TAG]:-}"
-  [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="${FLOW_MODE[$FLOW_TAG]}"
-  [[ "${FLOW_NO_DEPS[$FLOW_TAG]:-false}" == true ]] && NO_DEPS=true
+  [[ -n "$PW_PROJECT" ]] || PW_PROJECT="$flow_project"
+  [[ -n "$PW_GREP" ]] || PW_GREP="$flow_grep"
+  [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="$flow_mode"
+  [[ "$flow_no_deps" == true ]] && NO_DEPS=true
 fi
 
 [[ "$SETUP_ONLY" == false ]] || fail "Select a flow with --tag, --test, --project, or --run-smoke."

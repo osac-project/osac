@@ -348,7 +348,6 @@
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "{{ tenant_name }}"
               osac.openshift.io/storage-provider: netapp
-              osac.openshift.io/storage-backend-id: "{{ _netapp_backend_id }}"
           type: Opaque
           stringData:
             username: "{{ _runtime_username }}"
@@ -395,8 +394,7 @@
                 'labels': {
                   'app.kubernetes.io/managed-by': 'osac-aap',
                   'osac.openshift.io/tenant': tenant_name,
-                  'osac.openshift.io/storage-provider': 'netapp',
-                  'osac.openshift.io/storage-backend-id': _netapp_backend_id
+                  'osac.openshift.io/storage-provider': 'netapp'
                 }
               },
               'spec': (

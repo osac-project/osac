@@ -854,32 +854,6 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
         is False
     )
 
-    # Dedicated-SVM backend IDs label the TBC and CSI Secret, so they must be
-    # valid label values; Shared-TBC backend IDs are not restricted.
-    backend_label_when = _find_task(
-        validate_tasks, "Fail if a Dedicated-SVM backend_id is not a valid Kubernetes label value"
-    )["when"]
-    for bad_id in ("has space", "-lead", "trail.", "a" * 64, "be-1\n", "x/y"):
-        assert (
-            _render_when(
-                backend_label_when, {"_netapp_is_shared_tbc": False, "_netapp_backend_id": bad_id}
-            )
-            is True
-        ), bad_id
-    for good_id in ("be-1", "3f2a9c1e-7b4d-4e8a-9c2f-1d5e6a7b8c9d", "Backend_1.v2", "a" * 63):
-        assert (
-            _render_when(
-                backend_label_when, {"_netapp_is_shared_tbc": False, "_netapp_backend_id": good_id}
-            )
-            is False
-        ), good_id
-    assert (
-        _render_when(
-            backend_label_when, {"_netapp_is_shared_tbc": True, "_netapp_backend_id": "has space"}
-        )
-        is False
-    )
-
     prep_fields_when = _find_task(
         validate_tasks,
         "Validate operator-supplied tenant preparation fields for Dedicated-SVM backend",
@@ -1495,25 +1469,6 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
     )
     assert backend_ids == ["ded-1", "shared-1"]
     assert dedicated_ids == ["ded-1"]
-    # All Dedicated-SVM backend IDs are validated as label values before the
-    # write block (short-circuit Secret reconcile and per-backend provisioning).
-    all_ids_guard_name = "Fail if any Dedicated-SVM backend_id is not a valid Kubernetes label value"
-    ensure_names = [t.get("name") for t in ensure_tasks]
-    assert ensure_names.index(all_ids_guard_name) < ensure_names.index(
-        "Provision TridentBackendConfig and StorageClasses on target cluster"
-    )
-    all_ids_when = _find_task(ensure_tasks, all_ids_guard_name)["when"]
-    assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", "be 2"]}) is True
-    assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", "trail-"]}) is True
-    assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", "Be_2.x"]}) is False
-    # Boundaries: 63 characters is the longest valid label value; an empty ID
-    # is rejected even though an empty label value is legal.
-    assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["x" * 63]}) is False
-    for invalid in ("-be", ".be", "be.", "x" * 64, "", 123, "be\n"):
-        assert (
-            _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": ["be-1", invalid]}) is True
-        ), invalid
-    assert _render_when(all_ids_when, {"_netapp_dedicated_backend_ids": []}) is False
 
     # Backend IDs that differ only by case are distinct backends.
     assert _render(

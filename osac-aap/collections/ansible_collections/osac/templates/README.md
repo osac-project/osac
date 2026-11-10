@@ -299,9 +299,23 @@ rotation requires teardown + re-provisioning.
 **NetApp provider specifics (`netapp_storage`):** The `netapp_storage` role serves
 OSAC-managed NetApp ONTAP block tiers on VMaaS through NetApp Trident (`ontap-san`
 driver). It never calls the ONTAP API itself: Trident on the target cluster does,
-and Trident must already be installed there. The role writes no hub Secret. The
-service dispatcher currently routes the `netapp` product key to `osac_csi_storage`,
-so routing OSAC-managed VMaaS `netapp` tiers to this role is a separate change.
+and Trident must already be installed there. The role writes no hub Secret.
+
+The role does not prepare worker nodes. Before any workload attaches a volume, the
+target cluster's workers must be prepared for the SAN transport in
+`netapp_storage_san_type`. For `fcp` and `iscsi`, Trident fails the attach when
+`multipathd` is not running or `find_multipaths` is `yes` or `smart` (NetApp's
+worker node preparation sets `find_multipaths no` in `/etc/multipath.conf`); `fcp`
+also needs FC switch zoning between the worker and SVM WWPNs. The role's own steps
+(`TridentBackendConfig` binding, `StorageClass` creation) and volume provisioning
+succeed without this, so missing node preparation first shows up when a VM or pod
+attaches a disk.
+
+No OSAC workflow calls this role yet. Three separate changes gate it: the service
+dispatcher routes the `netapp` product key to `osac_csi_storage`, osac-operator does
+not send `tenant_preparation` or `provider_config`, and the API accepts a `netapp`
+StorageBackend only with `cspManaged: true` (`netapp_requires_csp_managed`).
+
 Each dispatched `backend_id` uses exactly one of two modes, selected by its
 `storage_provider_backend_connections` entry:
 

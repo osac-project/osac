@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net"
+	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -153,6 +155,85 @@ var _ = Describe("BareMetalInstance NetworkAttachment lifecycle", func() {
 		Expect(na.Annotations).To(HaveKeyWithValue(bareMetalInstanceOwnerAnnotation, "BareMetalPool/pool-a"))
 		Expect(na.Finalizers).To(ContainElement(BareMetalInstanceNetworkingFinalizer))
 	})
+
+	It("retries a transient inventory MAC lookup error and resumes attachment creation", func() {
+		createBMI()
+		lookupCount := 0
+		lookupErr := fmt.Errorf("inventory request: %w", &net.OpError{
+			Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded,
+		})
+		inv := &mockInventoryClient{getHostLogicalPortMACsFunc: func(context.Context, string) (map[string]string, error) {
+			lookupCount++
+			if lookupCount == 1 {
+				return nil, lookupErr
+			}
+			return map[string]string{"data-0": "aa:bb:cc:dd:ee:01"}, nil
+		}}
+		reconciler = newReconciler(inv)
+
+		result, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+		result, err = reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		condition := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+		Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+
+		attachment := &opv1alpha1.NetworkAttachment{}
+		key := bareMetalNetworkAttachmentKey(testNetworkingNamespace, bmi.Labels[BareMetalInstanceUUIDLabel])
+		Expect(k8sClient.Get(ctx, key, attachment)).To(Satisfy(apierrors.IsNotFound))
+
+		result, err = reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(lookupCount).To(Equal(2))
+		Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+		Expect(k8sClient.Get(ctx, key, attachment)).To(Succeed())
+	})
+
+	It("fails a malformed inventory MAC mapping without retrying", func() {
+		createBMI()
+		lookupCount := 0
+		reconciler = newReconciler(&mockInventoryClient{getHostLogicalPortMACsFunc: func(context.Context, string) (map[string]string, error) {
+			lookupCount++
+			return nil, fmt.Errorf("failed to parse interface MAC mapping JSON")
+		}})
+
+		_, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		result, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+		Expect(lookupCount).To(Equal(1))
+		Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+		condition := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonTemplateFailed))
+	})
+
+	DescribeTable("fails missing or malformed inventory MAC data",
+		func(macs map[string]string) {
+			createBMI()
+			reconciler = newReconciler(&mockInventoryClient{getHostLogicalPortMACsFunc: func(context.Context, string) (map[string]string, error) {
+				return macs, nil
+			}})
+
+			_, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+			condition := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonTemplateFailed))
+		},
+		Entry("missing logical interface", map[string]string{}),
+		Entry("invalid MAC value", map[string]string{"data-0": "not-a-mac"}),
+	)
 
 	It("reuses an existing immutable attachment without re-reading a changed inventory MAC", func() {
 		createBMI()

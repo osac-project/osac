@@ -788,7 +788,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 
 	// Reboot already triggered (condition exists but is not True) — poll for completion
 	if handoffCond != nil {
-		if handoffCond.Reason == "PoweringOn" {
+		if handoffCond.Reason == v1alpha1.HostConditionReasonPoweringOn {
 			powerStatus, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
 			if err != nil {
 				return ctrl.Result{}, err
@@ -852,7 +852,8 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 			return ctrl.Result{}, err
 		}
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionFalse, "PoweringOn", "Powering on host to request a tenant-network DHCP lease")
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOn,
+			"Powering on host to request a tenant-network DHCP lease")
 		log.Info("Powering on host for network handoff", "host", bmi.Spec.ExternalHostID)
 		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 	}

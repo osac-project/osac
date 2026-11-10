@@ -208,9 +208,10 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 	//
 	//    Failure detection is a denylist: a False condition is a hard failure unless
 	//    its reason is a known benign one. Benign reasons are the in-progress marker
-	//    (Progressing), Retrying on the provision-template condition, the empty
-	//    reason, and PowerSyncRequired — a restart is required, a normal in-flight
-	//    power transition, not a provisioning failure.
+	//    (Progressing), Retrying on the provision-template condition, PoweringOn
+	//    during network handoff, Detaching during attachment cleanup,
+	//    PowerSyncRequired during the normal power transition, and the empty reason
+	//    are benign, not provisioning failures.
 	//    A new benign False reason MUST be added to this skip set, or it will be
 	//    misclassified as a hard failure (the exhaustiveness test guards condition
 	//    types, not reason values).
@@ -221,6 +222,8 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 		}
 		if cond.Reason == HostConditionReasonProgressing ||
 			IsProvisionRetrying(cond) ||
+			cond.Reason == HostConditionReasonPoweringOn ||
+			cond.Reason == HostConditionReasonDetaching ||
 			cond.Reason == HostConditionReasonPowerSyncRequired ||
 			cond.Reason == "" {
 			continue

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -30,6 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -111,7 +113,15 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 
 	macs, err := r.InventoryClient.GetHostLogicalPortMACs(ctx, bmi.Spec.ExternalHostID)
 	if err != nil {
-		return r.failNetworkAttachment(bmi, fmt.Sprintf("read interface MACs for host %s: %v", bmi.Spec.ExternalHostID, err))
+		message := fmt.Sprintf("read interface MACs for host %s: %v", bmi.Spec.ExternalHostID, err)
+		logf.FromContext(ctx).Error(err, "Failed to read interface MACs from inventory",
+			"inventoryHostID", bmi.Spec.ExternalHostID, "interface", attachment.Interface)
+		if isRetryableInventoryError(err) {
+			bmi.SetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady,
+				metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing, message)
+			return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+		}
+		return r.failNetworkAttachment(bmi, message)
 	}
 	mac, ok := macs[attachment.Interface]
 	if !ok || strings.TrimSpace(mac) == "" {
@@ -163,6 +173,18 @@ func (r *BareMetalInstanceReconciler) failNetworkAttachment(
 		metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed, message)
 	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 	return ctrl.Result{}, nil
+}
+
+// isRetryableInventoryError identifies backend transport and API timeout errors.
+// Mapping validation errors remain terminal so bad inventory data does not poll forever.
+func isRetryableInventoryError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) ||
+		apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) ||
+		apierrors.IsTooManyRequests(err) || apierrors.IsServiceUnavailable(err) {
+		return true
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError)
 }
 
 func buildBareMetalNetworkAttachment(
@@ -264,7 +286,8 @@ func (r *BareMetalInstanceReconciler) projectNetworkAttachmentReady(
 ) ctrl.Result {
 	if !na.DeletionTimestamp.IsZero() {
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady,
-			metav1.ConditionFalse, "Detaching", latestBareMetalNetworkMessage(na, bareMetalDeleteNetworkAttachmentTask,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonDetaching,
+			latestBareMetalNetworkMessage(na, bareMetalDeleteNetworkAttachmentTask,
 				"NetworkAttachment is deleting"))
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}
 	}
@@ -374,14 +397,14 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 			return ctrl.Result{}, false, fmt.Errorf("delete NetworkAttachment %s: %w", key, err)
 		}
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady,
-			metav1.ConditionFalse, "Detaching", "waiting for NetworkAttachment cleanup")
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonDetaching, "waiting for NetworkAttachment cleanup")
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, false, nil
 	}
 	if controllerutil.ContainsFinalizer(na, operatorNetworkAttachmentFinalizer) {
 		message := latestBareMetalNetworkMessage(na, bareMetalDeleteNetworkAttachmentTask,
 			"waiting for the networking controller to remove its finalizer")
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady,
-			metav1.ConditionFalse, "Detaching", message)
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonDetaching, message)
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, false, nil
 	}
 	if controllerutil.ContainsFinalizer(na, BareMetalInstanceNetworkingFinalizer) {

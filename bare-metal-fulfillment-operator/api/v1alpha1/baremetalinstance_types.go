@@ -223,6 +223,12 @@ const (
 	// restart is initiated. Set by triggerRestart on management.ErrTransitioning.
 	HostConditionReasonPowerSyncRequired = "PowerSyncRequired"
 
+	// HostConditionReasonPoweringOn indicates the host is being powered on for network handoff.
+	HostConditionReasonPoweringOn = "PoweringOn"
+
+	// HostConditionReasonDetaching indicates network attachment cleanup is still in progress.
+	HostConditionReasonDetaching = "Detaching"
+
 	// HostConditionReasonNoMatchingHosts indicates no hosts match the selector labels
 	HostConditionReasonNoMatchingHosts = "NoMatchingHosts"
 

@@ -2231,7 +2231,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal("PoweringOn"))
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonPoweringOn))
 
 			result, err = reconciler.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
 			Expect(err).NotTo(HaveOccurred())

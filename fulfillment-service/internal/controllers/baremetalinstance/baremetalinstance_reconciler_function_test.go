@@ -2691,6 +2691,8 @@ var _ = Describe("syncStatus", func() {
 			Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 			Expect(cond.GetReason()).To(Equal(expectedReason))
 			Expect(cond.GetMessage()).To(Equal(expectedMsg))
+			Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+				Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING))
 			ready := findProtoCondition(t.bareMetalInstance,
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
 			Expect(ready).ToNot(BeNil())
@@ -2715,6 +2717,21 @@ var _ = Describe("syncStatus", func() {
 				{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: "Ready"},
 			},
 			string(bmfov1alpha1.StageNetworkSetup), "Network handoff is in progress."),
+		Entry("NetworkHandoffComplete=False/PoweringOn → NetworkSetup/handoff step",
+			[]metav1.Condition{
+				{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue, Reason: "Allocated"},
+				{Type: string(bmfov1alpha1.HostConditionProvisionTemplateComplete), Status: metav1.ConditionTrue, Reason: "Succeeded"},
+				{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: "Ready"},
+				{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionFalse, Reason: bmfov1alpha1.HostConditionReasonPoweringOn},
+			},
+			string(bmfov1alpha1.StageNetworkSetup), "Network handoff is in progress."),
+		Entry("NetworkAttachmentsReady=False/Detaching → NetworkSetup/attachment step",
+			[]metav1.Condition{
+				{Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue, Reason: "Allocated"},
+				{Type: string(bmfov1alpha1.HostConditionProvisionTemplateComplete), Status: metav1.ConditionTrue, Reason: "Succeeded"},
+				{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionFalse, Reason: bmfov1alpha1.HostConditionReasonDetaching},
+			},
+			string(bmfov1alpha1.StageNetworkSetup), "Network attachment is in progress."),
 		Entry("NetworkHandoffComplete=True → NetworkSetup/IP-discovery step",
 			[]metav1.Condition{
 				{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue, Reason: "Complete"},

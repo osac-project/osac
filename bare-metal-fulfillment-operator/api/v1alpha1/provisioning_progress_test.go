@@ -91,6 +91,21 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 				condTrue(HostConditionNetworkAttachmentsReady),
 			},
 			ProvisioningProgress{State: StateInProgress, Step: StepNetworkSetupHandoff}),
+		Entry("NetworkHandoffComplete False+PoweringOn -> handoff remains in progress",
+			[]metav1.Condition{
+				condTrue(HostConditionAllocated),
+				condTrue(HostConditionProvisionTemplateComplete),
+				condTrue(HostConditionNetworkAttachmentsReady),
+				condFalse(HostConditionNetworkHandoffComplete, HostConditionReasonPoweringOn),
+			},
+			ProvisioningProgress{State: StateInProgress, Step: StepNetworkSetupHandoff}),
+		Entry("NetworkAttachmentsReady False+Detaching -> attachment remains in progress",
+			[]metav1.Condition{
+				condTrue(HostConditionAllocated),
+				condTrue(HostConditionProvisionTemplateComplete),
+				condFalse(HostConditionNetworkAttachmentsReady, HostConditionReasonDetaching),
+			},
+			ProvisioningProgress{State: StateInProgress, Step: StepNetworkSetupAttachment}),
 		Entry("NetworkHandoffComplete True -> IP discovery in progress",
 			[]metav1.Condition{
 				condTrue(HostConditionAllocated),

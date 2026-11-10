@@ -56,6 +56,11 @@ def test_evpn_none_mode_has_no_gateway() -> None:
     assert plan == {"error": "", "gateway": "", "dhcp_start": "", "dhcp_end": ""}
 
 
+def test_evpn_rejects_subnets_smaller_than_a_slash_29() -> None:
+    plan = nc.netris_vnet_plan(plan_job("evpn", cidr="10.20.1.0/30"), "gateway_ipv4")
+    assert plan["error"] == "EVPN requires a Subnet prefix of /29 or shorter"
+
+
 def test_evpn_physical_first_mode() -> None:
     plan = nc.netris_vnet_plan(plan_job("evpn"), "physical_first")
     assert plan["gateway"] == "10.20.1.193/24"

@@ -308,6 +308,11 @@ def test_reserved_subnets_are_the_subnet_minus_the_remaining_overlay(subnet: str
     assert layer2["defaultGatewayIPs"] == [ipam["gateway_ipv4"]]
 
 
+def test_layer2_addressing_rejects_subnets_smaller_than_a_slash_29() -> None:
+    with pytest.raises(ce._InputError, match="prefix length /29 or shorter"):
+        ce.layer2_addressing("10.0.1.0/30", IPAM)
+
+
 def test_infrastructure_addresses_are_inside_the_overlay_range() -> None:
     layer2 = ce.layer2_addressing("10.0.1.0/24", IPAM)
     overlay = [ipaddress.ip_network(c) for c in IPAM["overlay_ipv4_cidrs"]]

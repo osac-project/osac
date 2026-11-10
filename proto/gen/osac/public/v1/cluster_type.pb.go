@@ -540,6 +540,8 @@ type ClusterSpec struct {
 	// If at any time the system can't allocate the number of nodes requested by the user, because of permissions, quota,
 	// availability of resources or system errors, the cluster will be marked as degraded, and the details will be in the
 	// `DEGRADED` condition.
+	//
+	// Quota: for each node set, as many hosts as its size, each of the node set's host type.
 	NodeSets map[string]*ClusterNodeSet `protobuf:"bytes,3,rep,name=node_sets,json=nodeSets,proto3" json:"node_sets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Reference to a Secret containing an OpenSSH public key installed into the
 	// `authorized_keys` file on cluster worker nodes.
@@ -579,6 +581,8 @@ type ClusterSpec struct {
 	// The ExternalIP pool is selected automatically based on available capacity.
 	//
 	// This field is immutable after creation — it cannot be changed on update.
+	//
+	// Quota: two external IP addresses, one for the cluster's API and one for its apps.
 	AutoExternalIpAttachment *bool `protobuf:"varint,10,opt,name=auto_external_ip_attachment,json=autoExternalIpAttachment,proto3,oneof" json:"auto_external_ip_attachment,omitempty"`
 	// Reference to a Secret resource containing pull secret credentials.
 	//
@@ -930,6 +934,8 @@ type ClusterSpec_builder struct {
 	// If at any time the system can't allocate the number of nodes requested by the user, because of permissions, quota,
 	// availability of resources or system errors, the cluster will be marked as degraded, and the details will be in the
 	// `DEGRADED` condition.
+	//
+	// Quota: for each node set, as many hosts as its size, each of the node set's host type.
 	NodeSets map[string]*ClusterNodeSet
 	// Reference to a Secret containing an OpenSSH public key installed into the
 	// `authorized_keys` file on cluster worker nodes.
@@ -969,6 +975,8 @@ type ClusterSpec_builder struct {
 	// The ExternalIP pool is selected automatically based on available capacity.
 	//
 	// This field is immutable after creation — it cannot be changed on update.
+	//
+	// Quota: two external IP addresses, one for the cluster's API and one for its apps.
 	AutoExternalIpAttachment *bool
 	// Reference to a Secret resource containing pull secret credentials.
 	//

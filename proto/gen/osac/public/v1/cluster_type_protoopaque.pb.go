@@ -797,6 +797,8 @@ type ClusterSpec_builder struct {
 	// If at any time the system can't allocate the number of nodes requested by the user, because of permissions, quota,
 	// availability of resources or system errors, the cluster will be marked as degraded, and the details will be in the
 	// `DEGRADED` condition.
+	//
+	// Quota: for each node set, as many hosts as its size, each of the node set's host type.
 	NodeSets map[string]*ClusterNodeSet
 	// Reference to a Secret containing an OpenSSH public key installed into the
 	// `authorized_keys` file on cluster worker nodes.
@@ -836,6 +838,8 @@ type ClusterSpec_builder struct {
 	// The ExternalIP pool is selected automatically based on available capacity.
 	//
 	// This field is immutable after creation — it cannot be changed on update.
+	//
+	// Quota: two external IP addresses, one for the cluster's API and one for its apps.
 	AutoExternalIpAttachment *bool
 	// Reference to a Secret resource containing pull secret credentials.
 	//

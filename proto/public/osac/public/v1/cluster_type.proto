@@ -147,6 +147,8 @@ message ClusterSpec {
   // If at any time the system can't allocate the number of nodes requested by the user, because of permissions, quota,
   // availability of resources or system errors, the cluster will be marked as degraded, and the details will be in the
   // `DEGRADED` condition.
+  //
+  // Quota: for each node set, as many hosts as its size, each of the node set's host type.
   map<string, ClusterNodeSet> node_sets = 3 [(buf.validate.field).map.keys.string = {
     min_len: 1,
     max_len: 63,
@@ -201,6 +203,8 @@ message ClusterSpec {
   // The ExternalIP pool is selected automatically based on available capacity.
   //
   // This field is immutable after creation — it cannot be changed on update.
+  //
+  // Quota: two external IP addresses, one for the cluster's API and one for its apps.
   optional bool auto_external_ip_attachment = 10 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reference to a Secret resource containing pull secret credentials.

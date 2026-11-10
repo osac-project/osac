@@ -20,6 +20,7 @@ import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/quota_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -91,7 +92,7 @@ message GpuSpec {
   string resource_name = 2 [(buf.validate.field).string.min_len = 1];
 
   // Number of GPU devices of this type.
-  int32 count = 3 [(buf.validate.field).int32 = {gte: 1, lte: 16}];
+  int32 count = 3 [(buf.validate.field).int32 = {gte: 1, lte: 16}, (osac.private.v1.quota) = {dimension: "compute.gpu.{spec.gpu.resource_name}"}];
 }
 
 // Defines the desired configuration for an InstanceType.
@@ -101,10 +102,10 @@ message GpuSpec {
 // to manage the instance type lifecycle.
 message InstanceTypeSpec {
   // Number of virtual CPUs. Immutable after creation.
-  int32 vcpus = 1 [(buf.validate.field).int32.gt = 0];
+  int32 vcpus = 1 [(buf.validate.field).int32.gt = 0, (osac.private.v1.quota) = {dimension: "compute.vcpus"}];
 
   // Amount of memory in GiB. Immutable after creation.
-  int32 memory_gib = 2 [(buf.validate.field).int32.gt = 0];
+  int32 memory_gib = 2 [(buf.validate.field).int32.gt = 0, (osac.private.v1.quota) = {dimension: "compute.memory_gib"}];
 
   // Human friendly description of the instance type, using Markdown format.
   string description = 3;

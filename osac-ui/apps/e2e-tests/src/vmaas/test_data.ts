@@ -30,12 +30,7 @@ interface RawInstanceType {
   gpu?: RawInstanceTypeGpu;
 }
 
-interface RawResizeInstanceType {
-  name?: string;
-  description: string;
-  vcpus: number;
-  memory_gib: number;
-}
+type RawResizeInstanceType = Omit<RawInstanceType, 'gpu'>;
 
 interface RawDiskImage {
   name?: string;
@@ -312,7 +307,7 @@ const storageTierTestRunId = requiredString(
   process.env.OSAC_STORAGE_TIER_TEST_RUN_ID,
   'OSAC_STORAGE_TIER_TEST_RUN_ID',
 );
-const catalogTestRunId = requiredString(
+export const catalogTestRunId = requiredString(
   process.env.OSAC_CATALOG_TEST_RUN_ID,
   'OSAC_CATALOG_TEST_RUN_ID',
 );

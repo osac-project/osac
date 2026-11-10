@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { stringify } from 'yaml';
 
-import { expectOsacCommandSucceeded, runOsacCommand } from './cli';
+import { expectOsacCommandSucceeded, parseOsacResource, runOsacCommand } from './cli';
 
 interface OsacUser {
   id?: string;
@@ -17,34 +17,18 @@ interface OsacRoleBinding {
   };
 }
 
-/** Parse the first resource from the CLI's JSON list or object response. */
-const parseResource = <T>(stdout: string, description: string): T => {
-  const parsed: unknown = JSON.parse(stdout);
-  if (Array.isArray(parsed) && parsed[0]) {
-    return parsed[0] as T;
-  }
-  if (parsed !== null && typeof parsed === 'object') {
-    const items = (parsed as { items?: unknown }).items;
-    if (Array.isArray(items) && items[0]) {
-      return items[0] as T;
-    }
-    return parsed as T;
-  }
-  throw new Error(`The CLI returned an unexpected response while getting ${description}.`);
-};
-
 /** Read a tenant-admin user through the private CLI API. */
 const getTenantAdminUser = async (username: string): Promise<OsacUser> => {
   const result = await runOsacCommand(['get', 'users', username, '--output', 'json']);
   expectOsacCommandSucceeded(result, `Get tenant-admin user '${username}'`);
-  return parseResource<OsacUser>(result.stdout, `tenant-admin user '${username}'`);
+  return parseOsacResource<OsacUser>(result.stdout, `tenant-admin user '${username}'`);
 };
 
 /** Read a role binding through the private CLI API. */
 const getRoleBinding = async (name: string): Promise<OsacRoleBinding> => {
   const result = await runOsacCommand(['get', 'rolebinding', name, '--output', 'json']);
   expectOsacCommandSucceeded(result, `Get tenant-admin role binding '${name}'`);
-  return parseResource<OsacRoleBinding>(result.stdout, `role binding '${name}'`);
+  return parseOsacResource<OsacRoleBinding>(result.stdout, `role binding '${name}'`);
 };
 
 /** Normalize the role-binding state returned by the CLI. */

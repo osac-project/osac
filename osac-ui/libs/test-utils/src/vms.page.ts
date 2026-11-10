@@ -159,15 +159,10 @@ export const waitForVmDetailsStatus = async (
     .poll(
       async () => {
         try {
-          if (/\/vms\/[^/]+$/.test(new URL(page.url()).pathname)) {
-            await page.reload();
-          } else {
-            await openVmsPage(page);
-            await openVmDetailsPage(page, name);
-          }
-          await expectVmDetailsPage(page, name);
-          const statusLabel = getVmDetailsStatus(page).filter({ hasText: exactText(status) });
-          return (await statusLabel.count()) > 0 ? status : '';
+          return await pollVmDetails(page, name, async () => {
+            const statusLabel = getVmDetailsStatus(page).filter({ hasText: exactText(status) });
+            return (await statusLabel.count()) > 0 ? status : '';
+          });
         } catch {
           return '';
         }
@@ -233,15 +228,10 @@ export const waitForVmConditionStatus = async (
     .poll(
       async () => {
         try {
-          if (/\/vms\/[^/]+$/.test(new URL(page.url()).pathname)) {
-            await page.reload();
-          } else {
-            await openVmsPage(page);
-            await openVmDetailsPage(page, name);
-          }
-          await expectVmDetailsPage(page, name);
-          await expectVmConditionStatus(page, conditionType, status);
-          return status;
+          return await pollVmDetails(page, name, async () => {
+            await expectVmConditionStatus(page, conditionType, status);
+            return status;
+          });
         } catch {
           return '';
         }
@@ -249,6 +239,21 @@ export const waitForVmConditionStatus = async (
       { timeout, intervals: [1_000, 2_000, 5_000] },
     )
     .toBe(status);
+};
+
+const pollVmDetails = async <T>(
+  page: Page,
+  name: string,
+  assertion: () => Promise<T>,
+): Promise<T> => {
+  if (/\/vms\/[^/]+$/.test(new URL(page.url()).pathname)) {
+    await page.reload();
+  } else {
+    await openVmsPage(page);
+    await openVmDetailsPage(page, name);
+  }
+  await expectVmDetailsPage(page, name);
+  return assertion();
 };
 
 /** Change the VM instance type through the details-page modal. */
@@ -299,6 +304,23 @@ export const deleteVm = async (page: Page, name: string): Promise<void> => {
   );
   await expect(page).toHaveURL((url) => url.pathname === '/vms');
   await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
+};
+
+/** Delete a VM when it exists and wait until the tenant list no longer returns it. */
+export const deleteVmIfPresent = async (page: Page, name: string): Promise<boolean> => {
+  if (/\/vms\/[^/]+$/.test(new URL(page.url()).pathname)) {
+    await deleteVm(page, name);
+  } else {
+    await openVmsPage(page);
+    const names = await listVmNames(page);
+    if (!names.includes(name)) {
+      return false;
+    }
+    await openVmDetailsPage(page, name);
+    await deleteVm(page, name);
+  }
+  await waitForVmToBeDeleted(page, name);
+  return true;
 };
 
 /** Poll the tenant VM list until a deleted VM is no longer returned. */

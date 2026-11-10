@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 
-import { expectOsacCommandSucceeded, runOsacCommand } from './cli';
+import { expectOsacCommandSucceeded, parseOsacResource, runOsacCommand } from './cli';
 
 export interface InstanceTypeGpuConfiguration {
   count: number;
@@ -58,21 +58,6 @@ interface InstanceTypeResource {
   };
 }
 
-const parseResource = <T>(stdout: string, description: string): T => {
-  const parsed: unknown = JSON.parse(stdout);
-  if (Array.isArray(parsed) && parsed[0]) {
-    return parsed[0] as T;
-  }
-  if (parsed !== null && typeof parsed === 'object') {
-    const items = (parsed as { items?: unknown }).items;
-    if (Array.isArray(items) && items[0]) {
-      return items[0] as T;
-    }
-    return parsed as T;
-  }
-  throw new Error(`The CLI returned an unexpected response while getting ${description}.`);
-};
-
 const getComputeInstance = async (tenantName: string, name: string): Promise<ComputeInstance> => {
   const result = await runOsacCommand([
     '--tenant',
@@ -84,7 +69,7 @@ const getComputeInstance = async (tenantName: string, name: string): Promise<Com
     'json',
   ]);
   expectOsacCommandSucceeded(result, `Get compute instance '${name}'`);
-  return parseResource<ComputeInstance>(result.stdout, `compute instance '${name}'`);
+  return parseOsacResource<ComputeInstance>(result.stdout, `compute instance '${name}'`);
 };
 
 const getInstanceType = async (
@@ -108,7 +93,7 @@ const getInstanceType = async (
   ]);
   expectOsacCommandSucceeded(result, `Get ${role} instance type '${referenceName}'`);
 
-  const instanceType = parseResource<InstanceTypeResource>(
+  const instanceType = parseOsacResource<InstanceTypeResource>(
     result.stdout,
     `${role} instance type '${referenceName}'`,
   );

@@ -1,5 +1,6 @@
 import { test } from '@playwright/test';
 
+import { markResizeResourceOwned } from './resize/ownership';
 import {
   instanceTypeNameOrSkip,
   instanceTypeTestData,
@@ -19,7 +20,9 @@ import { openInstanceTypesPage } from '../../../../libs/test-utils/src/main.page
 test('creates an instance type from Infrastructure', async ({ page }) => {
   // Allow login and page navigation to complete on a remote cluster.
   test.setTimeout(120_000);
-  const isResizeProject = test.info().project.name === 'vmaas-resize-target-instance-type';
+  const projectName = test.info().project.name;
+  const isResizeProject = projectName === 'vmaas-resize-target-instance-type';
+  const isResizePrerequisitesProject = projectName === 'vmaas-resize-prerequisites';
   const instanceTypeName = isResizeProject
     ? resizeInstanceTypeNameOrSkip()
     : instanceTypeNameOrSkip();
@@ -66,6 +69,11 @@ test('creates an instance type from Infrastructure', async ({ page }) => {
       instanceTypeData.gpu,
     ),
   );
+  if (isResizeProject || isResizePrerequisitesProject) {
+    await testStep('instance-type-create', 'Record resize prerequisite ownership', () =>
+      markResizeResourceOwned(isResizeProject ? 'instance-type-target' : 'instance-type-base'),
+    );
+  }
 
   await testStep(
     'instance-type-create',

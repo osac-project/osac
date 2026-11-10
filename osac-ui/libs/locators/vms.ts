@@ -46,7 +46,6 @@ export const VmDetailsPage = {
 } as const satisfies Record<string, VmsLocator>;
 
 export const VmDetailsActionButtons = {
-  openConsole: ['button', { name: 'Open console', exact: true }],
   start: ['button', { name: 'Start', exact: true }],
   stop: ['button', { name: 'Stop', exact: true }],
   restart: ['button', { name: 'Restart', exact: true }],

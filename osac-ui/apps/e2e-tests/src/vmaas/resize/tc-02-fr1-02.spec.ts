@@ -1,6 +1,13 @@
 import { test } from '@playwright/test';
 
-import { createResizeVm, deleteResizeVm } from './resize_vm';
+import {
+  baseInstanceType,
+  conditionTimeout,
+  lifecycleTimeout,
+  resizeInstanceType,
+  restartRequiredCondition,
+  useResizeVmLifecycle,
+} from './resize_test';
 import { expectComputeInstanceConfiguration } from '../../../../../libs/osac-cli/src/compute_instance';
 import { logProgress, testStep } from '../../../../../libs/test-utils/src/general/test_progress';
 import {
@@ -10,38 +17,10 @@ import {
   waitForVmConditionStatus,
   waitForVmDetailsStatus,
 } from '../../../../../libs/test-utils/src/vms.page';
-import {
-  instanceTypeTestData,
-  resizeInstanceTypeTestData,
-  tenantNameOrSkip,
-  vmTestName,
-} from '../test_data';
-
-const restartRequiredCondition = 'RESTART REQUIRED';
-const conditionTimeout = 180_000;
-const lifecycleTimeout = 300_000;
+import { tenantNameOrSkip, vmTestName } from '../test_data';
 
 test.setTimeout(900_000);
-
-const baseInstanceType = {
-  name: instanceTypeTestData.name,
-  vcpus: instanceTypeTestData.vcpus,
-  memoryGib: instanceTypeTestData.memoryGib,
-};
-
-const resizeInstanceType = {
-  name: resizeInstanceTypeTestData.name,
-  vcpus: resizeInstanceTypeTestData.vcpus,
-  memoryGib: resizeInstanceTypeTestData.memoryGib,
-};
-
-test.beforeEach(async ({ page }) => {
-  await createResizeVm(page);
-});
-
-test.afterEach(async ({ page }) => {
-  await deleteResizeVm(page);
-});
+useResizeVmLifecycle();
 
 test('TC-FR1-02 Resize a stopped VM from the UI, then start — new sizing is applied', async ({
   page,

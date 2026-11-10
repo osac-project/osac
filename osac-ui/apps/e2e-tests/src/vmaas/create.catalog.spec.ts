@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { access, writeFile } from 'node:fs/promises';
 
+import { markResizeResourceOwned } from './resize/ownership';
 import { catalogOwnershipFilePath, catalogTestData } from './test_data';
 import { CatalogCreatePage } from '../../../../libs/locators/catalog';
 import {
@@ -133,3 +134,8 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     },
   );
 });
+if (test.info().project.name === 'vmaas-resize-catalog') {
+  await testStep('catalog-create', 'Record resize prerequisite ownership', () =>
+    markResizeResourceOwned('catalog'),
+  );
+}

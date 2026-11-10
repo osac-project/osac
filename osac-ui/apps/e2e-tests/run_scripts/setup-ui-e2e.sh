@@ -49,6 +49,8 @@ PW_TEST_PATH=""
 PW_GREP=""
 PW_HEADED=""
 PW_LIST=false
+NO_DEPS=false
+MODE_FLAG_SET=false
 
 # ─── CLI args ──────────────────────────────────────────────────────────────
 
@@ -67,11 +69,12 @@ for arg in "$@"; do
     --project=*)        PW_PROJECT="${arg#*=}"; SETUP_ONLY=false ;;
     --grep=*)           PW_GREP="${arg#*=}" ;;
     --headed)           PW_HEADED="--headed"; SETUP_ONLY=false ;;
-    --mode=*)           OSAC_VM_FLOW_MODE="${arg#*=}" ;;
+    --mode=*)           OSAC_VM_FLOW_MODE="${arg#*=}"; MODE_FLAG_SET=true ;;
     --extravars=*)      OSAC_EXTRAVARS="${arg#*=}" ;;
     --tag=*)            FLOW_TAG="${arg#*=}"; SETUP_ONLY=false ;;
     --allow-root-e2e)   OSAC_ALLOW_ROOT_E2E=true ;;
     --list)             PW_LIST=true ;;
+    --no-deps)          NO_DEPS=true ;;
     --all)              PW_TEST_PATH="e2e-tests"; SETUP_ONLY=false ;;
     --help|-h)
       cat <<EOF
@@ -132,9 +135,19 @@ Test options:
                        starts Xvfb when DISPLAY is not set
   --mode=MODE           set OSAC_VM_FLOW_MODE to create, delete, or full
   --extravars=PATH      temporarily use a VMaaS extravars.yaml for the run
-  --tag=TAG              select a named flow: all or happy_basic
+  --tag=TAG              select a named flow. Supported tags include:
+                       all, happy_basic, create_resources, delete_resources,
+                       create_image/delete_image/full_image,
+                       create_storage/delete_storage/full_storage,
+                       create_instance_type/delete_instance_type/full_instance_type,
+                       create_tenant/delete_tenant/full_tenant, and
+                       create_catalog/delete_catalog/full_catalog,
+                       create_vm/delete_vm/full_vm
+                       create_* leaves resources for delete_*; full_* runs
+                       the resource's create and configured teardown.
   --allow-root-e2e      explicitly allow credentialed tests as root
   --list               list discovered tests without executing them
+  --no-deps             do not run Playwright project dependencies
 
   --run-smoke always uses the setup and smoke projects. VMaaS tests can create
   and delete resources on the live OSAC deployment.
@@ -189,6 +202,19 @@ Examples (assuming this script is mounted at /setup-ui-e2e.sh):
   # Run the complete VMaaS creation flow from an existing checkout.
   bash /setup-ui-e2e.sh --osac-ui-dir=/work/osac/osac-ui \
     --test=e2e-tests/src/vmaas --project=vmaas-full-flow --mode=create
+
+  # Create only the infrastructure resources and tenant.
+  bash /setup-ui-e2e.sh --osac-ui-dir=/work/osac/osac-ui \
+    --tag=create_resources
+
+  # Delete the VMaaS resources created by the resource flow.
+  bash /setup-ui-e2e.sh --osac-ui-dir=/work/osac/osac-ui \
+    --tag=delete_resources
+
+  # Run the image-only create, delete, or full lifecycle flow.
+  bash /setup-ui-e2e.sh --osac-ui-dir=/work/osac/osac-ui --tag=create_image
+  bash /setup-ui-e2e.sh --osac-ui-dir=/work/osac/osac-ui --tag=delete_image
+  bash /setup-ui-e2e.sh --osac-ui-dir=/work/osac/osac-ui --tag=full_image
 EOF
       exit 0
       ;;
@@ -255,13 +281,118 @@ placeholder_login() {
 if [[ -n "$FLOW_TAG" ]]; then
   case "$FLOW_TAG" in
     all|happy_basic)
-      # Both names currently select the complete VMaaS journey. Keep explicit
-      # --test/--project arguments authoritative for future flow definitions.
+      # Both names select the complete VMaaS journey. Keep explicit
+      # --test/--project arguments authoritative.
       [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
       [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-delete"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
+      ;;
+    create_resources|resources_create)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-resources"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
+      ;;
+    delete_resources|resources_delete)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-delete"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
+      ;;
+    create_image)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-resources"
+      [[ -n "$PW_GREP" ]] || PW_GREP='creates disk image'
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
+      ;;
+    delete_image)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-disk-image-delete"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
+      ;;
+    full_image)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-disk-image"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
+      ;;
+    create_storage)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-resources"
+      [[ -n "$PW_GREP" ]] || PW_GREP='creates a storage tier'
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
+      ;;
+    delete_storage)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-storage-tier-delete"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
+      ;;
+    full_storage)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-storage-tier"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
+      ;;
+    create_instance_type)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-resources"
+      [[ -n "$PW_GREP" ]] || PW_GREP='creates an instance type'
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
+      ;;
+    delete_instance_type)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-instance-type-delete"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
+      ;;
+    full_instance_type)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-instance-type"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
+      ;;
+    create_tenant)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
+      ;;
+    delete_tenant)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-delete"
+      NO_DEPS=true
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
+      ;;
+    full_tenant)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-delete"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
+      ;;
+    create_catalog)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-catalog"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
+      ;;
+    delete_catalog)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-catalog-delete"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
+      ;;
+    full_catalog)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-catalog"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
+      ;;
+    create_vm)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="create"
+      ;;
+    delete_vm)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-vm-delete"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="delete"
+      ;;
+    full_vm)
+      [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+      [[ -n "$PW_PROJECT" ]] || PW_PROJECT="vmaas-full-flow-vm-delete"
+      [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="full"
       ;;
     *)
-      fail "Unknown flow tag '${FLOW_TAG}'. Available tags: all, happy_basic."
+      fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags."
       ;;
   esac
 fi
@@ -646,6 +777,7 @@ cat <<EOF
   OSAC_ADMIN_USERNAME  : ${OSAC_ADMIN_USERNAME:-<not set>}
   OSAC_ADMIN_PASSWORD  : $([[ -n $OSAC_ADMIN_PASSWORD ]] && echo '<set>' || echo '<not set>')
   OSAC_VM_FLOW_MODE    : ${OSAC_VM_FLOW_MODE}
+  OSAC_FLOW_TAG        : ${FLOW_TAG:-<not set>}
   OSAC_ALLOW_ROOT_E2E  : ${OSAC_ALLOW_ROOT_E2E}
   KUBECONFIG           : ${KUBECONFIG_PATH:-<not set>}
   IGNORE_HTTPS_ERRORS  : ${IGNORE_HTTPS_ERRORS}
@@ -653,6 +785,9 @@ cat <<EOF
   osac-ui directory    : ${OSAC_UI_DIR}
   osac-ui commit       : $(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')
   cloned               : ${DO_CLONE} (branch: ${OSAC_BRANCH})
+  Playwright project   : ${PW_PROJECT:-<not set>}
+  Playwright test path : ${PW_TEST_PATH:-<not set>}
+  Playwright no-deps   : ${NO_DEPS}
 
   Node.js              : $(node -v)
   pnpm                 : $(pnpm -v)
@@ -683,6 +818,7 @@ if [[ "${PW_LIST}" == "true" ]]; then
   section "Listing discovered tests"
 
   PW_ARGS=()
+  [[ "$NO_DEPS" == true ]] && PW_ARGS+=(--no-deps)
   [[ -n "$PW_PROJECT" ]] && PW_ARGS+=(--project="${PW_PROJECT}")
   [[ -n "$PW_TEST_PATH" ]] && PW_ARGS+=("${PW_TEST_PATH}")
 
@@ -698,6 +834,7 @@ if [[ "${SETUP_ONLY}" == "false" ]]; then
 
   # Build the playwright command
   PW_ARGS=()
+  [[ "$NO_DEPS" == true ]] && PW_ARGS+=(--no-deps)
   [[ -n "$PW_TEST_PATH" ]] && PW_ARGS+=("${PW_TEST_PATH}")
   [[ -n "$PW_PROJECT" ]] && PW_ARGS+=(--project="${PW_PROJECT}")
   [[ -n "$PW_GREP" ]] && PW_ARGS+=(-g "${PW_GREP}")

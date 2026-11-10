@@ -34,7 +34,8 @@ for arg in "$@"; do
     --browser=*)        PW_BROWSER="${arg#*=}" ;;
     --kubeconfig=*)     KUBECONFIG_PATH="${arg#*=}" ;;
     --ignore-tls|--run-smoke|--admin-user=*|--admin-password=*|--test=*|--project=*|--grep=*|--headed|--mode=*|--tag=*|--allow-root-e2e|--list|--no-deps|--all)
-      echo "${arg} is a run option. Use run-ui-e2e.sh for test parameters." >&2
+      option_name="${arg%%=*}"
+      echo "${option_name} is a run option. Use run-ui-e2e.sh for test parameters." >&2
       exit 1
       ;;
     --help|-h)
@@ -176,16 +177,48 @@ install_osac_cli() {
   [[ -n "$FULFILLMENT_SERVICE_VERSION" ]] || fail \
     "OSAC CLI is missing. Install it, pass --osac-cli=PATH, or set FULFILLMENT_SERVICE_VERSION."
 
-  local version install_dir destination temporary
+  local version install_dir destination temporary download_url checksum_temporary checksum_status
+  local expected_checksum actual_checksum
   version="${FULFILLMENT_SERVICE_VERSION#v}"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || fail \
+    "FULFILLMENT_SERVICE_VERSION must be a semantic version."
   install_dir="${OSAC_CLI_INSTALL_DIR:-${LOCAL_PREFIX}/bin}"
   destination="${install_dir}/osac"
   temporary="${destination}.tmp.$$"
+  download_url="https://github.com/osac-project/osac/releases/download/fulfillment-service/v${version}/osac_Linux_x86_64"
+  checksum_temporary="${temporary}.sha256"
   mkdir -p "$install_dir"
   info "Downloading the OSAC CLI ..."
-  curl --fail --location --show-error --silent \
-    -o "$temporary" \
-    "https://github.com/osac-project/osac/releases/download/fulfillment-service/v${version}/osac_Linux_x86_64"
+  if ! curl --fail --location --show-error --silent -o "$temporary" "$download_url"; then
+    rm -f -- "$temporary"
+    fail "OSAC CLI download failed."
+  fi
+  checksum_status=$(curl --location --silent --show-error --output "$checksum_temporary" \
+    --write-out '%{http_code}' "${download_url}.sha256" 2>/dev/null || true)
+  case "$checksum_status" in
+    2[0-9][0-9])
+      command -v sha256sum >/dev/null 2>&1 || {
+        rm -f -- "$temporary" "$checksum_temporary"
+        fail "sha256sum is required to verify the OSAC CLI download."
+      }
+      expected_checksum=$(awk 'NF { print $1; exit }' "$checksum_temporary" | tr '[:upper:]' '[:lower:]')
+      [[ "$expected_checksum" =~ ^[[:xdigit:]]{64}$ ]] || {
+        rm -f -- "$temporary" "$checksum_temporary"
+        fail "The OSAC CLI checksum file is invalid."
+      }
+      actual_checksum=$(sha256sum "$temporary" | awk '{print $1}')
+      if [[ "$actual_checksum" != "$expected_checksum" ]]; then
+        rm -f -- "$temporary" "$checksum_temporary"
+        fail "The OSAC CLI checksum did not match."
+      fi
+      rm -f -- "$checksum_temporary"
+      ;;
+    404) rm -f -- "$checksum_temporary" ;;
+    *)
+      rm -f -- "$temporary" "$checksum_temporary"
+      fail "The OSAC CLI checksum could not be retrieved."
+      ;;
+  esac
   chmod 0755 "$temporary"
   mv -f -- "$temporary" "$destination"
   OSAC_CLI_PATH="$destination"
@@ -222,7 +255,17 @@ const parseQuantity = (value, kind) => {
   if (!match) return 0;
   const number = Number(match[1]);
   if (kind === 'cpu') return match[2] === 'm' ? number : number * 1000;
-  const multipliers = { Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40 };
+  const multipliers = {
+    k: 10 ** 3,
+    M: 10 ** 6,
+    G: 10 ** 9,
+    T: 10 ** 12,
+    P: 10 ** 15,
+    Ki: 2 ** 10,
+    Mi: 2 ** 20,
+    Gi: 2 ** 30,
+    Ti: 2 ** 40,
+  };
   return number * (multipliers[match[2]] ?? 1);
 };
 

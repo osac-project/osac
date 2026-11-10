@@ -22,6 +22,8 @@ readiness only.
 | Netris BMaaS (`networking/bmaas`) | BMI networking on the deployed fabric | Needs BMH SSH and the BMI network interface. PR job omits slow cross-tenant cases; Netris `full` excludes the directory (`cudn_evpn` rejects its ICMP rules) |
 | Stretched (`networking/stretched`) | BMI/VM connectivity on one Subnet | Needs the stretched deploy suite, BMaaS SSH, VM template/helper, EVPN underlay; not in standard runs |
 
+- Networking references ([OSAC-6744](https://github.com/osac-project/osac/pull/2323)) distinguish disabled-mode rejection without storage/allocation/accounting changes from enabled-provider allocation and traffic. The disabled fixture requires private pool management and Kubernetes observation; enabled ID/name selectors run serially in the full ordered VMaaS module, retaining the final allocation for detach, automatic allocation, billing and teardown. Registration/default rendering and disabled component tests do not establish live Netris allocation, connectivity or release; missing deployed evidence remains unresolved.
+
 ## Coverage gaps
 
 - Inter-subnet VM-to-VM routing across CUDNs is Phase 2, tracked by

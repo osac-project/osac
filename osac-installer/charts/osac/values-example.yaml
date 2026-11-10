@@ -73,15 +73,24 @@ operator:
   # resources (clusters, VMs, networks) via job templates.
   aap:
     # [REQUIRED for provisioning] Full URL to the AAP controller API.
-    # Set before installation. The create-api-token hook only creates the token
-    # and restarts the operator; it does not set this URL. Production requires
-    # a trusted HTTPS Route; check its host after the AAP instance is ready
-    # (oc get route -n <namespace>) and use it here:
+    # The create-api-token hook only creates the token and restarts the
+    # operator; it does not set this URL. On a fresh install the chart-managed
+    # AAP Route does not exist yet: leave this empty (the operator then uses
+    # the in-cluster http://osac-aap/api/controller default), and after the
+    # Route exists, look up its host (oc get route -n <namespace>) and set
+    # the trusted HTTPS URL with a Helm upgrade. For external AAP, set the
+    # external Controller URL before installation:
     # https://<trusted-aap-route>/api/controller
-    url: "https://<trusted-aap-route>/api/controller"
+    url: ""
 
-    # [REQUIRED for provisioning] The create-api-token hook creates this Secret
-    # for chart-managed AAP. For external AAP, create it before installation.
+    # [REQUIRED for provisioning] The create-api-token hook creates this
+    # Secret for chart-managed AAP. For external AAP, create the Secret
+    # before installation and also disable the chart-managed instance and
+    # hooks (aap.aap.instance.enabled, aap.bootstrap.enabled,
+    # aap.apiToken.create, and aap.instanceGroups.publishTemplates.enabled
+    # set to false); see the customer install guide's externally managed AAP
+    # section. The token hook and the publication hook otherwise wait for
+    # the chart-managed AAP instance.
     tokenSecret:
       name: osac-aap-api-token
       key: token

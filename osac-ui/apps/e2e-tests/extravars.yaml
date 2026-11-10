@@ -29,6 +29,14 @@ instance_type:
   vcpus: 4
   memory_gib: 8
 
+# The resize flow creates this target type after the VM is created and removes
+# it in the project's teardown.
+resize_instance_type:
+  name: 'instance-type-e2e-resize-medium'
+  description: 'Resize target instance type created by e2e test'
+  vcpus: 8
+  memory_gib: 16
+
 disk_image:
   # Playwright appends a per-run suffix so teardown only targets this run's image.
   name: 'disk-image-e2e'

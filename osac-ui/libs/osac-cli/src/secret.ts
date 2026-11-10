@@ -66,6 +66,9 @@ export const deleteTenantSshKey = async (tenantName: string): Promise<void> => {
     '--output',
     'json',
   ]);
+  if (existingResult.exitCode !== 0 && /No objects of type 'secret'/i.test(existingResult.stderr)) {
+    return;
+  }
   expectOsacCommandSucceeded(existingResult, `Get SSH public-key Secret '${secretName}'`);
 
   const existingSecrets: unknown = JSON.parse(existingResult.stdout);

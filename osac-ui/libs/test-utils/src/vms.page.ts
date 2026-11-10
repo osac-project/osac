@@ -2,7 +2,7 @@ import { type Locator, type Page, expect } from '@playwright/test';
 
 import { confirmDetailDeletion, getTableRowByCellText } from './general/row_assertions';
 import { openMainPageOption } from './main.page';
-import { VmDetailsPage, VmsMainPage } from '../../locators/vms';
+import { VmDetailsActionButtons, VmDetailsPage, VmsMainPage } from '../../locators/vms';
 
 /** Escape a value before placing it in an exact-match regular expression. */
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -11,7 +11,21 @@ const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\
 const exactText = (value: string): RegExp =>
   new RegExp(`^\\s*${escapeRegExp(value.normalize('NFC'))}\\s*$`);
 
-/** Locate a VM row by its exact name cell text. */
+const getVmDetailsStatus = (page: Page): Locator =>
+  page
+    .getByRole(...VmDetailsPage.statusTerm)
+    .filter({ hasText: exactText('Status') })
+    .locator('..')
+    .locator(...VmDetailsPage.statusLabel);
+
+export type VmPowerAction = 'start' | 'stop' | 'restart';
+
+export interface VmResizeTarget {
+  name: string;
+  vcpus: number;
+  memoryGib: number;
+}
+
 const getVmRow = (page: Page, name: string): Locator =>
   getTableRowByCellText(
     page.getByRole(...VmsMainPage.vmsTable),
@@ -118,14 +132,6 @@ export const expectVmDetailsPage = async (
   await expect(page.locator(...VmDetailsPage.pageTitle)).toHaveText(exactText(name), { timeout });
 };
 
-/** Locate the status labels in the VM details summary. */
-const getVmDetailsStatus = (page: Page): Locator =>
-  page
-    .getByRole(...VmDetailsPage.statusTerm)
-    .filter({ hasText: exactText('Status') })
-    .locator('..')
-    .locator(...VmDetailsPage.statusLabel);
-
 /** Verify that the VM details page reports Running. */
 export const expectVmDetailsToBeRunning = async (page: Page, timeout = 15_000): Promise<void> => {
   await expect(getVmDetailsStatus(page).filter({ hasText: exactText('Running') })).toHaveCount(1, {
@@ -139,17 +145,132 @@ export const waitForVmToBeRunning = async (
   name: string,
   timeout = 180_000,
 ): Promise<void> => {
+  await waitForVmDetailsStatus(page, name, 'Running', timeout);
+};
+
+/** Poll the VM details page until it reports the requested lifecycle state. */
+export const waitForVmDetailsStatus = async (
+  page: Page,
+  name: string,
+  status: string,
+  timeout = 180_000,
+): Promise<void> => {
   await expect
     .poll(
       async () => {
-        await page.reload();
-        await expectVmDetailsPage(page, name);
-        const runningStatus = getVmDetailsStatus(page).filter({ hasText: exactText('Running') });
-        return (await runningStatus.count()) > 0 ? 'Running' : '';
+        try {
+          if (/\/vms\/[^/]+$/.test(new URL(page.url()).pathname)) {
+            await page.reload();
+          } else {
+            await openVmsPage(page);
+            await openVmDetailsPage(page, name);
+          }
+          await expectVmDetailsPage(page, name);
+          const statusLabel = getVmDetailsStatus(page).filter({ hasText: exactText(status) });
+          return (await statusLabel.count()) > 0 ? status : '';
+        } catch {
+          return '';
+        }
       },
       { timeout, intervals: [1_000, 2_000, 5_000] },
     )
-    .toBe('Running');
+    .toBe(status);
+};
+
+/** Trigger a VM power action; the caller verifies the resulting lifecycle state. */
+export const runVmPowerAction = async (page: Page, action: VmPowerAction): Promise<void> => {
+  switch (action) {
+    case 'start':
+      await page.getByRole(...VmDetailsActionButtons.start).click();
+      break;
+    case 'stop':
+      await page.getByRole(...VmDetailsActionButtons.stop).click();
+      break;
+    case 'restart':
+      await page.getByRole(...VmDetailsActionButtons.restart).click();
+      break;
+  }
+};
+
+const detailValue = (page: Page, label: string): Locator =>
+  page
+    .locator('dt')
+    .filter({ hasText: exactText(label) })
+    .locator('..')
+    .locator('dd');
+
+/** Verify the instance type and the sizing values shown on the VM details page. */
+export const expectVmConfiguration = async (
+  page: Page,
+  instanceType: VmResizeTarget,
+): Promise<void> => {
+  await expect(detailValue(page, 'Instance type')).toContainText(instanceType.name);
+  await expect(detailValue(page, 'vCPUs')).toHaveText(exactText(String(instanceType.vcpus)));
+  await expect(detailValue(page, 'Memory')).toHaveText(exactText(`${instanceType.memoryGib} GiB`));
+};
+
+/** Verify a condition row rendered in the VM details Conditions table. */
+export const expectVmConditionStatus = async (
+  page: Page,
+  conditionType: string,
+  status: string,
+): Promise<void> => {
+  const table = page.getByRole(...VmDetailsPage.conditionsTable);
+  const row = table.locator('tbody tr').filter({ hasText: conditionType });
+  await expect(row).toHaveCount(1);
+  await expect(row.locator('td[data-label="Status"]')).toHaveText(exactText(status));
+};
+
+/** Poll the VM details page until a condition reaches the requested status. */
+export const waitForVmConditionStatus = async (
+  page: Page,
+  name: string,
+  conditionType: string,
+  status: string,
+  timeout = 60_000,
+): Promise<void> => {
+  await expect
+    .poll(
+      async () => {
+        try {
+          if (/\/vms\/[^/]+$/.test(new URL(page.url()).pathname)) {
+            await page.reload();
+          } else {
+            await openVmsPage(page);
+            await openVmDetailsPage(page, name);
+          }
+          await expectVmDetailsPage(page, name);
+          await expectVmConditionStatus(page, conditionType, status);
+          return status;
+        } catch {
+          return '';
+        }
+      },
+      { timeout, intervals: [1_000, 2_000, 5_000] },
+    )
+    .toBe(status);
+};
+
+/** Change the VM instance type through the details-page modal. */
+export const resizeVmInstanceType = async (page: Page, target: VmResizeTarget): Promise<void> => {
+  await page.getByRole(...VmDetailsPage.instanceTypeEditButton).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit instance type' });
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByRole('combobox').click();
+  // PatternFly renders the open typeahead menu in a portal outside the dialog.
+  // Keep the dialog scope for the form controls, but locate the option globally.
+  const option = page.getByRole('option', {
+    name: new RegExp(
+      `^${escapeRegExp(target.name)}\\s+—\\s+${target.vcpus} vCPUs, ${target.memoryGib} GiB$`,
+    ),
+  });
+  await expect(option).toBeVisible();
+  await option.click();
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole(...VmDetailsPage.instanceTypeEditButton)).toBeVisible();
 };
 
 /** Open a VM details page from its exact row link. */

@@ -252,6 +252,27 @@ pnpm --filter @osac/playwright exec playwright test \
   --project=vm-flow --headed
 ```
 
+### VM resize flow tests
+
+The resize flow is independent from `vmaas-full-flow`. Its prerequisite blocks
+create the base instance type, resize target instance type, disk image, storage
+tier, tenant, and published catalog item. Each resize scenario then creates its
+own VM at the start and deletes that VM in `afterEach`; the prerequisite teardown
+removes the catalog and infrastructure resources after all scenarios finish.
+
+The scenario files are under `apps/e2e-tests/src/vmaas/resize/` and use the
+test-plan names `TC-NFR1-01` and `TC-FR1-02`. The first verifies that a running
+VM reports `RESTART REQUIRED=True` after Save and applies the new sizing only
+after Restart. The second resizes a stopped VM, starts it, and verifies the new
+sizing.
+
+Run it with:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-resize
+```
+
 ### Storage tier flow tests
 
 The Storage tier specs read `storage_tier.name`, `description`, `backend`, and

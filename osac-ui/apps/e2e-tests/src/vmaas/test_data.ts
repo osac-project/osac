@@ -30,6 +30,13 @@ interface RawInstanceType {
   gpu?: RawInstanceTypeGpu;
 }
 
+interface RawResizeInstanceType {
+  name?: string;
+  description: string;
+  vcpus: number;
+  memory_gib: number;
+}
+
 interface RawDiskImage {
   name?: string;
   source_type: 'Registry';
@@ -73,6 +80,7 @@ interface RawStorageTier {
 interface RawExtravars {
   catalog: RawCatalog;
   instance_type: RawInstanceType;
+  resize_instance_type: RawResizeInstanceType;
   disk_image: RawDiskImage;
   storage_tier: RawStorageTier;
   lifecycle_actions: LifecycleAction[];
@@ -110,6 +118,8 @@ export interface InstanceTypeTestData {
   gpu?: InstanceTypeGpu;
   lifecycleActions: LifecycleAction[];
 }
+
+export type ResizeInstanceTypeTestData = Omit<InstanceTypeTestData, 'lifecycleActions' | 'gpu'>;
 
 export interface DiskImageTestData extends DiskImageCreateParams {
   lifecycleActions: LifecycleAction[];
@@ -204,6 +214,7 @@ const parseExtravars = (value: unknown): RawExtravars => {
   const catalogBootDisk = asRecord(catalogFields.boot_disk, 'catalog.fields.boot_disk');
   const catalogDiskImage = asRecord(catalogFields.disk_image, 'catalog.fields.disk_image');
   const instanceType = asRecord(root.instance_type, 'instance_type');
+  const resizeInstanceType = asRecord(root.resize_instance_type, 'resize_instance_type');
   const diskImage = asRecord(root.disk_image, 'disk_image');
   const storageTier = asRecord(root.storage_tier, 'storage_tier');
   const gpu =
@@ -249,6 +260,15 @@ const parseExtravars = (value: unknown): RawExtravars => {
           }
         : {}),
     },
+    resize_instance_type: {
+      name: requiredString(resizeInstanceType.name, 'resize_instance_type.name'),
+      description: requiredString(
+        resizeInstanceType.description,
+        'resize_instance_type.description',
+      ),
+      vcpus: positiveInteger(resizeInstanceType.vcpus, 'resize_instance_type.vcpus'),
+      memory_gib: positiveInteger(resizeInstanceType.memory_gib, 'resize_instance_type.memory_gib'),
+    },
     disk_image: {
       name: optionalString(diskImage.name, 'disk_image.name'),
       source_type: registrySourceType(diskImage.source_type),
@@ -277,6 +297,7 @@ const rawExtravars = parseExtravars(parse(readFileSync(extravarsPath, 'utf8')));
 const {
   catalog: rawCatalog,
   instance_type: rawInstanceType,
+  resize_instance_type: rawResizeInstanceType,
   disk_image: rawDiskImage,
   storage_tier: rawStorageTier,
   lifecycle_actions: rawLifecycleActions,
@@ -324,6 +345,15 @@ export const instanceTypeNameOrSkip = (): string | undefined => {
   }
 
   test.skip(true, 'instance_type.name is not set in apps/e2e-tests/extravars.yaml.');
+  return undefined;
+};
+
+export const resizeInstanceTypeNameOrSkip = (): string | undefined => {
+  if (rawResizeInstanceType.name !== undefined) {
+    return rawResizeInstanceType.name;
+  }
+
+  test.skip(true, 'resize_instance_type.name is not set in apps/e2e-tests/extravars.yaml.');
   return undefined;
 };
 
@@ -391,6 +421,13 @@ export const instanceTypeTestData: InstanceTypeTestData = {
       }
     : undefined,
   lifecycleActions: rawLifecycleActions,
+};
+
+export const resizeInstanceTypeTestData: ResizeInstanceTypeTestData = {
+  name: rawResizeInstanceType.name ?? '',
+  description: rawResizeInstanceType.description,
+  vcpus: rawResizeInstanceType.vcpus,
+  memoryGib: rawResizeInstanceType.memory_gib,
 };
 
 export const diskImagesTestData: DiskImageTestData = {

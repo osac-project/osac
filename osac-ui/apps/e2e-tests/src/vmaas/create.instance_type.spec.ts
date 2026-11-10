@@ -1,6 +1,11 @@
 import { test } from '@playwright/test';
 
-import { instanceTypeNameOrSkip, instanceTypeTestData } from './test_data';
+import {
+  instanceTypeNameOrSkip,
+  instanceTypeTestData,
+  resizeInstanceTypeNameOrSkip,
+  resizeInstanceTypeTestData,
+} from './test_data';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import {
@@ -14,7 +19,13 @@ import { openInstanceTypesPage } from '../../../../libs/test-utils/src/main.page
 test('creates an instance type from Infrastructure', async ({ page }) => {
   // Allow login and page navigation to complete on a remote cluster.
   test.setTimeout(120_000);
-  const instanceTypeName = instanceTypeNameOrSkip();
+  const isResizeProject = test.info().project.name === 'vmaas-resize-target-instance-type';
+  const instanceTypeName = isResizeProject
+    ? resizeInstanceTypeNameOrSkip()
+    : instanceTypeNameOrSkip();
+  const instanceTypeData = isResizeProject
+    ? { ...resizeInstanceTypeTestData, gpu: undefined }
+    : instanceTypeTestData;
   if (!instanceTypeName) {
     logProgress('instance-type-create', 'Skipped: instance_type.name is not configured.');
     return;
@@ -49,10 +60,10 @@ test('creates an instance type from Infrastructure', async ({ page }) => {
     createInstanceType(
       page,
       instanceTypeName,
-      instanceTypeTestData.description,
-      instanceTypeTestData.vcpus,
-      instanceTypeTestData.memoryGib,
-      instanceTypeTestData.gpu,
+      instanceTypeData.description,
+      instanceTypeData.vcpus,
+      instanceTypeData.memoryGib,
+      instanceTypeData.gpu,
     ),
   );
 

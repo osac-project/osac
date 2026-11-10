@@ -151,6 +151,11 @@ func (e *Engine) WithClock(c clock.PassiveClock) *Engine {
 // ProvisioningEnabled reports global.networking.provisioningEnabled.
 func (e *Engine) ProvisioningEnabled() bool { return e.cfg.ProvisioningEnabled }
 
+// TemplateName returns the complete AAP job template name for a task suffix.
+func (e *Engine) TemplateName(task string) string {
+	return TemplateName(e.cfg.TemplatePrefix, task)
+}
+
 // APIReader returns the reader that bypasses the cache.
 func (e *Engine) APIReader() client.Reader { return e.apiReader }
 

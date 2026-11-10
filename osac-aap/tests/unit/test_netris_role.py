@@ -13,6 +13,7 @@ import http.server
 import importlib.util
 import json
 import os
+import secrets
 import subprocess
 import sys
 import threading
@@ -35,7 +36,7 @@ MANAGER = {"name": "netris", "type": "fabric", "ansible_role": "osac.templates.n
 GOOD_ENV = {
     "NETRIS_CONTROLLER_URL": "https://netris.example.test",
     "NETRIS_USERNAME": "osac",
-    "NETRIS_PASSWORD": "pw-not-a-secret",
+    "NETRIS_PASSWORD": secrets.token_urlsafe(32),
     "NETRIS_SITE_ID": "1",
     "NETRIS_TENANT_ID": "2",
     "NETRIS_MGMT_VPC_ID": "3",
@@ -123,6 +124,23 @@ def test_input_accepts_a_subnet_task() -> None:
     assert (out["virtual_network_id"], out["subnet_id"], out["external_ip_pool_id"]) == (VN, SUBNET, "")
 
 
+def test_cluster_ingress_task_requires_and_uses_cluster_api_id() -> None:
+    job_input = {
+        "task": "reserve_cluster_ingress_ip",
+        "resource": snap("ClusterOrder", EIP),
+        "cluster_id": EIP,
+    }
+    ids = nc.netris_contract_input(job_input)
+    assert ids["error"] is None
+    assert ids["cluster_id"] == EIP
+    assert nc.netris_contract_names(ids)["cluster_ingress_reservation"] == f"osac-ci-{EIP}"
+
+    del job_input["cluster_id"]
+    assert nc.netris_contract_input(job_input)["error"].endswith(
+        "cluster_id must be a lowercase UUID API ID"
+    )
+
+
 def test_input_resource_fills_its_own_parent_id() -> None:
     out = nc.netris_contract_input(job("create_virtual_network", resource=snap("VirtualNetwork", VN)), [])
     assert out["virtual_network_id"] == VN
@@ -178,6 +196,7 @@ def test_names_follow_d7() -> None:
     assert eip["eipa_dnat"] == f"osac-eipa-{EIP}"
     assert eip["server_cluster"] == f"osac-fd-{EIP}"
     assert eip["eip_reservation"] == f"osac-eip-{EIP}"
+    assert eip["cluster_ingress_reservation"] == ""
 
 
 def test_longest_name_is_47_characters() -> None:
@@ -195,17 +214,25 @@ def test_result_shapes() -> None:
         "network_segment": {"type": "evpn", "l2_vni": "10100"},
         "external_ip": {"address": "198.51.100.7"},
         "dhcp_lease": {"ip_address": "10.0.1.20", "mac_address": "52:54:00:aa:bb:cc"},
+        "cluster_ingress": {"address": "10.0.1.201"},
     })
     assert out == {
         "backend_id": "12", "l3_vni": 10001,
         "network_segment": {"type": "evpn", "l2_vni": 10100},
         "external_ip": {"address": "198.51.100.7"},
         "dhcp_lease": {"ip_address": "10.0.1.20", "mac_address": "52:54:00:aa:bb:cc"},
+        "cluster_ingress": {"address": "10.0.1.201"},
     }
     assert isinstance(out["l3_vni"], int) and isinstance(out["backend_id"], str)
     assert nc.netris_contract_result({"backend_id": "5", "l3_vni": None}) == {"backend_id": "5"}
     with pytest.raises(ValueError):
         nc.netris_contract_result({"vni": 1})
+
+
+@pytest.mark.parametrize("cluster_ingress", [1, {"address": ""}])
+def test_cluster_ingress_result_requires_an_address(cluster_ingress) -> None:
+    with pytest.raises(ValueError, match="cluster_ingress needs address"):
+        nc.netris_contract_result({"cluster_ingress": cluster_ingress})
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +324,7 @@ def test_a_missing_setting_is_retryable_and_named(tmp_path: Path, variable: str)
     message = assert_error(rc, stats, retryable=True)
     assert "Missing or malformed setting in network-fulfillment-ig" in message
     assert variable in message
-    assert "pw-not-a-secret" not in message
+    assert GOOD_ENV["NETRIS_PASSWORD"] not in message
 
 
 def test_a_setting_the_task_does_not_need_is_not_checked(tmp_path: Path) -> None:

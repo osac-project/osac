@@ -16,6 +16,10 @@
 #   (every request of this run), nf_writes (POST/PUT/DELETE of this run as
 #   "METHOD /path" strings, login excluded), nf_write_kinds (the same without
 #   object IDs).
+- name: Resolve the launch extra-vars file - {{ sft_label }}
+  ansible.builtin.set_fact:
+    nf_extra_vars_path: "{{ nf.root }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+
 - name: "Empty the request log - {{ sft_label }}"
   ansible.builtin.include_tasks: admin.yaml
   vars:
@@ -23,7 +27,7 @@
 
 - name: "Write the launch extra vars - {{ sft_label }}"
   ansible.builtin.copy:
-    dest: "{{ nf.root }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+    dest: "{{ nf_extra_vars_path }}"
     mode: "0600"
     content: "{{ {'osac_job_vars': {'manager': nf_manager} | combine(nf_job)} | to_json }}"
 
@@ -35,12 +39,17 @@
       - inventory/localhost.yml   # the AAP inventory: localhost with a local connection
       - "{{ nf_playbook | default('playbook_osac_network_task.yml') }}"
       - -e
-      - "@{{ nf.root }}/{{ sft_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
+      - "@{{ nf_extra_vars_path }}"
     chdir: "{{ nf.repo }}"
-  environment: "{{ nf_child_env | combine(nf_settings) | combine(nf_env | default({})) }}"
+  environment: >-
+    {{ nf_child_env
+       | combine(nf_settings)
+       | combine(nf_env | default({}))
+       | combine({'OSAC_LAUNCH_EXTRA_VARS_PATH': nf_extra_vars_path}) }}
   register: nf_run
   changed_when: false
   failed_when: false
+  no_log: true
 
 - name: "Check the outcome - {{ sft_label }}"
   ansible.builtin.include_tasks: "{{ playbook_dir }}/../../network_task_playbook/tasks/parse_job.yaml"
@@ -62,6 +71,7 @@
     use_proxy: false
     return_content: true
   register: _nf_state_resp
+  no_log: true
 
 - name: "Read the requests of the run - {{ sft_label }}"
   ansible.builtin.uri:
@@ -80,6 +90,7 @@
     nf_calls: "{{ _nf_calls_resp.json }}"
     nf_writes: "{{ _writes | map('reject', 'mapping') | map('join', ' ') | list }}"
     nf_write_kinds: "{{ _writes | map('reject', 'mapping') | map('join', ' ') | map('regex_replace', '/[0-9]+$', '') | list }}"
+  no_log: true
 
 - name: "Check the task sent no request to Netris - {{ sft_label }}"
   when: nf_no_requests | default(false) | bool

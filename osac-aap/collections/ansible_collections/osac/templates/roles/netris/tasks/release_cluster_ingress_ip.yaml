@@ -1,12 +1,69 @@
 ---
-# Nothing is reserved on Netris (see reserve_cluster_ingress_ip), so there is
-# nothing to release. The task publishes nothing.
-- name: Release the cluster ingress address on Netris
+# Release only the reservation proven to belong to this ClusterOrder and its
+# recorded Subnet. IPAM deletion is by record ID, so VPC deletion cannot block
+# release. An absent reservation is an idempotent success.
+- name: Release the ClusterOrder ingress address on Netris
   block:
-    - name: Skip the release
-      ansible.builtin.include_tasks: _noop.yaml
+    - name: Check the settings
+      ansible.builtin.include_tasks: _settings.yaml
       vars:
-        netris_noop: release nothing, no cluster ingress address is reserved
+        netris_require: [controller, credentials, site, tenant]
+
+    - name: Check the task input
+      ansible.builtin.include_tasks: _input.yaml
+      vars:
+        netris_require_parents: [virtual_network, subnet]
+
+    - name: Build the object names
+      ansible.builtin.include_tasks: _names.yaml
+
+    - name: Log in to Netris
+      ansible.builtin.include_role:
+        name: netris.controller.auth
+        apply:
+          no_log: true
+      no_log: true
+      when: netris_session_cookie is not defined
+
+    - name: Look up the VirtualNetwork VPC when it is still present
+      ansible.builtin.include_role:
+        name: netris.controller.vpc
+        tasks_from: read
+        apply:
+          no_log: true
+      no_log: true
+      vars:
+        vpc_name: "{{ netris_names.vpc }}"
+        vpc_tenant_id: "{{ netris_tenant_id | int }}"
+
+    - name: Release the ClusterOrder ingress address
+      osac.templates.netris_cluster_ingress:
+        operation: cluster_ingress.release
+        resource: "{{ osac_job_vars.resource }}"
+        cluster_id: "{{ osac_job_vars.cluster_id }}"
+        virtual_network: "{{ osac_job_vars.virtual_network }}"
+        subnet: "{{ osac_job_vars.subnet }}"
+        vpc_id: "{{ netris_vpc.id | default(omit) }}"
+        ipam: "{{ osac_job_vars.ipam }}"
+        reservation_name: "{{ netris_names.cluster_ingress_reservation }}"
+        controller_url: "{{ netris_controller_url }}"
+        session_cookie: "{{ netris_session_cookie }}"
+        site_id: "{{ netris_site_id | int }}"
+        tenant_id: "{{ netris_tenant_id | int }}"
+        timeout: "{{ netris_timeout | default(30) }}"
+        validate_certs: "{{ netris_validate_certs | default(true) }}"
+        ca_path: "{{ netris_ca_path | default(omit, true) }}"
+      register: _netris_cluster_ingress
+      no_log: true
+      ignore_errors: true
+
+    - name: Stop when Netris cannot release the ingress address
+      ansible.builtin.include_tasks: _cluster_ingress_module_result.yaml
+
+    - name: Publish the empty release result
+      ansible.builtin.include_tasks: _publish.yaml
+      vars:
+        netris_result: {}
   rescue:
     - name: Report the error
       ansible.builtin.include_tasks: _rescue.yaml

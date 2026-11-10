@@ -43,6 +43,11 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+const (
+	standardCaaSTemplateID = "osac.templates.ocp_small"
+	maasCaaSTemplateID     = "osac.templates.ocp_4_20_ai_maas"
+)
+
 func readyClusterOrderNodePool(instanceType string, replicas int32) hypershiftv1beta1.NodePool {
 	return hypershiftv1beta1.NodePool{
 		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{agentNodeSetLabel: instanceType, agentInstanceTypeLabel: instanceType}},
@@ -2337,35 +2342,149 @@ var _ = Describe("ClusterOrder Controller", func() {
 		})
 	})
 
-	Context("VIP endpoint reconciliation", func() {
-		It("copies VIP annotations to status", func() {
+	Context("ClusterOrder endpoint discovery", func() {
+		It("selects the shared endpoint lifecycle from the resolved template capability", func() {
+			standard := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID:                     standardCaaSTemplateID,
+				SupportsAutomaticCaaSEndpoints: true,
+			}}
+			maas := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID:                     maasCaaSTemplateID,
+				SupportsAutomaticCaaSEndpoints: true,
+			}}
+			customCaaS := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID:                     "provider.templates.custom_caas",
+				SupportsAutomaticCaaSEndpoints: true,
+			}}
+			ci := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID: "osac.templates.ocp_ci_small",
+			}}
+			unqualifiedCI := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID: "ocp_ci_small",
+			}}
+			nico := &v1alpha1.ClusterOrder{Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID: "osac.templates.ocp_4_20_small_nico",
+			}}
+
+			Expect(clusterOrderUsesEndpointLifecycle(standard)).To(BeTrue())
+			Expect(clusterOrderUsesEndpointLifecycle(maas)).To(BeTrue())
+			Expect(clusterOrderUsesEndpointLifecycle(customCaaS)).To(BeTrue())
+			Expect(clusterOrderUsesEndpointLifecycle(ci)).To(BeFalse())
+			Expect(clusterOrderUsesEndpointLifecycle(unqualifiedCI)).To(BeFalse())
+			Expect(clusterOrderUsesEndpointLifecycle(nico)).To(BeFalse())
+
+			Expect(clusterOrderUsesAutomaticEndpointLifecycle(standard, true)).To(BeTrue())
+			Expect(clusterOrderUsesAutomaticEndpointLifecycle(maas, true)).To(BeTrue())
+			Expect(clusterOrderUsesAutomaticEndpointLifecycle(standard, false)).To(BeFalse(),
+				"legacy CaaS orders without automatic ExternalIP ownership keep annotation endpoints")
+			Expect(clusterOrderUsesAutomaticEndpointLifecycle(ci, true)).To(BeFalse())
+		})
+
+		It("keeps annotation endpoint discovery for legacy templates", func() {
 			instance := &v1alpha1.ClusterOrder{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-vip",
-					Namespace: "default",
-					Annotations: map[string]string{
-						"osac.openshift.io/api-endpoint":     "10.0.1.240",
-						"osac.openshift.io/ingress-endpoint": "10.0.1.241",
-					},
-				},
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+					osacAPIEndpointAnnotation:     "10.0.1.240",
+					osacIngressEndpointAnnotation: "10.0.1.241",
+				}},
 			}
 
 			reconcileVIPEndpoints(instance)
+
 			Expect(instance.Status.ApiEndpoint).To(Equal("10.0.1.240"))
 			Expect(instance.Status.IngressEndpoint).To(Equal("10.0.1.241"))
 		})
 
-		It("does nothing when annotations are absent", func() {
-			instance := &v1alpha1.ClusterOrder{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-no-vip",
-					Namespace: "default",
+		It("gates API attachments on management readiness for CaaS templates and wrappers", func() {
+			standard := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID:                     standardCaaSTemplateID,
+					SupportsAutomaticCaaSEndpoints: true,
 				},
+				Status: v1alpha1.ClusterOrderStatus{ApiEndpoint: "192.0.2.10"},
+			}
+			Expect(clusterAPIEndpointAvailableForAttachment(standard)).To(BeFalse())
+			standard.SetStatusCondition(string(v1alpha1.ClusterOrderConditionManagementPublicationReady),
+				metav1.ConditionTrue, "", endpointReasonAsExpected)
+			Expect(clusterAPIEndpointAvailableForAttachment(standard)).To(BeTrue())
+
+			maas := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID:                     maasCaaSTemplateID,
+					SupportsAutomaticCaaSEndpoints: true,
+				},
+				Status: v1alpha1.ClusterOrderStatus{ApiEndpoint: "192.0.2.12"},
+			}
+			Expect(clusterAPIEndpointAvailableForAttachment(maas)).To(BeFalse())
+			maas.SetStatusCondition(string(v1alpha1.ClusterOrderConditionManagementPublicationReady),
+				metav1.ConditionTrue, "", endpointReasonAsExpected)
+			Expect(clusterAPIEndpointAvailableForAttachment(maas)).To(BeTrue())
+
+			ci := &v1alpha1.ClusterOrder{Status: v1alpha1.ClusterOrderStatus{ApiEndpoint: "192.0.2.11"}}
+			Expect(clusterAPIEndpointAvailableForAttachment(ci)).To(BeTrue())
+		})
+
+		It("accepts one API Service IPv4 VIP with the configured frontend port", func() {
+			service := &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Type:  corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{{Name: "https", Port: 6443}},
+				},
+				Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
+					Ingress: []corev1.LoadBalancerIngress{{IP: "192.0.2.10"}},
+				}},
 			}
 
-			reconcileVIPEndpoints(instance)
-			Expect(instance.Status.ApiEndpoint).To(BeEmpty())
-			Expect(instance.Status.IngressEndpoint).To(BeEmpty())
+			address, port, check := managementAPIVIP(service, 6443)
+			Expect(address.String()).To(Equal("192.0.2.10"))
+			Expect(port).To(Equal(int32(6443)))
+			Expect(check.ready).To(BeTrue())
+		})
+
+		It("does not accept a hostname as an API VIP", func() {
+			service := &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Type:  corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{{Name: "https", Port: 6443}},
+				},
+				Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
+					Ingress: []corev1.LoadBalancerIngress{{Hostname: "api.example.test"}},
+				}},
+			}
+
+			address, port, check := managementAPIVIP(service, 6443)
+			Expect(address.IsValid()).To(BeFalse())
+			Expect(port).To(BeZero())
+			Expect(check.ready).To(BeFalse())
+			Expect(check.reason).To(Equal(managementPublicationPending))
+		})
+
+		It("fails when the API Service frontend port differs from the controlPlaneEndpoint", func() {
+			service := &corev1.Service{
+				Spec: corev1.ServiceSpec{
+					Type:  corev1.ServiceTypeLoadBalancer,
+					Ports: []corev1.ServicePort{{Name: "https", Port: 6443}},
+				},
+				Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
+					Ingress: []corev1.LoadBalancerIngress{{IP: "192.0.2.10"}},
+				}},
+			}
+
+			_, _, check := managementAPIVIP(service, 7443)
+			Expect(check.ready).To(BeFalse())
+			Expect(check.reason).To(Equal(managementPublicationFailed))
+		})
+
+		It("reports provider networking disabled without creating endpoint jobs", func() {
+			instance := &v1alpha1.ClusterOrder{}
+			reconciler := &ClusterOrderReconciler{}
+
+			Expect(reconciler.reconcileClusterEndpointLifecycle(ctx, instance, nil, true)).To(Succeed())
+			condition := apimeta.FindStatusCondition(instance.Status.Conditions,
+				string(v1alpha1.ClusterOrderConditionEndpointsReady))
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+			Expect(condition.Reason).To(Equal(endpointReasonProvisioningDisabled))
+			Expect(instance.Status.Jobs).To(BeEmpty())
 		})
 	})
 

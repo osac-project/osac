@@ -604,7 +604,23 @@ message ThingsUpdateResponse {
 - `lock` enables optimistic locking. When set to `true`, the server rejects the update if the
   current `metadata.version` of the stored object does not match the version in the submitted
   object. A stale locked update returns `Aborted`; read the object again, reapply the intended
-  change, and retry. Locking is optional and does not change when `false` or omitted.
+  change, and retry. Locking is optional.
+- A private update that changes `metadata.finalizers` must carry the current `metadata.version`,
+  whether or not `lock` is set, or it returns `Aborted` (HTTP 409). Finalizers are compared as a
+  set, so order and duplicates don't count as changes. A request without `metadata` that would
+  change them has no version to carry, so it returns `InvalidArgument` (HTTP 400) at any stored
+  version. Public updates keep the stored finalizers.
+  - An update without a mask replaces the whole object, so omitting `finalizers` changes them if the
+    object has any. Send a mask when changing other fields. DiskImages, InstanceTypes, and
+    BareMetalInstanceTypes merge a maskless request into the stored object instead, and
+    ServiceAccounts update only `metadata.labels` and `metadata.name`.
+  - The stale-finalizer check runs before validation, so an invalid stale request returns `Aborted`
+    first.
+  - Candidate preparation hooks may not change finalizers; doing so fails with `Internal`.
+  - The reconciler loop retries an `Aborted` from a reconciler function after 1 second, backing off
+    to 1 minute. Conflict-only failures log at DEBUG, then WARN once the backoff is capped; a
+    conflict joined with another failure logs at ERROR and follows that failure's retry interval,
+    if it has one.
 
 For the `metadata.labels` and `metadata.annotations` map rules, including reserved-entry handling,
 see [Administrator-only metadata](#administrator-only-metadata). The REST gateway normally builds

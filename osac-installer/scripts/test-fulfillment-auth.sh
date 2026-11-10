@@ -100,7 +100,9 @@ fail() {
 
 assert_eq() {
   local expected="$1" actual="$2" description="$3"
-  [[ "${actual}" == "${expected}" ]] || fail "${description}: expected '${expected}', got '${actual}'"
+  # Every caller compares an access token or a client secret, so report only
+  # that they differ. Echoing either value would put it in the CI log.
+  [[ "${actual}" == "${expected}" ]] || fail "${description}: values differ"
 }
 
 assert_not_contains() {

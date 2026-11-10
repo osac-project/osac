@@ -22,6 +22,8 @@ import {
   instanceTypeTestData,
   resizeInstanceTypeNameOrSkip,
   resizeInstanceTypeTestData,
+  resizeMixedInstanceTypeNameOrSkip,
+  resizeMixedInstanceTypeTestData,
   storageTierNameOrSkip,
   storageTierTestData,
   tenantNameOrSkip,
@@ -45,12 +47,14 @@ test('deletes the resize prerequisites', async ({ page }) => {
   logProgress('resize-cleanup', 'Removing the resize scenario prerequisites.');
 
   const targetInstanceTypeName = resizeInstanceTypeNameOrSkip();
+  const mixedInstanceTypeName = resizeMixedInstanceTypeNameOrSkip();
   const baseInstanceTypeName = instanceTypeNameOrSkip();
   const storageTierName = storageTierNameOrSkip();
   const diskImageName = diskImageNameOrSkip();
   const tenantName = tenantNameOrSkip();
   if (
     !targetInstanceTypeName ||
+    !mixedInstanceTypeName ||
     !baseInstanceTypeName ||
     !storageTierName ||
     !diskImageName ||
@@ -83,6 +87,18 @@ test('deletes the resize prerequisites', async ({ page }) => {
         resizeInstanceTypeTestData.description,
         resizeInstanceTypeTestData.vcpus,
         resizeInstanceTypeTestData.memoryGib,
+      ),
+    ),
+  );
+
+  await testStep('resize-cleanup', `Delete instance type "${mixedInstanceTypeName}"`, () =>
+    deleteOwnedResource('instance-type-mixed', 'Mixed-direction instance type', () =>
+      deleteInstanceTypeFlow(
+        page,
+        mixedInstanceTypeName,
+        resizeMixedInstanceTypeTestData.description,
+        resizeMixedInstanceTypeTestData.vcpus,
+        resizeMixedInstanceTypeTestData.memoryGib,
       ),
     ),
   );

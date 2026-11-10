@@ -3,7 +3,7 @@ import { test } from '@playwright/test';
 import {
   baseInstanceType,
   lifecycleTimeout,
-  resizeInstanceType,
+  resizeMixedInstanceType,
   restartVmAndVerify,
   useResizeVmLifecycle,
 } from './resize_test';
@@ -42,16 +42,17 @@ test('TC-FR1-02 Resize a stopped VM from the UI, then start — new sizing is ap
     await runVmPowerAction(page, 'stop');
     await waitForVmDetailsStatus(page, vmTestName, 'Stopped', lifecycleTimeout);
   });
-  await testStep('vm-resize', 'Resize the stopped VM to the target instance type', () =>
-    resizeVmInstanceType(page, resizeInstanceType),
+  // TC-FR2-02: Mixed-direction resize (increase CPU, decrease memory).
+  await testStep('vm-resize', 'TC-FR2-02: Resize the stopped VM to the mixed-direction type', () =>
+    resizeVmInstanceType(page, resizeMixedInstanceType),
   );
   await testStep('vm-resize', 'Verify the target is requested before the VM starts', () =>
     expectComputeInstanceConfiguration(tenantName, vmTestName, {
-      desired: resizeInstanceType,
+      desired: resizeMixedInstanceType,
       active: baseInstanceType,
     }),
   );
   await testStep('vm-resize', 'Start the VM with the new sizing', () =>
-    restartVmAndVerify(page, tenantName, vmTestName, 'start', resizeInstanceType),
+    restartVmAndVerify(page, tenantName, vmTestName, 'start', resizeMixedInstanceType),
   );
 });

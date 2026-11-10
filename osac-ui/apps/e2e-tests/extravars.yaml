@@ -37,6 +37,13 @@ resize_instance_type:
   vcpus: 8
   memory_gib: 16
 
+# Mixed-direction resize target: more vCPUs and less memory than the base type.
+resize_mixed_instance_type:
+  name: 'instance-type-e2e-resize-mixed'
+  description: 'Mixed-direction resize target instance type created by e2e test'
+  vcpus: 5
+  memory_gib: 4
+
 disk_image:
   # Playwright appends a per-run suffix so teardown only targets this run's image.
   name: 'disk-image-e2e'

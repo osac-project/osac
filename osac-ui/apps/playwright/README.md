@@ -264,7 +264,7 @@ The scenario files are under `apps/e2e-tests/src/vmaas/resize/` and use the
 test-plan names `TC-NFR1-01` and `TC-FR1-02`. The first verifies that a running
 VM reports `RESTART REQUIRED=True` after Save and applies the new sizing only
 after Restart. The second resizes a stopped VM, starts it, and verifies the new
-sizing.
+mixed-direction sizing for `TC-FR2-02`.
 
 Run it with:
 

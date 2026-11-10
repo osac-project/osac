@@ -9,6 +9,7 @@ export type ResizeOwnedResource =
   | 'catalog'
   | 'disk-image'
   | 'instance-type-base'
+  | 'instance-type-mixed'
   | 'instance-type-target'
   | 'storage-tier'
   | 'tenant';
@@ -36,7 +37,7 @@ export const markResizeOwnershipIfApplicable = async (
   if (!applicableProjects.includes(projectName)) {
     return;
   }
-  await testStep(stepCategory, 'Record resize prerequisite ownership', async () => {
+  await testStep(stepCategory, 'Record resize ownership', async () => {
     if (await isResizeResourceOwned(resource)) {
       throw new Error(`Resize resource "${resource}" already has an ownership marker.`);
     }

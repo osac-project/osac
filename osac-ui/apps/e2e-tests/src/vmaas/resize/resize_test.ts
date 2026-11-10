@@ -11,7 +11,11 @@ import {
   waitForVmConditionStatus,
   waitForVmDetailsStatus,
 } from '../../../../../libs/test-utils/src/vms.page';
-import { instanceTypeTestData, resizeInstanceTypeTestData } from '../test_data';
+import {
+  instanceTypeTestData,
+  resizeInstanceTypeTestData,
+  resizeMixedInstanceTypeTestData,
+} from '../test_data';
 
 export const restartRequiredCondition = 'RESTART REQUIRED';
 export const conditionTimeout = 180_000;
@@ -27,6 +31,12 @@ export const resizeInstanceType = {
   name: resizeInstanceTypeTestData.name,
   vcpus: resizeInstanceTypeTestData.vcpus,
   memoryGib: resizeInstanceTypeTestData.memoryGib,
+};
+
+export const resizeMixedInstanceType = {
+  name: resizeMixedInstanceTypeTestData.name,
+  vcpus: resizeMixedInstanceTypeTestData.vcpus,
+  memoryGib: resizeMixedInstanceTypeTestData.memoryGib,
 };
 
 export const useResizeVmLifecycle = (): void => {

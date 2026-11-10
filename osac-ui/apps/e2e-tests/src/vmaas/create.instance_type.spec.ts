@@ -6,6 +6,8 @@ import {
   instanceTypeTestData,
   resizeInstanceTypeNameOrSkip,
   resizeInstanceTypeTestData,
+  resizeMixedInstanceTypeNameOrSkip,
+  resizeMixedInstanceTypeTestData,
 } from './test_data';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
@@ -21,13 +23,18 @@ test('creates an instance type from Infrastructure', async ({ page }) => {
   // Allow login and page navigation to complete on a remote cluster.
   test.setTimeout(120_000);
   const projectName = test.info().project.name;
-  const isResizeProject = projectName === 'vmaas-resize-target-instance-type';
-  const instanceTypeName = isResizeProject
+  const isResizeTargetProject = projectName === 'vmaas-resize-target-instance-type';
+  const isResizeMixedProject = projectName === 'vmaas-resize-mixed-instance-type';
+  const instanceTypeName = isResizeTargetProject
     ? resizeInstanceTypeNameOrSkip()
-    : instanceTypeNameOrSkip();
-  const instanceTypeData = isResizeProject
+    : isResizeMixedProject
+      ? resizeMixedInstanceTypeNameOrSkip()
+      : instanceTypeNameOrSkip();
+  const instanceTypeData = isResizeTargetProject
     ? { ...resizeInstanceTypeTestData, gpu: undefined }
-    : instanceTypeTestData;
+    : isResizeMixedProject
+      ? { ...resizeMixedInstanceTypeTestData, gpu: undefined }
+      : instanceTypeTestData;
   if (!instanceTypeName) {
     logProgress('instance-type-create', 'Skipped: instance_type.name is not configured.');
     return;
@@ -70,8 +77,16 @@ test('creates an instance type from Infrastructure', async ({ page }) => {
   );
   await markResizeOwnershipIfApplicable(
     test.info().project.name,
-    ['vmaas-resize-target-instance-type', 'vmaas-resize-prerequisites'],
-    isResizeProject ? 'instance-type-target' : 'instance-type-base',
+    [
+      'vmaas-resize-target-instance-type',
+      'vmaas-resize-mixed-instance-type',
+      'vmaas-resize-prerequisites',
+    ],
+    isResizeTargetProject
+      ? 'instance-type-target'
+      : isResizeMixedProject
+        ? 'instance-type-mixed'
+        : 'instance-type-base',
     'instance-type-create',
   );
 

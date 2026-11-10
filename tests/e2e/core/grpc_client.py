@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from tests.e2e.core.runner import run, run_unchecked
+from tests.e2e.core.sanitize import register_endpoint
 
 PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
@@ -27,6 +28,7 @@ class GRPCClient:
     _TOKEN_TTL: float = 60.0
 
     def __init__(self, *, address: str, token: str = "", token_factory: Callable[[], str] | None = None) -> None:
+        register_endpoint(address)
         self.address: str = address
         self._static_token: str = token
         self._token_factory: Callable[[], str] | None = token_factory

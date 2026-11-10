@@ -173,7 +173,7 @@ class FailureReporter:
         first = self._remembered(exc)
         if first is not None:
             entry["repeat_of"] = first
-            logger.error("E2E FAILURE %s [%s] repeats the failure of %s", test, classified.kind, first)
+            logger.error("%s", sanitize_text(f"E2E FAILURE {test} [{classified.kind}] repeats the failure of {first}"))
             return
         self._exceptions[id(exc)] = (exc, test)
 
@@ -181,7 +181,7 @@ class FailureReporter:
             f"E2E FAILURE {test} [{classified.kind}] phase={entry['phase']} ids={classified.ids} "
             f"{sanitize_text(classified.summary)[:_LOG_SUMMARY_LIMIT]}"
         )
-        logger.error("%s", line)
+        logger.error("%s", sanitize_text(line))
         entry["snapshot"] = self._snapshot(test, classified.kind, started, entry)
 
     def _remembered(self, exc: BaseException) -> str | None:

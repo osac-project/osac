@@ -47,7 +47,7 @@ class CommandFailed(subprocess.CalledProcessError):
     """A command exited non-zero. `cmd` is sanitized; `stdout` and `stderr` stay as captured for callers."""
 
     def __init__(
-        self, returncode: int, cmd: Sequence[str], output: str | None = None, stderr: str | None = None
+        self, returncode: int, cmd: Sequence[str], output: str | bytes | None = None, stderr: str | bytes | None = None
     ) -> None:
         super().__init__(returncode, sanitize_args(cmd), output, stderr)
         # Exception repr and pickling use args, which would otherwise hold the raw stderr.

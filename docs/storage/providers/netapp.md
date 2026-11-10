@@ -206,8 +206,9 @@ another storage system's LUNs. Change the existing configuration instead:
 it needs `find_multipaths no`, and NetApp LUNs (vendor `NETAPP`, product
 `LUN`) must not be blacklisted.
 
-**1. The multipath configuration.** This is what Trident's own node
-preparation writes on a node that has no `/etc/multipath.conf`:
+**1. The multipath configuration.** Save it as `multipath.conf`. This is
+what Trident's own node preparation writes on a node that has no
+`/etc/multipath.conf`:
 
 ```text
 defaults {
@@ -231,9 +232,14 @@ With `find_multipaths no`, multipath claims every path device that is not
 blacklisted, local disks included. The blacklist with the NetApp exception
 limits it to NetApp LUNs.
 
-**2. The MachineConfig.** It writes that file and enables `multipathd`:
+**2. The MachineConfig.** It writes that file and enables `multipathd`. A
+MachineConfig carries a file's contents as an encoded `data:` URL, so
+generate it from `multipath.conf`:
 
-```yaml
+```shell
+MULTIPATH_CONF=$(base64 < multipath.conf | tr -d '\n')
+
+cat > 99-worker-netapp-multipath.yaml <<EOF
 apiVersion: machineconfiguration.openshift.io/v1
 kind: MachineConfig
 metadata:
@@ -250,8 +256,7 @@ spec:
           mode: 420  # 0644
           overwrite: true
           contents:
-            # base64 of the multipath configuration above
-            source: data:text/plain;charset=utf-8;base64,ZGVmYXVsdHMgewogICAgZmluZF9tdWx0aXBhdGhzIG5vCn0KYmxhY2tsaXN0IHsKICAgIGRldmljZSB7CiAgICAgICAgdmVuZG9yICIuKiIKICAgICAgICBwcm9kdWN0ICIuKiIKICAgIH0KfQpibGFja2xpc3RfZXhjZXB0aW9ucyB7CiAgICBkZXZpY2UgewogICAgICAgIHZlbmRvciAiTkVUQVBQIgogICAgICAgIHByb2R1Y3QgIkxVTiIKICAgIH0KfQo=
+            source: data:text/plain;charset=utf-8;base64,${MULTIPATH_CONF}
     systemd:
       units:
         - name: multipathd.service
@@ -259,6 +264,13 @@ spec:
         # iSCSI without Trident nodePrep only:
         # - name: iscsid.service
         #   enabled: true
+EOF
+```
+
+To read back what the generated MachineConfig writes:
+
+```shell
+grep -o 'base64,.*' 99-worker-netapp-multipath.yaml | cut -d, -f2 | base64 -d
 ```
 
 The example targets the `worker` MachineConfigPool. On single-node and

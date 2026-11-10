@@ -190,11 +190,6 @@ func (m *mockBCM) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
-}
-
 // newBCMReconciler wires a BareMetalInstance reconciler with the BCM inventory
 // backend pointed at the mock server, a real (envtest-backed) BMH manager, and
 // the Metal3 management client.

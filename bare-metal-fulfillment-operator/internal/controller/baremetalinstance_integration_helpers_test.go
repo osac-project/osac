@@ -17,6 +17,9 @@ limitations under the License.
 package controller
 
 import (
+	"encoding/json"
+	"net/http"
+
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
@@ -31,8 +34,8 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 )
 
-// Shared helpers for the controller integration suites (Metal3 and BCM). Both
-// run in package controller against the same envtest API server (see
+// Shared helpers for the controller integration suites (Metal3, BCM and NetBox).
+// They run in package controller against the same envtest API server (see
 // suite_test.go); these namespace-parameterized helpers hold the logic once so
 // each suite keeps only a thin, namespace-bound wrapper for readability.
 
@@ -127,6 +130,7 @@ func markBMHReadyInNS(namespace, name string) {
 
 func bmhExistsInNS(namespace, name string) bool {
 	err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &metal3api.BareMetalHost{})
+	ExpectWithOffset(1, client.IgnoreNotFound(err)).To(Succeed())
 	return err == nil
 }
 
@@ -137,4 +141,9 @@ func driveToAllocatedIn(reconciler *BareMetalInstanceReconciler, namespace, bmiN
 	ExpectWithOffset(1, bmhExistsInNS(namespace, hostname)).To(BeTrue(), "AssignHost should have created the BMH")
 	markBMHReadyInNS(namespace, hostname)
 	reconcileInNS(reconciler, namespace, bmiName, 1)
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
 }

@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 def disabled_reference_pool(
     private_grpc: GRPCClient, k8s_hub_client: K8sClient, ref_test_run_id: str
 ) -> Iterator[dict[str, str]]:
+    """Create a fixture-owned shared pool via private APIs, wait for readiness, then remove children and pool."""
     name = f"ref-disabled-pool-{ref_test_run_id}"
     pool_id = private_grpc.create_external_ip_pool(name=name, cidrs=[str(allocate_worker_subnet(prefix=30))])
     try:
@@ -89,10 +90,12 @@ class TestNetworkingReferences:
         ref_test_run_id: str,
         pool_selector: str,
     ) -> None:
+        """Reject either pool reference without storage, allocation-set or accounting changes."""
         pool = disabled_reference_pool
         name = f"ref-disabled-eip-{pool_selector}-{ref_test_run_id}"
 
         def snapshot() -> tuple[set[str], tuple[int, int]]:
+            """Read actual private allocation IDs and pool counters, propagating read failures."""
             ids = {item["id"] for item in private_grpc.list_private_external_ips()}
             status = private_grpc.get_external_ip_pool(pool_id=pool["id"])["object"]["status"]
             return ids, (int(status.get("allocated", 0)), int(status.get("available", 0)))

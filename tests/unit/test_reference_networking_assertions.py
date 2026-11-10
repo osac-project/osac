@@ -11,6 +11,7 @@ from tests.e2e.references.assertions import assert_disabled_create_error
 
 @pytest.mark.parametrize("stream", ["stderr", "output"])
 def test_disabled_create_error_accepts_exact_grpcurl_status(stream: str) -> None:
+    """Accept the canonical disabled status from either captured subprocess stream."""
     error = subprocess.CalledProcessError(
         1,
         ["grpcurl", "sensitive-command"],
@@ -38,6 +39,7 @@ def test_disabled_create_error_accepts_exact_grpcurl_status(stream: str) -> None
     ],
 )
 def test_disabled_create_error_rejects_other_failures_without_leaking(output: str) -> None:
+    """Reject incomplete or unrelated errors without printing captured commands or output."""
     error = subprocess.CalledProcessError(1, ["grpcurl", "sensitive-command"], stderr=output)
     with pytest.raises(AssertionError) as failure:
         assert_disabled_create_error(error)
@@ -47,6 +49,7 @@ def test_disabled_create_error_rejects_other_failures_without_leaking(output: st
 
 
 def test_disabled_create_rejects_unrelated_output_alongside_status() -> None:
+    """Do not accept a correct status when the other stream contains a transport failure."""
     error = subprocess.CalledProcessError(
         1,
         ["grpcurl"],
@@ -58,6 +61,7 @@ def test_disabled_create_rejects_unrelated_output_alongside_status() -> None:
 
 
 def test_disabled_no_storage_checks_total_not_only_returned_page() -> None:
+    """Fail the no-storage oracle for a nonzero total even when the returned page is empty."""
     from tests.e2e.references.test_networking_references import TestNetworkingReferences
 
     client = Mock()
@@ -66,6 +70,7 @@ def test_disabled_no_storage_checks_total_not_only_returned_page() -> None:
     )
 
     def call(*, service: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Return the expected create rejection followed by an inconsistent stored total."""
         if service.endswith("/Create"):
             raise error
         return {"total": 1}
@@ -87,6 +92,7 @@ def test_disabled_no_storage_checks_total_not_only_returned_page() -> None:
 
 
 def test_disabled_pool_cleanup_releases_unexpected_stored_external_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Release an unexpectedly persisted child before naturally deleting its owned pool."""
     from tests.e2e.references import test_networking_references as suite
 
     private = Mock()
@@ -111,11 +117,13 @@ def test_disabled_pool_cleanup_releases_unexpected_stored_external_ip(monkeypatc
 @pytest.mark.parametrize("pool_selector", ["id", "name"])
 @pytest.mark.parametrize("change", ["none", "allocation", "allocated", "available", "read-error"])
 def test_disabled_snapshot_contract(pool_selector: str, change: str) -> None:
+    """Accept unchanged state only; fail allocation/accounting mutations and observer errors."""
     from tests.e2e.references import test_networking_references as suite
 
     client = Mock()
 
     def call(*, service: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Validate the selected pool reference and model the exact disabled API response."""
         if service.endswith("/Create"):
             assert data["object"]["spec"] == {"pool": {pool_selector: f"pool-{pool_selector}"}}
             raise subprocess.CalledProcessError(
@@ -136,6 +144,7 @@ def test_disabled_snapshot_contract(pool_selector: str, change: str) -> None:
     ]
 
     def run() -> None:
+        """Exercise the deployed-test oracle with deterministic before/after API snapshots."""
         suite.TestNetworkingReferences().test_disabled_external_ip_reference_stores_nothing(
             grpc=client,
             private_grpc=private,

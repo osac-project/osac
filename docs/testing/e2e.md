@@ -26,6 +26,11 @@ readiness only.
 
 ## Coverage gaps
 
+The disabled reference fixture owns its shared pool; private API auth must allow
+pool create/read/delete and child ExternalIP List/delete, with Kubernetes
+observation for readiness and natural cleanup. No pre-existing pool is needed.
+Read failures remain failures; tenant-only credentials are insufficient.
+
 - Inter-subnet VM-to-VM routing across CUDNs is Phase 2, tracked by
   [OSAC-3667](https://redhat.atlassian.net/browse/OSAC-3667).
 - The [OSAC-4291](https://redhat.atlassian.net/browse/OSAC-4291) Netris VMaaS

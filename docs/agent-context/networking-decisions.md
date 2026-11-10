@@ -269,7 +269,10 @@ restore it to make allocation-dependent tests run in a disabled profile.
   Each requires the exact error, no object under the unique name, unchanged
   observed private ExternalIP ID set, and unchanged pool allocated/available
   counters. It uses real APIs, database and operator readiness, not synthetic
-  ALLOCATED feedback. Run without concurrent allocators; a read failure fails
+  ALLOCATED feedback. The fixture creates and deletes its own shared pool;
+  private API pool creation/read/deletion and ExternalIP observation/cleanup
+  permissions are required, not an existing ready pool. Run without concurrent
+  allocators; a read failure fails
   the case rather than supplying a default snapshot.
 - **Enabled [QE] E2E:** the complete ordered
   `tests/e2e/networking/vmaas/test_vmaas_networking.py` module tests eight

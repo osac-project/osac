@@ -25,8 +25,6 @@ the cluster's inventory ``type`` is deliberately not consulted for routing.
 from __future__ import annotations
 
 import base64
-import contextlib
-import json
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -111,11 +109,12 @@ class InventoryBackend(Protocol):
         ...
 
     def ensure_available_hosts(self) -> None:
-        """Make at least one host available for provisioning (idempotent)."""
-        ...
+        """Assert the inventory has at least one allocatable host.
 
-    def release_created_hosts(self) -> None:
-        """Tear down hosts this backend created in ensure_available_hosts."""
+        Hosts are pre-staged before the suite starts — BMHs by the infra
+        backend on metal3, devices by the provider reconcile on netbox —
+        never created by the tests.
+        """
         ...
 
     def close(self) -> None:
@@ -163,10 +162,6 @@ class Metal3Inventory:
             "(metal3 hosts are enrolled by the infra backend or an admin, not by the tests)"
         )
 
-    def release_created_hosts(self) -> None:
-        # metal3 hosts are infra-provided; the tests never create them.
-        return
-
     def close(self) -> None:
         return
 
@@ -182,21 +177,10 @@ class NetBoxInventory:
     to ``staged``.
     """
 
-    def __init__(
-        self,
-        *,
-        k8s: K8sClient,
-        netbox: NetBoxClient,
-        fixture_spec: list[dict[str, Any]],
-        name_prefix: str,
-        bmh_namespace: str = "",
-    ) -> None:
+    def __init__(self, *, k8s: K8sClient, netbox: NetBoxClient, bmh_namespace: str = "") -> None:
         self.k8s = k8s
         self.netbox = netbox
-        self.fixture_spec = fixture_spec
-        self.name_prefix = name_prefix
         self.bmh_namespace = bmh_namespace
-        self._created_device_ids: list[str] = []
 
     def host_for_bmi(self, *, bmi_cr_name: str) -> HostRef:
         external_host_id: str = self.k8s.get_baremetal_instance_external_host_id(name=bmi_cr_name)
@@ -240,9 +224,9 @@ class NetBoxInventory:
 
     def default_host_selector(self) -> dict[str, str]:
         # The netbox equivalent of the BMH host-type label: a capability
-        # custom field the operator queries as cf_host_type. Fixture devices
-        # are stamped with it (see _fixture_custom_fields) the same way the
-        # infra backend labels BMHs for metal3.
+        # custom field the operator queries as cf_host_type. The provider
+        # reconcile stamps it on every staged device, the same way the infra
+        # backend labels BMHs for metal3.
         return {"host_type": "default"}
 
     def wait_for_released(self, *, host: HostRef) -> None:
@@ -265,63 +249,11 @@ class NetBoxInventory:
         )
 
     def ensure_available_hosts(self) -> None:
-        if not self.fixture_spec:
-            raise RuntimeError(
-                "OSAC_NETBOX_FIXTURE_HOSTS is empty: the netbox backend provisions its "
-                "inventory through fixture devices and needs at least one host spec"
-            )
-        site: str = env("OSAC_NETBOX_SITE", "").strip()
-        if not site:
-            raise RuntimeError("OSAC_NETBOX_SITE must name the NetBox site slug for fixture devices")
-        device_type: str = env("OSAC_NETBOX_DEVICE_TYPE", "").strip()
-        if not device_type:
-            raise RuntimeError("OSAC_NETBOX_DEVICE_TYPE must name the NetBox device type slug for fixture devices")
-        role: str = env("OSAC_NETBOX_ROLE", "server")
-        try:
-            for index, spec in enumerate(self.fixture_spec, start=1):
-                name = f"{self.name_prefix}-netbox-{index}"
-                if self.netbox.list_devices(name=name):
-                    continue
-                device_id = self.netbox.create_device(
-                    name=name,
-                    role=role,
-                    site=site,
-                    device_type=device_type,
-                    custom_fields=self._fixture_custom_fields(spec),
-                )
-                self._created_device_ids.append(device_id)
-        except BaseException:
-            # Fixture setup failed partway: the yield-based pytest fixture
-            # never reaches teardown, so clean up here before re-raising.
-            with contextlib.suppress(Exception):
-                self.release_created_hosts()
-            raise
-
-    def _fixture_custom_fields(self, spec: dict[str, Any]) -> dict[str, Any]:
-        custom_fields: dict[str, Any] = {
-            "osac_managed": True,
-            "osac_bmc_address": spec["bmc_address"],
-            "osac_boot_mac": spec["boot_mac"],
-        }
-        # Capability fields matching the instance type's host selector — the
-        # netbox equivalent of the BMH labels the infra backend stamps.
-        custom_fields.update(self.default_host_selector())
-        interface_macs = spec.get("interface_macs")
-        if interface_macs:
-            custom_fields["osac_interface_macs"] = interface_macs
-        custom_fields.update(spec.get("custom_fields") or {})
-        return custom_fields
-
-    def release_created_hosts(self) -> None:
-        errors: list[Exception] = []
-        for device_id in self._created_device_ids:
-            try:
-                self.netbox.delete_device(device_id)
-            except Exception as exc:
-                errors.append(exc)
-        self._created_device_ids = []
-        if errors:
-            raise RuntimeError(f"{len(errors)} NetBox fixture device deletion failure(s)") from errors[0]
+        available: int = self.count_available()
+        assert available >= 1, (
+            f"Need at least 1 staged, unclaimed osac_managed device; found {available} "
+            "(netbox devices are staged by the provider reconcile, not by the tests)"
+        )
 
     def close(self) -> None:
         self.netbox.close()
@@ -474,31 +406,7 @@ def netbox_settings_from_bmf(*, k8s: K8sClient, namespace: str) -> NetBoxSetting
     )
 
 
-def load_netbox_fixture_spec() -> list[dict[str, Any]]:
-    """Parse OSAC_NETBOX_FIXTURE_HOSTS: a JSON list of virtual host specs.
-
-    Each entry is ``{"bmc_address": ..., "boot_mac": ..., "interface_macs"?: {...},
-    "custom_fields"?: {...}}`` — one per lab host backed by the sushy/redfish
-    emulator; ``custom_fields`` carries capability fields matching the instance
-    type's host selector.
-    """
-    raw = env("OSAC_NETBOX_FIXTURE_HOSTS", "").strip()
-    if not raw:
-        return []
-    try:
-        spec = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"OSAC_NETBOX_FIXTURE_HOSTS is not valid JSON: {exc}") from exc
-    if not isinstance(spec, list) or not all(isinstance(item, dict) for item in spec):
-        raise RuntimeError("OSAC_NETBOX_FIXTURE_HOSTS must be a JSON list of host objects")
-    for index, item in enumerate(spec, start=1):
-        for key in ("bmc_address", "boot_mac"):
-            if not item.get(key):
-                raise RuntimeError(f"OSAC_NETBOX_FIXTURE_HOSTS entry {index} is missing {key!r}")
-    return spec
-
-
-def make_inventory_backend(*, k8s: K8sClient, namespace: str, bmh_namespace: str, test_run_id: str) -> InventoryBackend:
+def make_inventory_backend(*, k8s: K8sClient, namespace: str, bmh_namespace: str) -> InventoryBackend:
     """Build the inventory backend selected by OSAC_INVENTORY_BACKEND."""
     backend = env("OSAC_INVENTORY_BACKEND", "metal3")
     if backend == "metal3":
@@ -508,13 +416,7 @@ def make_inventory_backend(*, k8s: K8sClient, namespace: str, bmh_namespace: str
         netbox = NetBoxClient(
             url=settings.url, token=settings.token, ca_pem=settings.ca_pem, insecure=settings.skip_tls_verify
         )
-        return NetBoxInventory(
-            k8s=k8s,
-            netbox=netbox,
-            fixture_spec=load_netbox_fixture_spec(),
-            name_prefix=test_run_id,
-            bmh_namespace=settings.bmh_namespace,
-        )
+        return NetBoxInventory(k8s=k8s, netbox=netbox, bmh_namespace=settings.bmh_namespace)
     raise RuntimeError(
         f"Unknown OSAC_INVENTORY_BACKEND {backend!r}; valid values: {', '.join(VALID_INVENTORY_BACKENDS)}"
     )

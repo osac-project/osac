@@ -37,7 +37,7 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import poll_until
+from tests.e2e.core.runner import CommandFailed, poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
 
@@ -48,8 +48,13 @@ _DEFAULT_LABEL = "osac.openshift.io/default"
 _LOG = logging.getLogger(__name__)
 
 
-def _pool_holders(private_grpc: GRPCClient, pool_id: str) -> list[dict[str, Any]]:
-    """The live ExternalIPs of every tenant that hold addresses of `pool_id`."""
+def _require(state: dict[str, Any], *keys: str) -> None:
+    missing = [k for k in keys if k not in state]
+    if missing:
+        pytest.skip(f"Prerequisite state missing: {', '.join(missing)}")
+
+
+def _pool_external_ips(private_grpc: GRPCClient, pool_id: str) -> list[dict[str, Any]]:
     return [
         item
         for item in private_grpc.list_private_external_ips()
@@ -57,19 +62,13 @@ def _pool_holders(private_grpc: GRPCClient, pool_id: str) -> list[dict[str, Any]
     ]
 
 
-def _is_default(item: dict[str, Any]) -> bool:
+def _is_default_external_ip(item: dict[str, Any]) -> bool:
     return (item.get("metadata", {}).get("labels") or {}).get(_DEFAULT_LABEL) == "true"
 
 
-def _describe(item: dict[str, Any]) -> str:
+def _describe_external_ip(item: dict[str, Any]) -> str:
     metadata = item.get("metadata", {})
     return f"{metadata.get('name', '?')} ({item.get('id', '?')}, tenant {metadata.get('tenant', '?')})"
-
-
-def _require(state: dict[str, Any], *keys: str) -> None:
-    missing = [k for k in keys if k not in state]
-    if missing:
-        pytest.skip(f"Prerequisite state missing: {', '.join(missing)}")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -578,23 +577,73 @@ class TestBmaasNetworking:
         if "pool_id" not in self.state:
             pytest.skip("No ExternalIPPool to delete")
 
-        # Tenant default ExternalIPs (default-nat) take addresses from any READY pool, so they can hold the
-        # suite's pool. They belong to no test: leave the pool to them. Any other holder is a leak.
-        holders = _pool_holders(private_grpc, self.state["pool_id"])
-        others = [item for item in holders if not _is_default(item)]
-        assert not others, (
-            f"ExternalIPPool {self.state['pool_id']} is still held by: {', '.join(_describe(i) for i in others)}"
+        pool_id = self.state["pool_id"]
+        suite_eip_ids = {
+            self.state[key] for key in ("nat_eip_id", "auto_eip_id", "ingress_eip_id") if self.state.get(key)
+        }
+        holders = _pool_external_ips(private_grpc, pool_id)
+        remaining_suite_eips = [item for item in holders if item.get("id") in suite_eip_ids]
+        assert not remaining_suite_eips, (
+            f"ExternalIPs created by this suite still hold pool {pool_id}: "
+            f"{', '.join(_describe_external_ip(item) for item in remaining_suite_eips)}"
+        )
+
+        poll_until(
+            fn=lambda: (
+                int(private_grpc.get_external_ip_pool(pool_id=pool_id)["object"]["status"].get("allocated", 0)),
+                len(_pool_external_ips(private_grpc, pool_id)),
+            ),
+            until=lambda counts: counts[0] == counts[1],
+            retries=12,
+            delay=5,
+            description=f"ExternalIPPool {pool_id} allocation count to match its live ExternalIPs",
+            resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
+            resource_id=pool_id,
+        )
+
+        other_holders = [item for item in holders if not _is_default_external_ip(item)]
+        assert not other_holders, (
+            f"ExternalIPPool {pool_id} is still held by: "
+            f"{', '.join(_describe_external_ip(item) for item in other_holders)}"
         )
         if holders:
+            assert pool_id in private_grpc.list_external_ip_pool_ids(), (
+                f"ExternalIPPool {pool_id} disappeared while tenant default ExternalIPs still use it"
+            )
             _LOG.warning(
-                "ExternalIPPool %s is not deleted: it is held by tenant default ExternalIPs: %s",
-                self.state["pool_id"],
-                ", ".join(_describe(item) for item in holders),
+                "Leaving ExternalIPPool %s in place because tenant default ExternalIPs still use it: %s",
+                pool_id,
+                ", ".join(_describe_external_ip(item) for item in holders),
             )
             return
 
-        private_grpc.delete_external_ip_pool(pool_id=self.state["pool_id"])
+        try:
+            private_grpc.delete_external_ip_pool(pool_id=pool_id)
+        except CommandFailed as exc:
+            # Tenant default addresses can be allocated between the holder
+            # check and delete. Keep the pool if that race is the only reason
+            # the API rejected deletion.
+            detail = f"{exc.stdout or ''} {exc.stderr or ''}"
+            if "FailedPrecondition" not in detail:
+                raise
+            holders = _pool_external_ips(private_grpc, pool_id)
+            other_holders = [item for item in holders if not _is_default_external_ip(item)]
+            assert not other_holders, (
+                f"ExternalIPPool {pool_id} is still held by: "
+                f"{', '.join(_describe_external_ip(item) for item in other_holders)}"
+            )
+            if not holders:
+                raise
+            assert pool_id in private_grpc.list_external_ip_pool_ids(), (
+                f"ExternalIPPool {pool_id} disappeared while tenant default ExternalIPs still use it"
+            )
+            _LOG.warning(
+                "Leaving ExternalIPPool %s in place because tenant default ExternalIPs appeared during deletion: %s",
+                pool_id,
+                ", ".join(_describe_external_ip(item) for item in holders),
+            )
+            return
         wait_for_external_ip_pool_deletion(k8s=k8s_hub_client, name=self.state["pool_cr"])
 
         remaining = private_grpc.list_external_ip_pool_ids()
-        assert self.state["pool_id"] not in remaining, "ExternalIPPool still in API after deletion"
+        assert pool_id not in remaining, "ExternalIPPool still in API after deletion"

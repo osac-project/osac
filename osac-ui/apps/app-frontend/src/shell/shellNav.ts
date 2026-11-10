@@ -1,7 +1,8 @@
-/** Role-based sidebar navigation (sectioned NavGroup layout). Nav icons: shellNavIcon in @osac/ui-components/icons */
+/** Sidebar navigation by role, with resource permissions checked by its item wrappers. */
 import type { TFunction } from 'i18next';
 
-import { ServiceTier } from '@osac/types';
+import { IdentityProviders, RoleBindings, ServiceAccounts, ServiceTier } from '@osac/types';
+import type { ServiceWithMethod } from '@osac/ui-components/hooks/use-permissions';
 import type { UserRole } from '@osac/ui-components/shellTypes';
 
 export const isNavSection = (row: NavRow): row is NavSection => row.kind === 'section';
@@ -13,6 +14,7 @@ export type NavLink = {
   label: string;
   path: string;
   service?: ServiceTier;
+  resource?: ServiceWithMethod<'list'>;
 };
 
 export type NavSection = {
@@ -39,21 +41,52 @@ export const filterNavRowsByServices = (
     return children.length > 0 ? [{ ...row, children }] : [];
   });
 
-const getIdpLinks = (t: TFunction): NavRow[] => [
-  { kind: 'link', id: 'idp', label: t('Identity providers'), path: '/tenant/identity-provider' },
-  { kind: 'link', id: 'role-bindings', label: t('Role Bindings'), path: '/tenant/role-binding' },
+const getTenantAdministrationSection = (t: TFunction): NavSection => ({
+  kind: 'section',
+  id: 'nav-tenant-admin',
+  label: t('Administration'),
+  children: [
+    {
+      kind: 'link',
+      id: 'role-bindings',
+      label: t('Role Bindings'),
+      path: '/tenant/role-binding',
+      resource: RoleBindings,
+    },
+    {
+      kind: 'link',
+      id: 'service-accounts',
+      label: t('Service accounts'),
+      path: '/tenant/service-accounts',
+      resource: ServiceAccounts,
+    },
+    {
+      kind: 'link',
+      id: 'idp',
+      label: t('Identity providers'),
+      path: '/tenant/identity-provider',
+      resource: IdentityProviders,
+    },
+  ],
+});
+
+const getIdpManagerNav = (t: TFunction): NavRow[] => [
+  ...getTenantAdministrationSection(t).children,
+  getSecretsNav(t),
 ];
 
-const getIdpManagerNav = (t: TFunction): NavRow[] => [...getIdpLinks(t), getSecretsNav(t)];
-
-const getAdminNav = (t: TFunction): NavRow[] => [
-  getCatalogNav(t),
-  {
+const getAdministractionSection = (t: TFunction): NavSection => {
+  return {
     kind: 'section',
     id: 'nav-administration',
     label: t('Administration'),
     children: [{ kind: 'link', id: 'tenant', label: t('Tenants'), path: '/admin/tenants' }],
-  },
+  };
+};
+
+const getAdminNav = (t: TFunction): NavRow[] => [
+  getCatalogNav(t),
+  getAdministractionSection(t),
   {
     kind: 'section',
     id: 'nav-admin-storage',
@@ -107,8 +140,8 @@ const getAdminNav = (t: TFunction): NavRow[] => [
 const getTenantAdminNav = (t: TFunction): NavRow[] => [
   ...getBaseNav(t),
   getStorageNav(t),
-  ...getIdpLinks(t),
   getNetworkNav(t),
+  getTenantAdministrationSection(t),
   getSecretsNav(t),
 ];
 
@@ -230,7 +263,12 @@ export const navRowsForRole = (
     rows = getTenantAdminNav(t);
   } else {
     // 'tenant-user'
-    rows = [...getBaseNav(t), getNetworkNav(t), getSecretsNav(t)];
+    rows = [
+      ...getBaseNav(t),
+      getNetworkNav(t),
+      getTenantAdministrationSection(t),
+      getSecretsNav(t),
+    ];
   }
 
   return filterNavRowsByServices(rows, enabledServices);

@@ -27,6 +27,7 @@ import {
   useArrayPageFilter,
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter';
+import { usePermissions } from '@osac/ui-components/hooks/use-permissions';
 import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
@@ -50,6 +51,7 @@ const EMPTY_ROLES: Role[] = [];
 
 const RoleBindingsPage = () => {
   const { t } = useTranslation();
+  const permissions = usePermissions(RoleBindings, 'list');
   const [, setSearchParams] = useSearchParams();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
   const [searchResetKey, setSearchResetKey] = useState(0);
@@ -77,14 +79,14 @@ const RoleBindingsPage = () => {
     data: listResponse,
     isLoading,
     error,
-  } = useListResource(RoleBindings, { filter: listFilter });
+  } = useListResource(RoleBindings, { filter: listFilter }, { enabled: permissions.allowed });
   const roleBindings = listResponse?.items ?? EMPTY_ROLE_BINDINGS;
 
   const {
     data: totalsResponse,
     isLoading: totalsLoading,
     error: totalsError,
-  } = useListResource(RoleBindings, { limit: 0 });
+  } = useListResource(RoleBindings, { limit: 0 }, { enabled: permissions.allowed });
   const totalItems = !totalsLoading && !totalsError ? (totalsResponse?.total ?? 0) : 0;
 
   const { data: roles, error: rolesError } = useListResource(Roles);
@@ -152,6 +154,7 @@ const RoleBindingsPage = () => {
           {t('Create role binding')}
         </CreateButton>
       }
+      permissions={permissions}
     >
       <Stack hasGutter>
         <StackItem>

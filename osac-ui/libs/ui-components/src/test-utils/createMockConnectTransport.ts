@@ -5,6 +5,8 @@ import type {
   ComputeInstance,
   ComputeInstancesListRequest,
   SelfSubjectAccessReviewsCreateRequest,
+  ServiceAccount,
+  ServiceAccountsListRequest,
 } from '@osac/types';
 import {
   BareMetalInstanceCatalogItem,
@@ -83,6 +85,8 @@ import {
   type SecurityGroupsDeleteResponse,
   SelfSubjectAccessReviews,
   SelfSubjectAccessReviewsCreateResponseSchema,
+  ServiceAccounts,
+  ServiceAccountsListResponseSchema,
   ServiceTier,
   Subnet,
   SubnetsDeleteRequest,
@@ -261,6 +265,7 @@ export type MockApiFixtures = {
   externalIps?: ExternalIP[];
   externalIpAttachments?: ExternalIPAttachment[];
   volumes?: Volume[];
+  serviceAccounts?: ServiceAccount[];
 };
 
 export const wrapWithAuthInterceptor = (transport: Transport): Transport => {
@@ -312,6 +317,18 @@ const matchesProjectSearchFilter = (filter: string | undefined, project: Project
   return (
     (project.metadata?.name ?? '').includes(search) || (project.spec?.title ?? '').includes(search)
   );
+};
+
+const matchesServiceAccountSearchFilter = (
+  filter: string | undefined,
+  serviceAccount: ServiceAccount,
+): boolean => {
+  const searchLiteral = filter?.match(/this\.metadata\.name\.contains\(("(?:\\.|[^"\\])*")\)/)?.[1];
+  if (!searchLiteral) {
+    return true;
+  }
+  const search = JSON.parse(searchLiteral) as string;
+  return (serviceAccount.metadata?.name ?? '').includes(search);
 };
 
 const matchesVirtualNetworkIdInFilter = (
@@ -507,6 +524,11 @@ export type MockTransportOverrides = {
   ) =>
     | MessageInitShape<typeof SelfSubjectAccessReviewsCreateResponseSchema>
     | Promise<MessageInitShape<typeof SelfSubjectAccessReviewsCreateResponseSchema>>;
+  onServiceAccountList?: (
+    req: ServiceAccountsListRequest,
+  ) =>
+    | MessageInitShape<typeof ServiceAccountsListResponseSchema>
+    | Promise<MessageInitShape<typeof ServiceAccountsListResponseSchema>>;
   onComputeInstanceCatalogItemCreate?: (
     req: ComputeInstanceCatalogItemsCreateRequest,
   ) =>
@@ -745,6 +767,7 @@ export const createMockConnectTransport = (
   const roles = fixtures.roles ?? [];
   const roleBindingsFixtures = fixtures.roleBindings ?? [];
   const secrets = fixtures.secrets ?? [];
+  const serviceAccounts = fixtures.serviceAccounts ?? [];
   const usersFixtures = fixtures.users ?? [];
   const natGateways = [...(fixtures.natGateways ?? [])];
   const externalIps = [...(fixtures.externalIps ?? [])];
@@ -902,6 +925,27 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: secrets.find((secret) => secret.id === req.id),
         }),
+      });
+
+      router.service(ServiceAccounts, {
+        list: (req) => {
+          if (overrides.onServiceAccountList) {
+            return overrides.onServiceAccountList(req);
+          }
+
+          const matchingAccounts = serviceAccounts.filter((serviceAccount) =>
+            matchesServiceAccountSearchFilter(req.filter, serviceAccount),
+          );
+          const total = matchingAccounts.length;
+          if (req.limit === 0) {
+            return { items: [], size: 0, total };
+          }
+
+          const offset = req.offset ?? 0;
+          const end = req.limit === undefined ? undefined : offset + req.limit;
+          const items = matchingAccounts.slice(offset, end);
+          return { items, size: items.length, total };
+        },
       });
 
       router.service(ClusterTemplates, {

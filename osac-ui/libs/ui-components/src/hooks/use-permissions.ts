@@ -1,10 +1,10 @@
 import type { DescMethod, DescService } from '@bufbuild/protobuf';
-import { Code, ConnectError } from '@connectrpc/connect';
+import { type Client, Code, ConnectError } from '@connectrpc/connect';
 // Permission checks use a descriptor-aware cache key rather than an ApiRoute.
 // eslint-disable-next-line no-restricted-imports
-import { useQuery } from '@tanstack/react-query';
+import { queryOptions, useQueries, useQuery } from '@tanstack/react-query';
 
-import { SelfSubjectAccessReviews } from '@osac/types';
+import { SelfSubjectAccessReviews, type SelfSubjectAccessReviewsCreateResponse } from '@osac/types';
 
 import { useSession } from './use-session';
 import { useApiFetch } from '../api/api-context';
@@ -20,29 +20,15 @@ const retryableCodes = new Set([Code.Unavailable, Code.DeadlineExceeded, Code.Re
 const isRetryableError = (error: unknown): boolean =>
   error instanceof ConnectError && retryableCodes.has(error.code);
 
-export interface UsePermissionsResult {
-  allowed: boolean;
-  error: Error | null;
-  isLoading: boolean;
-}
-
-// Permission results are cached for the lifetime of the browser page so they
-// are shared across components and refreshed only after a full page reload.
-export const usePermissions = <Service extends DescService>(
-  service: Service,
-  method: ServiceMethod<Service>,
-): UsePermissionsResult => {
-  const { role } = useSession();
-  const rpcMethodName = service.method[method].name;
-
-  // SSAR allows checks for public API only.
-  // Therefore if consumer of the hook tries to check private API
-  // we return true/false based on user's role (admin always true, false otherwise)
-  const isPrivateService = service.typeName.startsWith('osac.private.v1.');
-  const client = useApiFetch(SelfSubjectAccessReviews);
-  const { data, error, isPending } = useQuery({
-    queryKey: ['permissions', service.typeName, rpcMethodName],
-    enabled: !isPrivateService,
+// SSAR only checks public APIs; private APIs fall back to the user's role.
+const permissionQueryOptions = (
+  service: DescService,
+  rpcMethodName: string,
+  client: Client<typeof SelfSubjectAccessReviews>,
+) =>
+  queryOptions<SelfSubjectAccessReviewsCreateResponse, Error>({
+    queryKey: ['permissions', service.typeName, rpcMethodName] as const,
+    enabled: !service.typeName.startsWith('osac.private.v1.'),
     queryFn: async () => {
       const response = await client.create({
         object: {
@@ -69,13 +55,57 @@ export const usePermissions = <Service extends DescService>(
     refetchInterval: false,
   });
 
+export interface UsePermissionsResult {
+  allowed: boolean;
+  error: Error | null;
+  isLoading: boolean;
+}
+
+export const usePermissionsForServices = <Service extends DescService>(
+  services: Service[],
+  method: ServiceMethod<Service>,
+): UsePermissionsResult[] => {
+  const { role } = useSession();
+  const client = useApiFetch(SelfSubjectAccessReviews);
+  const results = useQueries({
+    queries: services.map((service) =>
+      permissionQueryOptions(service, service.method[method].name, client),
+    ),
+  });
+
+  return services.map((service, index) => {
+    if (service.typeName.startsWith('osac.private.v1.')) {
+      return { allowed: role === 'admin', error: null, isLoading: false };
+    }
+
+    const result = results[index];
+    return {
+      allowed: result?.data?.object?.status?.allowed === true,
+      error: result?.error ?? null,
+      isLoading: result?.isPending ?? true,
+    };
+  });
+};
+
+// Permission results are cached for the lifetime of the browser page so they
+// are shared across components and refreshed only after a full page reload.
+export const usePermissions = <Service extends DescService>(
+  service: Service,
+  method: ServiceMethod<Service>,
+): UsePermissionsResult => {
+  const { role } = useSession();
+  const isPrivateService = service.typeName.startsWith('osac.private.v1.');
+  const rpcMethodName = service.method[method].name;
+  const client = useApiFetch(SelfSubjectAccessReviews);
+  const result = useQuery(permissionQueryOptions(service, rpcMethodName, client));
+
   if (isPrivateService) {
     return { allowed: role === 'admin', error: null, isLoading: false };
   }
 
   return {
-    allowed: data?.object?.status?.allowed === true,
-    error,
-    isLoading: isPending,
+    allowed: result.data?.object?.status?.allowed === true,
+    error: result.error,
+    isLoading: result.isPending,
   };
 };

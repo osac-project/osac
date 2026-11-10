@@ -72,8 +72,9 @@ oc get csidriver
 # The shared Trident backend is bound
 oc get tridentbackendconfigs -A
 
-# One class per offered tier, with the required labels
-oc get storageclass -l osac.openshift.io/tenant=csp-managed
+# One class per offered tier; the last column is each class's tier label
+oc get storageclass -l osac.openshift.io/tenant=csp-managed \
+  -L osac.openshift.io/storage-tier
 
 # Each worker that can run tenant VMs: multipathd is active and
 # find_multipaths is "off" (how multipathd reports "no")
@@ -81,9 +82,13 @@ oc debug node/<node> -- chroot /host sh -c \
   'systemctl is-active multipathd; multipathd show config | grep -w find_multipaths'
 ```
 
-The StorageClass lookup is the same one OSAC performs during onboarding, so
-missing or mislabeled classes surface here rather than as a `StorageReady=False`
-condition later.
+OSAC lists the classes by the same tenant label during onboarding, then
+resolves each configured tier by the `osac.openshift.io/storage-tier` label.
+Each configured tier must appear exactly once in the last column. A class
+whose tier label is missing or misspelled is listed but does not count for
+its tier, and two classes with the same tier make that tier ambiguous.
+Either one surfaces later as a `StorageReady=False` condition. See the
+[resolution rules](../concepts/storageclass.md#resolution-rules).
 
 The node check has no OSAC equivalent. An unprepared worker passes
 onboarding and volume provisioning, and first fails when a tenant VM

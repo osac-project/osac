@@ -116,37 +116,10 @@ runs per node, so a cluster with only some workers prepared fails only for
 VMs that land on an unprepared one. Prepare every worker that can run
 tenant VMs, including live-migration targets.
 
-### iSCSI: Trident node preparation
+### Check the nodes first
 
-For iSCSI, Trident can configure and enable `iscsid` and `multipathd` on
-the workers itself. Set `nodePrep` on the TridentOrchestrator:
-
-```yaml
-spec:
-  nodePrep:
-    - iscsi
-```
-
-NetApp's
-[OpenShift OperatorHub installation guide](https://docs.netapp.com/us-en/trident/trident-install/openshift-operator-deploy.html)
-shows it in a complete TridentOrchestrator. `iscsi` is the only value
-`nodePrep` supports, and on OpenShift 4.19 and later it needs Trident
-25.06.1 or later (see the `nodePrep` row in NetApp's
-[TridentOrchestrator options](https://docs.netapp.com/us-en/trident/trident-install/kubernetes-customize-deploy.html)).
-On a node that already has an `/etc/multipath.conf`, Trident adds the
-NetApp device exception but does not change an existing `defaults` section:
-node preparation fails there unless that section sets `find_multipaths no`.
-
-### Fibre Channel: MachineConfig
-
-Trident has no node preparation for Fibre Channel. On OpenShift, apply the
-multipath configuration with a MachineConfig. For iSCSI without `nodePrep`,
-the same MachineConfig with its `iscsid.service` unit uncommented makes the
-changes `nodePrep` makes on a node with no `/etc/multipath.conf`: it writes
-this file and enables `iscsid` and `multipathd`.
-
-**1. Check what the nodes have today.** A MachineConfig replaces the whole
-file; nothing merges it with an existing one.
+Both methods below write `/etc/multipath.conf`. Before using either, find
+out what the nodes have today:
 
 ```shell
 # MachineConfigs that already manage /etc/multipath.conf
@@ -161,15 +134,79 @@ oc debug node/<node> -- chroot /host cat /etc/multipath.conf
 oc debug node/<node> -- chroot /host multipath -ll
 ```
 
-If no MachineConfig manages the file, the file does not exist, and no
-multipath devices are in use, the example below can be applied as it is.
-Otherwise do not apply it as it is: it replaces the existing configuration,
-and its blacklist excludes every device that is not a NetApp LUN, including
-a multipath boot device or another storage system's LUNs. Change the
-existing configuration instead: it needs `find_multipaths no`, and NetApp
-LUNs (vendor `NETAPP`, product `LUN`) must not be blacklisted.
+Run the node commands on every node the method changes. Trident's node
+preparation runs in Trident's node pods, which by default run on every
+Linux node, control plane included. A MachineConfig changes the nodes of
+its pool.
 
-**2. The multipath configuration.** This is what Trident's own node
+Either method can be used as described when no MachineConfig manages the
+file, the file does not exist on those nodes, and none of them has
+multipath devices in use. Otherwise read the cases under the method before
+using it.
+
+### iSCSI: Trident node preparation
+
+For iSCSI, Trident can configure and enable `iscsid` and `multipathd` on
+the nodes itself. Set `nodePrep` on the TridentOrchestrator:
+
+```yaml
+spec:
+  nodePrep:
+    - iscsi
+```
+
+NetApp's
+[OpenShift OperatorHub installation guide](https://docs.netapp.com/us-en/trident/trident-install/openshift-operator-deploy.html)
+shows it in a complete TridentOrchestrator. `iscsi` is the only value
+`nodePrep` supports, and on OpenShift 4.19 and later it needs Trident
+25.06.1 or later (see the `nodePrep` row in NetApp's
+[TridentOrchestrator options](https://docs.netapp.com/us-en/trident/trident-install/kubernetes-customize-deploy.html)).
+
+What node preparation does to `/etc/multipath.conf` depends on what the
+node has:
+
+| The node has | Node preparation |
+|---|---|
+| No `/etc/multipath.conf` | Writes the [configuration below](#fibre-channel-machineconfig), which blacklists every device except NetApp LUNs |
+| A file that sets `find_multipaths no`, or has no `defaults` section | Rewrites the file, adding the NetApp device exception and, where there is no `defaults` section, one with `find_multipaths no` |
+| A file whose `defaults` section does not set `find_multipaths no` | Stops with an error and leaves the file unchanged |
+
+Do not enable `nodePrep` when the [check](#check-the-nodes-first) found
+either of these:
+
+- **Multipath devices in use on a node that has no `/etc/multipath.conf`.**
+  The configuration Trident writes there blacklists every device that is
+  not a NetApp LUN, including a multipath boot device or another storage
+  system's LUNs. Use a MachineConfig with a configuration that keeps those
+  devices instead.
+- **A MachineConfig that manages `/etc/multipath.conf`.** Trident rewrites
+  the file on the node. The Machine Config Operator treats a managed file
+  that no longer matches its MachineConfig as
+  [configuration drift](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/machine_configuration/machine-config-index#machine-config-drift-detection_machine-config-overview):
+  it marks the node and its pool `Degraded`, and a degraded node cannot be
+  updated. Change that MachineConfig instead: it needs `find_multipaths no`,
+  NetApp LUNs (vendor `NETAPP`, product `LUN`) must not be blacklisted, and
+  it must enable `iscsid` and `multipathd`.
+
+### Fibre Channel: MachineConfig
+
+Trident has no node preparation for Fibre Channel. On OpenShift, apply the
+multipath configuration with a MachineConfig. For iSCSI without `nodePrep`,
+the same MachineConfig with its `iscsid.service` unit uncommented makes the
+changes `nodePrep` makes on a node with no `/etc/multipath.conf`: it writes
+this file and enables `iscsid` and `multipathd`.
+
+A MachineConfig replaces the whole file; nothing merges it with an existing
+one. If the [check](#check-the-nodes-first) found no MachineConfig managing
+the file, no file on the nodes, and no multipath devices in use, the
+example below can be applied as it is. Otherwise do not apply it as it is:
+it replaces the existing configuration, and its blacklist excludes every
+device that is not a NetApp LUN, including a multipath boot device or
+another storage system's LUNs. Change the existing configuration instead:
+it needs `find_multipaths no`, and NetApp LUNs (vendor `NETAPP`, product
+`LUN`) must not be blacklisted.
+
+**1. The multipath configuration.** This is what Trident's own node
 preparation writes on a node that has no `/etc/multipath.conf`:
 
 ```text
@@ -194,7 +231,7 @@ With `find_multipaths no`, multipath claims every path device that is not
 blacklisted, local disks included. The blacklist with the NetApp exception
 limits it to NetApp LUNs.
 
-**3. The MachineConfig.** It writes that file and enables `multipathd`:
+**2. The MachineConfig.** It writes that file and enables `multipathd`:
 
 ```yaml
 apiVersion: machineconfiguration.openshift.io/v1
@@ -228,7 +265,7 @@ The example targets the `worker` MachineConfigPool. On single-node and
 compact three-node clusters the nodes are in the `master` pool; change the
 role label and the name to match.
 
-**4. Apply it.** By default the Machine Config Operator drains and reboots
+**3. Apply it.** By default the Machine Config Operator drains and reboots
 the nodes of the pool, one at a time. Apply it before the cluster carries
 tenant workloads, or in a maintenance window.
 

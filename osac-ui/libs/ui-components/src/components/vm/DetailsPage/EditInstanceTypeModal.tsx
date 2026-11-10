@@ -19,9 +19,9 @@ import {
   InstanceTypeState,
   InstanceTypes,
 } from '@osac/types';
+import { useGetResource } from '@osac/ui-components/api/use-resource';
 
 import { cel } from '../../../api/cel';
-import { useInstanceType } from '../../../api/v1/instance-types';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import OsacForm from '../../Form/OsacForm';
@@ -58,12 +58,14 @@ const validationSchema = (t: TFunction) =>
 const EditInstanceTypeModal = ({ vm, onClose }: EditInstanceTypeModalProps) => {
   const { t } = useTranslation();
   const { updateInstanceType } = useUpdateVmInstanceType();
-  const {
-    data: currentType,
-    isLoading,
-    isError,
-    refetch,
-  } = useInstanceType(vm.spec?.instanceType?.id);
+  const id = vm.spec?.instanceType?.id;
+  const { data, isLoading, isError, refetch } = useGetResource(
+    InstanceTypes,
+    { id },
+    { enabled: !!id },
+  );
+  const currentType = data?.object;
+
   const [submitError, setSubmitError] = useState<unknown>();
 
   const currentTypeStatus: CurrentTypeStatus = isLoading

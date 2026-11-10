@@ -304,13 +304,14 @@ var _ = Describe("Public external IPs server", func() {
 			Entry("default enabled", (*NetworkingSettings)(nil)),
 		)
 
-		It("creates an ExternalIP from a shared pool given by name and returns its name and ID", func() {
+		It("resolves a shared pool by name for a tenant-owned ExternalIP", func() {
 			validator, err := references.NewReferenceValidator().SetLogger(logger).Build()
 			Expect(err).ToNot(HaveOccurred())
-			references.RegisterDAOLookup(validator, "osac.public.v1.ExternalIPPoolReference", externalIPPoolDao)
+			references.RegisterPlatformScopedDAOLookup(validator,
+				"osac.public.v1.ExternalIPPoolReference", externalIPPoolDao)
 			request := publicv1.ExternalIPsCreateRequest_builder{
 				Object: publicv1.ExternalIP_builder{
-					Metadata: publicv1.Metadata_builder{Name: "by-name-eip"}.Build(),
+					Metadata: publicv1.Metadata_builder{Name: "by-name-eip", Tenant: testTenant}.Build(),
 					Spec: publicv1.ExternalIPSpec_builder{
 						Pool: publicv1.ExternalIPPoolReference_builder{Name: "test-pool"}.Build(),
 					}.Build(),

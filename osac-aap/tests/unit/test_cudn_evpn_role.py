@@ -350,7 +350,7 @@ def test_cudn_keeps_the_full_overlay_available_to_ovn_dhcp() -> None:
     ipam = {"gateway_ipv4": "10.0.1.1", "overlay_ipv4_cidrs": ["10.0.1.0/24"],
             "physical_ipv4_cidrs": [], "lb_vip_ipv4_cidrs": []}
     layer2 = plan("create_subnet", ipam=ipam)["cudn_manifest"]["spec"]["network"]["layer2"]
-    assert layer2["reservedSubnets"] == []
+    assert layer2.get("reservedSubnets", []) == []
 
 
 def test_more_than_25_reserved_subnets_is_a_final_implementation_limit() -> None:

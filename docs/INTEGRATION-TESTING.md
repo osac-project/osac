@@ -672,6 +672,8 @@ HTTP, has no userinfo, query or fragment, forbids percent escapes in the host,
 and permits only well-formed percent escapes in the path. `retryCount` is
 nonnegative, `failureThreshold` is positive, and `failureWindowSeconds` and
 `openSeconds` are each in `1..9223372036` so they fit in a Go `time.Duration`.
+When a tuning variable is absent the loader applies the chart defaults: three
+retries, a failure threshold of five, and a 30-second window and open time.
 The chart schemas enforce these bounds; the loader additionally requires every
 tuning value to fit in the deployment architecture's Go `int`. Oversized counter
 values remain a schema/runtime validation gap. The per-item timeout, list

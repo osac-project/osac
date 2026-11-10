@@ -69,12 +69,21 @@ func validBaseURL(raw string) bool {
 	return httpsOrigin.MatchString(raw) || httpLoopbackOrigin.MatchString(raw)
 }
 
+// Defaults for the optional tuning settings. They mirror billing.tuning in the installer values and the retry policy
+// and advisory initial pricing-breaker thresholds of the design.
+const (
+	defaultRetryCount       = 3
+	defaultBreakerThreshold = 5
+	defaultBreakerSeconds   = 30
+)
+
 // LoadConfig builds a Config from the deployment: OSAC_BILLING_PROVIDER, OSAC_BILLING_BASE_URL,
-// OSAC_BILLING_CREDENTIAL_FILE (a mounted Secret file), OSAC_BILLING_RETRY_COUNT, the
-// OSAC_BILLING_PRICING_BREAKER_* settings and the optional OSAC_BILLING_CA_FILE (PEM roots trusted on top of the
-// system ones). An unset provider means billing is off and yields a zero Config with no error. Incomplete or invalid
-// settings fail with NOT_CONFIGURED; an unreadable or empty credential file, or a CA file without a certificate,
-// fails with UNAVAILABLE. Errors never carry the credential, path or URL.
+// OSAC_BILLING_CREDENTIAL_FILE (a mounted Secret file), the optional OSAC_BILLING_RETRY_COUNT and
+// OSAC_BILLING_PRICING_BREAKER_* settings, which fall back to the defaults above when absent, and the optional
+// OSAC_BILLING_CA_FILE (PEM roots trusted on top of the system ones). An unset provider means billing is off and
+// yields a zero Config with no error. Incomplete or invalid settings fail with NOT_CONFIGURED; an unreadable or empty
+// credential file, or a CA file without a certificate, fails with UNAVAILABLE. Errors never carry the credential,
+// path or URL.
 func LoadConfig(getenv func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
 	const op = "load config"
 	provider := getenv("OSAC_BILLING_PROVIDER")
@@ -83,10 +92,12 @@ func LoadConfig(getenv func(string) string, readFile func(string) ([]byte, error
 	}
 	file := getenv("OSAC_BILLING_CREDENTIAL_FILE")
 	cfg := Config{BaseURL: getenv("OSAC_BILLING_BASE_URL")}
-	retries, retriesOK := intAtLeast(getenv("OSAC_BILLING_RETRY_COUNT"), 0)
-	threshold, thresholdOK := intAtLeast(getenv("OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD"), 1)
-	window, windowOK := intAtLeast(getenv("OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS"), 1)
-	open, openOK := intAtLeast(getenv("OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS"), 1)
+	retries, retriesOK := intAtLeast(getenv("OSAC_BILLING_RETRY_COUNT"), 0, defaultRetryCount)
+	threshold, thresholdOK := intAtLeast(
+		getenv("OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD"), 1, defaultBreakerThreshold)
+	window, windowOK := intAtLeast(
+		getenv("OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS"), 1, defaultBreakerSeconds)
+	open, openOK := intAtLeast(getenv("OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS"), 1, defaultBreakerSeconds)
 	// Not a policy limit: more seconds than a Duration holds would wrap negative and silently break the breaker.
 	const maxSeconds = math.MaxInt64 / int64(time.Second)
 	if provider != KeyM360 || cfg.BaseURL == "" || file == "" ||
@@ -112,8 +123,12 @@ func LoadConfig(getenv func(string) string, readFile func(string) ([]byte, error
 	return cfg, nil
 }
 
-// intAtLeast parses s as an integer no smaller than floor, reporting false when s is empty or invalid.
-func intAtLeast(s string, floor int) (int, bool) {
+// intAtLeast parses s as an integer no smaller than floor. An empty s yields fallback; any other unparsable or
+// out-of-bounds value reports false.
+func intAtLeast(s string, floor, fallback int) (int, bool) {
+	if s == "" {
+		return fallback, true
+	}
 	n, err := strconv.Atoi(s)
 	return n, err == nil && n >= floor
 }

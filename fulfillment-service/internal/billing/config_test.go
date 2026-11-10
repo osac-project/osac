@@ -85,6 +85,20 @@ var _ = Describe("LoadConfig", func() {
 		Expect(cfg.RetryCount).To(BeZero())
 	})
 
+	It("fills in the tuning defaults when the optional settings are unset", func() {
+		delete(env, "OSAC_BILLING_RETRY_COUNT")
+		delete(env, "OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD")
+		delete(env, "OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS")
+		delete(env, "OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS")
+		cfg, err := billing.LoadConfig(getenv, readFile)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(cfg.RetryCount).To(Equal(3))
+		Expect(cfg.BreakerThreshold).To(Equal(5))
+		Expect(cfg.BreakerWindow).To(Equal(30 * time.Second))
+		Expect(cfg.BreakerOpen).To(Equal(30 * time.Second))
+		Expect(cfg.Validate()).To(Succeed())
+	})
+
 	It("means billing is off when the provider is unset", func() {
 		delete(env, "OSAC_BILLING_PROVIDER")
 		cfg, err := billing.LoadConfig(getenv, readFile)
@@ -106,18 +120,14 @@ var _ = Describe("LoadConfig", func() {
 		Entry("unknown provider", "OSAC_BILLING_PROVIDER", "stripe"),
 		Entry("missing base URL", "OSAC_BILLING_BASE_URL", ""),
 		Entry("missing credential file path", "OSAC_BILLING_CREDENTIAL_FILE", ""),
-		Entry("missing retry count", "OSAC_BILLING_RETRY_COUNT", ""),
 		Entry("negative retry count", "OSAC_BILLING_RETRY_COUNT", "-1"),
 		Entry("non-integer retry count", "OSAC_BILLING_RETRY_COUNT", "1.5"),
-		Entry("missing breaker threshold", "OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD", ""),
 		Entry("zero breaker threshold", "OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD", "0"),
 		Entry("negative breaker threshold", "OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD", "-5"),
 		Entry("non-integer breaker threshold", "OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD", "five"),
-		Entry("missing breaker window", "OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS", ""),
 		Entry("zero breaker window", "OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS", "0"),
 		Entry("negative breaker window", "OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS", "-30"),
 		Entry("non-integer breaker window", "OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS", "30s"),
-		Entry("missing breaker open time", "OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS", ""),
 		Entry("zero breaker open time", "OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS", "0"),
 		Entry("negative breaker open time", "OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS", "-30"),
 		Entry("non-integer breaker open time", "OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS", "0.5"),

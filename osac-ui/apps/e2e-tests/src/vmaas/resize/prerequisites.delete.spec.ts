@@ -79,42 +79,49 @@ test('deletes the resize prerequisites', async ({ page }) => {
     }),
   );
 
-  await testStep('resize-cleanup', `Delete instance type "${targetInstanceTypeName}"`, () =>
-    deleteOwnedResource('instance-type-target', 'Target instance type', () =>
-      deleteInstanceTypeFlow(
-        page,
-        targetInstanceTypeName,
-        resizeInstanceTypeTestData.description,
-        resizeInstanceTypeTestData.vcpus,
-        resizeInstanceTypeTestData.memoryGib,
+  const instanceTypesToDelete = [
+    {
+      name: targetInstanceTypeName,
+      resource: 'instance-type-target',
+      label: 'Target instance type',
+      description: resizeInstanceTypeTestData.description,
+      vcpus: resizeInstanceTypeTestData.vcpus,
+      memoryGib: resizeInstanceTypeTestData.memoryGib,
+      gpu: undefined,
+    },
+    {
+      name: mixedInstanceTypeName,
+      resource: 'instance-type-mixed',
+      label: 'Mixed-direction instance type',
+      description: resizeMixedInstanceTypeTestData.description,
+      vcpus: resizeMixedInstanceTypeTestData.vcpus,
+      memoryGib: resizeMixedInstanceTypeTestData.memoryGib,
+      gpu: undefined,
+    },
+    {
+      name: baseInstanceTypeName,
+      resource: 'instance-type-base',
+      label: 'Base instance type',
+      description: instanceTypeTestData.description,
+      vcpus: instanceTypeTestData.vcpus,
+      memoryGib: instanceTypeTestData.memoryGib,
+      gpu: instanceTypeTestData.gpu,
+    },
+  ] as const;
+  for (const instanceType of instanceTypesToDelete) {
+    await testStep('resize-cleanup', `Delete instance type "${instanceType.name}"`, () =>
+      deleteOwnedResource(instanceType.resource, instanceType.label, () =>
+        deleteInstanceTypeFlow(
+          page,
+          instanceType.name,
+          instanceType.description,
+          instanceType.vcpus,
+          instanceType.memoryGib,
+          instanceType.gpu,
+        ),
       ),
-    ),
-  );
-
-  await testStep('resize-cleanup', `Delete instance type "${mixedInstanceTypeName}"`, () =>
-    deleteOwnedResource('instance-type-mixed', 'Mixed-direction instance type', () =>
-      deleteInstanceTypeFlow(
-        page,
-        mixedInstanceTypeName,
-        resizeMixedInstanceTypeTestData.description,
-        resizeMixedInstanceTypeTestData.vcpus,
-        resizeMixedInstanceTypeTestData.memoryGib,
-      ),
-    ),
-  );
-
-  await testStep('resize-cleanup', `Delete instance type "${baseInstanceTypeName}"`, () =>
-    deleteOwnedResource('instance-type-base', 'Base instance type', () =>
-      deleteInstanceTypeFlow(
-        page,
-        baseInstanceTypeName,
-        instanceTypeTestData.description,
-        instanceTypeTestData.vcpus,
-        instanceTypeTestData.memoryGib,
-        instanceTypeTestData.gpu,
-      ),
-    ),
-  );
+    );
+  }
 
   await testStep('resize-cleanup', `Delete storage tier "${storageTierName}"`, () =>
     deleteOwnedResource('storage-tier', 'Storage tier', () =>

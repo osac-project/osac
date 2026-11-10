@@ -390,6 +390,18 @@ func (c *Client) DeleteUserFromOrganization(ctx context.Context, tenantName, use
 func (c *Client) DeleteUserFromRealm(ctx context.Context, userID string) error {
 	response, err := c.httpClient.DoRequest(ctx, http.MethodDelete, fmt.Sprintf("/admin/realms/%s/users/%s", c.realmName, url.PathEscape(userID)), nil)
 	if err != nil {
+		// Keycloak resolves the realm before looking up this exact user ID.
+		// Only its user-specific response confirms absence: a missing realm,
+		// unknown route, or proxy 404 must still prevent finalizer removal.
+		var apiErr *apiclient.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			var body struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal([]byte(apiErr.Body), &body) == nil && body.Error == "User not found" {
+				return nil
+			}
+		}
 		return fmt.Errorf("failed to delete user %q from realm: %w", userID, err)
 	}
 	defer response.Body.Close()

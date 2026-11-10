@@ -239,6 +239,35 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 | Component integration ([DEV] OSAC-6307) | `internal/servers` and `internal/database/migrations/126_hold_external_ip_capacity_until_archive_test.go`; from `fulfillment-service/`, run `go test ./internal/servers ./internal/database/migrations -timeout 20m` | Fulfillment server logic and PostgreSQL test container, including archive-time capacity and exclusivity for terminating consumers | Kubernetes and provider cleanup are not run; release completion is exercised by operator tests with provider fixtures. |
 | E2E | `../tests/e2e/` | Cross-component OSAC user journeys | Depends on the deployed test environment and its configured providers. |
 
+### Cached User identity deletion (OSAC-7594)
+
+The User reconciler tests classify this change as follows. Both rows belong to
+[DEV OSAC-7594](https://redhat.atlassian.net/browse/OSAC-7594).
+
+| Tier | Boundary and cases | Command from `fulfillment-service/` |
+|---|---|---|
+| Unit | `internal/controllers/user/user_deletion_test.go` runs the reconciler and real IdP/HTTP clients against `httptest` responses. It checks the cached-ID path, precise user-absence classification, realm/generic/malformed 404s, 401/403/5xx/transport failures, retries, versioned finalizer writes, and no deletion without a deletion timestamp. Fulfillment persistence is a recording double. | `go test ./internal/controllers/user ./internal/idp ./internal/apiclient -count=1 -timeout=5m` |
+| Contract | `internal/controllers/user/user_deletion_keycloak_test.go` runs the reconciler and real IdP client against a disposable Keycloak with organizations enabled. It checks initially present and already-absent stable IDs, a replacement with the same username, an unaffected second organization, and a missing realm. Fulfillment persistence remains a recording double. | Set the environment below, then run `go test ./internal/controllers/user -count=1 -timeout=3m -v -ginkgo.label-filter=keycloak-contract` |
+
+For the Contract row, provide `OSAC_TEST_KEYCLOAK_URL` (the disposable server's
+base URL), `OSAC_TEST_KEYCLOAK_REALM` (an existing disposable realm with
+`organizationsEnabled: true`), and `OSAC_TEST_KEYCLOAK_TOKEN_FILE` (a private file
+containing a current admin bearer token for that realm). Keycloak 26.3.0 is the
+validated baseline. The test creates uniquely named organizations and users and
+registers their cleanup; use only a disposable local server, then remove its
+container, token file, and bootstrap credentials after the run. The Contract
+spec skips when the URL is absent; an ordinary unit-suite pass does not prove
+this boundary ran.
+
+Only HTTP 404 with Keycloak's JSON `error: "User not found"` confirms absence
+for the exact realm-user DELETE. A missing realm returns `Realm not found.`;
+unknown or malformed 404 responses remain errors. Changes in Keycloak's error
+contract fail closed and need renewed Contract validation.
+
+Neither row proves Fulfillment database archival or dependent Project/Tenant
+reconciliation. That deployed cross-component acceptance remains a QE gap
+under [OSAC-7594](https://redhat.atlassian.net/browse/OSAC-7594).
+
 ### ComputeInstance disk handoff (OSAC-6685)
 
 After installing the Kind infrastructure, run this component-integration phase

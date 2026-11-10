@@ -436,10 +436,10 @@ def test_active_active_bgp() -> None:
     )
     raw_config = raw["spec"]["raw"]["rawConfig"]
     assert "bgp bestpath as-path multipath-relax" in raw_config
-    assert (
-        "address-family ipv4 unicast\n    maximum-paths 16\n  exit-address-family"
-        in raw_config
-    )
+    ipv4_af = raw_config.split("address-family ipv4 unicast\n", 1)[1].split(
+        "exit-address-family", 1
+    )[0]
+    assert "maximum-paths 16" in ipv4_af
     assert "address-family l2vpn evpn" in raw_config
     assert "OSAC-EVPN-ACTIVE-BACKUP" not in raw_config
 
@@ -476,6 +476,15 @@ def test_active_backup_bgp() -> None:
         "ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP seq 10 permit "
         "10.200.255.1/32"
     ) in raw_config
+    assert (
+        "match ip address prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS"
+        in raw_config
+    )
+    assert (
+        "match ip address prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP"
+        in raw_config
+    )
+    assert "match ip next-hop prefix-list OSAC-EVPN-ACTIVE-BACKUP" not in raw_config
     assert "set local-preference 200" in raw_config
     assert "set local-preference 100" in raw_config
     assert (
@@ -493,25 +502,27 @@ def test_active_backup_bgp() -> None:
     assert "route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-0 permit 10" in raw_config
     assert "route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-1 permit 10" not in raw_config
 
-    l2vpn_af = raw_config.split("address-family l2vpn evpn\n", 1)[1].split(
+    ipv4_af = raw_config.split("address-family ipv4 unicast\n", 1)[1].split(
         "exit-address-family", 1
     )[0]
     assert (
         "neighbor 169.254.133.3 route-map OSAC-EVPN-ACTIVE-BACKUP-IN-0 in"
-        in l2vpn_af
+        in ipv4_af
     )
     assert (
         "neighbor 169.254.133.1 route-map OSAC-EVPN-ACTIVE-BACKUP-IN-1 in"
-        in l2vpn_af
+        in ipv4_af
     )
     assert (
         "neighbor 169.254.133.3 route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-0 out"
-        in l2vpn_af
+        in ipv4_af
     )
-    before_l2vpn = raw_config.split("address-family l2vpn evpn\n", 1)[0]
+    l2vpn_af = raw_config.split("address-family l2vpn evpn\n", 1)[1].split(
+        "exit-address-family", 1
+    )[0]
     assert not any(
         line.strip().startswith("neighbor ") and " route-map " in line
-        for line in before_l2vpn.splitlines()
+        for line in l2vpn_af.splitlines()
     )
 
 

@@ -245,12 +245,12 @@ data:
           ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP seq 10 permit {{ printf "%s/32" $node.vtepIP }}
 {{ range $uplinkIndex, $uplink := $node.uplinks }}
           route-map OSAC-EVPN-ACTIVE-BACKUP-IN-{{ $uplinkIndex }} permit 10
-            match ip next-hop prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS
+            match ip address prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS
             set local-preference {{ if eq $uplink.role "active" }}200{{ else }}100{{ end }}
           route-map OSAC-EVPN-ACTIVE-BACKUP-IN-{{ $uplinkIndex }} permit 100
 {{ if eq $uplink.role "backup" }}
           route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-{{ $uplinkIndex }} permit 10
-            match ip next-hop prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP
+            match ip address prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP
             set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
           route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-{{ $uplinkIndex }} permit 100
 {{ end }}
@@ -259,20 +259,26 @@ data:
           router bgp {{ int64 $nodeASN }}
 {{ if $.Values.evpn.bgp.activeActive }}
             bgp bestpath as-path multipath-relax
+{{ end }}
+{{ if or $.Values.evpn.bgp.activeActive $.Values.evpn.bgp.activeBackup }}
             address-family ipv4 unicast
+{{ if $.Values.evpn.bgp.activeActive }}
               maximum-paths 16
+{{ end }}
+{{ if $.Values.evpn.bgp.activeBackup }}
+    {{- range $uplinkIndex, $uplink := $node.uplinks }}
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-IN-{{ $uplinkIndex }} in
+{{- if eq $uplink.role "backup" }}
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-{{ $uplinkIndex }} out
+{{- end }}
+    {{- end }}
+{{ end }}
             exit-address-family
 {{ end }}
             address-family l2vpn evpn
     {{- range $uplinkIndex, $uplink := $node.uplinks }}
               neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} activate
               neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} allowas-in origin
-{{- if $.Values.evpn.bgp.activeBackup }}
-              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-IN-{{ $uplinkIndex }} in
-{{- if eq $uplink.role "backup" }}
-              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-{{ $uplinkIndex }} out
-{{- end }}
-{{- end }}
     {{- end }}
               advertise-all-vni
             exit-address-family

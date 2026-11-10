@@ -19,14 +19,13 @@ package controller
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"math"
 	"time"
 
 	"github.com/go-logr/logr"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -39,6 +38,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	crcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -47,6 +47,7 @@ import (
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -85,6 +86,9 @@ type ClusterOrderReconciler struct {
 	NetworkingProvisioningEnabled bool
 	ClustersClient                automaticClustersGetter
 	ExternalIPAttachmentsClient   automaticExternalIPAttachmentsClient
+	managementProbe               managementEndpointProbe
+	ManagementRootCAs             *x509.CertPool
+	Engine                        *networktask.Engine
 	ProvisioningProvider          provisioning.ProvisioningProvider
 	StatusPollInterval            time.Duration
 	MaxJobHistory                 int
@@ -165,8 +169,11 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedclusters;nodepools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=hypershift.openshift.io,resources=hostedcontrolplanes,verbs=get
+// +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=networkclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=get;list;watch;delete
@@ -202,8 +209,20 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	oldstatus := instance.Status.DeepCopy()
 
 	var res ctrl.Result
+	var clusterLookup *fulfillmentClusterLookup
+	reconcileAutomaticAttachments := false
 	if instance.ObjectMeta.DeletionTimestamp.IsZero() {
-		res, err = r.handleUpdate(ctx, req, instance)
+		clusterLookup = &fulfillmentClusterLookup{}
+		var handled bool
+		handled, res, err = r.reconcileDeletingAutomaticEndpointDNS(ctx, instance)
+		if err == nil {
+			updateResult, updateErr := r.handleUpdateWithClusterLookup(ctx, req, instance, clusterLookup)
+			res = mergeReconcileResult(res, updateResult)
+			err = updateErr
+			// Keep normal ClusterOrder updates running while the provider removes
+			// the old attachment, but wait to create its replacement until then.
+			reconcileAutomaticAttachments = !handled
+		}
 	} else {
 		res, err = r.handleDelete(ctx, req, instance)
 	}
@@ -213,8 +232,10 @@ func (r *ClusterOrderReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return res, err
 		}
 	}
-	if err == nil && instance.DeletionTimestamp.IsZero() {
-		autoAttachmentResult, autoAttachmentErr := r.reconcileAutomaticExternalIPAttachments(ctx, instance)
+	if err == nil && instance.DeletionTimestamp.IsZero() && reconcileAutomaticAttachments {
+		autoAttachmentResult, autoAttachmentErr := r.reconcileAutomaticExternalIPAttachmentsWithLookup(
+			ctx, instance, clusterLookup,
+		)
 		if autoAttachmentErr != nil {
 			return res, autoAttachmentErr
 		}
@@ -379,6 +400,9 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		latest.Status.DesiredConfigVersion = computed.DesiredConfigVersion
 		latest.Status.ApiEndpoint = computed.ApiEndpoint
 		latest.Status.IngressEndpoint = computed.IngressEndpoint
+		latest.Status.APIURL = computed.APIURL
+		latest.Status.ConsoleURL = computed.ConsoleURL
+		latest.Status.APIDNSRecordsPublishedTime = computed.APIDNSRecordsPublishedTime
 		// Workers[] and its aggregate counts are owned by the BareMetalWorkerReconciler.
 		// Leave them from the fresh read so a concurrent worker status update is preserved.
 		for _, c := range computed.Conditions {
@@ -438,7 +462,10 @@ func (r *ClusterOrderReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 		return fmt.Errorf("local manager is nil")
 	}
 
+	// Management endpoint probes are synchronous and can take several seconds.
+	// Keep slow probes for one order from blocking unrelated ClusterOrders.
 	return ctrl.NewControllerManagedBy(localMgr).
+		WithOptions(crcontroller.Options{MaxConcurrentReconciles: 4}).
 		For(&v1alpha1.ClusterOrder{}, builder.WithPredicates(NamespacePredicate(r.ClusterOrderNamespace))).
 		Watches(
 			&corev1.Namespace{},
@@ -464,6 +491,20 @@ func (r *ClusterOrderReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 			&hypershiftv1beta1.NodePool{},
 			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
 			builder.WithPredicates(labelPredicate),
+		).
+		Watches(
+			&corev1.Service{},
+			handler.EnqueueRequestsFromMapFunc(r.mapControlPlaneServiceToCluster),
+		).
+		Watches(
+			&v1alpha1.Subnet{},
+			handler.EnqueueRequestsFromMapFunc(r.mapSubnetToCluster),
+			builder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
+		).
+		Watches(
+			&v1alpha1.ExternalIPAttachment{},
+			handler.EnqueueRequestsFromMapFunc(r.mapAutomaticAttachmentToCluster),
+			builder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
 		).
 		Complete(r)
 }
@@ -511,7 +552,76 @@ func (r *ClusterOrderReconciler) mapObjectToCluster(ctx context.Context, obj cli
 	}
 }
 
-func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+func (r *ClusterOrderReconciler) mapControlPlaneServiceToCluster(
+	ctx context.Context, obj client.Object,
+) []reconcile.Request {
+	service, ok := obj.(*corev1.Service)
+	if !ok || service.Name != "kube-apiserver" {
+		return nil
+	}
+	hostedClusters := &hypershiftv1beta1.HostedClusterList{}
+	if err := r.List(ctx, hostedClusters); err != nil {
+		return nil
+	}
+	for i := range hostedClusters.Items {
+		hc := &hostedClusters.Items[i]
+		if hostedControlPlaneNamespace(hc) == service.Namespace {
+			return r.mapObjectToCluster(ctx, hc)
+		}
+	}
+	return nil
+}
+
+func (r *ClusterOrderReconciler) mapSubnetToCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	subnet, ok := obj.(*v1alpha1.Subnet)
+	if !ok || subnet.Namespace != r.NetworkingNamespace {
+		return nil
+	}
+	orders := &v1alpha1.ClusterOrderList{}
+	if err := r.List(ctx, orders, client.InNamespace(r.ClusterOrderNamespace)); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, 1)
+	for i := range orders.Items {
+		order := &orders.Items[i]
+		if order.Spec.NetworkAttachment != nil && order.Spec.NetworkAttachment.SubnetRef == subnet.Name {
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(order)})
+		}
+	}
+	return requests
+}
+
+func (r *ClusterOrderReconciler) mapAutomaticAttachmentToCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	attachment, ok := obj.(*v1alpha1.ExternalIPAttachment)
+	if !ok || attachment.Spec.Cluster == nil || attachment.Labels[autoCreatedLabel] != labelValueTrue {
+		return nil
+	}
+	clusterID := attachment.Labels[autoCreatedForLabel]
+	if clusterID == "" {
+		return nil
+	}
+	orders := &v1alpha1.ClusterOrderList{}
+	if err := r.List(ctx, orders, client.InNamespace(r.ClusterOrderNamespace),
+		client.MatchingLabels{osacClusterOrderIDLabel: clusterID}); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(orders.Items))
+	for i := range orders.Items {
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&orders.Items[i])})
+	}
+	return requests
+}
+
+func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, req reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
+	return r.handleUpdateWithClusterLookup(ctx, req, instance, nil)
+}
+
+func (r *ClusterOrderReconciler) handleUpdateWithClusterLookup(
+	ctx context.Context,
+	_ reconcile.Request,
+	instance *v1alpha1.ClusterOrder,
+	clusterLookup *fulfillmentClusterLookup,
+) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
 	r.initializeStatusConditions(instance)
@@ -575,7 +685,7 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 		return ctrl.Result{}, err
 	}
 	if hc != nil {
-		if err := r.handleHostedCluster(ctx, instance, hc); err != nil {
+		if err := r.handleHostedClusterWithClusterLookup(ctx, instance, hc, clusterLookup); err != nil {
 			return ctrl.Result{}, err
 		}
 	} else if instance.Status.Phase != v1alpha1.ClusterOrderPhaseFailed &&
@@ -584,14 +694,30 @@ func (r *ClusterOrderReconciler) handleUpdate(ctx context.Context, _ reconcile.R
 		r.setProgressingStage(instance, v1alpha1.ReasonControlPlaneStarting)
 	}
 
-	// If provision job needs polling, requeue for status updates
-	return r.withStallRequeue(instance, provisionResult), nil
+	// If provision job needs polling, requeue for status updates.
+	result := r.withStallRequeue(instance, provisionResult)
+	if clusterOrderUsesEndpointLifecycle(instance) {
+		// Management publication is rechecked even after it becomes ready, and
+		// route/InfraEnv status changes do not all have dedicated watches.
+		result = mergeReconcileResult(result, ctrl.Result{RequeueAfter: r.StatusPollInterval})
+	}
+	return result, nil
 }
 
 func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instance *v1alpha1.ClusterOrder,
 	hc *hypershiftv1beta1.HostedCluster) error {
+	return r.handleHostedClusterWithClusterLookup(ctx, instance, hc, nil)
+}
+
+func (r *ClusterOrderReconciler) handleHostedClusterWithClusterLookup(
+	ctx context.Context,
+	instance *v1alpha1.ClusterOrder,
+	hc *hypershiftv1beta1.HostedCluster,
+	clusterLookup *fulfillmentClusterLookup,
+) error {
 
 	log := ctrllog.FromContext(ctx)
+	priorPhase := instance.Status.Phase
 
 	name := hc.GetName()
 	instance.SetClusterReferenceHostedClusterName(name)
@@ -612,9 +738,23 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 		}
 	}
 
-	// Copy VIP endpoints from annotations (written by the CaaS template's
-	// external_access step) into status fields for the feedback controller.
-	reconcileVIPEndpoints(instance)
+	usesCaaSEndpointLifecycle := clusterOrderUsesEndpointLifecycle(instance)
+	autoExternalAccess := false
+	if usesCaaSEndpointLifecycle {
+		cluster, err := r.lookupFulfillmentCluster(ctx, instance, clusterLookup)
+		if err != nil {
+			return fmt.Errorf("get Fulfillment Cluster for endpoint lifecycle: %w", err)
+		}
+		if cluster != nil {
+			autoExternalAccess = cluster.GetSpec().GetAutoExternalIpAttachment()
+			// Only a confirmed Cluster with the legacy flag disabled selects
+			// annotation-backed endpoint discovery. A missing lookup keeps the
+			// CaaS lifecycle active so endpoint readiness fails closed.
+			usesCaaSEndpointLifecycle = clusterOrderUsesAutomaticEndpointLifecycle(
+				instance, autoExternalAccess,
+			)
+		}
+	}
 
 	// Fetch the node pools and handle them:
 	nodePools := &hypershiftv1beta1.NodePoolList{}
@@ -630,7 +770,14 @@ func (r *ClusterOrderReconciler) handleHostedCluster(ctx context.Context, instan
 	// was accepted. Derive terminal readiness from the live HostedCluster and
 	// NodePool observations in this reconcile.
 	finalizeReadyIfProvisioned(log, instance, hc, nodePools.Items)
-	r.reconcileClusterOrderReadiness(instance, hc)
+	if usesCaaSEndpointLifecycle {
+		if err := r.reconcileClusterEndpointLifecycle(ctx, instance, hc, autoExternalAccess); err != nil {
+			return err
+		}
+	} else {
+		reconcileVIPEndpoints(instance)
+	}
+	r.reconcileClusterOrderReadiness(instance, hc, usesCaaSEndpointLifecycle, priorPhase)
 	return nil
 }
 
@@ -678,6 +825,8 @@ func bareMetalWorkersReady(instance *v1alpha1.ClusterOrder) bool {
 func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 	instance *v1alpha1.ClusterOrder,
 	hostedCluster *hypershiftv1beta1.HostedCluster,
+	requiresEndpointLifecycle bool,
+	priorPhase v1alpha1.ClusterOrderPhaseType,
 ) {
 	if hostedCluster == nil {
 		return
@@ -693,6 +842,14 @@ func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 	}
 
 	instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
+	if requiresEndpointLifecycle && r.Engine != nil && r.Engine.ProvisioningEnabled() &&
+		!apimeta.IsStatusConditionTrue(instance.Status.Conditions, string(v1alpha1.ClusterOrderConditionEndpointsReady)) &&
+		!r.clusterOrderHasTransientEndpointProbeFailure(instance, priorPhase) {
+		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
+		instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionTrue,
+			humanizeConditionName(endpointReasonProgressing), endpointReasonProgressing)
+		return
+	}
 
 	if instance.HasBareMetalNodeSet() && !bareMetalWorkersReady(instance) {
 		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
@@ -703,6 +860,27 @@ func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 
 	setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseReady)
 	instance.SetStatusCondition(v1alpha1.ConditionProgressing, metav1.ConditionFalse, "", v1alpha1.ReasonAsExpected)
+}
+
+func (r *ClusterOrderReconciler) endpointProbeFailureGracePeriod() time.Duration {
+	pollInterval := r.StatusPollInterval
+	if pollInterval <= 0 {
+		pollInterval = provisioning.DefaultStatusPollInterval
+	}
+	return time.Duration(endpointProbeGracePollIntervals) * pollInterval
+}
+
+func (r *ClusterOrderReconciler) clusterOrderHasTransientEndpointProbeFailure(
+	instance *v1alpha1.ClusterOrder,
+	priorPhase v1alpha1.ClusterOrderPhaseType,
+) bool {
+	now := time.Now()
+	if r.now != nil {
+		now = r.now()
+	}
+	return clusterOrderHasTransientEndpointProbeFailure(
+		instance, priorPhase, now, r.endpointProbeFailureGracePeriod(),
+	)
 }
 
 func (r *ClusterOrderReconciler) setProgressingStage(instance *v1alpha1.ClusterOrder, stage string) {
@@ -817,21 +995,6 @@ func (thresholds ClusterOrderStallThresholds) workersJoiningThreshold(nodeReques
 		}
 	}
 	return threshold
-}
-
-// reconcileVIPEndpoints copies VIP annotations written by the CaaS template
-// into the ClusterOrder status fields consumed by the feedback controller.
-func reconcileVIPEndpoints(instance *v1alpha1.ClusterOrder) {
-	annotations := instance.GetAnnotations()
-	if annotations == nil {
-		return
-	}
-	if v := annotations[osacAPIEndpointAnnotation]; v != "" {
-		instance.Status.ApiEndpoint = v
-	}
-	if v := annotations[osacIngressEndpointAnnotation]; v != "" {
-		instance.Status.IngressEndpoint = v
-	}
 }
 
 func (r *ClusterOrderReconciler) handleNodePools(ctx context.Context, instance *v1alpha1.ClusterOrder,
@@ -1137,6 +1300,26 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
+	// Stop any in-flight endpoint or Fabric Manager work before starting cleanup.
+	// Cleanup tasks are intentionally left running by CancelForDelete.
+	cancelled, retryAfter, err := r.cancelClusterEndpointJobsForDelete(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !cancelled {
+		return ctrl.Result{RequeueAfter: requeueAfterOutcome(networktask.Outcome{RequeueAfter: retryAfter}, r.StatusPollInterval)}, nil
+	}
+
+	// DNS points at the automatic ExternalIP resources, so remove records before
+	// detaching or releasing those addresses.
+	dnsRemoved, dnsResult, err := r.removePublishedClusterDNS(ctx, instance)
+	if err != nil || !dnsRemoved {
+		return dnsResult, err
+	}
+	if err := r.releaseAutomaticEndpointDNSHolds(ctx, instance); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Delete auto-provisioned ExternalIPAttachments then ExternalIPs before deprovisioning.
 	done, cleanupResult, err := r.reconcileAutoExternalIPCleanup(ctx, instance)
 	if err != nil || !done {
@@ -1167,16 +1350,31 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 
 		// We expect AAP to delete the hosted cluster, so we wait for that
 		// to happen before deleting the containing namespace.
-		if hc == nil {
-			log.Info("deleting cluster namespace", "namespace", ns.GetName())
-			if err := r.Client.Delete(ctx, ns); err != nil {
-				log.Error(err, "failed to delete namespace", "namespace", ns.GetName(), "error", err)
-				return ctrl.Result{}, err
-			}
+		if hc != nil {
+			return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+		}
+	}
+
+	// Worker resources can outlive the HostedCluster. Keep a recorded ingress
+	// reservation until the worker controller has removed its references.
+	if r.clusterIngressReservationRecorded(instance) && len(instance.Status.Workers) > 0 {
+		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+
+	reservationReleased, releaseResult, err := r.releaseClusterIngressReservation(ctx, instance)
+	if err != nil || !reservationReleased {
+		return releaseResult, err
+	}
+
+	if ns != nil {
+		log.Info("deleting cluster namespace", "namespace", ns.GetName())
+		if err := r.Client.Delete(ctx, ns); err != nil {
+			log.Error(err, "failed to delete namespace", "namespace", ns.GetName(), "error", err)
+			return ctrl.Result{}, err
 		}
 	} else {
-		// If we get this far, we are no longer monitoring any kubernetes resources.
-		// Allow kubernetes to delete the clusterorder.
+		// If we get this far, we are no longer monitoring any Kubernetes
+		// resources. Allow Kubernetes to delete the ClusterOrder.
 		if controllerutil.ContainsFinalizer(instance, osacFinalizer) {
 			if controllerutil.RemoveFinalizer(instance, osacFinalizer) {
 				if err := r.Update(ctx, instance); err != nil {
@@ -1200,11 +1398,13 @@ func (r *ClusterOrderReconciler) reconcileAutoExternalIPCleanup(ctx context.Cont
 	}, r.StatusPollInterval)
 }
 
-func (r *ClusterOrderReconciler) reconcileAutomaticExternalIPAttachments(
+func (r *ClusterOrderReconciler) reconcileAutomaticExternalIPAttachmentsWithLookup(
 	ctx context.Context,
 	instance *v1alpha1.ClusterOrder,
+	clusterLookup *fulfillmentClusterLookup,
 ) (ctrl.Result, error) {
-	if !r.NetworkingProvisioningEnabled || instance.Status.Phase != v1alpha1.ClusterOrderPhaseReady || r.ClustersClient == nil ||
+	if !r.NetworkingProvisioningEnabled || r.Engine == nil || !r.Engine.ProvisioningEnabled() ||
+		r.ClustersClient == nil ||
 		r.ExternalIPAttachmentsClient == nil || r.NetworkingNamespace == "" {
 		return ctrl.Result{}, nil
 	}
@@ -1212,14 +1412,10 @@ func (r *ClusterOrderReconciler) reconcileAutomaticExternalIPAttachments(
 	if clusterID == "" {
 		return ctrl.Result{}, nil
 	}
-	response, err := r.ClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: clusterID}.Build())
-	if status.Code(err) == codes.NotFound {
-		return ctrl.Result{}, nil
-	}
+	cluster, err := r.lookupFulfillmentCluster(ctx, instance, clusterLookup)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("get Fulfillment Cluster %q for automatic ExternalIPAttachment: %w", clusterID, err)
 	}
-	cluster := response.GetObject()
 	if cluster == nil || !cluster.GetSpec().GetAutoExternalIpAttachment() {
 		return ctrl.Result{}, nil
 	}
@@ -1231,7 +1427,7 @@ func (r *ClusterOrderReconciler) reconcileAutomaticExternalIPAttachments(
 		tenant:    cluster.GetMetadata().GetTenant(),
 		endpoints: []string{autoCreatedEndpointAPI, autoCreatedEndpointIngress},
 		availableEndpoints: map[string]bool{
-			autoCreatedEndpointAPI:     instance.Status.ApiEndpoint != "",
+			autoCreatedEndpointAPI:     clusterAPIEndpointAvailableForAttachment(instance),
 			autoCreatedEndpointIngress: instance.Status.IngressEndpoint != "",
 		},
 	}

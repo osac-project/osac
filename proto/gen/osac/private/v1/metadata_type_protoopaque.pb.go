@@ -265,7 +265,7 @@ type Metadata_builder struct {
 	Annotations map[string]string
 	// Version is a numeric field that is automatically incremented with every change to the object. Set `lock` to true
 	// on an Update request to require this version to match the stored version; a stale version is rejected with
-	// Aborted. If `lock` is omitted or false, the Update proceeds without an optimistic version check.
+	// Aborted. If `lock` is omitted or false, only changes to `finalizers` are version-checked.
 	Version int32
 	// Full name of the project that the object is assigned to. It can be empty, which means the object belongs to
 	// the default project of the tenant.
@@ -287,6 +287,11 @@ type Metadata_builder struct {
 	Project string
 	// Finalizers indicate tasks that need to be completed before the object can be completely deleted. When the object
 	// has been deleted and this list is empty the system will automatically archive the object.
+	//
+	// An Update that changes this list, compared as a set, must carry the current `version`, whether or not `lock` is
+	// set, or it is rejected with Aborted; without `metadata` it has no version to carry and is rejected with
+	// InvalidArgument. Most Updates without a mask replace the whole object, so send a mask when changing other fields
+	// of an object that may have finalizers.
 	Finalizers []string
 }
 

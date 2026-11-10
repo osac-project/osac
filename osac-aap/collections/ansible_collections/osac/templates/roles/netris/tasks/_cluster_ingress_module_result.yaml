@@ -1,0 +1,50 @@
+---
+# Convert the module's category-only error into the network-task contract.
+- name: Stop when the Subnet has no free LB VIP address
+  vars:
+    netris_fail:
+      message: >-
+        Subnet {{ netris_in.subnet_id }} has no free address in
+        ipam.lb_vip_ipv4_cidrs for ClusterOrder ingress. OSAC does not retry.
+      retryable: false
+  when: _netris_cluster_ingress is failed and
+        (_netris_cluster_ingress.msg | default('')) is search('\\(exhausted(, HTTP \\d+)?\\)')
+  ansible.builtin.include_tasks: _fail.yaml
+
+- name: Stop when the reservation is not owned by this ClusterOrder
+  vars:
+    netris_fail:
+      message: >-
+        Netris has a ClusterOrder ingress reservation with a foreign or
+        ambiguous owner; refusing to use or delete it. OSAC does not retry.
+      retryable: false
+  when: _netris_cluster_ingress is failed and
+        (_netris_cluster_ingress.msg | default('')) is search('\\(foreign_object(, HTTP \\d+)?\\)')
+  ansible.builtin.include_tasks: _fail.yaml
+
+- name: Stop on an invalid ClusterOrder ingress input
+  vars:
+    netris_fail:
+      message: >-
+        Netris rejected the ClusterOrder ingress input or recorded Subnet
+        layout. OSAC does not retry.
+      retryable: false
+  when: _netris_cluster_ingress is failed and
+        (_netris_cluster_ingress.msg | default('')) is search('\\(invalid_request(, HTTP \\d+)?\\)')
+  ansible.builtin.include_tasks: _fail.yaml
+
+- name: Stop when Netris definitively rejects the ingress request
+  vars:
+    netris_fail:
+      message: >-
+        Netris rejected the ClusterOrder ingress reservation request.
+        OSAC does not retry.
+      retryable: false
+  when: _netris_cluster_ingress is failed and
+        (_netris_cluster_ingress.msg | default('')) is search('\\(provider_error, HTTP 4(?!08|29)\\d+\\)')
+  ansible.builtin.include_tasks: _fail.yaml
+
+- name: Stop on any other Netris ingress failure
+  when: _netris_cluster_ingress is failed
+  ansible.builtin.fail:
+    msg: "{{ _netris_cluster_ingress.msg | default('Netris ingress reservation failed') }}"

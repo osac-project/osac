@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -113,6 +114,97 @@ var _ = Describe("ClassifyHubError", func() {
 			Expect(result).To(Equal(grpcErr))
 		})
 	})
+})
+
+// unavailableWrapper has its own Unavailable status, so conflict detection must walk past it.
+type unavailableWrapper struct {
+	cause error
+}
+
+func (e *unavailableWrapper) Error() string { return "unavailable: " + e.cause.Error() }
+func (e *unavailableWrapper) Unwrap() error { return e.cause }
+func (e *unavailableWrapper) GRPCStatus() *status.Status {
+	return status.New(codes.Unavailable, "unavailable")
+}
+
+// nilCauseError must count as its own failure, not a wrapper around nothing.
+type nilCauseError struct{}
+
+func (nilCauseError) Error() string { return "nil cause" }
+func (nilCauseError) Unwrap() error { return nil }
+
+// emptyJoinError must be treated like nilCauseError.
+type emptyJoinError struct{}
+
+func (emptyJoinError) Error() string   { return "empty join" }
+func (emptyJoinError) Unwrap() []error { return []error{} }
+
+var _ = Describe("conflict classification", func() {
+	aborted := func() error { return status.Error(codes.Aborted, "modified") }
+
+	DescribeTable("IsConflict",
+		func(err error, expected bool) {
+			Expect(IsConflict(err)).To(Equal(expected))
+		},
+		Entry("nil", nil, false),
+		Entry("plain error", errors.New("boom"), false),
+		Entry("Internal", status.Error(codes.Internal, "boom"), false),
+		Entry("bare Aborted", aborted(), true),
+		Entry("wrapped Aborted", fmt.Errorf("update volume: %w", aborted()), true),
+		Entry("Aborted joined behind Unavailable",
+			errors.Join(status.Error(codes.Unavailable, "hub down"), aborted()), true),
+		Entry("Aborted nested in wrapped join",
+			fmt.Errorf("%w", errors.Join(errors.New("x"), fmt.Errorf("%w", aborted()))), true),
+		Entry("Aborted behind a node with a different status",
+			&unavailableWrapper{cause: aborted()}, true),
+		Entry("Aborted requeued with an explicit delay",
+			RequeueAfter(aborted(), time.Second), true),
+		Entry("Aborted joined with a failure that is requeued with an explicit delay",
+			errors.Join(RequeueAfter(errors.New("x"), time.Second), aborted()), true),
+		Entry("plain error behind a node with a different status",
+			&unavailableWrapper{cause: errors.New("x")}, false),
+		Entry("node whose Unwrap returns no cause", nilCauseError{}, false),
+		Entry("node whose Unwrap returns an empty list", emptyJoinError{}, false),
+		Entry("Aborted joined with a node whose Unwrap returns no cause",
+			errors.Join(aborted(), nilCauseError{}), true),
+		Entry("Aborted joined with a node whose Unwrap returns an empty list",
+			errors.Join(aborted(), emptyJoinError{}), true),
+	)
+
+	It("keeps the retry interval of a failure that is joined with a conflict", func() {
+		joined := errors.Join(RequeueAfter(errors.New("x"), 5*time.Second), aborted())
+		Expect(IsRequeueable(joined)).To(BeTrue())
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(joined, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(5 * time.Second))
+	})
+
+	DescribeTable("isOnlyConflict",
+		func(err error, expected bool) {
+			Expect(isOnlyConflict(err)).To(Equal(expected))
+		},
+		Entry("nil", nil, false),
+		Entry("plain error", errors.New("boom"), false),
+		Entry("bare Aborted", aborted(), true),
+		Entry("wrapped Aborted", fmt.Errorf("update volume: %w", aborted()), true),
+		Entry("two Aborted joined", errors.Join(aborted(), aborted()), true),
+		Entry("Aborted joined with Unavailable",
+			errors.Join(status.Error(codes.Unavailable, "hub down"), aborted()), false),
+		Entry("Aborted joined with a plain error",
+			errors.Join(errors.New("x"), aborted()), false),
+		Entry("Aborted joined with a failure that is requeued with an explicit delay",
+			errors.Join(RequeueAfter(errors.New("x"), time.Second), aborted()), false),
+		Entry("Aborted requeued with an explicit delay",
+			RequeueAfter(aborted(), time.Second), true),
+		Entry("Aborted behind a node with a different status",
+			&unavailableWrapper{cause: aborted()}, true),
+		Entry("node whose Unwrap returns no cause", nilCauseError{}, false),
+		Entry("node whose Unwrap returns an empty list", emptyJoinError{}, false),
+		Entry("Aborted joined with a node whose Unwrap returns no cause",
+			errors.Join(aborted(), nilCauseError{}), false),
+		Entry("Aborted joined with a node whose Unwrap returns an empty list",
+			errors.Join(aborted(), emptyJoinError{}), false),
+	)
 })
 
 var _ = Describe("HandleK8sWriteError", func() {

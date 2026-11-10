@@ -28,6 +28,12 @@ spec:
         - name: kube-api-access
           mountPath: /var/run/secrets/kubernetes.io/serviceaccount
           readOnly: true
+{% if netris_ca_config_map_name %}
+        - name: netris-ca-bundle
+          mountPath: {{ netris_ca_path }}
+          subPath: bundle.pem
+          readOnly: true
+{% endif %}
       # Settings and credentials of the network managers (contract §4.3); the
       # installer writes both on every install and rollout.
       envFrom:
@@ -41,6 +47,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: NETRIS_CA_PATH
+          value: "{{ netris_ca_path }}"
+        - name: OSAC_LAUNCH_EXTRA_VARS_PATH
+          value: /runner/env/extravars
   volumes:
     - name: kube-api-access
       projected:
@@ -65,3 +75,12 @@ spec:
                 - key: service-ca.crt
                   path: service-ca.crt
         defaultMode: 420
+{% if netris_ca_config_map_name %}
+    - name: netris-ca-bundle
+      configMap:
+        name: {{ netris_ca_config_map_name }}
+        items:
+          - key: bundle.pem
+            path: bundle.pem
+        optional: false
+{% endif %}

@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
 	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -225,7 +226,7 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		Expect(err).ToNot(HaveOccurred())
 
 		list := &unstructured.UnstructuredList{}
-		list.SetGroupVersionKind(infraEnvGVK)
+		list.SetGroupVersionKind(assistedservice.InfraEnvGroupVersionKind())
 		Expect(k8sClient.List(ctx, list, client.InNamespace(testNamespace))).To(Succeed())
 		count := 0
 		for i := range list.Items {
@@ -359,6 +360,40 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 		ie := newInfraEnv("bmw-unmanaged-infraenv")
 		err = k8sClient.Get(ctx, client.ObjectKeyFromObject(ie), ie)
 		Expect(err).To(HaveOccurred(), "an unmanaged ClusterOrder must be skipped (no InfraEnv)")
+	})
+
+	It("reports invalid discovery ignition as an error and recovers when HTTP content is repaired", func() {
+		preloadDiskImageChain()
+		create(newBareMetalClusterOrder("bmw-invalid-ignition"))
+		ign.SetContent([]byte("not-json"))
+
+		_, err := runReconcile("bmw-invalid-ignition")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(setWorkerIgnitionURL(ctx, "bmw-invalid-ignition-infraenv", testNamespace, ign.URL())).To(Succeed())
+
+		res, err := runReconcile("bmw-invalid-ignition")
+		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
+		Expect(res.IsZero()).To(BeTrue())
+		Expect(fc.CreateCalls()).To(BeEmpty())
+		blocked := getClusterOrder("bmw-invalid-ignition")
+		cond := apimeta.FindStatusCondition(blocked.Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal("IgnitionInvalid"))
+
+		res, err = runReconcile("bmw-invalid-ignition")
+		Expect(err).To(MatchError(ContainSubstring("not valid JSON")))
+		Expect(res.IsZero()).To(BeTrue())
+		Expect(getClusterOrder("bmw-invalid-ignition").ResourceVersion).To(Equal(blocked.ResourceVersion),
+			"unchanged invalid content must leave status unchanged")
+
+		// Repair the response at the same URL, leaving Kubernetes inputs untouched.
+		ign.SetContent(defaultIgnition)
+		_, err = runReconcile("bmw-invalid-ignition")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		Expect(apimeta.IsStatusConditionTrue(
+			getClusterOrder("bmw-invalid-ignition").Status.Conditions, osacv1alpha1.ConditionInfraEnvReady)).To(BeTrue())
 	})
 
 	It("returns an error when the discovery ignition fetch fails", func() {

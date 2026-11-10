@@ -132,7 +132,7 @@
     sft_label: att-query-lease
     sft_expect: success
     nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
-    nf_result: {dhcp_lease: {ip_address: 10.20.1.10, mac_address: "{{ nf_mac }}"}}
+    nf_result: {dhcp_lease: {ip_address: 10.20.1.193, mac_address: "{{ nf_mac }}"}}
 
 - name: Attachment - a lease of another MAC is not returned
   ansible.builtin.include_tasks: run_task.yaml

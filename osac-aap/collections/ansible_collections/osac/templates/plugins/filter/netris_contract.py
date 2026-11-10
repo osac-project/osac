@@ -45,11 +45,15 @@ NAME_PREFIXES = {
     "eipa_dnat": "osac-eipa-",
     "server_cluster": "osac-fd-",
     "eip_reservation": "osac-eip-",
+    "cluster_ingress_reservation": "osac-ci-",
 }
 
 PARENTS = {"virtual_network": "VirtualNetwork", "subnet": "Subnet", "external_ip_pool": "ExternalIPPool"}
 
-RESULT_KEYS = ("backend_id", "l3_vni", "network_segment", "external_ip", "dhcp_lease")
+RESULT_KEYS = (
+    "backend_id", "l3_vni", "network_segment", "external_ip", "dhcp_lease",
+    "cluster_ingress",
+)
 
 
 
@@ -141,6 +145,7 @@ def netris_contract_input(job: Any, require: Any = None) -> dict:
         "error": None,
         "resource_id": "",
         "resource_kind": "",
+        "cluster_id": "",
         "virtual_network_id": "",
         "subnet_id": "",
         "external_ip_pool_id": "",
@@ -160,6 +165,11 @@ def netris_contract_input(job: Any, require: Any = None) -> dict:
     if not _api_id(resource.get("id")):
         return fail("resource.id must be a lowercase UUID API ID")
     out["resource_id"], out["resource_kind"] = resource["id"], kind
+    if job.get("task") in ("reserve_cluster_ingress_ip", "release_cluster_ingress_ip"):
+        cluster_id = job.get("cluster_id")
+        if not _api_id(cluster_id):
+            return fail("cluster_id must be a lowercase UUID API ID")
+        out["cluster_id"] = cluster_id
     for key, parent_kind in PARENTS.items():
         snap = job.get(key)
         if snap is None:
@@ -196,7 +206,7 @@ def netris_contract_names(ids: Any) -> dict:
     vpc and vn_ipam from the VirtualNetwork, vnet and subnet_ipam from the
     Subnet, pool_ipam and pool_common_ipam from the ExternalIPPool,
     natgw_snat / eipa_dnat / server_cluster / eip_reservation from the task's
-    resource.
+    resource, and cluster_ingress_reservation from cluster_id.
     """
     ids = ids if isinstance(ids, dict) else {}
     source = {
@@ -209,6 +219,7 @@ def netris_contract_names(ids: Any) -> dict:
         "eipa_dnat": ids.get("resource_id"),
         "server_cluster": ids.get("resource_id"),
         "eip_reservation": ids.get("resource_id"),
+        "cluster_ingress_reservation": ids.get("cluster_id"),
     }
     names = {key: (NAME_PREFIXES[key] + value if _api_id(value) else "") for key, value in source.items()}
     names["pool_common_ipam"] = f"{names['pool_ipam']}-common" if names["pool_ipam"] else ""
@@ -242,6 +253,11 @@ def netris_contract_result(raw: Any) -> dict:
     lease = raw.get("dhcp_lease")
     if lease:
         out["dhcp_lease"] = {"ip_address": str(lease["ip_address"]), "mac_address": str(lease["mac_address"])}
+    cluster_ingress = raw.get("cluster_ingress")
+    if cluster_ingress:
+        if not isinstance(cluster_ingress, dict) or cluster_ingress.get("address") in (None, ""):
+            raise ValueError("cluster_ingress needs address")
+        out["cluster_ingress"] = {"address": str(cluster_ingress["address"])}
     return out
 
 

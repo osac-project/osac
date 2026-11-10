@@ -84,7 +84,6 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
       enableReinitialize
       validationSchema={schema}
       onSubmit={handleSubmit}
-      validateOnChange={false}
     >
       <FieldValidationProvider>
         <LeaveFormConfirmation />

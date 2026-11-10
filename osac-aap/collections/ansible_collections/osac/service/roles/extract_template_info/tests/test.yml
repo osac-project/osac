@@ -27,17 +27,26 @@
   gather_facts: false
 
   tasks:
+    - name: Generate a fixture-only pull secret
+      ansible.builtin.set_fact:
+        fixture_pull_secret: >-
+          {{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}
+      when: test_qualified_id | default(false) | bool
+      no_log: true
+
     - name: Set up ClusterOrder fixture
       ansible.builtin.set_fact:
         cluster_order:
           spec:
             templateID: "osac.templates.ocp_small"
-            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa AAAA"}'
+            templateParameters: >-
+              {{ {'pull_secret': fixture_pull_secret, 'ssh_public_key': 'ssh-rsa AAAA'} | to_json }}
             nodeRequests:
               - nodeSet: workers
                 numberOfNodes: 2
                 bareMetal:
                   instanceType: bm.large
+      no_log: true
       when: test_qualified_id | default(false) | bool
 
     - name: Run extract_template_info role
@@ -59,9 +68,9 @@
         that:
           - template_parameters is defined
           - template_parameters is mapping
-          - template_parameters.pull_secret == "test-secret"
+          - template_parameters.pull_secret == fixture_pull_secret
           - template_parameters.ssh_public_key == "ssh-rsa AAAA"
-        fail_msg: "template_parameters not parsed correctly: {{ template_parameters | default('undefined') }}"
+        fail_msg: "template_parameters were not parsed correctly"
         success_msg: "template_parameters parsed: {{ template_parameters | length }} key(s)"
       when: test_qualified_id | default(false) | bool
 

@@ -7,4 +7,5 @@
       - sft_last.error.message is not search(item)
     fail_msg: "the error message contains '{{ item }}': {{ sft_last.error.message }}"
     quiet: true
-  loop: "{{ nf_leaks | default(['LEAKED-BODY', 'fake-session', 'pw-not-a-secret']) }}"
+  loop: "{{ nf_leaks | default(['LEAKED-BODY', nf_session_cookie, nf_test_password]) }}"
+  no_log: true

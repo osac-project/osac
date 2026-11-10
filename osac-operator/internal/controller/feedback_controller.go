@@ -453,9 +453,8 @@ func markRemovedNodeSetHistory(remote *privatev1.Cluster, name string) {
 	}
 }
 
-// syncClusterOrderVIPEndpoints copies MetalLB VIP addresses from ClusterOrder status
-// to the Cluster proto. The VIPs are written by the CaaS template and consumed by the
-// ExternalIPAttachment controller and the fulfillment-service API surface.
+// syncClusterOrderVIPEndpoints copies the observed management API and guest ingress
+// addresses from ClusterOrder status to the Fulfillment Cluster.
 func syncClusterOrderVIPEndpoints(clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
 	if clusterOrder.Status.ApiEndpoint != "" {
 		remote.GetStatus().SetApiEndpoint(clusterOrder.Status.ApiEndpoint)
@@ -635,9 +634,11 @@ var clusterOrderDegradedConditionSources = map[string]struct{}{
 //   - Deleting is reported through the DELETING state (see syncClusterOrderPhase and
 //     syncClusterOrderDelete), not as a condition.
 var clusterOrderUnsurfacedConditions = map[string]struct{}{
-	ckv1alpha1.ConditionNamespaceCreated:                          {},
-	ckv1alpha1.ConditionDeleting:                                  {},
-	string(ckv1alpha1.ClusterOrderConditionFulfillmentTrustReady): {},
+	ckv1alpha1.ConditionNamespaceCreated:                               {},
+	ckv1alpha1.ConditionDeleting:                                       {},
+	string(ckv1alpha1.ClusterOrderConditionFulfillmentTrustReady):      {},
+	string(ckv1alpha1.ClusterOrderConditionManagementPublicationReady): {},
+	string(ckv1alpha1.ClusterOrderConditionEndpointsReady):             {},
 }
 
 func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
@@ -962,10 +963,18 @@ func syncClusterOrderURLs(ctx context.Context, hubClient clnt.Client, clusterOrd
 	}
 
 	clusterStatus := remote.GetStatus()
-	if apiURL := calculateAPIURL(hostedCluster); apiURL != "" {
+	apiURL := clusterOrder.Status.APIURL
+	if apiURL == "" {
+		apiURL = calculateAPIURL(hostedCluster)
+	}
+	if apiURL != "" {
 		clusterStatus.SetApiUrl(apiURL)
 	}
-	if consoleURL := calculateConsoleURL(hostedCluster); consoleURL != "" {
+	consoleURL := clusterOrder.Status.ConsoleURL
+	if consoleURL == "" {
+		consoleURL = calculateConsoleURL(hostedCluster)
+	}
+	if consoleURL != "" {
 		clusterStatus.SetConsoleUrl(consoleURL)
 	}
 	return nil

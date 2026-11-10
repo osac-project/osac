@@ -31,7 +31,8 @@ const (
 
 	labelValueTrue = "true"
 
-	// fieldName and fieldAddress are keys of unstructured objects and job inputs.
-	fieldName    = "name"
-	fieldAddress = "address"
+	// fieldName, fieldNamespace and fieldAddress are keys of unstructured objects and job inputs.
+	fieldName      = "name"
+	fieldNamespace = "namespace"
+	fieldAddress   = "address"
 )

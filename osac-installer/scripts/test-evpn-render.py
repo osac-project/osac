@@ -468,23 +468,9 @@ def test_active_backup_bgp() -> None:
         "osac-evpn-raw-worker-0",
     )
     raw_config = raw["spec"]["raw"]["rawConfig"]
-    assert (
-        "ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS seq 1 permit "
-        "10.200.0.0/16 ge 32 le 32"
-    ) in raw_config
-    assert (
-        "ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP seq 10 permit "
-        "10.200.255.1/32"
-    ) in raw_config
-    assert (
-        "match ip address prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS"
-        in raw_config
-    )
-    assert (
-        "match ip address prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP"
-        in raw_config
-    )
-    assert "match ip next-hop prefix-list OSAC-EVPN-ACTIVE-BACKUP" not in raw_config
+    assert "OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS" not in raw_config
+    assert "OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP" not in raw_config
+    assert "match ip address prefix-list" not in raw_config
     assert "set local-preference 200" in raw_config
     assert "set local-preference 100" in raw_config
     assert (
@@ -493,36 +479,37 @@ def test_active_backup_bgp() -> None:
     )
     backup_in = raw_config.split(
         "route-map OSAC-EVPN-ACTIVE-BACKUP-IN-0 permit 10\n", 1
-    )[1].split("route-map OSAC-EVPN-ACTIVE-BACKUP-IN-0 permit 100", 1)[0]
+    )[1].split("route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-0 permit 10", 1)[0]
     active_in = raw_config.split(
         "route-map OSAC-EVPN-ACTIVE-BACKUP-IN-1 permit 10\n", 1
-    )[1].split("route-map OSAC-EVPN-ACTIVE-BACKUP-IN-1 permit 100", 1)[0]
+    )[1].split("router bgp", 1)[0]
     assert "set local-preference 100" in backup_in
     assert "set local-preference 200" in active_in
+    assert "match " not in backup_in
+    assert "match " not in active_in
     assert "route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-0 permit 10" in raw_config
     assert "route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-1 permit 10" not in raw_config
+    backup_out = raw_config.split(
+        "route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-0 permit 10\n", 1
+    )[1].split("route-map OSAC-EVPN-ACTIVE-BACKUP-IN-1 permit 10", 1)[0]
+    assert "set as-path prepend 4209999999 4209999999 4209999999" in backup_out
+    assert "match " not in backup_out
 
-    ipv4_af = raw_config.split("address-family ipv4 unicast\n", 1)[1].split(
+    assert "address-family ipv4 unicast" not in raw_config
+    l2vpn_af = raw_config.split("address-family l2vpn evpn\n", 1)[1].split(
         "exit-address-family", 1
     )[0]
     assert (
         "neighbor 169.254.133.3 route-map OSAC-EVPN-ACTIVE-BACKUP-IN-0 in"
-        in ipv4_af
+        in l2vpn_af
     )
     assert (
         "neighbor 169.254.133.1 route-map OSAC-EVPN-ACTIVE-BACKUP-IN-1 in"
-        in ipv4_af
+        in l2vpn_af
     )
     assert (
         "neighbor 169.254.133.3 route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-0 out"
-        in ipv4_af
-    )
-    l2vpn_af = raw_config.split("address-family l2vpn evpn\n", 1)[1].split(
-        "exit-address-family", 1
-    )[0]
-    assert not any(
-        line.strip().startswith("neighbor ") and " route-map " in line
-        for line in l2vpn_af.splitlines()
+        in l2vpn_af
     )
 
 

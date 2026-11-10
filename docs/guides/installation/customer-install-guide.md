@@ -661,7 +661,7 @@ With the Netris Fabric Manager, also note:
 | `evpn.bgp.asn` | Required. The node ASN; a node can override it. It must match the ASN that the fabric admin configured for the node's BGP neighbors. | Agreed with the fabric admin |
 | `evpn.bgp.acceptPrefixes` | Required. The fabric loopback (remote VTEP) ranges. Only /32 routes inside them are accepted. | Fabric admin |
 | `evpn.bgp.activeActive` | Optional. Defaults to `false`; set `true` to allow up to 16 eligible IPv4 BGP paths. FRR still applies its other multipath eligibility checks. | You |
-| `evpn.bgp.activeBackup` | Optional. Defaults to `false` and cannot be enabled with `activeActive`. Each node must have exactly one uplink with `role: active` and at least one with `role: backup`. When EVPN is enabled, IPv4-unicast route-maps match remote VTEP `/32` routes and set local preference to 200/100; the backup outbound route-map matches the node VTEP `/32` and prepends its ASN three times. | You |
+| `evpn.bgp.activeBackup` | Optional. Defaults to `false` and cannot be enabled with `activeActive`. Each node must have exactly one uplink with `role: active` and at least one with `role: backup`. When EVPN is enabled, L2VPN EVPN inbound route-maps set local preference to 200/100 without prefix matching; the backup outbound route-map prepends the node ASN three times to EVPN routes sent to that neighbor. | You |
 | `evpn.bgp.waitForEstablished` | Fails the installation unless every BGP session becomes `Established`. Default `true`. | You |
 | `evpn.bgp.timeoutSeconds` | Maximum wait for each BGP session, at least 60. Default `900`. | You |
 | `evpn.nodes[].name` | Kubernetes node name. Add one entry for every node that runs VMs. | Cluster admin |

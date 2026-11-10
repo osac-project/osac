@@ -430,12 +430,11 @@ multipath eligibility checks.
 For active/backup forwarding, set `evpn.bgp.activeBackup: true` instead; it is
 mutually exclusive with `activeActive`. Set `role: active` or `role: backup`
 on every node uplink; each node needs exactly one active neighbor and at least
-one backup. When EVPN is enabled, inbound route-maps in the IPv4 unicast
-address family match remote fabric VTEP `/32` routes from `acceptPrefixes` and
-set local preference to 200 on active neighbors or 100 on backups. Backup
-outbound route-maps match that node's VTEP `/32` route and prepend its ASN
-three times. The L2VPN EVPN address family remains responsible for EVPN
-neighbor activation and VNI advertisement.
+one backup. When EVPN is enabled, inbound route-maps in the L2VPN EVPN address
+family set local preference to 200 on active neighbors or 100 on backups,
+without prefix matching. The backup outbound route-map prepends the node ASN
+three times to EVPN routes sent to that neighbor. The L2VPN EVPN address family
+also activates the EVPN neighbors and advertises VNIs.
 
 ```yaml
 evpn:

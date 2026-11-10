@@ -24,6 +24,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator, Sequence
 from functools import partial
+from itertools import product
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -60,6 +61,7 @@ _LOG = logging.getLogger(__name__)
 _DEFAULT_LABEL = "osac.openshift.io/default"
 
 H = stack.EXTERNAL_PATH_HINT
+REFERENCE_SELECTORS = tuple(product(("id", "name"), repeat=3))
 
 _ALL = {"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}
 _TCP_22 = {"protocol": "PROTOCOL_TCP", "port_from": 22, "port_to": 22, "ipv4_cidr": "0.0.0.0/0"}
@@ -644,6 +646,7 @@ def netris_external_path(
             cidr=external_ip_pool_cidr,
             record=pool,
         )
+        pool["name"] = private_grpc.get_external_ip_pool(pool_id=pool["id"])["object"]["metadata"]["name"]
         stack.assert_pool_routed(external_ip_pool_cidr)
         stack.check_pool_ready(private_grpc, pool, cidr=external_ip_pool_cidr, needed=_EXTERNAL_IP_PEAK)
         yield external
@@ -820,6 +823,13 @@ def _assert_cluster_dns(state: dict[str, Any], vm: dict[str, str], dns_ip: str, 
     )
 
 
+def _assert_reference_id(spec: dict[str, Any], field: str, expected_id: str) -> None:
+    words = field.split("_")
+    json_field = words[0] + "".join(word.title() for word in words[1:])
+    reference = spec.get(field, spec.get(json_field, {}))
+    assert reference.get("id") == expected_id, f"{field} did not resolve to {expected_id}"
+
+
 def _create_nat(
     *,
     client: GRPCClient,
@@ -828,10 +838,16 @@ def _create_nat(
     pool: dict[str, Any],
     run_id: str,
     key: str,
+    pool_selector: str = "id",
+    network_selector: str = "name",
+    eip_selector: str = "name",
 ) -> None:
     """Allocate an ExternalIP and bind a NATGateway to the VirtualNetwork; records every ID first."""
     eip_name = f"netris-vm-nat-eip-{key}-{run_id}"
-    eip_id = client.create_external_ip(name=eip_name, pool=pool["id"])
+    eip_id = client.call(
+        service=f"{PUBLIC_API}.ExternalIPs/Create",
+        data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {pool_selector: pool[pool_selector]}}}},
+    )["object"]["id"]
     pool.setdefault("suite_eip_ids", set()).add(eip_id)
     network.update(nat_eip_id=eip_id, nat_eip_name=eip_name)
     with _diagnose(f"ExternalIP {eip_name} allocation"):
@@ -839,13 +855,23 @@ def _create_nat(
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=network["nat_eip_cr"])
     # The NATGateway needs its ExternalIP ALLOCATED in the API too, not only in the CR.
     address = stack.wait_for_grpc_external_ip_allocated(client, eip_id)
+    _assert_reference_id(client.get_external_ip(external_ip_id=eip_id)["object"]["spec"], "pool", pool["id"])
     assert ipaddress.IPv4Address(address) in ipaddress.IPv4Network(pool["cidr"]), (
         f"NAT ExternalIP {address} is outside the pool {pool['cidr']}"
     )
 
-    nat_id = client.create_nat_gateway(
-        name=f"netris-vm-nat-{key}-{run_id}", virtual_network_name=network["vnet_name"], external_ip_name=eip_name
-    )
+    nat_id = client.call(
+        service=f"{PUBLIC_API}.NATGateways/Create",
+        data={
+            "object": {
+                "metadata": {"name": f"netris-vm-nat-{key}-{run_id}"},
+                "spec": {
+                    "virtual_network": {network_selector: network[f"vnet_{network_selector}"]},
+                    "external_ip": {eip_selector: eip_id if eip_selector == "id" else eip_name},
+                },
+            }
+        },
+    )["object"]["id"]
     network["nat_id"] = nat_id
     nat_cr = stack.poll_or_fail(
         hint=H,
@@ -857,6 +883,9 @@ def _create_nat(
         resource_kind=WaitResourceKind.NAT_GATEWAY,
         resource_id=nat_id,
     )
+    spec = client.call(service=f"{PUBLIC_API}.NATGateways/Get", data={"id": nat_id})["object"]["spec"]
+    _assert_reference_id(spec, "virtual_network", network["vnet_id"])
+    _assert_reference_id(spec, "external_ip", eip_id)
     with _diagnose(f"NATGateway {nat_cr} readiness"):
         wait_for_nat_gateway_ready(k8s=k8s_hub_client, name=nat_cr)
     stack.poll_or_fail(
@@ -911,10 +940,17 @@ def _attach_external_ip(
     vm: dict[str, str],
     label: str,
     run_id: str,
+    pool_selector: str = "id",
+    eip_selector: str = "id",
+    vm_selector: str = "id",
 ) -> dict[str, Any]:
     """Create an ExternalIP and attach it to `vm`; the record joins `external['ingress']` before any wait."""
     pool = external["pool"]
-    eip_id = client.create_external_ip(name=f"netris-vm-{label}-eip-{run_id}", pool=pool["id"])
+    eip_name = f"netris-vm-{label}-eip-{run_id}"
+    eip_id = client.call(
+        service=f"{PUBLIC_API}.ExternalIPs/Create",
+        data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {pool_selector: pool[pool_selector]}}}},
+    )["object"]["id"]
     record: dict[str, Any] = {"label": label, "client": client, "eip_id": eip_id, "vm": vm}
     external["ingress"].append(record)
     pool.setdefault("suite_eip_ids", set()).add(eip_id)
@@ -923,13 +959,36 @@ def _attach_external_ip(
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=record["eip_cr"])
     # The attachment needs its ExternalIP ALLOCATED in the API too, not only in the CR.
     stack.wait_for_grpc_external_ip_allocated(client, eip_id)
-    attachment_id = client.create_external_ip_attachment(
-        name=f"netris-vm-{label}-attachment-{run_id}", external_ip=eip_id, compute_instance=vm["id"]
-    )
+    _assert_reference_id(client.get_external_ip(external_ip_id=eip_id)["object"]["spec"], "pool", pool["id"])
+    attachment_id = client.call(
+        service=f"{PUBLIC_API}.ExternalIPAttachments/Create",
+        data={
+            "object": {
+                "metadata": {"name": f"netris-vm-{label}-attachment-{run_id}"},
+                "spec": {
+                    "external_ip": {eip_selector: eip_id if eip_selector == "id" else eip_name},
+                    "compute_instance": {vm_selector: vm[vm_selector]},
+                },
+            }
+        },
+    )["object"]["id"]
     record["attachment_id"] = attachment_id
     with _diagnose(f"ExternalIPAttachment {label} readiness"):
         record["attachment_cr"] = wait_for_external_ip_attachment_cr(k8s=k8s_hub_client, uuid=attachment_id)
         wait_for_external_ip_attachment_ready(k8s=k8s_hub_client, name=record["attachment_cr"])
+    stack.poll_or_fail(
+        hint=H,
+        fn=lambda: client.get_external_ip_attachment(attachment_id=attachment_id)["object"]["status"]["state"],
+        until=lambda state: state == "EXTERNAL_IP_ATTACHMENT_STATE_READY",
+        retries=30,
+        delay=5,
+        description=f"ExternalIPAttachment {attachment_id} API READY",
+        resource_kind=WaitResourceKind.EXTERNAL_IP_ATTACHMENT,
+        resource_id=attachment_id,
+    )
+    spec = client.get_external_ip_attachment(attachment_id=attachment_id)["object"]["spec"]
+    _assert_reference_id(spec, "external_ip", eip_id)
+    _assert_reference_id(spec, "compute_instance", vm["id"])
     record["address"] = stack.external_ip_address(client, eip_id)
     assert ipaddress.IPv4Address(record["address"]) in ipaddress.IPv4Network(pool["cidr"]), (
         f"ExternalIP {record['address']} is outside the pool {pool['cidr']}"
@@ -1431,6 +1490,7 @@ class TestVmaasNetworking:
 
     # Phase C: the external path. The routed pool is checked by the netris_external_path fixture.
 
+    @pytest.mark.parametrize(("pool_selector", "network_selector", "eip_selector"), REFERENCE_SELECTORS)
     def test_09_nat_gateway_egress(
         self,
         grpc: GRPCClient,
@@ -1438,6 +1498,9 @@ class TestVmaasNetworking:
         net_test_run_id: str,
         netris_vm_network: dict[str, Any],
         netris_external_path: dict[str, Any],
+        pool_selector: str,
+        network_selector: str,
+        eip_selector: str,
     ) -> None:
         _assert_no_egress_without_nat(netris_vm_network, netris_vm_network["vm_a1"], "tenant1")
         _create_nat(
@@ -1447,9 +1510,16 @@ class TestVmaasNetworking:
             pool=netris_external_path["pool"],
             run_id=net_test_run_id,
             key="t1",
+            pool_selector=pool_selector,
+            network_selector=network_selector,
+            eip_selector=eip_selector,
         )
         _assert_nat_egress(netris_vm_network, netris_vm_network["vm_a1"], "tenant1")
+        if (pool_selector, network_selector, eip_selector) != REFERENCE_SELECTORS[-1]:
+            _drop_nat(grpc, k8s_hub_client, netris_external_path["t1"])
+            _drop_nat_eip(grpc, k8s_hub_client, netris_external_path["t1"])
 
+    @pytest.mark.parametrize(("pool_selector", "eip_selector", "vm_selector"), REFERENCE_SELECTORS)
     def test_10_manual_external_ip_ingress(
         self,
         grpc: GRPCClient,
@@ -1458,6 +1528,9 @@ class TestVmaasNetworking:
         net_test_run_id: str,
         netris_vm_network: dict[str, Any],
         netris_external_path: dict[str, Any],
+        pool_selector: str,
+        eip_selector: str,
+        vm_selector: str,
     ) -> None:
         vm = netris_vm_network["vm_a1"]
         record = _attach_external_ip(
@@ -1468,6 +1541,9 @@ class TestVmaasNetworking:
             vm=vm,
             label="t1-a1",
             run_id=net_test_run_id,
+            pool_selector=pool_selector,
+            eip_selector=eip_selector,
+            vm_selector=vm_selector,
         )
         _assert_external_ip_ssh(
             state=netris_vm_network,
@@ -1476,6 +1552,9 @@ class TestVmaasNetworking:
             description=f"SSH ingress through manually attached ExternalIP {record['address']}",
         )
         record["ingress_proven"] = True
+        if (pool_selector, eip_selector, vm_selector) != REFERENCE_SELECTORS[-1]:
+            _teardown_ingress_record(record, k8s_hub_client)
+            netris_external_path["ingress"].remove(record)
 
     def test_11_external_ip_attachment_delete_stops_ingress(
         self,

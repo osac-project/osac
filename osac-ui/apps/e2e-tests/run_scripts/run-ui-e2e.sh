@@ -194,7 +194,6 @@ case "${PW_TEST_PATH}:${PW_PROJECT}" in
   *vmaas*|e2e-tests:*|*:vmaas*) needs_vmaas=true ;;
 esac
 
-need_ui_url=true
 need_login=true
 [[ "$PW_LIST" == true && "$RUN_SMOKE" == false ]] && need_login=false
 

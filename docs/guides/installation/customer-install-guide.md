@@ -1317,6 +1317,47 @@ aap:
               name: network-fulfillment-ig
   ```
 
+  For a Netris controller certificate from a private CA, also mount the CA
+  bundle in this group: the Netris tasks run in `networking-operations` jobs,
+  not in `cluster-fulfillment`. Create a ConfigMap with the CA under the
+  `bundle.pem` key in the external job namespace and add these entries to the
+  same `pod_spec_override`; the path in `NETRIS_CA_PATH` must match the
+  mounted file:
+
+  ```yaml
+  spec:
+    volumes:
+      - name: netris-ca-bundle
+        configMap:
+          name: <NETRIS_CA_CONFIGMAP>
+          items:
+            - key: bundle.pem
+              path: bundle.pem
+    containers:
+      - name: worker
+        env:
+          - name: NETRIS_CA_PATH
+            value: /etc/netris/ca/bundle.pem
+        volumeMounts:
+          - name: netris-ca-bundle
+            mountPath: /etc/netris/ca/bundle.pem
+            subPath: bundle.pem
+            readOnly: true
+  ```
+
+  With `k8sManager: cudn_evpn`, the networking tasks manage Kubernetes
+  networking resources on the hub cluster, and their Kubernetes modules use
+  the job pod's default authentication without an explicit API endpoint: the
+  tasks target the cluster that `K8S_AUTH_KUBECONFIG` or the pod's
+  service-account token points to. When the external group's job pods run
+  outside the hub cluster, that default is the execution cluster, so the
+  tasks would manage the wrong cluster. Provide an authorized hub kubeconfig
+  the same way as the external `cluster-fulfillment` group
+  ([Section 6.2](#62-installing-osac-for-caas)): create the
+  `osac-hub-kubeconfig` Secret in the external job namespace and add the
+  kubeconfig volume, mount, and `K8S_AUTH_KUBECONFIG` variable to this
+  `pod_spec_override`, merging them with the CA entries above.
+
   For example, generate a non-secret env file from the `config` values and a
   protected env file from `.secret` using your secret manager, then apply them
   to the external job cluster:
@@ -2202,11 +2243,29 @@ configure endpoint routes and DNS outside OSAC.
      oc --context "$AAP_CONTEXT" apply -f -
    ```
 
-   Add the hub kubeconfig mount and `K8S_AUTH_KUBECONFIG` setting, along with
-   the CaaS `envFrom` entries, to the external container group's
-   `pod_spec_override`. The hosted-cluster workflow reads this variable for
-   Kubernetes API access. Merge these entries with any Netris CA mount from
-   [Section 4.4.3](#443-setting-the-networking-helm-values):
+   Add the CaaS `envFrom` entries to the external container group's
+   `pod_spec_override`. When the `osac-hub-kubeconfig` Secret above exists
+   (external jobs on another cluster), also add its volume mount and the
+   `K8S_AUTH_KUBECONFIG` setting; the hosted-cluster workflow reads this
+   variable for Kubernetes API access. When the jobs run on the hub cluster,
+   omit the kubeconfig volume and variable: a required Secret volume for an
+   absent Secret keeps the pod from starting, and the job uses its own
+   service-account identity. Merge these entries with any Netris CA mount
+   from [Section 4.4.3](#443-setting-the-networking-helm-values):
+
+   ```yaml
+   spec:
+     containers:
+       - name: worker
+         envFrom:
+           - configMapRef:
+               name: cluster-fulfillment-ig
+               optional: true
+           - secretRef:
+               name: cluster-fulfillment-ig
+   ```
+
+   With the hub kubeconfig Secret, add these entries to the same override:
 
    ```yaml
    spec:
@@ -2226,12 +2285,6 @@ configure endpoint routes and DNS outside OSAC.
          env:
            - name: K8S_AUTH_KUBECONFIG
              value: /etc/osac/hub-kubeconfig
-         envFrom:
-           - configMapRef:
-               name: cluster-fulfillment-ig
-               optional: true
-           - secretRef:
-               name: cluster-fulfillment-ig
    ```
 
    Keep the external ConfigMap and Secret synchronized with the configured

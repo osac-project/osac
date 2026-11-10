@@ -158,22 +158,20 @@ func listCmd() *cobra.Command {
 				return fmt.Errorf("failed to create gRPC connection: %w", err)
 			}
 			defer conn.Close()
-			response, err := privatev1.NewWorkloadClustersClient(conn).List(ctx, privatev1.WorkloadClustersListRequest_builder{
-				Filter: proto.String(filter),
-			}.Build())
+			client := privatev1.NewWorkloadClustersClient(conn)
+			items, err := listAll(ctx, client, filter)
 			if err != nil {
 				return fmt.Errorf("failed to list workload clusters: %w", err)
 			}
-			hubsResponse, err := privatev1.NewHubsClient(conn).List(ctx, privatev1.HubsListRequest_builder{}.Build())
+			hubs, err := hublistAll(ctx, privatev1.NewHubsClient(conn))
 			if err != nil {
 				return fmt.Errorf("failed to list hubs: %w", err)
 			}
-			hubNames := make(map[string]string, len(hubsResponse.GetItems()))
-			for _, hub := range hubsResponse.GetItems() {
+			hubNames := make(map[string]string, len(hubs))
+			for _, hub := range hubs {
 				hubNames[hub.GetId()] = hub.GetMetadata().GetName()
 			}
-			renderWorkloadClusterList(terminal.ConsoleFromContext(ctx), response.GetItems(), hubNames)
-			return nil
+			return renderWorkloadClusterList(terminal.ConsoleFromContext(ctx), items, hubNames)
 		},
 	}
 	result.Flags().StringVar(&filter, "filter", "", "_EXPRESSION_ - CEL filter for selecting workload clusters.")
@@ -310,6 +308,36 @@ func findWorkloadCluster(ctx context.Context, client privatev1.WorkloadClustersC
 	})
 }
 
+func listAll(ctx context.Context, client privatev1.WorkloadClustersClient, filter string) ([]*privatev1.WorkloadCluster, error) {
+	const pageSize int32 = 100
+	var result []*privatev1.WorkloadCluster
+	for offset := int32(0); ; offset += pageSize {
+		response, err := client.List(ctx, privatev1.WorkloadClustersListRequest_builder{Filter: proto.String(filter), Offset: proto.Int32(offset), Limit: proto.Int32(pageSize)}.Build())
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, response.GetItems()...)
+		if int32(len(result)) >= response.GetTotal() || len(response.GetItems()) == 0 {
+			return result, nil
+		}
+	}
+}
+
+func hublistAll(ctx context.Context, client privatev1.HubsClient) ([]*privatev1.Hub, error) {
+	const pageSize int32 = 100
+	var result []*privatev1.Hub
+	for offset := int32(0); ; offset += pageSize {
+		response, err := client.List(ctx, privatev1.HubsListRequest_builder{Offset: proto.Int32(offset), Limit: proto.Int32(pageSize)}.Build())
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, response.GetItems()...)
+		if int32(len(result)) >= response.GetTotal() || len(response.GetItems()) == 0 {
+			return result, nil
+		}
+	}
+}
+
 func parseSupportedWorkloads(values []string) ([]string, error) {
 	if len(values) == 0 {
 		return nil, errors.New("at least one supported workload is required")
@@ -337,20 +365,24 @@ func parseSupportedWorkloads(values []string) ([]string, error) {
 	return result, nil
 }
 
-func renderWorkloadClusterList(w io.Writer, objects []*privatev1.WorkloadCluster, hubNames map[string]string) {
+func renderWorkloadClusterList(w io.Writer, objects []*privatev1.WorkloadCluster, hubNames map[string]string) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(writer, "ID\tNAME\tHUB\tMANAGED CLUSTER\tAVAILABLE\tHUB REACHABLE")
+	if _, err := fmt.Fprintln(writer, "ID\tNAME\tHUB\tMANAGED CLUSTER\tAVAILABLE\tHUB REACHABLE"); err != nil {
+		return err
+	}
 	for _, object := range objects {
 		hubID := object.GetSpec().GetSourceHubId()
 		hubName := hubNames[hubID]
 		if hubName == "" {
 			hubName = hubID
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			object.GetId(), object.GetMetadata().GetName(), hubName,
-			object.GetSpec().GetManagedClusterName(), conditionValue(object, "Available"), conditionValue(object, "HubReachable"))
+			object.GetSpec().GetManagedClusterName(), conditionValue(object, "Available"), conditionValue(object, "HubReachable")); err != nil {
+			return err
+		}
 	}
-	_ = writer.Flush()
+	return writer.Flush()
 }
 
 func renderWorkloadCluster(w io.Writer, object *privatev1.WorkloadCluster) error {

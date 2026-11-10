@@ -178,6 +178,7 @@ func (s *WorkloadClustersServer) Create(ctx context.Context,
 
 func (s *WorkloadClustersServer) Update(ctx context.Context,
 	request *publicv1.WorkloadClustersUpdateRequest) (*publicv1.WorkloadClustersUpdateResponse, error) {
+	ctx = withPublicAPIView(ctx)
 	privateObject := &privatev1.WorkloadCluster{}
 	if err := s.inMapper.Copy(ctx, request.GetObject(), privateObject); err != nil {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "failed to process workload cluster")

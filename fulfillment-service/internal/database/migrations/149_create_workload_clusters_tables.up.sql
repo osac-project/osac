@@ -102,7 +102,7 @@ begin
       where source_hub_id = old.id
     ) then
     raise exception using
-      errcode = 'Z0002',
+      errcode = 'Z0003',
       message = format('Hub ''%s'' is referenced by an active WorkloadCluster', old.id);
   end if;
   return new;

@@ -15,7 +15,9 @@ package migrations
 
 import (
 	"context"
+	"errors"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -87,5 +89,8 @@ var _ = DescribeMigration("Create WorkloadCluster tables", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = conn.Exec(ctx, `update hubs set deletion_timestamp = now() where id = 'hub-a'`)
 		Expect(err).To(HaveOccurred())
+		var pgErr *pgconn.PgError
+		Expect(errors.As(err, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("Z0003"))
 	})
 })

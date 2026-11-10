@@ -12,7 +12,6 @@ package workloadcluster
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -34,8 +33,6 @@ const (
 	managedClusterGroup    = "cluster.open-cluster-management.io"
 	managedClusterVersion  = "v1"
 	managedClusterResource = "managedclusters"
-	clusterClaimResource   = "clusterclaims"
-	clusterClaimName       = "id.k8s.io"
 
 	availableCondition = "Available"
 	hubReachable       = "HubReachable"
@@ -49,7 +46,6 @@ const (
 )
 
 var managedClusterGVK = schema.GroupVersionKind{Group: managedClusterGroup, Version: managedClusterVersion, Kind: "ManagedCluster"}
-var clusterClaimGVK = schema.GroupVersionKind{Group: managedClusterGroup, Version: "v1alpha1", Kind: "ClusterClaim"}
 
 // FunctionBuilder contains the dependencies needed to observe a registered ManagedCluster.
 type FunctionBuilder struct {
@@ -63,7 +59,7 @@ type function struct {
 	grpcClient       *grpc.ClientConn
 	hubCache         controllers.HubCache
 	workloadClusters privatev1.WorkloadClustersClient
-	watchers         map[string]struct{}
+	watchers         map[string]context.CancelFunc
 	watchersLock     sync.Mutex
 }
 
@@ -101,7 +97,7 @@ func (b *FunctionBuilder) Build() (controllers.ReconcilerFunction[*privatev1.Wor
 		grpcClient:       b.connection,
 		hubCache:         b.hubCache,
 		workloadClusters: privatev1.NewWorkloadClustersClient(b.connection),
-		watchers:         map[string]struct{}{},
+		watchers:         map[string]context.CancelFunc{},
 	}
 	return r.run, nil
 }
@@ -111,7 +107,7 @@ func (r *function) run(ctx context.Context, object *privatev1.WorkloadCluster) e
 		return nil
 	}
 	old := proto.Clone(object).(*privatev1.WorkloadCluster)
-	r.ensureWatcher(object.GetSpec().GetSourceHubId())
+	r.ensureWatcher(ctx, object.GetSpec().GetSourceHubId())
 	status := object.GetStatus()
 	if status == nil {
 		status = &privatev1.WorkloadClusterStatus{}
@@ -145,15 +141,10 @@ func (r *function) observe(ctx context.Context, hubClient clnt.Client, object *p
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("managed cluster observation failed: %w", err)
+		setUnavailable(status, reasonManagedClusterUnavailable, "Failed to observe the managed cluster on the hub", false)
+		return errors.New("managed cluster observation failed")
 	}
-	claim := &unstructured.Unstructured{}
-	claim.SetGroupVersionKind(clusterClaimGVK)
-	claimErr := hubClient.Get(ctx, clnt.ObjectKey{Namespace: object.GetSpec().GetManagedClusterName(), Name: clusterClaimName}, claim)
-	claimValue, _, _ := unstructured.NestedString(claim.Object, "spec", "value")
-	if claimErr != nil && !apierrors.IsNotFound(claimErr) {
-		return fmt.Errorf("cluster identity observation failed: %w", claimErr)
-	}
+	claimValue := clusterIdentity(managed)
 	if strings.TrimSpace(claimValue) == "" {
 		setUnavailable(status, reasonClusterIdentityMissing, "Managed cluster has no stable identity claim", true)
 		return nil
@@ -176,6 +167,22 @@ func (r *function) observe(ctx context.Context, hubClient clnt.Client, object *p
 	}
 	setCondition(status, availableCondition, "True", "ManagedClusterAvailable", "Referenced managed cluster is available", true)
 	return nil
+}
+
+func clusterIdentity(object *unstructured.Unstructured) string {
+	claims, _, _ := unstructured.NestedSlice(object.Object, "status", "clusterClaims")
+	for _, raw := range claims {
+		claim, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(claim, "name")
+		if name == "id.k8s.io" {
+			value, _, _ := unstructured.NestedString(claim, "value")
+			return value
+		}
+	}
+	return ""
 }
 
 func conditionTrue(object *unstructured.Unstructured, conditionType string) bool {

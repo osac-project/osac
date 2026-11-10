@@ -199,12 +199,17 @@ need_login=true
 
 if [[ -z "$KUBECONFIG_PATH" ]]; then
   for candidate in \
-    /root/dev-scripts/ocp/ostest/auth/kubeconfig \
     /home/kni/clusterconfigs/auth/kubeconfig \
+    /root/kubeconfig \
+    /root/dev-scripts/ocp/ostest/auth/kubeconfig \
     /root/.kube/config; do
     if [[ -f "$candidate" ]]; then
+      if command -v oc >/dev/null 2>&1; then
+        timeout 10s env KUBECONFIG="$candidate" oc --request-timeout=5s \
+          get --raw=/version >/dev/null 2>&1 || continue
+      fi
       KUBECONFIG_PATH="$candidate"
-      info "Using detected KUBECONFIG: ${KUBECONFIG_PATH}"
+      info "Using detected reachable KUBECONFIG: ${KUBECONFIG_PATH}"
       break
     fi
   done

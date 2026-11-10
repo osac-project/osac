@@ -39,7 +39,6 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/aap"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
@@ -49,14 +48,14 @@ type BareMetalInstanceReconciler struct {
 	// APIReader is a direct, uncached reader (mgr.GetAPIReader) used by the
 	// duplicate-job guard so it does not read the same lagging informer cache it
 	// is meant to bypass. Set in SetupWithManager.
-	APIReader                            client.Reader
-	Scheme                               *runtime.Scheme
-	InventoryClient                      inventory.Client
-	ManagementClient                     management.Client
-	ProvisioningProvider                 provisioning.ProvisioningProvider
-	NetworkingProvider                   provisioning.ProvisioningProvider
-	IPDiscoveryProvider                  provisioning.ProvisioningProvider
-	AAPClient                            *aap.Client
+	APIReader            client.Reader
+	Scheme               *runtime.Scheme
+	InventoryClient      inventory.Client
+	ManagementClient     management.Client
+	ProvisioningProvider provisioning.ProvisioningProvider
+	// NetworkingNamespace is the namespace of the NetworkAttachments, BMF's own
+	// namespace. Empty when networking provisioning is disabled.
+	NetworkingNamespace                  string
 	NoFreeHostsPollIntervalDuration      time.Duration
 	TryLockFailPollIntervalDuration      time.Duration
 	ManagementRecheckIntervalDuration    time.Duration
@@ -66,6 +65,7 @@ type BareMetalInstanceReconciler struct {
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=networkclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=networkattachments,verbs=get;create;patch;delete
 
 func NewBareMetalInstanceReconciler(
 	client client.Client,
@@ -73,9 +73,7 @@ func NewBareMetalInstanceReconciler(
 	inventoryClient inventory.Client,
 	managementClient management.Client,
 	provisioningProvider provisioning.ProvisioningProvider,
-	networkingProvider provisioning.ProvisioningProvider,
-	ipDiscoveryProvider provisioning.ProvisioningProvider,
-	aapClient *aap.Client,
+	networkingNamespace string,
 	noFreeHostsPollIntervalDuration time.Duration,
 	tryLockFailPollIntervalDuration time.Duration,
 	managementRecheckIntervalDuration time.Duration,
@@ -110,9 +108,7 @@ func NewBareMetalInstanceReconciler(
 		TryLockFailPollIntervalDuration:      tryLockFailPollIntervalDuration,
 		ManagementClient:                     managementClient,
 		ProvisioningProvider:                 provisioningProvider,
-		NetworkingProvider:                   networkingProvider,
-		IPDiscoveryProvider:                  ipDiscoveryProvider,
-		AAPClient:                            aapClient,
+		NetworkingNamespace:                  networkingNamespace,
 		ManagementRecheckIntervalDuration:    managementRecheckIntervalDuration,
 		ProvisionPollIntervalDuration:        provisionPollIntervalDuration,
 		HostAvailabilityPollIntervalDuration: hostAvailabilityPollIntervalDuration,
@@ -298,6 +294,8 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 		}
 
 		bareMetalInstance.Spec.ExternalHostID = inventoryHost.InventoryHostID
+		// The Fabric Manager identifies the host by its inventory name.
+		bareMetalInstance.Spec.ExternalHostName = inventoryHost.Name
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionAllocated,
 			metav1.ConditionTrue,
@@ -369,6 +367,11 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	}
 
 	bareMetalInstance.Spec.HostClass = inventoryHost.HostClass
+	// A host assigned without FindFreeHost gets its name here. The name is part
+	// of the provisioning input, so it is set only before provisioning starts.
+	if bareMetalInstance.Spec.ExternalHostName == "" && len(bareMetalInstance.Status.ProvisioningJobs) == 0 {
+		bareMetalInstance.Spec.ExternalHostName = inventoryHost.Name
+	}
 	if err = r.Update(ctx, bareMetalInstance); err != nil {
 		log.Error(err, "Failed to update BareMetalInstance CR with HostClass", "HostClass", inventoryHost.HostClass)
 		return ctrl.Result{}, err
@@ -745,10 +748,10 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if r.NetworkingProvider == nil {
-		log.Info("Networking provider not configured, skipping network-handoff reboot")
+	if !r.networkingEnabled() {
+		log.Info("Networking provisioning disabled, skipping network-handoff reboot")
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionTrue, "Skipped", "Networking provider not configured")
+			metav1.ConditionTrue, "Skipped", "Networking provisioning disabled")
 		return ctrl.Result{}, nil
 	}
 
@@ -1067,7 +1070,7 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	// Power off BEFORE moving the port back to the provisioning network — ensures tenant
 	// workloads never run on the provisioning network. Only needed when networking
 	// provisioning is enabled (port was actually moved to the tenant network).
-	if len(bareMetalInstance.Spec.NetworkAttachments) > 0 && r.ManagementClient != nil && r.NetworkingProvider != nil {
+	if len(bareMetalInstance.Spec.NetworkAttachments) > 0 && r.ManagementClient != nil && r.networkingEnabled() {
 		result, err = r.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
 		if err != nil {
 			return result, err

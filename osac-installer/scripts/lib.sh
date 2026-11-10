@@ -79,6 +79,93 @@ validate_namespace() {
     return 0
 }
 
+# Split a caller-supplied argument string into argv words the way a POSIX
+# shell would, without evaluating it. Whitespace separates words; single
+# quotes, double quotes, and backslashes group and escape characters; word
+# expansions, command substitution, and globs stay literal data. Recipes
+# call this once per invocation and expand the global ARGV array quoted, so
+# a value such as `--set-string k="two words"` reaches Helm as one argument
+# instead of losing its quotes to word splitting and arriving as
+# `k="two` plus a stray positional `words"`.
+#
+# Usage: split_argv NAME STRING
+# NAME labels the variable in diagnostics. Only the quote shape is
+# reported: the value itself may carry caller data.
+split_argv() {
+    local name="$1" input="$2"
+    local word='' have_word=0 quote='' ch nxt i n
+    n=${#input}
+    ARGV=()
+    for ((i = 0; i < n; i++)); do
+        ch=${input:i:1}
+        nxt=''
+        if ((i + 1 < n)); then
+            nxt=${input:i+1:1}
+        fi
+        if [[ -n ${quote} ]]; then
+            if [[ ${ch} == "${quote}" ]]; then
+                quote=''
+            elif [[ ${quote} == '"' && ${ch} == '\' ]]; then
+                # Inside double quotes a backslash only escapes what the
+                # shell treats as special there; any other backslash is
+                # literal.
+                case ${nxt} in
+                    '$'|'`'|'"'|'\')
+                        word+=${nxt}
+                        i=$((i + 1))
+                        ;;
+                    $'\n')
+                        i=$((i + 1))
+                        ;;
+                    *)
+                        word+='\'
+                        ;;
+                esac
+            else
+                word+=${ch}
+            fi
+            have_word=1
+            continue
+        fi
+        case ${ch} in
+            ' '|$'\t'|$'\n')
+                if ((have_word)); then
+                    ARGV+=("${word}")
+                    word=''
+                    have_word=0
+                fi
+                ;;
+            "'"|'"')
+                quote=${ch}
+                have_word=1
+                ;;
+            '\')
+                if [[ -n ${nxt} ]]; then
+                    if [[ ${nxt} != $'\n' ]]; then
+                        word+=${nxt}
+                    fi
+                    i=$((i + 1))
+                else
+                    word+='\'
+                fi
+                have_word=1
+                ;;
+            *)
+                word+=${ch}
+                have_word=1
+                ;;
+        esac
+    done
+    if [[ -n ${quote} ]]; then
+        echo "ERROR: ${name} has an unterminated quote; pair every quote or escape it." >&2
+        return 1
+    fi
+    if ((have_word)); then
+        ARGV+=("${word}")
+    fi
+    return 0
+}
+
 # Render the osac chart offline for the input-validation gate, bridging the
 # NetBox lookup branch. helm template cannot see cluster Secrets (lookup
 # returns nil offline), so a profile relying on the install-time

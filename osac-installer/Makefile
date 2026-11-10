@@ -33,9 +33,12 @@ SHELL := /usr/bin/env bash -o pipefail
 # Caller-supplied Helm args are data, never command text: the value is
 # frozen verbatim -- Make-side references such as DRY_RUN_HELM_FLAGS below
 # read the frozen text without expanding Make expressions in it -- and
-# exported, and recipes word-split $${EXTRA_HELM_ARGS} from the
+# exported. Recipes parse it into the ARGV array with split_argv from the
 # environment, so shell metacharacters in a caller value reach Helm as
-# argument text instead of executing.
+# argument text instead of executing, while quotes and backslashes still
+# group a value that contains spaces into one argument. The array is
+# expanded with the ${ARGV[@]+...} form so an empty list stays valid under
+# `set -u` on every supported bash.
 EXTRA_HELM_ARGS ?=
 override EXTRA_HELM_ARGS := $(value EXTRA_HELM_ARGS)
 export EXTRA_HELM_ARGS
@@ -748,7 +751,8 @@ ifeq ($(PLATFORM),kind)
 		$(INFRA_HELM_ARGS) \
 		$(OIDC_IDP_CA_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	@source scripts/lib.sh && netbox_seed_check osac-infra $(INFRA_CHART) \
+	@source scripts/lib.sh && split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}" && \
+	netbox_seed_check osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
 		-f $(INFRA_VALUES) $${INFRA_VALUES_EXTRA} \
 		--set osacNamespace=$(NS) \
@@ -759,7 +763,7 @@ ifeq ($(PLATFORM),kind)
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(INSTANCE_HELM_ARGS) \
-		$${EXTRA_HELM_ARGS} \
+		$${ARGV[@]+"$${ARGV[@]}"} \
 		$(REMOTE_CLUSTER_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 ifeq ($(PROFILE),dev-full)
@@ -795,7 +799,8 @@ else
 		$(INFRA_HELM_ARGS) \
 		$(OIDC_IDP_CA_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	@source scripts/lib.sh && netbox_seed_check osac-infra $(INFRA_CHART) \
+	@source scripts/lib.sh && split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}" && \
+	netbox_seed_check osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
 		--values $(INFRA_VALUES) $${INFRA_VALUES_EXTRA} \
 		--set osacNamespace=$(NS) \
@@ -816,7 +821,7 @@ else
 		--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac \
 		--set ui.externalHostname=$(UI_HOSTNAME) \
 		$(INSTANCE_HELM_ARGS) \
-		$${EXTRA_HELM_ARGS} \
+		$${ARGV[@]+"$${ARGV[@]}"} \
 		$(REMOTE_CLUSTER_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 endif
@@ -865,17 +870,18 @@ ifneq ($(PLATFORM),kind)
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' | grep -Eo '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*' | head -1))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
 endif
-	@if [[ -n "$${REMOTE_KUBECONFIG:-}" ]]; then \
-		source scripts/lib.sh; \
+	@source scripts/lib.sh; \
+	if [[ -n "$${REMOTE_KUBECONFIG:-}" ]]; then \
 		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"; \
 	fi; \
+	split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}"; \
 	helm upgrade --install osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set ui.externalHostname=$(UI_HOSTNAME)) \
 		$(INSTANCE_HELM_ARGS) \
-		$${EXTRA_HELM_ARGS} $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \
+		$${ARGV[@]+"$${ARGV[@]}"} $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \
 		--wait --timeout 40m
 .PHONY: uninstall-osac
 uninstall-osac: validate-ns ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)
@@ -976,13 +982,14 @@ else
 		$(INFRA_HELM_ARGS) \
 		$(OIDC_IDP_CA_HELM_ARGS)
 endif
+	source scripts/lib.sh && split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}" && \
 	helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(filter openshift,$(PLATFORM)),--set service.externalHostname=fulfillment-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set global.clusterDomain=$(DRY_RUN_CLUSTER_DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac --set ui.externalHostname=osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN)) \
 		$(INSTANCE_HELM_ARGS) \
-		$${EXTRA_HELM_ARGS}
+		$${ARGV[@]+"$${ARGV[@]}"}
 ifeq ($(PROFILE),dev-full)
 	helm dependency build charts/osac-devstack
 	helm template osac-devstack charts/osac-devstack \

@@ -53,13 +53,21 @@ write_stub() {
   chmod +x "${STUB_BIN}/${name}"
 }
 
-# Shared stub logger: append "name arg..." to MOCK_LOG.
+# Shared stub logger: append "name arg..." to MOCK_LOG. When MOCK_ARGV_LOG
+# is set, also record one "name<TAB>arg" line per argument, so a caller's
+# argument grouping can be asserted where the space-joined form cannot
+# distinguish one argument from two.
 write_stub mock-log <<'STUB'
 #!/usr/bin/env bash
 set -eu
 name=$1
 shift
 printf '%s %s\n' "${name}" "$*" >>"${MOCK_LOG}"
+if [ -n "${MOCK_ARGV_LOG:-}" ]; then
+  for arg in "$@"; do
+    printf '%s\t%s\n' "${name}" "${arg}" >>"${MOCK_ARGV_LOG}"
+  done
+fi
 STUB
 
 # helm: log every invocation; MOCK_TEMPLATE_FAIL=1 makes offline renders fail
@@ -454,6 +462,75 @@ fi
 grep -q 'helm template osac ' "${LOG}" \
   || fail "extra-args-injection: the gate render never ran"
 assert_prevalidation_commands extra-args-injection
+
+# Caller-supplied Helm args keep shell-style grouping without shell-style
+# evaluation: double-quoted, single-quoted, and backslash-escaped
+# whitespace must reach Helm inside one argument, not split into a stray
+# positional argument. The argv log records each argument on its own line,
+# because the space-joined command log cannot show the difference.
+echo "checking extra-args-quoting (quoted and escaped whitespace stay grouped)"
+extra_argv_log="${TMP_DIR}/extra-args-argv.log"
+: >"${LOG}"
+: >"${extra_argv_log}"
+if MOCK_LOG="${LOG}" MOCK_ARGV_LOG="${extra_argv_log}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    EXTRA_HELM_ARGS="--set-string operator.networkManagers.fabricManagers.cudn_net.description=\"two words\" --set-string operator.vendorControllers.acme.description=two\ escaped --set-string operator.vendorControllers.other.description='three word value'" \
+    >"${TMP_DIR}/extra-quoting.out" 2>"${TMP_DIR}/extra-quoting.err"; then
+  :
+else
+  fail "extra-args-quoting: the gate rejected a valid quoted EXTRA_HELM_ARGS value"
+fi
+grep -Fxq $'helm\toperator.networkManagers.fabricManagers.cudn_net.description=two words' \
+  "${extra_argv_log}" \
+  || fail "extra-args-quoting: a double-quoted value did not reach Helm as one argument"
+grep -Fxq $'helm\toperator.vendorControllers.acme.description=two escaped' \
+  "${extra_argv_log}" \
+  || fail "extra-args-quoting: a backslash-escaped value did not reach Helm as one argument"
+grep -Fxq $'helm\toperator.vendorControllers.other.description=three word value' \
+  "${extra_argv_log}" \
+  || fail "extra-args-quoting: a single-quoted value did not reach Helm as one argument"
+assert_prevalidation_commands extra-args-quoting
+
+# The dry-run path parses the same input the same way: `make install
+# DRY_RUN=1` must not fail on a value that the gate accepted.
+echo "checking extra-args-quoting-dry-run (quoted whitespace in the dry-run path)"
+extra_dry_argv_log="${TMP_DIR}/extra-args-dry-run-argv.log"
+: >"${LOG}"
+: >"${extra_dry_argv_log}"
+if MOCK_LOG="${LOG}" MOCK_ARGV_LOG="${extra_dry_argv_log}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-dry-run \
+    PLATFORM=kind PROFILE=dev NS=osac \
+    EXTRA_HELM_ARGS='--set-string operator.vendorControllers.acme.description="two words"' \
+    >"${TMP_DIR}/extra-dry.out" 2>"${TMP_DIR}/extra-dry.err"; then
+  :
+else
+  fail "extra-args-quoting-dry-run: the dry-run render rejected a quoted EXTRA_HELM_ARGS value"
+fi
+grep -Fxq $'helm\toperator.vendorControllers.acme.description=two words' \
+  "${extra_dry_argv_log}" \
+  || fail "extra-args-quoting-dry-run: the value did not reach Helm as one argument"
+
+# An unterminated quote is a caller error with a value-free diagnostic: the
+# gate must fail before any render, and the message must not echo the value
+# (the argument may carry customer data).
+echo "checking extra-args-quoting-error (an unbalanced quote fails safely)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=kind PROFILE=dev NS=osac \
+    EXTRA_HELM_ARGS='--set-string operator.vendorControllers.acme.description="unterminated SECRETVALUE' \
+    >"${TMP_DIR}/extra-quote-error.out" 2>"${TMP_DIR}/extra-quote-error.err"; then
+  fail "extra-args-quoting-error: the gate accepted an unbalanced quote"
+fi
+grep -q 'EXTRA_HELM_ARGS has an unterminated quote' "${TMP_DIR}/extra-quote-error.err" \
+  || fail "extra-args-quoting-error: the failure did not name the unbalanced quote"
+grep -q 'SECRETVALUE' "${TMP_DIR}/extra-quote-error.err" \
+  && fail "extra-args-quoting-error: the diagnostic echoed the caller value"
+grep -q 'helm template osac ' "${LOG}" \
+  && fail "extra-args-quoting-error: the OSAC chart render ran despite the bad input"
+assert_prevalidation_commands extra-args-quoting-error
 
 # Caller-supplied values lists are data too: INFRA_VALUES_EXTRA is frozen
 # and env-passed, so shell metacharacters in it word-split into Helm

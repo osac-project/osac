@@ -26,9 +26,10 @@ export const VmsMainPage = {
   vmRows: ['tbody tr'],
   vmNameCell: ['td[data-label="Name"]'],
   vmStatusCell: ['td[data-label="Status"]'],
-  emptyState: ['No virtual machines yet. Create one to get started.'],
-  filteredEmptyState: ['Choose one or more statuses above to filter virtual machines.'],
-  noMatchingState: ['No virtual machines match your filters.'],
+  listView: id('list-view'),
+  emptyState: ['No virtual machines found'],
+  filteredEmptyState: ['No virtual machines are available yet.'],
+  noMatchingState: ['No virtual machines match your filters'],
   errorState: ['heading', { name: 'An error occurred', exact: true }],
 } as const satisfies Record<string, VmsLocator>;
 

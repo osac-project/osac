@@ -135,7 +135,7 @@ placeholder_url() {
   esac
 }
 
-placeholder_login() {
+placeholder_username() {
   case "$1" in
     your-*|*example*|placeholder|changeme) return 0 ;;
     *) return 1 ;;
@@ -241,30 +241,18 @@ case "$OSAC_UI_BASE_URL" in
   *) fail "OSAC_UI_BASE_URL must use an HTTP or HTTPS URL." ;;
 esac
 
-is_loopback_url=false
-case "$OSAC_UI_BASE_URL" in
-  http://localhost|http://localhost:*|http://127.0.0.1|http://127.0.0.1:*|http://\[::1\]|http://\[::1\]:*)
-    is_loopback_url=true
-    ;;
-esac
-
 if [[ "$PROMPT_PASSWORD" == true ]]; then
   [[ -t 0 ]] || fail "--prompt-password requires an interactive terminal."
   IFS= read -r -s -p "OSAC admin password: " OSAC_ADMIN_PASSWORD ||
     fail "Unable to read OSAC_ADMIN_PASSWORD."
   printf '\n'
-elif [[ -z "$OSAC_ADMIN_PASSWORD" && "$is_loopback_url" == true ]]; then
-  OSAC_ADMIN_PASSWORD=foobar
 fi
 
 if [[ "$need_login" == true ]]; then
-  [[ -n "$OSAC_ADMIN_USERNAME" ]] && ! placeholder_login "$OSAC_ADMIN_USERNAME" ||
+  [[ -n "$OSAC_ADMIN_USERNAME" ]] && ! placeholder_username "$OSAC_ADMIN_USERNAME" ||
     fail "Set OSAC_ADMIN_USERNAME to a real Keycloak test user before running tests."
-  [[ -n "$OSAC_ADMIN_PASSWORD" ]] && ! placeholder_login "$OSAC_ADMIN_PASSWORD" ||
-    fail "Set OSAC_ADMIN_PASSWORD to that user's real password before running tests."
-  if [[ "$is_loopback_url" == false && "$OSAC_ADMIN_PASSWORD" == foobar ]]; then
-    fail "Set an explicit OSAC_ADMIN_PASSWORD for non-loopback UI URLs."
-  fi
+  [[ -n "$OSAC_ADMIN_PASSWORD" ]] ||
+    fail "Set OSAC_ADMIN_PASSWORD or use --prompt-password before running tests."
   if (( EUID == 0 )) && [[ "$OSAC_ALLOW_ROOT_E2E" != true ]]; then
     fail "Credentialed tests refuse to run as root. Use a non-root user or --allow-root-e2e."
   fi
@@ -345,12 +333,29 @@ if [[ -n "$PW_HEADED" && -z ${DISPLAY:-} ]]; then
   Xvfb "$DISPLAY" -screen 0 1920x1080x24 -nolisten tcp \
     -auth "$XAUTHORITY" >"$xvfb_log" 2>&1 &
   xvfb_pid=$!
+  display_socket="/tmp/.X11-unix/X${DISPLAY#:}"
+  xvfb_ready=false
+  for _ in {1..50}; do
+    if ! kill -0 "$xvfb_pid" 2>/dev/null; then
+      cat "$xvfb_log" >&2
+      fail "Xvfb exited before its display became ready."
+    fi
+    if [[ -S "$display_socket" ]]; then
+      xvfb_ready=true
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$xvfb_ready" != true ]]; then
+    cat "$xvfb_log" >&2
+    fail "Xvfb display was not ready within the startup timeout."
+  fi
 fi
 
 HTTP_STATUS="$(curl -sk --max-time 15 --proto '=http,https' -o /dev/null \
   -w '%{http_code}' "$OSAC_UI_BASE_URL" 2>/dev/null || true)"
 HTTP_STATUS="${HTTP_STATUS: -3}"
-[[ "$HTTP_STATUS" =~ ^[23][0-9][0-9]$ ]] || fail "OSAC UI is not reachable: ${OSAC_UI_BASE_URL}"
+[[ "$HTTP_STATUS" =~ ^[23][0-9][0-9]$ ]] || fail "OSAC UI is not reachable."
 
 export_test_environment
 if [[ "$RUN_SMOKE" == true ]]; then

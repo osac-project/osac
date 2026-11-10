@@ -57,8 +57,7 @@ bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
 The preparation helper installs Node.js, npm, pnpm, Playwright dependencies,
 and Chromium. The runner accepts the flow tags listed below, validates the
 deployment and VMaaS prerequisites, and keeps run-time credentials outside the
-setup step. The local loopback default is `admin`/`foobar`; non-loopback
-deployments require an explicit password supplied through the environment or
+setup step. Supply the admin password through the environment or
 `--prompt-password`.
 
 ## Running

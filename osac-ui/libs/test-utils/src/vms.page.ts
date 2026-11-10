@@ -4,11 +4,14 @@ import { confirmDetailDeletion, getTableRowByCellText } from './general/row_asse
 import { openMainPageOption } from './main.page';
 import { VmDetailsPage, VmsMainPage } from '../../locators/vms';
 
+/** Escape a value before placing it in an exact-match regular expression. */
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** Build an exact, whitespace-tolerant text matcher. */
 const exactText = (value: string): RegExp =>
   new RegExp(`^\\s*${escapeRegExp(value.normalize('NFC'))}\\s*$`);
 
+/** Locate a VM row by its exact name cell text. */
 const getVmRow = (page: Page, name: string): Locator =>
   getTableRowByCellText(
     page.getByRole(...VmsMainPage.vmsTable),
@@ -24,8 +27,19 @@ export const openVmsPage = async (page: Page): Promise<void> => {
   await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
 };
 
+/** Select the table view so VM rows are available to list and deletion helpers. */
+export const selectVmListView = async (page: Page): Promise<void> => {
+  const listView = page.locator(...VmsMainPage.listView);
+  await expect(listView).toBeVisible();
+  if ((await listView.getAttribute('aria-pressed')) !== 'true') {
+    await listView.click();
+  }
+  await expect(listView).toHaveAttribute('aria-pressed', 'true');
+};
+
 /** Wait until the tenant VM list reports a loaded table or empty state. */
 const waitForVmListReady = async (page: Page): Promise<Locator> => {
+  await selectVmListView(page);
   const table = page.getByRole(...VmsMainPage.vmsTable);
   const emptyState = page.getByText(...VmsMainPage.emptyState);
   const filteredEmptyState = page.getByText(...VmsMainPage.filteredEmptyState);
@@ -59,6 +73,7 @@ const waitForVmListReady = async (page: Page): Promise<Locator> => {
 
 /** Return the VM names currently visible in the tenant VM list. */
 export const listVmNames = async (page: Page): Promise<string[]> => {
+  await selectVmListView(page);
   const table = await waitForVmListReady(page);
   if ((await table.count()) === 0) {
     return [];
@@ -102,6 +117,7 @@ export const expectVmDetailsPage = async (
   await expect(page.locator(...VmDetailsPage.pageTitle)).toHaveText(exactText(name), { timeout });
 };
 
+/** Locate the status labels in the VM details summary. */
 const getVmDetailsStatus = (page: Page): Locator =>
   page
     .getByRole(...VmDetailsPage.statusTerm)
@@ -137,6 +153,7 @@ export const waitForVmToBeRunning = async (
 
 /** Open a VM details page from its exact row link. */
 export const openVmDetailsPage = async (page: Page, name: string): Promise<void> => {
+  await selectVmListView(page);
   const row = await expectVmToExist(page, name);
   await row
     .locator(...VmsMainPage.vmNameCell)
@@ -175,6 +192,7 @@ export const waitForVmToBeDeleted = async (
         await expect(page).toHaveURL((url) => url.pathname === '/vms');
         await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
 
+        await selectVmListView(page);
         const table = await waitForVmListReady(page);
         if ((await table.count()) === 0) {
           return 0;

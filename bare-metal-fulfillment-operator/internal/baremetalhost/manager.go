@@ -33,11 +33,21 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+// credentialsSecretSuffix is appended to the BareMetalHost name to name the
+// operator-managed BMC credentials Secret consumed by BMO.
+const credentialsSecretSuffix = "-bmc-secret"
+
+// CredentialsSecretName returns the name of the operator-managed BMC
+// credentials Secret for the given BareMetalHost. It is the single definition
+// of that naming contract, shared with the credentials Writer implementation.
+func CredentialsSecretName(hostName string) string {
+	return hostName + credentialsSecretSuffix
+}
+
 // CreateParams holds the parameters for creating a BareMetalHost CR.
 type CreateParams struct {
 	Name                           string
 	BMCAddress                     string
-	CredentialsSecret              string
 	BootMACAddress                 string
 	DisableCertificateVerification bool
 	ConsumerRef                    *corev1.ObjectReference
@@ -89,7 +99,7 @@ func (m *Manager) CreateBMH(ctx context.Context, params CreateParams) error {
 		Spec: metal3api.BareMetalHostSpec{
 			BMC: metal3api.BMCDetails{
 				Address:                        params.BMCAddress,
-				CredentialsName:                params.CredentialsSecret,
+				CredentialsName:                CredentialsSecretName(params.Name),
 				DisableCertificateVerification: params.DisableCertificateVerification,
 			},
 			BootMACAddress: params.BootMACAddress,

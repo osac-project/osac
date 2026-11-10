@@ -328,12 +328,11 @@ func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connec
 	if credentials == nil {
 		return nil, errors.New("BMC credentials are required")
 	}
-	secretName := host.Name + bmcSecretSuffix
-	if err := c.credentialsWriter.Create(ctx, bmcCredentials.Reference{ID: secretName, OwnerID: bareMetalInstanceID}, *credentials); err != nil {
+	if err := c.credentialsWriter.Create(ctx, bmcCredentials.Reference{HostID: host.Name, BMIID: bareMetalInstanceID}, *credentials); err != nil {
 		return nil, fmt.Errorf("failed to ensure BMC credentials Secret for NetBox host: %w", err)
 	}
 
-	params := bmhCreateParams(host.Name, connection.BMCAddress, secretName, connection.BootMACAddress, bareMetalInstanceID)
+	params := bmhCreateParams(host.Name, connection.BMCAddress, connection.BootMACAddress, bareMetalInstanceID)
 	if err := c.bmhManager.CreateBMH(ctx, params); err != nil {
 		return nil, fmt.Errorf("failed to create BareMetalHost for NetBox host: %w", err)
 	}
@@ -552,7 +551,7 @@ func (c *NetBoxClient) deleteNetBoxResources(ctx context.Context, deviceID, bare
 	if err := c.deleteNetBoxBMH(ctx, name, bareMetalInstanceID); err != nil {
 		return err
 	}
-	return c.credentialsWriter.Delete(ctx, bmcCredentials.Reference{ID: name + bmcSecretSuffix, OwnerID: bareMetalInstanceID})
+	return c.credentialsWriter.Delete(ctx, bmcCredentials.Reference{HostID: name, BMIID: bareMetalInstanceID})
 }
 
 func (c *NetBoxClient) deleteNetBoxBMH(ctx context.Context, name, bareMetalInstanceID string) error {

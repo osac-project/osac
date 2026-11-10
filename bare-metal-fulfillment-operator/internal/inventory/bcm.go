@@ -491,16 +491,14 @@ func (c *BCMClient) ensureBMHExists(ctx context.Context, device *bcmclient.Devic
 		return err
 	}
 
-	// Secret name is derived from the BMH so the two stay coupled.
-	secretName := bmhName + bmcSecretSuffix
-	if err := c.credentialsWriter.Create(ctx, credentials.Reference{ID: secretName, OwnerID: bareMetalInstanceID}, credentials.BMC{
+	if err := c.credentialsWriter.Create(ctx, credentials.Reference{HostID: bmhName, BMIID: bareMetalInstanceID}, credentials.BMC{
 		Username: []byte(username),
 		Password: []byte(password),
 	}); err != nil {
 		return fmt.Errorf("failed to create BMC credentials Secret for host %q: %w", device.Hostname, err)
 	}
 
-	params := bmhCreateParams(bmhName, bmcAddress, secretName, device.MAC, bareMetalInstanceID)
+	params := bmhCreateParams(bmhName, bmcAddress, device.MAC, bareMetalInstanceID)
 	if err := c.bmhManager.CreateBMH(ctx, params); err != nil {
 		return fmt.Errorf("failed to create BareMetalHost for %s: %w", device.Hostname, err)
 	}
@@ -513,12 +511,11 @@ func (c *BCMClient) ensureBMHExists(ctx context.Context, device *bcmclient.Devic
 // intentionally omitted from ConsumerRef: the consumer is identified by an
 // opaque ID, not a resolvable namespace/name — matching the Metal3 adapter's
 // documented convention, which is sufficient for BMO's claim mechanism.
-func bmhCreateParams(bmhName, bmcAddress, secretName, bootMAC, bareMetalInstanceID string) baremetalhost.CreateParams {
+func bmhCreateParams(bmhName, bmcAddress, bootMAC, bareMetalInstanceID string) baremetalhost.CreateParams {
 	return baremetalhost.CreateParams{
-		Name:              bmhName,
-		BMCAddress:        bmcAddress,
-		CredentialsSecret: secretName,
-		BootMACAddress:    bootMAC,
+		Name:           bmhName,
+		BMCAddress:     bmcAddress,
+		BootMACAddress: bootMAC,
 		ConsumerRef: &corev1.ObjectReference{
 			APIVersion: "osac.openshift.io/v1alpha1",
 			Kind:       "BareMetalInstance",
@@ -529,9 +526,6 @@ func bmhCreateParams(bmhName, bmcAddress, secretName, bootMAC, bareMetalInstance
 		},
 	}
 }
-
-// bmcSecretSuffix is appended to the BMH name to name operator-created BMC Secrets.
-const bmcSecretSuffix = "-bmc-secret"
 
 // resolveBMCCredentials resolves the per-host BMC username/password from BCM,
 // following BCM's own inheritance order (device → category → partition
@@ -719,7 +713,7 @@ func (c *BCMClient) deleteBCMResources(ctx context.Context, hostname, ownerUID s
 	if exists {
 		return fmt.Errorf("BareMetalHost %s deletion pending", hostname)
 	}
-	return c.credentialsWriter.Delete(ctx, credentials.Reference{ID: hostname + bmcSecretSuffix, OwnerID: ownerUID})
+	return c.credentialsWriter.Delete(ctx, credentials.Reference{HostID: hostname, BMIID: ownerUID})
 }
 
 func (c *BCMClient) clearBCMAssignment(ctx context.Context, hostname, bareMetalInstanceID string, labels []string) (bool, error) {

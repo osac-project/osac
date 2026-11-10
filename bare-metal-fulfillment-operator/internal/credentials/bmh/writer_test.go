@@ -72,7 +72,7 @@ var _ = Describe("BMC Secret Writer", func() {
 		It("creates an operator-managed Secret owned by the BMI", func() {
 			writer, k8sClient := newWriter()
 
-			Expect(writer.Create(ctx, credentials.Reference{ID: "node001-bmc-secret", OwnerID: "bmi-A"}, credentials.BMC{
+			Expect(writer.Create(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-A"}, credentials.BMC{
 				Username: []byte(testBMCUsername),
 				Password: []byte(testBMCPassword),
 			})).To(Succeed())
@@ -88,11 +88,11 @@ var _ = Describe("BMC Secret Writer", func() {
 
 		It("updates credentials for the same BMI", func() {
 			writer, k8sClient := newWriter()
-			Expect(writer.Create(ctx, credentials.Reference{ID: "node001-bmc-secret", OwnerID: "bmi-A"}, credentials.BMC{
+			Expect(writer.Create(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-A"}, credentials.BMC{
 				Username: []byte(testBMCUsername), Password: []byte(testOldBMCPassword),
 			})).To(Succeed())
 
-			Expect(writer.Create(ctx, credentials.Reference{ID: "node001-bmc-secret", OwnerID: "bmi-A"}, credentials.BMC{
+			Expect(writer.Create(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-A"}, credentials.BMC{
 				Username: []byte(testBMCUsername), Password: []byte(testNewBMCPassword),
 			})).To(Succeed())
 
@@ -103,11 +103,11 @@ var _ = Describe("BMC Secret Writer", func() {
 
 		It("refuses an update by a different BMI", func() {
 			writer, k8sClient := newWriter()
-			Expect(writer.Create(ctx, credentials.Reference{ID: "node001-bmc-secret", OwnerID: "bmi-A"}, credentials.BMC{
+			Expect(writer.Create(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-A"}, credentials.BMC{
 				Username: []byte(testBMCUsername), Password: []byte(testOriginalBMCPassword),
 			})).To(Succeed())
 
-			err := writer.Create(ctx, credentials.Reference{ID: "node001-bmc-secret", OwnerID: "bmi-B"}, credentials.BMC{
+			err := writer.Create(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-B"}, credentials.BMC{
 				Username: []byte(testBMCUsername), Password: []byte(testReplacementBMCPassword),
 			})
 			Expect(err).To(MatchError(ContainSubstring("not owned by this BMI")))
@@ -128,11 +128,11 @@ var _ = Describe("BMC Secret Writer", func() {
 			}, Data: map[string][]byte{"password": []byte(testOriginalBMCPassword)}}
 			writer, k8sClient := newWriter(bmh, legacy)
 
-			err := writer.Create(ctx, credentials.Reference{ID: legacy.Name, OwnerID: "bmi-B"}, credentials.BMC{
+			err := writer.Create(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-B"}, credentials.BMC{
 				Username: []byte(testBMCUsername), Password: []byte(testForeignBMCPassword),
 			})
 			Expect(err).To(MatchError(ContainSubstring("not owned by this BMI")))
-			Expect(writer.Create(ctx, credentials.Reference{ID: legacy.Name, OwnerID: "bmi-A"}, credentials.BMC{
+			Expect(writer.Create(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-A"}, credentials.BMC{
 				Username: []byte(testBMCUsername), Password: []byte(testReplacementBMCPassword),
 			})).To(Succeed())
 
@@ -149,7 +149,7 @@ var _ = Describe("BMC Secret Writer", func() {
 			}
 			writer, k8sClient := newWriter(foreign)
 
-			err := writer.Create(ctx, credentials.Reference{ID: "node001-bmc-secret", OwnerID: "bmi-A"}, credentials.BMC{
+			err := writer.Create(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-A"}, credentials.BMC{
 				Username: []byte(testBMCUsername), Password: []byte(testBMCPassword),
 			})
 
@@ -162,22 +162,22 @@ var _ = Describe("BMC Secret Writer", func() {
 
 		It("rejects a missing owner", func() {
 			writer, _ := newWriter()
-			Expect(writer.Create(ctx, credentials.Reference{ID: "node001-bmc-secret", OwnerID: ""}, credentials.BMC{})).To(MatchError(ContainSubstring("requires a BMI UID")))
+			Expect(writer.Create(ctx, credentials.Reference{HostID: "node001", BMIID: ""}, credentials.BMC{})).To(MatchError(ContainSubstring("requires a BMI UID")))
 		})
 	})
 
 	Describe("Delete", func() {
 		It("deletes a Secret only for its BMI owner", func() {
 			writer, k8sClient := newWriter()
-			Expect(writer.Create(ctx, credentials.Reference{ID: "node001-bmc-secret", OwnerID: "bmi-A"}, credentials.BMC{
+			Expect(writer.Create(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-A"}, credentials.BMC{
 				Username: []byte(testBMCUsername), Password: []byte(testBMCPassword),
 			})).To(Succeed())
 
-			Expect(writer.Delete(ctx, credentials.Reference{ID: "node001-bmc-secret", OwnerID: "bmi-B"})).To(MatchError(ContainSubstring("not owned by this BMI")))
+			Expect(writer.Delete(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-B"})).To(MatchError(ContainSubstring("not owned by this BMI")))
 			secret := &corev1.Secret{}
 			key := client.ObjectKey{Namespace: testNamespace, Name: "node001-bmc-secret"}
 			Expect(k8sClient.Get(ctx, key, secret)).To(Succeed())
-			Expect(writer.Delete(ctx, credentials.Reference{ID: "node001-bmc-secret", OwnerID: "bmi-A"})).To(Succeed())
+			Expect(writer.Delete(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-A"})).To(Succeed())
 			Expect(k8sClient.Get(ctx, key, &corev1.Secret{})).To(HaveOccurred())
 		})
 
@@ -188,7 +188,7 @@ var _ = Describe("BMC Secret Writer", func() {
 			}
 			writer, k8sClient := newWriter(adminSecret)
 
-			Expect(writer.Delete(ctx, credentials.Reference{ID: "admin-bmc-secret", OwnerID: "bmi-A"})).To(MatchError(ContainSubstring("not operator-managed")))
+			Expect(writer.Delete(ctx, credentials.Reference{HostID: "admin", BMIID: "bmi-A"})).To(MatchError(ContainSubstring("not operator-managed")))
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(adminSecret), &corev1.Secret{})).To(Succeed())
 		})
 
@@ -199,13 +199,13 @@ var _ = Describe("BMC Secret Writer", func() {
 			}}
 			writer, k8sClient := newWriter(legacy)
 
-			Expect(writer.Delete(ctx, credentials.Reference{ID: legacy.Name, OwnerID: "bmi-A"})).To(Succeed())
+			Expect(writer.Delete(ctx, credentials.Reference{HostID: "node001", BMIID: "bmi-A"})).To(Succeed())
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(legacy), &corev1.Secret{})).To(HaveOccurred())
 		})
 
 		It("is idempotent when the Secret does not exist", func() {
 			writer, _ := newWriter()
-			Expect(writer.Delete(ctx, credentials.Reference{ID: "nonexistent", OwnerID: "bmi-A"})).To(Succeed())
+			Expect(writer.Delete(ctx, credentials.Reference{HostID: "nonexistent", BMIID: "bmi-A"})).To(Succeed())
 		})
 	})
 })

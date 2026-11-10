@@ -14,8 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package credentials defines the BMC credentials shared by inventory
-// backends.
+// Package credentials defines the BMC credential contracts shared by inventory
+// backends and credential stores.
+//
+// A Reader resolves credentials for a host from a source. A Writer persists
+// credentials for a host in a destination. A Reference carries the domain
+// identifiers they exchange; it never contains a destination-specific storage
+// key.
 package credentials
 
 import (
@@ -41,19 +46,40 @@ type BMC struct {
 
 // Reader retrieves BMC credentials for a host from its configured source.
 type Reader interface {
+	// GetCredentials returns the credentials for the host identified by its
+	// inventory host ID.
 	GetCredentials(ctx context.Context, hostID string) (*BMC, error)
+
+	// Close releases resources held by the reader.
 	Close() error
 }
 
-// Reference identifies credentials in a destination and their expected owner.
+// Reference identifies the host a set of BMC credentials belongs to and the
+// BareMetalInstance that owns them.
+//
+// It is the contract between the layer that produces credentials (an inventory
+// backend) and a Writer that stores them. It deliberately carries domain
+// identifiers only: never a destination-specific storage key. Resolving that
+// key is the Writer implementation's job.
 type Reference struct {
-	ID      string
-	OwnerID string
+	// HostID is the host's identity in the inventory layer. Writers map it to
+	// their own storage key; callers must never pass a storage key here.
+	HostID string
+
+	// BMIID is the UID of the BareMetalInstance that owns the credentials.
+	// Writers use it to reject changes and deletions by any other owner.
+	BMIID string
 }
 
-// Writer stores and deletes BMC credentials in its configured destination.
+// Writer stores and deletes the BMC credentials for a host in its configured
+// destination. Callers identify the host and its owner; they never choose the
+// destination's storage key.
 type Writer interface {
-	// Create creates or updates credentials for the reference's owner.
+	// Create creates or updates the credentials for ref.HostID and records
+	// ref.BMIID as their owner.
 	Create(ctx context.Context, ref Reference, bmc BMC) error
+
+	// Delete removes the credentials for ref.HostID, but only if ref.BMIID is
+	// still their owner.
 	Delete(ctx context.Context, ref Reference) error
 }

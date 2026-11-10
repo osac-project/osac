@@ -86,10 +86,9 @@ var _ = Describe("BareMetalHost Manager", func() {
 			mgr := newTestManager()
 
 			err := mgr.CreateBMH(ctx, CreateParams{
-				Name:              "node001",
-				BMCAddress:        "redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1",
-				CredentialsSecret: "bmc-creds",
-				BootMACAddress:    "aa:bb:cc:dd:ee:01",
+				Name:           "node001",
+				BMCAddress:     "redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1",
+				BootMACAddress: "aa:bb:cc:dd:ee:01",
 				ConsumerRef: &corev1.ObjectReference{
 					APIVersion: "osac.openshift.io/v1alpha1",
 					Kind:       "BareMetalInstance",
@@ -105,7 +104,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			}, bmh)).To(Succeed())
 
 			Expect(bmh.Spec.BMC.Address).To(Equal("redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1"))
-			Expect(bmh.Spec.BMC.CredentialsName).To(Equal("bmc-creds"))
+			Expect(bmh.Spec.BMC.CredentialsName).To(Equal("node001-bmc-secret"))
 			Expect(bmh.Spec.BootMACAddress).To(Equal("aa:bb:cc:dd:ee:01"))
 			Expect(bmh.Spec.Online).To(BeFalse())
 			Expect(bmh.Spec.ConsumerRef).NotTo(BeNil())

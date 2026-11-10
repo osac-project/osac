@@ -327,7 +327,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 
 			// Operator-managed BMC secret was created with correct credentials
 			secret := &corev1.Secret{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostname + "-bmc-secret", Namespace: bcmTestNS}, secret)).To(Succeed())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: baremetalhost.CredentialsSecretName(hostname), Namespace: bcmTestNS}, secret)).To(Succeed())
 			Expect(secret.Data).To(HaveKeyWithValue("username", []byte("root")))
 			Expect(secret.Data).To(HaveKeyWithValue("password", []byte("calvin")))
 
@@ -405,7 +405,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 			Expect(ev).NotTo(HaveKey("osac_instance_id"))
 			// BMH and operator secret deleted
 			Expect(bmhExistsInNS(hostname)).To(BeFalse())
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: hostname + "-bmc-secret", Namespace: bcmTestNS}, &corev1.Secret{})
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: baremetalhost.CredentialsSecretName(hostname), Namespace: bcmTestNS}, &corev1.Secret{})
 			Expect(client.IgnoreNotFound(err)).To(Succeed())
 			Expect(err).To(HaveOccurred())
 

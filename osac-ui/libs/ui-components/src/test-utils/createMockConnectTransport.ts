@@ -172,6 +172,8 @@ import type {
   StorageBackend,
   StorageBackendsCreateRequest,
   StorageBackendsCreateResponse,
+  StorageBackendsDeleteRequest,
+  StorageBackendsGetRequest,
   StorageBackendsListRequest,
   StorageBackendsUpdateRequest,
   StorageBackendsUpdateResponse,
@@ -199,6 +201,8 @@ import {
   Tenants as PrivateTenants,
   StorageBackendState,
   StorageBackends,
+  StorageBackendsDeleteResponseSchema,
+  StorageBackendsGetResponseSchema,
   StorageBackendsListResponseSchema,
   StorageTierState,
   StorageTiers,
@@ -512,10 +516,20 @@ export type MockTransportOverrides = {
   onStorageBackendList?: (
     req: StorageBackendsListRequest,
   ) => MessageInitShape<typeof StorageBackendsListResponseSchema>;
+  onStorageBackendGet?: (
+    req: StorageBackendsGetRequest,
+  ) =>
+    | MessageInitShape<typeof StorageBackendsGetResponseSchema>
+    | Promise<MessageInitShape<typeof StorageBackendsGetResponseSchema>>;
   onStorageBackendCreate?: (
     req: StorageBackendsCreateRequest,
   ) => StorageBackendsCreateResponse | Promise<StorageBackendsCreateResponse>;
   onStorageBackendUpdate?: (req: StorageBackendsUpdateRequest) => StorageBackendsUpdateResponse;
+  onStorageBackendDelete?: (
+    req: StorageBackendsDeleteRequest,
+  ) =>
+    | MessageInitShape<typeof StorageBackendsDeleteResponseSchema>
+    | Promise<MessageInitShape<typeof StorageBackendsDeleteResponseSchema>>;
   onExternalIPPoolList?: (
     req: ExternalIPPoolsListRequest,
   ) => MessageInitShape<typeof ExternalIPPoolsListResponseSchema>;
@@ -987,9 +1001,12 @@ export const createMockConnectTransport = (
           );
           return { items, size: items.length, total: items.length };
         },
-        get: (req) => ({
-          object: storageBackends.find((b) => b.id === req.id),
-        }),
+        get: (req) => {
+          if (overrides.onStorageBackendGet) {
+            return overrides.onStorageBackendGet(req);
+          }
+          return { object: storageBackends.find((b) => b.id === req.id) };
+        },
         create: (req) => {
           if (overrides.onStorageBackendCreate) {
             return overrides.onStorageBackendCreate(req);
@@ -1010,6 +1027,9 @@ export const createMockConnectTransport = (
           return { object: req.object };
         },
         delete: (req) => {
+          if (overrides.onStorageBackendDelete) {
+            return overrides.onStorageBackendDelete(req);
+          }
           const index = storageBackends.findIndex((b) => b.id === req.id);
           if (index !== -1) {
             storageBackends.splice(index, 1);

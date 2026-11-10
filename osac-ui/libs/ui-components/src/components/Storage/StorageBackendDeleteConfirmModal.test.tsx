@@ -1,17 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Code, ConnectError } from '@connectrpc/connect';
+import { screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import StorageBackendDeleteConfirmModal from './StorageBackendDeleteConfirmModal';
-import * as storageBackendsApi from '../../api/v1/private/storage-backends';
-
-vi.mock('../../api/v1/private/storage-backends', async (importOriginal) => {
-  const actual = await importOriginal<typeof storageBackendsApi>();
-  return {
-    ...actual,
-    useDeleteStorageBackend: vi.fn(),
-  };
-});
+import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const mockBackend = {
   id: 'backend-1',
@@ -20,33 +12,16 @@ const mockBackend = {
 };
 
 describe('StorageBackendDeleteConfirmModal', () => {
-  const mutate = vi.fn();
-  const reset = vi.fn();
-
-  beforeEach(() => {
-    vi.resetAllMocks();
-    vi.mocked(storageBackendsApi.useDeleteStorageBackend).mockReturnValue({
-      mutate,
-      reset,
-      isPending: false,
-      error: null,
-    } as unknown as ReturnType<typeof storageBackendsApi.useDeleteStorageBackend>);
-  });
-
   it('deletes the backend and calls onSuccess', async () => {
-    const user = userEvent.setup();
-    mutate.mockImplementation((_id: string, options?: { onSuccess?: () => void }) => {
-      options?.onSuccess?.();
-      return Promise.resolve(undefined);
-    });
+    const onStorageBackendDelete = vi.fn(() => ({}));
     const onSuccess = vi.fn();
-
-    render(
+    const { user } = renderWithProviders(
       <StorageBackendDeleteConfirmModal
         backend={mockBackend as never}
         onClose={vi.fn()}
         onSuccess={onSuccess}
       />,
+      { transportOverrides: { onStorageBackendDelete } },
     );
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
@@ -54,46 +29,44 @@ describe('StorageBackendDeleteConfirmModal', () => {
     await user.click(screen.getByRole('button', { name: /^Delete$/i }));
 
     await waitFor(() => {
-      expect(mutate).toHaveBeenCalledWith('backend-1', {
-        onSuccess: expect.any(Function) as unknown,
-      });
+      expect(onStorageBackendDelete).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'backend-1' }),
+      );
       expect(onSuccess).toHaveBeenCalled();
     });
   });
 
-  it('shows the FAILED_PRECONDITION error verbatim and does not call onSuccess', async () => {
-    const user = userEvent.setup();
-    vi.mocked(storageBackendsApi.useDeleteStorageBackend).mockReturnValue({
-      mutate,
-      reset,
-      isPending: false,
-      error: new Error('[failed_precondition] backend is referenced by an active storage tier'),
-    } as unknown as ReturnType<typeof storageBackendsApi.useDeleteStorageBackend>);
+  it('shows the referential-integrity error and does not call onSuccess', async () => {
     const onSuccess = vi.fn();
-
-    render(
+    const { user } = renderWithProviders(
       <StorageBackendDeleteConfirmModal
         backend={mockBackend as never}
         onClose={vi.fn()}
         onSuccess={onSuccess}
       />,
+      {
+        transportOverrides: {
+          onStorageBackendDelete: () => {
+            throw new ConnectError(
+              'backend is referenced by an active storage tier',
+              Code.FailedPrecondition,
+            );
+          },
+        },
+      },
     );
 
     await user.click(screen.getByRole('button', { name: /^Delete$/i }));
 
-    await waitFor(() => {
-      expect(
-        screen.getByText(/backend is referenced by an active storage tier/i),
-      ).toBeInTheDocument();
-    });
+    expect(
+      await screen.findByText(/backend is referenced by an active storage tier/i),
+    ).toBeInTheDocument();
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
   it('calls onClose when Cancel is clicked', async () => {
-    const user = userEvent.setup();
     const onClose = vi.fn();
-
-    render(
+    const { user } = renderWithProviders(
       <StorageBackendDeleteConfirmModal
         backend={mockBackend as never}
         onClose={onClose}

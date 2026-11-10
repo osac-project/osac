@@ -25,29 +25,29 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
 
   return (
     <Card isFullHeight>
-      <CardTitle>Cluster configuration</CardTitle>
+      <CardTitle>{t('Cluster configuration')}</CardTitle>
       <CardBody>
         <DescriptionList isCompact>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Current version')}</DescriptionListTerm>
             <DescriptionListDescription>
-              <ClusterVersionControls key={cluster.id} cluster={cluster} />
+              <ClusterVersionControls cluster={cluster} />
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>Catalog item</DescriptionListTerm>
+            <DescriptionListTerm>{t('Catalog item')}</DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(catalogItem?.name || catalogItem?.id)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>Created</DescriptionListTerm>
+            <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
             <DescriptionListDescription>
               <Timestamp value={cluster.metadata?.creationTimestamp} />
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>Creator</DescriptionListTerm>
+            <DescriptionListTerm>{t('Creator')}</DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(cluster.metadata?.creator)}
             </DescriptionListDescription>

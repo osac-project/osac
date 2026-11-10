@@ -2,13 +2,14 @@ import { useMemo } from 'react';
 import { Skeleton } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
-import { type Cluster, ClusterState } from '@osac/types';
+import { type Cluster, ClusterState, ClusterVersions } from '@osac/types';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 
 import ClusterActionsMenu from './ClusterActionsMenu';
 import { ClusterStatusLabel } from './ClusterStatusLabel';
 import ClusterVersionLifecycleLabel from './ClusterVersionLifecycleLabel';
-import { clusterVersionNamesFilter, useClusterVersions } from '../../api/v1/cluster-versions';
+import { clusterVersionNamesFilter } from '../../api/v1/cluster-versions';
 import { useTranslation } from '../../hooks/useTranslation';
 import ExternalLink from '../Primitives/ExternalLink';
 import { Timestamp } from '../Primitives/Timestamp';
@@ -32,15 +33,16 @@ export const ClustersTable = ({ clusters }: ClustersTableProps) => {
     ],
     [clusters],
   );
-  const { data: clusterVersions = [], isLoading: isClusterVersionsLoading } = useClusterVersions(
+  const { data: clusterVersionReply, isLoading: isClusterVersionsLoading } = useListResource(
+    ClusterVersions,
     { filter: clusterVersionNamesFilter(versionNames) },
     { enabled: versionNames.length > 0 },
   );
 
   // Clusters reference versions by spec.version.name, so key the catalog by name.
   const clusterVersionByName = useMemo(
-    () => new Map(clusterVersions.map((cv) => [cv.metadata?.name, cv])),
-    [clusterVersions],
+    () => new Map(clusterVersionReply?.items.map((cv) => [cv.metadata?.name, cv]) ?? []),
+    [clusterVersionReply],
   );
 
   return (

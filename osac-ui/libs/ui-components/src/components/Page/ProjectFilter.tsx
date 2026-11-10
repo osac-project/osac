@@ -46,7 +46,7 @@ const ProjectFilter = () => {
   const selectedProjects: Project[] = [];
 
   projects.forEach((p) => {
-    const project = data?.find((d) => d.metadata?.name === p);
+    const project = data?.items.find((d) => d.metadata?.name === p);
     if (project) {
       selectedProjects.push(project);
     }
@@ -65,7 +65,7 @@ const ProjectFilter = () => {
   return (
     <ProjectSelect
       mode="multiple"
-      projects={data ?? []}
+      projects={data?.items ?? []}
       selected={projects}
       onChange={setProjects}
       isLoading={isLoading}

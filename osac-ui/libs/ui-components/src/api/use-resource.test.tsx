@@ -154,7 +154,7 @@ describe('resource queries', () => {
     });
 
     await waitFor(() => expect(result.current.all.isSuccess).toBe(true));
-    expect(result.current.all.data?.map(({ id }) => id)).toEqual(tenants.map(({ id }) => id));
+    expect(result.current.all.data?.items.map(({ id }) => id)).toEqual(tenants.map(({ id }) => id));
     expect(result.current.normal.data?.items).toHaveLength(25);
     expect(queryClient.getQueryCache().findAll({ queryKey: [Tenants.typeName] })).toHaveLength(2);
   });
@@ -180,7 +180,9 @@ describe('resource queries', () => {
     expect(calls).toBe(0);
 
     rerender({ enabled: true });
-    await waitFor(() => expect(result.current.data?.map(({ id }) => id)).toEqual(['tenant-1']));
+    await waitFor(() =>
+      expect(result.current.data?.items.map(({ id }) => id)).toEqual(['tenant-1']),
+    );
     expect(calls).toBe(1);
   });
 

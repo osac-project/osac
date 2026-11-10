@@ -18,7 +18,7 @@ const ClusterDeleteConfirmModal = ({
   onSuccess,
 }: ClusterDeleteConfirmModalProps) => {
   const { t } = useTranslation();
-  const deleteCluster = useDeleteResource(Clusters, { retry: false });
+  const deleteCluster = useDeleteResource(Clusters);
   const clusterName = cluster.metadata?.name ?? cluster.id;
   const hasAutoExternalIp = cluster.spec?.autoExternalIpAttachment === true;
 

@@ -59,7 +59,7 @@ describe('ClusterDeleteConfirmModal', () => {
     );
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    expect(resourceApi.useDeleteResource).toHaveBeenCalledWith(Clusters, { retry: false });
+    expect(resourceApi.useDeleteResource).toHaveBeenCalledWith(Clusters);
     expect(
       screen.getByText(
         'This permanently deletes the cluster and all its resources. This action cannot be undone.',

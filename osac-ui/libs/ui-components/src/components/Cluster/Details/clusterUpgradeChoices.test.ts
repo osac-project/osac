@@ -1,4 +1,5 @@
 import { create } from '@bufbuild/protobuf';
+import type { TFunction } from 'i18next';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -14,7 +15,15 @@ import {
   ClusterVersionState,
 } from '@osac/types';
 
-import { resolveClusterUpgradeChoices } from './clusterUpgradeChoices';
+import { resolveClusterUpgradeChoices as resolveChoices } from './clusterUpgradeChoices';
+
+const t = ((key: string, values?: Record<string, string>) =>
+  key.replace(/{{(\w+)}}/g, (_, name: string) => values?.[name] ?? '')) as TFunction;
+const resolveClusterUpgradeChoices = (
+  cluster: Cluster,
+  configuredVersion: ClusterVersion | undefined,
+  catalog: readonly ClusterVersion[],
+) => resolveChoices(cluster, configuredVersion, catalog, t);
 
 type ClusterFixture = Cluster & {
   spec: NonNullable<Cluster['spec']>;
@@ -87,26 +96,12 @@ describe('resolveClusterUpgradeChoices', () => {
     expect(result.blockedReason).toBeUndefined();
   });
 
-  it('blocks an absent or mismatched configured version', () => {
+  it('blocks a missing fetched version and accepts stale reference metadata', () => {
     const cluster = makeCluster();
     const target = nextVersion();
 
     expect(resolveClusterUpgradeChoices(cluster, undefined, [target]).blockedReason).toBe(
-      'configured-version-unresolved',
-    );
-
-    cluster.spec.version = undefined;
-    expect(resolveClusterUpgradeChoices(cluster, currentVersion(), [target]).blockedReason).toBe(
-      'configured-version-unresolved',
-    );
-
-    cluster.spec.version = create(ClusterVersionReferenceSchema, {
-      id: 'different-id',
-      name: 'current',
-      project: 'project-a',
-    });
-    expect(resolveClusterUpgradeChoices(cluster, currentVersion(), [target]).blockedReason).toBe(
-      'configured-version-unresolved',
+      'The configured cluster version could not be found.',
     );
 
     cluster.spec.version = create(ClusterVersionReferenceSchema, {
@@ -114,16 +109,16 @@ describe('resolveClusterUpgradeChoices', () => {
       name: 'different-name',
       project: 'project-a',
     });
-    expect(resolveClusterUpgradeChoices(cluster, currentVersion(), [target]).blockedReason).toBe(
-      'configured-version-unresolved',
-    );
+    expect(
+      resolveClusterUpgradeChoices(cluster, currentVersion(), [target]).blockedReason,
+    ).toBeUndefined();
 
     cluster.spec.version = makeCluster().spec.version;
     const wrongProject = currentVersion();
     wrongProject.metadata.project = 'project-b';
-    expect(resolveClusterUpgradeChoices(cluster, wrongProject, [target]).blockedReason).toBe(
-      'configured-version-unresolved',
-    );
+    expect(
+      resolveClusterUpgradeChoices(cluster, wrongProject, [target]).blockedReason,
+    ).toBeUndefined();
   });
 
   it('distinguishes an invalid configured semver from an unresolved version', () => {
@@ -132,14 +127,14 @@ describe('resolveClusterUpgradeChoices', () => {
     configured.spec.version = '4.16';
 
     expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()]).blockedReason).toBe(
-      'configured-version-invalid',
+      'The configured cluster version is invalid.',
     );
   });
 
   it.each([
-    [ClusterState.FAILED, 'cluster-failed'],
-    [ClusterState.DELETING, 'cluster-deleting'],
-    [ClusterState.DELETE_FAILED, 'cluster-delete-failed'],
+    [ClusterState.FAILED, 'The cluster is in a failed state.'],
+    [ClusterState.DELETING, 'The cluster is being deleted.'],
+    [ClusterState.DELETE_FAILED, 'The cluster deletion failed.'],
   ] as const)('blocks Cluster state %s with %s', (state, reason) => {
     const cluster = makeCluster();
     cluster.status.state = state;
@@ -155,12 +150,12 @@ describe('resolveClusterUpgradeChoices', () => {
 
     expect(
       resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()]).blockedReason,
-    ).toBe('control-plane-observation-unavailable');
+    ).toBe('The current control plane version is not available yet.');
 
     cluster.status.observedVersion = 'not-semver';
     expect(
       resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()]).blockedReason,
-    ).toBe('control-plane-observation-unavailable');
+    ).toBe('The current control plane version is not available yet.');
   });
 
   it('rejects noncanonical semver strings in configuration, observations, and targets', () => {
@@ -169,28 +164,26 @@ describe('resolveClusterUpgradeChoices', () => {
 
     configured.spec.version = 'v4.16.0';
     expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()]).blockedReason).toBe(
-      'configured-version-invalid',
+      'The configured cluster version is invalid.',
     );
 
     configured.spec.version = '4.16.0';
     cluster.status.observedVersion = 'v4.16.0';
     expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()]).blockedReason).toBe(
-      'control-plane-observation-unavailable',
+      'The current control plane version is not available yet.',
     );
 
     cluster.status.observedVersion = '4.16.0';
     cluster.status.nodeSets.workers.observedVersion = '4.16.0 ';
     expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()])).toMatchObject({
-      blockedReason: 'node-set-observation-unavailable',
-      blockedNodeSetId: 'workers',
-      blockedObservedVersion: '4.16.0 ',
+      blockedReason: 'Node set workers reported an invalid observed version: 4.16.0 .',
     });
 
     cluster.status.nodeSets.workers.observedVersion = '4.16.0';
     expect(
       resolveClusterUpgradeChoices(cluster, configured, [makeVersion('prefixed', 'v4.17.0')])
         .blockedReason,
-    ).toBe('no-eligible-target');
+    ).toBe('No eligible upgrade target is available.');
   });
 
   it('requires valid observations for configured and extra current node sets', () => {
@@ -198,17 +191,14 @@ describe('resolveClusterUpgradeChoices', () => {
     delete cluster.status.nodeSets.gpu;
 
     expect(resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()])).toMatchObject({
-      blockedReason: 'node-set-observation-unavailable',
-      blockedNodeSetId: 'gpu',
+      blockedReason: 'Node set gpu has not reported an observed version.',
     });
 
     cluster.status.nodeSets.gpu = create(ClusterNodeSetSchema, {
       observedVersion: 'invalid',
     });
     expect(resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()])).toMatchObject({
-      blockedReason: 'node-set-observation-unavailable',
-      blockedNodeSetId: 'gpu',
-      blockedObservedVersion: 'invalid',
+      blockedReason: 'Node set gpu reported an invalid observed version: invalid.',
     });
 
     cluster.status.nodeSets.gpu.observedVersion = '4.16.0';
@@ -217,7 +207,7 @@ describe('resolveClusterUpgradeChoices', () => {
     });
     expect(
       resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()]).blockedReason,
-    ).toBe('node-set-observation-unavailable');
+    ).toBe('Node set extra has not reported an observed version.');
   });
 
   it('compares desired and observed versions semantically across all components', () => {
@@ -233,16 +223,13 @@ describe('resolveClusterUpgradeChoices', () => {
 
     cluster.status.nodeSets.gpu.observedVersion = '4.15.9';
     expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()])).toMatchObject({
-      blockedReason: 'components-not-converged',
-      blockedNodeSetId: 'gpu',
-      blockedObservedVersion: '4.15.9',
+      blockedReason: 'Node set gpu is at 4.15.9; wait for 4.16.0+desired.',
     });
 
     cluster.status.nodeSets.gpu.observedVersion = '4.16.0';
     cluster.status.observedVersion = '4.15.9';
     expect(resolveClusterUpgradeChoices(cluster, configured, [nextVersion()])).toMatchObject({
-      blockedReason: 'components-not-converged',
-      blockedObservedVersion: '4.15.9',
+      blockedReason: 'The control plane is at 4.15.9; wait for 4.16.0+desired.',
     });
   });
 
@@ -257,7 +244,7 @@ describe('resolveClusterUpgradeChoices', () => {
     cluster.status.nodeSets.workers.observedVersion = '4.15.9';
     expect(
       resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()]).blockedReason,
-    ).toBe('components-not-converged');
+    ).toBe('Node set workers is at 4.15.9; wait for 4.16.0.');
   });
 
   it('allows a later request after TimedOut only once every observation converges', () => {
@@ -273,7 +260,7 @@ describe('resolveClusterUpgradeChoices', () => {
 
     expect(
       resolveClusterUpgradeChoices(cluster, currentVersion(), [nextVersion()]).blockedReason,
-    ).toBe('components-not-converged');
+    ).toBe('The control plane is at 4.15.0; wait for 4.16.0.');
 
     cluster.status.observedVersion = '4.16.0';
     expect(
@@ -299,7 +286,9 @@ describe('resolveClusterUpgradeChoices', () => {
     ]);
 
     expect(result.eligibleTargets).toEqual([]);
-    expect(result.blockedReason).toBe('unsupported-skew');
+    expect(result.blockedReason).toBe(
+      'Available targets exceed the supported node set version skew.',
+    );
   });
 
   it('blocks a diverged node set before inspecting catalog targets', () => {
@@ -309,9 +298,7 @@ describe('resolveClusterUpgradeChoices', () => {
     const result = resolveClusterUpgradeChoices(cluster, currentVersion(), [target]);
 
     expect(result.eligibleTargets).toEqual([]);
-    expect(result.blockedReason).toBe('components-not-converged');
-    expect(result.blockedNodeSetId).toBe('workers');
-    expect(result.blockedObservedVersion).toBe('4.17.0');
+    expect(result.blockedReason).toBe('Node set workers is at 4.17.0; wait for 4.16.0.');
   });
 
   it('reports no eligible target when the catalog has no usable newer entry', () => {
@@ -323,6 +310,6 @@ describe('resolveClusterUpgradeChoices', () => {
     const result = resolveClusterUpgradeChoices(makeCluster(), currentVersion(), catalog);
 
     expect(result.eligibleTargets).toEqual([]);
-    expect(result.blockedReason).toBe('no-eligible-target');
+    expect(result.blockedReason).toBe('No eligible upgrade target is available.');
   });
 });

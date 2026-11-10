@@ -1,12 +1,6 @@
-import { type ClusterVersion, ClusterVersionState, ClusterVersions } from '@osac/types';
+import { type ClusterVersion, ClusterVersionState } from '@osac/types';
 
 import { cel } from '../cel';
-import { type ListParams } from '../types';
-import { useListResource } from '../use-resource';
-
-type ClusterVersionsQueryOptions = {
-  enabled?: boolean;
-};
 
 export const CLUSTER_VERSION_ACTIVE_LIST_FILTER = cel<ClusterVersion>((filter) =>
   filter.and(
@@ -17,14 +11,6 @@ export const CLUSTER_VERSION_ACTIVE_LIST_FILTER = cel<ClusterVersion>((filter) =
     filter.field('spec.enabled').equals(true),
   ),
 );
-
-export const clusterUpgradeCatalogFilter = (tenant: string) =>
-  cel<ClusterVersion>((filter) =>
-    filter.or(
-      filter.field('metadata.tenant').equals(tenant),
-      filter.field('metadata.tenant').equals('shared'),
-    ),
-  );
 
 // References both spec.state and spec.enabled so the public List RPC returns
 // every version — including obsolete and disabled ones. The server injects
@@ -59,15 +45,4 @@ export const CLUSTER_VERSION_ALL_STATES_LIST_FILTER = cel<ClusterVersion>((filte
 export const clusterVersionNamesFilter = (names: string[]) =>
   cel<ClusterVersion>((filter) =>
     filter.and(filter.field('metadata.name').isIn(names), CLUSTER_VERSION_ALL_STATES_LIST_FILTER),
-  );
-
-export const useClusterVersions = (
-  params: ListParams = {},
-  options: ClusterVersionsQueryOptions = {},
-) =>
-  useListResource(
-    ClusterVersions,
-    params,
-    { enabled: options.enabled ?? true },
-    (reply) => reply.items,
   );

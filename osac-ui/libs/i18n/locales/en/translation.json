@@ -232,6 +232,7 @@
   "Cluster access file (.kube/config)": "Cluster access file (.kube/config)",
   "cluster catalog item": "cluster catalog item",
   "Cluster conditions": "Cluster conditions",
+  "Cluster configuration": "Cluster configuration",
   "Cluster Networking": "Cluster Networking",
   "Cluster node sets": "Cluster node sets",
   "Cluster password": "Cluster password",

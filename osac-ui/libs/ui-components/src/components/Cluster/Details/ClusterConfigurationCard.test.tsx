@@ -1,4 +1,5 @@
 import { clone, create } from '@bufbuild/protobuf';
+import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
 import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
@@ -10,19 +11,21 @@ import {
   ClusterUpgradeState,
   ClusterVersionSchema,
   ClusterVersionState,
+  ClusterVersions,
 } from '@osac/types';
 
 import { ClusterConfigurationCard } from './ClusterConfigurationCard';
+import { useGetResource } from '../../../api/use-resource';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 const currentVersion = create(ClusterVersionSchema, {
   id: 'version-4-17',
-  metadata: { name: 'ocp-4-17', tenant: 'tenant-a', project: 'project-a' },
+  metadata: { name: 'ocp-4-17', tenant: 'shared', project: 'project-a' },
   spec: { version: '4.17.0', state: ClusterVersionState.ACTIVE, enabled: true },
 });
 const targetVersion = create(ClusterVersionSchema, {
   id: 'version-4-18',
-  metadata: { name: 'ocp-4-18', tenant: 'tenant-a', project: 'project-a' },
+  metadata: { name: 'ocp-4-18', tenant: 'shared', project: 'project-a' },
   spec: { version: '4.18.0', state: ClusterVersionState.ACTIVE, enabled: true },
 });
 const cluster = create(ClusterSchema, {
@@ -34,6 +37,11 @@ const cluster = create(ClusterSchema, {
   },
   status: { state: ClusterState.READY, observedVersion: '4.17.0' },
 });
+
+const RefreshVersion = () => {
+  const { refetch } = useGetResource(ClusterVersions, { id: currentVersion.id });
+  return <button onClick={() => void refetch()}>Refresh version</button>;
+};
 
 describe('ClusterConfigurationCard', () => {
   it('shows configuration and an inline available upgrade beside the observed version', async () => {
@@ -136,6 +144,40 @@ describe('ClusterConfigurationCard', () => {
         'Node set workers is at 4.16.0; wait for 4.17.0.',
       ),
     );
+  });
+
+  it('blocks an upgrade when a version refetch fails after a successful fetch', async () => {
+    let getCalls = 0;
+    const transport = createRouterTransport((router) => {
+      router.service(ClusterVersions, {
+        get: () => {
+          getCalls += 1;
+          if (getCalls > 1) {
+            throw new ConnectError('version removed', Code.NotFound);
+          }
+          return { object: currentVersion };
+        },
+        list: () => ({ items: [currentVersion, targetVersion], size: 2, total: 2 }),
+      });
+    });
+    const { user } = renderWithProviders(
+      <>
+        <ClusterConfigurationCard cluster={cluster} />
+        <RefreshVersion />
+      </>,
+      { transport },
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole('button', { name: 'Refresh version' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
+        'Could not load upgrade options.',
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
   });
 
   it('closes an open upgrade dialog when the cluster identity changes', async () => {

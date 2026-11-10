@@ -294,7 +294,7 @@ describe('UpgradeClusterDialog', () => {
     await user.click(screen.getByRole('button', { name: /Upgrade cluster/ }));
 
     const errorMessage = await screen.findByText('upgrade admission denied');
-    expect(errorMessage.closest('[aria-live]')).toHaveAttribute('aria-live', 'polite');
+    expect(errorMessage.closest('[role="alert"]')).not.toBeNull();
     expect(screen.getByLabelText(/^Target version/)).toHaveTextContent('4.19.0 (deprecated)');
     expect(screen.getByRole('button', { name: /Upgrade cluster/ })).toBeEnabled();
     expect(requests).toHaveLength(1);

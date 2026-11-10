@@ -49,7 +49,7 @@ const UpgradeClusterDialog = ({
   onClose,
 }: UpgradeClusterDialogProps) => {
   const { t } = useTranslation();
-  const updateCluster = useUpdateResource(Clusters, { retry: false });
+  const updateCluster = useUpdateResource(Clusters);
   const requiresDowntimeAcknowledgement = workerNodeCount === 1;
   const options = eligibleVersions.map((version) => {
     const label = versionDisplayName(version, version.id);
@@ -87,7 +87,7 @@ const UpgradeClusterDialog = ({
       onSubmit={handleSubmit}
     >
       {({ submitForm, isSubmitting, values }) => {
-        const pending = isSubmitting || updateCluster.isPending;
+        const pending = isSubmitting;
         const selectedTargetExists = eligibleVersions.some(
           (version) => version.id === values.targetVersionId,
         );
@@ -166,7 +166,7 @@ const UpgradeClusterDialog = ({
                 <Alert
                   variant="danger"
                   isInline
-                  isLiveRegion
+                  role="alert"
                   title={t('Could not request the cluster upgrade')}
                 >
                   {getApiErrorMessage(updateCluster.error, t)}
@@ -185,7 +185,7 @@ const UpgradeClusterDialog = ({
                   !selectedTargetExists ||
                   (requiresDowntimeAcknowledgement && !values.acknowledgeDowntime)
                 }
-                isLoading={pending || undefined}
+                isLoading={pending}
               >
                 {t('Upgrade cluster')}
               </Button>

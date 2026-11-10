@@ -27,7 +27,7 @@ interface Props {
 const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const provision = useCreateResource(Clusters, { retry: false });
+  const provision = useCreateResource(Clusters);
   const catalogItemQuery = useGetResource(
     ClusterCatalogItems,
     { id: initialCatalogItemId ?? '' },

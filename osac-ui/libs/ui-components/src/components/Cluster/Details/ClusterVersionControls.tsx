@@ -1,7 +1,5 @@
 import { useId, useState } from 'react';
-import { Code, ConnectError } from '@connectrpc/connect';
 import { Button, Content, Flex, FlexItem, Label } from '@patternfly/react-core';
-import type { TFunction } from 'i18next';
 
 import { type Cluster, ClusterState, ClusterUpgradeState, ClusterVersions } from '@osac/types';
 
@@ -11,7 +9,6 @@ import {
 } from './clusterUpgradeChoices';
 import UpgradeClusterDialog from './UpgradeClusterDialog';
 import { useGetResource, useListAllResources } from '../../../api/use-resource';
-import { clusterUpgradeCatalogFilter } from '../../../api/v1/cluster-versions';
 import { useTranslation } from '../../../hooks/useTranslation';
 
 interface ClusterVersionControlsProps {
@@ -23,53 +20,6 @@ type UpgradeActionState =
   | { kind: 'available' }
   | { kind: 'in-progress' }
   | { kind: 'blocked'; reason: string };
-
-const blockedReasonText = (
-  choices: ClusterUpgradeChoiceResult,
-  desiredVersion: string | undefined,
-  t: TFunction,
-): string => {
-  switch (choices.blockedReason) {
-    case 'cluster-failed':
-      return t('The cluster is in a failed state.');
-    case 'cluster-deleting':
-      return t('The cluster is being deleted.');
-    case 'cluster-delete-failed':
-      return t('The cluster deletion failed.');
-    case 'configured-version-unresolved':
-      return t('The configured cluster version could not be found.');
-    case 'configured-version-invalid':
-      return t('The configured cluster version is invalid.');
-    case 'control-plane-observation-unavailable':
-      return t('The current control plane version is not available yet.');
-    case 'node-set-observation-unavailable':
-      return choices.blockedObservedVersion
-        ? t('Node set {{nodeSetId}} reported an invalid observed version: {{observedVersion}}.', {
-            nodeSetId: choices.blockedNodeSetId,
-            observedVersion: choices.blockedObservedVersion,
-          })
-        : t('Node set {{nodeSetId}} has not reported an observed version.', {
-            nodeSetId: choices.blockedNodeSetId,
-          });
-    case 'components-not-converged':
-      return choices.blockedNodeSetId
-        ? t('Node set {{nodeSetId}} is at {{observedVersion}}; wait for {{desiredVersion}}.', {
-            nodeSetId: choices.blockedNodeSetId,
-            observedVersion: choices.blockedObservedVersion,
-            desiredVersion,
-          })
-        : t('The control plane is at {{observedVersion}}; wait for {{desiredVersion}}.', {
-            observedVersion: choices.blockedObservedVersion,
-            desiredVersion,
-          });
-    case 'unsupported-skew':
-      return t('Available targets exceed the supported node set version skew.');
-    case 'no-eligible-target':
-      return t('No eligible upgrade target is available.');
-    default:
-      return t('Upgrade eligibility is unavailable.');
-  }
-};
 
 const countCurrentWorkerNodes = (cluster: Cluster): number => {
   const statusNodeSets = cluster.status?.nodeSets ?? {};
@@ -85,8 +35,8 @@ const countCurrentWorkerNodes = (cluster: Cluster): number => {
 const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   const { t } = useTranslation();
   const reasonId = useId();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const tenant = cluster.metadata?.tenant;
+  const [openClusterId, setOpenClusterId] = useState<string>();
+  const dialogOpen = openClusterId === cluster.id;
   const configuredVersionId = cluster.spec?.version?.id;
   const upgradeInProgress =
     cluster.status?.state !== ClusterState.FAILED &&
@@ -99,30 +49,18 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   const configuredVersionQuery = useGetResource(
     ClusterVersions,
     { id: configuredVersionId ?? '' },
-    { enabled: Boolean(configuredVersionId && tenant && !upgradeInProgress), retry: false },
+    { enabled: Boolean(configuredVersionId && !upgradeInProgress), retry: false },
   );
-  const catalogQuery = useListAllResources(
-    ClusterVersions,
-    tenant ? clusterUpgradeCatalogFilter(tenant) : undefined,
-    {
-      enabled: Boolean(configuredVersionId && tenant && !upgradeInProgress),
-      refetchInterval: false,
-    },
-  );
-  const fetchedVersion = configuredVersionQuery.data?.object;
-  const configuredVersion =
-    fetchedVersion?.metadata?.tenant === tenant || fetchedVersion?.metadata?.tenant === 'shared'
-      ? fetchedVersion
-      : undefined;
-  const notFound =
-    configuredVersionQuery.error instanceof ConnectError &&
-    configuredVersionQuery.error.code === Code.NotFound;
+  const catalogQuery = useListAllResources(ClusterVersions, undefined, {
+    enabled: Boolean(configuredVersionId && !upgradeInProgress),
+  });
+  const configuredVersion = configuredVersionQuery.data?.object;
 
   let choices: ClusterUpgradeChoiceResult = { eligibleTargets: [] };
   let action: UpgradeActionState;
   if (upgradeInProgress) {
     action = { kind: 'in-progress' };
-  } else if (!tenant) {
+  } else if (!configuredVersionId) {
     action = { kind: 'blocked', reason: t('Upgrade eligibility is unavailable.') };
   } else if (
     configuredVersionQuery.isLoading ||
@@ -130,15 +68,17 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
     catalogQuery.isPlaceholderData
   ) {
     action = { kind: 'loading' };
-  } else if ((configuredVersionQuery.isError && !notFound) || catalogQuery.isError) {
+  } else if (configuredVersionQuery.isError || catalogQuery.isError) {
     action = { kind: 'blocked', reason: t('Could not load upgrade options.') };
   } else {
-    choices = resolveClusterUpgradeChoices(cluster, configuredVersion, catalogQuery.data ?? []);
+    choices = resolveClusterUpgradeChoices(
+      cluster,
+      configuredVersion,
+      catalogQuery.data?.items ?? [],
+      t,
+    );
     action = choices.blockedReason
-      ? {
-          kind: 'blocked',
-          reason: blockedReasonText(choices, configuredVersion?.spec?.version, t),
-        }
+      ? { kind: 'blocked', reason: choices.blockedReason }
       : { kind: 'available' };
   }
 
@@ -176,7 +116,7 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
           <Button
             variant="link"
             isInline
-            onClick={() => setDialogOpen(true)}
+            onClick={() => setOpenClusterId(cluster.id)}
             isDisabled={action.kind !== 'available'}
             aria-describedby={
               unavailableReason || action.kind === 'in-progress' ? reasonId : undefined
@@ -198,7 +138,7 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
           currentVersion={cluster.status?.observedVersion}
           eligibleVersions={choices.blockedReason ? [] : choices.eligibleTargets}
           workerNodeCount={countCurrentWorkerNodes(cluster)}
-          onClose={() => setDialogOpen(false)}
+          onClose={() => setOpenClusterId(undefined)}
         />
       )}
     </>

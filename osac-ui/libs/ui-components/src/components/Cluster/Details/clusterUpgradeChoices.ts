@@ -1,26 +1,11 @@
+import type { TFunction } from 'i18next';
 import { type SemVer, compare, eq, gt, parse } from 'semver';
 
 import { type Cluster, ClusterState, type ClusterVersion, ClusterVersionState } from '@osac/types';
 
-import { matchesClusterVersionReference } from '../../../api/v1/cluster-version-reference';
-
-export type ClusterUpgradeBlockedReason =
-  | 'cluster-failed'
-  | 'cluster-deleting'
-  | 'cluster-delete-failed'
-  | 'configured-version-unresolved'
-  | 'configured-version-invalid'
-  | 'control-plane-observation-unavailable'
-  | 'node-set-observation-unavailable'
-  | 'components-not-converged'
-  | 'no-eligible-target'
-  | 'unsupported-skew';
-
 export interface ClusterUpgradeChoiceResult {
   eligibleTargets: ClusterVersion[];
-  blockedReason?: ClusterUpgradeBlockedReason;
-  blockedNodeSetId?: string;
-  blockedObservedVersion?: string;
+  blockedReason?: string;
 }
 
 const MAX_MINOR_VERSION_SKEW = 3;
@@ -36,45 +21,46 @@ const parseStrictSemVer = (version?: string): SemVer | null => {
   return canonical === version ? parsed : null;
 };
 
-const blocked = (
-  blockedReason: ClusterUpgradeBlockedReason,
-  details: Pick<ClusterUpgradeChoiceResult, 'blockedNodeSetId' | 'blockedObservedVersion'> = {},
-): ClusterUpgradeChoiceResult => ({ eligibleTargets: [], blockedReason, ...details });
+const blocked = (blockedReason: string): ClusterUpgradeChoiceResult => ({
+  eligibleTargets: [],
+  blockedReason,
+});
 
 export const resolveClusterUpgradeChoices = (
   cluster: Cluster,
   configuredVersion: ClusterVersion | undefined,
   candidateCatalog: readonly ClusterVersion[],
+  t: TFunction,
 ): ClusterUpgradeChoiceResult => {
   switch (cluster.status?.state) {
     case ClusterState.FAILED:
-      return blocked('cluster-failed');
+      return blocked(t('The cluster is in a failed state.'));
     case ClusterState.DELETING:
-      return blocked('cluster-deleting');
+      return blocked(t('The cluster is being deleted.'));
     case ClusterState.DELETE_FAILED:
-      return blocked('cluster-delete-failed');
+      return blocked(t('The cluster deletion failed.'));
   }
 
-  const reference = cluster.spec?.version;
-  if (
-    !reference ||
-    !configuredVersion ||
-    !matchesClusterVersionReference(reference, configuredVersion)
-  ) {
-    return blocked('configured-version-unresolved');
+  if (!configuredVersion) {
+    return blocked(t('The configured cluster version could not be found.'));
   }
   const configured = parseStrictSemVer(configuredVersion.spec?.version);
   if (!configured) {
-    return blocked('configured-version-invalid');
+    return blocked(t('The configured cluster version is invalid.'));
   }
 
   const observedVersion = cluster.status?.observedVersion;
   const controlPlane = parseStrictSemVer(observedVersion);
   if (!controlPlane) {
-    return blocked('control-plane-observation-unavailable');
+    return blocked(t('The current control plane version is not available yet.'));
   }
   if (!eq(controlPlane, configured)) {
-    return blocked('components-not-converged', { blockedObservedVersion: observedVersion });
+    return blocked(
+      t('The control plane is at {{observedVersion}}; wait for {{desiredVersion}}.', {
+        observedVersion,
+        desiredVersion: configuredVersion.spec?.version,
+      }),
+    );
   }
 
   const observedNodeSets = cluster.status?.nodeSets ?? {};
@@ -86,16 +72,23 @@ export const resolveClusterUpgradeChoices = (
     const nodeSetVersion = observedNodeSets[id]?.observedVersion;
     const observed = parseStrictSemVer(nodeSetVersion);
     if (!observed) {
-      return blocked('node-set-observation-unavailable', {
-        blockedNodeSetId: id,
-        blockedObservedVersion: nodeSetVersion,
-      });
+      return blocked(
+        nodeSetVersion
+          ? t('Node set {{nodeSetId}} reported an invalid observed version: {{observedVersion}}.', {
+              nodeSetId: id,
+              observedVersion: nodeSetVersion,
+            })
+          : t('Node set {{nodeSetId}} has not reported an observed version.', { nodeSetId: id }),
+      );
     }
     if (!eq(observed, configured)) {
-      return blocked('components-not-converged', {
-        blockedNodeSetId: id,
-        blockedObservedVersion: nodeSetVersion,
-      });
+      return blocked(
+        t('Node set {{nodeSetId}} is at {{observedVersion}}; wait for {{desiredVersion}}.', {
+          nodeSetId: id,
+          observedVersion: nodeSetVersion,
+          desiredVersion: configuredVersion.spec?.version,
+        }),
+      );
     }
   }
 
@@ -124,7 +117,11 @@ export const resolveClusterUpgradeChoices = (
   }
 
   if (eligible.length === 0) {
-    return blocked(skewRejected ? 'unsupported-skew' : 'no-eligible-target');
+    return blocked(
+      skewRejected
+        ? t('Available targets exceed the supported node set version skew.')
+        : t('No eligible upgrade target is available.'),
+    );
   }
   return {
     eligibleTargets: eligible

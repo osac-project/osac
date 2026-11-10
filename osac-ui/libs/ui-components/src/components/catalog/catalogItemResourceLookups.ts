@@ -1,7 +1,6 @@
 import type { BareMetalInstanceType, ClusterVersion, DiskImage, InstanceType } from '@osac/types';
-import { BareMetalInstanceTypes } from '@osac/types';
+import { BareMetalInstanceTypes, ClusterVersions } from '@osac/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
-import { useClusterVersions } from '@osac/ui-components/api/v1/cluster-versions';
 import { useDiskImages } from '@osac/ui-components/api/v1/disk-image';
 import { useInstanceTypes } from '@osac/ui-components/api/v1/instance-types';
 
@@ -27,12 +26,12 @@ export const useCatalogItemResourceLookups = (
     {},
     { enabled },
   );
-  const { data: clusterVersions = [] } = useClusterVersions({}, { enabled });
+  const { data: clusterVersionReply } = useListResource(ClusterVersions, {}, { enabled });
 
   return {
     diskImages,
     computeInstanceTypes,
     bareMetalInstanceTypes: bareMetalInstanceTypesData?.items ?? [],
-    clusterVersions,
+    clusterVersions: clusterVersionReply?.items ?? [],
   };
 };

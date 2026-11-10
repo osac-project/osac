@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
     allocate_worker_subnet,
     assert_grpc_field_violation,
@@ -46,6 +46,25 @@ def disabled_reference_pool(
         )
         yield {"id": pool_id, "name": name}
     finally:
+        stored = private_grpc.call(
+            service=f"{PRIVATE_API}.ExternalIPs/List", data={"filter": f'this.spec.pool.id == "{pool_id}"'}
+        )
+        for item in stored.get("items", []):
+            external_ip_id = item["id"]
+            wait_owned_gone(
+                description=f"Unexpected ExternalIP {external_ip_id} gone",
+                api_gone=lambda resource_id=external_ip_id: (
+                    resource_id not in {entry["id"] for entry in private_grpc.list_private_external_ips()}
+                ),
+                cr_gone=lambda resource_id=external_ip_id: (
+                    k8s_hub_client.get_external_ip_name(uuid=resource_id, checked=False) == ""
+                ),
+                delete=lambda resource_id=external_ip_id: private_grpc.call(
+                    service=f"{PRIVATE_API}.ExternalIPs/Delete", data={"id": resource_id}
+                ),
+                resource_kind=WaitResourceKind.EXTERNAL_IP,
+                resource_id=external_ip_id,
+            )
         wait_owned_gone(
             description=f"ExternalIPPool {pool_id} gone",
             api_gone=lambda: pool_id not in private_grpc.list_external_ip_pool_ids(),
@@ -90,11 +109,11 @@ class TestNetworkingReferences:
                 )
                 unexpected_id = response["object"]["id"]
             assert_disabled_create_error(failure.value)
-            assert (
-                grpc.list_with_filter(
-                    service=f"{PUBLIC_API}.ExternalIPs/List", filter_expr=f'this.metadata.name == "{name}"'
-                )
-                == []
+            stored = grpc.call(
+                service=f"{PUBLIC_API}.ExternalIPs/List", data={"filter": f'this.metadata.name == "{name}"'}
+            )
+            assert not stored.get("items", []) and int(stored.get("total", 0)) == 0, (
+                "Rejected create stored an ExternalIP"
             )
             assert snapshot() == before, "Rejected create changed the observed ExternalIPs or pool accounting"
         finally:

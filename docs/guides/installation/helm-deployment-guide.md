@@ -479,6 +479,7 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 | `evpn.bgp.asn` | Required default node ASN, assigned with the fabric admin. |
 | `evpn.bgp.acceptPrefixes` | Required fabric loopback IPv4 ranges supplied by the fabric admin. Only /32 routes are accepted. |
 | `evpn.bgp.activeActive` | Optional; defaults to `false`. Set `true` to allow up to 16 eligible IPv4 paths (`as-path multipath-relax`). |
+| `evpn.bgp.activeBackup` | Optional; defaults to `false` and is mutually exclusive with `activeActive`. Requires each node to have exactly one uplink with `role: active` and at least one with `role: backup`. L2VPN EVPN inbound route-maps match remote VTEP next-hops and set local preference to 200/100; backup outbound route-maps match the node VTEP `/32` and prepend its ASN three times. |
 | `evpn.bgp.waitForEstablished` | Fails installation if a configured BGP session does not become Established. |
 | `evpn.bgp.timeoutSeconds` | Maximum wait per BGP session. |
 | `evpn.bgp.bfdProfile` | Optional FRR-K8s BFD profile applied to every EVPN uplink; empty disables BFD. |
@@ -493,6 +494,31 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 | `evpn.nodes[].uplinks[].peerAddress` | IPv4 address of the connected fabric BGP peer, supplied by the fabric admin. |
 | `evpn.nodes[].uplinks[].unnumbered` | Set `true` to use an interface-based unnumbered BGP neighbor; omit `address` and `peerAddress`. |
 | `evpn.nodes[].uplinks[].peerASN` | ASN of the connected fabric peer, supplied by the fabric admin. |
+| `evpn.nodes[].uplinks[].role` | `active` or `backup`; required for every uplink when `evpn.bgp.activeBackup` is enabled. |
+
+For active/backup mode, assign roles explicitly on each neighbor:
+
+```yaml
+evpn:
+  enabled: true
+  vtepCIDR: 192.168.51.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes: [192.168.52.0/24]
+    activeBackup: true
+  nodes:
+    - name: worker-0
+      vtepIP: 192.168.51.1
+      uplinks:
+        - interface: ens5f0
+          peerAddress: 169.254.133.1
+          peerASN: 4200300002
+          role: active
+        - interface: ens5f1
+          peerAddress: 169.254.133.3
+          peerASN: 4200300003
+          role: backup
+```
 
 For a multicluster VMaaS deployment, `make install-multicluster` uses the
 infra values to configure EVPN on the workload cluster. The management-cluster

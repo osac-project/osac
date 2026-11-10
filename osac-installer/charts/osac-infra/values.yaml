@@ -137,6 +137,8 @@ evpn:
     acceptPrefixes: []
     # Allow up to 16 eligible IPv4 BGP paths for active-active forwarding.
     activeActive: false
+    # Use uplink roles to set local preference and prepend on backups.
+    activeBackup: false
     # Fail the install when sessions are not Established within the timeout.
     waitForEstablished: true
     timeoutSeconds: 900
@@ -153,10 +155,12 @@ evpn:
   #     asn: 4209999999           # optional, defaults to bgp.asn
   #     uplinks:                  # one per cable to a leaf
   #       - interface: ens6
+  #         role: active           # required with bgp.activeBackup
   #         address: 169.254.133.2/31   # optional; omit if already configured
   #         peerAddress: 169.254.133.1
   #         peerASN: 4200300002
   #       - interface: ens7
+  #         role: backup           # active or backup
   #         unnumbered: true       # use FRR's interface-based BGP neighbor
   #         peerASN: 4200300003    # peerAddress and address are omitted
   nodes: []

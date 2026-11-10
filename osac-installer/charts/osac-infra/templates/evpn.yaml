@@ -22,6 +22,30 @@
     {{- fail (printf "evpn.nodes: duplicate vtepIP %s" $node.vtepIP) }}
   {{- end }}
   {{- $_ := set $seenVTEPs $node.vtepIP true }}
+  {{- if $.Values.evpn.bgp.activeBackup }}
+    {{- if lt (len $node.uplinks) 2 }}
+      {{- fail (printf "evpn.nodes: activeBackup requires at least two uplinks on node %s" $node.name) }}
+    {{- end }}
+    {{- $activeCount := 0 }}
+    {{- $backupCount := 0 }}
+    {{- range $uplink := $node.uplinks }}
+      {{- if not (hasKey $uplink "role") }}
+        {{- fail (printf "evpn.nodes: node %s uplink %s must set role to active or backup when activeBackup is enabled" $node.name $uplink.interface) }}
+      {{- else if eq $uplink.role "active" }}
+        {{- $activeCount = add $activeCount 1 }}
+      {{- else if eq $uplink.role "backup" }}
+        {{- $backupCount = add $backupCount 1 }}
+      {{- else }}
+        {{- fail (printf "evpn.nodes: node %s uplink %s role must be active or backup" $node.name $uplink.interface) }}
+      {{- end }}
+    {{- end }}
+    {{- if ne $activeCount 1 }}
+      {{- fail (printf "evpn.nodes: activeBackup requires exactly one active uplink on node %s" $node.name) }}
+    {{- end }}
+    {{- if lt $backupCount 1 }}
+      {{- fail (printf "evpn.nodes: activeBackup requires at least one backup uplink on node %s" $node.name) }}
+    {{- end }}
+  {{- end }}
   {{- $seenPeers := dict }}
   {{- range $uplink := $node.uplinks }}
     {{- $unnumbered := $uplink.unnumbered | default false }}
@@ -214,6 +238,24 @@ data:
       raw:
         priority: 5
         rawConfig: |
+{{ if $.Values.evpn.bgp.activeBackup }}
+{{ range $prefixIndex, $prefix := $.Values.evpn.bgp.acceptPrefixes }}
+          ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS seq {{ add1 $prefixIndex }} permit {{ $prefix }} ge 32 le 32
+{{ end }}
+          ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP seq 10 permit {{ printf "%s/32" $node.vtepIP }}
+{{ range $uplinkIndex, $uplink := $node.uplinks }}
+          route-map OSAC-EVPN-ACTIVE-BACKUP-IN-{{ $uplinkIndex }} permit 10
+            match ip next-hop prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS
+            set local-preference {{ if eq $uplink.role "active" }}200{{ else }}100{{ end }}
+          route-map OSAC-EVPN-ACTIVE-BACKUP-IN-{{ $uplinkIndex }} permit 100
+{{ if eq $uplink.role "backup" }}
+          route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-{{ $uplinkIndex }} permit 10
+            match ip next-hop prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP
+            set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
+          route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-{{ $uplinkIndex }} permit 100
+{{ end }}
+{{ end }}
+{{ end }}
           router bgp {{ int64 $nodeASN }}
 {{ if $.Values.evpn.bgp.activeActive }}
             bgp bestpath as-path multipath-relax
@@ -222,9 +264,15 @@ data:
             exit-address-family
 {{ end }}
             address-family l2vpn evpn
-    {{- range $uplink := $node.uplinks }}
+    {{- range $uplinkIndex, $uplink := $node.uplinks }}
               neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} activate
               neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} allowas-in origin
+{{- if $.Values.evpn.bgp.activeBackup }}
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-IN-{{ $uplinkIndex }} in
+{{- if eq $uplink.role "backup" }}
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-{{ $uplinkIndex }} out
+{{- end }}
+{{- end }}
     {{- end }}
               advertise-all-vni
             exit-address-family

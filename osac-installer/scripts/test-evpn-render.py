@@ -124,6 +124,7 @@ def uplink(
     peer_asn: int = 4200300002,
     address: str | None = None,
     unnumbered: bool = False,
+    role: str | None = None,
 ) -> dict[str, Any]:
     value: dict[str, Any] = {
         "interface": interface,
@@ -135,6 +136,8 @@ def uplink(
         value["address"] = address
     if unnumbered:
         value["unnumbered"] = True
+    if role is not None:
+        value["role"] = role
     return value
 
 
@@ -438,6 +441,152 @@ def test_active_active_bgp() -> None:
         in raw_config
     )
     assert "address-family l2vpn evpn" in raw_config
+    assert "OSAC-EVPN-ACTIVE-BACKUP" not in raw_config
+
+
+def test_active_backup_bgp() -> None:
+    values = base_values(
+        [
+            node(
+                "worker-0",
+                "10.200.255.1",
+                [
+                    uplink("ens5f1", "169.254.133.3", role="backup"),
+                    uplink("ens5f0", "169.254.133.1", role="active"),
+                ],
+            )
+        ]
+    )
+    values["evpn"]["bgp"]["activeBackup"] = True
+    with tempfile.TemporaryDirectory(prefix="evpn-active-backup-") as temp:
+        values_file = write_values(pathlib.Path(temp), "active-backup.yaml", values)
+        infra = render("osac-infra", INFRA_CHART, "--values", str(values_file))
+
+    raw = named(
+        parse_documents(config_data(infra)["frr.yaml"]),
+        "FRRConfiguration",
+        "osac-evpn-raw-worker-0",
+    )
+    raw_config = raw["spec"]["raw"]["rawConfig"]
+    assert (
+        "ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS seq 1 permit "
+        "10.200.0.0/16 ge 32 le 32"
+    ) in raw_config
+    assert (
+        "ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP seq 10 permit "
+        "10.200.255.1/32"
+    ) in raw_config
+    assert "set local-preference 200" in raw_config
+    assert "set local-preference 100" in raw_config
+    assert (
+        "set as-path prepend 4209999999 4209999999 4209999999"
+        in raw_config
+    )
+    backup_in = raw_config.split(
+        "route-map OSAC-EVPN-ACTIVE-BACKUP-IN-0 permit 10\n", 1
+    )[1].split("route-map OSAC-EVPN-ACTIVE-BACKUP-IN-0 permit 100", 1)[0]
+    active_in = raw_config.split(
+        "route-map OSAC-EVPN-ACTIVE-BACKUP-IN-1 permit 10\n", 1
+    )[1].split("route-map OSAC-EVPN-ACTIVE-BACKUP-IN-1 permit 100", 1)[0]
+    assert "set local-preference 100" in backup_in
+    assert "set local-preference 200" in active_in
+    assert "route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-0 permit 10" in raw_config
+    assert "route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-1 permit 10" not in raw_config
+
+    l2vpn_af = raw_config.split("address-family l2vpn evpn\n", 1)[1].split(
+        "exit-address-family", 1
+    )[0]
+    assert (
+        "neighbor 169.254.133.3 route-map OSAC-EVPN-ACTIVE-BACKUP-IN-0 in"
+        in l2vpn_af
+    )
+    assert (
+        "neighbor 169.254.133.1 route-map OSAC-EVPN-ACTIVE-BACKUP-IN-1 in"
+        in l2vpn_af
+    )
+    assert (
+        "neighbor 169.254.133.3 route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-0 out"
+        in l2vpn_af
+    )
+    before_l2vpn = raw_config.split("address-family l2vpn evpn\n", 1)[0]
+    assert not any(
+        line.strip().startswith("neighbor ") and " route-map " in line
+        for line in before_l2vpn.splitlines()
+    )
+
+
+def test_active_backup_requires_l2vpn_enabled() -> None:
+    values = base_values(
+        [node("worker-0", "10.200.255.1", [uplink("ens5f0", "169.254.133.1")])]
+    )
+    values["evpn"]["enabled"] = False
+    values["evpn"]["bgp"]["activeBackup"] = True
+    with tempfile.TemporaryDirectory(prefix="evpn-active-backup-disabled-") as temp:
+        values_file = write_values(pathlib.Path(temp), "disabled.yaml", values)
+        infra = render("osac-infra", INFRA_CHART, "--values", str(values_file))
+
+    absent(infra, "ConfigMap", "osac-infra-evpn-config")
+    absent(infra, "Job", "osac-infra-configure-evpn")
+
+
+def test_active_backup_requires_two_uplinks() -> None:
+    values = base_values(
+        [node("worker-0", "10.200.255.1", [uplink("ens5f0", "169.254.133.1")])]
+    )
+    values["evpn"]["bgp"]["activeBackup"] = True
+    with tempfile.TemporaryDirectory(prefix="evpn-active-backup-single-uplink-") as temp:
+        values_file = write_values(pathlib.Path(temp), "single-uplink.yaml", values)
+        expect_render_failure(INFRA_CHART, values_file)
+
+
+def test_active_backup_requires_explicit_uplink_roles() -> None:
+    values = base_values(
+        [
+            node(
+                "worker-0",
+                "10.200.255.1",
+                [
+                    uplink("ens5f0", "169.254.133.1"),
+                    uplink("ens5f1", "169.254.133.3", role="backup"),
+                ],
+            )
+        ]
+    )
+    values["evpn"]["bgp"]["activeBackup"] = True
+    with tempfile.TemporaryDirectory(prefix="evpn-active-backup-missing-role-") as temp:
+        values_file = write_values(pathlib.Path(temp), "missing-role.yaml", values)
+        expect_render_failure(INFRA_CHART, values_file)
+
+
+def test_active_backup_requires_one_active_and_one_backup() -> None:
+    for roles in (["backup", "backup"], ["active", "active"]):
+        values = base_values(
+            [
+                node(
+                    "worker-0",
+                    "10.200.255.1",
+                    [
+                        uplink("ens5f0", "169.254.133.1", role=roles[0]),
+                        uplink("ens5f1", "169.254.133.3", role=roles[1]),
+                    ],
+                )
+            ]
+        )
+        values["evpn"]["bgp"]["activeBackup"] = True
+        with tempfile.TemporaryDirectory(prefix="evpn-active-backup-role-count-") as temp:
+            values_file = write_values(pathlib.Path(temp), "invalid-roles.yaml", values)
+            expect_render_failure(INFRA_CHART, values_file)
+
+
+def test_active_backup_is_mutually_exclusive_with_active_active() -> None:
+    values = base_values(
+        [node("worker-0", "10.200.255.1", [uplink("ens5f0", "169.254.133.1")])]
+    )
+    values["evpn"]["bgp"]["activeActive"] = True
+    values["evpn"]["bgp"]["activeBackup"] = True
+    with tempfile.TemporaryDirectory(prefix="evpn-bgp-modes-") as temp:
+        values_file = write_values(pathlib.Path(temp), "conflicting-modes.yaml", values)
+        expect_render_failure(INFRA_CHART, values_file)
 
 
 def test_uplink_without_address() -> None:
@@ -554,6 +703,12 @@ def main() -> None:
     test_single_node()
     test_multiple_nodes()
     test_active_active_bgp()
+    test_active_backup_bgp()
+    test_active_backup_requires_l2vpn_enabled()
+    test_active_backup_requires_two_uplinks()
+    test_active_backup_requires_explicit_uplink_roles()
+    test_active_backup_requires_one_active_and_one_backup()
+    test_active_backup_is_mutually_exclusive_with_active_active()
     test_uplink_without_address()
     test_nmstate_install_disabled()
     test_invalid_values()

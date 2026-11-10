@@ -661,6 +661,7 @@ With the Netris Fabric Manager, also note:
 | `evpn.bgp.asn` | Required. The node ASN; a node can override it. It must match the ASN that the fabric admin configured for the node's BGP neighbors. | Agreed with the fabric admin |
 | `evpn.bgp.acceptPrefixes` | Required. The fabric loopback (remote VTEP) ranges. Only /32 routes inside them are accepted. | Fabric admin |
 | `evpn.bgp.activeActive` | Optional. Defaults to `false`; set `true` to allow up to 16 eligible IPv4 BGP paths. FRR still applies its other multipath eligibility checks. | You |
+| `evpn.bgp.activeBackup` | Optional. Defaults to `false` and cannot be enabled with `activeActive`. Each node must have exactly one uplink with `role: active` and at least one with `role: backup`. L2VPN EVPN inbound route-maps match remote VTEP next-hops and set local preference to 200/100; backup outbound route-maps match the node VTEP `/32` and prepend its ASN three times. | You |
 | `evpn.bgp.waitForEstablished` | Fails the installation unless every BGP session becomes `Established`. Default `true`. | You |
 | `evpn.bgp.timeoutSeconds` | Maximum wait for each BGP session, at least 60. Default `900`. | You |
 | `evpn.nodes[].name` | Kubernetes node name. Add one entry for every node that runs VMs. | Cluster admin |
@@ -670,6 +671,31 @@ With the Netris Fabric Manager, also note:
 | `evpn.nodes[].uplinks[].address` | Optional IPv4 CIDR for the uplink. Omit it when the address is already configured. | Fabric admin |
 | `evpn.nodes[].uplinks[].peerAddress` | The leaf's BGP address. | Fabric admin |
 | `evpn.nodes[].uplinks[].peerASN` | The leaf's ASN. | Fabric admin |
+| `evpn.nodes[].uplinks[].role` | `active` or `backup`; required on every uplink when `evpn.bgp.activeBackup` is enabled. | You |
+
+For example, label each BGP neighbor explicitly when enabling active/backup:
+
+```yaml
+evpn:
+  enabled: true
+  vtepCIDR: 192.168.51.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes: [192.168.52.0/24]
+    activeBackup: true
+  nodes:
+    - name: worker-0
+      vtepIP: 192.168.51.1
+      uplinks:
+        - interface: ens5f0
+          peerAddress: 192.168.53.1
+          peerASN: 4200300002
+          role: active
+        - interface: ens7
+          peerAddress: 192.168.53.3
+          peerASN: 4200300003
+          role: backup
+```
 
 When `evpn.enabled` is `true`, the chart requires `vtepCIDR`, `bgp.asn`, at
 least one `acceptPrefixes` entry, and at least one node. It rejects duplicate

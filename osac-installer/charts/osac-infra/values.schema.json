@@ -250,6 +250,11 @@
               "description": "Allow up to 16 eligible IPv4 BGP paths for active-active forwarding.",
               "default": false
             },
+            "activeBackup": {
+              "type": "boolean",
+              "description": "Use each uplink's role to prefer active neighbors and prepend the node ASN on backup neighbors. Requires one active and at least one backup uplink per node.",
+              "default": false
+            },
             "waitForEstablished": {
               "type": "boolean",
               "description": "Fail installation unless every configured BGP session is Established.",
@@ -288,7 +293,14 @@
               "default": 3
             }
           },
-          "required": ["asn", "acceptPrefixes", "waitForEstablished", "timeoutSeconds"]
+          "required": ["asn", "acceptPrefixes", "waitForEstablished", "timeoutSeconds"],
+          "not": {
+            "required": ["activeActive", "activeBackup"],
+            "properties": {
+              "activeActive": {"const": true},
+              "activeBackup": {"const": true}
+            }
+          }
         },
         "nodes": {
           "type": "array",
@@ -345,6 +357,11 @@
                       "minimum": 1,
                       "maximum": 4294967294,
                       "description": "Fabric leaf BGP ASN."
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": ["active", "backup"],
+                      "description": "Neighbor role for active-backup BGP; required when evpn.bgp.activeBackup is true."
                     }
                   },
                   "required": ["interface", "peerASN"],

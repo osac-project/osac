@@ -23,7 +23,7 @@ import test_netris_vn_subnet as vs  # noqa: E402
 from netris_fake import Netris  # noqa: E402
 from test_netris_role import GOOD_ENV, MANAGER, SUBNET, VN, nc  # noqa: E402
 from test_netris_vn_subnet import (  # noqa: E402,F401
-    ANSIBLE_PLAYBOOK, CIDR, IPAM, ROOT, SUBNET_CIDR, err, ok, snap, subnet_job,
+    ANSIBLE_PLAYBOOK, CIDR, EVPN_IPAM, IPAM, ROOT, SUBNET_CIDR, err, ok, snap, subnet_job,
 )
 
 ATT = "6c1d2e3f-4a5b-4c6d-8e7f-90a1b2c3d4e5"
@@ -53,7 +53,7 @@ def att_job(task="apply_network_attachment", itype="physical", network_type=None
         "network_attachment": {"subnet": subnet_ref, "interface": interface, "security_group_ids": []},
         "virtual_network": snap("VirtualNetwork", VN, {"ipv4Cidr": CIDR}, {"l3Vni": 10001} if network_type else {}),
         "subnet": snap("Subnet", SUBNET, {"ipv4Cidr": SUBNET_CIDR}),
-        "ipam": IPAM if ipam is None else ipam,
+        "ipam": (EVPN_IPAM if network_type == "evpn" else IPAM) if ipam is None else ipam,
     }
     if network_type:
         job["network_type"] = network_type
@@ -98,9 +98,9 @@ def vnet_detail(dhcp: bool = False, gateway: str = "10.20.1.1/24") -> dict:
 
 def test_dhcp_update_enables_dhcp_over_the_physical_range_and_keeps_the_gateway() -> None:
     out = nc.netris_vnet_dhcp_update(vnet_detail(), att_job(network_type="evpn"))
-    assert (out["error"], out["matches"], out["start"], out["end"]) == ("", False, "10.20.1.8", "10.20.1.31")
+    assert (out["error"], out["matches"], out["start"], out["end"]) == ("", False, "10.20.1.192", "10.20.1.254")
     assert out["body"]["gateways"] == [{"id": 9, "prefix": "10.20.1.1/24", "dhcpEnabled": True,
-                                        "dhcpStartIp": "10.20.1.8", "dhcpEndIp": "10.20.1.31"}]
+                                        "dhcpStartIp": "10.20.1.192", "dhcpEndIp": "10.20.1.254"}]
 
 
 def test_dhcp_update_matches_when_dhcp_already_serves_the_range() -> None:
@@ -108,7 +108,9 @@ def test_dhcp_update_matches_when_dhcp_already_serves_the_range() -> None:
 
 
 def test_dhcp_update_keeps_a_physical_first_gateway() -> None:
-    out = nc.netris_vnet_dhcp_update(vnet_detail(gateway="10.20.1.9/24"), att_job(network_type="evpn"))
+    out = nc.netris_vnet_dhcp_update(
+        vnet_detail(gateway="10.20.1.9/24"), att_job(network_type="evpn", ipam=IPAM)
+    )
     assert out["body"]["gateways"][0]["prefix"] == "10.20.1.9/24" and out["start"] == "10.20.1.10"
 
 
@@ -286,7 +288,7 @@ def test_physical_apply_on_an_evpn_subnet_enables_dhcp_before_the_move(tmp_path,
     assert ok(*run(tmp_path, netris, att_job(network_type="evpn"))) == {}
     gateway = tenant_vnet(netris)["gateways"][0]
     assert gateway["prefix"] == "10.20.1.1/24" and gateway["dhcpEnabled"] is True
-    assert (gateway["dhcpStartIp"], gateway["dhcpEndIp"]) == ("10.20.1.8", "10.20.1.31")
+    assert (gateway["dhcpStartIp"], gateway["dhcpEndIp"]) == ("10.20.1.192", "10.20.1.254")
     assert ports_of(netris, f"osac-sn-{SUBNET}") == [62] and ports_of(netris, PROVISIONING) == []
     vnet_id = str(tenant_vnet(netris)["id"])
     writes = [(m, p.rsplit("/", 1)[-1]) for m, p in netris.writes()]

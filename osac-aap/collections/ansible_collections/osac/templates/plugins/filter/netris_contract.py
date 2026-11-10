@@ -373,9 +373,11 @@ def netris_vnet_gateway_update(detail: Any, plan: Any, keep_dhcp: bool = False) 
     ``body`` is the full V-Net to PUT: the read detail with ``gateways``
     replaced by the planned gateway. The returned gateway keeps the fields of
     the existing one (ID, nested Netris 4.16 ``dhcp`` metadata) and only sets
-    prefix, dhcpEnabled and the DHCP range. With ``keep_dhcp`` the DHCP of the
-    V-Net is not compared and not changed. The EVPN Subnet caller sets this
-    only after confirming that the enabled range matches physical DHCP.
+    prefix, dhcpEnabled and the DHCP range. Flat range fields are cleared when
+    DHCP is disabled; nested Netris 4.16 metadata is preserved. With
+    ``keep_dhcp`` the DHCP of the V-Net is not compared and not changed. The
+    EVPN Subnet caller sets this only after confirming that the enabled range
+    matches physical DHCP.
     """
     detail = detail if isinstance(detail, dict) else {}
     plan = plan if isinstance(plan, dict) else {}
@@ -402,6 +404,9 @@ def netris_vnet_gateway_update(detail: Any, plan: Any, keep_dhcp: bool = False) 
             new["dhcp"] = {**existing["dhcp"], "start": start, "end": end}
         else:
             new["dhcpStartIp"], new["dhcpEndIp"] = start, end
+    else:
+        new.pop("dhcpStartIp", None)
+        new.pop("dhcpEndIp", None)
     return {"matches": matches, "body": {**detail, "gateways": [new]}}
 
 

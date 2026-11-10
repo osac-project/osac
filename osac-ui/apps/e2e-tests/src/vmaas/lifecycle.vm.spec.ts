@@ -22,8 +22,9 @@ const runningButtons = { start: false, stop: true, restart: true };
 const stoppedButtons = { start: true, stop: false, restart: false };
 
 test(`stops, starts and restarts VM ${vmTestName} from its details page`, async ({ page }) => {
-  // Each power action waits up to three minutes for the VM to settle.
-  test.setTimeout(720_000);
+  // Five waits of up to three minutes each (initial Running, Stopped, Running,
+  // the restart poll, Running after the restart), plus login and actions.
+  test.setTimeout(1_080_000);
   const tenantName = tenantNameOrSkip();
   if (!tenantName) {
     logProgress('vm-lifecycle', 'Skipped: tenant_name is not configured.');
@@ -91,9 +92,11 @@ test(`stops, starts and restarts VM ${vmTestName} from its details page`, async 
     expect
       .poll(
         async () => {
-          // A failed CLI read counts as "not changed yet", never as a change.
+          // A failed CLI read or a missing timestamp counts as "not changed yet".
           try {
-            return await getComputeInstanceLastRestartedAt(tenantName, vmTestName);
+            return (
+              (await getComputeInstanceLastRestartedAt(tenantName, vmTestName)) ?? lastRestartedAt
+            );
           } catch {
             return lastRestartedAt;
           }

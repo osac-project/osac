@@ -37,10 +37,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 func seedClusterVersion(ctx context.Context, cv *privatev1.ClusterVersion) {
@@ -468,6 +470,42 @@ var _ = Describe("Private clusters server", func() {
 				).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			for _, template := range []struct {
+				id           string
+				capabilities map[string]bool
+			}{
+				{
+					id: "osac.templates.ocp_small",
+					capabilities: map[string]bool{
+						supportsAutomaticCAASEndpointsCapability: true,
+					},
+				},
+				{
+					id: "osac.templates.ocp_4_20_ai_maas",
+					capabilities: map[string]bool{
+						supportsAutomaticCAASEndpointsCapability: true,
+					},
+				},
+				{id: "osac.templates.ocp_ci_small"},
+				{
+					id: "acme.templates.caas-capable",
+					capabilities: map[string]bool{
+						supportsAutomaticCAASEndpointsCapability: true,
+					},
+				},
+			} {
+				_, err = templatesDao.Create().SetObject(privatev1.ClusterTemplate_builder{
+					Id: template.id,
+					Metadata: privatev1.Metadata_builder{
+						Name:   template.id,
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Title:        template.id,
+					Description:  template.id,
+					Capabilities: template.capabilities,
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
 
 			// Create a second template for missing-node-set cases:
 			_, err = templatesDao.Create().
@@ -906,7 +944,92 @@ var _ = Describe("Private clusters server", func() {
 			Expect(stored.GetItems()).To(BeEmpty())
 		})
 
-		It("creates automatic ExternalIPs without attachments and cleans them up", func() {
+		It("skips automatic ExternalIPs and pool reservations when provider networking is disabled", func() {
+			server.settings.ProvisioningEnabled = false
+
+			poolID := "disabled-auto-eip-pool"
+			_, err := server.externalIPPoolDao.Create().SetObject(privatev1.ExternalIPPool_builder{
+				Id:       poolID,
+				Metadata: privatev1.Metadata_builder{Name: poolID, Tenant: auth.SharedTenant}.Build(),
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+				}.Build(),
+				Status: privatev1.ExternalIPPoolStatus_builder{
+					State:     privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY,
+					Total:     5,
+					Available: 5,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			createWithoutExternalIPs := func(name string) {
+				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template:                 privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							AutoExternalIpAttachment: proto.Bool(true),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+
+				clusterID := response.GetObject().GetId()
+				eips, err := server.externalIPDao.List().
+					SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, clusterID)).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(eips.GetItems()).To(BeEmpty())
+			}
+
+			poolResponse, err := server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			available := poolResponse.GetObject().GetStatus().GetAvailable()
+			allocated := poolResponse.GetObject().GetStatus().GetAllocated()
+
+			createWithoutExternalIPs(fmt.Sprintf("disabled-auto-eip-%s", uuid.New()[24:32]))
+			poolResponse, err = server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+
+			// No READY pool is available, but the cluster request still succeeds.
+			pool := poolResponse.GetObject()
+			pool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
+			_, err = server.externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			createWithoutExternalIPs(fmt.Sprintf("disabled-auto-eip-%s", uuid.New()[24:32]))
+			poolResponse, err = server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+		})
+
+		It("rejects false automatic endpoint requests for templates that require CaaS endpoints", func() {
+			name := fmt.Sprintf("disabled-endpoints-%s", uuid.New()[24:32])
+			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template:                 privatev1.ClusterTemplateReference_builder{Id: "acme.templates.caas-capable"}.Build(),
+						AutoExternalIpAttachment: proto.Bool(false),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("spec.auto_external_ip_attachment must be omitted or true"))
+
+			clustersDao, err := dao.NewGenericDAO[*privatev1.Cluster]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := clustersDao.List().SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetItems()).To(BeEmpty())
+		})
+
+		It("creates automatic ExternalIPs when a template declares CaaS endpoint support", func() {
 			poolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -930,13 +1053,14 @@ var _ = Describe("Private clusters server", func() {
 				Object: privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("deferred-%s", uuid.New()[24:32])}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
-						Template:                 privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
-						AutoExternalIpAttachment: proto.Bool(true),
+						Template: privatev1.ClusterTemplateReference_builder{Id: "acme.templates.caas-capable"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			clusterID := response.GetObject().GetId()
+			Expect(response.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
+			Expect(response.GetObject().GetSpec().GetSupportsAutomaticCaasEndpoints()).To(BeTrue())
 
 			eipDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 			Expect(err).ToNot(HaveOccurred())
@@ -965,6 +1089,95 @@ var _ = Describe("Private clusters server", func() {
 			eipList, err = eipDao.List().SetFilter(filter).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(BeEmpty())
+		})
+
+		It("keeps automatic ExternalIPs while an attachment finalizer holds public deletion", func() {
+			poolDao, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = poolDao.Create().SetObject(privatev1.ExternalIPPool_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					Cidrs: []string{"198.51.100.0/24"}, IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+				}.Build(),
+				Status: privatev1.ExternalIPPoolStatus_builder{
+					State: privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY, Total: 5, Available: 5,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			created, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{Object: privatev1.Cluster_builder{
+				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("dns-hold-%s", uuid.New()[24:32])}.Build(),
+				Spec: privatev1.ClusterSpec_builder{
+					Template: privatev1.ClusterTemplateReference_builder{Id: "osac.templates.ocp_small"}.Build(),
+				}.Build(),
+			}.Build()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			clusterID := created.GetObject().GetId()
+			eipFilter := fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, clusterID)
+			eips, err := server.externalIPDao.List().SetFilter(eipFilter).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(eips.GetItems()).To(HaveLen(2))
+			var apiEIP *privatev1.ExternalIP
+			for _, item := range eips.GetItems() {
+				if item.GetMetadata().GetLabels()[autoCreatedEndpointLabel] == "api" {
+					apiEIP = item
+				}
+			}
+			Expect(apiEIP).NotTo(BeNil())
+
+			attachment, err := server.externalIPAttachmentDao.Create().SetObject(privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    fmt.Sprintf("dns-hold-%s", uuid.New()[24:32]),
+					Tenant:  created.GetObject().GetMetadata().GetTenant(),
+					Creator: systemCreator,
+					Labels: map[string]string{
+						autoCreatedLabel:         "true",
+						autoCreatedForLabel:      clusterID,
+						autoCreatedEndpointLabel: "api",
+					},
+					Finalizers: []string{finalizers.Controller},
+				}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: apiEIP.GetId()}.Build(),
+					Cluster:        privatev1.ClusterLocalReference_builder{Id: clusterID}.Build(),
+					TargetEndpoint: privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
+				}.Build(),
+				Status: privatev1.ExternalIPAttachmentStatus_builder{
+					State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			publicServer := &ClustersServer{private: server}
+			_, err = publicServer.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: clusterID}.Build())
+			Expect(err).NotTo(HaveOccurred())
+
+			storedAttachment, err := server.externalIPAttachmentDao.Get().SetId(attachment.GetObject().GetId()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(storedAttachment.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+			Expect(storedAttachment.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(
+				finalizers.Controller))
+
+			storedIP, err := server.externalIPDao.Get().SetId(apiEIP.GetId()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(storedIP.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse(),
+				"the attached IP remains allocated while its attachment finalizer is present")
+		})
+
+		It("leaves the CI template automatic-access setting unchanged", func() {
+			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				Object: privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("ci-%s", uuid.New()[24:32])}.Build(),
+					Spec: privatev1.ClusterSpec_builder{
+						Template: privatev1.ClusterTemplateReference_builder{Id: "osac.templates.ocp_ci_small"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeFalse())
 		})
 
 		It("Preserves direct add-on operators through create and get", func() {
@@ -6835,7 +7048,7 @@ var _ = Describe("Private clusters server", func() {
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{Name: "networking-disabled"}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
-							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							Template: privatev1.ClusterTemplateReference_builder{Id: "osac.templates.ocp_small"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
 									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
@@ -6849,11 +7062,17 @@ var _ = Describe("Private clusters server", func() {
 				}.Build())
 
 				Expect(err).NotTo(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
 				networkAttachment := response.GetObject().GetSpec().GetNetworkAttachment()
 				Expect(networkAttachment.GetSubnet().GetId()).To(Equal(defaults.subnetID))
 				Expect(networkAttachment.GetSecurityGroups()).To(HaveLen(1))
 				Expect(networkAttachment.GetSecurityGroups()[0].GetId()).To(Equal(defaults.securityGroupID))
 				Expect(response.GetObject().GetSpec().GetNodeSets()["compute"].GetFabricInterface()).To(Equal("data-0"))
+				autoIPs, err := server.externalIPDao.List().SetFilter(fmt.Sprintf(
+					"this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, response.GetObject().GetId(),
+				)).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(autoIPs.GetItems()).To(BeEmpty())
 			})
 
 			It("Selects the first fabric port when multiple exist", func() {

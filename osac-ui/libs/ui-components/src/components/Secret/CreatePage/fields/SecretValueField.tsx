@@ -9,7 +9,6 @@ import {
   Stack,
   StackItem,
   TextArea,
-  TextInput,
 } from '@patternfly/react-core';
 import DownloadIcon from '@patternfly/react-icons/dist/esm/icons/download-icon';
 import MinusCircleIcon from '@patternfly/react-icons/dist/esm/icons/minus-circle-icon';
@@ -19,10 +18,12 @@ import {
   FormFieldHelper,
   getFormFieldHelperDescribedBy,
 } from '@osac/ui-components/components/Form/FormFieldHelper';
+import { InputField } from '@osac/ui-components/components/Form/InputField';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import { getVisibleFieldError } from '../../../Form/fieldError';
 import { useShowFieldValidationErrors } from '../../../Form/FieldValidationContext';
+import { useTrimmedInput } from '../../../Form/useTrimmedInput';
 import { downloadSecretBytes, getSecretType } from '../../utils';
 import {
   SECRET_FILE_MAX_BYTES,
@@ -53,7 +54,7 @@ const SecretValueField = ({
   const { setFieldError, values } = useFormikContext<SecretValues>();
   const secretTypes = getSecretType(t);
   const valueLabel = keyEditable ? t('Value') : secretTypes[values.type];
-  const [keyField, keyMeta, keyHelpers] = useField<string>(`${name}.key`);
+  const [keyField] = useField<string>(`${name}.key`);
   const [field, meta, helpers] = useField<Uint8Array>(`${name}.value`);
   const hasBinaryInitial =
     decodeSecretValue(entry.value) === undefined && entry.value.byteLength > 0;
@@ -62,10 +63,12 @@ const SecretValueField = ({
   const [isUploading, setIsUploading] = useState(false);
 
   const showValidationErrors = useShowFieldValidationErrors();
-  const keyError = getVisibleFieldError(keyMeta, showValidationErrors);
   const valueError = getVisibleFieldError(meta, showValidationErrors);
   const value = field.value ?? new Uint8Array();
   const textValue = decodeSecretValue(value);
+  const trimmedInput = useTrimmedInput(textValue, (nextValue) => {
+    void helpers.setValue(encodeSecretValue(nextValue));
+  });
   const keyFieldId = `${name.replaceAll('.', '-')}-key`;
   const fieldId = `${name.replaceAll('.', '-')}-value`;
   const fileFieldId = `${name.replaceAll('.', '-')}-file`;
@@ -81,7 +84,9 @@ const SecretValueField = ({
 
     try {
       setIsUploading(true);
-      await helpers.setValue(new Uint8Array(await file.arrayBuffer()));
+      const fileBytes = new Uint8Array(await file.arrayBuffer());
+      trimmedInput.onBlur();
+      await helpers.setValue(fileBytes);
       setFileName(file.name);
     } catch {
       setFieldError(`${name}.value`, t('Failed to read secret file'));
@@ -91,6 +96,7 @@ const SecretValueField = ({
   };
 
   const clearValue = async () => {
+    trimmedInput.onBlur();
     await helpers.setValue(new Uint8Array());
     await helpers.setTouched(true);
     setFileName('');
@@ -101,33 +107,21 @@ const SecretValueField = ({
     void clearValue();
   };
 
+  const handleTextBlur = () => {
+    trimmedInput.onBlur();
+    void helpers.setTouched(true);
+  };
+
   return (
     <Stack hasGutter>
       <StackItem>
-        <FormGroup
+        <InputField
           label={keyEditable ? t('Key') : t('Required key')}
           fieldId={keyFieldId}
           isRequired
-        >
-          <TextInput
-            id={keyFieldId}
-            name={keyField.name}
-            value={keyField.value}
-            isDisabled={!keyEditable}
-            validated={keyError ? 'error' : 'default'}
-            aria-label={keyEditable ? t('Key') : t('Required key')}
-            aria-invalid={!!keyError}
-            onChange={
-              keyEditable
-                ? (_event, val) => {
-                    void keyHelpers.setValue(val);
-                  }
-                : undefined
-            }
-            onBlur={keyField.onBlur}
-          />
-          <FormFieldHelper error={keyError} fieldId={keyFieldId} />
-        </FormGroup>
+          name={`${name}.key`}
+          isDisabled={!keyEditable}
+        />
       </StackItem>
       <StackItem>
         <FormGroup label={valueLabel} fieldId={fieldId} isRequired>
@@ -155,11 +149,9 @@ const SecretValueField = ({
               <FlexItem grow={{ default: 'grow' }}>
                 <TextArea
                   id={`${fieldId}-text`}
-                  value={textValue ?? ''}
-                  onChange={(_event, nextValue) => {
-                    void helpers.setValue(encodeSecretValue(nextValue));
-                  }}
-                  onBlur={() => void helpers.setTouched(true)}
+                  value={trimmedInput.value}
+                  onChange={(_event, nextValue) => trimmedInput.onChange(nextValue)}
+                  onBlur={handleTextBlur}
                   validated={valueError ? 'error' : 'default'}
                   aria-label={valueLabel}
                   aria-invalid={!!valueError}
@@ -187,7 +179,7 @@ const SecretValueField = ({
                 <FileUpload
                   id={fileFieldId}
                   type="text"
-                  value={textValue ?? ''}
+                  value={trimmedInput.value}
                   filename={fileName}
                   browseButtonText={t('Choose file')}
                   clearButtonText={t('Clear value')}
@@ -205,10 +197,8 @@ const SecretValueField = ({
                   onFileInputChange={(_event, file) => {
                     void handleFileSelected(file);
                   }}
-                  onTextChange={(_event, nextValue) => {
-                    void helpers.setValue(encodeSecretValue(nextValue));
-                  }}
-                  onTextAreaBlur={() => void helpers.setTouched(true)}
+                  onTextChange={(_event, nextValue) => trimmedInput.onChange(nextValue)}
+                  onTextAreaBlur={handleTextBlur}
                   onClearClick={() => void clearValue()}
                 >
                   {value.byteLength > 0 && (

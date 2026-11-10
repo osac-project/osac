@@ -24,6 +24,8 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -641,6 +643,84 @@ var _ = Describe("run", func() {
 			})
 		})
 
+		When("the first pass adds finalizers and the write conflicts", func() {
+			It("returns the conflict itself", func() {
+				conflictErr := grpcstatus.Error(grpccodes.Aborted, "object has been modified")
+				mockTenants.EXPECT().
+					Update(gomock.Any(), gomock.Any(), gomock.Any()).
+					Return(nil, conflictErr)
+
+				tenant := privatev1.Tenant_builder{
+					Id: tenantID,
+					Metadata: privatev1.Metadata_builder{
+						Name:   tenantID,
+						Tenant: tenantName,
+					}.Build(),
+				}.Build()
+
+				f := newFunction(mockHubCache, mockHubs, mockTenants, mockProjects)
+				err := f.run(ctx, tenant)
+
+				Expect(err).To(Equal(conflictErr))
+				Expect(controllers.IsConflict(err)).To(BeTrue())
+			})
+		})
+
+		DescribeTable("the status write fails after creating a Tenant CRD on a hub fails",
+			func(writeErr error, expectConflict bool) {
+				fakeClient := fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithInterceptorFuncs(interceptor.Funcs{
+						Create: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.CreateOption) error {
+							return errors.New("create failed")
+						},
+					}).
+					Build()
+
+				mockHubs.EXPECT().
+					List(gomock.Any(), gomock.Any()).
+					Return(&privatev1.HubsListResponse{
+						Size:  1,
+						Total: 1,
+						Items: []*privatev1.Hub{
+							privatev1.Hub_builder{Id: hub1ID}.Build(),
+						},
+					}, nil)
+
+				mockHubCache.EXPECT().
+					Get(gomock.Any(), hub1ID).
+					Return(&controllers.HubEntry{Namespace: namespace1, Client: fakeClient}, nil)
+
+				mockTenants.EXPECT().
+					Update(gomock.Any(), gomock.Any(), gomock.Any()).
+					Return(nil, writeErr)
+
+				tenant := privatev1.Tenant_builder{
+					Id: tenantID,
+					Metadata: privatev1.Metadata_builder{
+						Name:       tenantID,
+						Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+						Tenant:     tenantName,
+					}.Build(),
+				}.Build()
+
+				f := newFunction(mockHubCache, mockHubs, mockTenants, mockProjects)
+				err := f.run(ctx, tenant)
+
+				// The write error must be visible so the loop retries a conflict, and only a conflict.
+				Expect(err).To(MatchError(writeErr))
+				Expect(err).To(MatchError(ContainSubstring(hub1ID)))
+				Expect(controllers.IsConflict(err)).To(Equal(expectConflict))
+				Expect(tenant.GetStatus().GetState()).To(
+					Equal(privatev1.TenantState_TENANT_STATE_FAILED),
+				)
+			},
+			Entry("with a conflict",
+				grpcstatus.Error(grpccodes.Aborted, "object has been modified"), true),
+			Entry("with another error",
+				grpcstatus.Error(grpccodes.Unavailable, "database unavailable"), false),
+		)
+
 		When("creating a Tenant CRD on a hub fails", func() {
 			It("sets status to FAILED and returns the error for requeue", func() {
 				expectedErr := errors.New("create failed")
@@ -685,7 +765,8 @@ var _ = Describe("run", func() {
 				f := newFunction(mockHubCache, mockHubs, mockTenants, mockProjects)
 				err := f.run(ctx, tenant)
 
-				Expect(err).To(HaveOccurred())
+				Expect(err).To(MatchError(expectedErr))
+				Expect(controllers.IsConflict(err)).To(BeFalse())
 				Expect(tenant.GetStatus().GetState()).To(
 					Equal(privatev1.TenantState_TENANT_STATE_FAILED),
 				)

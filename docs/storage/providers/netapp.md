@@ -137,7 +137,9 @@ oc debug node/<node> -- chroot /host multipath -ll
 Run the node commands on every node the method changes. Trident's node
 preparation runs in Trident's node pods, which by default run on every
 Linux node, control plane included. A MachineConfig changes the nodes of
-its pool.
+every pool that uses it: one with the `worker` role also changes the nodes
+of custom pools such as `infra`, because custom pools inherit the worker
+pool's MachineConfigs.
 
 Either method can be used as described when no MachineConfig manages the
 file, the file does not exist on those nodes, and none of them has
@@ -168,25 +170,32 @@ node has:
 | The node has | Node preparation |
 |---|---|
 | No `/etc/multipath.conf` | Writes the [configuration below](#fibre-channel-machineconfig), which blacklists every device except NetApp LUNs |
-| A file that sets `find_multipaths no`, or has no `defaults` section | Rewrites the file, adding the NetApp device exception and, where there is no `defaults` section, one with `find_multipaths no` |
+| A file that sets `find_multipaths no`, or has no `defaults` section | Rewrites the file, adding the NetApp device exception and, where there is no `defaults` section, one with `find_multipaths no`. It does not add a blacklist |
 | A file whose `defaults` section does not set `find_multipaths no` | Stops with an error and leaves the file unchanged |
 
 Do not enable `nodePrep` when the [check](#check-the-nodes-first) found
-either of these:
+any of these:
 
 - **Multipath devices in use on a node that has no `/etc/multipath.conf`.**
   The configuration Trident writes there blacklists every device that is
   not a NetApp LUN, including a multipath boot device or another storage
   system's LUNs. Use a MachineConfig with a configuration that keeps those
   devices instead.
+- **An existing `/etc/multipath.conf` that does not blacklist the node's
+  other devices.** Trident adds the NetApp exception to an existing file
+  but no blacklist, and it starts `multipathd`. With `find_multipaths no`,
+  multipath then claims every path device that is not blacklisted, local
+  disks included. Add a blacklist that covers those devices to the file
+  first.
 - **A MachineConfig that manages `/etc/multipath.conf`.** Trident rewrites
   the file on the node. The Machine Config Operator treats a managed file
   that no longer matches its MachineConfig as
   [configuration drift](https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/machine_configuration/machine-config-index#machine-config-drift-detection_machine-config-overview):
   it marks the node and its pool `Degraded`, and a degraded node cannot be
-  updated. Change that MachineConfig instead: it needs `find_multipaths no`,
-  NetApp LUNs (vendor `NETAPP`, product `LUN`) must not be blacklisted, and
-  it must enable `iscsid` and `multipathd`.
+  updated. Change that MachineConfig instead. Its file needs
+  `find_multipaths no` and a blacklist that covers every device multipath
+  must leave alone; NetApp LUNs (vendor `NETAPP`, product `LUN`) must not be
+  blacklisted. It must also enable `iscsid` and `multipathd`.
 
 ### Fibre Channel: MachineConfig
 
@@ -203,7 +212,8 @@ example below can be applied as it is. Otherwise do not apply it as it is:
 it replaces the existing configuration, and its blacklist excludes every
 device that is not a NetApp LUN, including a multipath boot device or
 another storage system's LUNs. Change the existing configuration instead:
-it needs `find_multipaths no`, and NetApp LUNs (vendor `NETAPP`, product
+it needs `find_multipaths no` and a blacklist that covers every device
+multipath must leave alone, and NetApp LUNs (vendor `NETAPP`, product
 `LUN`) must not be blacklisted.
 
 **1. Generate the MachineConfig.** It writes `/etc/multipath.conf` and
@@ -270,20 +280,33 @@ To read back what the generated MachineConfig writes:
 grep -o 'base64,.*' 99-worker-netapp-multipath.yaml | cut -d, -f2 | base64 --decode
 ```
 
-The example targets the `worker` MachineConfigPool. On single-node and
-compact three-node clusters the nodes are in the `master` pool; change the
-role label and the name to match.
+The example targets the `worker` MachineConfigPool, and with it every
+custom pool, since custom pools inherit the worker pool's MachineConfigs.
+On single-node and compact three-node clusters the nodes are in the
+`master` pool; change the role label and the name to match.
 
 **2. Apply it.** By default the Machine Config Operator drains and reboots
-the nodes of the pool, one at a time. Apply it before the cluster carries
-tenant workloads, or in a maintenance window.
+the nodes of each pool the MachineConfig changes, one node at a time in
+each pool. Apply it before the cluster carries tenant workloads, or in a
+maintenance window.
 
 ```shell
 oc apply -f 99-worker-netapp-multipath.yaml
 
-# Done when UPDATED is True
-oc get machineconfigpool worker
+# Progress of every pool
+oc get machineconfigpool
+
+# Pools whose nodes all run the new MachineConfig
+oc get machineconfigpool -o json | jq -r '.items[]
+  | select(any(.status.configuration.source[]?;
+      .name == "99-worker-netapp-multipath"))
+  | .metadata.name'
 ```
+
+The rollout is done when the second command lists every pool the
+MachineConfig changes. If the MachineConfig was renamed, use its name in
+the command. `UPDATED` alone does not show that: right after `oc apply`, a
+pool still reports `True` for its previous configuration.
 
 ### Verifying a node
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from ipaddress import ip_address
 from threading import Lock
 from urllib.parse import urlsplit
 
@@ -11,7 +12,21 @@ REDACTED = "<redacted>"
 
 _ENDPOINT_HOSTS: frozenset[str] = frozenset()
 _ENDPOINT_LOCK = Lock()
-_ENDPOINT_ARG = re.compile(r"^(?:(?:https?|grpcs?)://|(?:\[[0-9a-fA-F:]+\]|[\w.-]+):[0-9]+$)")
+_ENDPOINT_URL = re.compile(r"^(?:https?|grpcs?)://")
+
+
+def _is_transport_target(value: str) -> bool:
+    """Infer only explicit network URLs or IP authorities outside a known RPC target position."""
+    if _ENDPOINT_URL.match(value):
+        return True
+    try:
+        parsed = urlsplit(f"//{value}")
+        if parsed.port is None or parsed.path or parsed.query or parsed.fragment or parsed.username:
+            return False
+        ip_address(parsed.hostname or "")
+    except ValueError:
+        return False
+    return True
 
 
 def register_endpoint(address: str) -> None:
@@ -45,15 +60,16 @@ def sanitize_text(text: str | bytes) -> str:
     """Scrub credentials and known endpoint hosts without masking unrelated dotted identifiers."""
     if isinstance(text, bytes):
         text = text.decode(errors="replace")
-    with _ENDPOINT_LOCK:
-        hosts = _ENDPOINT_HOSTS
-    for host in sorted(hosts, key=len, reverse=True):
-        text = re.sub(r"(?<![\w.-])" + re.escape(host) + r"(?![\w-]|\.[\w-])", REDACTED, text, flags=re.I)
     text = _JWT.sub(REDACTED, text)
     text = _AUTH_SCHEME.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
     text = _KEY_VALUE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
     text = _TOKEN_FLAG.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
-    return _JSON_SECRET.sub(lambda m: f'{m.group(1)}"{REDACTED}"', text)
+    text = _JSON_SECRET.sub(lambda m: f'{m.group(1)}"{REDACTED}"', text)
+    with _ENDPOINT_LOCK:
+        hosts = _ENDPOINT_HOSTS
+    for host in sorted(hosts, key=len, reverse=True):
+        text = re.sub(r"(?<![\w.-])" + re.escape(host) + r"(?![\w-]|\.[\w-])", REDACTED, text, flags=re.I)
+    return text
 
 
 def sanitize_args(args: Iterable[object]) -> list[str]:
@@ -74,7 +90,7 @@ def sanitize_args(args: Iterable[object]) -> list[str]:
             continue
         redact_next = arg in _VALUE_FLAGS
         value = arg.partition("=")[2] if arg.startswith("--") and equals else arg
-        if _ENDPOINT_ARG.match(value):
+        if _is_transport_target(value):
             register_endpoint(value)
         cleaned.append(sanitize_text(arg))
     return [sanitize_text(arg) for arg in cleaned]

@@ -384,7 +384,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 	})
 
 	It("Returns missing-Secret guidance from the create handler", func() {
-		mockToken := "mock-token-value"
+		rawBearerValue := "raw-bearer-value"
 		mockSecretValue := "mock-user-data-secret-value"
 		instances := &mockComputeInstancesClient{
 			createFunc: func(
@@ -398,7 +398,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		}
 
 		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
-		_, output, err := handler(context.Background(), requestWithToken(mockToken), CreateComputeInstanceInput{
+		_, output, err := handler(context.Background(), requestWithToken(rawBearerValue), CreateComputeInstanceInput{
 			Name: "demo-vm", CatalogItem: "catalog-item-1",
 		})
 		envelope := decodeToolError(err)
@@ -409,7 +409,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		Expect(envelope.Message).To(ContainSubstring("/secrets/create"))
 		Expect(envelope.Details).To(ConsistOf("Secret reference missing-user-data is missing"))
 		Expect(err.Error()).ToNot(ContainSubstring("there is no secret"))
-		Expect(err.Error()).ToNot(ContainSubstring(mockToken))
+		Expect(err.Error()).ToNot(ContainSubstring(rawBearerValue))
 		Expect(err.Error()).ToNot(ContainSubstring(mockSecretValue))
 	})
 

@@ -38,20 +38,23 @@ const bareMetalInstanceCleanupFinalizer = "osac.openshift.io/baremetalinstance-c
 // BareMetalInstanceCleanupReconciler removes automatically created networking resources before a BareMetalInstance is deleted.
 type BareMetalInstanceCleanupReconciler struct {
 	client.Client
-	bareMetalInstanceNamespace  string
-	networkingNamespace         string
-	pollInterval                time.Duration
-	BareMetalInstancesClient    automaticBareMetalInstancesGetter
-	ExternalIPAttachmentsClient automaticExternalIPAttachmentsClient
+	bareMetalInstanceNamespace string
+	networkingNamespace        string
+	pollInterval               time.Duration
+	// NetworkingProvisioningEnabled is global.networking.provisioningEnabled.
+	NetworkingProvisioningEnabled bool
+	BareMetalInstancesClient      automaticBareMetalInstancesGetter
+	ExternalIPAttachmentsClient   automaticExternalIPAttachmentsClient
 }
 
 // NewBareMetalInstanceCleanupReconciler creates the networking cleanup controller.
 func NewBareMetalInstanceCleanupReconciler(c client.Client, bareMetalInstanceNamespace, networkingNamespace string) *BareMetalInstanceCleanupReconciler {
 	return &BareMetalInstanceCleanupReconciler{
-		Client:                     c,
-		bareMetalInstanceNamespace: bareMetalInstanceNamespace,
-		networkingNamespace:        networkingNamespace,
-		pollInterval:               5 * time.Second,
+		Client:                        c,
+		bareMetalInstanceNamespace:    bareMetalInstanceNamespace,
+		networkingNamespace:           networkingNamespace,
+		pollInterval:                  5 * time.Second,
+		NetworkingProvisioningEnabled: true,
 	}
 }
 
@@ -115,7 +118,7 @@ func (r *BareMetalInstanceCleanupReconciler) reconcileAutomaticExternalIPAttachm
 	bmi *bmfov1alpha1.BareMetalInstance,
 	bmiID string,
 ) (ctrl.Result, error) {
-	if bmi.Status.Phase != bmfov1alpha1.BareMetalInstancePhaseReady || !hasPrimaryBareMetalInstanceAddress(bmi) ||
+	if !r.NetworkingProvisioningEnabled || bmi.Status.Phase != bmfov1alpha1.BareMetalInstancePhaseReady || !hasPrimaryBareMetalInstanceAddress(bmi) ||
 		r.BareMetalInstancesClient == nil || r.ExternalIPAttachmentsClient == nil {
 		return ctrl.Result{}, nil
 	}

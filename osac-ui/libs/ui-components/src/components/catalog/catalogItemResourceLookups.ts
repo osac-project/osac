@@ -1,9 +1,8 @@
 import type { BareMetalInstanceType, ClusterVersion, DiskImage, InstanceType } from '@osac/types';
-import { BareMetalInstanceTypes } from '@osac/types';
+import { BareMetalInstanceTypes, InstanceTypes } from '@osac/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
 import { useClusterVersions } from '@osac/ui-components/api/v1/cluster-versions';
 import { useDiskImages } from '@osac/ui-components/api/v1/disk-image';
-import { useInstanceTypes } from '@osac/ui-components/api/v1/instance-types';
 
 export interface CatalogItemResourceLookups {
   diskImages: DiskImage[];
@@ -21,7 +20,7 @@ export const useCatalogItemResourceLookups = (
 ): CatalogItemResourceLookups => {
   const enabled = options.enabled ?? true;
   const { data: diskImages = [] } = useDiskImages({}, { enabled });
-  const { data: computeInstanceTypes = [] } = useInstanceTypes({}, { enabled });
+  const { data: computeInstanceTypes } = useListResource(InstanceTypes, {}, { enabled });
   const { data: bareMetalInstanceTypesData } = useListResource(
     BareMetalInstanceTypes,
     {},
@@ -31,7 +30,7 @@ export const useCatalogItemResourceLookups = (
 
   return {
     diskImages,
-    computeInstanceTypes,
+    computeInstanceTypes: computeInstanceTypes?.items ?? [],
     bareMetalInstanceTypes: bareMetalInstanceTypesData?.items ?? [],
     clusterVersions,
   };

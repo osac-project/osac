@@ -1347,6 +1347,124 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Entry("a shared catalog item rejects a tenant's Template", "shared", usersGroup, false),
 		)
 
+		It("resolves a Template by name in an explicitly selected visible tenant", func(ctx context.Context) {
+			name := catalogItemFixtureName()
+			templates := privatev1.NewComputeInstanceTemplatesClient(tool.InternalView().AdminConn())
+			created, err := templates.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
+				Object: privatev1.ComputeInstanceTemplate_builder{
+					Id:       name,
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: otherTenant}.Build(),
+					Title:    "Template in an explicitly selected tenant",
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			templateID := created.GetObject().GetId()
+			deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+				_, err := templates.Delete(ctx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{
+					Id: templateID,
+				}.Build())
+				return err
+			}, nil)
+
+			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(),
+				publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: catalogItemMetadata(usersGroup),
+					Template: publicv1.ComputeInstanceTemplateReference_builder{
+						Name: name, Tenant: otherTenant,
+					}.Build(),
+				}.Build(),
+			)
+			Expect(item.GetTemplate().GetId()).To(Equal(templateID))
+			Expect(item.GetTemplate().GetTenant()).To(Equal(otherTenant))
+			Expect(item.GetTemplate().GetShared()).To(BeFalse())
+		})
+
+		It("resolves a Template by ID in an explicitly selected visible tenant", func(ctx context.Context) {
+			name := catalogItemFixtureName()
+			templates := privatev1.NewComputeInstanceTemplatesClient(tool.InternalView().AdminConn())
+			created, err := templates.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
+				Object: privatev1.ComputeInstanceTemplate_builder{
+					Id:       name,
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: otherTenant}.Build(),
+					Title:    "Template in an explicitly selected tenant",
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			templateID := created.GetObject().GetId()
+			deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+				_, err := templates.Delete(ctx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{
+					Id: templateID,
+				}.Build())
+				return err
+			}, nil)
+
+			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(),
+				publicv1.ComputeInstanceCatalogItem_builder{
+					Metadata: catalogItemMetadata(usersGroup),
+					Template: publicv1.ComputeInstanceTemplateReference_builder{
+						Id: templateID, Tenant: otherTenant,
+					}.Build(),
+				}.Build(),
+			)
+			Expect(item.GetTemplate().GetId()).To(Equal(templateID))
+			Expect(item.GetTemplate().GetTenant()).To(Equal(otherTenant))
+			Expect(item.GetTemplate().GetShared()).To(BeFalse())
+		})
+
+		It("denies a caller a full reference to a tenant they cannot see", func(ctx context.Context) {
+			name := catalogItemFixtureName()
+			// Fill the VM's required inputs so template visibility is the only reason this
+			// dry run fails.
+			instanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
+			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+			tier := createCatalogItemStorageTierFixture(ctx)
+			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+			defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+				InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceType}.Build(),
+				DiskImage:    privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+				BootDisk: privatev1.ComputeInstanceDisk_builder{
+					SizeGib:     new(int32(30)),
+					StorageTier: privatev1.StorageTierReference_builder{Id: tier}.Build(),
+				}.Build(),
+				RunStrategy: new(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS),
+			}.Build()
+			templates := privatev1.NewComputeInstanceTemplatesClient(tool.InternalView().AdminConn())
+			created, err := templates.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
+				Object: privatev1.ComputeInstanceTemplate_builder{
+					Id:           name,
+					Metadata:     catalogItemFixtureMetadata(otherTenant, ""),
+					Title:        "Template outside the caller's visible tenants",
+					SpecDefaults: defaults,
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			templateID := created.GetObject().GetId()
+			deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+				_, err := templates.Delete(ctx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{
+					Id: templateID,
+				}.Build())
+				return err
+			}, nil)
+
+			request := publicv1.ComputeInstancesCreateRequest_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						Template: publicv1.ComputeInstanceTemplateReference_builder{
+							Id: templateID, Tenant: otherTenant,
+						}.Build(),
+						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+							network.computeInstanceAttachment(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build()
+			dryRun := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
+			client := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
+			_, err = client.Create(dryRun, request)
+			expectCatalogItemStatusCode(err, codes.InvalidArgument)
+		})
+
 		DescribeTable("accepts disk images from the catalog item's tenant or the shared tenant",
 			func(ctx context.Context, catalogTenant, imageTenant string, shouldSucceed bool) {
 				template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)

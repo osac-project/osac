@@ -186,6 +186,8 @@ func (m *mockTx) Run(ctx context.Context, task any, args ...any) error {
 	return nil
 }
 
+func (m *mockTx) OnCommit(fn func()) {}
+
 // newFakeHubClientFactory returns a HubClientFactory that ignores the config
 // and always returns the provided fake client.
 func newFakeHubClientFactory(client clnt.Client) HubClientFactory {

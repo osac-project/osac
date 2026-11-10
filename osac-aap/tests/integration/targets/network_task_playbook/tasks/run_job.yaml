@@ -31,6 +31,7 @@
     ANSIBLE_PYTHON_INTERPRETER: "{{ ansible_playbook_python }}"
     ANSIBLE_LOCALHOST_WARNING: "False"
     ANSIBLE_INVENTORY_UNPARSED_WARNING: "False"
+    OSAC_LAUNCH_EXTRA_VARS_PATH: "{{ ntp.root }}/{{ ntp_label | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json"
   register: _ntp_run
   changed_when: false
   failed_when: false

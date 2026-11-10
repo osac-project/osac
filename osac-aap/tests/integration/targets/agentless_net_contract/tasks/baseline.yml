@@ -334,7 +334,7 @@
               - _switch.ports.swp1 == [30]
               - _switch.ports.swp2 == [30]
               - _switch.ports.swp3 == [200]
-              - agentless_net_contract_bmi_id in _switch.tombstones
+              - ('network-attachment-' ~ agentless_net_contract_bmi_id) in _switch.tombstones
 
         - name: Attempt a late apply after delete completed
           ansible.builtin.set_fact:

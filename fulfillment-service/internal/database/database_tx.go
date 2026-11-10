@@ -81,4 +81,9 @@ type Tx interface {
 	// If the function returns an error, the savepoint is rolled back and the outer transaction
 	// remains usable. If the function succeeds, the savepoint is released.
 	Savepoint(ctx context.Context, fn func(ctx context.Context) error) error
+
+	// OnCommit registers a function that End calls after a successful commit, never after a rollback or a failed
+	// commit. Functions registered inside a savepoint wait for the enclosing transaction, and are dropped if the
+	// savepoint is rolled back. A panic in one is logged and doesn't stop the others.
+	OnCommit(fn func())
 }

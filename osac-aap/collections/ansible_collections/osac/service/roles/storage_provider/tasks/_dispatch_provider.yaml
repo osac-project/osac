@@ -51,10 +51,10 @@
 - name: "Dispatch provider storage action with remote kubeconfig routing"
   module_defaults:
     kubernetes.core.k8s:
-      kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+      kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit, true) }}"
       validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
     kubernetes.core.k8s_info:
-      kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+      kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit, true) }}"
       validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
   block:
     - name: "Include provider storage role"

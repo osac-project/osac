@@ -451,6 +451,24 @@ class TestMetadataTemplateTypes:
             "pull_secret_secret": {"name": "shared-pull-secret"}
         }
 
+    def test_cluster_template_capabilities_are_published_from_role_metadata(self):
+        templates = {
+            template.name: template
+            for template in Collection(
+                parent_path=_roles_dir_path().parents[2],
+                name="osac.templates",
+            ).templates()
+            if isinstance(template, ClusterTemplate)
+        }
+
+        capability = "supports_automatic_caas_endpoints"
+        for role_name in ("ocp_small", "ocp_4_20_ai_maas"):
+            published = templates[role_name].model_dump(mode="json", exclude_none=True)
+            assert published["capabilities"][capability] is True
+
+        for role_name in ("ocp_ci_small", "ocp_4_20_small_nico"):
+            assert templates[role_name].capabilities.get(capability, False) is False
+
     def test_cluster_with_parameters(self, roles_dir):
         metadata = _load_metadata(roles_dir, "ocp_4_20_ai_maas")
         assert len(metadata.parameters) > 0

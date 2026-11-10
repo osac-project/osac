@@ -2,15 +2,12 @@ import { useMemo } from 'react';
 import { Alert, Stack, StackItem } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
-import { StorageTiers } from '@osac/types/private';
+import { StorageBackend, StorageBackends, StorageTiers } from '@osac/types/private';
+import { cel } from '@osac/ui-components/api/cel';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 
-import {
-  storageBackendIdsFilter,
-  usePrivateStorageBackends,
-} from '../../api/v1/private/storage-backends';
-import { usePrivateStorageTiers } from '../../api/v1/private/storage-tiers';
 import ListPage from '../../components/Page/ListPage';
 import ListPageBody from '../../components/Page/ListPageBody';
 import StorageTierActionsMenu from '../../components/Storage/StorageTierActionsMenu';
@@ -25,18 +22,19 @@ import { useTranslation } from '../../hooks/useTranslation';
 export const StorageTiersListPage = () => {
   const { t } = useTranslation();
 
-  const { data: tiers = [], isLoading, error } = usePrivateStorageTiers();
+  const { data: tiers, isLoading, error } = useListResource(StorageTiers);
 
-  const backendIds = useMemo(() => uniqueBackendIds(tiers), [tiers]);
+  const backendIds = useMemo(() => uniqueBackendIds(tiers?.items || []), [tiers?.items]);
 
-  const { data: backends = [], error: backendsError } = usePrivateStorageBackends(
-    { filter: storageBackendIdsFilter(backendIds) },
+  const { data: backends, error: backendsError } = useListResource(
+    StorageBackends,
+    { filter: cel<StorageBackend>((filter) => filter.field('id').isIn(backendIds)) },
     { enabled: backendIds.length > 0 },
   );
 
   const backendsById = useMemo(
-    () => new Map(backends.map((backend) => [backend.id, backend])),
-    [backends],
+    () => new Map((backends?.items || []).map((backend) => [backend.id, backend])),
+    [backends?.items],
   );
 
   const protocolLabels = protocolLabel(t);
@@ -63,7 +61,7 @@ export const StorageTiersListPage = () => {
             </StackItem>
           )}
           <StackItem>
-            {tiers.length === 0 ? (
+            {!tiers?.items.length ? (
               <SubtleContent component="p">
                 {t('No storage tiers yet. Create one to get started.')}
               </SubtleContent>
@@ -79,7 +77,7 @@ export const StorageTiersListPage = () => {
                   </Tr>
                 </Thead>
                 <Tbody>
-                  {tiers.map((tier) => {
+                  {(tiers?.items || []).map((tier) => {
                     const backendAssociations = tier.spec?.backends ?? [];
                     return (
                       <Tr key={tier.id}>

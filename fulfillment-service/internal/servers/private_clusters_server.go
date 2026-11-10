@@ -329,7 +329,8 @@ func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.C
 	if err != nil {
 		return
 	}
-	if !isDryRun(ctx) && response.GetObject().GetSpec().GetAutoExternalIpAttachment() {
+	if !isDryRun(ctx) && s.settings.ProvisioningEnabled &&
+		response.GetObject().GetSpec().GetAutoExternalIpAttachment() {
 		err = s.autoProvisionExternalIPs(ctx, response.GetObject())
 		if err != nil {
 			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
@@ -366,6 +367,18 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	clusterVersion, err := s.applyClusterTemplate(ctx, candidate, template)
 	if err != nil {
 		return
+	}
+	supportsAutomaticCAASEndpoints := template.GetCapabilities()[supportsAutomaticCAASEndpointsCapability]
+	candidate.GetSpec().SetSupportsAutomaticCaasEndpoints(supportsAutomaticCAASEndpoints)
+	if supportsAutomaticCAASEndpoints {
+		if spec := candidate.GetSpec(); spec.HasAutoExternalIpAttachment() && !spec.GetAutoExternalIpAttachment() {
+			return grpcstatus.Error(grpccodes.InvalidArgument,
+				"spec.auto_external_ip_attachment must be omitted or true for templates that support automatic CaaS endpoints")
+		}
+		// The template declares that the cluster uses the automatic CaaS
+		// endpoint lifecycle. Persist that contract so the ClusterOrder
+		// reconciler creates both endpoints when provider networking is enabled.
+		candidate.GetSpec().SetAutoExternalIpAttachment(true)
 	}
 	if err := s.validateCreatedNodeSetVersions(ctx, candidate); err != nil {
 		return err
@@ -415,6 +428,8 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 
 	return
 }
+
+const supportsAutomaticCAASEndpointsCapability = "supports_automatic_caas_endpoints"
 
 // resolveCreationSource accepts exactly one provisioning source: spec.catalog_item or
 // spec.template. For a Catalog Item it finds the item's Template and applies its field rules;
@@ -526,7 +541,7 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 	if err := s.initializeAddedNodeSetVersions(ctx, current, candidate); err != nil {
 		return err
 	}
-	if err := s.validateUpdatedClusterSpec(current, candidate, mask); err != nil {
+	if err := s.validateUpdatedClusterSpec(ctx, current, candidate, mask); err != nil {
 		return err
 	}
 	return s.prepareUpdatedClusterReferences(ctx, current, candidate, mask, sizeOnlyNodeSets)
@@ -557,7 +572,7 @@ func (s *PrivateClustersServer) initializeAddedNodeSetVersions(ctx context.Conte
 	return nil
 }
 
-func (s *PrivateClustersServer) validateUpdatedClusterSpec(current, candidate *privatev1.Cluster,
+func (s *PrivateClustersServer) validateUpdatedClusterSpec(ctx context.Context, current, candidate *privatev1.Cluster,
 	mask *fieldmaskpb.FieldMask) error {
 	if updateIncludesField(mask, "spec.ssh_key") {
 		existingKey := current.GetSpec().GetSshKey()
@@ -570,6 +585,18 @@ func (s *PrivateClustersServer) validateUpdatedClusterSpec(current, candidate *p
 			candidate.GetSpec().SetSshKey(cloneMessage(existingKey))
 		}
 	}
+	const supportsAutomaticCAASEndpointsPath = "spec.supports_automatic_caas_endpoints"
+	currentSupportsAutomaticCAASEndpoints := current.GetSpec().GetSupportsAutomaticCaasEndpoints()
+	candidateSupportsAutomaticCAASEndpoints := candidate.GetSpec().GetSupportsAutomaticCaasEndpoints()
+	if updateIncludesField(mask, supportsAutomaticCAASEndpointsPath) &&
+		currentSupportsAutomaticCAASEndpoints != candidateSupportsAutomaticCAASEndpoints &&
+		(!isPublicAPIView(ctx) || updateMaskIncludesExactPath(mask, supportsAutomaticCAASEndpointsPath)) {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"cannot change spec.supports_automatic_caas_endpoints: template capability is immutable")
+	}
+	// The capability is server-owned and absent from public Cluster specs. Keep
+	// it when a parent-spec mask or full-object update replaces the public spec.
+	candidate.GetSpec().SetSupportsAutomaticCaasEndpoints(currentSupportsAutomaticCAASEndpoints)
 	if err := s.validateAddOnOperatorImmutability(current, candidate, mask); err != nil {
 		return err
 	}
@@ -1329,6 +1356,10 @@ func selectClusterFabricInterface(instanceType *privatev1.BareMetalInstanceType)
 // autoProvisionExternalIPs creates the API and ingress ExternalIPs. The ClusterOrder
 // reconciler requests their ExternalIPAttachments once the cluster endpoints are ready.
 func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cluster *privatev1.Cluster) error {
+	if !s.settings.ProvisioningEnabled {
+		return nil
+	}
+
 	pool, err := SelectExternalIPPool(ctx, s.logger, s.externalIPPoolDao, 2)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)

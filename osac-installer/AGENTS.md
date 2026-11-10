@@ -59,7 +59,7 @@ respective areas.
 | Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |
 | Fulfillment Volume lifecycle | Component integration | `../fulfillment-service/it/it_volume_lifecycle_test.go` covers Volume creation and deletion, status, hub assignment, and cleanup through `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment`. |
 | `global.networking` values, schema, networking validation, cudn_evpn or Netris registration (`test_cudn_evpn_registration_is_contract_format`, `test_netris_registration_is_contract_format`), admission policy, or `network-fulfillment-ig` rendering | Helm contract | `make helm-networking-test` |
-| CaaS Netris settings of cluster fulfillment (`NETRIS_CONTROLLER_URL`, `NETRIS_VALIDATE_CERTS`, `NETRIS_CA_CONFIGMAP` in `config-as-code-ig`) | Helm contract | `make helm-networking-test` (`AapSettingsTest`) |
+| Netris manager settings, launch protection, CA ConfigMap mount, and cluster-job isolation | Helm contract | `make helm-networking-test` (`AapSettingsTest`) |
 | Netris CI overlays (`values/{vmaas-ci,bmaas-ci,full-ci}/netris.yaml`) | Helm contract | `make helm-networking-test` (`NetrisOverlayTest`) |
 | NetworkClass step (`files/network-class-step.py`) | Unit with a fake fulfillment API | `make network-class-step-test` |
 | OpenBao security context, podSecurityContext, or Kind/OpenShift UID handling | Helm contract | `make openbao-security-context-test` |
@@ -68,6 +68,7 @@ respective areas.
 | Install preflight engine, catalog, report schema, or `preflight.*` values | Unit (mocked cluster) | `helm unittest charts/osac` (helm-unittest plugin; CI pins v1.2.1) |
 | `metering.readers` values (reader name only, all tenants), schema, umbrella passthrough, or reserved names | Unit (mocked cluster) | `helm unittest -f 'tests/metering_readers*_test.yaml' charts/osac` (the suites also run in the full `helm unittest charts/osac`) |
 | Install preflight rendering contract, hook log policy, or CSI hook deadlines | Helm contract | `uv run --script scripts/test-preflight-render.py` |
+| Kind preflight harness readiness or fixture restoration | Unit (mocked commands) | `uv run --script scripts/test-preflight-harness.py` |
 | Install preflight against a real API server, upgrade behavior, or failed-hook logs | Component integration | `uv run --script scripts/test-preflight-kind.py` against a Kind context; see [install preflight](../docs/INTEGRATION-TESTING.md#install-preflight-osac-6561) |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
 

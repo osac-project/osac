@@ -548,9 +548,10 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
-				SshKey:   privatev1.SecretReference_builder{Id: "canonical-key-id"}.Build(),
-				Version:  &privatev1.ClusterVersionReference{Name: versionName},
+				Template:                       &privatev1.ClusterTemplateReference{Name: "test-template"},
+				SshKey:                         privatev1.SecretReference_builder{Id: "canonical-key-id"}.Build(),
+				Version:                        &privatev1.ClusterVersionReference{Name: versionName},
+				SupportsAutomaticCaasEndpoints: true,
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"workers": privatev1.ClusterNodeSet_builder{
 						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "bm.large"},
@@ -591,6 +592,7 @@ var _ = Describe("update tenant annotation", func() {
 		createdCR := list.Items[0]
 		Expect(createdCR.Spec.SSHKey).NotTo(BeNil())
 		Expect(createdCR.Spec.SSHKey.ID).To(Equal("canonical-key-id"))
+		Expect(createdCR.Spec.SupportsAutomaticCaaSEndpoints).To(BeTrue())
 		Expect(createdCR.Spec.ReleaseImage).To(Equal(resolvedImage))
 		Expect(createdCR.Spec.NodeRequests).To(HaveLen(1))
 		Expect(createdCR.Spec.NodeRequests[0].ReleaseImage).To(Equal(resolvedImage))

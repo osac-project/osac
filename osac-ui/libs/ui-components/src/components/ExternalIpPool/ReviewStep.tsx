@@ -39,12 +39,6 @@ const ReviewStep = () => {
               {values.cidrs.filter((cidr) => cidr.trim()).join(', ') || displayValue()}
             </DescriptionListDescription>
           </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Tenant')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(values.metadata.tenant.name || values.metadata.tenant.id)}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
         </DescriptionList>
       </StackItem>
     </Stack>

@@ -388,8 +388,8 @@ func ParseExternalIP(result Result, poolCIDR string) (string, error) {
 }
 
 // ParseClusterIngress reads the cluster_ingress of reserve_cluster_ingress_ip:
-// a canonical address in lb_vip_ipv4_cidrs, not the Subnet broadcast address,
-// equal to accepted when an address was already accepted.
+// a canonical address in lb_vip_ipv4_cidrs, not the Subnet network, broadcast
+// or gateway address, equal to accepted when an address was already accepted.
 func ParseClusterIngress(result Result, subnetCIDR string, ipam *v1alpha1.SubnetIPAM, accepted string) (string, error) {
 	if err := result.checkKeys([]string{"cluster_ingress"}, "cluster_ingress"); err != nil {
 		return "", err
@@ -409,8 +409,18 @@ func ParseClusterIngress(result Result, subnetCIDR string, ipam *v1alpha1.Subnet
 	if ipam == nil || !inCIDRs(addr, ipam.LBVIPIPv4CIDRs) {
 		return "", Reject("cluster_ingress.address is not in lb_vip_ipv4_cidrs")
 	}
-	if _, broadcast, err := networkAndBroadcast(subnetCIDR); err == nil && addr == broadcast {
+	network, broadcast, err := networkAndBroadcast(subnetCIDR)
+	if err != nil {
+		return "", err
+	}
+	if addr == network {
+		return "", Reject("cluster_ingress.address is the Subnet's network address")
+	}
+	if addr == broadcast {
 		return "", Reject("cluster_ingress.address is the Subnet's broadcast address")
+	}
+	if addr.String() == ipam.GatewayIPv4 {
+		return "", Reject("cluster_ingress.address is the Subnet's gateway address")
 	}
 	if accepted != "" && accepted != address {
 		return "", Reject("cluster_ingress.address differs from the address already accepted for the cluster")

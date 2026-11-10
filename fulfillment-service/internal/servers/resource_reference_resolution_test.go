@@ -18,6 +18,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 // Regression tests for OSAC-6381: global references with project==""
@@ -37,14 +38,19 @@ var _ = Describe("selectedReferenceScope", func() {
 	DescribeTable("selects the correct scope",
 		func(
 			owner referenceScope,
+			tenant string,
 			shared bool,
 			project string,
 			expectedTenant string,
 			expectedProject string,
+			expectConflict bool,
 		) {
-			result := selectedReferenceScope(
-				owner, shared, project,
-			)
+			result, err := selectedReferenceScope(owner, tenant, shared, project)
+			if expectConflict {
+				Expect(err).To(HaveOccurred())
+				return
+			}
+			Expect(err).ToNot(HaveOccurred())
 			Expect(result.tenant).To(
 				Equal(expectedTenant),
 				"tenant mismatch",
@@ -61,8 +67,8 @@ var _ = Describe("selectedReferenceScope", func() {
 		Entry(
 			"empty project from named-project owner "+
 				"selects default project",
-			ownerInNamedProject, false, "",
-			"acme", "",
+			ownerInNamedProject, "", false, "",
+			"acme", "", false,
 		),
 
 		// Shared reference with empty project targets the shared
@@ -70,23 +76,23 @@ var _ = Describe("selectedReferenceScope", func() {
 		Entry(
 			"shared with empty project selects "+
 				"shared default project",
-			ownerInNamedProject, true, "",
-			auth.SharedTenant, "",
+			ownerInNamedProject, "", true, "",
+			auth.SharedTenant, "", false,
 		),
 
 		// Explicit named project overrides the owner's project.
 		Entry(
 			"explicit project overrides owner project",
-			ownerInNamedProject, false, "infra",
-			"acme", "infra",
+			ownerInNamedProject, "", false, "infra",
+			"acme", "infra", false,
 		),
 
 		// Shared with explicit project selects that project in
 		// the shared tenant.
 		Entry(
 			"shared with explicit project",
-			ownerInNamedProject, true, "templates",
-			auth.SharedTenant, "templates",
+			ownerInNamedProject, "", true, "templates",
+			auth.SharedTenant, "templates", false,
 		),
 
 		// Owner already in the default project — empty project
@@ -94,15 +100,78 @@ var _ = Describe("selectedReferenceScope", func() {
 		Entry(
 			"empty project from default-project owner "+
 				"stays at default",
-			ownerInDefaultProject, false, "",
-			"acme", "",
+			ownerInDefaultProject, "", false, "",
+			"acme", "", false,
 		),
 
 		// Non-shared, owner's tenant is preserved.
 		Entry(
 			"non-shared keeps owner tenant",
-			ownerInNamedProject, false, "other",
-			"acme", "other",
+			ownerInNamedProject, "", false, "other",
+			"acme", "other", false,
+		),
+		Entry(
+			"explicit tenant selects a visible tenant",
+			ownerInNamedProject, "tenant-b", false, "catalog",
+			"tenant-b", "catalog", false,
+		),
+		Entry(
+			"explicit shared tenant selects shared",
+			ownerInNamedProject, auth.SharedTenant, false, "catalog",
+			auth.SharedTenant, "catalog", false,
+		),
+		Entry(
+			"matching explicit shared selectors are accepted",
+			ownerInNamedProject, auth.SharedTenant, true, "catalog",
+			auth.SharedTenant, "catalog", false,
+		),
+		Entry(
+			"conflicting explicit tenant and shared selectors are rejected",
+			ownerInNamedProject, "tenant-b", true, "catalog",
+			"", "", true,
 		),
 	)
+})
+
+var _ = Describe("inheritReferenceScope", func() {
+	owner := privatev1.Metadata_builder{
+		Tenant:  "acme",
+		Project: "apps",
+	}.Build()
+
+	It("inherits the owner tenant and project for a name-based default", func() {
+		reference := privatev1.DiskImageReference_builder{Name: "default-image"}.Build()
+
+		inheritReferenceScope(reference, owner)
+
+		Expect(reference.GetTenant()).To(Equal("acme"))
+		Expect(reference.GetProject()).To(Equal("apps"))
+		Expect(reference.GetShared()).To(BeFalse())
+	})
+
+	It("keeps an ID-based default tenantless so a shared target remains valid", func() {
+		reference := privatev1.DiskImageReference_builder{Id: "shared-image-id"}.Build()
+
+		inheritReferenceScope(reference, owner)
+
+		Expect(reference.GetTenant()).To(BeEmpty())
+		Expect(reference.GetShared()).To(BeFalse())
+		Expect(reference.GetProject()).To(BeEmpty())
+		Expect(validateDependencyOwnerScope(
+			referenceScope{tenant: owner.GetTenant(), project: owner.GetProject()},
+			privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+			reference.GetTenant(), "disk image", "",
+		)).To(Succeed())
+	})
+
+	It("preserves an explicit reference scope", func() {
+		reference := privatev1.DiskImageReference_builder{
+			Id: "shared-image-id", Tenant: auth.SharedTenant, Project: "templates",
+		}.Build()
+
+		inheritReferenceScope(reference, owner)
+
+		Expect(reference.GetTenant()).To(Equal(auth.SharedTenant))
+		Expect(reference.GetProject()).To(Equal("templates"))
+	})
 })

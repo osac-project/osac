@@ -2356,14 +2356,14 @@ class StateStore:
         if observed_vlan_ids is None:
             observed_vlan_ids = set()
         if not isinstance(observed_vlan_ids, (set, list, tuple)):
-            raise StateError("Observed Cumulus VLAN IDs must be a collection of integers")
+            raise StateError("Observed switch VLAN IDs must be a collection of integers")
         for vlan_id in observed_vlan_ids:
             if (
                 isinstance(vlan_id, bool)
                 or not isinstance(vlan_id, int)
                 or not MIN_VLAN_ID <= vlan_id <= MAX_VLAN_ID
             ):
-                raise StateError("Observed Cumulus VLAN ID is outside the supported range")
+                raise StateError("Observed switch VLAN ID is outside the supported range")
         observed_vlan_ids = set(observed_vlan_ids)
         # Validate all caller-controlled fields before opening state.
         requested = _subnet_payload(

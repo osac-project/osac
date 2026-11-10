@@ -23,16 +23,18 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // RoleBindingsServerBuilder is a builder for creating instances of RoleBindingsServer.
 type RoleBindingsServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
+	logger              *slog.Logger
+	attributionLogic    auth.AttributionLogic
+	tenancyLogic        auth.TenancyLogic
+	metricsRegisterer   prometheus.Registerer
+	userReferenceLookup references.ReferenceLookupFunc
 }
 
 var _ publicv1.RoleBindingsServer = (*RoleBindingsServer)(nil)
@@ -77,6 +79,14 @@ func (b *RoleBindingsServerBuilder) SetMetricsRegisterer(value prometheus.Regist
 	return b
 }
 
+// SetUserReferenceLookup configures ID-only UserReference resolution for public response redaction.
+func (b *RoleBindingsServerBuilder) SetUserReferenceLookup(
+	value references.ReferenceLookupFunc,
+) *RoleBindingsServerBuilder {
+	b.userReferenceLookup = value
+	return b
+}
+
 // Build creates the public role bindings server from the builder configuration.
 func (b *RoleBindingsServerBuilder) Build() (result *RoleBindingsServer, err error) {
 	if b.logger == nil {
@@ -98,6 +108,7 @@ func (b *RoleBindingsServerBuilder) Build() (result *RoleBindingsServer, err err
 	outMapper, err := NewGenericMapper[*privatev1.RoleBinding, *publicv1.RoleBinding]().
 		SetLogger(b.logger).
 		SetStrict(false).
+		SetUserReferenceLookup(b.userReferenceLookup).
 		Build()
 	if err != nil {
 		return

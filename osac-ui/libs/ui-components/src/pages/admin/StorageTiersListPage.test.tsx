@@ -7,7 +7,7 @@ import type { StorageBackend, StorageTier } from '@osac/types/private';
 import { StorageBackendState, StorageProtocol, StorageTierState } from '@osac/types/private';
 
 import { StorageTiersListPage } from './StorageTiersListPage';
-import { storageBackendIdsFilter } from '../../api/v1/private/storage-backends';
+import { cel } from '../../api/cel';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const makeBackend = (id: string, name: string): StorageBackend =>
@@ -112,7 +112,9 @@ describe('StorageTiersListPage', () => {
     });
 
     const expectedIds = ['backend-a', 'backend-b', 'missing-backend'].sort();
-    expect(capturedFilter).toBe(storageBackendIdsFilter(expectedIds));
+    expect(capturedFilter).toBe(
+      cel<StorageBackend>((filter) => filter.field('id').isIn(expectedIds)),
+    );
   });
 
   it('does not request backend names when there are no tiers', async () => {

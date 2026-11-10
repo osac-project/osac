@@ -562,30 +562,8 @@ var _ = Describe("MCP server", func() {
 				publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
 			))
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
-		currentResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
-			Id: computeInstanceID,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		currentVersion := currentResponse.GetObject().GetMetadata().GetVersion()
-		// The instance is still reconciling toward RUNNING, so its version
-		// keeps advancing; currentVersion + 1 can become the stored version
-		// between this Get and the tool's internal pre-check, letting the
-		// update succeed. Subtract instead: the stored version never goes
-		// below the observed one, so currentVersion - 1 always mismatches.
-		// It is at least 2 here because reaching the STARTING state already
-		// bumped the version past creation.
-		staleVersion := currentVersion - 1
-
-		_, err = callMCPTool[mcpserver.UpdateComputeInstanceOutput](
-			ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
-				ID: computeInstanceID, Version: staleVersion, RunStrategy: "HALTED",
-			},
-		)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring(`"category":"conflict"`))
-		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"Aborted"`))
-
 		var updated mcpserver.UpdateComputeInstanceOutput
+		var staleVersion int32
 		Eventually(func(g Gomega) {
 			retryResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
 				Id: computeInstanceID,
@@ -603,10 +581,21 @@ var _ = Describe("MCP server", func() {
 				g.Expect(updateErr).ToNot(HaveOccurred())
 				return
 			}
+			staleVersion = retryVersion
 			updated = output
 			g.Expect(updated.Version).To(BeNumerically(">", retryVersion))
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
 		Expect(updated.ID).To(Equal(computeInstanceID))
+		Expect(staleVersion).To(BeNumerically(">", 0))
+
+		_, err = callMCPTool[mcpserver.UpdateComputeInstanceOutput](
+			ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
+				ID: computeInstanceID, Version: staleVersion, RunStrategy: "HALTED",
+			},
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`"category":"conflict"`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"Aborted"`))
 
 		updateInstanceTypeWithRetry := func(instanceTypeID string) mcpserver.UpdateComputeInstanceOutput {
 			var output mcpserver.UpdateComputeInstanceOutput

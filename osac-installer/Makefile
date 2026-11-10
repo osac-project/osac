@@ -18,7 +18,7 @@
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
 # UI, seeded catalog) via scripts/dev-full/. It needs a rootful container runtime
-# (Linux: rootful podman or Docker; macOS: Docker Desktop) and /dev/kvm on Linux —
+# (Linux: rootful podman or Docker; macOS: Docker Desktop or Colima) and /dev/kvm on Linux —
 # see scripts/dev-full/kind-runtime.sh and README.md.
 #
 # Helm chart management (no parameters required):
@@ -67,7 +67,7 @@ TOPOLVM_BACKING_SIZE ?= 20G
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
+ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-build-load-images kind-load-images test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -234,6 +234,7 @@ endif
 # provider selection aligned.
 KIND_RUNTIME := scripts/dev-full/kind-runtime.sh
 KIND_ARM64_CLI_IMAGE := quay.io/openshift/origin-cli:4.20.0
+KIND_AAP_CLI_IMAGE := quay.io/openshift/origin-cli:4.19
 
 # quay.io/openshift/origin-cli:4.20.0 has no arm64 manifest. On Apple Silicon,
 # build a compatible local image with the same tag so every chart can continue
@@ -251,6 +252,12 @@ endif
 # Apple Silicon and dev-full use the runtime wrapper. Plain non-macOS dev
 # keeps its existing direct Kind/container-tool behavior.
 KIND_RUNTIME_REQUIRED := $(if $(filter true,$(HOST_IS_MAC_ARM)),true,$(if $(filter dev-full,$(PROFILE)),true,false))
+KIND_REQUIRE_UV := false
+ifeq ($(PLATFORM)/$(PROFILE),kind/dev-full)
+ifeq ($(HOST_IS_MAC_ARM),true)
+KIND_REQUIRE_UV := true
+endif
+endif
 
 ifeq ($(PLATFORM)/$(PROFILE)/$(KIND_RUNTIME_REQUIRED),kind/dev/false)
 ifeq ($(strip $(KIND_EXPERIMENTAL_PROVIDER)),)
@@ -297,6 +304,7 @@ endif
 KIND_RUNTIME_ENV := KIND_PROFILE=$(PROFILE) \
 	KIND_OSAC_NAMESPACE=$(NS) \
 	TOPOLVM_BACKING_SIZE=$(TOPOLVM_BACKING_SIZE) \
+	KIND_REQUIRE_UV=$(KIND_REQUIRE_UV) \
 	$(if $(KIND_RUNTIME_PROVIDER),KIND_EXPERIMENTAL_PROVIDER=$(KIND_RUNTIME_PROVIDER))
 KIND_RUNTIME_CMD := $(KIND_RUNTIME_ENV) $(KIND_RUNTIME)
 KIND_CLUSTER_NAME ?= osac-dev
@@ -317,10 +325,15 @@ endif
 # it empty and helm/kubectl would fall back to localhost:8080. `$(or ...)` skips empty.
 export KUBECONFIG := $(or $(KUBECONFIG),$(KIND_KUBECONFIG))
 
+# These local image references match the dev-full chart values.
+KIND_FULFILLMENT_IMAGE := ghcr.io/osac-project/fulfillment-service:latest
+KIND_OPERATOR_IMAGE := ghcr.io/osac-project/osac-operator:latest
+KIND_METERING_IMAGE := ghcr.io/osac-project/metering-service:latest
+KIND_AAP_IMAGE := ghcr.io/osac-project/osac-aap:latest
 # UI has no component Makefile, so the installer keeps its local image reference.
 KIND_UI_IMAGE := ghcr.io/osac-project/osac-ui:latest
 KIND_LOAD_IMAGE_SCRIPT ?= $(abspath scripts/dev-full/kind-load-image.sh)
-define kind-load-ui-image
+define kind-load-local-image
 	$(KIND_RUNTIME_ENV) NS="$(NS)" \
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KUBECONFIG="$(KUBECONFIG)" \
 	CONTAINER_TOOL="$(CONTAINER_TOOL)" "$(KIND_LOAD_IMAGE_SCRIPT)" "$(1)"
@@ -363,10 +376,36 @@ kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=k
 	@if [ "$(PLATFORM)/$(PROFILE)" != "kind/dev-full" ]; then \
 		echo "ERROR: kind-load-images requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1; \
 	fi
-	$(MAKE) -C ../fulfillment-service kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
-	$(MAKE) -C ../osac-operator kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
-	$(MAKE) -C ../osac-aap kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
-	$(call kind-load-ui-image,$(KIND_UI_IMAGE))
+	$(MAKE) -C ../fulfillment-service kind-load-image IMG=$(KIND_FULFILLMENT_IMAGE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-operator kind-load-image IMG=$(KIND_OPERATOR_IMAGE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-aap kind-load-image IMG=$(KIND_AAP_IMAGE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(call kind-load-local-image,$(KIND_METERING_IMAGE))
+	$(call kind-load-local-image,$(KIND_UI_IMAGE))
+
+.PHONY: kind-build-load-images
+kind-build-load-images: ## Build and load dev-full images into Kind (PLATFORM=kind PROFILE=dev-full NS= required)
+	@if [ "$(PLATFORM)/$(PROFILE)" != "kind/dev-full" ]; then \
+		echo "ERROR: kind-build-load-images requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1; \
+	fi
+	$(MAKE) -C ../fulfillment-service image-build IMG=$(KIND_FULFILLMENT_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-operator image-build IMG=$(KIND_OPERATOR_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-metering/metering-service image-build IMG=$(KIND_METERING_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL)
+ifeq ($(HOST_IS_MAC_ARM),true)
+	$(KIND_RUNTIME_ENV) scripts/dev-full/build-arm64-cli-image.sh $(KIND_CLUSTER_NAME) $(KIND_AAP_CLI_IMAGE) 4.19.0
+# The AAP build uses CONTAINER_TOOL. Copy the ARM64 CLI image there when the
+# Kind provider uses a different engine.
+ifneq ($(KIND_RUNTIME_PROVIDER),)
+ifneq ($(KIND_RUNTIME_PROVIDER),$(notdir $(CONTAINER_TOOL)))
+	@set -e; archive=$$(mktemp "$${TMPDIR:-/tmp}/osac-aap-cli-image-XXXXXX.tar"); \
+		trap 'rm -f "$$archive"' EXIT; \
+		$(KIND_RUNTIME_CMD) container save $(KIND_AAP_CLI_IMAGE) -o "$$archive"; \
+		$(CONTAINER_TOOL) load -i "$$archive"
+endif
+endif
+endif
+	$(MAKE) -C ../osac-aap execution-environment-build IMG=$(KIND_AAP_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(CONTAINER_TOOL) build -f ../osac-ui/Containerfile -t $(KIND_UI_IMAGE) ..
+	$(MAKE) kind-load-images PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 ##@ Entity: Infra
 
 .PHONY: install-infra
@@ -618,7 +657,14 @@ endif
 ifeq ($(DRY_RUN),1)
 install: install-dry-run ## Render full install manifests without cluster changes (DRY_RUN=1)
 else ifeq ($(PROFILE),dev-full)
+ifeq ($(HOST_IS_MAC_ARM),true)
+install: install-infra ## Full ARM64 Mac install: infra + local images + osac + dev stack
+	$(MAKE) kind-build-load-images PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) install-osac PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) install-devstack PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+else
 install: install-infra install-osac install-devstack ## Full install: infra + osac (+ dev stack for dev-full)
+endif
 else
 install: install-infra install-osac ## Full install: infra + osac (PLATFORM= PROFILE= required)
 endif

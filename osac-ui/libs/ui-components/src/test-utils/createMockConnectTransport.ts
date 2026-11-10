@@ -1,7 +1,11 @@
 import type { MessageInitShape } from '@bufbuild/protobuf';
 import { Code, ConnectError, type Transport, createRouterTransport } from '@connectrpc/connect';
 
-import type { SelfSubjectAccessReviewsCreateRequest } from '@osac/types';
+import type {
+  ComputeInstance,
+  ComputeInstancesListRequest,
+  SelfSubjectAccessReviewsCreateRequest,
+} from '@osac/types';
 import {
   BareMetalInstanceCatalogItem,
   BareMetalInstanceCatalogItemsCreateRequest,
@@ -64,6 +68,8 @@ import {
   Project,
   ProjectMembership,
   ExternalIPPool as PublicExternalIPPool,
+  InstanceTypesGetRequest as PublicInstanceTypesGetRequest,
+  InstanceTypesGetResponse as PublicInstanceTypesGetResponse,
   StorageTier as PublicStorageTier,
   StorageTiersGetRequest as PublicStorageTiersGetRequest,
   StorageTiersListRequest as PublicStorageTiersListRequest,
@@ -106,6 +112,7 @@ import {
   ComputeInstanceCatalogItemsUpdateResponseSchema,
   ComputeInstanceTemplates,
   ComputeInstances,
+  ComputeInstancesListResponseSchema,
   DiskImageLifecycle,
   DiskImages,
   DiskImagesGetResponseSchema,
@@ -165,6 +172,8 @@ import type {
   StorageBackend,
   StorageBackendsCreateRequest,
   StorageBackendsCreateResponse,
+  StorageBackendsDeleteRequest,
+  StorageBackendsGetRequest,
   StorageBackendsListRequest,
   StorageBackendsUpdateRequest,
   StorageBackendsUpdateResponse,
@@ -192,6 +201,8 @@ import {
   Tenants as PrivateTenants,
   StorageBackendState,
   StorageBackends,
+  StorageBackendsDeleteResponseSchema,
+  StorageBackendsGetResponseSchema,
   StorageBackendsListResponseSchema,
   StorageTierState,
   StorageTiers,
@@ -206,6 +217,7 @@ import { UnauthorizedError } from '../utils/unauthorizedError';
 export type MockApiFixtures = {
   enabledServices?: ServiceTier[];
   catalogItems?: ComputeInstanceCatalogItem[];
+  computeInstances?: ComputeInstance[];
   clusters?: Cluster[];
   clusterCatalogItems?: ClusterCatalogItem[];
   bareMetalCatalogItems?: BareMetalInstanceCatalogItem[];
@@ -484,6 +496,9 @@ export type MockTransportOverrides = {
   onComputeInstanceCreate?: (
     req: ComputeInstancesCreateRequest,
   ) => ComputeInstancesCreateResponse | Promise<ComputeInstancesCreateResponse>;
+  onComputeInstanceList?: (
+    req: ComputeInstancesListRequest,
+  ) => MessageInitShape<typeof ComputeInstancesListResponseSchema>;
   onBareMetalInstanceCreate?: (
     req: BareMetalInstancesCreateRequest,
   ) => BareMetalInstancesCreateResponse | Promise<BareMetalInstancesCreateResponse>;
@@ -501,10 +516,20 @@ export type MockTransportOverrides = {
   onStorageBackendList?: (
     req: StorageBackendsListRequest,
   ) => MessageInitShape<typeof StorageBackendsListResponseSchema>;
+  onStorageBackendGet?: (
+    req: StorageBackendsGetRequest,
+  ) =>
+    | MessageInitShape<typeof StorageBackendsGetResponseSchema>
+    | Promise<MessageInitShape<typeof StorageBackendsGetResponseSchema>>;
   onStorageBackendCreate?: (
     req: StorageBackendsCreateRequest,
   ) => StorageBackendsCreateResponse | Promise<StorageBackendsCreateResponse>;
   onStorageBackendUpdate?: (req: StorageBackendsUpdateRequest) => StorageBackendsUpdateResponse;
+  onStorageBackendDelete?: (
+    req: StorageBackendsDeleteRequest,
+  ) =>
+    | MessageInitShape<typeof StorageBackendsDeleteResponseSchema>
+    | Promise<MessageInitShape<typeof StorageBackendsDeleteResponseSchema>>;
   onExternalIPPoolList?: (
     req: ExternalIPPoolsListRequest,
   ) => MessageInitShape<typeof ExternalIPPoolsListResponseSchema>;
@@ -536,6 +561,9 @@ export type MockTransportOverrides = {
     req: StorageTiersDeleteRequest,
   ) => MessageInitShape<typeof StorageTiersDeleteResponseSchema>;
   onPublicInstanceTypeList?: () => { items: InstanceType[] };
+  onPublicInstanceTypeGet?: (
+    req: PublicInstanceTypesGetRequest,
+  ) => PublicInstanceTypesGetResponse | Promise<PublicInstanceTypesGetResponse>;
   onInstanceTypeList?: (req: InstanceTypesListRequest) => InstanceTypesListResponse;
   onInstanceTypeGet?: (
     req: InstanceTypesGetRequest,
@@ -616,6 +644,7 @@ export const createMockConnectTransport = (
   ];
   const catalogItems = fixtures.catalogItems ?? [];
   const clusters = fixtures.clusters ?? [];
+  const computeInstances = fixtures.computeInstances ?? [];
   const clusterCatalogItems = fixtures.clusterCatalogItems ?? [];
   const bareMetalCatalogItems = fixtures.bareMetalCatalogItems ?? [];
   const bareMetalInstanceTemplates = fixtures.bareMetalInstanceTemplates ?? [];
@@ -687,6 +716,16 @@ export const createMockConnectTransport = (
       });
 
       router.service(ComputeInstances, {
+        list: (req) => {
+          if (overrides.onComputeInstanceList) {
+            return overrides.onComputeInstanceList(req);
+          }
+          return {
+            items: computeInstances,
+            size: computeInstances.length,
+            total: computeInstances.length,
+          };
+        },
         create: (req) => {
           if (overrides.onComputeInstanceCreate) {
             return overrides.onComputeInstanceCreate(req);
@@ -880,9 +919,12 @@ export const createMockConnectTransport = (
             ),
           };
         },
-        get: (req) => ({
-          object: instanceTypes.find((i) => i.id === req.id),
-        }),
+        get: (req) => {
+          if (overrides.onPublicInstanceTypeGet) {
+            return overrides.onPublicInstanceTypeGet(req);
+          }
+          return { object: instanceTypes.find((i) => i.id === req.id) };
+        },
       });
 
       router.service(DiskImages, {
@@ -959,9 +1001,12 @@ export const createMockConnectTransport = (
           );
           return { items, size: items.length, total: items.length };
         },
-        get: (req) => ({
-          object: storageBackends.find((b) => b.id === req.id),
-        }),
+        get: (req) => {
+          if (overrides.onStorageBackendGet) {
+            return overrides.onStorageBackendGet(req);
+          }
+          return { object: storageBackends.find((b) => b.id === req.id) };
+        },
         create: (req) => {
           if (overrides.onStorageBackendCreate) {
             return overrides.onStorageBackendCreate(req);
@@ -982,6 +1027,9 @@ export const createMockConnectTransport = (
           return { object: req.object };
         },
         delete: (req) => {
+          if (overrides.onStorageBackendDelete) {
+            return overrides.onStorageBackendDelete(req);
+          }
           const index = storageBackends.findIndex((b) => b.id === req.id);
           if (index !== -1) {
             storageBackends.splice(index, 1);
@@ -1350,16 +1398,19 @@ export const createMockConnectTransport = (
       router.service(ExternalIPs, {
         list: (req) => {
           overrides.onExternalIpList?.(req);
+          const items = externalIps.filter(
+            (item) =>
+              matchesIdInFilter(req.filter, item.id) &&
+              matchesUnallocatedExternalIpFilter(
+                req.filter,
+                item.status?.state,
+                item.status?.attached,
+              ),
+          );
           return {
-            items: externalIps.filter(
-              (item) =>
-                matchesIdInFilter(req.filter, item.id) &&
-                matchesUnallocatedExternalIpFilter(
-                  req.filter,
-                  item.status?.state,
-                  item.status?.attached,
-                ),
-            ),
+            items: req.limit === 0 ? [] : items,
+            size: items.length,
+            total: items.length,
           };
         },
         get: (req) => ({

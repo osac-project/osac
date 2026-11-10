@@ -127,9 +127,12 @@ spec:
     - iscsi
 ```
 
-`iscsi` is the only value `nodePrep` supports, and on OpenShift 4.19 and
-later it needs Trident 25.06.1 or later (see NetApp's
-[operator installation options](https://docs.netapp.com/us-en/trident/trident-install/kubernetes-customize-deploy.html)).
+NetApp's
+[OpenShift OperatorHub installation guide](https://docs.netapp.com/us-en/trident/trident-install/openshift-operator-deploy.html)
+shows it in a complete TridentOrchestrator. `iscsi` is the only value
+`nodePrep` supports, and on OpenShift 4.19 and later it needs Trident
+25.06.1 or later (see the `nodePrep` row in NetApp's
+[TridentOrchestrator options](https://docs.netapp.com/us-en/trident/trident-install/kubernetes-customize-deploy.html)).
 On a node that already has an `/etc/multipath.conf`, Trident adds the
 NetApp device exception but does not change an existing `defaults` section:
 node preparation fails there unless that section sets `find_multipaths no`.
@@ -137,8 +140,10 @@ node preparation fails there unless that section sets `find_multipaths no`.
 ### Fibre Channel: MachineConfig
 
 Trident has no node preparation for Fibre Channel. On OpenShift, apply the
-multipath configuration with a MachineConfig. The same MachineConfig works
-for iSCSI when `nodePrep` is not used.
+multipath configuration with a MachineConfig. For iSCSI without `nodePrep`,
+the same MachineConfig with its `iscsid.service` unit uncommented makes the
+changes `nodePrep` makes on a node with no `/etc/multipath.conf`: it writes
+this file and enables `iscsid` and `multipathd`.
 
 **1. Check what the nodes have today.** A MachineConfig replaces the whole
 file; nothing merges it with an existing one.

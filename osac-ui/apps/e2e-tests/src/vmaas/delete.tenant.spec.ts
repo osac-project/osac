@@ -27,7 +27,7 @@ test('deletes the requested tenant', async ({ page }) => {
   });
 
   await testStep('tenant-delete', `Delete tenant "${configuredTenantName}"`, () =>
-    deleteTenantFlow(page, configuredTenantName, ''),
+    deleteTenantFlow(page, configuredTenantName),
   );
   await testStep('tenant-delete', 'Remove VMaaS full-flow run state', async () => {
     await removeVmaasFullFlowRunState();

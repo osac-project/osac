@@ -116,6 +116,6 @@ test('deletes the resize prerequisites', async ({ page }) => {
   );
 
   await testStep('resize-cleanup', `Delete tenant "${tenantName}"`, () =>
-    deleteOwnedResource('tenant', 'Tenant', () => deleteTenantFlow(page, tenantName, '')),
+    deleteOwnedResource('tenant', 'Tenant', () => deleteTenantFlow(page, tenantName)),
   );
 });

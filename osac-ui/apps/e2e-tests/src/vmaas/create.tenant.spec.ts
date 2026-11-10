@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { markResizeResourceOwned } from './resize/ownership';
+import { markResizeOwnershipIfApplicable } from './resize/ownership';
 import { tenantNameOrSkip, tenantPassword } from './test_data';
 import { createTenantSshKey } from '../../../../libs/osac-cli/src/secret';
 import { createTenantAdminRoleBinding } from '../../../../libs/osac-cli/src/tenant_admin';
@@ -148,9 +148,10 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
     `Create SSH public-key Secret for tenant "${configuredTenantName}"`,
     () => createTenantSshKey(configuredTenantName),
   );
-  if (test.info().project.name === 'vmaas-resize-prerequisites') {
-    await testStep('tenant-create', 'Record resize prerequisite ownership', () =>
-      markResizeResourceOwned('tenant'),
-    );
-  }
+  await markResizeOwnershipIfApplicable(
+    test.info().project.name,
+    ['vmaas-resize-prerequisites'],
+    'tenant',
+    'tenant-create',
+  );
 });

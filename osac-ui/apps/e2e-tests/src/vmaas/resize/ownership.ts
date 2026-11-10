@@ -2,6 +2,7 @@ import { access, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { testStep } from '../../../../../libs/test-utils/src/general/test_progress';
 import { catalogTestRunId } from '../test_data';
 
 export type ResizeOwnedResource =
@@ -24,6 +25,20 @@ export const markResizeResourceOwned = async (resource: ResizeOwnedResource): Pr
     flag: 'wx',
     mode: 0o600,
   });
+};
+
+export const markResizeOwnershipIfApplicable = async (
+  projectName: string,
+  applicableProjects: readonly string[],
+  resource: ResizeOwnedResource,
+  stepCategory: string,
+): Promise<void> => {
+  if (!applicableProjects.includes(projectName)) {
+    return;
+  }
+  await testStep(stepCategory, 'Record resize prerequisite ownership', () =>
+    markResizeResourceOwned(resource),
+  );
 };
 
 export const isResizeResourceOwned = async (resource: ResizeOwnedResource): Promise<boolean> => {

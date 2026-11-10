@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { markResizeResourceOwned } from './resize/ownership';
+import { markResizeOwnershipIfApplicable } from './resize/ownership';
 import { diskImageNameOrSkip, diskImagesTestData } from './test_data';
 import {
   createDiskImage,
@@ -51,11 +51,12 @@ test(`creates disk image ${diskImagesTestData.name} from Infrastructure`, async 
   await testStep('disk-image-create', 'Create the configured disk image', () =>
     createDiskImage(page, diskImage),
   );
-  if (test.info().project.name === 'vmaas-resize-prerequisites') {
-    await testStep('disk-image-create', 'Record resize prerequisite ownership', () =>
-      markResizeResourceOwned('disk-image'),
-    );
-  }
+  await markResizeOwnershipIfApplicable(
+    test.info().project.name,
+    ['vmaas-resize-prerequisites'],
+    'disk-image',
+    'disk-image-create',
+  );
 
   await testStep(
     'disk-image-create',

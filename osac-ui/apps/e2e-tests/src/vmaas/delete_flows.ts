@@ -83,15 +83,11 @@ export const deleteDiskImageFlow = async (
   await expectDiskImageNotToExist(page, diskImage.name);
 };
 
-export const deleteTenantFlow = async (
-  page: Page,
-  tenantName: string,
-  username: string,
-): Promise<void> => {
+export const deleteTenantFlow = async (page: Page, tenantName: string): Promise<void> => {
   const credentialsFile = tenantCredentialsFilePath(tenantName);
   await openTenantsPage(page);
   const tenantCredentials = await readTenantCredentials(credentialsFile);
-  await deleteTenantAdmin(tenantName, username || tenantCredentials.username);
+  await deleteTenantAdmin(tenantName, tenantCredentials.username);
   await deleteTenantSshKey(tenantName);
   await deleteTenant(page, tenantName);
   await expectTenantNotToExist(page, tenantName);

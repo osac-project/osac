@@ -124,7 +124,6 @@ const UpgradeClusterDialog = ({
                     <Alert
                       variant="warning"
                       isInline
-                      isLiveRegion
                       title={t(
                         'Workloads may be unavailable while the single worker node upgrades.',
                       )}

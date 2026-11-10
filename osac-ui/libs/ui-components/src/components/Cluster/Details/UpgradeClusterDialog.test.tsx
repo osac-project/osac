@@ -114,10 +114,9 @@ describe('UpgradeClusterDialog', () => {
   it('requires downtime acknowledgement before submitting for one worker node', async () => {
     const { user, requests } = renderDialog({ workerNodeCount: 1 });
 
-    const warning = screen.getByText(
-      'Workloads may be unavailable while the single worker node upgrades.',
-    );
-    expect(warning.closest('[aria-live]')).toHaveAttribute('aria-live', 'polite');
+    expect(
+      screen.getByText('Workloads may be unavailable while the single worker node upgrades.'),
+    ).toBeInTheDocument();
     const acknowledgement = screen.getByRole('checkbox', {
       name: 'I understand this may cause downtime',
     });

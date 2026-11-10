@@ -31,6 +31,8 @@ package directclient
 import (
 	"errors"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -57,13 +59,22 @@ type directClient struct {
 func (directClient) direct() {}
 
 // New builds a direct client from a REST configuration. The returned client
-// reads from the API server and never starts or consults a cache. It is the
-// only way production code can obtain a Client.
-func New(cfg *rest.Config, opts client.Options) (Client, error) {
+// reads from the API server and never starts or consults a cache.
+//
+// The signature deliberately omits client.Options: controller-runtime's
+// client.New returns a cache-backed client when Options.Cache.Reader is set
+// ("If both Options.Cache and Options.Cache.Reader are non-nil, the client
+// reads from a local cache"), so accepting caller-supplied options would let a
+// cache back in through the sealed type. Only the fields needed to talk to the
+// API server are accepted, and the cache option is not reachable.
+func New(cfg *rest.Config, scheme *runtime.Scheme, mapper meta.RESTMapper) (Client, error) {
 	if cfg == nil {
 		return nil, errors.New("rest config is required to build a direct client")
 	}
-	c, err := client.New(cfg, opts)
+	if scheme == nil {
+		return nil, errors.New("scheme is required to build a direct client")
+	}
+	c, err := client.New(cfg, client.Options{Scheme: scheme, Mapper: mapper})
 	if err != nil {
 		return nil, err
 	}

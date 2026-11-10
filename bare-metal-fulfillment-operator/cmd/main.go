@@ -717,7 +717,7 @@ func createMetal3Managers(
 	// Keep BMC credential Secret access off the cluster-wide informer. The
 	// direct client avoids Secret list/watch permissions and limits access to
 	// the operations performed by the BMH manager and the credentials writer.
-	direct, err := directclient.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper()})
+	direct, err := directclient.New(mgr.GetConfig(), mgr.GetScheme(), mgr.GetRESTMapper())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create direct Kubernetes client: %w", err)
 	}

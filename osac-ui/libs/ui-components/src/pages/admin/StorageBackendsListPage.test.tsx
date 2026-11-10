@@ -1,5 +1,6 @@
+import { Route, Routes } from 'react-router-dom';
 import { screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { StorageBackend } from '@osac/types/private';
 import { StorageBackendState } from '@osac/types/private';
@@ -7,14 +8,7 @@ import { StorageBackendState } from '@osac/types/private';
 import { StorageBackendsListPage } from './StorageBackendsListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-const mockNavigate = vi.fn();
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>();
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-  };
-});
+const BACKENDS_LIST_PATH = '/admin/infrastructure/storage/backends';
 
 const makeBackend = (
   id: string,
@@ -36,13 +30,15 @@ const defaultBackends = [
 ];
 
 const renderPage = (storageBackends: StorageBackend[] = defaultBackends) =>
-  renderWithProviders(<StorageBackendsListPage />, { apiFixtures: { storageBackends } });
+  renderWithProviders(
+    <Routes>
+      <Route path={BACKENDS_LIST_PATH} element={<StorageBackendsListPage />} />
+      <Route path={`${BACKENDS_LIST_PATH}/:id/edit`} element={<div>navigated-to-edit</div>} />
+    </Routes>,
+    { apiFixtures: { storageBackends }, routerEntries: [BACKENDS_LIST_PATH] },
+  );
 
 describe('StorageBackendsListPage', () => {
-  beforeEach(() => {
-    mockNavigate.mockReset();
-  });
-
   it('renders column headers', async () => {
     renderPage();
 
@@ -117,7 +113,7 @@ describe('StorageBackendsListPage', () => {
     await user.click(screen.getByRole('button', { name: 'Actions for vast-prod' }));
     await user.click(screen.getByText('Edit'));
 
-    expect(mockNavigate).toHaveBeenCalledWith('/admin/infrastructure/storage/backends/b-1/edit');
+    expect(await screen.findByText('navigated-to-edit')).toBeInTheDocument();
   });
 
   it('opens the delete confirmation dialog when Delete is clicked', async () => {

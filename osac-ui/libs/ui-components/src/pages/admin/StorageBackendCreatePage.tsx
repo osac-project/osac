@@ -20,12 +20,12 @@ import { Formik } from 'formik';
 import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
 
-import type { StorageBackend } from '@osac/types/private';
+import { type StorageBackend, StorageBackends } from '@osac/types/private';
 import {
-  useCreateStorageBackend,
-  usePrivateStorageBackend,
-  useUpdateStorageBackend,
-} from '@osac/ui-components/api/v1/private/storage-backends';
+  useCreateResource,
+  useGetResource,
+  useUpdateResource,
+} from '@osac/ui-components/api/use-resource';
 import { CheckboxField } from '@osac/ui-components/components/Form/CheckboxField';
 import { InputField } from '@osac/ui-components/components/Form/InputField';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
@@ -111,8 +111,8 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const isEdit = !!backend;
-  const { mutateAsync: create, error: createError } = useCreateStorageBackend();
-  const { mutateAsync: update, error: updateError } = useUpdateStorageBackend();
+  const { mutateAsync: create, error: createError } = useCreateResource(StorageBackends);
+  const { mutateAsync: update, error: updateError } = useUpdateResource(StorageBackends);
   const error = isEdit ? updateError : createError;
 
   const providerOptions: SelectFieldOption[] = selectableStorageBackendProviders.map(({ key }) => ({
@@ -132,27 +132,30 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
     try {
       if (backend) {
         await update({
-          id: backend.id,
-          version: backend.metadata?.version ?? 0,
-          spec: {
-            endpoint: values.endpoint,
-            description: values.description,
-            ...credentials,
+          object: {
+            id: backend.id,
+            spec: {
+              endpoint: values.endpoint,
+              description: values.description,
+              ...credentials,
+            },
           },
         });
         navigate(BACKENDS_LIST_PATH);
       } else {
         const created = await create({
-          metadata: values.metadata,
-          spec: {
-            provider: values.provider,
-            cspManaged: values.cspManaged,
-            endpoint: values.endpoint,
-            description: values.description,
-            ...credentials,
+          object: {
+            metadata: values.metadata,
+            spec: {
+              provider: values.provider,
+              cspManaged: values.cspManaged,
+              endpoint: values.endpoint,
+              description: values.description,
+              ...credentials,
+            },
           },
         });
-        navigate(`${BACKENDS_LIST_PATH}/${created.id}`);
+        navigate(`${BACKENDS_LIST_PATH}/${created.object?.id}`);
       }
     } catch {
       // Surfaced via the mutation's own `error` state below; nothing further to do here.
@@ -298,7 +301,11 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
 export const StorageBackendCreatePage = () => {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
-  const { data, isLoading, error } = usePrivateStorageBackend(id ?? '');
+  const { data, isLoading, error } = useGetResource(
+    StorageBackends,
+    { id: id ?? '' },
+    { enabled: !!id },
+  );
 
   if (id) {
     if (isLoading) {
@@ -318,5 +325,5 @@ export const StorageBackendCreatePage = () => {
     }
   }
 
-  return <StorageBackendForm backend={data} />;
+  return <StorageBackendForm backend={data?.object} />;
 };

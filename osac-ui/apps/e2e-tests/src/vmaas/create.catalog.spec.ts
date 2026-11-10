@@ -1,8 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { access, writeFile } from 'node:fs/promises';
 
-import { markResizeOwnershipIfApplicable } from './resize/ownership';
-import { catalogOwnershipFilePath, catalogTestData } from './test_data';
+import { isResizeResourceOwned, markResizeResourceOwned } from './resize/ownership';
+import { catalogTestData } from './test_data';
 import { CatalogCreatePage } from '../../../../libs/locators/catalog';
 import {
   expectCatalogItemListed,
@@ -36,17 +35,11 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     () => expectCatalogItemNotListed(page, catalogTestData.name),
   );
 
-  const ownershipFile = catalogOwnershipFilePath(catalogTestData.name);
   await testStep('catalog-create', 'Verify catalog ownership marker is not present', async () => {
-    try {
-      await access(ownershipFile);
+    if (await isResizeResourceOwned('catalog')) {
       throw new Error(
         `Catalog item "${catalogTestData.name}" already has an ownership marker for this run.`,
       );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
-      }
     }
   });
 
@@ -101,11 +94,7 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     await expect(page).toHaveURL(
       (url) => /^\/catalog\/vm\/[^/]+$/.test(url.pathname) && url.pathname !== '/catalog/vm/create',
     );
-    await writeFile(ownershipFile, '', {
-      encoding: 'utf8',
-      flag: 'wx',
-      mode: 0o600,
-    });
+    await markResizeResourceOwned('catalog');
     await expect(
       page.getByRole('heading', { name: catalogTestData.name, exact: true }),
     ).toBeVisible();
@@ -132,11 +121,5 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
         },
       );
     },
-  );
-  await markResizeOwnershipIfApplicable(
-    test.info().project.name,
-    ['vmaas-resize-catalog'],
-    'catalog',
-    'catalog-create',
   );
 });

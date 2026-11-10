@@ -1,5 +1,4 @@
 import { test } from '@playwright/test';
-import { rm } from 'node:fs/promises';
 
 import {
   deleteCatalogFlow,
@@ -16,7 +15,6 @@ import {
 import { openAndLogin } from '../../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../../libs/test-utils/src/general/test_progress';
 import {
-  catalogOwnershipFilePath,
   catalogTestData,
   diskImageNameOrSkip,
   diskImagesTestData,
@@ -74,7 +72,6 @@ test('deletes the resize prerequisites', async ({ page }) => {
   await testStep('resize-cleanup', 'Delete the resize catalog item', () =>
     deleteOwnedResource('catalog', 'Catalog', async () => {
       await deleteCatalogFlow(page, catalogTestData.name);
-      await rm(catalogOwnershipFilePath(catalogTestData.name), { force: true });
     }),
   );
 

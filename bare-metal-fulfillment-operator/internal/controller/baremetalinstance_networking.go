@@ -331,6 +331,10 @@ func (r *BareMetalInstanceReconciler) networkAttachmentForDeletion(
 	}
 	apiID := bmi.Labels[BareMetalInstanceUUIDLabel]
 	if apiID == "" {
+		if !controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer) {
+			// The finalizer is added before any NetworkAttachment create, so none exists.
+			return nil, nil
+		}
 		return nil, fmt.Errorf("BareMetalInstance %s has no %s label; cannot safely locate its NetworkAttachment",
 			bmi.Name, BareMetalInstanceUUIDLabel)
 	}

@@ -300,6 +300,11 @@ func (s *PrivateNATGatewaysServer) Update(ctx context.Context,
 		nil); err != nil {
 		return
 	}
+	// The tenant lock comes before the NAT gateway's row lock below, so a checked update never
+	// waits for another request's locks in the opposite order:
+	if err = s.generic.LockTenantForCheckedUpdate(ctx, request); err != nil {
+		return
+	}
 	if _, _, err = s.lifecycle.lockNATGateway(ctx, id); err != nil {
 		err = translateLifecycleError(err)
 		return

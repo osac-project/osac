@@ -40,6 +40,9 @@ import "osac/private/v1/nat_gateway_type.proto";
 import "osac/private/v1/network_class_type.proto";
 import "osac/private/v1/project_membership_type.proto";
 import "osac/private/v1/project_type.proto";
+import "osac/private/v1/quota_limit_request_type.proto";
+import "osac/private/v1/quota_limit_type.proto";
+import "osac/private/v1/quota_threshold_type.proto";
 import "osac/private/v1/tenant_type.proto";
 import "osac/private/v1/role_binding_type.proto";
 import "osac/private/v1/role_type.proto";
@@ -111,6 +114,10 @@ message Event {
     AddOnOperator add_on_operator = 37 [(cleanapi.field).private = true];
     FabricDomain fabric_domain = 38 [(cleanapi.field).private = true];
     ServiceAccount service_account = 39 [(cleanapi.field).private = true];
+    QuotaLimit quota_limit = 41 [(cleanapi.field).private = true];
+    QuotaDefaultLimit quota_default_limit = 42 [(cleanapi.field).private = true];
+    QuotaThreshold quota_threshold = 43 [(cleanapi.field).private = true];
+    QuotaLimitRequest quota_limit_request = 44 [(cleanapi.field).private = true];
   }
 
   reserved 10;

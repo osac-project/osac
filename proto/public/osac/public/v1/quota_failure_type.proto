@@ -1,0 +1,47 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+// Explains why a request was refused by the quota check.
+//
+// The check attaches one QuotaFailure, with an ErrorInfo whose reason is `QUOTA_EXCEEDED`, to the
+// `FAILED_PRECONDITION` error of a request that would take a scope over one of its limits. The
+// request writes nothing, and can pass only after a delete or a higher limit.
+message QuotaFailure {
+  // The scope that refused the request: `tenant`, `project` or `ancestor_project`.
+  string scope = 1;
+
+  // The tenant of the failing scope.
+  string tenant = 2;
+
+  // The project of the failing scope. Empty for the tenant scope.
+  string project = 3;
+
+  // The dimension that would go over its limit, such as `compute.vcpus`.
+  string dimension = 4;
+
+  // The limit of the dimension in the failing scope.
+  int64 limit = 5;
+
+  // The usage counted in the failing scope before the request.
+  int64 usage = 6;
+
+  // What the request adds to the dimension.
+  int64 added = 7;
+
+  // The parts of the request that add to the dimension, such as the field path of a node set.
+  repeated string sources = 8;
+}

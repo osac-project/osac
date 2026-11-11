@@ -627,6 +627,8 @@ type BareMetalInstanceSpec_builder struct {
 	// When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
 	// with an ExternalIPAttachment for this instance atomically during creation.
 	// Immutable after creation.
+	//
+	// Quota: one external IP address, when the field is true.
 	AutoExternalIpAttachment *bool
 	// Reference to the bare metal instance template. Either `template` or `catalog_item` is required on create.
 	//

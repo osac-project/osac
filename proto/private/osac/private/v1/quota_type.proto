@@ -1,0 +1,144 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+import "google/protobuf/descriptor.proto";
+
+// This file is private: quota reads the annotations from the private protos, and the public
+// API doesn't need them.
+option (cleanapi.file).private = true;
+
+// Quota limits are counted per dimension, one thing a limit counts, such as `compute.vcpus`
+// or `storage.fast.gib`. The annotations defined here declare each resource kind's price:
+// the dimensions and amounts a request uses, including what OSAC will create for it. The
+// list lives with the resource definitions instead of in per-kind Go code that would drift
+// apart from them.
+//
+// The annotations feed a shared registry, the Go package `proto/quota`. At startup the
+// registry walks the compiled proto descriptors of this package, collects every quota
+// annotation, and validates it (a dimension's brace paths must name real fields, a `through`
+// or `creates` kind must exist, and every kind must either carry annotations or be on the
+// registry's list of kinds that use nothing). It fails loudly on an annotation that is
+// invalid, so a typo is a startup failure, not a silently uncounted resource.
+//
+// A **type** is a kind that resources point to for their size, such as an instance type or a
+// host type. A type itself counts toward no limit: its annotations say what each resource
+// that uses it counts.
+//
+// Paths in these annotations start at the resource, such as `status.instance_type`. A path
+// in braces in a dimension puts its value into the dimension name, such as
+// `storage.{spec.storage_tier}.gib`. Inside `creates`, `count_field` and the values in `set`
+// are paths from the **item**: the field's value, each entry of its list, or each value of
+// its map. In a name prefix, `{parent}` is the parent's ID.
+//
+// A resource counts the larger of what is asked for and what exists. `larger_of` applies the
+// rule inside one resource: the resource uses, on each dimension, the larger of what the two
+// referenced types say. What OSAC has already created for a resource is counted by the usage
+// query, which trusts a `created_for` link only when the resource's creator is `system`.
+//
+// The kinds of link, with examples:
+//
+// - by field: the resource holds a reference to its parent, such as a host's
+//   `status.cluster`.
+// - by name: the resource's name starts with a prefix of the parent's ID, such as a VM's
+//   disk volume named `ci-` + the VM's ID + `-boot`.
+// - by labels: two labels hold the parent's ID and kind, such as an automatic external IP
+//   address.
+message QuotaCreatedForOptions {
+  // Kind of the parent resource, for example "ComputeInstance". Empty for label links,
+  // where the kind label holds the parent's kind.
+  string parent = 1;
+
+  // Prefix of the resource's name. `{parent}` is the parent's ID, so "ci-{parent}-" names
+  // a VM's disk volume "ci-<vm id>-boot". Set for name links only.
+  string name_prefix = 2;
+
+  // Label that holds the parent's ID, for example "osac.openshift.io/auto-created-for".
+  // Set for label links only.
+  string id_label = 3;
+
+  // Label that holds the parent's kind, for example "osac.openshift.io/auto-created-kind".
+  // Set for label links only.
+  string kind_label = 4;
+}
+
+// Resources OSAC will create for the annotated field's value: one for a message that is
+// present or a bool that is true, one for each list entry or map value.
+message QuotaCreatesOptions {
+  // Kind of resource to create, for example "Volume".
+  string kind = 1;
+
+  // Field of the annotated field's message that holds the list of items, such as "items".
+  // Each entry of that list is one item. Empty when the field's value is itself the item.
+  string each = 2;
+
+  // How many resources to create for each item, as a number. Mutually exclusive with
+  // `count_field`; when both are empty, one resource per item.
+  int32 count = 3;
+
+  // Field of the item that says how many resources to create for it, such as a node set's
+  // "size".
+  string count_field = 4;
+
+  // Fields of each new resource. Each key is a field path of the new resource, and each
+  // value is a path from the item, such as "spec.size_gib" from "size_gib".
+  map<string, string> set = 5;
+}
+
+// Options of a field that quota reads. Exactly one of `dimension`, `through`, `creates` and
+// `created_for` is set.
+message QuotaFieldOptions {
+  // Dimension the field's value counts against, such as a volume's `size_gib` on
+  // "storage.{spec.storage_tier}.gib".
+  string dimension = 1;
+
+  // Kind of type the field's reference points at, such as "InstanceType". The resource
+  // uses what the type's annotations say.
+  string through = 2;
+
+  // Proto field path, relative to the resource, of a second field that points at the same
+  // kind of type, such as "status.instance_type". The resource uses the larger amount on
+  // each dimension. Empty when the resource uses only the referenced type.
+  string larger_of = 3;
+
+  // Resources OSAC will create for this field's value.
+  QuotaCreatesOptions creates = 4;
+
+  // Link to the parent this resource was created for, when the field itself holds the
+  // link, such as a host's `status.cluster`.
+  QuotaCreatedForOptions created_for = 5;
+}
+
+// Options of a message that quota reads.
+message QuotaMessageOptions {
+  // Dimension each resource of the message uses 1 of, such as "caas.control_planes" per
+  // cluster. On a type, each resource of that type uses 1, such as
+  // "bare_metal.instances.{metadata.name}" per host of that host type.
+  string dimension = 1;
+
+  // Link to the parent this resource was created for, such as a VM's disk volume pointing
+  // back to the VM by its name prefix.
+  QuotaCreatedForOptions created_for = 2;
+}
+
+extend google.protobuf.FieldOptions {
+  QuotaFieldOptions quota = 50003;
+}
+
+extend google.protobuf.MessageOptions {
+  QuotaMessageOptions quota_message = 50003;
+}

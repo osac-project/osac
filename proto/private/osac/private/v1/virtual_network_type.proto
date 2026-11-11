@@ -19,6 +19,7 @@ import "cleanapi/cleanapi.proto";
 import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/quota_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -29,6 +30,9 @@ option (cleanapi.file).package = "osac.public.v1";
 //
 // Tenant isolation is enforced via the standard Metadata tenant field.
 message VirtualNetwork {
+  // Quota: one virtual network per resource.
+  option (osac.private.v1.quota_message) = {dimension: "network.virtual_networks"};
+
   // Unique identifier of the virtual network.
   string id = 1;
 

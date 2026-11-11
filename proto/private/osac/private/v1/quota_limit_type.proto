@@ -1,0 +1,105 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
+import "osac/private/v1/metadata_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// Represents the limit of one quota dimension at one scope.
+//
+// A dimension is one thing a limit counts, such as `compute.vcpus` or `storage.fast.gib`. The scope
+// comes from the metadata: a tenant override belongs to a tenant and to the default project, and a
+// project limit belongs to a tenant and to a named project. The resolution order is: a project
+// counts against its project limit when one exists, and the tenant always counts against its
+// override, else the default limit, else 0.
+//
+// Cloud Provider Admins set tenant overrides; Tenant Admins set project limits. One limit exists
+// per dimension per scope. The dimension is immutable; the value can change. Clearing a limit
+// deletes it, so the dimension falls back to the next scope in the resolution order.
+message QuotaLimit {
+  // Unique identifier of the limit.
+  string id = 1;
+
+  // Metadata of the limit, including name, tenant, and project.
+  Metadata metadata = 2;
+
+  // Desired configuration of the limit (user-specified).
+  QuotaLimitSpec spec = 3;
+
+  // Current state of the limit (system-provided, read-only).
+  QuotaLimitStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Defines the desired configuration for a QuotaLimit.
+message QuotaLimitSpec {
+  // The quota dimension this limit caps, such as `compute.vcpus` or `storage.fast.gib`. Required
+  // and immutable after creation. Unique within the limit's scope.
+  string dimension = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).string = {min_len: 1, max_len: 256}
+  ];
+
+  // The maximum amount of the dimension that the scope may hold. Zero refuses everything that adds
+  // to the dimension. When the `metadata.name` is omitted it is generated from the dimension.
+  int64 value = 2 [(buf.validate.field).int64.gte = 0];
+}
+
+// Represents the current state of a QuotaLimit.
+message QuotaLimitStatus {}
+
+// Represents the default limit of one quota dimension for all tenants.
+//
+// A default applies to every tenant that has no override for the dimension. A dimension with no
+// default has limit 0. Default limits belong to no tenant; only Cloud Provider Admins manage them.
+// Setting a default with a dimension that already has one replaces its value; clearing it deletes
+// it. Approving a QuotaLimitRequest never writes a default, it writes the requesting tenant's
+// override.
+message QuotaDefaultLimit {
+  // Unique identifier of the default limit.
+  string id = 1;
+
+  // Metadata of the default limit. The tenant and project are always empty.
+  Metadata metadata = 2;
+
+  // Desired configuration of the default limit (user-specified).
+  QuotaDefaultLimitSpec spec = 3;
+
+  // Current state of the default limit (system-provided, read-only).
+  QuotaDefaultLimitStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Defines the desired configuration for a QuotaDefaultLimit.
+message QuotaDefaultLimitSpec {
+  // The quota dimension this default caps, such as `compute.vcpus`. Required and immutable.
+  // Unique across all default limits.
+  string dimension = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).string = {min_len: 1, max_len: 256}
+  ];
+
+  // The maximum amount of the dimension that each tenant without an override may hold. When the
+  // `metadata.name` is omitted it is generated from the dimension.
+  int64 value = 2 [(buf.validate.field).int64.gte = 0];
+}
+
+// Represents the current state of a QuotaDefaultLimit.
+message QuotaDefaultLimitStatus {}

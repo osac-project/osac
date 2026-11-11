@@ -30,6 +30,7 @@ import "osac/private/v1/cluster_version_type.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/metering_type.proto";
+import "osac/private/v1/quota_type.proto";
 import "osac/private/v1/secret_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -39,6 +40,9 @@ option (cleanapi.file).package = "osac.public.v1";
 // The `spec` contains the desired details, and may be modified by the user. The `status` contains the current status of
 // the cluster, is provided by the system and can't be modified by the user.
 message Cluster {
+  // Quota: one control plane per cluster.
+  option (osac.private.v1.quota_message) = {dimension: "caas.control_planes"};
+
   // Unique identifier of the cluster.
   string id = 1;
 
@@ -151,10 +155,18 @@ message ClusterSpec {
   // If at any time the system can't allocate the number of nodes requested by the user, because of permissions, quota,
   // availability of resources or system errors, the cluster will be marked as degraded, and the details will be in the
   // `DEGRADED` condition.
+  //
+  // Quota: for each node set, as many hosts as its size, each of the node set's host type.
   map<string, ClusterNodeSet> node_sets = 3 [(buf.validate.field).map.keys.string = {
     min_len: 1,
     max_len: 63,
     pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }, (osac.private.v1.quota) = {
+    creates: {
+      kind: "BareMetalInstance"
+      count_field: "size"
+      set: {key: "spec.instance_type" value: "baremetal_instance_type"}
+    }
   }];
 
   // Reserved field number and name for the removed inline SSH-key field.
@@ -205,7 +217,9 @@ message ClusterSpec {
   // The ExternalIP pool is selected automatically based on available capacity.
   //
   // This field is immutable after creation — it cannot be changed on update.
-  optional bool auto_external_ip_attachment = 10 [(google.api.field_behavior) = IMMUTABLE];
+  //
+  // Quota: two external IP addresses, one for the cluster's API and one for its apps.
+  optional bool auto_external_ip_attachment = 10 [(google.api.field_behavior) = IMMUTABLE, (osac.private.v1.quota) = {creates: {kind: "ExternalIP", count: 2}}];
 
   // Reference to a Secret resource containing pull secret credentials.
   //

@@ -417,6 +417,7 @@ func computeInstanceNetworkAttachmentsFromInput(input []ComputeInstanceNetworkAt
 	return attachments, nil
 }
 
+// handleUpdateComputeInstance applies catalog-policy-approved fields to a versioned instance.
 func handleUpdateComputeInstance(
 	clients computeInstanceClients,
 ) mcp.ToolHandlerFor[UpdateComputeInstanceInput, UpdateComputeInstanceOutput] {
@@ -518,6 +519,7 @@ func safeUpdatePreconditionError() error {
 	return envelope
 }
 
+// getComputeInstanceAtVersion returns the instance only when its version matches the caller's view.
 func getComputeInstanceAtVersion(
 	ctx context.Context, client publicv1.ComputeInstancesClient, id string, version int32,
 ) (*publicv1.ComputeInstance, error) {
@@ -532,6 +534,7 @@ func getComputeInstanceAtVersion(
 	return current, nil
 }
 
+// nextComputeInstanceRestartRequestedAt creates a restart signal later than the persisted signal.
 func nextComputeInstanceRestartRequestedAt(
 	now time.Time, previous *timestamppb.Timestamp,
 ) *timestamppb.Timestamp {
@@ -545,6 +548,7 @@ func nextComputeInstanceRestartRequestedAt(
 	return timestamppb.New(next)
 }
 
+// safeComputeInstanceUpdateError maps public update failures to stable MCP errors.
 func safeComputeInstanceUpdateError(err error) error {
 	if status.Code(err) == codes.Aborted {
 		return safeStaleVersionError()
@@ -555,6 +559,7 @@ func safeComputeInstanceUpdateError(err error) error {
 	return safePublicAPIError(err)
 }
 
+// handleSetComputeInstancePower changes run strategy after checking catalog-item policy.
 func handleSetComputeInstancePower(
 	clients computeInstanceClients,
 ) mcp.ToolHandlerFor[SetComputeInstancePowerInput, SetComputeInstancePowerOutput] {
@@ -625,6 +630,7 @@ func handleSetComputeInstancePower(
 	}
 }
 
+// handleRestartComputeInstance advances the restart signal using a version-locked update.
 func handleRestartComputeInstance(
 	client publicv1.ComputeInstancesClient,
 ) mcp.ToolHandlerFor[RestartComputeInstanceInput, RestartComputeInstanceOutput] {
@@ -682,6 +688,7 @@ func handleRestartComputeInstance(
 	}
 }
 
+// normalizeSetComputeInstancePowerInput trims identifiers and validates the requested power action.
 func normalizeSetComputeInstancePowerInput(input SetComputeInstancePowerInput) (SetComputeInstancePowerInput, error) {
 	input.ID = strings.TrimSpace(input.ID)
 	input.Action = strings.ToLower(strings.TrimSpace(input.Action))
@@ -697,6 +704,7 @@ func normalizeSetComputeInstancePowerInput(input SetComputeInstancePowerInput) (
 	return input, nil
 }
 
+// normalizeRestartComputeInstanceInput trims the identifier and requires a current version.
 func normalizeRestartComputeInstanceInput(input RestartComputeInstanceInput) (RestartComputeInstanceInput, error) {
 	input.ID = strings.TrimSpace(input.ID)
 	if input.ID == "" {

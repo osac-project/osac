@@ -28,8 +28,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
@@ -384,7 +388,134 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("ssh-ed25519 AAAAsecret"))
 		Expect(string(request.GetObject().GetData()["public_key"])).To(Equal("ssh-ed25519 AAAAsecret"))
 	})
+
+	It("Redacts public and private permission rule values without modifying messages", func() {
+		permissionRules := []proto.Message{
+			publicv1.PermissionRule_builder{
+				Service: "osac.public.compute_instances",
+				Methods: []string{"get", "update"},
+			}.Build(),
+			privatev1.PermissionRule_builder{
+				Service: "osac.private.compute_instances",
+				Methods: []string{"get", "update"},
+			}.Build(),
+		}
+
+		for _, rule := range permissionRules {
+			original := proto.Clone(rule)
+			redacted := redactProtoMessage(rule).ProtoReflect()
+			fields := redacted.Descriptor().Fields()
+
+			Expect(redacted.Get(fields.ByName("service")).String()).To(Equal(redactMark))
+			methods := redacted.Get(fields.ByName("methods")).List()
+			Expect(methods.Len()).To(Equal(2))
+			for index := 0; index < methods.Len(); index++ {
+				Expect(methods.Get(index).String()).To(Equal(redactMark))
+			}
+			Expect(proto.Equal(rule, original)).To(BeTrue())
+		}
+	})
+
+	It("Redacts ComputeInstance customer data from unary client body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response, err := computeInstanceLogFixtures()
+		Expect(err).ToNot(HaveOccurred())
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+		responseTemplate := proto.Clone(response)
+
+		invoker := func(_ context.Context, _ string, _, response any, _ *grpc.ClientConn,
+			_ ...grpc.CallOption) error {
+			proto.Reset(response.(proto.Message))
+			proto.Merge(response.(proto.Message), responseTemplate)
+			return nil
+		}
+		err = redactedInterceptor.UnaryClient(ctx, "/osac.public.v1.ComputeInstances/Create",
+			request, response, conn, invoker)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("template-parameter-private-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("user-data-private-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.3"))
+		Expect(buffer.String()).ToNot(ContainSubstring("192.0.2.4"))
+		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.5"))
+		Expect(buffer.String()).ToNot(ContainSubstring("subnet-private-id"))
+		Expect(buffer.String()).To(ContainSubstring(redactMark))
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts ComputeInstance customer data from unary server body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response, err := computeInstanceLogFixtures()
+		Expect(err).ToNot(HaveOccurred())
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+
+		_, err = redactedInterceptor.UnaryServer(ctx, request,
+			&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.ComputeInstances/Create"},
+			func(context.Context, any) (any, error) { return response, nil })
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("template-parameter-private-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("user-data-private-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.3"))
+		Expect(buffer.String()).ToNot(ContainSubstring("192.0.2.4"))
+		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.5"))
+		Expect(buffer.String()).ToNot(ContainSubstring("subnet-private-id"))
+		Expect(buffer.String()).To(ContainSubstring(redactMark))
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
 })
+
+// computeInstanceLogFixtures returns public request and response bodies with private customer data.
+func computeInstanceLogFixtures() (
+	*publicv1.ComputeInstancesCreateRequest,
+	*publicv1.ComputeInstancesCreateResponse,
+	error,
+) {
+	templateParameter, err := anypb.New(wrapperspb.String("template-parameter-private-value"))
+	if err != nil {
+		return nil, nil, err
+	}
+	userData := "user-data-private-value"
+	spec := publicv1.ComputeInstanceSpec_builder{
+		TemplateParameters: map[string]*anypb.Any{"credential": templateParameter},
+		UserDataSource:     publicv1.UserDataSource_builder{Inline: &userData}.Build(),
+	}.Build()
+	request := publicv1.ComputeInstancesCreateRequest_builder{
+		Object: publicv1.ComputeInstance_builder{Spec: spec}.Build(),
+	}.Build()
+	response := publicv1.ComputeInstancesCreateResponse_builder{
+		Object: publicv1.ComputeInstance_builder{
+			Spec: spec,
+			Status: publicv1.ComputeInstanceStatus_builder{
+				InternalIpAddress: "10.1.2.3",
+				ExternalIpAddress: "192.0.2.4",
+				ComputeNetworkAttachmentStatuses: []*publicv1.ComputeNetworkAttachmentStatus{
+					publicv1.ComputeNetworkAttachmentStatus_builder{
+						SubnetRef: "subnet-private-id",
+						IpAddress: "10.1.2.5",
+					}.Build(),
+				},
+			}.Build(),
+		}.Build(),
+	}.Build()
+	return request, response, nil
+}
 
 type mockClientStream struct {
 	ctx context.Context

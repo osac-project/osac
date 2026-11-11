@@ -470,20 +470,35 @@ const (
 
 	publicPermissionRuleMessage  = protoreflect.FullName("osac.public.v1.PermissionRule")
 	privatePermissionRuleMessage = protoreflect.FullName("osac.private.v1.PermissionRule")
+
+	publicComputeInstanceSpec    = protoreflect.FullName("osac.public.v1.ComputeInstanceSpec")
+	privateComputeInstanceSpec   = protoreflect.FullName("osac.private.v1.ComputeInstanceSpec")
+	publicComputeInstanceStatus  = protoreflect.FullName("osac.public.v1.ComputeInstanceStatus")
+	privateComputeInstanceStatus = protoreflect.FullName("osac.private.v1.ComputeInstanceStatus")
 )
 
-// redactProtoMessage returns a copy of the message with Secret data and permission rule values replaced by the
-// standard log redaction marker. The copy ensures that logging never changes the message sent through gRPC.
+// redactProtoMessage returns a copy with Secret data, permission rule values, and sensitive
+// ComputeInstance fields redacted.
+// The copy ensures that logging never changes the message sent through gRPC.
 func redactProtoMessage(message proto.Message) proto.Message {
 	result := proto.Clone(message)
 	redactProtoMessageFields(result.ProtoReflect())
 	return result
 }
 
+// redactProtoMessageFields redacts Secret payloads and sensitive ComputeInstance data in place.
 func redactProtoMessageFields(message protoreflect.Message) {
 	fields := message.Descriptor().Fields()
 	for index := 0; index < fields.Len(); index++ {
 		field := fields.Get(index)
+		if isSensitiveComputeInstanceField(field) {
+			if field.Kind() == protoreflect.StringKind {
+				message.Set(field, protoreflect.ValueOfString(redactMark))
+			} else {
+				message.Clear(field)
+			}
+			continue
+		}
 		if field.IsMap() {
 			if field.Name() == "data" && isSecret(field.ContainingMessage()) {
 				values := message.Mutable(field).Map()
@@ -527,6 +542,23 @@ func redactProtoMessageFields(message protoreflect.Message) {
 			redactProtoMessageFields(message.Get(field).Message())
 		}
 	}
+}
+
+func isSensitiveComputeInstanceField(field protoreflect.FieldDescriptor) bool {
+	name := field.Name()
+	switch field.ContainingMessage().FullName() {
+	case publicComputeInstanceSpec, privateComputeInstanceSpec:
+		switch name {
+		case "template_parameters", "user_data_source", "ssh_key", "network_attachments":
+			return true
+		}
+	case publicComputeInstanceStatus, privateComputeInstanceStatus:
+		switch name {
+		case "internal_ip_address", "external_ip_address", "compute_network_attachment_statuses":
+			return true
+		}
+	}
+	return false
 }
 
 func isSecret(message protoreflect.MessageDescriptor) bool {

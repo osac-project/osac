@@ -79,7 +79,7 @@ const allFullFlowsProjectRequested = process.argv.some((argument) =>
   argument.includes('vmaas-all-full-flows'),
 );
 const fullHappyFlowProjectRequested = process.argv.some(
-  (argument) => argument.includes('vmaas-full-happy-basic-flow') || allFullFlowsProjectRequested,
+  (argument) => argument.includes('vmaas_full_happy_basic') || allFullFlowsProjectRequested,
 );
 const fullFlowProjectRequested = process.argv.some(
   (argument) =>
@@ -214,7 +214,7 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-full-happy-basic-flow',
+      name: 'vmaas_full_happy_basic',
       testDir: vmaasDir,
       testMatch: /delete\.vm\.spec\.ts/,
       fullyParallel: false,
@@ -227,7 +227,7 @@ export default defineConfig({
       testMatch: /$^/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       // Add future complete VMaaS flows here as they become available.
-      dependencies: ['vmaas-full-happy-basic-flow'],
+      dependencies: ['vmaas_full_happy_basic'],
     },
     {
       name: 'vmaas-full-flow-pre-resource-delete',

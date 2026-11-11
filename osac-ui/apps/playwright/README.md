@@ -89,7 +89,7 @@ Environment variables:
 | --------------------- | ------------------------------------------------------------------------------------------------- |
 | `OSAC_UI_BASE_URL`    | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
 | `OSAC_API_BASE_URL`   | Optional Fulfillment API URL; auto-discovered from the `fulfillment-api` route when possible      |
-| `OSAC_CLI_PATH`       | Optional path to the `osac` binary; the runner also checks `~/.local/bin/osac`                |
+| `OSAC_CLI_PATH`       | Optional path to the `osac` binary; the runner also checks `~/.local/bin/osac`                    |
 | `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                               |
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
@@ -194,14 +194,14 @@ The full-flow projects run in this order:
 1. `vmaas-full-flow-pre-resource` creates the infrastructure resources, catalog
    item, and tenant.
 2. `vm-flow` creates and verifies the VM.
-3. `vmaas-full-happy-basic-flow` deletes the VM as the tenant admin.
+3. `vmaas_full_happy_basic` deletes the VM as the tenant admin.
 4. `vmaas-full-flow-pre-resource-delete` removes the catalog item, disk image,
    instance type, storage tier, tenant-admin RoleBinding and OSAC User,
    SSH public-key Secret, tenant, and generated credential file as the admin
    user.
 
 `vmaas-all-full-flows` is the aggregator for complete VMaaS flows. It currently
-depends on `vmaas-full-happy-basic-flow`; add future full-flow projects to its
+depends on `vmaas_full_happy_basic`; add future full-flow projects to its
 dependencies in `playwright.config.ts`.
 
 Run the complete creation flow, including VM creation, with:

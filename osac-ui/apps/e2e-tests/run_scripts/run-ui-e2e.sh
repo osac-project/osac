@@ -78,18 +78,15 @@ Usage: $0 [OPTIONS]
 Run prepared OSAC UI Playwright flows. Run prepare-setup-for-ui-run.sh first.
 
 Flow tags:
-  vmaas_all                                 all VMaaS flows (happy flow for now)
-  vmaas-full-happy-basic-flow              complete VMaaS happy flow
-  create_pre-resources, delete_pre-resources, full_pre-resources
-                                            infrastructure resource group
-  create_disk_image, delete_disk_image, full_disk_image
-                                            disk image lifecycle
-  create_storage-tier, delete_storage-tier, full_storage-tier
-                                            storage tier lifecycle
-  create_instance_type, delete_instance_type, full_instance_type
-  create_tenant, delete_tenant, full_tenant
-  create_catalog, delete_catalog, full_catalog
-  create_vm, delete_vm, full_vm
+  vmaas_all  - all VMaaS flows (happy flow for now)
+  vmaas_full_happy_basic - complete VMaaS happy basic flow (no features, includes creation of all requires resources, create VM, delete VM and delete all pre-created resources)
+  create_pre-resources, delete_pre-resources, full_pre-resources - infrastructure resource group: create and delete resources requred for VM creation
+  create_disk_image, delete_disk_image, full_disk_image - disk image lifecycle
+  create_storage-tier, delete_storage-tier, full_storage-tier - storage tier lifecycle
+  create_instance_type, delete_instance_type, full_instance_type - instance type lifecycle
+  create_tenant, delete_tenant, full_tenant - tenant lifecycle
+  create_catalog, delete_catalog, full_catalog - catalog lifecycle
+  create_vm, delete_vm, full_vm - VM lifecycle
 
 create_* leaves a resource for delete_*; full_* runs the configured teardown.
 
@@ -179,7 +176,7 @@ placeholder_username() {
 
 declare -A FLOW_CONFIG=(
   [vmaas_all]='vmaas-all-full-flows|full||false'
-  [vmaas-full-happy-basic-flow]='vmaas-full-happy-basic-flow|full||false'
+  [vmaas_full_happy_basic]='vmaas_full_happy_basic|full||false'
   [create_pre-resources]='vmaas-full-flow-pre-resource|create||false'
   [delete_pre-resources]='vmaas-full-flow-pre-resource|delete||false'
   [full_pre-resources]='vmaas-full-flow-pre-resource|full||false'

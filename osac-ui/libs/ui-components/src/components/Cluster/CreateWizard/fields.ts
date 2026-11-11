@@ -17,7 +17,7 @@ export interface ClusterNodeSetRow {
   rowId: string;
   name: string;
   hostType: ResourceSelectValue;
-  size: string;
+  size: number | undefined;
 }
 
 export interface ClusterWizardValues {
@@ -69,7 +69,7 @@ export const createEmptyNodeSetRow = (): ClusterNodeSetRow => ({
   rowId: createNodeSetRowId(),
   name: '',
   hostType: emptyResourceSelectValue(),
-  size: '',
+  size: undefined,
 });
 
 export const createEmptyClusterValues = (): ClusterWizardValues => ({
@@ -146,7 +146,7 @@ const nodeSetRowsFromPolicy = (
     rowId: createNodeSetRowId(),
     name,
     hostType: nodeSet.baremetalInstanceType ?? emptyResourceSelectValue(),
-    size: nodeSet.size ? String(nodeSet.size) : '',
+    size: nodeSet.size,
   }));
 
   return provisioningFieldValue(

@@ -99,6 +99,8 @@ Multi-stage build images: `nodejs-22-minimal:9.8`, `go-toolset:1.25`, `ubi-minim
 - **One component per file**: split each meaningful component into its own file in the same feature area (e.g., `feature-name/SubView.tsx`); keep page files focused on composition, data wiring, and layout. Exception: a tiny non-exported helper may stay if the file remains short
 - **Restricted imports** (ESLint enforces):
   - Use `OsacForm` wrapper (`libs/ui-components/src/components/Form/OsacForm.tsx`), not PF `Form` directly
+  - In Formik forms, always use the Formik-aware field components from `libs/ui-components/src/components/Form/` (for example, `SelectField`, and `CheckboxField`); do not wire raw PatternFly form controls to Formik in pages or callers
+  - Build every Formik field component on an appropriate field primitive from `libs/ui-components/src/components/Form/base/`; if a needed primitive is missing, add it there first
   - Deep imports for PF icons/tokens (ESM): `@patternfly/react-icons/dist/esm/icons/<name>`, `@patternfly/react-tokens/dist/esm/<token-name>`
   - Deep imports for lodash-es: `lodash-es/<function>`
   - Use `@osac/ui-components/hooks/useTranslation`, never `react-i18next` directly

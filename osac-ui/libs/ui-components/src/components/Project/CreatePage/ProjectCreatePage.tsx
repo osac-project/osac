@@ -22,7 +22,7 @@ import { getErrorMessage } from '@osac/ui-components/utils/error';
 import { getCreateProjectPayload } from './payload';
 import { getProjectValidationSchema } from './validation';
 import { initialValues } from './values';
-import { InputField } from '../../Form/InputField';
+import TextField from '../../Form/base/TextField';
 import LeaveFormConfirmation from '../../Form/LeaveFormConfirmation';
 import NameField from '../../Form/NameField';
 import OsacForm from '../../Form/OsacForm';
@@ -71,7 +71,7 @@ const ProjectCreatePage = () => {
                   <OsacForm>
                     <ProjectField label={t('Parent project')} />
                     <NameField />
-                    <InputField name="title" label={t('Title')} fieldId="project-title" />
+                    <TextField name="title" label={t('Title')} fieldId="project-title" />
                   </OsacForm>
                 </StackItem>
                 {!!error && (

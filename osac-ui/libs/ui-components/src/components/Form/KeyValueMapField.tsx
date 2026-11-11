@@ -12,10 +12,10 @@ import MinusCircleIcon from '@patternfly/react-icons/dist/esm/icons/minus-circle
 import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-icon';
 import { FieldArray, useField, useFormikContext } from 'formik';
 
+import TextField from './base/TextField';
 import { getVisibleFieldError } from './fieldError';
 import { FieldValidationProvider, useShowFieldValidationErrors } from './FieldValidationContext';
 import { FormFieldHelper } from './FormFieldHelper';
-import { InputField } from './InputField';
 import { useTranslation } from '../../hooks/useTranslation';
 
 export interface KeyValuePair {
@@ -89,7 +89,7 @@ export const KeyValueMapField = ({
                     <StackItem key={index}>
                       <Split hasGutter>
                         <SplitItem isFilled>
-                          <InputField
+                          <TextField
                             name={`${name}.${index}.key`}
                             fieldId={`${fieldId}-${index}-key`}
                             label={t('{{label}} key {{number}}', { label, number: index + 1 })}
@@ -98,7 +98,7 @@ export const KeyValueMapField = ({
                           />
                         </SplitItem>
                         <SplitItem isFilled>
-                          <InputField
+                          <TextField
                             name={`${name}.${index}.value`}
                             fieldId={`${fieldId}-${index}-value`}
                             label={t('{{label}} value {{number}}', { label, number: index + 1 })}

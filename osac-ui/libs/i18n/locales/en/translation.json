@@ -712,6 +712,7 @@
   "Must be a valid domain (e.g. example.com)": "Must be a valid domain (e.g. example.com)",
   "Must be a valid URL (e.g. https://example.com)": "Must be a valid URL (e.g. https://example.com)",
   "Must be a whole number": "Must be a whole number",
+  "Must be at least {{min}}": "Must be at least {{min}}",
   "Must be at most {{max}}": "Must be at most {{max}}",
   "Must be greater than zero": "Must be greater than zero",
   "Name": "Name",

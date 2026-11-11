@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import CatalogField from './CatalogField';
 import { renderWithProviders } from '../../test-utils/TestProviders';
-import { InputField } from '../Form/InputField';
+import TextField from '../Form/base/TextField';
 import type { ProvisioningFieldValue } from '../ProvisioningWizard/fields/provisioningFieldValue';
 
 interface Values {
@@ -16,7 +16,7 @@ const renderCatalogField = (initial: ProvisioningFieldValue<string>) =>
     <Formik<Values> initialValues={{ userData: initial }} onSubmit={() => {}}>
       <CatalogField name="userData">
         {({ valueName, isDisabled, isRequired, labelInfo }) => (
-          <InputField
+          <TextField
             name={valueName}
             label="User data"
             fieldId="user-data"

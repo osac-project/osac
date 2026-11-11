@@ -1,4 +1,4 @@
-import { InputField } from './InputField';
+import TextField from './base/TextField';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface NameFieldProps {
@@ -15,7 +15,7 @@ const NameField = ({
   const { t } = useTranslation();
 
   return (
-    <InputField
+    <TextField
       name={name}
       label={t('Name')}
       fieldId={fieldId}

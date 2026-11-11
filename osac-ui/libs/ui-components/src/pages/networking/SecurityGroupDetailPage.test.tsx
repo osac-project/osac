@@ -181,6 +181,46 @@ describe('SecurityGroupDetailPage', () => {
     );
   });
 
+  it.each(['empty', 'populated'] as const)(
+    'places the restriction above the rules card for %s rule lists in both tabs',
+    async (ruleState) => {
+      const user = userEvent.setup();
+      vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+        data: {
+          ...mockSecurityGroup,
+          metadata: {
+            ...mockSecurityGroup.metadata,
+            labels: { 'osac.openshift.io/auto-created': 'true' },
+          },
+          spec: {
+            ...mockSecurityGroup.spec,
+            ingress: ruleState === 'empty' ? [] : mockSecurityGroup.spec.ingress,
+            egress: ruleState === 'empty' ? [] : mockSecurityGroup.spec.egress,
+          },
+        },
+        isLoading: false,
+        error: null,
+      } as unknown as ReturnType<typeof networkingApi.useSecurityGroup>);
+      renderPage();
+
+      for (const tabName of ['Inbound Rules', 'Outbound Rules']) {
+        await user.click(screen.getByRole('tab', { name: tabName }));
+        const panel = screen.getByRole('tabpanel');
+        const heading = within(panel).getByRole('heading', {
+          name: /Automatic security group rules cannot be edited/,
+        });
+        expect(heading.closest('.pf-v6-c-card')).toBeNull();
+        const card = panel.querySelector('.pf-v6-c-card');
+        if (!card) {
+          throw new Error('Expected the rule content to remain inside a PatternFly card');
+        }
+        expect(heading.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+          Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+      }
+    },
+  );
+
   it('keeps a default security group editable when only the default label is set', async () => {
     const user = userEvent.setup();
     vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({

@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { Alert, Button, Tooltip } from '@patternfly/react-core';
+import { Alert, Button, Card, CardBody, Tooltip } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import type { TFunction } from 'i18next';
 
@@ -80,23 +80,27 @@ export const SecurityGroupRulesTable = ({
     );
 
   const reason = disabledReason ? (
-    <Alert id={reasonId} variant="info" isInline title={disabledReason} />
+    <Alert id={reasonId} variant="info" isInline title={disabledReason} className="pf-v6-u-mb-md" />
   ) : null;
 
   if (rules.length === 0) {
     return (
       <div>
         {reason}
-        <SubtleContent component="p">
-          {editingDisabled
-            ? direction === 'ingress'
-              ? t('No inbound rules')
-              : t('No outbound rules')
-            : direction === 'ingress'
-              ? t('No inbound rules yet. Add one to allow incoming traffic.')
-              : t('No outbound rules yet. Add one to allow outgoing traffic.')}
-        </SubtleContent>
-        {!editingDisabled && addAction('pf-v6-u-mt-md')}
+        <Card>
+          <CardBody>
+            <SubtleContent component="p">
+              {editingDisabled
+                ? direction === 'ingress'
+                  ? t('No inbound rules')
+                  : t('No outbound rules')
+                : direction === 'ingress'
+                  ? t('No inbound rules yet. Add one to allow incoming traffic.')
+                  : t('No outbound rules yet. Add one to allow outgoing traffic.')}
+            </SubtleContent>
+            {!editingDisabled && addAction('pf-v6-u-mt-md')}
+          </CardBody>
+        </Card>
       </div>
     );
   }
@@ -104,52 +108,56 @@ export const SecurityGroupRulesTable = ({
   return (
     <div>
       {reason}
-      {addAction('pf-v6-u-mb-md')}
-      <Table
-        aria-label={direction === 'ingress' ? t('Ingress rules') : t('Egress rules')}
-        aria-describedby={editingDisabled ? reasonId : undefined}
-        variant="compact"
-        borders
-      >
-        <Thead>
-          <Tr>
-            <Th>{t('Protocol')}</Th>
-            <Th>{t('Port Range')}</Th>
-            <Th>{cidrLabel}</Th>
-            <Th>{t('Actions')}</Th>
-          </Tr>
-        </Thead>
-        <Tbody>
-          {rules.map((rule, index) => (
-            <Tr key={index}>
-              <Td dataLabel={t('Protocol')}>{protocolToString(rule.protocol, t)}</Td>
-              <Td dataLabel={t('Port Range')}>{formatPortRange(rule.portFrom, rule.portTo)}</Td>
-              <Td dataLabel={cidrLabel}>{formatCidr(rule.ipv4Cidr)}</Td>
-              <Td dataLabel={t('Actions')}>
-                {disabledReason ? (
-                  <Tooltip content={disabledReason}>
-                    <Button variant="link" isInline isAriaDisabled aria-describedby={reasonId}>
-                      {t('Edit')}
-                    </Button>
-                  </Tooltip>
-                ) : (
-                  <Button variant="link" isInline onClick={() => onEditRule(index)}>
-                    {t('Edit')}
-                  </Button>
-                )}
-                {' | '}
-                <DeleteResourceButton
-                  variant="link"
-                  isInline
-                  canDelete={!editingDisabled}
-                  disabledReason={disabledReason}
-                  onClick={editingDisabled ? undefined : () => onDeleteRule(index)}
-                />
-              </Td>
-            </Tr>
-          ))}
-        </Tbody>
-      </Table>
+      <Card>
+        <CardBody>
+          {addAction('pf-v6-u-mb-md')}
+          <Table
+            aria-label={direction === 'ingress' ? t('Ingress rules') : t('Egress rules')}
+            aria-describedby={editingDisabled ? reasonId : undefined}
+            variant="compact"
+            borders
+          >
+            <Thead>
+              <Tr>
+                <Th>{t('Protocol')}</Th>
+                <Th>{t('Port Range')}</Th>
+                <Th>{cidrLabel}</Th>
+                <Th>{t('Actions')}</Th>
+              </Tr>
+            </Thead>
+            <Tbody>
+              {rules.map((rule, index) => (
+                <Tr key={index}>
+                  <Td dataLabel={t('Protocol')}>{protocolToString(rule.protocol, t)}</Td>
+                  <Td dataLabel={t('Port Range')}>{formatPortRange(rule.portFrom, rule.portTo)}</Td>
+                  <Td dataLabel={cidrLabel}>{formatCidr(rule.ipv4Cidr)}</Td>
+                  <Td dataLabel={t('Actions')}>
+                    {disabledReason ? (
+                      <Tooltip content={disabledReason}>
+                        <Button variant="link" isInline isAriaDisabled aria-describedby={reasonId}>
+                          {t('Edit')}
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Button variant="link" isInline onClick={() => onEditRule(index)}>
+                        {t('Edit')}
+                      </Button>
+                    )}
+                    {' | '}
+                    <DeleteResourceButton
+                      variant="link"
+                      isInline
+                      canDelete={!editingDisabled}
+                      disabledReason={disabledReason}
+                      onClick={editingDisabled ? undefined : () => onDeleteRule(index)}
+                    />
+                  </Td>
+                </Tr>
+              ))}
+            </Tbody>
+          </Table>
+        </CardBody>
+      </Card>
     </div>
   );
 };

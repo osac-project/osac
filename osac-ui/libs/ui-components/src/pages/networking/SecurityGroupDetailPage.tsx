@@ -220,33 +220,25 @@ export const SecurityGroupDetailPage = () => {
           </Tab>
 
           <Tab eventKey={1} title={<TabTitleText>{t('Inbound Rules')}</TabTitleText>}>
-            <Card>
-              <CardBody>
-                <SecurityGroupRulesTable
-                  rules={sg?.spec?.ingress ?? []}
-                  direction="ingress"
-                  editingDisabledReason={editingDisabledReason}
-                  onAddRule={() => openRuleEditor({ direction: 'ingress' })}
-                  onEditRule={(ruleIndex) => openRuleEditor({ direction: 'ingress', ruleIndex })}
-                  onDeleteRule={(ruleIndex) => openDeleteRule({ direction: 'ingress', ruleIndex })}
-                />
-              </CardBody>
-            </Card>
+            <SecurityGroupRulesTable
+              rules={sg?.spec?.ingress ?? []}
+              direction="ingress"
+              editingDisabledReason={editingDisabledReason}
+              onAddRule={() => openRuleEditor({ direction: 'ingress' })}
+              onEditRule={(ruleIndex) => openRuleEditor({ direction: 'ingress', ruleIndex })}
+              onDeleteRule={(ruleIndex) => openDeleteRule({ direction: 'ingress', ruleIndex })}
+            />
           </Tab>
 
           <Tab eventKey={2} title={<TabTitleText>{t('Outbound Rules')}</TabTitleText>}>
-            <Card>
-              <CardBody>
-                <SecurityGroupRulesTable
-                  rules={sg?.spec?.egress ?? []}
-                  direction="egress"
-                  editingDisabledReason={editingDisabledReason}
-                  onAddRule={() => openRuleEditor({ direction: 'egress' })}
-                  onEditRule={(ruleIndex) => openRuleEditor({ direction: 'egress', ruleIndex })}
-                  onDeleteRule={(ruleIndex) => openDeleteRule({ direction: 'egress', ruleIndex })}
-                />
-              </CardBody>
-            </Card>
+            <SecurityGroupRulesTable
+              rules={sg?.spec?.egress ?? []}
+              direction="egress"
+              editingDisabledReason={editingDisabledReason}
+              onAddRule={() => openRuleEditor({ direction: 'egress' })}
+              onEditRule={(ruleIndex) => openRuleEditor({ direction: 'egress', ruleIndex })}
+              onDeleteRule={(ruleIndex) => openDeleteRule({ direction: 'egress', ruleIndex })}
+            />
           </Tab>
         </Tabs>
       </ListPageBody>

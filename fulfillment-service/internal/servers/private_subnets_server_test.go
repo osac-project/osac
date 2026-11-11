@@ -223,12 +223,12 @@ var _ = Describe("Private subnets server", func() {
 			Expect(err.Error()).To(ContainSubstring(instance.GetObject().GetId()))
 		})
 
-		It("names the owning Cluster for a CaaS worker", func() {
+		It("names the BareMetalInstance for a CaaS worker", func() {
 			cluster, err := fixtureDAO[*privatev1.Cluster]().Create().SetObject(privatev1.Cluster_builder{
 				Metadata: privatev1.Metadata_builder{Name: "cluster-1", Tenant: "system"}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			_, err = fixtureDAO[*privatev1.BareMetalInstance]().Create().SetObject(privatev1.BareMetalInstance_builder{
+			worker, err := fixtureDAO[*privatev1.BareMetalInstance]().Create().SetObject(privatev1.BareMetalInstance_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name:   "worker",
 					Tenant: "system",
@@ -247,7 +247,7 @@ var _ = Describe("Private subnets server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			_, err = server.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnet.GetId()}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err.Error()).To(ContainSubstring("Cluster '" + cluster.GetObject().GetId() + "'"))
+			Expect(err.Error()).To(ContainSubstring("BareMetalInstance '" + worker.GetObject().GetId() + "'"))
 		})
 
 		It("accepts a second delete", func() {

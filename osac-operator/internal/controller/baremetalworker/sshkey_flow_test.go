@@ -176,6 +176,7 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 			Expect(request.GetSpec().GetSshKey().GetId()).To(Equal("key-id"))
 			Expect(request.GetSpec().GetSshKey().GetName()).To(Equal("key-name"))
 			Expect(request.GetSpec().GetSshKey().GetProject()).To(Equal("proj"))
+			Expect(request.GetMetadata().GetAnnotations()[clusterAPIIDAnnotation]).To(Equal(cluster.GetId()))
 			Expect(request.GetSpec().GetSshKey()).NotTo(BeIdenticalTo(cluster.GetSpec().GetSshKey()),
 				"the reference must be cloned, not aliased")
 		})

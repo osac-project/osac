@@ -292,6 +292,25 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 			ProvisioningProgress{State: StateFailed, Step: StepNetworkSetupAttachment, Failure: FailureNetworkAttachment}),
 	)
 
+	It("does not classify in-flight networking reasons as PROVISIONED failures", func() {
+		for _, reason := range []string{
+			HostConditionReasonPoweringOff,
+			HostConditionReasonPoweringOn,
+			HostConditionReasonLeasePending,
+			HostConditionReasonNetworkDetaching,
+			HostConditionReasonOffboarding,
+		} {
+			progress := DeriveProvisioningProgress([]metav1.Condition{
+				condTrue(HostConditionAllocated),
+				condTrue(HostConditionProvisionTemplateComplete),
+				condFalse(HostConditionNetworkAttachmentsReady, reason),
+			})
+			Expect(progress).To(Equal(ProvisioningProgress{
+				State: StateInProgress, Step: StepNetworkSetupAttachment,
+			}), "reason %q must not fail PROVISIONED", reason)
+		}
+	})
+
 	It("ignores unrecognized condition types", func() {
 		Expect(func() {
 			progress := DeriveProvisioningProgress([]metav1.Condition{

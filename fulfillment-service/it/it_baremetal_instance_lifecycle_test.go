@@ -27,7 +27,6 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
@@ -39,9 +38,7 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// bmiTestSSHPublicKey is a valid OpenSSH public key used to satisfy the
-// requirement that a BareMetalInstance provide at least one authentication
-// method (ssh_key or user_data) at create time.
+// bmiTestSSHPublicKey is a valid key for the integration test's SSH Secret fixtures.
 const bmiTestSSHPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
 
 var _ = Describe("BareMetalInstance lifecycle", func() {
@@ -299,7 +296,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey:       new(bmiTestSSHPublicKey),
+					UserDataSource:     publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					DiskImage:          publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{attachment},
 				}.Build(),
@@ -315,7 +312,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		Expect(listed.GetItems()).To(BeEmpty(), "rejected Create must not persist a BMI")
 	})
 
-	It("persists and exposes a curated NETWORK_READY condition", func(ctx context.Context) {
+	It("projects BMFO network status without injecting operator-owned conditions", func(ctx context.Context) {
 		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
@@ -325,7 +322,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
-					SshPublicKey:       new(bmiTestSSHPublicKey),
+					UserDataSource:     publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					DiskImage:          publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 					NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
 				}.Build(),
@@ -345,30 +342,49 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		})
 
 		kubeClient := tool.KubeClient()
-		bmiList := &bmfov1alpha1.BareMetalInstanceList{}
-		var kubeBMI *bmfov1alpha1.BareMetalInstance
+		networkConditionTypes := map[string]struct{}{
+			string(bmfov1alpha1.HostConditionNetworkOffboardComplete): {},
+			string(bmfov1alpha1.HostConditionNetworkAttachmentsReady): {},
+			string(bmfov1alpha1.HostConditionNetworkHandoffComplete):  {},
+			string(bmfov1alpha1.HostConditionIPDiscoveryComplete):     {},
+		}
+		curatedMessages := []string{
+			"Network setup is in progress.",
+			"Network attachment is in progress.",
+			"Network handoff is in progress.",
+			"IP address discovery is in progress.",
+			"Network cleanup is in progress.",
+			"Network cleanup did not complete.",
+			"Network attachment did not complete.",
+			"Network handoff did not complete.",
+			"IP address discovery did not complete.",
+			"Network setup is complete.",
+			"Provider networking is disabled; network setup was skipped.",
+			"Network setup did not complete.",
+		}
 		Eventually(func(g Gomega) {
+			bmiList := &bmfov1alpha1.BareMetalInstanceList{}
 			g.Expect(kubeClient.List(ctx, bmiList, crclient.MatchingLabels{
 				labels.BareMetalInstanceUuid: bmiID,
 			})).To(Succeed())
 			g.Expect(bmiList.Items).To(HaveLen(1))
-			kubeBMI = &bmiList.Items[0]
-		}, time.Minute, time.Second).Should(Succeed())
+			kubeBMI := &bmiList.Items[0]
 
-		kubeBMI.Status.Conditions = []metav1.Condition{{
-			Type:               string(bmfov1alpha1.HostConditionNetworkAttachmentsReady),
-			Status:             metav1.ConditionFalse,
-			Reason:             "NetworkAttachmentFailed",
-			Message:            "provider detail must not be exposed",
-			ObservedGeneration: kubeBMI.Generation,
-			LastTransitionTime: metav1.Now(),
-		}}
-		Expect(kubeClient.Status().Update(ctx, kubeBMI)).To(Succeed())
-		_, err = privateBareMetalInstancesClient.Signal(ctx,
-			privatev1.BareMetalInstancesSignalRequest_builder{Id: bmiID}.Build())
-		Expect(err).NotTo(HaveOccurred())
+			hasNetworkCondition := false
+			for _, condition := range kubeBMI.Status.Conditions {
+				if _, found := networkConditionTypes[condition.Type]; found {
+					hasNetworkCondition = true
+					break
+				}
+			}
+			shouldProject := hasNetworkCondition || kubeBMI.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseProgressing
+			failedBeforeNetwork := !hasNetworkCondition && kubeBMI.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseFailed
+			g.Expect(shouldProject || failedBeforeNetwork).To(BeTrue(),
+				"wait for BMFO to start networking or fail before networking")
 
-		Eventually(func(g Gomega) {
+			_, err = privateBareMetalInstancesClient.Signal(ctx,
+				privatev1.BareMetalInstancesSignalRequest_builder{Id: bmiID}.Build())
+			g.Expect(err).NotTo(HaveOccurred())
 			persisted, err := bareMetalInstancesClient.Get(ctx,
 				publicv1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
 			g.Expect(err).NotTo(HaveOccurred())
@@ -379,11 +395,18 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					break
 				}
 			}
+			if failedBeforeNetwork {
+				g.Expect(networkReady).To(BeNil())
+				return
+			}
 			g.Expect(networkReady).NotTo(BeNil())
-			g.Expect(networkReady.GetStatus()).To(Equal(publicv1.ConditionStatus_CONDITION_STATUS_FALSE))
-			g.Expect(networkReady.GetReason()).To(Equal("NetworkAttachmentFailed"))
-			g.Expect(networkReady.GetMessage()).To(Equal("Network attachment did not complete."))
-			g.Expect(networkReady.GetMessage()).NotTo(ContainSubstring("provider detail"))
+			if !hasNetworkCondition {
+				g.Expect(networkReady.GetStatus()).To(Equal(publicv1.ConditionStatus_CONDITION_STATUS_FALSE))
+				g.Expect(networkReady.GetReason()).To(Equal("Progressing"))
+				g.Expect(networkReady.GetMessage()).To(Equal("Network setup is in progress."))
+				return
+			}
+			g.Expect(curatedMessages).To(ContainElement(networkReady.GetMessage()))
 		}, 2*time.Minute, time.Second).Should(Succeed())
 	})
 

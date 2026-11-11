@@ -1869,7 +1869,7 @@ var _ = Describe("syncStatus", func() {
 	})
 
 	DescribeTable("maps network condition reasons to curated NETWORK_READY messages",
-		func(conditionType bmfov1alpha1.BareMetalInstanceConditionType, reason, expectedMessage string) {
+		func(conditionType bmfov1alpha1.BareMetalInstanceConditionType, reason, expectedReason, expectedMessage string) {
 			t := newTask(0)
 			conditions := []metav1.Condition{}
 			switch conditionType {
@@ -1899,46 +1899,46 @@ var _ = Describe("syncStatus", func() {
 				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
 			Expect(condition).ToNot(BeNil())
 			Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
-			Expect(condition.GetReason()).To(Equal(reason))
+			Expect(condition.GetReason()).To(Equal(expectedReason))
 			Expect(condition.GetMessage()).To(Equal(expectedMessage))
 			Expect(condition.GetMessage()).ToNot(ContainSubstring("provider diagnostic"))
 			Expect(object.Status.Conditions[len(object.Status.Conditions)-1].Message).
 				To(Equal("provider diagnostic must remain administrator-visible"))
 		},
 		Entry("network attachment failure", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
-			"NetworkAttachmentFailed", "Network attachment did not complete."),
+			"NetworkAttachmentFailed", "NetworkAttachmentFailed", "Network attachment did not complete."),
 		Entry("network attachment template failure", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
-			bmfov1alpha1.HostConditionReasonTemplateFailed, "Network attachment did not complete."),
+			bmfov1alpha1.HostConditionReasonTemplateFailed, "NetworkSetupFailed", "Network setup did not complete."),
 		Entry("network handoff failure", bmfov1alpha1.HostConditionNetworkHandoffComplete,
-			"NetworkHandoffFailed", "Network handoff did not complete."),
+			"NetworkHandoffFailed", "NetworkHandoffFailed", "Network handoff did not complete."),
 		Entry("IP discovery failure", bmfov1alpha1.HostConditionIPDiscoveryComplete,
-			"IPDiscoveryFailed", "IP address discovery did not complete."),
+			"IPDiscoveryFailed", "IPDiscoveryFailed", "IP address discovery did not complete."),
 		Entry("IP discovery template failure", bmfov1alpha1.HostConditionIPDiscoveryComplete,
-			bmfov1alpha1.HostConditionReasonTemplateFailed, "IP address discovery did not complete."),
+			bmfov1alpha1.HostConditionReasonTemplateFailed, "NetworkSetupFailed", "Network setup did not complete."),
 		Entry("attachment progress", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
-			"Progressing", "Network attachment is in progress."),
+			"Progressing", "Progressing", "Network attachment is in progress."),
 		Entry("handoff progress", bmfov1alpha1.HostConditionNetworkHandoffComplete,
-			"Progressing", "Network handoff is in progress."),
+			"Progressing", "Progressing", "Network handoff is in progress."),
 		Entry("IP discovery progress", bmfov1alpha1.HostConditionIPDiscoveryComplete,
-			"Progressing", "IP address discovery is in progress."),
+			"Progressing", "Progressing", "IP address discovery is in progress."),
 		Entry("offboard progress", bmfov1alpha1.HostConditionNetworkOffboardComplete,
-			"Progressing", "Network cleanup is in progress."),
+			"Progressing", "Progressing", "Network cleanup is in progress."),
 		Entry("power off progress", bmfov1alpha1.HostConditionNetworkOffboardComplete,
-			"PoweringOff", "Network handoff is in progress."),
+			"PoweringOff", "PoweringOff", "Network handoff is in progress."),
 		Entry("power on progress", bmfov1alpha1.HostConditionNetworkHandoffComplete,
-			"PoweringOn", "Network handoff is in progress."),
+			"PoweringOn", "PoweringOn", "Network handoff is in progress."),
 		Entry("lease progress", bmfov1alpha1.HostConditionIPDiscoveryComplete,
-			"LeasePending", "IP address discovery is in progress."),
+			"LeasePending", "LeasePending", "IP address discovery is in progress."),
 		Entry("offboarding", bmfov1alpha1.HostConditionNetworkOffboardComplete,
-			"Offboarding", "Network cleanup is in progress."),
+			"Offboarding", "Offboarding", "Network cleanup is in progress."),
 		Entry("network detaching", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
-			"NetworkDetaching", "Network cleanup is in progress."),
+			"NetworkDetaching", "NetworkDetaching", "Network cleanup is in progress."),
 		Entry("detaching compatibility", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
-			"Detaching", "Network cleanup is in progress."),
+			"Detaching", "NetworkDetaching", "Network cleanup is in progress."),
 		Entry("power off failed", bmfov1alpha1.HostConditionNetworkOffboardComplete,
-			"PowerOffFailed", "Network cleanup did not complete."),
+			"PowerOffFailed", "PowerOffFailed", "Network cleanup did not complete."),
 		Entry("unknown reason", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
-			"ProviderSpecificFailure", "Network setup did not complete."),
+			"ProviderSpecificFailure", "NetworkSetupFailed", "Network setup did not complete."),
 	)
 
 	It("selects NETWORK_READY by lifecycle precedence, independent of condition order", func() {
@@ -2001,7 +2001,7 @@ var _ = Describe("syncStatus", func() {
 		Expect(condition.GetMessage()).To(Equal("Network handoff is in progress."))
 	})
 
-	It("preserves an unknown network condition status and reason without its raw message", func() {
+	It("uses a generic tenant-safe reason for an unknown network condition", func() {
 		t := newTask(0)
 		object := &bmfov1alpha1.BareMetalInstance{
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
@@ -2022,7 +2022,7 @@ var _ = Describe("syncStatus", func() {
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
 		Expect(condition).ToNot(BeNil())
 		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED))
-		Expect(condition.GetReason()).To(Equal("ProviderSpecificFailure"))
+		Expect(condition.GetReason()).To(Equal("NetworkSetupFailed"))
 		Expect(condition.GetMessage()).To(Equal("Network setup did not complete."))
 		Expect(condition.GetMessage()).ToNot(ContainSubstring("sensitive host diagnostic"))
 	})
@@ -2042,7 +2042,7 @@ var _ = Describe("syncStatus", func() {
 			expectedMessage string
 		}{
 			{reason: "IPDiscovered", expectedReason: "IPDiscovered", expectedMessage: "Network setup is complete."},
-			{reason: "ProvisioningDisabled", expectedReason: "ProvisioningDisabled", expectedMessage: "Provider networking is disabled; network setup was skipped."},
+			{reason: "ProvisioningDisabled", expectedReason: "ProvisioningDisabled", expectedMessage: "Provider networking is disabled; this operation was skipped."},
 		} {
 			t := newTask(0)
 			t.syncStatus(&bmfov1alpha1.BareMetalInstance{
@@ -2081,6 +2081,7 @@ var _ = Describe("syncStatus", func() {
 		t := newTask(0)
 		t.syncStatus(&bmfov1alpha1.BareMetalInstance{
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseProgressing,
 				Conditions: []metav1.Condition{{
 					Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionTrue, Reason: "Allocated",
 				}},
@@ -2092,7 +2093,28 @@ var _ = Describe("syncStatus", func() {
 		Expect(condition).ToNot(BeNil())
 		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 		Expect(condition.GetReason()).To(Equal("Progressing"))
-		Expect(condition.GetMessage()).To(Equal("Network attachment is in progress."))
+		Expect(condition.GetMessage()).To(Equal("Network setup is in progress."))
+	})
+
+	It("leaves NETWORK_READY unset when provisioning fails before networking starts", func() {
+		t := newTask(0)
+		t.syncStatus(&bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseFailed,
+				Conditions: []metav1.Condition{{
+					Type: string(bmfov1alpha1.HostConditionAllocated), Status: metav1.ConditionFalse,
+					Reason: bmfov1alpha1.HostConditionReasonNoMatchingHosts,
+				}},
+			},
+		})
+
+		Expect(findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)).To(BeNil())
+		provisioned := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED)
+		Expect(provisioned).ToNot(BeNil())
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(provisioned.GetReason()).To(Equal(string(bmfov1alpha1.FailureNoMatchingHosts)))
 	})
 
 	It("should not change state when phase is empty", func() {
@@ -3077,7 +3099,7 @@ var _ = Describe("syncStatus", func() {
 		Entry("NetworkHandoffFailed → PROVISIONED",
 			[]metav1.Condition{{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionFalse, Reason: "HandoffFailed"}},
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
-			string(bmfov1alpha1.FailureNetworkHandoff), "Network handoff (reboot) did not complete."),
+			string(bmfov1alpha1.FailureNetworkHandoff), "Network handoff did not complete."),
 		Entry("IPDiscoveryFailed → PROVISIONED",
 			[]metav1.Condition{{Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionFalse, Reason: "DiscoveryFailed"}},
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_PROVISIONED,
@@ -3285,7 +3307,7 @@ var _ = Describe("failureMessage", func() {
 		Entry("HostAllocationFailed", bmfov1alpha1.FailureHostAllocation, "Host allocation failed."),
 		Entry("ProvisionJobFailed", bmfov1alpha1.FailureProvisionJob, "OS installation and configuration did not complete; the provisioning job failed."),
 		Entry("NetworkAttachmentFailed", bmfov1alpha1.FailureNetworkAttachment, "Network attachment did not complete."),
-		Entry("NetworkHandoffFailed", bmfov1alpha1.FailureNetworkHandoff, "Network handoff (reboot) did not complete."),
+		Entry("NetworkHandoffFailed", bmfov1alpha1.FailureNetworkHandoff, "Network handoff did not complete."),
 		Entry("IPDiscoveryFailed", bmfov1alpha1.FailureIPDiscovery, "IP address discovery did not complete."),
 		Entry("ReadyTimeout", bmfov1alpha1.FailureReadyTimeout, "The instance did not reach its powered-on ready state."),
 	)

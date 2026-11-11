@@ -2719,14 +2719,23 @@ var _ = Describe("Private bare metal instances server", func() {
 		})
 
 		It("Rejects an interface with management role", func() {
-			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+			sshKey, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("bmaas-ssh-key-%s", uuid.NewString()[:8]),
+					Tenant: testTenant,
+				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+				Data: map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
-						SshPublicKey: new(testSSHPublicKey),
+						CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						SshKey:      privatev1.SecretReference_builder{Id: sshKey.GetObject().GetId()}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
@@ -2745,7 +2754,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Message()).To(ContainSubstring("fabric"))
 		})
 
-		It("leaves CaaS worker interfaces to Cluster network authorization", func() {
+		It("does not bypass fabric role validation for system tenant candidates", func() {
 			bmi := privatev1.BareMetalInstance_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: auth.SystemTenant}.Build(),
 				Spec: privatev1.BareMetalInstanceSpec_builder{
@@ -2758,9 +2767,12 @@ var _ = Describe("Private bare metal instances server", func() {
 				}.Build(),
 			}.Build()
 			instanceType := bareMetalInstanceTypeFixture("worker-type",
-				bareMetalNetworkPort("data-0", "management"))
+				bareMetalNetworkPort("data-0", "management"),
+				bareMetalNetworkPort("data-1", "fabric"))
 
-			Expect(server.validateNetworkAttachments(bmi, instanceType)).To(Succeed())
+			err := server.validateNetworkAttachments(bmi, instanceType)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("must have role 'fabric'")))
 		})
 
 		It("validates interfaces against a user-selected instance type when the template has no default", func() {

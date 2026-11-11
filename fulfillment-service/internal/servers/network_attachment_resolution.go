@@ -32,8 +32,7 @@ import (
 // networkAttachmentRequest is the network attachment field of a workload create, before defaulting.
 type networkAttachmentRequest struct {
 	// tenant and project are the scope of the Subnets and SecurityGroups the field references: the tenant and project
-	// of the workload. For a CaaS worker BareMetalInstance (tenant system) they are the tenant and project of the
-	// Cluster.
+	// of the workload. For a CaaS worker BareMetalInstance they are the tenant and project of the Cluster.
 	tenant  string
 	project string
 

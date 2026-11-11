@@ -33,6 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -64,10 +65,11 @@ const (
 	messageStepNetworkSetupAttachment  = "Network attachment is in progress."
 	messageStepNetworkSetupHandoff     = "Network handoff is in progress."
 	messageStepNetworkSetupIPDiscovery = "IP address discovery is in progress."
+	messageNetworkSetupProgressing     = "Network setup is in progress."
 	messageStepReadyPowerSync          = "Power synchronization is in progress."
 
 	messageNetworkSetupComplete     = "Network setup is complete."
-	messageNetworkSetupSkipped      = "Provider networking is disabled; network setup was skipped."
+	messageNetworkSetupSkipped      = "Provider networking is disabled; this operation was skipped."
 	messageNetworkSetupFailed       = "Network setup did not complete."
 	messageNetworkCleanupInProgress = "Network cleanup is in progress."
 	messageNetworkCleanupFailed     = "Network cleanup did not complete."
@@ -77,9 +79,10 @@ const (
 	messageFailureHostAllocation    = "Host allocation failed."
 	messageFailureProvisionJob      = "OS installation and configuration did not complete; the provisioning job failed."
 	messageFailureNetworkAttachment = "Network attachment did not complete."
-	messageFailureNetworkHandoff    = "Network handoff (reboot) did not complete."
+	messageFailureNetworkHandoff    = "Network handoff did not complete."
 	messageFailureIPDiscovery       = "IP address discovery did not complete."
 	messageFailureReadyTimeout      = "The instance did not reach its powered-on ready state."
+	reasonNetworkSetupFailed        = "NetworkSetupFailed"
 
 	// Controller-side failure that never reaches the operator's lifecycle.
 	messageFailureSSHKey = "The registered SSH-key Secret could not be resolved."
@@ -341,8 +344,10 @@ func (t *task) setDefaults() {
 		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING, nil)
 	}
 	for value := range privatev1.BareMetalInstanceConditionType_name {
-		if value != 0 {
-			t.setConditionDefaults(privatev1.BareMetalInstanceConditionType(value))
+		conditionType := privatev1.BareMetalInstanceConditionType(value)
+		if value != 0 && conditionType !=
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY {
+			t.setConditionDefaults(conditionType)
 		}
 	}
 }
@@ -597,12 +602,21 @@ func (t *task) updateCondition(conditionType privatev1.BareMetalInstanceConditio
 	t.bareMetalInstance.GetStatus().SetConditions(conditions)
 }
 
+func (t *task) removeCondition(conditionType privatev1.BareMetalInstanceConditionType) {
+	conditions := t.bareMetalInstance.GetStatus().GetConditions()
+	conditions = slices.DeleteFunc(conditions, func(condition *privatev1.BareMetalInstanceCondition) bool {
+		return condition.GetType() == conditionType
+	})
+	t.bareMetalInstance.GetStatus().SetConditions(conditions)
+}
+
 func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 	if object == nil {
 		return
 	}
 
 	powerSynced := object.GetStatusCondition(bmfov1alpha1.HostConditionPowerSynced)
+	t.bareMetalInstance.GetStatus().SetExternalHostName(object.Spec.ExternalHostName)
 
 	t.syncState(object, powerSynced)
 
@@ -683,7 +697,7 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 		}.Build())
 	}
 	t.bareMetalInstance.GetStatus().SetNetworkAttachmentStatuses(protoStatuses)
-	t.syncNetworkReady(object.Status.Conditions)
+	t.syncNetworkReady(object.Status.Phase, object.Status.Conditions)
 
 	if hw := object.Status.Hardware; hw != nil {
 		protoNICs := make([]*privatev1.BareMetalNICStatus, 0, len(hw.NICs))
@@ -751,58 +765,53 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 	}
 }
 
-func (t *task) syncNetworkReady(conditions []metav1.Condition) {
-	conditionTypes := []bmfov1alpha1.BareMetalInstanceConditionType{
-		bmfov1alpha1.HostConditionNetworkOffboardComplete,
-		bmfov1alpha1.HostConditionNetworkAttachmentsReady,
-		bmfov1alpha1.HostConditionNetworkHandoffComplete,
-		bmfov1alpha1.HostConditionIPDiscoveryComplete,
-	}
-	byType := make(map[bmfov1alpha1.BareMetalInstanceConditionType]metav1.Condition, len(conditionTypes))
-	for _, condition := range conditions {
-		conditionType := bmfov1alpha1.BareMetalInstanceConditionType(condition.Type)
-		for _, expected := range conditionTypes {
-			if conditionType == expected {
-				if _, found := byType[conditionType]; !found {
-					byType[conditionType] = condition
-				}
-				break
-			}
+func (t *task) syncNetworkReady(phase bmfov1alpha1.BareMetalInstancePhaseType, conditions []metav1.Condition) {
+	offboard := apimeta.FindStatusCondition(conditions, string(bmfov1alpha1.HostConditionNetworkOffboardComplete))
+	attachments := apimeta.FindStatusCondition(conditions, string(bmfov1alpha1.HostConditionNetworkAttachmentsReady))
+	handoff := apimeta.FindStatusCondition(conditions, string(bmfov1alpha1.HostConditionNetworkHandoffComplete))
+	ipDiscovery := apimeta.FindStatusCondition(conditions, string(bmfov1alpha1.HostConditionIPDiscoveryComplete))
+
+	if offboard == nil && attachments == nil && handoff == nil && ipDiscovery == nil {
+		switch phase {
+		case bmfov1alpha1.BareMetalInstancePhaseProgressing:
+			t.setNetworkReady(metav1.ConditionFalse, "Progressing", "")
+		case bmfov1alpha1.BareMetalInstancePhaseDeleting:
+			// Keep the last network condition visible while deletion takes precedence.
+		default:
+			t.removeCondition(privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
 		}
-	}
-
-	if len(byType) == 0 {
-		t.setNetworkReady(
-			metav1.ConditionFalse,
-			"Progressing",
-			string(bmfov1alpha1.HostConditionNetworkAttachmentsReady),
-		)
 		return
 	}
 
-	if condition, found := byType[bmfov1alpha1.HostConditionNetworkOffboardComplete]; found && condition.Status != metav1.ConditionTrue {
-		t.setNetworkReady(condition.Status, condition.Reason, condition.Type)
+	if offboard != nil && offboard.Status != metav1.ConditionTrue {
+		t.setNetworkReady(offboard.Status, offboard.Reason, offboard.Type)
 		return
 	}
 
-	phaseTypes := conditionTypes[1:]
-	missingReasons := []string{"Progressing", "PoweringOff", "LeasePending"}
-	for i, conditionType := range phaseTypes {
-		condition, found := byType[conditionType]
-		if !found {
-			t.setNetworkReady(metav1.ConditionFalse, missingReasons[i], string(conditionType))
+	phases := []struct {
+		condition     *metav1.Condition
+		conditionType bmfov1alpha1.BareMetalInstanceConditionType
+		missingReason string
+	}{
+		{attachments, bmfov1alpha1.HostConditionNetworkAttachmentsReady, "Progressing"},
+		{handoff, bmfov1alpha1.HostConditionNetworkHandoffComplete, "PoweringOff"},
+		{ipDiscovery, bmfov1alpha1.HostConditionIPDiscoveryComplete, "LeasePending"},
+	}
+	for _, phase := range phases {
+		if phase.condition == nil {
+			t.setNetworkReady(metav1.ConditionFalse, phase.missingReason, string(phase.conditionType))
 			return
 		}
-		if condition.Status != metav1.ConditionTrue {
-			t.setNetworkReady(condition.Status, condition.Reason, condition.Type)
+		if phase.condition.Status != metav1.ConditionTrue {
+			t.setNetworkReady(phase.condition.Status, phase.condition.Reason, phase.condition.Type)
 			return
 		}
 	}
 
 	reason := "IPDiscovered"
 	allPhasesSkipped := true
-	for _, conditionType := range phaseTypes {
-		if byType[conditionType].Reason != "ProvisioningDisabled" {
+	for _, phase := range phases {
+		if phase.condition.Reason != "ProvisioningDisabled" {
 			allPhasesSkipped = false
 			break
 		}
@@ -814,54 +823,56 @@ func (t *task) syncNetworkReady(conditions []metav1.Condition) {
 }
 
 func (t *task) setNetworkReady(status metav1.ConditionStatus, reason, conditionType string) {
+	reason = networkReadyReason(reason)
 	t.updateCondition(
 		privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY,
 		mapConditionStatus(status), reason, networkReadyMessage(conditionType, reason))
 }
 
-func networkReadyMessage(conditionType, reason string) string {
-	if reason == bmfov1alpha1.HostConditionReasonTemplateFailed {
-		switch bmfov1alpha1.BareMetalInstanceConditionType(conditionType) {
-		case bmfov1alpha1.HostConditionNetworkAttachmentsReady:
-			return messageFailureNetworkAttachment
-		case bmfov1alpha1.HostConditionIPDiscoveryComplete:
-			return messageFailureIPDiscovery
-		}
-	}
-
+func networkReadyReason(reason string) string {
 	switch reason {
-	case "NetworkAttachmentFailed":
-		return messageFailureNetworkAttachment
+	case "NetworkAttachmentFailed", "NetworkHandoffFailed", "IPDiscoveryFailed",
+		"Progressing", "Offboarding", "PoweringOff", "PoweringOn", "LeasePending",
+		"NetworkDetaching", "ProvisioningDisabled", "PowerOffFailed", "IPDiscovered":
+		return reason
+	case "Detaching":
+		return "NetworkDetaching"
+	default:
+		return reasonNetworkSetupFailed
+	}
+}
+
+func networkReadyMessage(conditionType, reason string) string {
+	switch reason {
 	case "NetworkHandoffFailed":
-		return "Network handoff did not complete."
+		return failureMessage(bmfov1alpha1.FailureNetworkHandoff)
 	case "IPDiscoveryFailed":
-		return "IP address discovery did not complete."
+		return failureMessage(bmfov1alpha1.FailureIPDiscovery)
+	case "NetworkAttachmentFailed":
+		return failureMessage(bmfov1alpha1.FailureNetworkAttachment)
 	case "Progressing":
 		switch bmfov1alpha1.BareMetalInstanceConditionType(conditionType) {
+		case "":
+			return messageNetworkSetupProgressing
 		case bmfov1alpha1.HostConditionNetworkHandoffComplete:
-			return messageStepNetworkSetupHandoff
+			return stepMessage(bmfov1alpha1.StepNetworkSetupHandoff)
 		case bmfov1alpha1.HostConditionIPDiscoveryComplete:
-			return messageStepNetworkSetupIPDiscovery
+			return stepMessage(bmfov1alpha1.StepNetworkSetupIPDiscovery)
 		case bmfov1alpha1.HostConditionNetworkOffboardComplete:
 			return messageNetworkCleanupInProgress
 		default:
-			return messageStepNetworkSetupAttachment
+			return stepMessage(bmfov1alpha1.StepNetworkSetupAttachment)
 		}
 	case "PoweringOff", "PoweringOn":
-		return messageStepNetworkSetupHandoff
+		return stepMessage(bmfov1alpha1.StepNetworkSetupHandoff)
 	case "LeasePending":
-		return messageStepNetworkSetupIPDiscovery
-	case "Offboarding", "NetworkDetaching", "Detaching":
+		return stepMessage(bmfov1alpha1.StepNetworkSetupIPDiscovery)
+	case "Offboarding", "NetworkDetaching":
 		return messageNetworkCleanupInProgress
 	case "ProvisioningDisabled":
 		return messageNetworkSetupSkipped
-	case "NetworkOffboardFailed", "OffboardingFailed":
-		return messageNetworkCleanupFailed
 	case "PowerOffFailed":
-		if bmfov1alpha1.BareMetalInstanceConditionType(conditionType) == bmfov1alpha1.HostConditionNetworkOffboardComplete {
-			return messageNetworkCleanupFailed
-		}
-		return "Network handoff did not complete."
+		return messageNetworkCleanupFailed
 	case "IPDiscovered":
 		return messageNetworkSetupComplete
 	default:

@@ -223,6 +223,13 @@ const (
 	// restart is initiated. Set by triggerRestart on management.ErrTransitioning.
 	HostConditionReasonPowerSyncRequired = "PowerSyncRequired"
 
+	// In-flight network handoff and teardown reasons do not indicate a provisioning failure.
+	HostConditionReasonPoweringOff      = "PoweringOff"
+	HostConditionReasonPoweringOn       = "PoweringOn"
+	HostConditionReasonLeasePending     = "LeasePending"
+	HostConditionReasonNetworkDetaching = "NetworkDetaching"
+	HostConditionReasonOffboarding      = "Offboarding"
+
 	// HostConditionReasonNoMatchingHosts indicates no hosts match the selector labels
 	HostConditionReasonNoMatchingHosts = "NoMatchingHosts"
 

@@ -55,6 +55,11 @@ ownership by API ID, and verify release tombstoning. DHCP leases, Linux and
 provider commands, Kind, an AAP server, a live switch, BGP convergence and
 packet delivery are not run.
 
+The `netris_fabric` target runs all 19 current contract Fabric tasks plus two
+legacy CaaS ingress task names. Those ingress tests exercise Netris allocation
+and release only; they do not cover the desired Fulfillment-owned allocator,
+which remains design-only.
+
 ## Network role coverage gate
 
 `make test` measures `roles/netris`, `roles/cudn_evpn` and their four plugins.

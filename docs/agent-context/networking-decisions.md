@@ -5,8 +5,9 @@ including IP, MAC, or network-attachment data on any provisioned resource.
 
 ## Authoritative sources and implementation status
 
-This summary was checked against the accepted designs on `enhancement-proposals`
-`main` on 2026-11-09. Read the applicable full designs before finalizing scope:
+This summary was checked against the accepted designs in `enhancement-proposals`
+at commit [`3a23a5c`](https://github.com/osac-project/enhancement-proposals/commit/3a23a5c9ff0e80de5918e2f0b872da24c6ec0921)
+on 2026-11-11. Read the applicable full designs before finalizing scope:
 
 - [Unified networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-unified-networking/design.md)
 - [Network Manager integration contract, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-network-manager-integration-contract-networking/design.md)
@@ -36,8 +37,11 @@ superseded or extended design explicitly.
    Manager, which owns the physical fabric, external addresses, routing, and
    fabric policy. The Kubernetes Manager is optional and required for VMs; it
    owns VM hub networking. ExternalIP pools and their addresses use Fabric
-   Manager tasks. Keep these responsibilities separate and follow the full
-   design's deployment profiles.
+   Manager tasks. The current contract has 19 Fabric tasks. CaaS guest ingress
+   allocation and release are Fulfillment-owned; the Fabric carries guest
+   MetalLB's L2 announcements and traffic without reservation or release tasks.
+   Keep these responsibilities separate and follow the full design's deployment
+   profiles.
 2. **Shared networking resources:** VirtualNetwork, Subnet, SecurityGroup,
    ExternalIP, ExternalIPAttachment, and NATGateway serve VMaaS, CaaS, and BMaaS.
    A Subnet can host VMs, bare-metal servers, and cluster nodes.
@@ -212,7 +216,20 @@ as follows:
   it because NetworkPolicy cannot match ICMP; `all` includes ICMP. Netris
   declares it although its SecurityGroup tasks are no-ops. The value is derived,
   so it has no Helm value. A class whose default rules use `icmp` without the
-  capability fails resolution.
+  capability fails resolution. The accepted contract also adds
+  `security_group_physical_noop` (Fabric only) for a documented no-op on
+  physical SecurityGroup creation or attachment binding, which leaves worker
+  traffic unfiltered. The current OSAC code does not support this capability or
+  its derived status yet. AgentlessNet declares only `security_group_icmp`, so
+  it does not meet the physical-profile capability until OSAC support and the
+  AgentlessNet registration are updated.
+- **Physical attachment concurrency and capacity:** the accepted contract
+  serializes physical apply and delete jobs per Fabric Manager with a Kubernetes
+  Lease. Before moving a port, `apply_network_attachment` checks DHCP capacity
+  and counts physical attachments without a confirmed lease as consuming an
+  address. A canceled AAP job can still finish a provider request after the
+  Lease is released and write stale state; revision or ETag fencing is future
+  hardening, not a current conformance requirement.
 - **DNS:** OSAC has no per-resource DNS. VMs get the cluster DNS that
   OVN-Kubernetes DHCP gives on the primary UDN. Bare metal on Netris gets an
   installation-level resolver (default `8.8.8.8`) from the Netris default DHCP
@@ -256,12 +273,19 @@ as follows:
 - **CaaS endpoint lifecycle:** CaaS ClusterOrders using this shared lifecycle
   discover the management API and guest ingress endpoints, request automatic
   ExternalIPAttachments after each target is ready and its ExternalIP is
-  allocated, and own DNS publication/removal. Ingress reservation and release
-  use the generic Fabric Manager task contract selected from the Subnet; the
-  selected manager role is not hardcoded. The selected ClusterTemplate declares
-  the `supports_automatic_caas_endpoints` capability; Fulfillment stores that
-  resolved capability on the Cluster and projects it to the ClusterOrder, whose
-  controller uses it to select this lifecycle instead of matching template IDs.
+  allocated, and own DNS publication/removal. The accepted CaaS design assigns
+  guest ingress allocation to Fulfillment: it reserves one durable address per
+  Cluster from the attached Subnet's LB VIP ranges, then passes the immutable
+  address to the ClusterOrder for validation and guest MetalLB configuration.
+  This is a desired design without an allocator implementation yet. The current
+  code still contains the legacy `reserve_cluster_ingress_ip` and
+  `release_cluster_ingress_ip` Fabric tasks; they are outside the 19-task
+  contract and do not implement the accepted allocator design. The Fabric only
+  carries the guest MetalLB L2 announcement and traffic. The selected
+  ClusterTemplate declares the `supports_automatic_caas_endpoints` capability;
+  Fulfillment stores that resolved capability on the Cluster and projects it to
+  the ClusterOrder, whose controller uses it to select this lifecycle instead
+  of matching template IDs.
   With provider networking disabled,
   ClusterOrder creates no endpoint jobs, reservations, DNS, or automatic
   ExternalIP resources and reports `ProvisioningDisabled`. Templates that do
@@ -335,7 +359,9 @@ ExternalIPAttachment consumes the supplied ExternalIP and destination. Its
 attachment path accepts tenant VirtualNetwork destinations and rejects
 provider-management destinations. Physical apply and DHCP lease query are
 BMaaS-specific paths. SecurityGroup tasks are documented physical-policy
-no-ops and do not establish SecurityGroup policy conformance.
+no-ops, but the AgentlessNet design registers only `security_group_icmp` and
+not `security_group_physical_noop`; it therefore does not meet the accepted
+physical-profile capability.
 
 The accepted integration design marks this implementation as under review;
 these code paths do not establish released or conformance status. Conformance

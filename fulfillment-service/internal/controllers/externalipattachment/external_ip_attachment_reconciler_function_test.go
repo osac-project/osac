@@ -23,8 +23,6 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
-	grpccodes "google.golang.org/grpc/codes"
-	grpcstatus "google.golang.org/grpc/status"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -82,6 +80,15 @@ func newAttachmentCR(id, namespace, name string, deletionTimestamp *metav1.Time)
 // hasFinalizer checks if the fulfillment-controller finalizer is present on the attachment.
 func hasFinalizer(attachment *privatev1.ExternalIPAttachment) bool {
 	return slices.Contains(attachment.GetMetadata().GetFinalizers(), finalizers.Controller)
+}
+
+func expectDeletionRetry(err error) {
+	var retryable interface{ RequeueAfter() time.Duration }
+	Expect(errors.As(err, &retryable)).To(BeTrue())
+	Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+	var backoff interface{ UseExponentialBackoff() bool }
+	Expect(errors.As(err, &backoff)).To(BeTrue())
+	Expect(backoff.UseExponentialBackoff()).To(BeFalse())
 }
 
 // newTaskForDelete creates a task configured for testing delete() with hub-dependent paths.
@@ -295,24 +302,11 @@ var _ = Describe("delete", func() {
 			}, nil)
 
 		t := newTaskForDelete(attachmentID, hubID, hubCache)
-		ctx, cancel := context.WithCancel(ctx)
-		DeferCleanup(cancel)
-		signaledID := make(chan string, 1)
-		externalIPAttachmentsClient := NewMockExternalIPAttachmentsClient(ctrl)
-		externalIPAttachmentsClient.EXPECT().Signal(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, request *privatev1.ExternalIPAttachmentsSignalRequest, _ ...grpc.CallOption) (*privatev1.ExternalIPAttachmentsSignalResponse, error) {
-				signaledID <- request.GetId()
-				return nil, grpcstatus.Error(grpccodes.NotFound, "resource is gone")
-			},
-		)
-		t.r.externalIPAttachmentsClient = externalIPAttachmentsClient
-		t.r.deleteRetry = controllers.NewReconcileSignalScheduler(logger, time.Millisecond)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeTrue())
 		Expect(hasFinalizer(t.externalIPAttachment)).To(BeTrue())
-		Eventually(signaledID).Should(Receive(Equal(attachmentID)))
 	})
 
 	It("should not call hubClient.Delete when K8s object has DeletionTimestamp", func() {
@@ -345,7 +339,7 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(attachmentID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeFalse())
 		Expect(hasFinalizer(t.externalIPAttachment)).To(BeTrue())
 	})

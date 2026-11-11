@@ -18,8 +18,15 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net"
+	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -27,9 +34,111 @@ import (
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
+const (
+	// bareMetalInstanceIDLabel carries the API ID of a BareMetalInstance.
+	bareMetalInstanceIDLabel = "osac.openshift.io/baremetalinstance-uuid"
+
+	// tenantAnnotation carries the tenant API ID of a BareMetalInstance and of
+	// its NetworkAttachment.
+	tenantAnnotation = "osac.openshift.io/tenant"
+)
+
+// errSelectedPortMACUnavailable marks a selected port whose MAC address the
+// inventory does not have, or has in an invalid form. Retrying cannot fix it.
+var errSelectedPortMACUnavailable = errors.New("selected port MAC address unavailable")
+
+// primaryNetworkAttachment returns the BareMetalInstance's primary network
+// attachment. A single attachment is the primary one even when primary is
+// omitted, as the API defines. It returns nil when there is none.
+func primaryNetworkAttachment(bmi *v1alpha1.BareMetalInstance) *v1alpha1.BareMetalNetworkAttachment {
+	attachments := bmi.Spec.NetworkAttachments
+	for i := range attachments {
+		if attachments[i].Primary {
+			return &attachments[i]
+		}
+	}
+	if len(attachments) == 1 {
+		return &attachments[0]
+	}
+	return nil
+}
+
+// networkAttachmentKey returns the key of the NetworkAttachment of a
+// BareMetalInstance's attachment: baremetalinstance-<BMI API ID>-<interface>,
+// next to the BareMetalInstance. It returns false when the BareMetalInstance has
+// no API ID label, so it cannot have a NetworkAttachment.
+func networkAttachmentKey(
+	bmi *v1alpha1.BareMetalInstance, attachment *v1alpha1.BareMetalNetworkAttachment,
+) (client.ObjectKey, bool) {
+	id := bmi.Labels[bareMetalInstanceIDLabel]
+	if id == "" {
+		return client.ObjectKey{}, false
+	}
+	return client.ObjectKey{
+		Namespace: bmi.Namespace,
+		Name: opv1alpha1.NetworkAttachmentName(
+			opv1alpha1.NetworkAttachmentTargetBareMetalInstance, id, attachment.Interface),
+	}, true
+}
+
+// getNetworkAttachment reads a NetworkAttachment directly from the API server.
+// It returns nil when the NetworkAttachment does not exist.
+func (r *BareMetalInstanceReconciler) getNetworkAttachment(
+	ctx context.Context, key client.ObjectKey,
+) (*opv1alpha1.NetworkAttachment, error) {
+	na := &opv1alpha1.NetworkAttachment{}
+	if err := r.apiReaderOrClient().Get(ctx, key, na); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get NetworkAttachment %s: %w", key.Name, err)
+	}
+	return na, nil
+}
+
+// normalizeMAC returns a MAC address in lowercase, colon-separated form. It
+// accepts ':' or '-' separators in any case.
+func normalizeMAC(mac string) (string, error) {
+	hw, err := net.ParseMAC(strings.TrimSpace(mac))
+	if err != nil || len(hw) != 6 {
+		return "", fmt.Errorf("invalid MAC address %q", mac)
+	}
+	return hw.String(), nil
+}
+
+// selectedPortMAC returns the inventory MAC address of a host interface. An
+// error wrapping errSelectedPortMACUnavailable is final; any other error is an
+// inventory backend failure and is worth a retry.
+func (r *BareMetalInstanceReconciler) selectedPortMAC(
+	ctx context.Context, bmi *v1alpha1.BareMetalInstance, iface string,
+) (string, error) {
+	if r.InventoryClient == nil {
+		return "", fmt.Errorf("%w: inventory client not configured", errSelectedPortMACUnavailable)
+	}
+	macs, err := r.InventoryClient.GetHostLogicalPortMACs(ctx, bmi.Spec.ExternalHostID)
+	if err != nil {
+		return "", fmt.Errorf("get the logical port MAC addresses of host %s: %w", bmi.Spec.ExternalHostID, err)
+	}
+	mac := macs[iface]
+	if mac == "" {
+		return "", fmt.Errorf("%w: the inventory has no MAC address for interface %q", errSelectedPortMACUnavailable, iface)
+	}
+	normalized, err := normalizeMAC(mac)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", errSelectedPortMACUnavailable, err)
+	}
+	return normalized, nil
+}
+
+func setNetworkAttachmentsReady(bmi *v1alpha1.BareMetalInstance, status metav1.ConditionStatus, reason, message string) {
+	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady, status, reason, message)
+}
+
+// reconcileNetworking creates the BareMetalInstance's NetworkAttachment and
+// mirrors its readiness. The osac-operator networking controller runs the
+// Fabric Manager task that moves the host's port to the tenant network.
 func (r *BareMetalInstanceReconciler) reconcileNetworking(
 	ctx context.Context,
 	bareMetalInstance *v1alpha1.BareMetalInstance,
@@ -37,23 +146,13 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 	log := logf.FromContext(ctx)
 
 	if len(bareMetalInstance.Spec.NetworkAttachments) == 0 {
-		bareMetalInstance.SetStatusCondition(
-			v1alpha1.HostConditionNetworkAttachmentsReady,
-			metav1.ConditionTrue,
-			"Skipped",
-			"No network attachments configured",
-		)
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionTrue, "Skipped", "No network attachments configured")
 		return ctrl.Result{}, nil
 	}
 
-	if r.NetworkingProvider == nil {
-		log.Info("Networking provider not configured, skipping network attachment provisioning")
-		bareMetalInstance.SetStatusCondition(
-			v1alpha1.HostConditionNetworkAttachmentsReady,
-			metav1.ConditionTrue,
-			"Skipped",
-			"Networking provider not configured",
-		)
+	if !r.NetworkingEnabled {
+		log.Info("Networking provisioning disabled, skipping network attachment provisioning")
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionTrue, "Skipped", "Networking provisioning disabled")
 		return ctrl.Result{}, nil
 	}
 
@@ -64,81 +163,101 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("Reconciling network attachments", "count", len(bareMetalInstance.Spec.NetworkAttachments))
+	attachment := primaryNetworkAttachment(bareMetalInstance)
+	if attachment == nil {
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed,
+			"the BareMetalInstance has no primary network attachment")
+		return ctrl.Result{}, nil
+	}
+	// The interface name is part of the NetworkAttachment name.
+	if errs := validation.IsDNS1123Label(attachment.Interface); len(errs) > 0 {
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed,
+			fmt.Sprintf("interface %q is not a valid DNS label: %s", attachment.Interface, strings.Join(errs, "; ")))
+		return ctrl.Result{}, nil
+	}
+	key, ok := networkAttachmentKey(bareMetalInstance, attachment)
+	if !ok {
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed,
+			fmt.Sprintf("the BareMetalInstance has no %s label", bareMetalInstanceIDLabel))
+		return ctrl.Result{}, nil
+	}
 
-	desiredVersion, err := provisioning.ComputeDesiredConfigVersion(struct {
-		NetworkAttachments []v1alpha1.BareMetalNetworkAttachment
-		ExternalHostID     string
-		HostClass          string
-	}{
-		bareMetalInstance.Spec.NetworkAttachments,
-		bareMetalInstance.Spec.ExternalHostID,
-		bareMetalInstance.Spec.HostClass,
-	})
+	na, err := r.getNetworkAttachment(ctx, key)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	if bareMetalInstance.Status.NetworkingJobs == nil {
-		bareMetalInstance.Status.NetworkingJobs = []opv1alpha1.JobStatus{}
-	}
-
-	result, err := provisioning.RunProvisioningLifecycle(
-		ctx, r.NetworkingProvider, bareMetalInstance,
-		&provisioning.State{
-			Jobs:                 &bareMetalInstance.Status.NetworkingJobs,
-			DesiredConfigVersion: desiredVersion,
-		},
-		provisioning.DefaultMaxJobHistory, r.ProvisionPollIntervalDuration,
-		&provisioning.PollCallbacks{
-			OnFailed: func(message string) {
-				bareMetalInstance.SetStatusCondition(
-					v1alpha1.HostConditionNetworkAttachmentsReady,
-					metav1.ConditionFalse,
-					v1alpha1.HostConditionReasonTemplateFailed,
-					message,
-				)
-			},
-			OnSuccess: func(_ provisioning.ProvisionStatus) {
-				bareMetalInstance.SetStatusCondition(
-					v1alpha1.HostConditionNetworkAttachmentsReady,
-					metav1.ConditionTrue,
-					"Succeeded",
-					"All network attachments provisioned",
-				)
-			},
-		},
-		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(
-				ctx, r.apiReaderOrClient(), client.ObjectKeyFromObject(bareMetalInstance), &v1alpha1.BareMetalInstance{},
-				func(obj client.Object) []opv1alpha1.JobStatus {
-					return obj.(*v1alpha1.BareMetalInstance).Status.NetworkingJobs
-				},
-			)
-		},
-		func() error {
-			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)
-		},
-	)
-	if err != nil {
-		return result, err
-	}
-
-	if result.RequeueAfter > 0 {
-		netCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-		if netCond == nil || netCond.Reason != v1alpha1.HostConditionReasonTemplateFailed {
-			bareMetalInstance.SetStatusCondition(
-				v1alpha1.HostConditionNetworkAttachmentsReady,
-				metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonProgressing,
-				"Network attachment provisioning in progress",
-			)
+	if na == nil {
+		// The Fabric task needs the tenant of the attachment.
+		tenant := bareMetalInstance.Annotations[tenantAnnotation]
+		if tenant == "" {
+			setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed,
+				fmt.Sprintf("the BareMetalInstance has no %s annotation", tenantAnnotation))
+			return ctrl.Result{}, nil
 		}
+		mac, err := r.selectedPortMAC(ctx, bareMetalInstance, attachment.Interface)
+		if errors.Is(err, errSelectedPortMACUnavailable) {
+			setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed,
+				fmt.Sprintf("cannot resolve the MAC address of interface %q: %v", attachment.Interface, err))
+			return ctrl.Result{}, nil
+		}
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		na = &opv1alpha1.NetworkAttachment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        key.Name,
+				Namespace:   key.Namespace,
+				Finalizers:  []string{BareMetalInstanceNetworkingFinalizer},
+				Annotations: map[string]string{tenantAnnotation: tenant},
+			},
+			Spec: opv1alpha1.NetworkAttachmentSpec{
+				Target: opv1alpha1.NetworkAttachmentTarget{
+					Kind: opv1alpha1.NetworkAttachmentTargetBareMetalInstance,
+					ID:   bareMetalInstance.Labels[bareMetalInstanceIDLabel],
+				},
+				Subnet: attachment.SubnetRef,
+				Interface: opv1alpha1.NetworkAttachmentInterface{
+					Type:       opv1alpha1.NetworkInterfacePhysical,
+					Name:       attachment.Interface,
+					MACAddress: mac,
+				},
+				SecurityGroups: attachment.SecurityGroupRefs,
+			},
+		}
+		// Create only if missing; AlreadyExists means an earlier reconcile created it.
+		if err := r.Create(ctx, na); err != nil && !apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, fmt.Errorf("create NetworkAttachment %s: %w", key.Name, err)
+		}
+		log.Info("Created NetworkAttachment", "networkAttachment", key.Name)
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+			"Waiting for the network attachment")
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 
-	return result, nil
+	ready := meta.FindStatusCondition(na.Status.Conditions, opv1alpha1.NetworkConditionReady)
+	switch {
+	case ready != nil && ready.Status == metav1.ConditionTrue:
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionTrue, "Succeeded", "Network attachment is ready")
+		return ctrl.Result{}, nil
+	case ready != nil && ready.Reason == opv1alpha1.ReasonFailed:
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed, ready.Message)
+		return ctrl.Result{}, nil
+	default:
+		message := "Waiting for the network attachment"
+		if ready != nil && ready.Message != "" {
+			message = ready.Message
+		}
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing, message)
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
 }
 
+// reconcileNetworkingDeletion deletes the BareMetalInstance's NetworkAttachment
+// and waits until it is gone. The networking controller moves the host's port
+// back to the provisioning network before it removes its own finalizer; BMF
+// then removes its finalizer from the NetworkAttachment and from the
+// BareMetalInstance. It returns true once network cleanup is complete.
 func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 	ctx context.Context,
 	bareMetalInstance *v1alpha1.BareMetalInstance,
@@ -149,46 +268,47 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 		return ctrl.Result{}, true, nil
 	}
 
-	if r.NetworkingProvider == nil || len(bareMetalInstance.Spec.NetworkAttachments) == 0 {
-		controllerutil.RemoveFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)
-		if err := r.Update(ctx, bareMetalInstance); err != nil {
+	if attachment := primaryNetworkAttachment(bareMetalInstance); attachment != nil && r.NetworkingEnabled {
+		key, ok := networkAttachmentKey(bareMetalInstance, attachment)
+		if !ok {
+			return r.removeNetworkingFinalizer(ctx, bareMetalInstance)
+		}
+		na, err := r.getNetworkAttachment(ctx, key)
+		if err != nil {
 			return ctrl.Result{}, false, err
 		}
-		return ctrl.Result{}, true, nil
+		if na != nil {
+			if na.DeletionTimestamp.IsZero() {
+				log.Info("Deleting NetworkAttachment", "networkAttachment", key.Name)
+				if err := r.Delete(ctx, na); err != nil && !apierrors.IsNotFound(err) {
+					return ctrl.Result{}, false, fmt.Errorf("delete NetworkAttachment %s: %w", key.Name, err)
+				}
+			} else if len(na.Finalizers) == 1 && na.Finalizers[0] == BareMetalInstanceNetworkingFinalizer {
+				// The networking controller has finished the Fabric cleanup.
+				base := na.DeepCopy()
+				controllerutil.RemoveFinalizer(na, BareMetalInstanceNetworkingFinalizer)
+				if err := r.Patch(ctx, na, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil &&
+					!apierrors.IsNotFound(err) {
+					return ctrl.Result{}, false, fmt.Errorf("remove finalizer from NetworkAttachment %s: %w", key.Name, err)
+				}
+			}
+			setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+				"Waiting for network attachment cleanup")
+			return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, false, nil
+		}
 	}
 
-	log.Info("Deprovisioning network attachments")
+	return r.removeNetworkingFinalizer(ctx, bareMetalInstance)
+}
 
-	if bareMetalInstance.Status.NetworkingJobs == nil {
-		bareMetalInstance.Status.NetworkingJobs = []opv1alpha1.JobStatus{}
-	}
-
-	result, done, err := provisioning.RunDeprovisioningLifecycle(
-		ctx, r.NetworkingProvider, bareMetalInstance,
-		&bareMetalInstance.Status.NetworkingJobs,
-		provisioning.DefaultMaxJobHistory, r.ProvisionPollIntervalDuration,
-	)
-	// Persist NetworkingJobs changes made by RunDeprovisioningLifecycle.
-	// The CRD has a status subresource, so r.Update does not write status fields.
-	if statusErr := r.Status().Update(ctx, bareMetalInstance); statusErr != nil {
-		return ctrl.Result{}, false, statusErr
-	}
-	// DeprovisionSkipped: no deprovision template configured — treat as done.
-	if !done && result.IsZero() && err == nil {
-		done = true
-	}
-	if err != nil {
-		return result, false, err
-	}
-	if !done {
-		return result, false, nil
-	}
-
+// removeNetworkingFinalizer completes network cleanup of a BareMetalInstance.
+func (r *BareMetalInstanceReconciler) removeNetworkingFinalizer(
+	ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance,
+) (ctrl.Result, bool, error) {
 	controllerutil.RemoveFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)
 	if err := r.Update(ctx, bareMetalInstance); err != nil {
 		return ctrl.Result{}, false, err
 	}
-
-	log.Info("Network attachment deprovisioning completed")
+	logf.FromContext(ctx).Info("Network attachment cleanup completed")
 	return ctrl.Result{}, true, nil
 }

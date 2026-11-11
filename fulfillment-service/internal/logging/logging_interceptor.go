@@ -471,10 +471,16 @@ const (
 	publicPermissionRuleMessage  = protoreflect.FullName("osac.public.v1.PermissionRule")
 	privatePermissionRuleMessage = protoreflect.FullName("osac.private.v1.PermissionRule")
 
-	publicComputeInstanceMessage  = protoreflect.FullName("osac.public.v1.ComputeInstance")
-	privateComputeInstanceMessage = protoreflect.FullName("osac.private.v1.ComputeInstance")
-	publicMetadataMessage         = protoreflect.FullName("osac.public.v1.Metadata")
-	privateMetadataMessage        = protoreflect.FullName("osac.private.v1.Metadata")
+	publicComputeInstanceMessage      = protoreflect.FullName("osac.public.v1.ComputeInstance")
+	privateComputeInstanceMessage     = protoreflect.FullName("osac.private.v1.ComputeInstance")
+	publicMetadataMessage             = protoreflect.FullName("osac.public.v1.Metadata")
+	privateMetadataMessage            = protoreflect.FullName("osac.private.v1.Metadata")
+	publicComputeInstancesListRequest = protoreflect.FullName(
+		"osac.public.v1.ComputeInstancesListRequest",
+	)
+	privateComputeInstancesListRequest = protoreflect.FullName(
+		"osac.private.v1.ComputeInstancesListRequest",
+	)
 
 	publicComputeInstanceSpec        = protoreflect.FullName("osac.public.v1.ComputeInstanceSpec")
 	privateComputeInstanceSpec       = protoreflect.FullName("osac.private.v1.ComputeInstanceSpec")
@@ -514,6 +520,12 @@ func redactProtoMessageFields(message protoreflect.Message, redactMetadata bool)
 	fields := message.Descriptor().Fields()
 	for index := 0; index < fields.Len(); index++ {
 		field := fields.Get(index)
+		if isSensitiveComputeInstancesListFilter(field) {
+			if message.Has(field) {
+				message.Set(field, protoreflect.ValueOfString(redactMark))
+			}
+			continue
+		}
 		if isSensitiveComputeInstanceField(field) {
 			if field.Kind() == protoreflect.StringKind {
 				message.Set(field, protoreflect.ValueOfString(redactMark))
@@ -581,6 +593,17 @@ func redactProtoMessageFields(message protoreflect.Message, redactMetadata bool)
 
 func isMetadata(message protoreflect.MessageDescriptor) bool {
 	return message.FullName() == publicMetadataMessage || message.FullName() == privateMetadataMessage
+}
+
+func isSensitiveComputeInstancesListFilter(field protoreflect.FieldDescriptor) bool {
+	if field.Name() != "filter" {
+		return false
+	}
+	switch field.ContainingMessage().FullName() {
+	case publicComputeInstancesListRequest, privateComputeInstancesListRequest:
+		return true
+	}
+	return false
 }
 
 func isSensitiveComputeInstanceField(field protoreflect.FieldDescriptor) bool {

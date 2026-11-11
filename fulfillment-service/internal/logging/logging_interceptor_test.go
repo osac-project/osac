@@ -539,6 +539,58 @@ var _ = Describe("Interceptor", func() {
 		expectLifecycleUpdateCreatorRedacted("spec.restart_requested_at")
 	})
 
+	It("Redacts customer values from ComputeInstances list client body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response := computeInstancesListLogFixtures()
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+		responseTemplate := proto.Clone(response)
+		invoker := func(_ context.Context, _ string, _, response any, _ *grpc.ClientConn,
+			_ ...grpc.CallOption) error {
+			proto.Reset(response.(proto.Message))
+			proto.Merge(response.(proto.Message), responseTemplate)
+			return nil
+		}
+		err = redactedInterceptor.UnaryClient(ctx, "/osac.public.v1.ComputeInstances/List",
+			request, response, conn, invoker)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-filter"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer-sensitive-filter-value"))
+		expectComputeInstancesListBodyLogs(buffer, "Sending unary request", "Received unary response")
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts customer values from ComputeInstances list server body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response := computeInstancesListLogFixtures()
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+		_, err = redactedInterceptor.UnaryServer(ctx, request,
+			&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.ComputeInstances/List"},
+			func(context.Context, any) (any, error) { return response, nil })
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-filter"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer-sensitive-filter-value"))
+		expectComputeInstancesListBodyLogs(buffer, "Received unary request", "Sent unary response")
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
 	It("Redacts ComputeInstance catalog policies from unary client body logs", func() {
 		redactedInterceptor, err := NewInterceptor().
 			SetLogger(logger).
@@ -700,6 +752,50 @@ func computeInstanceUpdateLogFixtures(updatePath string) (
 		}.Build(),
 	}.Build()
 	return request, response
+}
+
+func computeInstancesListLogFixtures() (
+	*publicv1.ComputeInstancesListRequest,
+	*publicv1.ComputeInstancesListResponse,
+) {
+	filter := `this.metadata.labels["customer.example.test/private-filter"] == "customer-sensitive-filter-value"`
+	limit := int32(25)
+	order := "metadata.name asc"
+	request := publicv1.ComputeInstancesListRequest_builder{
+		Filter: &filter,
+		Limit:  &limit,
+		Order:  &order,
+	}.Build()
+	response := publicv1.ComputeInstancesListResponse_builder{
+		Size:  1,
+		Total: 3,
+		Items: []*publicv1.ComputeInstance{
+			publicv1.ComputeInstance_builder{Id: "compute-instance-list-fixture"}.Build(),
+		},
+	}.Build()
+	return request, response
+}
+
+func expectComputeInstancesListBodyLogs(buffer *bytes.Buffer, requestEvent, responseEvent string) {
+	messages := Parse(buffer)
+	requestLogs := Find(messages, requestEvent)
+	Expect(requestLogs).To(HaveLen(1))
+	requestBody, ok := requestLogs[0]["request"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(requestBody).To(HaveKeyWithValue("filter", redactMark))
+	Expect(requestBody["limit"]).To(BeNumerically("==", 25))
+	Expect(requestBody).To(HaveKeyWithValue("order", "metadata.name asc"))
+
+	responseLogs := Find(messages, responseEvent)
+	Expect(responseLogs).To(HaveLen(1))
+	responseBody, ok := responseLogs[0]["response"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(responseBody["size"]).To(BeNumerically("==", 1))
+	Expect(responseBody["total"]).To(BeNumerically("==", 3))
+	items, ok := responseBody["items"].([]any)
+	Expect(ok).To(BeTrue())
+	Expect(items).To(HaveLen(1))
+	Expect(items[0].(map[string]any)).To(HaveKeyWithValue("id", "compute-instance-list-fixture"))
 }
 
 func expectComputeInstanceBodyLogs(buffer *bytes.Buffer, requestEvent, responseEvent string) {

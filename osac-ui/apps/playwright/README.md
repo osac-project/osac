@@ -191,11 +191,11 @@ The creation and VM portion of the full-flow journey runs in this order:
 
 The full-flow projects run in this order:
 
-1. `vmaas-full-flow-resources` creates the infrastructure resources and tenant.
-2. `vmaas-full-flow-catalog` creates and publishes the catalog item.
-3. `vmaas-full-flow` creates and verifies the VM.
-4. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
-5. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
+1. `vmaas-full-flow-resources` creates the infrastructure resources, catalog
+   item, and tenant.
+2. `vmaas-full-flow` creates and verifies the VM.
+3. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
+4. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
    type, storage tier, tenant-admin RoleBinding and OSAC User, SSH public-key
    Secret, tenant, and generated credential file as the admin user.
 

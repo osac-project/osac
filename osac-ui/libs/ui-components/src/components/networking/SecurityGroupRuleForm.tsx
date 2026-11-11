@@ -4,6 +4,7 @@ import { Protocol } from '@osac/types';
 
 import { protocolToString } from './SecurityGroupRulesTable';
 import { useTranslation } from '../../hooks/useTranslation';
+import TextField from '../Form/base/TextField';
 import { InputField } from '../Form/InputField';
 import { SelectField } from '../Form/SelectField';
 
@@ -60,7 +61,7 @@ export const SecurityGroupRuleForm = () => {
         </>
       )}
 
-      <InputField
+      <TextField
         name="ipv4Cidr"
         label={t('IPv4 CIDR')}
         fieldId="rule-ipv4-cidr"

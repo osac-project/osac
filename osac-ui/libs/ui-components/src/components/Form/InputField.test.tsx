@@ -80,94 +80,6 @@ describe('InputField', () => {
     expect(input).toHaveValue(null);
   });
 
-  it('stores trimmed text while preserving the draft until blur', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <Formik initialValues={{ name: '' }} onSubmit={() => undefined}>
-        <>
-          <InputField name="name" label="Name" fieldId="name" />
-          <FormikFieldObserver name="name" label="Formik name" />
-        </>
-      </Formik>,
-    );
-
-    const input = screen.getByRole('textbox', { name: 'Name' });
-    await user.type(input, '  ');
-    expect(input).toHaveValue('  ');
-    expect(screen.getByLabelText('Formik name').textContent).toBe('');
-
-    await user.type(input, 'production cluster  ');
-    expect(input).toHaveValue('  production cluster  ');
-    expect(screen.getByLabelText('Formik name').textContent).toBe('production cluster');
-
-    await user.tab();
-    expect(input).toHaveValue('production cluster');
-  });
-
-  it('preserves an untouched prefilled text value on blur', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <Formik initialValues={{ name: '  prod-v4  ' }} onSubmit={() => undefined}>
-        <>
-          <InputField name="name" label="Name" fieldId="name" />
-          <FormikFieldObserver name="name" label="Formik name" />
-        </>
-      </Formik>,
-    );
-
-    const input = screen.getByRole('textbox', { name: 'Name' });
-    await user.click(input);
-    await user.tab();
-
-    expect(input).toHaveValue('  prod-v4  ');
-    expect(screen.getByLabelText('Formik name').textContent).toBe('  prod-v4  ');
-  });
-
-  it('leaves an untouched optional value undefined on blur', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <Formik initialValues={{ notes: undefined as string | undefined }} onSubmit={() => undefined}>
-        {({ values, dirty }) => (
-          <>
-            <InputField name="notes" label="Notes" fieldId="notes" multiline />
-            <output aria-label="Formik value">{String(values.notes)}</output>
-            <output aria-label="Formik dirty">{String(dirty)}</output>
-          </>
-        )}
-      </Formik>,
-    );
-
-    await user.click(screen.getByRole('textbox', { name: 'Notes' }));
-    await user.tab();
-
-    expect(screen.getByLabelText('Formik value')).toHaveTextContent('undefined');
-    expect(screen.getByLabelText('Formik dirty')).toHaveTextContent('false');
-  });
-
-  it('stores trimmed password text while preserving the draft until blur', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <Formik initialValues={{ password: '' }} onSubmit={() => undefined}>
-        <>
-          <InputField name="password" label="Password" fieldId="password" type="password" />
-          <FormikFieldObserver name="password" label="Formik password" />
-        </>
-      </Formik>,
-    );
-
-    const input = screen.getByLabelText('Password');
-    await user.type(input, '  secret phrase  ');
-    expect(input).toHaveValue('  secret phrase  ');
-    expect(screen.getByLabelText('Formik password').textContent).toBe('secret phrase');
-
-    await user.tab();
-    expect(input).toHaveValue('secret phrase');
-  });
-
   it('does not trim number inputs on blur', async () => {
     const user = userEvent.setup();
     let setValueSpy: MockInstance | undefined;
@@ -203,27 +115,5 @@ describe('InputField', () => {
     }
     expect(setValueSpy).not.toHaveBeenCalled();
     expect(latestValues.sizeGib).toBe(screen.getByLabelText('Formik sizeGib').textContent);
-  });
-
-  it('stores trimmed multiline text while preserving indentation in the draft', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <Formik initialValues={{ notes: '' }} onSubmit={() => undefined}>
-        <>
-          <InputField name="notes" label="Notes" fieldId="notes" multiline rows={3} />
-          <FormikFieldObserver name="notes" label="Formik notes" />
-        </>
-      </Formik>,
-    );
-
-    const input = screen.getByRole('textbox', { name: 'Notes' });
-    const content = '#cloud-config\n  packages:\n    - vim';
-    await user.type(input, `\n${content}\n`);
-    expect(input).toHaveValue(`\n${content}\n`);
-    expect(screen.getByLabelText('Formik notes').textContent).toBe(content);
-
-    await user.tab();
-    expect(input).toHaveValue(content);
   });
 });

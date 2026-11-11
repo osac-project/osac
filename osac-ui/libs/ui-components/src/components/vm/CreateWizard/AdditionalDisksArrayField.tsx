@@ -6,7 +6,7 @@ import { useField } from 'formik';
 
 import type { ComputeInstanceDiskValues } from './fields';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { InputField } from '../../Form/InputField';
+import IntegerField from '../../Form/base/IntegerField';
 import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 import { StorageTierSelectField } from '../../Form/StorageTierSelectField';
 import type { ProvisioningFieldControlProps } from '../../ProvisioningWizard/fields/provisioningFieldValue';
@@ -17,7 +17,7 @@ interface AdditionalDisksArrayFieldProps extends ProvisioningFieldControlProps {
 }
 
 const createDisk = (): ComputeInstanceDiskValues => ({
-  sizeGib: '30',
+  sizeGib: 30,
   storageTier: emptyResourceSelectValue(),
 });
 
@@ -80,15 +80,11 @@ export const AdditionalDisksArrayField = ({
               </Flex>
             </StackItem>
             <StackItem>
-              <InputField
+              <IntegerField
                 name={`${name}.${index}.sizeGib`}
                 label={t('Disk size (GiB)')}
                 fieldId={`vm-additional-disk-${index}-size`}
-                type="number"
                 isRequired
-                min={1}
-                max={16384}
-                step={1}
                 isDisabled={isDisabled}
               />
             </StackItem>

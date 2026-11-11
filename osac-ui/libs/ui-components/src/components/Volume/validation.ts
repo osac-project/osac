@@ -3,7 +3,7 @@ import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
 
 import { VolumeAccessMode } from '@osac/types';
-import { positiveIntegerSchema } from '@osac/ui-components/validation/positive-integer';
+import { bigIntSchema } from '@osac/ui-components/validation/number';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 
 import type { VolumeFormValues } from './values';
@@ -17,7 +17,7 @@ export const getVolumeValidationSchema = (t: TFunction) =>
       storageTier: Yup.object({
         id: Yup.string().required(t('A storage tier is required')),
       }),
-      sizeGib: positiveIntegerSchema(t),
+      sizeGib: bigIntSchema(t).required(t('Size is required')),
       accessMode: Yup.mixed<VolumeAccessMode>()
         .oneOf(
           [

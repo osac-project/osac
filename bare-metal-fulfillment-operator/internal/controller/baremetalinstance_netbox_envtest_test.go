@@ -408,7 +408,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 2)
 			bmi := getBMIInNS(netboxTestNS, bmiName)
 			Expect(bmi.Spec.ExternalHostID).To(Equal(netboxTestNS + "/" + hostname))
-			Expect(bmi.Spec.ExternalHostName).To(BeEmpty())
+			Expect(bmi.Spec.ExternalHostName).To(Equal(hostname))
 			Expect(bmi.Annotations).To(BeEmpty())
 
 			listRequests := mock.requestsFor(http.MethodGet, "/api/dcim/devices/")

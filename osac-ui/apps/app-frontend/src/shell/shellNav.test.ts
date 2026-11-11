@@ -111,11 +111,9 @@ describe('navRowsForRole', () => {
     expect(findLink('tenant-idp-manager', 'projects')).toBeUndefined();
   });
 
-  it('includes Networking section for all roles except IDP manager', () => {
-    for (const role of [...nonIdpRoles, 'admin'] as UserRole[]) {
-      const networking = findSection(role, 'nav-tenant-networking');
-      expect(networking).toBeDefined();
-      expect(networking?.children).toEqual([
+  it('includes all tenant networking links for tenant roles', () => {
+    for (const role of nonIdpRoles) {
+      expect(findSection(role, 'nav-tenant-networking')?.children).toEqual([
         {
           kind: 'link',
           id: 'virtual-networks',
@@ -136,6 +134,16 @@ describe('navRowsForRole', () => {
         },
       ]);
     }
+
+    expect(findSection('admin', 'nav-tenant-networking')?.children).toEqual([
+      {
+        kind: 'link',
+        id: 'external-ip-pools',
+        label: 'External IP pools',
+        path: '/admin/infrastructure/external-ip-pools',
+      },
+    ]);
+
     const networking = findSection('tenant-idp-manager', 'nav-tenant-networking');
     expect(networking).toBeUndefined();
   });
@@ -153,7 +161,7 @@ describe('navRowsForRole', () => {
     ]);
   });
 
-  it('Infrastructure section shows up only for admin role and contains instance types, external IP pools, bare metal instance types, and disk images', () => {
+  it('Infrastructure section shows up only for admin role and contains instance types, bare metal instance types, and disk images', () => {
     expect(findSection('admin', 'nav-infrastructure')).toEqual({
       kind: 'section',
       id: 'nav-infrastructure',
@@ -165,12 +173,6 @@ describe('navRowsForRole', () => {
           label: 'Instance types',
           path: '/admin/infrastructure/instance-types',
           service: ServiceTier.VMAAS,
-        },
-        {
-          kind: 'link',
-          id: 'external-ip-pools',
-          label: 'External IP pools',
-          path: '/admin/infrastructure/external-ip-pools',
         },
         {
           kind: 'link',

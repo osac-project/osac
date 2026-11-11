@@ -4,11 +4,14 @@ import { confirmDetailDeletion, getTableRowByCellText } from './general/row_asse
 import { openMainPageOption } from './main.page';
 import { VmDetailsPage, VmsMainPage } from '../../locators/vms';
 
+/** Escape a value before placing it in an exact-match regular expression. */
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** Build an exact, whitespace-tolerant text matcher. */
 const exactText = (value: string): RegExp =>
   new RegExp(`^\\s*${escapeRegExp(value.normalize('NFC'))}\\s*$`);
 
+/** Locate a VM row by its exact name cell text. */
 const getVmRow = (page: Page, name: string): Locator =>
   getTableRowByCellText(
     page.getByRole(...VmsMainPage.vmsTable),
@@ -24,8 +27,19 @@ export const openVmsPage = async (page: Page): Promise<void> => {
   await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
 };
 
-/** Return the VM names currently visible in the tenant VM list. */
-export const listVmNames = async (page: Page): Promise<string[]> => {
+/** Select the table view so VM rows are available to list and deletion helpers. */
+export const selectVmListView = async (page: Page): Promise<void> => {
+  const listView = page.locator(...VmsMainPage.listView);
+  await expect(listView).toBeVisible();
+  if ((await listView.getAttribute('aria-pressed')) !== 'true') {
+    await listView.click();
+  }
+  await expect(listView).toHaveAttribute('aria-pressed', 'true');
+};
+
+/** Wait until the tenant VM list reports a loaded table or empty state. */
+const waitForVmListReady = async (page: Page): Promise<Locator> => {
+  await selectVmListView(page);
   const table = page.getByRole(...VmsMainPage.vmsTable);
   const emptyState = page.getByText(...VmsMainPage.emptyState);
   const filteredEmptyState = page.getByText(...VmsMainPage.filteredEmptyState);
@@ -54,6 +68,13 @@ export const listVmNames = async (page: Page): Promise<string[]> => {
       { timeout: 15_000, intervals: [250, 500, 1_000] },
     )
     .toBeTruthy();
+  return table;
+};
+
+/** Return the VM names currently visible in the tenant VM list. */
+export const listVmNames = async (page: Page): Promise<string[]> => {
+  await selectVmListView(page);
+  const table = await waitForVmListReady(page);
   if ((await table.count()) === 0) {
     return [];
   }
@@ -82,6 +103,7 @@ export const expectVmToBeRunning = async (
   name: string,
   timeout = 15_000,
 ): Promise<void> => {
+  await selectVmListView(page);
   const row = await expectVmToExist(page, name, timeout);
   await expect(row.locator(...VmsMainPage.vmStatusCell)).toHaveText('Running', { timeout });
 };
@@ -96,11 +118,19 @@ export const expectVmDetailsPage = async (
   await expect(page.locator(...VmDetailsPage.pageTitle)).toHaveText(exactText(name), { timeout });
 };
 
+/** Locate the status labels in the VM details summary. */
+const getVmDetailsStatus = (page: Page): Locator =>
+  page
+    .getByRole(...VmDetailsPage.statusTerm)
+    .filter({ hasText: exactText('Status') })
+    .locator('..')
+    .locator(...VmDetailsPage.statusLabel);
+
 /** Verify that the VM details page reports Running. */
 export const expectVmDetailsToBeRunning = async (page: Page, timeout = 15_000): Promise<void> => {
-  await expect(
-    page.locator(...VmDetailsPage.statusLabel).filter({ hasText: exactText('Running') }),
-  ).toHaveCount(1, { timeout });
+  await expect(getVmDetailsStatus(page).filter({ hasText: exactText('Running') })).toHaveCount(1, {
+    timeout,
+  });
 };
 
 /** Wait for the VM details page to report Running, refreshing the UI between polls. */
@@ -114,9 +144,7 @@ export const waitForVmToBeRunning = async (
       async () => {
         await page.reload();
         await expectVmDetailsPage(page, name);
-        const runningStatus = page
-          .locator(...VmDetailsPage.statusLabel)
-          .filter({ hasText: exactText('Running') });
+        const runningStatus = getVmDetailsStatus(page).filter({ hasText: exactText('Running') });
         return (await runningStatus.count()) > 0 ? 'Running' : '';
       },
       { timeout, intervals: [1_000, 2_000, 5_000] },
@@ -126,6 +154,7 @@ export const waitForVmToBeRunning = async (
 
 /** Open a VM details page from its exact row link. */
 export const openVmDetailsPage = async (page: Page, name: string): Promise<void> => {
+  await selectVmListView(page);
   const row = await expectVmToExist(page, name);
   await row
     .locator(...VmsMainPage.vmNameCell)
@@ -164,34 +193,8 @@ export const waitForVmToBeDeleted = async (
         await expect(page).toHaveURL((url) => url.pathname === '/vms');
         await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
 
-        const table = page.getByRole(...VmsMainPage.vmsTable);
-        const emptyState = page.getByText(...VmsMainPage.emptyState);
-        const filteredEmptyState = page.getByText(...VmsMainPage.filteredEmptyState);
-        const noMatchingState = page.getByText(...VmsMainPage.noMatchingState);
-        const errorState = page.getByRole(...VmsMainPage.errorState);
-        await expect
-          .poll(
-            async () => {
-              if (await errorState.isVisible().catch(() => false)) {
-                throw new Error('The tenant VM list reported an API error while loading.');
-              }
-              if (await table.isVisible().catch(() => false)) {
-                return 'table';
-              }
-              if (await emptyState.isVisible().catch(() => false)) {
-                return 'empty';
-              }
-              if (await filteredEmptyState.isVisible().catch(() => false)) {
-                return 'filtered-empty';
-              }
-              if (await noMatchingState.isVisible().catch(() => false)) {
-                return 'no-matching';
-              }
-              return '';
-            },
-            { timeout: 15_000, intervals: [250, 500, 1_000] },
-          )
-          .toBeTruthy();
+        await selectVmListView(page);
+        const table = await waitForVmListReady(page);
         if ((await table.count()) === 0) {
           return 0;
         }

@@ -110,10 +110,8 @@ func newTestReconciler(invClient inventory.Client, namespace string) *BareMetalI
 		k8sClient.Scheme(),
 		invClient,
 		management.NewMetal3ClientForTest(k8sClient, namespace),
-		nil, // provisioning provider
-		nil, // networking provider
-		nil, // IP discovery provider
-		nil, // AAP client
+		nil,   // provisioning provider
+		false, // networking enabled
 		0, 0, 0, 0, 0,
 	)
 }

@@ -18,9 +18,14 @@ import {
   NATGatewaySchema,
   ProjectState,
 } from '@osac/types';
+import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 
 import ExternalIpListPage from './ExternalIpListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
+
+vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
+  window.setTimeout(() => callback(0), 0),
+);
 
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -100,6 +105,7 @@ const renderPage = (
 
 describe('ExternalIpListPage', () => {
   beforeEach(() => {
+    localStorage.clear();
     mockNavigate.mockReset();
   });
 
@@ -116,6 +122,7 @@ describe('ExternalIpListPage', () => {
   });
 
   it('renders a row per external IP', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ips'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -124,10 +131,12 @@ describe('ExternalIpListPage', () => {
     expect(screen.getByText('edge-ip')).toBeInTheDocument();
     expect(screen.getByText('nat-ip')).toBeInTheDocument();
     expect(screen.getByText('203.0.113.11')).toBeInTheDocument();
+    expect(screen.getByText('2 external IPs')).toBeInTheDocument();
     expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
       'Name',
       'Status',
       'Project',
+      'Attached to',
       'Address',
       'IP pool',
       'Created',
@@ -175,21 +184,49 @@ describe('ExternalIpListPage', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('No external IPs yet. Create one to get started.'),
+        screen.getByRole('heading', { name: 'No external IPs found', level: 2 }),
       ).toBeInTheDocument();
     });
+    expect(screen.getByText('No external IPs are available yet.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
-  it('shows a filtered empty state when a project filter has no results', async () => {
+  it('shows a filter-specific empty state when a project filter has no results', async () => {
     renderPage([], defaultAttachments, [], ['/networking/external-ips?project=default']);
 
     await waitFor(() => {
-      expect(screen.getByText('No external IPs match your search.')).toBeInTheDocument();
+      expect(
+        screen.getByRole('heading', { name: 'No external IPs match your filters', level: 2 }),
+      ).toBeInTheDocument();
     });
-    expect(
-      screen.queryByText('No external IPs yet. Create one to get started.'),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText('Try a different project, state, or search term.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+    expect(screen.queryByText('No external IPs are available yet.')).not.toBeInTheDocument();
+  });
+
+  it('renders the search input', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search external IPs')).toBeInTheDocument();
+    });
+  });
+
+  it('renders the status filter toggle', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'All states' })).toBeInTheDocument();
+    });
+  });
+
+  it('renders the list and card view switcher', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Card view' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'List view' })).toBeInTheDocument();
+    });
   });
 
   it('links Create external IP to the create route', async () => {
@@ -202,6 +239,7 @@ describe('ExternalIpListPage', () => {
   });
 
   it('opens the delete confirmation dialog from the kebab', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ips'), 'list');
     const { user } = renderPage();
 
     await waitFor(() => {
@@ -216,6 +254,7 @@ describe('ExternalIpListPage', () => {
   });
 
   it('links a NAT-consumed IP to its virtual network', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ips'), 'list');
     renderPage(
       [makeExternalIp('eip-2', 'nat-ip', '203.0.113.11', 'pool-1', true)],
       [],
@@ -241,6 +280,7 @@ describe('ExternalIpListPage', () => {
   });
 
   it('disables delete when the external IP is attached', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ips'), 'list');
     const { user } = renderPage();
 
     await waitFor(() => {

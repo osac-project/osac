@@ -1027,7 +1027,10 @@ openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext 
 	./scripts/test-openbao-security-context.sh
 
 .PHONY: ensure-inotify
-ensure-inotify: override export _INOTIFY_PROVIDER := $(KIND_RUNTIME_PROVIDER)
+# Make 3.81 cannot combine target-specific override and export. Export the
+# variable separately; only this target assigns its resolved provider value.
+export _INOTIFY_PROVIDER
+ensure-inotify: override _INOTIFY_PROVIDER := $(KIND_RUNTIME_PROVIDER)
 ensure-inotify: ## Opt in to native Linux host inotify preparation (floor 512)
 	@source scripts/lib.sh && ensure_inotify_instances
 

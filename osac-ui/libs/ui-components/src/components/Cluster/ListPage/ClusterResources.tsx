@@ -8,6 +8,7 @@ import {
 } from '@patternfly/react-core';
 
 import { type Cluster, ClusterUpgradeState, type ClusterVersion } from '@osac/types';
+import { formatClusterCatalogVersionLabel } from '@osac/ui-components/components/catalog/clusterCatalogItemResourceDisplay';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import { GuestOsIcon } from '../../shared/GuestOsIcon';
@@ -21,11 +22,7 @@ interface ClusterResourcesProps {
 const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) => {
   const { t } = useTranslation();
   const observedVersion = cluster.status?.observedVersion?.trim();
-  const versionLabel = observedVersion
-    ? /^openshift\s/i.test(observedVersion)
-      ? observedVersion
-      : `OpenShift ${observedVersion}`
-    : '—';
+  const versionLabel = formatClusterCatalogVersionLabel(observedVersion) || '—';
   const matchingVersion =
     observedVersion && clusterVersion?.spec?.version === observedVersion
       ? clusterVersion

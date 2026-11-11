@@ -86,10 +86,13 @@ export const findClusterVersionForReference = (
 };
 
 export const formatClusterCatalogVersionLabel = (
-  version: ClusterVersion | undefined,
-  reference: ClusterVersionReference | undefined,
+  version: ClusterVersion | string | undefined,
+  reference?: ClusterVersionReference,
 ): string => {
-  const raw = version?.spec?.version || version?.metadata?.name || reference?.name || '';
+  const raw =
+    typeof version === 'string'
+      ? version
+      : version?.spec?.version || version?.metadata?.name || reference?.name || '';
   if (!raw) {
     return '';
   }

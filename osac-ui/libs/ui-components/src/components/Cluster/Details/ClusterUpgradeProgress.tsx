@@ -4,16 +4,15 @@ import {
   CardBody,
   CardTitle,
   Content,
-  ProgressStep,
   ProgressStepVariant,
   ProgressStepper,
   StackItem,
 } from '@patternfly/react-core';
-import { RhUiInProgressIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-in-progress-icon';
 
 import { type Cluster, ClusterUpgradeState } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
+import ResourceProgressStep from '../../Resource/ResourceProgressStep';
 import { getControlPlaneUpgradeHistory } from '../ListPage/clusterDisplay';
 
 interface ClusterUpgradeProgressProps {
@@ -38,37 +37,27 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
 
   const source = attempt.sourceVersion || cluster.status?.observedVersion || '—';
   const target = attempt.targetVersion || '—';
-  const title =
-    pending || progressing
-      ? t('Upgrading from {{source}} to {{target}}', { source, target })
-      : t('Upgrade from {{source}} to {{target}}', { source, target });
+  const title = t('Upgrade from {{source}} to {{target}}', { source, target });
   const progressVariant = succeeded
     ? ProgressStepVariant.success
     : progressing
       ? ProgressStepVariant.pending
       : ProgressStepVariant.default;
-  const progressStatus = succeeded ? t('Complete') : progressing ? t('In progress') : undefined;
-  const acceptedDescription = pending
-    ? t('Accepted by OSAC; HyperShift has not yet reported it started.')
-    : t('Complete');
-  const progressDescription = progressing
-    ? t('HyperShift is working toward the requested version.')
-    : progressStatus;
-  const outcomeLabel = timedOut ? t('Timed out') : failed ? t('Failed') : t('Success');
-  const outcomeVariant = timedOut
-    ? ProgressStepVariant.warning
-    : failed
-      ? ProgressStepVariant.danger
-      : succeeded
-        ? ProgressStepVariant.success
-        : ProgressStepVariant.default;
-  const outcomeDescription = succeeded
-    ? t('The component reached the requested version.')
-    : failed
-      ? t('HyperShift reported a terminal error and stopped.')
-      : timedOut
-        ? t('No definitive result within the timeout.')
-        : undefined;
+  let outcomeLabel = t('Success');
+  let outcomeVariant = ProgressStepVariant.default;
+  let outcomeDescription: string | undefined;
+  if (succeeded) {
+    outcomeVariant = ProgressStepVariant.success;
+    outcomeDescription = t('The component reached the requested version.');
+  } else if (failed) {
+    outcomeLabel = t('Failed');
+    outcomeVariant = ProgressStepVariant.danger;
+    outcomeDescription = t('HyperShift reported a terminal error and stopped.');
+  } else if (timedOut) {
+    outcomeLabel = t('Timed out');
+    outcomeVariant = ProgressStepVariant.warning;
+    outcomeDescription = t('No definitive result within the timeout.');
+  }
 
   return (
     <StackItem>
@@ -88,51 +77,37 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
             <Content component="p">{attempt.message}</Content>
           )}
           <ProgressStepper isCenterAligned aria-label={t('Upgrade progress steps')}>
-            <ProgressStep
-              id="cluster-upgrade-accepted"
-              titleId="cluster-upgrade-accepted-title"
-              variant={ProgressStepVariant.success}
-              isCurrent={pending}
-              description={acceptedDescription}
-              aria-label={
-                pending
-                  ? `${t('Request accepted')}, ${t('Complete')}, ${acceptedDescription}`
-                  : `${t('Request accepted')}, ${t('Complete')}`
-              }
-            >
-              {t('Request accepted')}
-            </ProgressStep>
-            <ProgressStep
-              id="cluster-upgrade-progressing"
-              titleId="cluster-upgrade-progressing-title"
-              variant={progressVariant}
-              isCurrent={progressing}
-              icon={progressing ? <RhUiInProgressIcon /> : undefined}
-              description={progressDescription}
-              aria-label={
-                progressing
-                  ? `${t('Progressing')}, ${progressStatus}, ${progressDescription}`
-                  : progressStatus
-                    ? `${t('Progressing')}, ${progressStatus}`
-                    : t('Progressing')
-              }
-            >
-              {t('Progressing')}
-            </ProgressStep>
-            <ProgressStep
-              id="cluster-upgrade-outcome"
-              titleId="cluster-upgrade-outcome-title"
-              variant={outcomeVariant}
-              isCurrent={failed || timedOut}
-              description={outcomeDescription}
-              aria-label={
-                outcomeDescription
-                  ? `${outcomeLabel}, ${succeeded ? `${t('Complete')}, ` : ''}${outcomeDescription}`
-                  : outcomeLabel
-              }
-            >
-              {outcomeLabel}
-            </ProgressStep>
+            <ResourceProgressStep
+              stepId="cluster-upgrade-accepted"
+              title={t('Request accepted')}
+              stepStatus={{
+                variant: ProgressStepVariant.success,
+                isCurrent: pending,
+                description: pending
+                  ? t('Accepted by OSAC; HyperShift has not yet reported it started.')
+                  : undefined,
+              }}
+            />
+            <ResourceProgressStep
+              stepId="cluster-upgrade-progressing"
+              title={t('Progressing')}
+              stepStatus={{
+                variant: progressVariant,
+                isCurrent: progressing,
+                description: progressing
+                  ? t('HyperShift is working toward the requested version.')
+                  : undefined,
+              }}
+            />
+            <ResourceProgressStep
+              stepId="cluster-upgrade-outcome"
+              title={outcomeLabel}
+              stepStatus={{
+                variant: outcomeVariant,
+                isCurrent: failed || timedOut,
+                description: outcomeDescription,
+              }}
+            />
           </ProgressStepper>
         </CardBody>
       </Card>

@@ -110,7 +110,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
         'Upgrade accepted and running',
       );
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
-      expect(screen.getByText('Upgrading from 4.17.0 to 4.18.0')).toBeInTheDocument();
+      expect(screen.getByText('Upgrade from 4.17.0 to 4.18.0')).toBeInTheDocument();
       const steps = within(screen.getByLabelText('Upgrade progress steps'));
       const pending = state === ClusterUpgradeState.PENDING;
       const acceptedDescription = pending
@@ -191,7 +191,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled(),
     );
-    expect(screen.queryByText('Upgrading from 4.17.0 to 4.18.0')).not.toBeInTheDocument();
+    expect(screen.queryByText('Upgrade from 4.17.0 to 4.18.0')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Upgrade history' })).not.toBeInTheDocument();
   });
 
@@ -218,7 +218,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     const { user } = renderPage(upgrading, [currentVersion, targetVersion]);
 
     await waitFor(() =>
-      expect(screen.getByText('Upgrading from 4.17.0 to 4.18.0')).toBeInTheDocument(),
+      expect(screen.getByText('Upgrade from 4.17.0 to 4.18.0')).toBeInTheDocument(),
     );
     expect(screen.getAllByText('Control plane is upgrading').length).toBeGreaterThan(0);
     expect(screen.queryByText('Workers failed')).not.toBeInTheDocument();

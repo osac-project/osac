@@ -25,7 +25,7 @@ const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) =>
   const { t } = useTranslation();
   const observedVersion = cluster.status?.observedVersion;
   const versionLabel = formatClusterCatalogVersionLabel(observedVersion) || '—';
-  const matchingVersion =
+  const observedCatalogVersion =
     observedVersion && clusterVersion?.spec?.version === observedVersion
       ? clusterVersion
       : undefined;
@@ -73,9 +73,9 @@ const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) =>
               <FlexItem>
                 <Label color="blue">{t('Upgrade in progress')}</Label>
               </FlexItem>
-            ) : matchingVersion ? (
+            ) : observedCatalogVersion ? (
               <FlexItem>
-                <ClusterVersionLifecycleLabel clusterVersion={matchingVersion} />
+                <ClusterVersionLifecycleLabel clusterVersion={observedCatalogVersion} />
               </FlexItem>
             ) : null}
           </Flex>

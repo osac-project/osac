@@ -231,6 +231,15 @@ func assertDimensions(t *testing.T, quote Quote, expected map[string]int64) {
 	}
 }
 
+// assertSources fails the test unless the quote's sources of one dimension match exactly.
+func assertSources(t *testing.T, quote Quote, dimension string, expected []string) {
+	t.Helper()
+	if !reflect.DeepEqual(quote.Sources[dimension], expected) {
+		t.Fatalf("the sources of '%s' don't match:\nexpected: %#v\nactual:   %#v",
+			dimension, expected, quote.Sources[dimension])
+	}
+}
+
 // plannedOf returns the planned creates of one kind.
 func plannedOf(quote Quote, kind string) []PlannedCreate {
 	var planned []PlannedCreate
@@ -303,6 +312,9 @@ func TestPriceComputeInstance(t *testing.T) {
 	if len(plannedOf(quote, "ExternalIP")) != 1 {
 		t.Fatalf("expected 1 planned external IP, got %d", len(plannedOf(quote, "ExternalIP")))
 	}
+	assertSources(t, quote, "compute.vcpus", []string{"spec.instance_type"})
+	assertSources(t, quote, "storage.volumes", []string{"spec.additional_disks", "spec.boot_disk"})
+	assertSources(t, quote, "network.external_ips", []string{"spec.auto_external_ip_attachment"})
 }
 
 // TestPriceCluster prices a cluster: one control plane, as many hosts of the node set's
@@ -343,6 +355,8 @@ func TestPriceCluster(t *testing.T) {
 	if len(plannedOf(quote, "ExternalIP")) != 2 {
 		t.Fatalf("expected 2 planned external IPs, got %d", len(plannedOf(quote, "ExternalIP")))
 	}
+	assertSources(t, quote, "bare_metal.instances.metal-1tb", []string{"spec.node_sets.compute"})
+	assertSources(t, quote, "caas.control_planes", []string{"Cluster"})
 }
 
 // TestPriceBareMetalInstance prices a standalone host: one of its host type's dimension,
@@ -710,14 +724,18 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 	}
 }
 
-// TestPriceUnsetThrough checks that a through reference that isn't set is an error: a
-// price that silently skipped it would undercount the resource.
+// TestPriceUnsetThrough checks that a through reference that isn't set prices nothing, the
+// way the usage counter's left join prices a stored row without one: an unmasked
+// metadata-only update sends a candidate with no spec, and it must not fail the check.
 func TestPriceUnsetThrough(t *testing.T) {
 	instance := &privatev1.ComputeInstance{Spec: &privatev1.ComputeInstanceSpec{}}
 
-	_, err := Price(instance.ProtoReflect(), instanceTypes())
-	if err == nil || !strings.Contains(err.Error(), "isn't set") {
-		t.Fatalf("an unset through reference must fail the price, got: %v", err)
+	quote, err := Price(instance.ProtoReflect(), instanceTypes())
+	if err != nil {
+		t.Fatalf("an unset through reference must price nothing, got: %v", err)
+	}
+	if len(quote.Dimensions) != 0 {
+		t.Fatalf("an unset through reference must price nothing, got: %v", quote.Dimensions)
 	}
 }
 

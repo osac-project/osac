@@ -458,6 +458,11 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	if err = s.validateNoDuplicateConditions(request.GetObject()); err != nil {
 		return
 	}
+	// The tenant lock comes before the cluster's row lock below, so a checked update never
+	// waits for another request's locks in the opposite order:
+	if err = s.generic.LockTenantForCheckedUpdate(ctx, request); err != nil {
+		return
+	}
 	if err = s.validateClusterStateForSpecUpdate(ctx, request); err != nil {
 		return
 	}

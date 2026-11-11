@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -48,6 +49,7 @@ type PrivateQuotaLimitsServer struct {
 	generic          *GenericServer[*privatev1.QuotaLimit]
 	defaults         *quotaDefaultLimitsStore
 	attributionLogic auth.AttributionLogic
+	quota            *quotaEnforcer
 }
 
 func NewPrivateQuotaLimitsServer() *PrivateQuotaLimitsServerBuilder {
@@ -115,6 +117,10 @@ func (b *PrivateQuotaLimitsServerBuilder) Build() (result *PrivateQuotaLimitsSer
 		defaults:         defaults,
 		attributionLogic: b.attributionLogic,
 	}
+	result.quota, err = newQuotaEnforcer(b.logger, b.metricsRegisterer)
+	if err != nil {
+		return
+	}
 	return
 }
 
@@ -138,6 +144,10 @@ func (s *PrivateQuotaLimitsServer) Create(ctx context.Context,
 	}
 	fillQuotaName(limit, limit.GetSpec().GetDimension())
 	err = s.generic.Create(ctx, request, &response)
+	if err == nil {
+		err = s.warnCreatedLimit(ctx, limit.GetMetadata().GetTenant(),
+			limit.GetMetadata().GetProject(), limit.GetSpec().GetDimension())
+	}
 	return
 }
 
@@ -148,14 +158,68 @@ func (s *PrivateQuotaLimitsServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
+	// Read the old value with the row locked, so the warning sees the value this update
+	// replaces:
+	getResponse, err := s.generic.dao.Get().SetId(id).SetLock(true).Do(ctx)
+	if err != nil {
+		err = ConvertDAOErrorToGRPC(err, "get", id)
+		return
+	}
+	oldValue := getResponse.GetObject().GetSpec().GetValue()
 	err = s.generic.UpdateWithValidation(ctx, request, &response, validateQuotaLimitUpdate)
+	if err == nil {
+		updated := response.GetObject()
+		err = s.warnLimitChange(ctx, updated.GetMetadata().GetTenant(),
+			updated.GetMetadata().GetProject(), updated.GetSpec().GetDimension(), oldValue)
+	}
 	return
 }
 
 func (s *PrivateQuotaLimitsServer) Delete(ctx context.Context,
 	request *privatev1.QuotaLimitsDeleteRequest) (response *privatev1.QuotaLimitsDeleteResponse, err error) {
+	var getResponse *privatev1.QuotaLimitsGetResponse
+	err = s.generic.Get(ctx, privatev1.QuotaLimitsGetRequest_builder{
+		Id: request.GetId(),
+	}.Build(), &getResponse)
+	if err != nil {
+		return
+	}
+	limit := getResponse.GetObject()
 	err = s.generic.Delete(ctx, request, &response)
+	if err == nil {
+		err = s.warnLimitChange(ctx, limit.GetMetadata().GetTenant(),
+			limit.GetMetadata().GetProject(), limit.GetSpec().GetDimension(),
+			limit.GetSpec().GetValue())
+	}
 	return
+}
+
+// warnLimitChange writes the warnings a limit change leaves behind: one for each threshold of
+// the dimension, in the changed scope, whose usage is at or above it. Only a change that
+// tightens the scope's limit warns.
+func (s *PrivateQuotaLimitsServer) warnLimitChange(
+	ctx context.Context, tenant, project, dimension string, oldLimit int64,
+) error {
+	if warnErr := s.quota.warnScopeAtOrAbove(ctx, tenant, project, dimension, oldLimit); warnErr != nil {
+		s.logger.ErrorContext(ctx, "Failed to write the quota warnings of a limit change",
+			slog.Any("error", warnErr))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to write the quota warnings")
+	}
+	return nil
+}
+
+// warnCreatedLimit writes the warnings a newly created limit leaves behind. The scope's old
+// limit is what it falls back to without a row: the tenant's limit for a project, the default
+// for the tenant.
+func (s *PrivateQuotaLimitsServer) warnCreatedLimit(
+	ctx context.Context, tenant, project, dimension string,
+) error {
+	if warnErr := s.quota.warnCreatedLimit(ctx, tenant, project, dimension); warnErr != nil {
+		s.logger.ErrorContext(ctx, "Failed to write the quota warnings of a limit change",
+			slog.Any("error", warnErr))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to write the quota warnings")
+	}
+	return nil
 }
 
 func (s *PrivateQuotaLimitsServer) Signal(ctx context.Context,
@@ -211,11 +275,18 @@ func (s *PrivateQuotaLimitsServer) SetDefault(ctx context.Context,
 		return
 	}
 	limit.GetMetadata().SetCreator(creator)
+	// The old default tells the scan which tenants the change tightened:
+	oldDefaults, oldErr := s.defaults.values(ctx)
+	if oldErr != nil {
+		err = s.translateDefaultsError(ctx, oldErr)
+		return
+	}
 	object, setErr := s.defaults.set(ctx, limit)
 	if setErr != nil {
 		err = s.translateDefaultsError(ctx, setErr)
 		return
 	}
+	s.scheduleDefaultScan(ctx, limit.GetSpec().GetDimension(), oldDefaults[limit.GetSpec().GetDimension()])
 	response = &privatev1.QuotaLimitsSetDefaultResponse{}
 	response.SetObject(object)
 	return
@@ -227,12 +298,34 @@ func (s *PrivateQuotaLimitsServer) ClearDefault(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
+	object, getErr := s.defaults.get(ctx, request.GetId())
+	if getErr != nil {
+		err = s.translateDefaultsError(ctx, getErr)
+		return
+	}
 	if clearErr := s.defaults.clear(ctx, request.GetId()); clearErr != nil {
 		err = s.translateDefaultsError(ctx, clearErr)
 		return
 	}
+	s.scheduleDefaultScan(ctx, object.GetSpec().GetDimension(), object.GetSpec().GetValue())
 	response = &privatev1.QuotaLimitsClearDefaultResponse{}
 	return
+}
+
+// scheduleDefaultScan writes the threshold warnings of every tenant the change tightened, after
+// the change commits: a default belongs to every tenant, and no request transaction should scan
+// them all.
+func (s *PrivateQuotaLimitsServer) scheduleDefaultScan(ctx context.Context, dimension string, oldDefault int64) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	tx.OnCommit(func() {
+		// The commit has already happened, so the scan still sees the change; detached from
+		// the request and off the request's goroutine, it can't be killed by the RPC's
+		// deadline and doesn't block its response:
+		go s.quota.scanDefaultLimitChange(context.WithoutCancel(ctx), dimension, oldDefault)
+	})
 }
 
 // translateDefaultsError turns the store's errors into gRPC errors the client can act on.

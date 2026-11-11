@@ -152,11 +152,13 @@ func (s *quotaDefaultLimitsStore) set(
 	}
 	// Lock the row of the dimension, if any, so two sets of the same dimension can't race. Two
 	// first-time sets can still both miss the lock and race on the insert; the loser of that race
-	// updates the row the winner committed instead of surfacing the unique-index error.
+	// updates the row the winner committed instead of surfacing the unique-index error. The
+	// update leaves name alone: the column is immutable, and the row already carries the name
+	// the insert gave it.
 	probe := fmt.Sprintf(
 		"select id from %s where data -> 'spec' ->> 'dimension' = $1 for update", quotaDefaultLimitsTable)
 	write := fmt.Sprintf(
-		"update %s set name = $1, creator = $2, data = $3, version = version + 1 where id = $4",
+		"update %s set creator = $1, data = $2, version = version + 1 where id = $3",
 		quotaDefaultLimitsTable,
 	)
 	var id string
@@ -177,17 +179,11 @@ func (s *quotaDefaultLimitsStore) set(
 		if isUniqueViolation(err) {
 			err = tx.QueryRow(ctx, probe, object.GetSpec().GetDimension()).Scan(&id)
 			if err == nil {
-				_, err = tx.Exec(
-					ctx, write,
-					object.GetMetadata().GetName(), object.GetMetadata().GetCreator(), data, id,
-				)
+				_, err = tx.Exec(ctx, write, object.GetMetadata().GetCreator(), data, id)
 			}
 		}
 	} else if err == nil {
-		_, err = tx.Exec(
-			ctx, write,
-			object.GetMetadata().GetName(), object.GetMetadata().GetCreator(), data, id,
-		)
+		_, err = tx.Exec(ctx, write, object.GetMetadata().GetCreator(), data, id)
 	}
 	if err != nil {
 		return nil, err

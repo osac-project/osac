@@ -41,9 +41,15 @@ import (
 	quota "github.com/osac-project/osac/proto/quota"
 )
 
-// tables maps the proto message of each quota-annotated kind to the table that stores it. Extend
-// together with the quota annotations when a new counted resource or type gets annotations;
+// Table returns the table that stores the kind with the given message name, such as
+// "osac.private.v1.InstanceType". Empty when the kind carries no quota annotations. Extend the
+// map together with the quota annotations when a new counted resource or type gets annotations;
 // Build fails a kind that has annotations but no table, and fails a mapped kind that carries none.
+func Table(message protoreflect.FullName) string {
+	return tables[message]
+}
+
+// tables maps the proto message of each quota-annotated kind to the table that stores it.
 var tables = map[protoreflect.FullName]string{
 	"osac.private.v1.BareMetalInstance":     "bare_metal_instances",
 	"osac.private.v1.BareMetalInstanceType": "bare_metal_instance_types",
@@ -59,8 +65,9 @@ var tables = map[protoreflect.FullName]string{
 
 // Counter counts a tenant's usage, one SQL statement per counted kind. Create it with NewCounter.
 type Counter struct {
-	logger *slog.Logger
-	kinds  map[string]*quota.Kind
+	logger     *slog.Logger
+	kinds      map[string]*quota.Kind
+	statements map[string]string
 }
 
 // CounterBuilder contains the data and logic needed to create a counter.
@@ -112,6 +119,17 @@ func (b *CounterBuilder) Build() (result *Counter, err error) {
 	}
 	if err := checkKinds(result.kinds); err != nil {
 		return nil, err
+	}
+	result.statements = map[string]string{}
+	for _, kind := range result.kinds {
+		if result.isType(kind.Name) {
+			continue
+		}
+		statement, err := result.kindStatement(kind)
+		if err != nil {
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+		}
+		result.statements[kind.Name] = statement
 	}
 	return result, nil
 }
@@ -182,24 +200,20 @@ func (c *Counter) Count(ctx context.Context, tenant string) (map[string]map[stri
 	}
 	result := map[string]map[string]int64{}
 	for _, name := range sortedKindNames(c.kinds) {
-		kind := c.kinds[name]
-		if c.isType(name) {
+		statement, ok := c.statements[name]
+		if !ok {
 			continue
-		}
-		statement, err := c.kindStatement(kind)
-		if err != nil {
-			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
 		}
 		rows, err := tx.Query(ctx, statement, tenant)
 		if err != nil {
-			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", name, err)
 		}
 		for rows.Next() {
 			var project, dimension string
 			var amount int64
 			if err := rows.Scan(&project, &dimension, &amount); err != nil {
 				rows.Close()
-				return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+				return nil, fmt.Errorf("failed to count the usage of '%s': %w", name, err)
 			}
 			if result[project] == nil {
 				result[project] = map[string]int64{}
@@ -208,7 +222,7 @@ func (c *Counter) Count(ctx context.Context, tenant string) (map[string]map[stri
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", name, err)
 		}
 		rows.Close()
 	}

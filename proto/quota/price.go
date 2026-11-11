@@ -41,6 +41,12 @@ type Quote struct {
 	// Creates are the resources OSAC will create for the request, one entry per
 	// resource.
 	Creates []PlannedCreate
+
+	// Sources maps each dimension to the parts of the request that add to it: the
+	// annotated field's path, with the map key of the item, such as
+	// "spec.node_sets.compute". The kind's own name stands in for its message
+	// dimension.
+	Sources map[string][]string
 }
 
 // PlannedCreate is one resource OSAC will create for a request.
@@ -79,53 +85,69 @@ func Price(message protoreflect.Message, types TypeLookup) (Quote, error) {
 	if kind == nil {
 		return Quote{}, nil
 	}
-	dimensions, creates, err := priceOf(message, kind, types, byName)
+	dimensions, creates, sources, err := priceOf(message, kind, types, byName)
 	if err != nil {
 		return Quote{}, err
 	}
-	return Quote{Dimensions: dimensions, Creates: creates}, nil
+	return Quote{Dimensions: dimensions, Creates: creates, Sources: sources}, nil
 }
 
 // priceOf prices one message against its kind's annotations: its own dimensions, what its
-// through references use, and what OSAC will create for it.
+// through references use, and what OSAC will create for it. The sources name the parts of the
+// message that add to each dimension; nested prices of types and planned resources attribute
+// their dimensions to the field that reached them, so only this message's own fields appear.
 func priceOf(
 	message protoreflect.Message,
 	kind *Kind,
 	types TypeLookup,
 	byName map[string]*Kind,
-) (map[string]int64, []PlannedCreate, error) {
+) (map[string]int64, []PlannedCreate, map[string][]string, error) {
 	dimensions := map[string]int64{}
+	sources := map[string][]string{}
 	var creates []PlannedCreate
 
 	if kind.Dimension != "" {
 		dimension, err := resolveDimension(kind.Dimension, message)
 		if err != nil {
-			return nil, nil, fmt.Errorf("kind '%s': %w", kind.Name, err)
+			return nil, nil, nil, fmt.Errorf("kind '%s': %w", kind.Name, err)
 		}
 		dimensions[dimension]++
+		addSource(sources, dimension, kind.Name)
 	}
 
 	for _, field := range kind.Fields {
 		var err error
 		switch {
 		case field.Dimension != "":
-			err = addFieldDimension(dimensions, message, field)
+			err = addFieldDimension(dimensions, sources, message, field)
 		case field.Through != "":
-			err = addThrough(dimensions, message, field, types, byName)
+			err = addThrough(dimensions, sources, message, field, types, byName)
 		case field.Creates != nil:
 			var fieldCreates []PlannedCreate
-			fieldCreates, err = addCreates(dimensions, message, field, types, byName)
+			fieldCreates, err = addCreates(dimensions, sources, message, field, types, byName)
 			creates = append(creates, fieldCreates...)
 		}
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
-	return dimensions, creates, nil
+	return dimensions, creates, sources, nil
+}
+
+// addSource records that the source added to the dimension, unless it already did.
+func addSource(sources map[string][]string, dimension, source string) {
+	for _, existing := range sources[dimension] {
+		if existing == source {
+			return
+		}
+	}
+	sources[dimension] = append(sources[dimension], source)
 }
 
 // addFieldDimension adds the value of an annotated field to its dimension.
-func addFieldDimension(dimensions map[string]int64, message protoreflect.Message, field Field) error {
+func addFieldDimension(
+	dimensions map[string]int64, sources map[string][]string, message protoreflect.Message, field Field,
+) error {
 	value, _, ok, err := navigate(message, field.Path)
 	if err != nil || !ok {
 		return err
@@ -135,15 +157,18 @@ func addFieldDimension(dimensions map[string]int64, message protoreflect.Message
 		return fmt.Errorf("field '%s': %w", field.Path, err)
 	}
 	dimensions[dimension] += value.Int()
+	addSource(sources, dimension, field.Path)
 	return nil
 }
 
-// addThrough adds what a referenced type uses. With a larger_of path, the resource uses
+// addThrough adds what a referenced type uses. An unset reference prices nothing, the way the
+// usage counter's left join prices a row without one. With a larger_of path, the resource uses
 // the larger amount on each dimension: while a resize is in progress the resource keeps
 // running the old type, so counting only the asked type would free quota the resource
 // still uses.
 func addThrough(
 	dimensions map[string]int64,
+	sources map[string][]string,
 	message protoreflect.Message,
 	field Field,
 	types TypeLookup,
@@ -154,7 +179,7 @@ func addThrough(
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("field '%s' resolves through a type but isn't set", field.Path)
+		return nil
 	}
 	askedDimensions, err := throughDimensions(asked.Message(), field, types, byName)
 	if err != nil {
@@ -174,10 +199,18 @@ func addThrough(
 		}
 	}
 	mergeMax(dimensions, askedDimensions, runningDimensions)
+	for dimension := range askedDimensions {
+		addSource(sources, dimension, field.Path)
+	}
+	for dimension := range runningDimensions {
+		addSource(sources, dimension, field.Path)
+	}
 	return nil
 }
 
-// throughDimensions prices the type a reference points at.
+// throughDimensions prices the type a reference points at. A reference that names nothing
+// prices nothing, like one that isn't set: the usage counter's left join prices both the
+// same way.
 func throughDimensions(
 	reference protoreflect.Message,
 	field Field,
@@ -186,6 +219,9 @@ func throughDimensions(
 ) (map[string]int64, error) {
 	name, err := referenceName(reference)
 	if err != nil {
+		if name == "" {
+			return map[string]int64{}, nil
+		}
 		return nil, fmt.Errorf("field '%s': %w", field.Path, err)
 	}
 	typed := types.Type(field.Through, name)
@@ -198,7 +234,7 @@ func throughDimensions(
 			field.Path, typed.Descriptor().FullName(), field.Through,
 		)
 	}
-	dimensions, _, err := priceOf(typed, byName[field.Through], types, byName)
+	dimensions, _, _, err := priceOf(typed, byName[field.Through], types, byName)
 	if err != nil {
 		return nil, err
 	}
@@ -206,9 +242,12 @@ func throughDimensions(
 }
 
 // addCreates expands what OSAC will create for an annotated field's value: the price of
-// each created resource, and the planned creates themselves.
+// each created resource, and the planned creates themselves. Each item's source names the
+// part of the request it comes from: the field's path, with the map key of a map field's
+// item, such as "spec.node_sets.compute".
 func addCreates(
 	dimensions map[string]int64,
+	sources map[string][]string,
 	message protoreflect.Message,
 	field Field,
 	types TypeLookup,
@@ -221,46 +260,52 @@ func addCreates(
 	creates := field.Creates
 
 	var items []protoreflect.Value
+	var itemSources []string
 	if descriptor.Kind() == protoreflect.BoolKind {
 		// A bool field has no item: the count alone decides, and the registry
 		// validates that a bool creates neither reads a count field nor sets fields.
 		if value.Bool() {
 			items = []protoreflect.Value{protoreflect.Value{}}
+			itemSources = []string{field.Path}
 		}
 	} else {
-		items, err = itemsOf(value, descriptor, creates.Each)
+		items, itemSources, err = itemsOf(value, descriptor, creates.Each, field.Path)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	var planned []PlannedCreate
-	for _, item := range items {
+	for i, item := range items {
 		count, err := createCount(creates, item)
 		if err != nil {
 			return nil, err
 		}
-		for i := 0; i < count; i++ {
+		for j := 0; j < count; j++ {
 			create, plannedMessage, err := plannedCreate(creates, item, byName)
 			if err != nil {
 				return nil, err
 			}
-			createdDimensions, _, err := priceOf(plannedMessage, byName[creates.Kind], types, byName)
+			createdDimensions, _, _, err := priceOf(plannedMessage, byName[creates.Kind], types, byName)
 			if err != nil {
 				return nil, err
 			}
 			mergeSum(dimensions, createdDimensions)
+			for dimension := range createdDimensions {
+				addSource(sources, dimension, itemSources[i])
+			}
 			planned = append(planned, create)
 		}
 	}
 	return planned, nil
 }
 
-// itemsOf returns the items a creates annotation creates resources for: the field's
-// value, each entry of its list, or each value of its map.
+// itemsOf returns the items a creates annotation creates resources for, and the source
+// naming each one: the field's value, each entry of its list, or each value of its map,
+// keyed by the map field's key.
 func itemsOf(
-	value protoreflect.Value, field protoreflect.FieldDescriptor, each string,
-) ([]protoreflect.Value, error) {
+	value protoreflect.Value, field protoreflect.FieldDescriptor, each, path string,
+) ([]protoreflect.Value, []string, error) {
 	switch {
 	case field.IsMap():
 		mapValue := value.Map()
@@ -271,23 +316,36 @@ func itemsOf(
 		})
 		sort.Strings(keys)
 		items := make([]protoreflect.Value, 0, len(keys))
+		sources := make([]string, 0, len(keys))
 		for _, key := range keys {
 			items = append(items, mapValue.Get(protoreflect.ValueOfString(key).MapKey()))
+			sources = append(sources, path+"."+key)
 		}
-		return items, nil
+		return items, sources, nil
 	case field.IsList():
-		return listItems(value.List()), nil
+		list := value.List()
+		return listItems(list), sourcesOfCount(list.Len(), path), nil
 	case each != "":
 		listField := value.Message().Descriptor().Fields().ByName(protoreflect.Name(each))
 		if listField == nil {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"message '%s' has no field '%s'", value.Message().Descriptor().FullName(), each,
 			)
 		}
-		return listItems(value.Message().Get(listField).List()), nil
+		list := value.Message().Get(listField).List()
+		return listItems(list), sourcesOfCount(list.Len(), path), nil
 	default:
-		return []protoreflect.Value{value}, nil
+		return []protoreflect.Value{value}, []string{path}, nil
 	}
+}
+
+// sourcesOfCount names every entry of a list with the list's own path.
+func sourcesOfCount(count int, path string) []string {
+	sources := make([]string, count)
+	for i := range count {
+		sources[i] = path
+	}
+	return sources
 }
 
 // listItems returns the entries of a list.

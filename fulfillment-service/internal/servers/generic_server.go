@@ -132,6 +132,7 @@ type GenericServer[O dao.Object] struct {
 	pathCache        map[string]*masks.Path[O]
 	pathCacheLock    *sync.Mutex
 	validator        protovalidate.Validator
+	quota            *quotaEnforcer
 }
 
 type objectIface interface {
@@ -280,6 +281,14 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 		return
 	}
 
+	// Create the quota enforcer. It decides per kind whether a request is checked, so servers
+	// of kinds that use nothing carry it without ever running it.
+	quota, err := newQuotaEnforcer(b.logger, b.metricsRegisterer)
+	if err != nil {
+		err = fmt.Errorf("failed to create the quota enforcer: %w", err)
+		return
+	}
+
 	// Create the object early so that we can use its methods as callbacks:
 	s := &GenericServer[O]{
 		logger:           b.logger,
@@ -291,6 +300,7 @@ func (b *GenericServerBuilder[O]) Build() (result *GenericServer[O], err error) 
 		pathCache:        map[string]*masks.Path[O]{},
 		pathCacheLock:    &sync.Mutex{},
 		validator:        validator,
+		quota:            quota,
 	}
 
 	// Create the DAO:
@@ -523,6 +533,15 @@ func (s *GenericServer[O]) CreateWithCandidatePreparation(
 		return err
 	}
 
+	// A checked request locks its tenant's row before any other row, so two requests in one
+	// tenant never both pass the quota check:
+	quotaChecked := s.quota.Checks(requestObject)
+	if quotaChecked {
+		if err = s.quota.lockTenant(ctx, metadataOf(requestObject).GetTenant()); err != nil {
+			return err
+		}
+	}
+
 	var nilObject O
 	if prepareCandidate != nil {
 		preparedID := requestObject.GetId()
@@ -536,6 +555,14 @@ func (s *GenericServer[O]) CreateWithCandidatePreparation(
 			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
 				tx.ReportError(&err)
 			}
+			return err
+		}
+	}
+
+	// The check runs after the fill-in, in the same transaction as the write, so a request over
+	// a limit writes nothing. The dry run returns before the write, not before the check.
+	if quotaChecked {
+		if err = s.quota.checkCreate(ctx, requestObject); err != nil {
 			return err
 		}
 	}
@@ -857,6 +884,13 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		return grpcstatus.Errorf(grpccodes.Internal, "object identifier is mandatory")
 	}
 
+	// A checked update locks its tenant's row before the resource's own row. The stored
+	// object's tenant never changes, so an unlocked read finds it:
+	quotaChecked, err := s.quotaUpdateLock(ctx, requestObject, requestMsg.GetUpdateMask())
+	if err != nil {
+		return err
+	}
+
 	// Fetch the current representation of the object:
 	getResponse, err := s.dao.Get().
 		SetId(requestId).
@@ -977,6 +1011,14 @@ func (s *GenericServer[O]) updateWithCandidatePreparation(
 		}
 	}
 
+	// The check runs after the fill-in, in the same transaction as the write. An update adds
+	// the difference between the new and the old version of the resource:
+	if quotaChecked {
+		if err = s.quota.checkUpdate(ctx, currentObject, tmpObject); err != nil {
+			return err
+		}
+	}
+
 	// Save the object only if there is any actual difference:
 	var responseObject O
 	if !s.equivalentObjects(tmpObject, currentObject) {
@@ -1052,6 +1094,39 @@ func (s *GenericServer[O]) UpdateWithValidation(
 		func(ctx context.Context, current, candidate O) error {
 			return validate(ctx, candidate, current)
 		}, true)
+}
+
+// LockTenantForCheckedUpdate takes the tenant lock of a checked update before any other row.
+// Private servers that lock their own rows ahead of the generic update path, such as the
+// Clusters server locking the cluster's row, call this first, so the tenant lock keeps its
+// place at the front. The generic update path takes the same lock again, which never waits
+// within one transaction.
+func (s *GenericServer[O]) LockTenantForCheckedUpdate(ctx context.Context, request any) error {
+	type requestIface interface {
+		GetObject() O
+		GetUpdateMask() *fieldmaskpb.FieldMask
+	}
+	requestMsg := request.(requestIface)
+	requestObject := requestMsg.GetObject()
+	if s.isNil(requestObject) {
+		return nil
+	}
+	if !s.quota.updateChecked(requestObject, requestMsg.GetUpdateMask()) {
+		return nil
+	}
+	return s.quota.lockTenantOfRow(ctx, requestObject, requestObject.GetId())
+}
+
+// quotaUpdateLock reports whether an update runs the quota check, and when it does, locks
+// the tenant's row of the stored object first: the tenant never changes, so an unlocked read
+// finds it, and the lock comes before the resource's own row.
+func (s *GenericServer[O]) quotaUpdateLock(
+	ctx context.Context, requestObject O, mask *fieldmaskpb.FieldMask,
+) (bool, error) {
+	if !s.quota.updateChecked(requestObject, mask) {
+		return false, nil
+	}
+	return true, s.quota.lockTenantOfRow(ctx, requestObject, requestObject.GetId())
 }
 
 func (s *GenericServer[O]) translateUpdateError(ctx context.Context, requestId string, err error) error {

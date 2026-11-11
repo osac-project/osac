@@ -101,6 +101,16 @@ by the type system. A handler that panics is rolled back before the panic propag
 Use `Tx.OnCommit` for work that must only happen once a change is stored, such as logging it. It
 never runs after a rollback or a failed commit.
 
+**Quota enforcement rides the same transaction.** Every create or update of a quota-annotated kind
+(except types) that a private server sends through the generic server first locks the tenant's row
+in `tenants` (`FOR NO KEY UPDATE`, before any other row), then runs the quota check after the
+fill-in: it prices the request from the annotations, counts the tenant's usage from the database,
+and refuses with `QUOTA_EXCEEDED` when a scope would go over a limit. Because the check and the
+write share the request's transaction, a refused request writes nothing, and the tenant lock
+serializes two concurrent requests in one tenant so they cannot both pass the check at READ
+COMMITTED. A request that crosses a warning threshold writes its warning to `quota_outbox` in the
+same transaction.
+
 ### Event delivery and reconciliation recovery
 
 Watch events notify controllers that an object may need reconciliation. Controllers read the

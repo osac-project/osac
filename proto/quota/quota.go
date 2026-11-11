@@ -725,7 +725,7 @@ func checkCreatesCycles(kinds []Kind) error {
 // validateDimension checks that every brace path of a dimension template names a string
 // field of the kind, so the price can fill the dimension's name.
 func validateDimension(kind protoreflect.MessageDescriptor, dimension, where string) error {
-	paths, err := bracePaths(dimension)
+	paths, err := BracePaths(dimension)
 	if err != nil {
 		return fmt.Errorf("%s: %w", where, err)
 	}
@@ -741,9 +741,9 @@ func validateDimension(kind protoreflect.MessageDescriptor, dimension, where str
 	return nil
 }
 
-// bracePaths returns the paths in the braces of a dimension template, such as
+// BracePaths returns the paths in the braces of a dimension template, such as
 // "spec.storage_tier" from "storage.{spec.storage_tier}.gib".
-func bracePaths(template string) ([]string, error) {
+func BracePaths(template string) ([]string, error) {
 	var paths []string
 	rest := template
 	for {

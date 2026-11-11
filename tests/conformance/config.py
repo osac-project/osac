@@ -116,10 +116,9 @@ def load_config(path: Path, *, area_names: Collection[str]) -> Config:
 
     timeouts_doc = document.get("timeouts", {})
     timeouts = _mapping(timeouts_doc, "timeouts", checks)
-    if timeouts is not None:
-        if any(not isinstance(k, str) or not isinstance(v, str) for k, v in timeouts.items()):
-            checks.append("timeouts must map keys to duration strings")
-            timeouts = {}
+    if timeouts is not None and any(not isinstance(k, str) or not isinstance(v, str) for k, v in timeouts.items()):
+        checks.append("timeouts must map keys to duration strings")
+        timeouts = {}
 
     areas: dict[str, Mapping[str, Any]] = {}
     for name in area_names:

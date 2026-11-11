@@ -16,7 +16,18 @@ def _run_plugin(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env["OSAC_CONFORMANCE_MANIFEST"] = str(tmp_path / "manifest.json")
     env["OSAC_CONFORMANCE_RESULTS"] = str(tmp_path / "results.jsonl")
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "-n", "0", "-p", "no:cacheprovider", "-p", "tests.conformance.pytest_plugin", *args],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-n",
+            "0",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "tests.conformance.pytest_plugin",
+            *args,
+        ],
         cwd=REPO,
         env=env,
         text=True,

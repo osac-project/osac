@@ -48,7 +48,7 @@ class FakeLabServer:
         lab = self.lab
 
         class Handler(BaseHTTPRequestHandler):
-            def do_GET(self) -> None:  # noqa: N802
+            def do_GET(self) -> None:
                 path = urlparse(self.path).path
                 if path == "/api/fulfillment/v1/capabilities":
                     body = json.dumps({"enabled_services": list(lab.enabled_services)}).encode()

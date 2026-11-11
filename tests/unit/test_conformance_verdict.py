@@ -11,6 +11,7 @@ from tests.conformance.model import (
     Layer,
     Plan,
     ProfileResult,
+    Report,
     Result,
     TestIdentity,
     TestOutcome,
@@ -43,7 +44,7 @@ def _evaluate(
     leftovers: tuple[str, ...] = (),
     components: tuple[ComponentResult, ...] | None = None,
     profiles: tuple[ProfileResult, ...] = (),
-):
+) -> Report:
     plan = Plan(tuple(outcome.identity for outcome in outcomes), ("generic",), complete)
     if components is None:
         components = (ComponentResult("networking", {"name": "mock"}, Verdict.CONFORMANT),)

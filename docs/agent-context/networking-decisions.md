@@ -184,8 +184,9 @@ as follows:
   so it has no Helm value. A class whose default rules use `icmp` without the
   capability fails resolution.
 - **EVPN DHCP and DNS:** `cudn_evpn` uses OVN-Kubernetes DHCP for VMs, which
-  allocates from `overlay_ipv4_cidrs`; its `reservedSubnets` covers addresses
-  outside the overlay and the infrastructure addresses. Netris enables DHCP
+  allocates from `overlay_ipv4_cidrs`. Its `reservedSubnets` covers only the
+  Subnet outside the overlay. The gateway and management-port addresses lie
+  inside the overlay and belong only in `infrastructureSubnets`. Netris enables DHCP
   over `physical_ipv4_cidrs` when it creates the Subnet's V-Net and that
   range is non-empty, and repairs it on every rerun; a physical attachment
   also enables it before moving a port when an older V-Net has no range. The

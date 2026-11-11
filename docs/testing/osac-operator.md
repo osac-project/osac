@@ -45,6 +45,12 @@ mounting remain E2E
 ([OSAC-3711](https://redhat.atlassian.net/browse/OSAC-3711)). Remote StorageClass
 coverage needs dual Envtest plus a second Kind cluster.
 
+ClusterOrder upgrade dispatch, observation, and deadline coverage
+([DEV] OSAC-6265, OSAC-7232) uses Envtest for dispatch and feedback against the
+real API, etcd, and CRDs with controlled AAP/HyperShift inputs; the deployed
+Kind suite covers installed CRD/status handling and manager timeout variables.
+Fulfillment persistence and the AAP workflow are not exercised.
+
 Subnet compute eligibility is covered at Unit and Envtest tier, in the
 Fulfillment servers suite (see the
 [fulfillment-service guide](fulfillment-service.md)), and by the

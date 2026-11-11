@@ -1,0 +1,24 @@
+---
+# Simulate malformed output from a supported NodePool modification hook. The
+# workflow rejects this definition before Kubernetes creates a NodePool.
+- name: Initialize the malformed NodePool hook results
+  no_log: true
+  ansible.builtin.set_fact:
+    hosted_cluster_malformed_nodepool_definitions: []
+
+- name: Make only the batch NodePool hook result malformed
+  no_log: true
+  ansible.builtin.set_fact:
+    hosted_cluster_malformed_nodepool_definitions: >-
+      {{ hosted_cluster_malformed_nodepool_definitions
+         + [item | combine({'metadata': {'name': ''}}, recursive=true)]
+         if item.metadata.labels[agent_node_set_label] == 'batch'
+         else hosted_cluster_malformed_nodepool_definitions + [item] }}
+  loop: "{{ nodepool_definitions }}"
+  loop_control:
+    label: "{{ item.metadata.labels[agent_node_set_label] }}"
+
+- name: Expose the malformed hook results to the workflow
+  no_log: true
+  ansible.builtin.set_fact:
+    nodepool_definitions: "{{ hosted_cluster_malformed_nodepool_definitions }}"

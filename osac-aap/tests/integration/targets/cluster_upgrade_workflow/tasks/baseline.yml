@@ -1,0 +1,683 @@
+---
+- name: Prepare the ClusterOrder projected by Fulfillment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_id: >-
+      {{ lookup('env', 'POD_UID') | default('local', true)
+      | regex_replace('[^a-z0-9]', '') | truncate(8, true, '') }}
+    fixture_namespace: "cluster-upgrade-{{ fixture_id }}"
+    cluster_order_name: "upgrade-{{ fixture_id }}"
+    cluster_order_label: "osac.openshift.io/clusterorder"
+    cluster_order_infrastructure_finalizer: "osac.openshift.io/infrastructure"
+    agent_instance_type_label: "osac.openshift.io/instance_type"
+    agent_node_set_label: "osac.openshift.io/node-set"
+    upgrade_attempt_annotation: "osac.openshift.io/upgrade-attempt-id"
+    initial_control_plane_image: "quay.io/example/control-plane:4.18"
+    rerun_control_plane_image: "quay.io/example/control-plane:4.19"
+    rerun_upgrade_attempt_id: "rerun-upgrade-id"
+    pre_upgrade_node_image: "quay.io/example/node:4.17"
+    pre_upgrade_batch_node_image: "quay.io/example/batch-node:4.17"
+    target_node_image: "quay.io/example/node:4.18"
+    target_batch_node_image: "quay.io/example/batch-node:4.18"
+    cluster_upgrade_pull_secret: "{{ lookup('env', 'OSAC_CLUSTER_UPGRADE_PULL_SECRET') }}"
+    cluster_upgrade_ssh_public_key: >-
+      ssh-ed25519 {{ lookup('pipe', 'openssl rand -base64 32') | trim }}
+      cluster-upgrade-test
+  tasks:
+    - name: Persist fixture values for imported workflows
+      ansible.builtin.set_fact:
+        fixture_id: "{{ fixture_id }}"
+        fixture_namespace: "{{ fixture_namespace }}"
+        cluster_order_name: "{{ cluster_order_name }}"
+        initial_control_plane_image: "{{ initial_control_plane_image }}"
+        pre_upgrade_node_image: "{{ pre_upgrade_node_image }}"
+        pre_upgrade_batch_node_image: "{{ pre_upgrade_batch_node_image }}"
+        target_node_image: "{{ target_node_image }}"
+        target_batch_node_image: "{{ target_batch_node_image }}"
+        rerun_control_plane_image: "{{ rerun_control_plane_image }}"
+        rerun_upgrade_attempt_id: "{{ rerun_upgrade_attempt_id }}"
+
+    - name: Install the HostedCluster CRD
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../files/hostedclusters.crd.yaml"
+        wait: true
+        wait_condition:
+          type: Established
+          status: "True"
+
+    - name: Install the NodePool CRD
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../files/nodepools.crd.yaml"
+        wait: true
+        wait_condition:
+          type: Established
+          status: "True"
+
+    - name: Create the workflow's working namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ fixture_namespace }}"
+        state: present
+
+    - name: Label the working namespace for cluster lookup
+      kubernetes.core.k8s:
+        state: patched
+        merge_type: merge
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ fixture_namespace }}"
+            labels:
+              osac.openshift.io/clusterorder: "{{ cluster_order_name }}"
+
+    - name: Require the external pull-secret test variable
+      ansible.builtin.assert:
+        that:
+          - cluster_upgrade_pull_secret | length > 0
+        fail_msg: Set OSAC_CLUSTER_UPGRADE_PULL_SECRET to a test value.
+
+    - name: Create the projected ClusterOrder
+      no_log: true
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: ClusterOrder
+          metadata:
+            name: "{{ cluster_order_name }}"
+            namespace: osac-system
+            annotations:
+              osac.openshift.io/management-state: unmanaged
+              osac.openshift.io/tenant: cluster-upgrade-test
+              osac.openshift.io/owner-reference: cluster-upgrade-test
+              osac.openshift.io/upgrade-attempt-id: shared-upgrade-id
+          spec:
+            templateID: osac.templates.ocp_small
+            templateParameters: >-
+              {{ {'pull_secret': cluster_upgrade_pull_secret,
+                  'ssh_public_key': cluster_upgrade_ssh_public_key} | to_json }}
+            releaseImage: "{{ initial_control_plane_image }}"
+            nodeRequests:
+              - nodeSet: compute
+                numberOfNodes: 2
+                releaseImage: "{{ pre_upgrade_node_image }}"
+                bareMetal:
+                  instanceType: bm.large
+              - nodeSet: batch
+                numberOfNodes: 1
+                releaseImage: "{{ pre_upgrade_batch_node_image }}"
+                bareMetal:
+                  instanceType: bm.large
+      register: created_cluster_order
+
+    - name: Keep the projected ClusterOrder for the existing workflow
+      no_log: true
+      ansible.builtin.set_fact:
+        upgrade_cluster_order: "{{ created_cluster_order.result }}"
+
+    - name: Set the ClusterOrder fact for the imported workflow
+      no_log: true
+      ansible.builtin.set_fact:
+        cluster_order: "{{ upgrade_cluster_order }}"
+
+- name: Run the existing cluster workflow for the initial projection
+  ansible.builtin.import_playbook: osac.workflows.cluster.create
+  vars:
+    osac_job_vars:
+      resource: "{{ upgrade_cluster_order }}"
+    cluster_working_namespace: "{{ fixture_namespace }}"
+    awx_job_id: "upgrade-initial-{{ fixture_id }}"
+    cluster_order_label: "osac.openshift.io/clusterorder"
+    cluster_order_infrastructure_finalizer: "osac.openshift.io/infrastructure"
+    agent_instance_type_label: "osac.openshift.io/instance_type"
+    agent_node_set_label: "osac.openshift.io/node-set"
+    hosted_cluster_default_agent_namespace: "{{ fixture_namespace }}"
+    install_step_external_access_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_retrieve_kubeconfig_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_wait_for_nodes_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_wait_for_cluster_operators_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Verify the initial workflow projection and serialization lock
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_namespace: "{{ hostvars.localhost.fixture_namespace }}"
+    cluster_order_name: "{{ hostvars.localhost.cluster_order_name }}"
+    upgrade_attempt_annotation: "osac.openshift.io/upgrade-attempt-id"
+    initial_control_plane_image: "{{ hostvars.localhost.initial_control_plane_image }}"
+    pre_upgrade_node_image: "{{ hostvars.localhost.pre_upgrade_node_image }}"
+    pre_upgrade_batch_node_image: "{{ hostvars.localhost.pre_upgrade_batch_node_image }}"
+    expected_attempt_ids:
+      - shared-upgrade-id
+      - shared-upgrade-id
+  tasks:
+    - name: Read the initial HostedCluster
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: hypershift.openshift.io/v1beta1
+        kind: HostedCluster
+        name: "{{ cluster_order_name }}"
+        namespace: "{{ fixture_namespace }}"
+      register: initial_hosted_cluster
+
+    - name: Read the initial NodePools
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: hypershift.openshift.io/v1beta1
+        kind: NodePool
+        namespace: "{{ fixture_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/clusterorder={{ cluster_order_name }}"
+      register: initial_nodepools
+
+    - name: Read the workflow serialization Lease
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "cluster-{{ cluster_order_name }}-lock"
+        namespace: osac-system
+      register: initial_upgrade_lease
+
+    - name: Assert the initial projection and lock
+      no_log: true
+      ansible.builtin.assert:
+        that:
+          - initial_hosted_cluster.resources | length == 1
+          - initial_hosted_cluster.resources[0].spec.release.image == initial_control_plane_image
+          - initial_hosted_cluster.resources[0].metadata.annotations[upgrade_attempt_annotation] == 'shared-upgrade-id'
+          - initial_nodepools.resources | length == 2
+          - >-
+            initial_nodepools.resources
+            | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-compute')
+            | map(attribute='spec.release.image') | first == pre_upgrade_node_image
+          - >-
+            initial_nodepools.resources
+            | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-batch')
+            | map(attribute='spec.release.image') | first == pre_upgrade_batch_node_image
+          - >-
+            (initial_nodepools.resources
+             | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-compute')
+             | list | first).metadata.annotations[upgrade_attempt_annotation]
+            == 'shared-upgrade-id'
+          - >-
+            (initial_nodepools.resources
+             | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-batch')
+             | list | first).metadata.annotations[upgrade_attempt_annotation]
+            == 'shared-upgrade-id'
+          - initial_upgrade_lease.resources | length == 1
+          - initial_upgrade_lease.resources[0].metadata.labels['osac.openshift.io/aap-job-id'] is search('upgrade-initial-')
+          - initial_upgrade_lease.resources[0].spec.holderIdentity is search('upgrade-initial-')
+        fail_msg: >-
+          The existing cluster workflow did not project the image batch and shared
+          attempt ID, or did not create its same-type serialization Lease.
+
+    - name: Remove the completed workflow's Lease
+      kubernetes.core.k8s:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "cluster-{{ cluster_order_name }}-lock"
+        namespace: osac-system
+        state: absent
+
+    - name: Project the post-success node-pool image batch
+      no_log: true
+      kubernetes.core.k8s:
+        state: patched
+        merge_type: merge
+        definition:
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: ClusterOrder
+          metadata:
+            name: "{{ cluster_order_name }}"
+            namespace: osac-system
+          spec:
+            nodeRequests:
+              - nodeSet: compute
+                numberOfNodes: 2
+                releaseImage: "{{ hostvars.localhost.target_node_image }}"
+                bareMetal:
+                  instanceType: bm.large
+              - nodeSet: batch
+                numberOfNodes: 1
+                releaseImage: "{{ hostvars.localhost.target_batch_node_image }}"
+                bareMetal:
+                  instanceType: bm.large
+      register: node_batch_cluster_order
+
+    - name: Read the node-batch projected ClusterOrder
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: ClusterOrder
+        name: "{{ cluster_order_name }}"
+        namespace: osac-system
+      register: node_batch_cluster_order_fetched
+
+    - name: Keep the node-batch projected ClusterOrder
+      no_log: true
+      ansible.builtin.set_fact:
+        upgrade_cluster_order: "{{ node_batch_cluster_order_fetched.resources[0] }}"
+        cluster_order: "{{ node_batch_cluster_order_fetched.resources[0] }}"
+        template_parameters: "{{ node_batch_cluster_order_fetched.resources[0].spec.templateParameters | from_json }}"
+        node_requests: "{{ node_batch_cluster_order_fetched.resources[0].spec.nodeRequests }}"
+
+    - name: Set the ClusterOrder fact for the imported workflow
+      no_log: true
+      ansible.builtin.set_fact:
+        cluster_order: "{{ upgrade_cluster_order }}"
+
+- name: Run the same existing cluster workflow for the node-pool batch
+  ansible.builtin.import_playbook: osac.workflows.cluster.create
+  vars:
+    osac_job_vars:
+      resource: "{{ upgrade_cluster_order }}"
+    cluster_working_namespace: "{{ fixture_namespace }}"
+    awx_job_id: "upgrade-node-batch-{{ fixture_id }}"
+    cluster_order_label: "osac.openshift.io/clusterorder"
+    cluster_order_infrastructure_finalizer: "osac.openshift.io/infrastructure"
+    agent_instance_type_label: "osac.openshift.io/instance_type"
+    agent_node_set_label: "osac.openshift.io/node-set"
+    hosted_cluster_default_agent_namespace: "{{ fixture_namespace }}"
+    install_step_external_access_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_retrieve_kubeconfig_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_wait_for_nodes_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_wait_for_cluster_operators_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Verify the node-pool batch and project a later control-plane update
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_namespace: "{{ hostvars.localhost.fixture_namespace }}"
+    cluster_order_name: "{{ hostvars.localhost.cluster_order_name }}"
+    initial_control_plane_image: "{{ hostvars.localhost.initial_control_plane_image }}"
+    target_node_image: "{{ hostvars.localhost.target_node_image }}"
+    target_batch_node_image: "{{ hostvars.localhost.target_batch_node_image }}"
+    upgrade_attempt_annotation: "osac.openshift.io/upgrade-attempt-id"
+    expected_attempt_ids:
+      - shared-upgrade-id
+      - shared-upgrade-id
+  tasks:
+    - name: Read the node-batch HostedCluster
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: hypershift.openshift.io/v1beta1
+        kind: HostedCluster
+        name: "{{ cluster_order_name }}"
+        namespace: "{{ fixture_namespace }}"
+      register: node_batch_hosted_cluster
+
+    - name: Read the node-batch NodePools
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: hypershift.openshift.io/v1beta1
+        kind: NodePool
+        namespace: "{{ fixture_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/clusterorder={{ cluster_order_name }}"
+      register: node_batch_nodepools
+
+    - name: Assert the node-pool image batch was applied
+      no_log: true
+      ansible.builtin.assert:
+        that:
+          - node_batch_hosted_cluster.resources | length == 1
+          - >-
+            node_batch_hosted_cluster.resources[0].spec.release.image
+            == initial_control_plane_image
+          - >-
+            node_batch_hosted_cluster.resources[0].metadata.annotations[upgrade_attempt_annotation]
+            == 'shared-upgrade-id'
+          - node_batch_nodepools.resources | length == 2
+          - >-
+            node_batch_nodepools.resources
+            | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-compute')
+            | map(attribute='spec.release.image') | first == target_node_image
+          - >-
+            node_batch_nodepools.resources
+            | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-batch')
+            | map(attribute='spec.release.image') | first == target_batch_node_image
+          - >-
+            (node_batch_nodepools.resources
+             | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-compute')
+             | list | first).metadata.annotations[upgrade_attempt_annotation]
+            == 'shared-upgrade-id'
+          - >-
+            (node_batch_nodepools.resources
+             | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-batch')
+             | list | first).metadata.annotations[upgrade_attempt_annotation]
+            == 'shared-upgrade-id'
+        fail_msg: "The existing workflow did not apply the projected node-pool image batch."
+
+    - name: Remove the completed node-batch workflow's Lease
+      kubernetes.core.k8s:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "cluster-{{ cluster_order_name }}-lock"
+        namespace: osac-system
+        state: absent
+
+    - name: Project a later control-plane reconciliation
+      no_log: true
+      kubernetes.core.k8s:
+        state: patched
+        merge_type: merge
+        definition:
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: ClusterOrder
+          metadata:
+            name: "{{ cluster_order_name }}"
+            namespace: osac-system
+            annotations:
+              osac.openshift.io/upgrade-attempt-id: "{{ hostvars.localhost.rerun_upgrade_attempt_id }}"
+          spec:
+            releaseImage: "{{ hostvars.localhost.rerun_control_plane_image }}"
+      register: later_cluster_order
+
+    - name: Keep the later projected ClusterOrder
+      no_log: true
+      ansible.builtin.set_fact:
+        upgrade_cluster_order: "{{ later_cluster_order.result }}"
+
+    - name: Set the ClusterOrder fact for the imported workflow
+      no_log: true
+      ansible.builtin.set_fact:
+        cluster_order: "{{ upgrade_cluster_order }}"
+
+- name: Run the same existing cluster workflow for the later control-plane update
+  ansible.builtin.import_playbook: osac.workflows.cluster.create
+  vars:
+    osac_job_vars:
+      resource: "{{ upgrade_cluster_order }}"
+    cluster_working_namespace: "{{ fixture_namespace }}"
+    awx_job_id: "upgrade-later-{{ fixture_id }}"
+    cluster_order_label: "osac.openshift.io/clusterorder"
+    cluster_order_infrastructure_finalizer: "osac.openshift.io/infrastructure"
+    agent_instance_type_label: "osac.openshift.io/instance_type"
+    agent_node_set_label: "osac.openshift.io/node-set"
+    hosted_cluster_default_agent_namespace: "{{ fixture_namespace }}"
+    install_step_external_access_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_retrieve_kubeconfig_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_wait_for_nodes_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_wait_for_cluster_operators_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+
+- name: Verify later reconciliation and clean up
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_namespace: "{{ hostvars.localhost.fixture_namespace }}"
+    cluster_order_name: "{{ hostvars.localhost.cluster_order_name }}"
+    initial_control_plane_image: "{{ hostvars.localhost.initial_control_plane_image }}"
+    rerun_control_plane_image: "{{ hostvars.localhost.rerun_control_plane_image }}"
+    rerun_upgrade_attempt_id: "{{ hostvars.localhost.rerun_upgrade_attempt_id }}"
+    target_node_image: "{{ hostvars.localhost.target_node_image }}"
+    target_batch_node_image: "{{ hostvars.localhost.target_batch_node_image }}"
+    upgrade_attempt_annotation: "osac.openshift.io/upgrade-attempt-id"
+    expected_attempt_ids:
+      - shared-upgrade-id
+      - shared-upgrade-id
+  tasks:
+    - name: Verify the later reconciliation and component-specific failure
+      block:
+        - name: Read the later HostedCluster
+          no_log: true
+          kubernetes.core.k8s_info:
+            api_version: hypershift.openshift.io/v1beta1
+            kind: HostedCluster
+            name: "{{ cluster_order_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: later_hosted_cluster
+
+        - name: Read the later NodePools
+          no_log: true
+          kubernetes.core.k8s_info:
+            api_version: hypershift.openshift.io/v1beta1
+            kind: NodePool
+            namespace: "{{ fixture_namespace }}"
+            label_selectors:
+              - "osac.openshift.io/clusterorder={{ cluster_order_name }}"
+          register: later_nodepools
+
+        - name: Assert a later reconciliation preserves NodePool images
+          no_log: true
+          ansible.builtin.assert:
+            that:
+              - later_hosted_cluster.resources | length == 1
+              - >-
+                later_hosted_cluster.resources[0].spec.release.image
+                == rerun_control_plane_image
+              - >-
+                later_hosted_cluster.resources[0].metadata.annotations[upgrade_attempt_annotation]
+                == rerun_upgrade_attempt_id
+              - later_nodepools.resources | length == 2
+              - >-
+                later_nodepools.resources
+                | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-compute')
+                | map(attribute='spec.release.image') | first == target_node_image
+              - >-
+                later_nodepools.resources
+                | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-batch')
+                | map(attribute='spec.release.image') | first == target_batch_node_image
+              - >-
+                (later_nodepools.resources
+                 | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-compute')
+                 | list | first).metadata.annotations[upgrade_attempt_annotation]
+                == rerun_upgrade_attempt_id
+              - >-
+                (later_nodepools.resources
+                 | selectattr('metadata.name', 'equalto', 'nodepool-' ~ cluster_order_name ~ '-batch')
+                 | list | first).metadata.annotations[upgrade_attempt_annotation]
+                == rerun_upgrade_attempt_id
+            fail_msg: "A later run did not preserve explicit NodePool images."
+
+        - name: Remove the completed later workflow's Lease
+          kubernetes.core.k8s:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            name: "cluster-{{ cluster_order_name }}-lock"
+            namespace: osac-system
+            state: absent
+
+        - name: Read the current projected ClusterOrder
+          no_log: true
+          kubernetes.core.k8s_info:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ClusterOrder
+            name: "{{ cluster_order_name }}"
+            namespace: osac-system
+          register: current_cluster_order
+
+        - name: Read the original SSH-key Secret
+          no_log: true
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "sshkey-cluster-{{ cluster_order_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: original_sshkey_secret
+
+        - name: Create the malformed-run variable file
+          ansible.builtin.tempfile:
+            state: file
+            prefix: cluster-upgrade-malformed-
+            suffix: .json
+          register: malformed_run_vars_file
+
+        - name: Write the malformed-run variables
+          no_log: true
+          ansible.builtin.copy:
+            dest: "{{ malformed_run_vars_file.path }}"
+            mode: "0600"
+            content: >-
+              {{ {
+                'upgrade_cluster_order': current_cluster_order.resources[0],
+                'fixture_namespace': fixture_namespace,
+                'cluster_order_name': cluster_order_name,
+                'fixture_id': hostvars.localhost.fixture_id
+              } | to_nice_json }}
+
+        - name: Run the existing workflow with malformed batch NodePool hook output
+          no_log: true
+          ansible.builtin.command:
+            argv:
+              - uv
+              - run
+              - ansible-playbook
+              - -e
+              - "ansible_python_interpreter={{ ansible_playbook_python }}"
+              - -e
+              - "@{{ playbook_dir }}/../../../common_vars.yml"
+              - -e
+              - "@{{ malformed_run_vars_file.path }}"
+              - "{{ playbook_dir }}/run_malformed_nodepool_hook.yml"
+          environment:
+            ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../ansible.cfg"
+          register: malformed_nodepool_run
+          failed_when: false
+          changed_when: true
+
+        - name: Combine the malformed-run output
+          no_log: true
+          ansible.builtin.set_fact:
+            malformed_nodepool_output: >-
+              {{ malformed_nodepool_run.stdout | default('') }}
+              {{ malformed_nodepool_run.stderr | default('') }}
+
+        - name: Assert the malformed NodePool run fails with a censored result
+          ansible.builtin.assert:
+            that:
+              - malformed_nodepool_run.rc != 0
+              - >-
+                malformed_nodepool_output is
+                search('(?s)TASK \[osac\.service\.hosted_cluster : Create NodePool resources\](?:(?!TASK \[).)*the output has been hidden')
+
+        - name: Read the SSH-key Secret after the malformed run
+          no_log: true
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "sshkey-cluster-{{ cluster_order_name }}"
+            namespace: "{{ fixture_namespace }}"
+          register: malformed_run_sshkey_secret
+
+        - name: Assert the malformed run preserves the SSH-key Secret
+          no_log: true
+          ansible.builtin.assert:
+            that:
+              - original_sshkey_secret.resources | length == 1
+              - malformed_run_sshkey_secret.resources | length == 1
+              - >-
+                malformed_run_sshkey_secret.resources[0].data['id_rsa.pub']
+                == original_sshkey_secret.resources[0].data['id_rsa.pub']
+
+        - name: Read the previously applied compute NodePool
+          no_log: true
+          kubernetes.core.k8s_info:
+            api_version: hypershift.openshift.io/v1beta1
+            kind: NodePool
+            name: "nodepool-{{ cluster_order_name }}-compute"
+            namespace: "{{ fixture_namespace }}"
+          register: unaffected_nodepool
+
+        - name: Assert the previously applied component remains unchanged
+          no_log: true
+          ansible.builtin.assert:
+            that:
+              - unaffected_nodepool.resources | length == 1
+              - unaffected_nodepool.resources[0].spec.release.image == target_node_image
+              - >-
+                unaffected_nodepool.resources[0].metadata.annotations[upgrade_attempt_annotation]
+                == rerun_upgrade_attempt_id
+
+      always:
+        - name: Remove the malformed-run variable file
+          ansible.builtin.file:
+            path: "{{ malformed_run_vars_file.path | default('') }}"
+            state: absent
+          when: malformed_run_vars_file.path | default('') | length > 0
+
+        - name: Remove the workflow finalizer from the ClusterOrder
+          no_log: true
+          kubernetes.core.k8s:
+            state: patched
+            merge_type: merge
+            definition:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ClusterOrder
+              metadata:
+                name: "{{ cluster_order_name }}"
+                namespace: osac-system
+                finalizers: []
+          failed_when: false
+
+        - name: Remove the projected ClusterOrder
+          no_log: true
+          kubernetes.core.k8s:
+            api_version: osac.openshift.io/v1alpha1
+            kind: ClusterOrder
+            name: "{{ cluster_order_name }}"
+            namespace: osac-system
+            state: absent
+          failed_when: false
+
+        - name: Remove the workflow finalizer from the namespace
+          kubernetes.core.k8s:
+            state: patched
+            merge_type: merge
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ fixture_namespace }}"
+                finalizers: []
+          failed_when: false
+
+        - name: Remove the working namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: absent
+            wait: true
+          failed_when: false
+
+        - name: Remove any remaining workflow Lease
+          kubernetes.core.k8s:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            name: "cluster-{{ cluster_order_name }}-lock"
+            namespace: osac-system
+            state: absent
+          failed_when: false

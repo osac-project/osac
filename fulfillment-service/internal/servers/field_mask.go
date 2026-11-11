@@ -55,3 +55,18 @@ func updateMaskIncludesExactPath(mask *fieldmaskpb.FieldMask, path string) bool 
 	}
 	return false
 }
+
+// updateMaskIncludesDescendantField reports whether a mask selects any child
+// of the named field. The exact field and its parents are not descendants.
+func updateMaskIncludesDescendantField(mask *fieldmaskpb.FieldMask, path string) bool {
+	if mask == nil {
+		return false
+	}
+	prefix := path + "."
+	for _, maskPath := range mask.GetPaths() {
+		if strings.HasPrefix(maskPath, prefix) {
+			return true
+		}
+	}
+	return false
+}

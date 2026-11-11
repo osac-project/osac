@@ -40,7 +40,7 @@ describe('buildClusterCatalogItemCreatePayload', () => {
     expect(payload.fields?.version).toEqual({
       behavior: {
         case: 'locked',
-        value: { id: 'version-1', name: '4-17-0', tenant: 'shared' },
+        value: { id: 'version-1', name: '4-17-0', shared: true },
       },
     });
     expect(payload.fields?.network).toEqual({
@@ -57,7 +57,7 @@ describe('buildClusterCatalogItemCreatePayload', () => {
     expect(payload.fields?.version).toEqual({
       behavior: {
         case: 'editable',
-        value: { defaultValue: { id: 'version-2', name: '4-20-0', tenant: 'shared' } },
+        value: { defaultValue: { id: 'version-2', name: '4-20-0', shared: true } },
       },
     });
   });
@@ -95,15 +95,15 @@ describe('buildClusterCatalogItemCreatePayload', () => {
           items: {
             workers: {
               size: 3,
-              baremetalInstanceType: { id: 'bmit-worker', name: 'worker', tenant: 'shared' },
+              baremetalInstanceType: { id: 'bmit-worker', name: 'worker', shared: true },
             },
             infra: {
               size: 1,
-              baremetalInstanceType: { id: 'bmit-infra', name: 'infra', tenant: 'shared' },
+              baremetalInstanceType: { id: 'bmit-infra', name: 'infra', shared: true },
             },
             legacy: {
               size: 1,
-              baremetalInstanceType: { id: 'bmit-legacy', tenant: 'shared' },
+              baremetalInstanceType: { id: 'bmit-legacy', shared: true },
             },
           },
         },

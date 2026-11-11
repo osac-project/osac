@@ -298,7 +298,7 @@ describe('BareMetalCatalogItemWizard', () => {
         instanceType: {
           behavior: {
             case: 'locked',
-            value: { id: 'instance-type-1', name: 'acme-1tb', tenant: 'shared' },
+            value: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
           },
         },
       },

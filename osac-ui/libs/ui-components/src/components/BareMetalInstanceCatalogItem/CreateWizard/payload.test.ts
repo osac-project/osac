@@ -44,7 +44,7 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
     expect(payload.fields?.instanceType).toEqual({
       behavior: {
         case: 'locked',
-        value: { id: 'instance-type-1', name: 'acme-1tb', tenant: 'shared' },
+        value: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
       },
     });
     expect(payload.fields?.diskImage).toEqual({
@@ -73,7 +73,7 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
       behavior: {
         case: 'editable',
         value: {
-          defaultValue: { id: 'instance-type-1', name: 'acme-1tb', tenant: 'shared' },
+          defaultValue: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
         },
       },
     });

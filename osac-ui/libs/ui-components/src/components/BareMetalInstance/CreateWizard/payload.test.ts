@@ -39,7 +39,7 @@ describe('buildBareMetalInstanceCreatePayload', () => {
 
     expect(buildBareMetalInstanceCreatePayload(values).spec?.instanceType).toEqual({
       name: 'bare-metal.large',
-      tenant: 'shared',
+      shared: true,
     });
   });
 

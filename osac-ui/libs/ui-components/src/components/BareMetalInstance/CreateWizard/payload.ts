@@ -33,7 +33,7 @@ export const buildBareMetalInstanceCreatePayload = (
         values.spec.instanceType.value && {
           instanceType: {
             name: values.spec.instanceType.value,
-            tenant: 'shared',
+            shared: true,
           },
         }),
       ...(!values.spec.diskImage.locked && {

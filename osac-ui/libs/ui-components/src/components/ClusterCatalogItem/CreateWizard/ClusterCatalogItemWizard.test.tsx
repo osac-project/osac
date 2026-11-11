@@ -211,7 +211,7 @@ describe('ClusterCatalogItemWizard', () => {
     expect(screen.getByRole('button', { name: 'Remove node set' })).toBeDisabled();
   });
 
-  it('sends the shared-tenant host type reference by ID', async () => {
+  it('sends the shared host type reference by ID', async () => {
     const onCreate = vi.fn((req: { object?: unknown }) => ({
       object: { ...(req.object as object), id: 'catalog-item-1' },
     }));
@@ -240,7 +240,7 @@ describe('ClusterCatalogItemWizard', () => {
           items: {
             workers: {
               size: 3,
-              baremetalInstanceType: { id: HOST_TYPE.id, name: 'worker', tenant: 'shared' },
+              baremetalInstanceType: { id: HOST_TYPE.id, name: 'worker', shared: true },
             },
           },
         },
@@ -356,7 +356,7 @@ describe('ClusterCatalogItemWizard', () => {
         version: {
           behavior: {
             case: 'locked',
-            value: { id: 'version-1', name: '4-17-0', tenant: 'shared' },
+            value: { id: 'version-1', name: '4-17-0', shared: true },
           },
         },
       },

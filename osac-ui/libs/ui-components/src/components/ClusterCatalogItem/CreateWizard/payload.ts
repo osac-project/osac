@@ -20,7 +20,7 @@ const toTrimmedString = (value: string) => value.trim();
 const toVersionReference = (value: ResourceSelectValue) => ({
   id: value.id,
   name: value.name,
-  tenant: 'shared',
+  shared: true,
 });
 
 const toNodeSetMap = (value: ClusterNodeSetRow[]) => {
@@ -28,7 +28,7 @@ const toNodeSetMap = (value: ClusterNodeSetRow[]) => {
     string,
     {
       size: number;
-      baremetalInstanceType: { id: string; name?: string; tenant: string };
+      baremetalInstanceType: { id: string; name?: string; shared: boolean };
     }
   >;
 
@@ -44,7 +44,7 @@ const toNodeSetMap = (value: ClusterNodeSetRow[]) => {
       baremetalInstanceType: {
         id: hostType.id,
         ...(hostType.name ? { name: hostType.name } : {}),
-        tenant: 'shared',
+        shared: true,
       },
     };
   }

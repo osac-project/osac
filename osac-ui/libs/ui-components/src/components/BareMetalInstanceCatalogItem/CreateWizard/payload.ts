@@ -17,7 +17,7 @@ const isEmptyResource = (value: ResourceSelectValue) => !value.id;
 const toInstanceTypeReference = (value: ResourceSelectValue) => ({
   id: value.id,
   name: value.name,
-  tenant: 'shared',
+  shared: true,
 });
 const buildBareMetalCatalogItemFieldsPayload = (
   values: BareMetalCatalogItemValues,

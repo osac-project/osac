@@ -195,7 +195,7 @@ The full-flow projects run in this order:
    item, and tenant.
 2. `vmaas-full-flow` creates and verifies the VM.
 3. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
-4. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
+4. `vmaas-full-flow-pre-resource` removes the catalog item, disk image, instance
    type, storage tier, tenant-admin RoleBinding and OSAC User, SSH public-key
    Secret, tenant, and generated credential file as the admin user.
 
@@ -210,7 +210,7 @@ Run the complete deletion flow for an existing creation run with:
 
 ```bash
 OSAC_VM_FLOW_MODE=delete pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow-delete
+  --project=vmaas-full-flow-pre-resource
 ```
 
 The creation command stores the non-secret run IDs in
@@ -228,7 +228,7 @@ Run the complete creation and deletion flow with:
 
 ```bash
 OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow-delete
+  --project=vmaas-full-flow-pre-resource
 ```
 
 The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the

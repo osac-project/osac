@@ -174,10 +174,10 @@ placeholder_username() {
 }
 
 declare -A FLOW_CONFIG=(
-  [all]='vmaas-full-flow-delete|full||false'
-  [happy_basic]='vmaas-full-flow-delete|full||false'
+  [all]='vmaas-full-flow-pre-resource|full||false'
+  [happy_basic]='vmaas-full-flow-pre-resource|full||false'
   [create_resources]='vmaas-full-flow-resources|create||false'
-  [delete_resources]='vmaas-full-flow-delete|delete||false'
+  [delete_resources]='vmaas-full-flow-pre-resource|delete||false'
   [create_image]='vmaas-full-flow-resources|create|creates disk image|false'
   [delete_image]='vmaas-disk-image-delete|delete||false'
   [full_image]='vmaas-disk-image|full||false'

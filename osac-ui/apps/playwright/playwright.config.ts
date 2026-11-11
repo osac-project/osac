@@ -186,7 +186,7 @@ export default defineConfig({
       dependencies: flowMode === 'full' ? ['vmaas-full-flow'] : [],
     },
     {
-      name: 'vmaas-full-flow-delete',
+      name: 'vmaas-full-flow-pre-resource',
       testDir: vmaasDir,
       testMatch: /delete\.(catalog|disk_images|instance_type|storage_tier|tenant)\.spec\.ts/,
       fullyParallel: false,

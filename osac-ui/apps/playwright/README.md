@@ -269,6 +269,13 @@ mixed-direction sizing for `TC-FR2-02`.
 Run it with:
 
 ```bash
+bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
+  --osac-ui-dir="$PWD" --tag=resize
+```
+
+The same flow can be run directly after the common runner preparation:
+
+```bash
 pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-resize
 ```

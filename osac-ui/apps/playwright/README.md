@@ -54,7 +54,7 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
 export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=<keycloak-user>
 read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD && printf '\n'
 bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
-  --osac-ui-dir="$PWD" --tag=happy_basic
+  --osac-ui-dir="$PWD" --tag=vmaas_happy_basic
 unset OSAC_ADMIN_PASSWORD
 ```
 

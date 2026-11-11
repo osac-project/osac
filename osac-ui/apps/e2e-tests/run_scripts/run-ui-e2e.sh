@@ -78,9 +78,10 @@ Usage: $0 [OPTIONS]
 Run prepared OSAC UI Playwright flows. Run prepare-setup-for-ui-run.sh first.
 
 Flow tags:
-  all, happy_basic                         complete VMaaS flow
+  all, vmaas_happy_basic                   complete VMaaS flow
   create_resources, delete_resources       infrastructure resource group
-  create_image, delete_image, full_image   disk image lifecycle
+  create_disk_image, delete_disk_image, full_disk_image
+                                          disk image lifecycle
   create_storage, delete_storage, full_storage
   create_instance_type, delete_instance_type, full_instance_type
   create_tenant, delete_tenant, full_tenant
@@ -109,9 +110,9 @@ Options:
   --help, -h             print this help
 
 Examples:
-  bash $0 --tag=create_image
-  bash $0 --tag=delete_image
-  bash $0 --tag=full_image
+  bash $0 --tag=create_disk_image
+  bash $0 --tag=delete_disk_image
+  bash $0 --tag=full_disk_image
 EOF
       exit 0
       ;;
@@ -175,12 +176,12 @@ placeholder_username() {
 
 declare -A FLOW_CONFIG=(
   [all]='vmaas-full-flow-pre-resource|full||false'
-  [happy_basic]='vmaas-full-flow-pre-resource|full||false'
+  [vmaas_happy_basic]='vmaas-full-flow-pre-resource|full||false'
   [create_resources]='vmaas-full-flow-resources|create||false'
   [delete_resources]='vmaas-full-flow-pre-resource|delete||false'
-  [create_image]='vmaas-full-flow-resources|create|creates disk image|false'
-  [delete_image]='vmaas-disk-image-delete|delete||false'
-  [full_image]='vmaas-disk-image|full||false'
+  [create_disk_image]='vmaas-full-flow-resources|create|creates disk image|false'
+  [delete_disk_image]='vmaas-disk-image-delete|delete||false'
+  [full_disk_image]='vmaas-disk-image|full||false'
   [create_storage]='vmaas-full-flow-resources|create|creates a storage tier|false'
   [delete_storage]='vmaas-storage-tier-delete|delete||false'
   [full_storage]='vmaas-storage-tier|full||false'

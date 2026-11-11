@@ -186,14 +186,17 @@ as follows:
 - **EVPN DHCP and DNS:** `cudn_evpn` uses OVN-Kubernetes DHCP for VMs, which
   allocates from `overlay_ipv4_cidrs`; its `reservedSubnets` covers addresses
   outside the overlay and the infrastructure addresses. Netris enables DHCP
-  only over `physical_ipv4_cidrs`, before moving a physical attachment, and
-  leaves that range enabled after the attachment is removed. Netris cannot
-  filter DHCP offers by MAC, so a physical-range offer can reach VMs on the
-  same segment; whether a VM accepts it remains an open lab check. OSAC has no
-  per-resource DNS. VM DNS comes from OVN-Kubernetes DHCP. Bare metal on Netris
-  gets an installation-level resolver (default `8.8.8.8`) from the Netris
-  default DHCP option set, a provider install step, not OSAC code; bare metal
-  without internet needs no DNS reachability. The settings
+  over `physical_ipv4_cidrs` when it creates the Subnet's V-Net and that
+  range is non-empty, and repairs it on every rerun; a physical attachment
+  also enables it before moving a port when an older V-Net has no range. The
+  range stays enabled after the attachment is removed. Netris cannot filter
+  DHCP offers by MAC, so
+  a physical-range offer can reach VMs on the same segment; whether a VM
+  accepts it remains an open lab check. OSAC has no per-resource DNS. VM DNS
+  comes from OVN-Kubernetes DHCP. Bare metal on Netris gets an
+  installation-level resolver (default `8.8.8.8`) from the Netris default DHCP
+  option set, a provider install step, not OSAC code; bare metal without
+  internet needs no DNS reachability. The settings
   `CUDN_EVPN_DNS_RESOLVERS`,
   `NETRIS_DNS_RESOLVERS`, `NETRIS_DNS_SNAT_CIDR` and the Netris per-VN DNS SNAT
   are removed.

@@ -29,8 +29,9 @@ netris_resource_class_map: >-
 #   gateway_ipv4   gateway_ipv4/prefix from the IPAM result (the lab spike)
 #   none           no Netris gateway
 #   physical_first first address of the first physical block, Subnet prefix
-# With EVPN, Netris DHCP is disabled at Subnet creation. A physical attachment
-# enables DHCP over physical_ipv4_cidrs before the port moves to the Subnet.
+# With EVPN, Netris DHCP serves physical_ipv4_cidrs from Subnet creation and a
+# rerun repairs it; OVN serves VM DHCP from overlay_ipv4_cidrs. A physical
+# attachment also enables the physical range before the port moves.
 netris_evpn_vnet_gateway_mode: gateway_ipv4
 
 # Seconds to wait after host ports left a V-Net before they join another one

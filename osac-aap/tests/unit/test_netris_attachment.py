@@ -1,11 +1,11 @@
 """NetworkAttachment tasks of the Netris Fabric Manager (OSAC-6766, T11.4).
 
 Overlay attachments are a documented no-op. A physical attachment moves the
-host's fabric ports from the provisioning V-Net to the V-Net of the Subnet
-(EVPN Subnets included: DHCP is switched on over the physical range first),
-and query_dhcp_lease reads the IPAM host of the interface MAC. The pure rules
-are tested on the filter module; the task files run through the generic
-networking playbook against the Netris double in netris_fake.py.
+host's fabric ports from the provisioning V-Net to the V-Net of the Subnet,
+configures DHCP over the physical IPAM range first, and query_dhcp_lease reads
+the IPAM host of the interface MAC. The pure rules are tested on the filter
+module; the task files run through the generic networking playbook against the
+Netris double in netris_fake.py.
 """
 
 from __future__ import annotations
@@ -124,25 +124,6 @@ def test_dhcp_update_needs_a_gateway() -> None:
     assert "gateway" in nc.netris_vnet_dhcp_update(vnet_detail(gateway=""), att_job(network_type="evpn"))["error"]
 
 
-def test_gateway_update_can_ignore_the_dhcp_of_the_v_net() -> None:
-    plan = {"gateway": "10.20.1.1/24", "dhcp_start": "", "dhcp_end": ""}
-    out = nc.netris_vnet_gateway_update(vnet_detail(dhcp=True), plan, True)
-    assert out["matches"] is True
-    assert out["body"]["gateways"][0]["dhcpEnabled"] is True
-    drift = nc.netris_vnet_gateway_update(vnet_detail(dhcp=True, gateway="10.20.1.5/24"), plan, True)
-    assert drift["matches"] is False
-    assert drift["body"]["gateways"][0]["prefix"] == "10.20.1.1/24"
-    assert drift["body"]["gateways"][0]["dhcpEnabled"] is True
-    assert nc.netris_vnet_gateway_update(vnet_detail(dhcp=True), plan)["matches"] is False
-
-
-def test_gateway_update_that_ignores_dhcp_creates_a_gateway_with_dhcp_off() -> None:
-    plan = {"gateway": "10.20.1.1/24", "dhcp_start": "", "dhcp_end": ""}
-    out = nc.netris_vnet_gateway_update({"id": 1, "gateways": []}, plan, True)
-    assert out["matches"] is False
-    assert out["body"]["gateways"] == [{"prefix": "10.20.1.1/24", "dhcpEnabled": False}]
-
-
 def test_dhcp_lease_matches_the_mac_in_any_case_and_strips_the_prefix_length() -> None:
     hosts = [
         {"name": "a", "address": "10.20.1.10/32", "mac": [{"address": MAC.lower()}]},
@@ -202,6 +183,8 @@ def run(tmp_path: Path, server, job: dict, env_drop: tuple = ()) -> tuple[int, d
     extra.write_text(json.dumps({"osac_job_vars": job}))
     environ = {k: v for k, v in os.environ.items() if not k.startswith("NETRIS_")}
     environ.update(GOOD_ENV)
+    environ.pop("KUBECONFIG", None)
+    environ.pop("K8S_AUTH_KUBECONFIG", None)
     environ.update({
         "NETRIS_CONTROLLER_URL": server.url,
         "NETRIS_VALIDATE_CERTS": "false",
@@ -240,7 +223,8 @@ def seed_host(netris, on_provisioning: bool = True) -> None:
 def prepare(tmp_path, netris, network_type=None) -> None:
     """VirtualNetwork, Subnet (as the network type needs) and the host."""
     ok(*run(tmp_path, netris, vs.vn_job("create_virtual_network", network_type)))
-    ok(*run(tmp_path, netris, subnet_job("create_subnet", network_type, l3_vni=10001 if network_type else None)))
+    subnet = subnet_job("create_subnet", network_type, l3_vni=10001 if network_type else None)
+    ok(*run(tmp_path, netris, subnet))
     seed_host(netris)
     netris.calls.clear()
 
@@ -282,9 +266,13 @@ def test_physical_apply_rerun_makes_no_write(tmp_path, netris) -> None:
     assert netris.writes() == []
 
 
-def test_physical_apply_on_an_evpn_subnet_enables_dhcp_before_the_move(tmp_path, netris) -> None:
+def test_evpn_physical_apply_reconfigures_dhcp_before_moving_ports(tmp_path, netris) -> None:
     prepare(tmp_path, netris, "evpn")
-    assert tenant_vnet(netris)["gateways"][0].get("dhcpEnabled", False) is False
+    gateway = tenant_vnet(netris)["gateways"][0]
+    assert gateway["dhcpEnabled"] is True
+    gateway["dhcpEnabled"] = False
+    gateway.pop("dhcpStartIp")
+    gateway.pop("dhcpEndIp")
     assert ok(*run(tmp_path, netris, att_job(network_type="evpn"))) == {}
     gateway = tenant_vnet(netris)["gateways"][0]
     assert gateway["prefix"] == "10.20.1.1/24" and gateway["dhcpEnabled"] is True
@@ -303,7 +291,9 @@ def test_create_subnet_rerun_keeps_the_dhcp_of_an_evpn_subnet(tmp_path, netris) 
     first = ok(*run(tmp_path, netris, subnet_job("create_subnet", "evpn")))
     assert first == {"network_segment": {"type": "evpn", "l2_vni": 10101}}
     assert netris.writes() == []
-    assert tenant_vnet(netris)["gateways"][0]["dhcpEnabled"] is True
+    gateway = tenant_vnet(netris)["gateways"][0]
+    assert gateway["dhcpEnabled"] is True
+    assert (gateway["dhcpStartIp"], gateway["dhcpEndIp"]) == ("10.20.1.192", "10.20.1.254")
 
 
 def test_evpn_apply_without_a_physical_range_is_final_and_writes_nothing(tmp_path, netris) -> None:

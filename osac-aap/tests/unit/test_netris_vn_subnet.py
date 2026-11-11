@@ -46,9 +46,9 @@ def plan_job(network_type=None, ipam=IPAM, cidr=SUBNET_CIDR) -> dict:
     return job
 
 
-def test_evpn_default_mode_keeps_the_gateway_and_leaves_dhcp_off() -> None:
+def test_evpn_default_mode_keeps_the_gateway_and_serves_the_physical_range() -> None:
     plan = nc.netris_vnet_plan(plan_job("evpn"), "gateway_ipv4")
-    assert plan == {"error": "", "gateway": "10.20.1.1/24", "dhcp_start": "", "dhcp_end": ""}
+    assert plan == {"error": "", "gateway": "10.20.1.1/24", "dhcp_start": "10.20.1.192", "dhcp_end": "10.20.1.254"}
 
 
 def test_evpn_none_mode_has_no_gateway() -> None:
@@ -64,7 +64,7 @@ def test_evpn_rejects_subnets_smaller_than_a_slash_29() -> None:
 def test_evpn_physical_first_mode() -> None:
     plan = nc.netris_vnet_plan(plan_job("evpn"), "physical_first")
     assert plan["gateway"] == "10.20.1.193/24"
-    assert (plan["dhcp_start"], plan["dhcp_end"]) == ("", "")
+    assert (plan["dhcp_start"], plan["dhcp_end"]) == ("10.20.1.194", "10.20.1.254")
     empty = nc.netris_vnet_plan(plan_job("evpn", {**EVPN_IPAM, "physical_ipv4_cidrs": []}), "physical_first")
     assert "physical_ipv4_cidrs" in empty["error"]
 
@@ -328,7 +328,8 @@ def test_create_subnet_with_network_type_returns_the_segment(tmp_path, netris) -
     assert ipam["name"] == f"osac-sn-{SUBNET}" and ipam["prefix"] == SUBNET_CIDR and ipam["purpose"] == "common"
     vnet = netris.state["vnets"][0]
     assert vnet["name"] == f"osac-sn-{SUBNET}" and vnet["vpc"] == {"id": 101}
-    assert vnet["gateways"] == [{"prefix": "10.20.1.1/24"}]
+    assert vnet["gateways"] == [{"prefix": "10.20.1.1/24", "dhcpEnabled": True,
+                                 "dhcpStartIp": "10.20.1.192", "dhcpEndIp": "10.20.1.254"}]
 
 
 def test_create_subnet_rerun_makes_no_write(tmp_path, netris) -> None:
@@ -354,7 +355,7 @@ def test_create_subnet_without_physical_ranges_has_no_dhcp(tmp_path, netris) -> 
     assert netris.state["vnets"][0]["gateways"] == [{"prefix": "10.20.1.1/24"}]
 
 
-def test_create_subnet_disables_a_legacy_evpn_dhcp_pool(tmp_path, netris) -> None:
+def test_create_subnet_repairs_an_evpn_dhcp_pool(tmp_path, netris) -> None:
     prepare_vn(tmp_path, netris)
     ok(*run(tmp_path, netris, subnet_job("create_subnet", "evpn")))
     netris.state["vnets"][0]["gateways"] = [{
@@ -364,7 +365,24 @@ def test_create_subnet_disables_a_legacy_evpn_dhcp_pool(tmp_path, netris) -> Non
     netris.calls.clear()
     result = ok(*run(tmp_path, netris, subnet_job("create_subnet", "evpn")))
     assert result == {"network_segment": {"type": "evpn", "l2_vni": 10101}}
-    assert netris.state["vnets"][0]["gateways"] == [{"id": 7, "prefix": "10.20.1.1/24", "dhcpEnabled": False}]
+    assert netris.state["vnets"][0]["gateways"] == [{
+        "id": 7, "prefix": "10.20.1.1/24", "dhcpEnabled": True,
+        "dhcpStartIp": "10.20.1.192", "dhcpEndIp": "10.20.1.254",
+    }]
+    assert len(netris.writes()) == 1
+
+
+def test_create_subnet_rerun_enables_a_missing_evpn_dhcp_pool(tmp_path, netris) -> None:
+    prepare_vn(tmp_path, netris)
+    ok(*run(tmp_path, netris, subnet_job("create_subnet", "evpn")))
+    netris.state["vnets"][0]["gateways"] = [{"id": 7, "prefix": "10.20.1.1/24", "dhcpEnabled": False}]
+    netris.calls.clear()
+    result = ok(*run(tmp_path, netris, subnet_job("create_subnet", "evpn")))
+    assert result == {"network_segment": {"type": "evpn", "l2_vni": 10101}}
+    assert netris.state["vnets"][0]["gateways"] == [{
+        "id": 7, "prefix": "10.20.1.1/24", "dhcpEnabled": True,
+        "dhcpStartIp": "10.20.1.192", "dhcpEndIp": "10.20.1.254",
+    }]
     assert len(netris.writes()) == 1
 
 

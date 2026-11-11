@@ -8,8 +8,8 @@
 # process). Checks:
 #   - lifecycle: all 21 tasks of the Fabric set run once with valid input and
 #     publish their contract result, or nothing for the documented no-ops;
-#   - VirtualNetwork / Subnet: result keys, VNIs, V-Net gateway, EVPN DHCP off
-#     until a physical attachment, and plain Subnet physical-range DHCP;
+#   - VirtualNetwork / Subnet: result keys, VNIs, V-Net gateway, EVPN and plain
+#     Subnet physical-range DHCP at creation and on rerun;
 #     reruns that write nothing, a parent l3Vni that differs from the VPC;
 #   - NetworkAttachment: physical port move with DHCP over the physical range
 #     on an EVPN Subnet, DHCP lease lookup by MAC, ports moved back on delete;

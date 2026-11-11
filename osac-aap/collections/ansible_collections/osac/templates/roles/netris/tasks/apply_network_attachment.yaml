@@ -5,7 +5,8 @@
 # leaves NETRIS_BM_PROVISIONING_VNET and interface.name joins the V-Net
 # osac-sn-<Subnet ID>. Before the move the V-Net gets DHCP over
 # ipam.physical_ipv4_cidrs (EVPN Subnets too; the gateway stays as it is), so
-# the host can boot on it. Everything that can fail is checked before the
+# the host can boot on it. create_subnet enables that range already; this
+# repairs a drifted V-Net. Everything that can fail is checked before the
 # first write. Nothing is published. Rerun-safe: a port already moved stays.
 #
 # Known gap: port changes read and write the whole ports list of a V-Net with

@@ -150,9 +150,11 @@ service account on the hub cluster.
 
 - **DNS.** OVN-Kubernetes's DHCP response gives a VM the ClusterIP of the
   cluster-wide DNS Service (`dns-service-namespace` / `dns-service-name` of
-  ovnkube). Netris enables DHCP only over `physical_ipv4_cidrs` when a physical
-  attachment is applied. Netris cannot filter offers by MAC, so a physical-range
-  offer can reach VMs; whether a VM accepts it remains an open lab check.
+  ovnkube). Netris enables DHCP over `physical_ipv4_cidrs` when the Fabric
+  Manager creates the Subnet's V-Net and that range is non-empty, and repairs
+  it on rerun; a physical attachment also enables it. Netris cannot filter
+  offers by MAC, so a physical-range offer can reach VMs; whether a VM accepts
+  it remains an open lab check.
 - **ICMP.** `icmp` rules fail `create_security_group` as final; `all` for the
   CIDR allows ICMP with everything else.
 - **Claim during the owner's delete.** A Subnet created while the owner Subnet

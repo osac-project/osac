@@ -1,6 +1,6 @@
 ---
 # Cases 5 and the attachment part of 10: physical attachment on an EVPN Subnet
-# moves the host port, switches DHCP on over the physical range, query_dhcp_lease
+# moves the host port, keeps DHCP on over the physical range, query_dhcp_lease
 # finds the lease, delete moves the port back. Overlay attachments are no-ops.
 - name: Attachment - start with a host, a VirtualNetwork and an EVPN Subnet
   ansible.builtin.include_tasks: admin.yaml
@@ -52,7 +52,7 @@
   ansible.builtin.assert:
     that:
       - nf_writes == []
-      - not (_vnet.gateways[0].dhcpEnabled | default(false))
+      - _vnet.gateways[0].dhcpEnabled
     quiet: true
 
 - name: Attachment - a Subnet without a physical range cannot serve DHCP (final, no write)
@@ -105,7 +105,7 @@
     that: nf_writes == []
     quiet: true
 
-- name: Attachment - a rerun of create_subnet keeps the DHCP the attachment switched on
+- name: Attachment - a rerun of create_subnet keeps the physical DHCP enabled
   ansible.builtin.include_tasks: run_task.yaml
   vars:
     nf_task: create_subnet

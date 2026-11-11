@@ -524,7 +524,9 @@ The `topolvm-provisioner` StorageClass is not the cluster default. Kind's
 `standard` class remains the default for dev-stack components such as AWX
 PostgreSQL. OSAC registers the existing `local` storage tier. AWX's storage
 templates create a tenant-labeled class for that tier, and the operator passes
-the tenant's resolved class to compute provisioning.
+the tenant's resolved class to compute provisioning. When reusing storage after
+a container-runtime reboot, the setup helper reactivates the existing logical
+volumes after checking that the volume group belongs to its backing file.
 The devstack grants CDI read-only access to Kind's placeholder OpenShift Route
 API. Without that permission, CDI's informer cache cannot synchronize and
 DataVolumes remain without PVCs, leaving VMs in `ErrorPvcNotFound`.

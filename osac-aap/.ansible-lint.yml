@@ -12,5 +12,6 @@ exclude_paths:
 kinds:
   # Test helper role task files are task files, not playbooks.
   - tasks: "**/integration/roles/*/tasks/*.yml"
+  - tasks: "**/integration/common/run_agentless_provider_playbook.yaml"
   # Integration test files are playbooks (multi-play), not task files
   - playbook: "**/integration/**/tasks/*.yml"

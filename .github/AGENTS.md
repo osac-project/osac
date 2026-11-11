@@ -52,19 +52,19 @@ plus a native approval on the head commit, and the merge queue.
   (`@osac-project/wg-ui`); every other workflow reports a required check, uses secrets or publishes an image, so it stays with
   wg-infra.
 
-## CaaS suite selection and coverage
+## Service suite selection and coverage
 
-The CaaS full-install caller runs only `caas/sanity` with `-m sanity` for PRs
-and merge queue. Periodics run `caas` (sanity + regression) and applicable
-reference tests with `-m 'sanity or regression or requires_caas or reference_common'`.
-Manual dispatch defaults to sanity and permits suite/filter/marker overrides.
-The test-infra reusable runner must not append references to sanity or widen
-an empty requested tier to the full suite. Readiness and fork authorization
-are independent of suite selection.
+VMaaS, CaaS, and BMaaS full-install callers run only sanity-marked tests for
+pull requests and merge queue. VMaaS and BMaaS select their service roots so
+root-level marked tests remain eligible; CaaS selects `caas/sanity`. Periodics
+run the service root with sanity, regression, applicable references, and BMaaS
+serial coverage. Manual dispatch defaults to sanity and permits explicit
+suite/filter/marker overrides. Each service also has a manual full PR variant.
+Readiness and fork authorization are independent of suite selection.
 
 | Area | Required coverage | Command (repository root) | Boundary |
 |---|---|---|---|
-| CaaS CI suite policy | [DEV] Unit/Contract selection checks | `OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra uv run pytest -n 0 tests/unit/test_caas_ci_suite_policy.py` | Evaluates caller YAML and executes reusable path-selection Bash locally. No deployed services; companion checks skip if the checkout is not specified. |
+| Service E2E CI suite policy | [DEV] Unit/Contract selection checks | `uv run pytest -n 0 tests/unit/test_caas_full_variant.py tests/unit/test_caas_ci_suite_policy.py` | Evaluates the checked-in workflow selectors and full variants. Companion CaaS runner checks are enabled with `OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra`. No deployed services. |
 
 ## Component-hooks and sandbox regression smoke tests
 

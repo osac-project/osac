@@ -1,4 +1,4 @@
-"""The CaaS suite has a variant: a second box that runs sanity and regression together, counted as the CaaS suite."""
+"""Service suites have full variants that run sanity and regression together on a pull request."""
 
 from __future__ import annotations
 
@@ -11,6 +11,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 SHA = "a" * 40  # the commit a pull request or a merge queue entry is tested on
 FULL_MARKER = "sanity or regression or requires_caas or reference_common"
+SERVICES = {
+    "vmaas": "sanity or regression or requires_vmaas or reference_common or reference_networking",
+    "caas": FULL_MARKER,
+    "bmaas": "sanity or regression or serial or requires_bmaas or reference_common or reference_networking",
+}
 
 
 def _load(path: str) -> dict:
@@ -110,11 +115,13 @@ def test_a_commit_ignores_the_manual_overrides_whatever_the_tier(given: dict) ->
     assert _selection(given["test-suite"], sha=SHA, tier="other") == "caas/sanity"
 
 
-def test_the_schedule_and_a_manual_run_do_not_change(given: dict) -> None:
+def test_the_schedule_and_manual_tier_selection(given: dict) -> None:
     assert _selection(given["test-suite"], event="schedule") == "caas"
     assert _selection(given["test-suite"], event="workflow_dispatch", suite="caas/regression") == "caas/regression"
     assert _selection(given["test-suite"], event="workflow_dispatch") == "caas/sanity"
-    assert _selection(given["test-marker"], event="workflow_dispatch") == FULL_MARKER
+    assert _selection(given["test-marker"], event="workflow_dispatch", suite="caas/sanity") == "sanity"
+    assert _selection(given["test-marker"], event="workflow_dispatch", suite="caas/regression") == "regression"
+    assert _selection(given["test-marker"], event="workflow_dispatch", suite="caas", marker="metering") == "metering"
 
 
 def test_the_wrapper_takes_the_tier_as_an_optional_input_that_defaults_to_the_sanity_tests() -> None:
@@ -122,12 +129,14 @@ def test_the_wrapper_takes_the_tier_as_an_optional_input_that_defaults_to_the_sa
     assert tier["required"] is False and tier["default"] == "" and tier["type"] == "string"
 
 
-def test_the_full_box_is_a_variant_of_the_caas_suite_on_its_line_started_by_hand_only() -> None:
+@pytest.mark.parametrize("service", SERVICES)
+def test_the_full_box_is_a_variant_of_its_service_on_the_same_line(service: str) -> None:
     jobs = _load(".github/e2e-policy.yml")["jobs"]
-    caas, full = jobs["e2e-caas"], jobs["e2e-caas-full"]
-    assert full["variant_of"] == caas["suite"] == "caas" and full["tier"] == "full" and full["manual_only"] is True
-    assert full["check"] == caas["check"], "the same line, so the E2E check counts it like the suite"
-    assert "manual_only" not in caas
+    default, full = jobs[f"e2e-{service}"], jobs[f"e2e-{service}-full"]
+    assert full["variant_of"] == default["suite"] == service
+    assert full["tier"] == "full" and full["manual_only"] is True
+    assert full["check"] == default["check"], "the same line, so the E2E check counts it like the suite"
+    assert "manual_only" not in default
 
 
 def test_the_policy_loads_with_the_shared_rules_and_the_decision_never_chooses_the_variant() -> None:
@@ -135,26 +144,48 @@ def test_the_policy_loads_with_the_shared_rules_and_the_decision_never_chooses_t
     e2e_start = pytest.importorskip("osac_ci.e2e_start")
     policy = osac_ci.load_policy(ROOT / ".github/e2e-policy.yml")
     suites = {s.name: s for s in e2e_start.suites_of(policy)}
-    assert suites["caas-full"].variant_of == "caas" and suites["caas-full"].tier == "full"
+    for service in SERVICES:
+        assert suites[f"{service}-full"].variant_of == service and suites[f"{service}-full"].tier == "full"
     assert [s.name for s in e2e_start.automatic(suites.values())] == ["vmaas", "caas", "bmaas"]
 
 
-def test_the_caas_suite_passes_the_tier_the_decision_gives_and_nothing_else_does() -> None:
+@pytest.mark.parametrize("service", SERVICES)
+def test_each_service_passes_the_tier_the_decision_gives(service: str) -> None:
     jobs = _load(".github/workflows/e2e-pr.yml")["jobs"]
     assert set(jobs) == {"decide", "track", "finish"}, "every suite runs as a run of its own (e2e-pr-<suite>.yml)"
-    caas = _load(".github/workflows/e2e-pr-caas.yml")
-    tier = caas[True]["workflow_dispatch"]["inputs"]["tier"]
+    wrapper = _load(f".github/workflows/e2e-pr-{service}.yml")
+    tier = wrapper[True]["workflow_dispatch"]["inputs"]["tier"]
     assert tier["required"] is False and tier["default"] == "" and tier["type"] == "string"
-    assert caas["jobs"]["caas"]["with"]["tier"] == "${{ inputs.tier }}"
-    # every other suite (the policy names the workflow of each; a suite can be renamed, as bmaas-netris was)
-    others = {j["suite"]: j["workflow"] for j in _load(".github/e2e-policy.yml")["jobs"].values() if j.get("workflow")}
-    assert len(others) > 1 and others["caas"] == "e2e-pr-caas.yml"
-    for suite, file in others.items():
-        if suite == "caas":
-            continue
-        wrapper = _load(f".github/workflows/{file}")
-        assert "tier" not in wrapper[True]["workflow_dispatch"]["inputs"], "only the caas suite has a variant"
-        assert "tier" not in wrapper["jobs"][suite]["with"]
+    assert wrapper["jobs"][service]["with"]["tier"] == "${{ inputs.tier }}"
+
+
+@pytest.mark.parametrize(("service", "sanity_suite"), [("vmaas", "vmaas"), ("caas", "caas/sanity"), ("bmaas", "bmaas")])
+def test_service_commit_and_schedule_tiers(service: str, sanity_suite: str) -> None:
+    given = _load(f".github/workflows/e2e-{service}-full-install.yml")["jobs"][f"e2e-{service}-full-install"]["with"]
+    assert _selection(given["test-suite"], sha=SHA) == sanity_suite
+    assert _selection(given["test-marker"], sha=SHA) == "sanity"
+    assert _selection(given["test-suite"], sha=SHA, tier="full") == service
+    assert _selection(given["test-marker"], sha=SHA, tier="full") == SERVICES[service]
+    assert _selection(given["test-suite"], event="schedule") == service
+    assert _selection(given["test-marker"], event="schedule") == SERVICES[service]
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_manual_service_tiers_use_matching_markers(service: str) -> None:
+    given = _load(f".github/workflows/e2e-{service}-full-install.yml")["jobs"][f"e2e-{service}-full-install"]["with"]
+    assert _selection(given["test-marker"], event="workflow_dispatch", suite=f"{service}/sanity") == "sanity"
+    assert _selection(given["test-marker"], event="workflow_dispatch", suite=f"{service}/regression") == "regression"
+    assert _selection(given["test-marker"], event="workflow_dispatch", suite=service) == SERVICES[service]
+    assert _selection(given["test-marker"], event="workflow_dispatch", suite=service, marker="metering") == "metering"
+
+
+def test_vmaas_service_root_keeps_root_level_sanity_modules_in_presubmit() -> None:
+    for name in ("test_disabled_services.py", "test_self_subject_access_review.py"):
+        path = ROOT / "tests/e2e/vmaas" / name
+        assert "pytest.mark.sanity" in path.read_text()
+
+
+def test_full_variants_have_no_merge_queue_jobs() -> None:
     queue = _load(".github/workflows/e2e-queue.yml")["jobs"]
     assert not any("tier" in (job.get("with") or {}) for job in queue.values()), "the queue gets the sanity tests alone"
-    assert "caas-full" not in queue, "a variant has no job in the queue either"
+    assert not any(f"{service}-full" in queue for service in SERVICES), "variants have no merge queue jobs"

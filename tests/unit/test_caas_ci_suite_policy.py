@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+SHA = "a" * 40
 FULL_MARKER = "sanity or regression or requires_caas or reference_common"
 
 
@@ -18,7 +19,9 @@ def _workflow(root: Path, filename: str) -> dict:
     return yaml.safe_load((root / ".github/workflows" / filename).read_text())
 
 
-def _selection(expression: str, event: str, suite: str = "", marker: str = "", pr: str = "") -> str:
+def _selection(
+    expression: str, event: str, suite: str = "", marker: str = "", pr: str = "", sha: str = "", tier: str = ""
+) -> str:
     # These selectors use only string comparisons and &&/|| short-circuiting.
     # Substitute contexts from the real YAML rather than reimplementing policy.
     values = {
@@ -26,6 +29,8 @@ def _selection(expression: str, event: str, suite: str = "", marker: str = "", p
         "inputs.test-suite": suite,
         "inputs.test-marker": marker,
         "inputs.pr-number": pr,
+        "inputs.sha": sha,
+        "inputs.tier": tier,
         "github.event.pull_request.labels.*.name": ["e2e-serial", "e2e-regression"],
     }
     code = expression.removeprefix("${{").removesuffix("}}").strip()
@@ -39,8 +44,11 @@ def _selection(expression: str, event: str, suite: str = "", marker: str = "", p
 @pytest.fixture(params=["osac", "test-infra"])
 def caller(request: pytest.FixtureRequest) -> dict:
     if request.param == "osac":
-        return _workflow(ROOT, "e2e-caas-full-install.yml")
-    return _workflow(_infra_root(), "e2e-caas-full-install-caller.yml")
+        workflow = _workflow(ROOT, "e2e-caas-full-install.yml")
+    else:
+        workflow = _workflow(_infra_root(), "e2e-caas-full-install-caller.yml")
+    workflow["_source"] = request.param
+    return workflow
 
 
 def _infra_root() -> Path:
@@ -56,20 +64,24 @@ def _infra_root() -> Path:
         ("pull_request", "caas/sanity", "sanity"),
         ("merge_group", "caas/sanity", "sanity"),
         ("schedule", "caas", FULL_MARKER),
-        ("workflow_dispatch", "caas/sanity", FULL_MARKER),
+        ("workflow_dispatch", "caas/sanity", "sanity"),
     ],
 )
 def test_caller_trigger_policy(caller: dict, event: str, suite: str, marker: str) -> None:
     inputs = caller["jobs"]["e2e-caas-full-install"]["with"]
-    assert _selection(inputs["test-suite"], event) == suite
-    assert _selection(inputs.get("test-marker", "''"), event) == marker
+    sha = SHA if caller["_source"] == "osac" and event in {"pull_request", "merge_group"} else ""
+    manual_suite = "caas/sanity" if caller["_source"] == "osac" and event == "workflow_dispatch" else ""
+    expected_marker = FULL_MARKER if caller["_source"] == "test-infra" and event == "workflow_dispatch" else marker
+    assert _selection(inputs["test-suite"], event, suite=manual_suite, sha=sha) == suite
+    assert _selection(inputs.get("test-marker", "''"), event, suite=manual_suite, sha=sha) == expected_marker
 
 
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 def test_pr_events_ignore_overrides(caller: dict, event: str) -> None:
     inputs = caller["jobs"]["e2e-caas-full-install"]["with"]
-    assert _selection(inputs["test-suite"], event, "caas/regression") == "caas/sanity"
-    assert _selection(inputs["test-marker"], event, marker="regression") == "sanity"
+    sha = SHA if caller["_source"] == "osac" else ""
+    assert _selection(inputs["test-suite"], event, "caas/regression", sha=sha) == "caas/sanity"
+    assert _selection(inputs["test-marker"], event, marker="regression", sha=sha) == "sanity"
 
 
 def test_dispatch_defaults(caller: dict) -> None:
@@ -81,6 +93,8 @@ def test_dispatch_defaults(caller: dict) -> None:
 def test_manual_overrides(caller: dict) -> None:
     inputs = caller["jobs"]["e2e-caas-full-install"]["with"]
     assert _selection(inputs["test-suite"], "workflow_dispatch", "caas/regression") == "caas/regression"
+    expected_marker = "regression" if caller["_source"] == "osac" else FULL_MARKER
+    assert _selection(inputs.get("test-marker", "''"), "workflow_dispatch", suite="caas/regression") == expected_marker
     assert _selection(inputs.get("test-marker", "''"), "workflow_dispatch", marker="regression") == "regression"
 
 
@@ -127,7 +141,14 @@ def test_runner_tier_does_not_fall_back(tmp_path: Path, populated: bool) -> None
     output = tmp_path / "env"
     result = subprocess.run(
         ["bash", "-euo", "pipefail", "-c", step["run"]],
-        env={**os.environ, "TEST_SUITE": "caas/sanity", "GITHUB_ENV": str(output)},
+        env={
+            **os.environ,
+            "BASH_ENV": "/dev/null",
+            "TEST_SUITE": "caas/sanity",
+            "TEST_MARKER": "",
+            "GITHUB_ENV": str(output),
+            "GITHUB_OUTPUT": str(tmp_path / "output"),
+        },
         cwd=tmp_path,
         capture_output=True,
         text=True,

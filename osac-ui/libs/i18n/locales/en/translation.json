@@ -239,6 +239,7 @@
   "CIDR": "CIDR",
   "CIDR is required": "CIDR is required",
   "CIDR must be within parent virtual network range": "CIDR must be within parent virtual network range",
+  "CIDR must use the network address (for example, 2.3.4.0/23)": "CIDR must use the network address (for example, 2.3.4.0/23)",
   "CIDR overlaps with existing subnet \"{{name}}\" ({{cidr}})": "CIDR overlaps with existing subnet \"{{name}}\" ({{cidr}})",
   "CIDRs": "CIDRs",
   "Clear all filters": "Clear all filters",

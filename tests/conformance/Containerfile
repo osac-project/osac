@@ -1,0 +1,11 @@
+# Build context: the osac repository root.
+#   podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
+FROM registry.access.redhat.com/ubi10/python-312:latest
+
+WORKDIR /opt/osac
+
+COPY pyproject.toml uv.lock ./
+COPY tests ./tests
+RUN python3 -m pip install --no-cache-dir --no-build-isolation .
+
+ENTRYPOINT ["osac-conformance"]

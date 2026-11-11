@@ -33,6 +33,39 @@ profile_values=(
 )
 chart_render=$(helm template test charts/osac-devstack --namespace osac \
   "${profile_values[@]}" --set ui.enabled=true)
+cdi_rbac_render=$(helm template test charts/osac-devstack --namespace osac \
+  "${profile_values[@]}" --show-only templates/cdi-rbac.yaml)
+cdi_route_rules=$(awk '/^rules:/ { in_rules = 1; next }
+  in_rules && /^---$/ { exit }
+  in_rules { print }' <<<"$cdi_rbac_render")
+expected_cdi_route_rules='- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get", "list", "watch"]'
+if [[ "$cdi_route_rules" != "$expected_cdi_route_rules" ]]; then
+  echo "dev-full CDI must have only read access to the placeholder Route API" >&2
+  exit 1
+fi
+cdi_route_binding=$(sed -n '/^roleRef:/,$p' <<<"$cdi_rbac_render")
+expected_cdi_route_binding='roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: test-osac-devstack-cdi-route-reader
+subjects:
+- kind: ServiceAccount
+  name: cdi-sa
+  namespace: cdi'
+if [[ "$cdi_route_binding" != "$expected_cdi_route_binding" ]]; then
+  echo "dev-full must grant Route read access only to the CDI controller account" >&2
+  exit 1
+fi
+for disabled_value in virt.enabled rbac.create; do
+  disabled_render=$(helm template test charts/osac-devstack --namespace osac \
+    "${profile_values[@]}" --set "$disabled_value=false")
+  if grep -Fq 'cdi-route-reader' <<<"$disabled_render"; then
+    echo "CDI Route permissions must be absent when $disabled_value is false" >&2
+    exit 1
+  fi
+done
 osac_render=$(helm template osac charts/osac --namespace osac \
   --values values/dev/kind-instance.yaml \
   --values values/dev/kind-instance-devfull.yaml \

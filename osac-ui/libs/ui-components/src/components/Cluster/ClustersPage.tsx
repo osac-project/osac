@@ -92,7 +92,7 @@ export const ClustersPage = () => {
 
   const resolveClusterVersion = useCallback(
     (cluster: Cluster): ClusterVersion | undefined => {
-      const observedVersion = cluster.status?.observedVersion?.trim();
+      const observedVersion = cluster.status?.observedVersion;
       return observedVersion ? clusterVersionBySemver.get(observedVersion) : undefined;
     },
     [clusterVersionBySemver],

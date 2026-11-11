@@ -36,8 +36,8 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
     return null;
   }
 
-  const source = attempt.sourceVersion.trim() || cluster.status?.observedVersion || '—';
-  const target = attempt.targetVersion.trim() || '—';
+  const source = attempt.sourceVersion || cluster.status?.observedVersion || '—';
+  const target = attempt.targetVersion || '—';
   const title =
     pending || progressing
       ? t('Upgrading from {{source}} to {{target}}', { source, target })

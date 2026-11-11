@@ -52,7 +52,7 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   const upgradeHistory = getControlPlaneUpgradeHistory(cluster);
   const latestUpgrade = cluster.status?.upgradeHistory[0];
   const latestControlPlaneUpgrade = upgradeHistory[0];
-  const observedVersion = cluster.status?.observedVersion?.trim();
+  const observedVersion = cluster.status?.observedVersion;
   const activeTarget = getActiveControlPlaneUpgradeTarget(cluster);
   const upgradeInProgress =
     latestControlPlaneUpgrade?.state === ClusterUpgradeState.PENDING ||

@@ -59,7 +59,7 @@ export const getActiveControlPlaneUpgradeTarget = (cluster: Cluster): string | u
   const active =
     latestAttempt?.state === ClusterUpgradeState.PENDING ||
     latestAttempt?.state === ClusterUpgradeState.PROGRESSING;
-  return active ? latestAttempt.targetVersion.trim() || undefined : undefined;
+  return active ? latestAttempt.targetVersion || undefined : undefined;
 };
 
 const CARD_CREATED_FORMAT = new Intl.DateTimeFormat('en-US', {

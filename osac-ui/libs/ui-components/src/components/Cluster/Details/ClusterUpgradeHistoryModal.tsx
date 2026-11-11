@@ -53,7 +53,7 @@ const ClusterUpgradeHistoryModal = ({ attempts, onClose }: ClusterUpgradeHistory
               return (
                 <Tr key={index}>
                   <Td dataLabel={t('Upgrade')}>
-                    {attempt.sourceVersion.trim() || '—'} → {attempt.targetVersion.trim() || '—'}
+                    {attempt.sourceVersion || '—'} → {attempt.targetVersion || '—'}
                   </Td>
                   <Td dataLabel={t('Status')}>{stateLabel(attempt.state)}</Td>
                   <Td dataLabel={t('Accepted')}>

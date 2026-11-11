@@ -23,7 +23,7 @@ interface ClusterResourcesProps {
 
 const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) => {
   const { t } = useTranslation();
-  const observedVersion = cluster.status?.observedVersion?.trim();
+  const observedVersion = cluster.status?.observedVersion;
   const versionLabel = formatClusterCatalogVersionLabel(observedVersion) || '—';
   const matchingVersion =
     observedVersion && clusterVersion?.spec?.version === observedVersion

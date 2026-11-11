@@ -32,7 +32,7 @@ def _report(message: str = "ok") -> Report:
         labels=frozenset({"conformance_generic"}),
         area="networking",
         layer=Layer.COMPONENT,
-        profile=None,
+        profiles=(),
         classification=Classification.BLOCKING,
     )
     return Report(
@@ -41,7 +41,7 @@ def _report(message: str = "ok") -> Report:
         selectors=("generic", "vmaas"),
         components=(ComponentResult("networking", {"name": "mock"}, Verdict.CONFORMANT),),
         enabled_services=("vmaas",),
-        profiles=(ProfileResult("vm", "networking", True, Result.PASS),),
+        profiles=(ProfileResult("vm", ("vmaas",), True, Result.PASS),),
         tests=(TestOutcome(identity, Result.PASS, 1.5, message, Path()),),
         checks=(
             Check("CHECK-1", "every selected blocking test passed", "rule", "remedy", CheckResult.PASS),
@@ -74,7 +74,7 @@ def test_report_has_the_exact_top_level_keys(tmp_path: Path) -> None:
     ]
     assert data["tests"][0]["id"] == "TC-1"
     assert data["tests"][0]["durationSeconds"] == 1.5
-    assert data["profiles"][0] == {"name": "vm", "area": "networking", "required": True, "result": "pass"}
+    assert data["profiles"][0] == {"name": "vm", "selectors": ["vmaas"], "required": True, "result": "pass"}
 
 
 def test_report_redacts_messages(tmp_path: Path) -> None:

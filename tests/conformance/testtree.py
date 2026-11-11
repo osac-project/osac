@@ -84,19 +84,14 @@ class PytestTestTree:
             if {"conformance_informing", "conformance/informing"} & markers
             else Classification.BLOCKING
         )
-        profile = None
-        for marker in markers:
-            if marker.startswith("conformance_profile_"):
-                profile = marker.removeprefix("conformance_profile_")
-        layer = Layer.PROFILE if profile else Layer.COMPONENT
         return TestIdentity(
             id=name,
             name=name,
             nodeid=nodeid,
             labels=markers,
             area=area,
-            layer=layer,
-            profile=profile,
+            layer=Layer.COMPONENT,
+            profiles=(),
             classification=classification,
         )
 

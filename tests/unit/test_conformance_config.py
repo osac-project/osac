@@ -20,8 +20,8 @@ def _write(path: Path, data: dict[str, object]) -> Path:
 def _valid_data() -> dict[str, object]:
     return {
         "osacRelease": "1.4.0",
+        "profiles": ["vm", "netris"],
         "lab": {
-            "selectors": ["vmaas", "netris"],
             "kubeconfig": "/config/lab-hub.kubeconfig",
             "apiURL": "https://fulfillment.example.test",
             "tokenFile": "/config/admin-token",
@@ -36,20 +36,20 @@ def test_loads_common_keys_and_area_sections(tmp_path: Path) -> None:
     cfg = load_config(_write(tmp_path / "conformance.yaml", _valid_data()), area_names={"networking"})
 
     assert cfg.osac_release == "1.4.0"
-    assert cfg.selectors == ("generic", "vmaas", "netris")
+    assert cfg.profiles == ("vm", "netris")
     assert cfg.lab_api_url == "https://fulfillment.example.test"
     assert cfg.lab_kubeconfig == Path("/config/lab-hub.kubeconfig")
     assert cfg.timeouts == {"delete": "30m"}
     assert cfg.areas["networking"] == {"externalIPPoolCIDR": "198.51.100.0/28"}
 
 
-def test_generic_is_first_and_not_duplicated(tmp_path: Path) -> None:
+def test_profiles_are_deduplicated(tmp_path: Path) -> None:
     data = _valid_data()
-    data["lab"]["selectors"] = ["generic", "vmaas", "generic"]  # type: ignore[index]
+    data["profiles"] = ["generic", "vm", "generic"]
 
     cfg = load_config(_write(tmp_path / "conformance.yaml", data), area_names={"networking"})
 
-    assert cfg.selectors == ("generic", "vmaas")
+    assert cfg.profiles == ("generic", "vm")
 
 
 def test_optional_aap_is_parsed(tmp_path: Path) -> None:
@@ -93,14 +93,14 @@ def test_missing_required_lab_key_is_a_config_error(tmp_path: Path) -> None:
     assert "lab.apiURL" in "\n".join(exc.value.checks)
 
 
-def test_selectors_must_be_a_list_of_strings(tmp_path: Path) -> None:
+def test_profiles_must_be_a_list_of_strings(tmp_path: Path) -> None:
     data = _valid_data()
-    data["lab"]["selectors"] = "vmaas"  # type: ignore[index]
+    data["profiles"] = "vm"
 
     with pytest.raises(ConfigError) as exc:
         load_config(_write(tmp_path / "conformance.yaml", data), area_names={"networking"})
 
-    assert "lab.selectors" in "\n".join(exc.value.checks)
+    assert "profiles" in "\n".join(exc.value.checks)
 
 
 def test_missing_config_file_is_a_config_error(tmp_path: Path) -> None:
@@ -126,7 +126,7 @@ def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
     )
     config = Config(
         osac_release="1.4.0",
-        selectors=("generic",),
+        profiles=("generic",),
         lab_kubeconfig=hub,
         lab_api_url="https://api.lab.example.test",
         lab_token_file=token,

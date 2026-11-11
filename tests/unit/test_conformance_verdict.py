@@ -28,7 +28,7 @@ def _test(test_id: str, classification: Classification = Classification.BLOCKING
         labels=frozenset({"conformance_generic"}),
         area="networking",
         layer=Layer.COMPONENT,
-        profile=None,
+        profiles=(),
         classification=classification,
     )
 
@@ -45,7 +45,7 @@ def _evaluate(
     components: tuple[ComponentResult, ...] | None = None,
     profiles: tuple[ProfileResult, ...] = (),
 ) -> Report:
-    plan = Plan(tuple(outcome.identity for outcome in outcomes), ("generic",), complete)
+    plan = Plan(tuple(outcome.identity for outcome in outcomes), ("generic",), ("generic",), complete)
     if components is None:
         components = (ComponentResult("networking", {"name": "mock"}, Verdict.CONFORMANT),)
     return evaluate(
@@ -133,7 +133,7 @@ def test_focused_run_exits_one_when_a_selected_blocking_test_fails() -> None:
 
 
 def test_selected_profile_with_no_blocking_test_is_not_a_pass() -> None:
-    profile = ProfileResult("vm", "networking", True, Result.SKIP)
+    profile = ProfileResult("vm", ("vmaas",), True, Result.SKIP)
     report = _evaluate([_outcome(_test("A"), Result.PASS)], profiles=(profile,))
 
     assert report.profiles[0].result is Result.SKIP

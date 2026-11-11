@@ -504,11 +504,11 @@ func redactProtoMessage(message proto.Message) proto.Message {
 }
 
 // redactProtoMessageFields redacts Secret payloads and sensitive instance and catalog data in place.
-func redactProtoMessageFields(message protoreflect.Message, redactAnnotations bool) {
+func redactProtoMessageFields(message protoreflect.Message, redactMetadata bool) {
 	switch message.Descriptor().FullName() {
 	case publicComputeInstanceMessage, privateComputeInstanceMessage,
 		publicComputeInstanceCatalogItem, privateComputeInstanceCatalogItem:
-		redactAnnotations = true
+		redactMetadata = true
 	}
 
 	fields := message.Descriptor().Fields()
@@ -522,13 +522,12 @@ func redactProtoMessageFields(message protoreflect.Message, redactAnnotations bo
 			}
 			continue
 		}
-		if redactAnnotations && field.Name() == "annotations" && isMetadata(message.Descriptor()) {
-			annotations := message.Mutable(field).Map()
-			annotations.Range(func(key protoreflect.MapKey, _ protoreflect.Value) bool {
-				annotations.Set(key, protoreflect.ValueOfString(redactMark))
-				return true
-			})
-			continue
+		if redactMetadata && isMetadata(message.Descriptor()) {
+			switch field.Name() {
+			case "annotations", "labels":
+				message.Clear(field)
+				continue
+			}
 		}
 		if field.IsMap() {
 			if field.Name() == "data" && isSecret(field.ContainingMessage()) {
@@ -541,7 +540,7 @@ func redactProtoMessageFields(message protoreflect.Message, redactAnnotations bo
 			}
 			if field.MapValue().Kind() == protoreflect.MessageKind || field.MapValue().Kind() == protoreflect.GroupKind {
 				message.Get(field).Map().Range(func(_ protoreflect.MapKey, value protoreflect.Value) bool {
-					redactProtoMessageFields(value.Message(), redactAnnotations)
+					redactProtoMessageFields(value.Message(), redactMetadata)
 					return true
 				})
 			}
@@ -551,7 +550,7 @@ func redactProtoMessageFields(message protoreflect.Message, redactAnnotations bo
 			if field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind {
 				list := message.Get(field).List()
 				for index := 0; index < list.Len(); index++ {
-					redactProtoMessageFields(list.Get(index).Message(), redactAnnotations)
+					redactProtoMessageFields(list.Get(index).Message(), redactMetadata)
 				}
 				continue
 			}
@@ -570,7 +569,7 @@ func redactProtoMessageFields(message protoreflect.Message, redactAnnotations bo
 			continue
 		}
 		if (field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind) && message.Has(field) {
-			redactProtoMessageFields(message.Get(field).Message(), redactAnnotations)
+			redactProtoMessageFields(message.Get(field).Message(), redactMetadata)
 		}
 	}
 }

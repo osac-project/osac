@@ -446,8 +446,12 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("192.0.2.4"))
 		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.5"))
 		Expect(buffer.String()).ToNot(ContainSubstring("subnet-private-id"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-annotation"))
 		Expect(buffer.String()).ToNot(ContainSubstring("compute-instance-annotation-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-label"))
+		Expect(buffer.String()).ToNot(ContainSubstring("compute-instance-label-fixture-value"))
 		Expect(buffer.String()).To(ContainSubstring(redactMark))
+		expectComputeInstanceBodyLogs(buffer, "Sending unary request", "Received unary response")
 		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
 	})
@@ -476,8 +480,12 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("192.0.2.4"))
 		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.5"))
 		Expect(buffer.String()).ToNot(ContainSubstring("subnet-private-id"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-annotation"))
 		Expect(buffer.String()).ToNot(ContainSubstring("compute-instance-annotation-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-label"))
+		Expect(buffer.String()).ToNot(ContainSubstring("compute-instance-label-fixture-value"))
 		Expect(buffer.String()).To(ContainSubstring(redactMark))
+		expectComputeInstanceBodyLogs(buffer, "Received unary request", "Sent unary response")
 		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
 	})
@@ -509,7 +517,10 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("locked-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("default-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("inline-user-data-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-annotation"))
 		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-annotation-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/catalog-private-label"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-label-fixture-value"))
 
 		messages := Parse(buffer)
 		requestLogs := Find(messages, "Sending unary request")
@@ -547,7 +558,10 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("locked-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("default-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("inline-user-data-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-annotation"))
 		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-annotation-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/catalog-private-label"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-label-fixture-value"))
 
 		messages := Parse(buffer)
 		requestLogs := Find(messages, "Received unary request")
@@ -581,15 +595,21 @@ func computeInstanceLogFixtures() (
 		UserDataSource:     publicv1.UserDataSource_builder{Inline: &fixtureUserData}.Build(),
 	}.Build()
 	metadata := publicv1.Metadata_builder{
+		Labels: map[string]string{
+			"customer.example.test/private-label": "compute-instance-label-fixture-value",
+		},
 		Annotations: map[string]string{
-			"customer.example.test/private": "compute-instance-annotation-fixture-value",
+			"customer.example.test/private-annotation": "compute-instance-annotation-fixture-value",
 		},
 	}.Build()
 	request := publicv1.ComputeInstancesCreateRequest_builder{
-		Object: publicv1.ComputeInstance_builder{Metadata: metadata, Spec: spec}.Build(),
+		Object: publicv1.ComputeInstance_builder{
+			Id: "compute-instance-fixture", Metadata: metadata, Spec: spec,
+		}.Build(),
 	}.Build()
 	response := publicv1.ComputeInstancesCreateResponse_builder{
 		Object: publicv1.ComputeInstance_builder{
+			Id:       "compute-instance-fixture",
 			Metadata: metadata,
 			Spec:     spec,
 			Status: publicv1.ComputeInstanceStatus_builder{
@@ -605,6 +625,25 @@ func computeInstanceLogFixtures() (
 		}.Build(),
 	}.Build()
 	return request, response, nil
+}
+
+func expectComputeInstanceBodyLogs(buffer *bytes.Buffer, requestEvent, responseEvent string) {
+	messages := Parse(buffer)
+	requestLogs := Find(messages, requestEvent)
+	Expect(requestLogs).To(HaveLen(1))
+	requestBody, ok := requestLogs[0]["request"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	requestObject, ok := requestBody["object"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(requestObject).To(HaveKeyWithValue("id", "compute-instance-fixture"))
+
+	responseLogs := Find(messages, responseEvent)
+	Expect(responseLogs).To(HaveLen(1))
+	responseBody, ok := responseLogs[0]["response"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	responseObject, ok := responseBody["object"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(responseObject).To(HaveKeyWithValue("id", "compute-instance-fixture"))
 }
 
 // computeInstanceCatalogItemLogFixtures returns catalog policies with fake sensitive values.
@@ -623,8 +662,11 @@ func computeInstanceCatalogItemLogFixtures() (
 	}
 	inlineUserData := "inline-user-data-fixture"
 	metadata := publicv1.Metadata_builder{
+		Labels: map[string]string{
+			"customer.example.test/catalog-private-label": "catalog-item-label-fixture-value",
+		},
 		Annotations: map[string]string{
-			"customer.example.test/private": "catalog-item-annotation-fixture-value",
+			"customer.example.test/private-annotation": "catalog-item-annotation-fixture-value",
 		},
 	}.Build()
 	item := publicv1.ComputeInstanceCatalogItem_builder{

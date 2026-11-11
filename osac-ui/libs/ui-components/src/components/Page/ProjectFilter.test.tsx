@@ -61,6 +61,33 @@ describe('ProjectFilter', () => {
     expect(setProjects).toHaveBeenCalledWith(['foo.bar']);
   });
 
+  it('lists each project path once when several tenants have it', async () => {
+    const withTenant = (project: Project, tenant: string): Project =>
+      ({
+        ...project,
+        id: `${project.id}-${tenant}`,
+        metadata: { ...project.metadata, tenant },
+      }) as Project;
+    const { user } = renderWithProviders(<ProjectFilter />, {
+      apiFixtures: {
+        projects: [
+          ...projects.map((project) => withTenant(project, 'tenant-1')),
+          ...projects.map((project) => withTenant(project, 'tenant-2')),
+        ],
+      },
+    });
+
+    await user.click(await screen.findByRole('button', { name: /All projects/ }));
+
+    expect(screen.getAllByRole('option', { name: 'Root' })).toHaveLength(1);
+    expect(screen.getAllByRole('option', { name: 'foo' })).toHaveLength(1);
+    expect(screen.getAllByRole('option', { name: 'bar' })).toHaveLength(1);
+
+    await user.click(screen.getByRole('option', { name: 'Root' }));
+
+    expect(setProjects).toHaveBeenCalledWith(['']);
+  });
+
   it('keeps the menu open while adding and removing selected projects', async () => {
     mockSessionProjects(['foo']);
     const { user, rerender } = renderWithProviders(<ProjectFilter />, {

@@ -53,12 +53,13 @@ const ProjectListPage = () => {
     ),
   );
 
-  const { data: projects = [], isLoading, error } = useListAllResources(Projects, filter);
+  const { data: projectReply, isLoading, error } = useListAllResources(Projects, filter);
+  const projects = projectReply?.items ?? [];
   const [expandedPaths, setExpandedPaths] = useState<string[]>(['']);
 
   const canCreate = role === 'tenant-admin';
 
-  const projectTree = useMemo(() => buildProjectTree(projects), [projects]);
+  const projectTree = useMemo(() => buildProjectTree(projectReply?.items ?? []), [projectReply]);
 
   const renderRows = (
     nodes: ProjectTreeNode[],

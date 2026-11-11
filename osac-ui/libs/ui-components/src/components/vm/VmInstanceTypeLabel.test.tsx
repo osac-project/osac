@@ -1,19 +1,11 @@
 import type { ComponentProps } from 'react';
 import { screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { InstanceType } from '@osac/types';
 
 import { VmInstanceTypeLabel } from './VmInstanceTypeLabel';
 import { renderWithProviders } from '../../test-utils/TestProviders';
-
-vi.mock('../../api/v1/instance-types', () => ({
-  formatInstanceTypeDisplayName: (
-    instanceType: { metadata?: { name?: string } } | undefined,
-    _suffix: string,
-    fallbackId?: string,
-  ) => instanceType?.metadata?.name ?? fallbackId ?? '—',
-}));
 
 const standardInstanceType = {
   id: 'standard-4-8',

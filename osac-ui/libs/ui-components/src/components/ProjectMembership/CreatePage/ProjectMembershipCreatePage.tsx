@@ -16,13 +16,13 @@ import {
 } from '@patternfly/react-core';
 import { Formik } from 'formik';
 
-import { ProjectMembershipRole, Projects, Users } from '@osac/types';
-import { useGetResource, useListResource } from '@osac/ui-components/api/use-resource';
+import { ProjectMembershipRole, ProjectMemberships, Projects, Users } from '@osac/types';
 import {
-  useCreateProjectMembership,
-  useProjectMembership,
-  useUpdateProjectMembership,
-} from '@osac/ui-components/api/v1/project-membership';
+  useCreateResource,
+  useGetResource,
+  useListResource,
+  useUpdateResource,
+} from '@osac/ui-components/api/use-resource';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
@@ -42,8 +42,8 @@ const ProjectMembershipCreatePage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
-  const { mutateAsync: create, error: createErr } = useCreateProjectMembership();
-  const { mutateAsync: update, error: updateErr } = useUpdateProjectMembership();
+  const { mutateAsync: create, error: createErr } = useCreateResource(ProjectMemberships);
+  const { mutateAsync: update, error: updateErr } = useUpdateResource(ProjectMemberships);
 
   const {
     data: project,
@@ -51,7 +51,12 @@ const ProjectMembershipCreatePage = () => {
     error: projectErr,
   } = useGetResource(Projects, { id: projectId });
   const { data: users, isLoading: usersLoading, error: usersError } = useListResource(Users);
-  const { data: pm, isLoading: pmLoading, error: pmError } = useProjectMembership(pmId);
+
+  const {
+    data: pm,
+    isLoading: pmLoading,
+    error: pmError,
+  } = useGetResource(ProjectMemberships, { id: pmId }, { enabled: !!pmId });
 
   const roles = getRoleLabel(t);
 
@@ -109,16 +114,23 @@ const ProjectMembershipCreatePage = () => {
       </PageSection>
       <PageSection hasBodyWrapper={false}>
         <Formik
-          initialValues={getInitialValues(pm)}
+          initialValues={getInitialValues(pm?.object)}
           validationSchema={getProjectMembershipValidationSchema(t)}
           onSubmit={async (values) => {
             try {
               if (pmId) {
-                await update({ id: pmId, body: getUpdateProjectMembershipPayload(values) });
+                await update({
+                  object: { id: pmId, ...getUpdateProjectMembershipPayload(values) },
+                });
               } else {
-                await create(
-                  getCreateProjectMembershipPayload(values, project.object?.metadata?.name || ''),
-                );
+                await create({
+                  object: {
+                    ...getCreateProjectMembershipPayload(
+                      values,
+                      project.object?.metadata?.name || '',
+                    ),
+                  },
+                });
               }
               navigate(`/projects/${projectId}`);
             } catch {

@@ -471,8 +471,12 @@ func handleUpdateComputeInstance(
 			return nil, UpdateComputeInstanceOutput{}, safeComputeInstanceWriteAPIError(err)
 		}
 		updated := response.GetObject()
+		updatedID := updated.GetId()
+		if updatedID == "" {
+			updatedID = input.ID
+		}
 		return nil, UpdateComputeInstanceOutput{
-			ID:       input.ID,
+			ID:       updatedID,
 			Version:  updated.GetMetadata().GetVersion(),
 			State:    updated.GetStatus().GetState().String(),
 			Warnings: response.GetWarnings(),

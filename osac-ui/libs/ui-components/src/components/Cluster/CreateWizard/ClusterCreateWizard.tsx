@@ -3,9 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { PageSection, PageSectionTypes, Wizard, WizardStep } from '@patternfly/react-core';
 import { Formik } from 'formik';
 
-import { ClusterCatalogItem, ClusterCatalogItems } from '@osac/types';
-import { useGetResource } from '@osac/ui-components/api/use-resource';
-import { useProvisionCluster } from '@osac/ui-components/api/v1/cluster';
+import { ClusterCatalogItem, ClusterCatalogItems, Clusters } from '@osac/types';
+import { useCreateResource, useGetResource } from '@osac/ui-components/api/use-resource';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
@@ -28,7 +27,7 @@ interface Props {
 const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const provision = useProvisionCluster();
+  const provision = useCreateResource(Clusters);
   const catalogItemQuery = useGetResource(
     ClusterCatalogItems,
     { id: initialCatalogItemId ?? '' },
@@ -48,9 +47,9 @@ const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const handleSubmit = useCallback(
     async (values: ClusterWizardValues) => {
       try {
-        const created = await provision.mutateAsync(buildClusterCreatePayload(values));
-        if (created?.id) {
-          navigate(`/clusters/${created.id}`);
+        const created = await provision.mutateAsync({ object: buildClusterCreatePayload(values) });
+        if (created.object?.id) {
+          navigate(`/clusters/${created.object.id}`);
         }
       } catch {
         // Surfaced via provision.error in the footer; nothing further to do here.

@@ -3,9 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { PageSection, PageSectionTypes, Wizard, WizardStep } from '@patternfly/react-core';
 import { Formik } from 'formik';
 
-import { ComputeInstanceCatalogItem, ComputeInstanceCatalogItems } from '@osac/types';
-import { useGetResource } from '@osac/ui-components/api/use-resource';
-import { useProvisionComputeInstance } from '@osac/ui-components/api/v1/compute-instance';
+import {
+  ComputeInstanceCatalogItem,
+  ComputeInstanceCatalogItems,
+  ComputeInstances,
+} from '@osac/types';
+import { useCreateResource, useGetResource } from '@osac/ui-components/api/use-resource';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
@@ -31,7 +34,7 @@ interface Props {
 const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const provision = useProvisionComputeInstance();
+  const provision = useCreateResource(ComputeInstances);
   const catalogItemQuery = useGetResource(
     ComputeInstanceCatalogItems,
     { id: initialCatalogItemId ?? '' },
@@ -65,14 +68,14 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
         return;
       }
       try {
-        const created = await provision.mutateAsync(
-          buildComputeInstanceCreatePayload(
+        const created = await provision.mutateAsync({
+          object: buildComputeInstanceCreatePayload(
             values,
             selectedCatalogItem ?? catalogItemQuery.data?.object,
           ),
-        );
-        if (created?.id) {
-          navigate(`/vms/${created.id}`);
+        });
+        if (created?.object?.id) {
+          navigate(`/vms/${created.object.id}`);
         }
       } catch {
         // Surfaced via provision.error in the footer; nothing further to do here.

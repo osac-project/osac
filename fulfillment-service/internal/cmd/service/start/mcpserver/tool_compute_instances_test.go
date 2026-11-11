@@ -540,6 +540,31 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		}))
 	})
 
+	It("Uses the requested ID when the public update response omits it", func() {
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			return publicv1.ComputeInstancesUpdateResponse_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{Version: 8}.Build(),
+					Status: publicv1.ComputeInstanceStatus_builder{
+						State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil
+		}
+
+		handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+			ID: "instance-1", Version: 7, RunStrategy: "HALTED",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output).To(Equal(UpdateComputeInstanceOutput{
+			ID: "instance-1", Version: 8, State: "COMPUTE_INSTANCE_STATE_RUNNING",
+		}))
+	})
+
 	It("Rejects a stale version before the public update", func() {
 		instances := instancesWithCurrent(7)
 		instances.updateFunc = func(

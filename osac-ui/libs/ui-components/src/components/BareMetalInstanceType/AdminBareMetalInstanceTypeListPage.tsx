@@ -1,7 +1,7 @@
 import { BareMetalInstanceTypes } from '@osac/types/private';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 
 import AdminBareMetalInstanceTypeTable from './AdminBareMetalInstanceTypeTable';
-import { useAdminBareMetalInstanceTypes } from '../../api/v1/private/baremetal-instance-type';
 import { useTranslation } from '../../hooks/useTranslation';
 import ListPage from '../Page/ListPage';
 import ListPageBody from '../Page/ListPageBody';
@@ -11,7 +11,11 @@ export const BAREMETAL_INSTANCE_TYPES_LIST_ROUTE = '/admin/infrastructure/bareme
 
 const AdminBareMetalInstanceTypeListPage = () => {
   const { t } = useTranslation();
-  const { data: bareMetalInstanceTypes = [], isLoading, error } = useAdminBareMetalInstanceTypes();
+  const {
+    data: bareMetalInstanceTypes,
+    isLoading,
+    error,
+  } = useListResource(BareMetalInstanceTypes);
 
   return (
     <ListPage
@@ -28,7 +32,9 @@ const AdminBareMetalInstanceTypeListPage = () => {
       }
     >
       <ListPageBody isLoading={isLoading} error={error}>
-        <AdminBareMetalInstanceTypeTable bareMetalInstanceTypes={bareMetalInstanceTypes} />
+        <AdminBareMetalInstanceTypeTable
+          bareMetalInstanceTypes={bareMetalInstanceTypes?.items || []}
+        />
       </ListPageBody>
     </ListPage>
   );

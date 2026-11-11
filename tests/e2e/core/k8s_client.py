@@ -335,7 +335,7 @@ class K8sClient:
     def get_subnet_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",
-            "subnet",
+            "subnets.osac.openshift.io",
             "-n",
             self.namespace,
             "-l",
@@ -715,7 +715,7 @@ class K8sClient:
     def get_security_group_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",
-            "securitygroup",
+            "securitygroups.osac.openshift.io",
             "-n",
             self.namespace,
             "-l",

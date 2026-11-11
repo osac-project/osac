@@ -1,5 +1,5 @@
-import type { BareMetalInstanceType } from '@osac/types/private';
-import { useDeleteBareMetalInstanceType } from '@osac/ui-components/api/v1/private/baremetal-instance-type';
+import { type BareMetalInstanceType, BareMetalInstanceTypes } from '@osac/types/private';
+import { useDeleteResource } from '@osac/ui-components/api/use-resource';
 
 import { useTranslation } from '../../hooks/useTranslation';
 import DeleteResourceModal from '../Resource/DeleteResourceModal';
@@ -16,7 +16,7 @@ const BareMetalInstanceTypeDeleteModal = ({
   onSuccess,
 }: BareMetalInstanceTypeDeleteModalProps) => {
   const { t } = useTranslation();
-  const deleteBareMetalInstanceType = useDeleteBareMetalInstanceType();
+  const deleteBareMetalInstanceType = useDeleteResource(BareMetalInstanceTypes);
 
   return (
     <DeleteResourceModal
@@ -28,7 +28,7 @@ const BareMetalInstanceTypeDeleteModal = ({
       onClose={onClose}
       onSuccess={onSuccess}
       mutation={deleteBareMetalInstanceType}
-      variables={instanceType.id}
+      variables={{ id: instanceType.id }}
     />
   );
 };

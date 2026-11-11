@@ -61,23 +61,40 @@ export const ClustersPage = () => {
   const [viewType] = useViewType(CLUSTERS_LIST_VIEW_KEY);
   const [searchResetKey, setSearchResetKey] = useState(0);
 
-  const listFilter = useMemo(
-    (): CelFilter<Cluster> | undefined =>
-      buildClusterListFilter({
-        search,
-        status: statusFilter,
-        versionNames: versionFilterParams,
-      }),
-    [versionFilterParams, search, statusFilter],
-  );
-
-  const { clusters, totalItems, isLoading: clustersLoading, error } = useClusters(listFilter);
-
   const { data: clusterVersionReply, error: versionLoadError } = useListResource(ClusterVersions, {
     filter: CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
     limit: 1000,
   });
   const clusterVersions = useMemo(() => clusterVersionReply?.items ?? [], [clusterVersionReply]);
+  const observedVersions = useMemo(
+    () =>
+      versionFilterParams.flatMap((name) => {
+        const version = clusterVersions.find((item) => item.metadata?.name === name)?.spec?.version;
+        return version ? [version] : [];
+      }),
+    [clusterVersions, versionFilterParams],
+  );
+
+  const listFilter = useMemo(
+    (): CelFilter<Cluster> | undefined =>
+      buildClusterListFilter({
+        search,
+        status: statusFilter,
+        observedVersions: versionFilterParams.length ? observedVersions : undefined,
+      }),
+    [observedVersions, versionFilterParams, search, statusFilter],
+  );
+
+  const {
+    clusters,
+    totalItems,
+    isLoading: clustersLoading,
+    error: clusterError,
+  } = useClusters(listFilter, versionFilterParams.length === 0 || Boolean(clusterVersionReply));
+  const error = clusterError ?? (versionFilterParams.length ? versionLoadError : undefined);
+  const isLoading =
+    clustersLoading ||
+    (versionFilterParams.length > 0 && !clusterVersionReply && !versionLoadError);
 
   const clusterVersionBySemver = useMemo(() => {
     const versionsBySemver = new Map<string, ClusterVersion>();
@@ -101,7 +118,7 @@ export const ClustersPage = () => {
   const isFiltered = Boolean(
     search || projects.length || statusFilter || versionFilterParams.length > 0,
   );
-  const showEmptyState = !clustersLoading && !error && clusters.length === 0;
+  const showEmptyState = !isLoading && !error && clusters.length === 0;
 
   const clearAllFilters = () => {
     setProjects([]);
@@ -160,9 +177,7 @@ export const ClustersPage = () => {
       <Stack hasGutter>
         <StackItem>
           <ListPageToolbar
-            filteredText={
-              !clustersLoading && !error && clusters.length > 0 ? filteredText : undefined
-            }
+            filteredText={!isLoading && !error && clusters.length > 0 ? filteredText : undefined}
             isFiltered={isFiltered}
             onClearAllFilters={clearAllFilters}
           >
@@ -205,7 +220,7 @@ export const ClustersPage = () => {
           </ListPageToolbar>
         </StackItem>
         <StackItem>
-          <ListPageBody isLoading={clustersLoading} error={error}>
+          <ListPageBody isLoading={isLoading} error={error}>
             {showEmptyState ? (
               emptyState
             ) : viewType === 'cards' ? (

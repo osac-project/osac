@@ -134,12 +134,12 @@ describe('ClustersPage', () => {
     });
   });
 
-  it('applies cluster version from the URL before the active version catalog loads', async () => {
+  it('applies a catalog name from the URL to the observed version', async () => {
     const { transport, getClusterListFilter } = createTransport([
       makeCluster('c-obsolete', 'v4.15'),
       makeCluster('c-active', 'v4.17'),
     ]);
-    const expected = buildClusterListFilter({ versionNames: ['v4.15'] });
+    const expected = buildClusterListFilter({ observedVersions: ['4.15.0'] });
 
     renderClustersPage(transport, ['/?clusterVersion=v4.15']);
 
@@ -157,7 +157,7 @@ describe('ClustersPage', () => {
     await user.click(screen.getByRole('button', { name: 'Filter by cluster version' }));
     await user.click(screen.getByRole('checkbox', { name: 'OpenShift 4.17.0' }));
 
-    const expected = buildClusterListFilter({ versionNames: ['v4.17'] });
+    const expected = buildClusterListFilter({ observedVersions: ['4.17.0'] });
 
     await waitFor(() => {
       expect(getClusterListFilter()).toBe(expected);
@@ -194,12 +194,27 @@ describe('ClustersPage', () => {
     expect(screen.queryByText('Active')).not.toBeInTheDocument();
   });
 
+  it('filters on the observed version while an upgrade targets another version', async () => {
+    const upgrading = makeCluster('c-upgrading', 'v4.17');
+    if (!upgrading.status) {
+      throw new Error('Expected status');
+    }
+    upgrading.status.observedVersion = '4.15.0';
+    const { transport, getClusterListFilter } = createTransport([upgrading]);
+    renderClustersPage(transport, ['/?clusterVersion=v4.15']);
+
+    expect(await screen.findByText('OpenShift 4.15.0')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(getClusterListFilter()).toBe('this.status.observed_version in ["4.15.0"]');
+    });
+  });
+
   it('clears project, status, cluster version, and search filters together', async () => {
     const { transport, getClusterListFilter } = createTransport([makeCluster('c-active', 'v4.17')]);
     const criteriaFilter = buildClusterListFilter({
       search: 'nomatch',
       status: 'ready',
-      versionNames: ['v4.17'],
+      observedVersions: ['4.17.0'],
     });
     const expected = cel<Cluster>((builder) =>
       builder.and(

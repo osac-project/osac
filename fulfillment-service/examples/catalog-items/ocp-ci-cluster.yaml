@@ -8,7 +8,7 @@ title: CI OpenShift Cluster
 description: A minimal OpenShift 4.17 cluster for CI testing with 1 worker node.
 template:
   id: osac.templates.ocp_ci_small
-  shared: true
+  tenant: shared
 published: false
 fields:
   network:

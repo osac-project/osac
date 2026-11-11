@@ -124,6 +124,28 @@ def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
     assert report["tests"][0]["result"] == "pass"
     assert (results / "junit.xml").exists()
     assert "secret-value" not in (results / "conformance.log").read_text()
+
+    focused_results = tmp_path / "focused-results"
+    focused_results.mkdir()
+    focused_runtime = Runtime(
+        config=config,
+        areas=load_areas(areas_dir),
+        profile_catalog=_catalog(),
+        tree=PytestTestTree(root=tree_dir),
+        lab=FakeLabClient(FakeLab()),
+        results=focused_results,
+        redactor=redactor,
+        output=OutputSink(focused_results, redactor),
+        suite_image_digest="sha256:test",
+        podman_socket=tmp_path / "podman.sock",
+    )
+    focused_plan = focused_results / "conformance-plan.yaml"
+    focused_plan.write_text("tests:\n  - id: test_passes\n")
+    assert main(["run", "--plan", str(focused_plan)], runtime=focused_runtime) == 0
+    focused_report = yaml.safe_load((focused_results / "conformance-report.yaml").read_text())
+    vm = next(profile for profile in focused_report["profiles"] if profile["name"] == "vm")
+    assert vm["required"] is False
+    assert vm["result"] == "skip"
     for path in results.rglob("*"):
         if path.is_file():
             assert "secret-value" not in path.read_text(errors="ignore")

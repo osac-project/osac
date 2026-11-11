@@ -80,7 +80,7 @@ Run prepared OSAC UI Playwright flows. Run prepare-setup-for-ui-run.sh first.
 Flow tags:
   vmaas_all                                 all VMaaS flows (happy flow for now)
   vmaas-full-happy-basic-flow              complete VMaaS happy flow
-  create_resources, delete_resources, full_resources
+  create_pre-resources, delete_pre-resources, full_pre-resources
                                             infrastructure resource group
   create_disk_image, delete_disk_image, full_disk_image
                                             disk image lifecycle
@@ -180,9 +180,9 @@ placeholder_username() {
 declare -A FLOW_CONFIG=(
   [vmaas_all]='vmaas-all-full-flows|full||false'
   [vmaas-full-happy-basic-flow]='vmaas-full-happy-basic-flow|full||false'
-  [create_resources]='vmaas-full-flow-pre-resource|create||false'
-  [delete_resources]='vmaas-full-flow-pre-resource|delete||false'
-  [full_resources]='vmaas-full-flow-pre-resource|full||false'
+  [create_pre-resources]='vmaas-full-flow-pre-resource|create||false'
+  [delete_pre-resources]='vmaas-full-flow-pre-resource|delete||false'
+  [full_pre-resources]='vmaas-full-flow-pre-resource|full||false'
   [create_disk_image]='disk-image|create||false'
   [delete_disk_image]='disk-image|delete||false'
   [full_disk_image]='disk-image|full||false'

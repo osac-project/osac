@@ -60,6 +60,10 @@ describe('buildCidrSchema (ipv4)', () => {
     await expect(schema.validate('')).resolves.toBe('');
   });
 
+  it('allows whitespace-only input for optional fields without throwing', async () => {
+    await expect(schema.validate('   ')).resolves.toBe('   ');
+  });
+
   it('rejects invalid CIDR without prefix', async () => {
     await expect(schema.validate('192.168.1.0')).rejects.toThrow();
   });

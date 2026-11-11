@@ -61,7 +61,7 @@ export const buildCidrSchema = (t: TFunction, ipFamily: CidrIpFamily) => {
   }
 
   return schema.test('canonical-ipv4-cidr', (value, context) => {
-    if (!value || !isValidCidr(value, 'ipv4')) {
+    if (!value?.trim() || !isValidCidr(value, 'ipv4')) {
       return true;
     }
 

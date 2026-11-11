@@ -78,11 +78,14 @@ Usage: $0 [OPTIONS]
 Run prepared OSAC UI Playwright flows. Run prepare-setup-for-ui-run.sh first.
 
 Flow tags:
-  all, vmaas_happy_basic                   complete VMaaS flow
-  create_resources, delete_resources       infrastructure resource group
+  vmaas_all                                 all VMaaS flows (happy flow for now)
+  vmaas-full-happy-basic-flow              complete VMaaS happy flow
+  create_resources, delete_resources, full_resources
+                                            infrastructure resource group
   create_disk_image, delete_disk_image, full_disk_image
-                                          disk image lifecycle
-  create_storage, delete_storage, full_storage
+                                            disk image lifecycle
+  create_storage-tier, delete_storage-tier, full_storage-tier
+                                            storage tier lifecycle
   create_instance_type, delete_instance_type, full_instance_type
   create_tenant, delete_tenant, full_tenant
   create_catalog, delete_catalog, full_catalog
@@ -175,24 +178,25 @@ placeholder_username() {
 }
 
 declare -A FLOW_CONFIG=(
-  [all]='vmaas-full-flow-pre-resource|full||false'
-  [vmaas_happy_basic]='vmaas-full-flow-pre-resource|full||false'
-  [create_resources]='vmaas-full-flow-resources|create||false'
+  [vmaas_all]='vmaas-full-happy-basic-flow|full||false'
+  [vmaas-full-happy-basic-flow]='vmaas-full-happy-basic-flow|full||false'
+  [create_resources]='vmaas-full-flow-pre-resource|create||false'
   [delete_resources]='vmaas-full-flow-pre-resource|delete||false'
-  [create_disk_image]='vmaas-full-flow-resources|create|creates disk image|false'
-  [delete_disk_image]='vmaas-disk-image-delete|delete||false'
+  [full_resources]='vmaas-full-flow-pre-resource|full||false'
+  [create_disk_image]='vmaas-disk-image|create||false'
+  [delete_disk_image]='vmaas-disk-image|delete||false'
   [full_disk_image]='vmaas-disk-image|full||false'
-  [create_storage]='vmaas-full-flow-resources|create|creates a storage tier|false'
-  [delete_storage]='vmaas-storage-tier-delete|delete||false'
-  [full_storage]='vmaas-storage-tier|full||false'
-  [create_instance_type]='vmaas-full-flow-resources|create|creates an instance type|false'
-  [delete_instance_type]='vmaas-instance-type-delete|delete||false'
+  [create_storage-tier]='vmaas-storage-tier|create||false'
+  [delete_storage-tier]='vmaas-storage-tier|delete||false'
+  [full_storage-tier]='vmaas-storage-tier|full||false'
+  [create_instance_type]='vmaas-instance-type|create||false'
+  [delete_instance_type]='vmaas-instance-type|delete||false'
   [full_instance_type]='vmaas-instance-type|full||false'
   [create_tenant]='vmaas|create||false'
-  [delete_tenant]='vmaas-delete|delete||true'
-  [full_tenant]='vmaas-delete|full||false'
-  [create_catalog]='vmaas-full-flow-catalog|create||false'
-  [delete_catalog]='vmaas-catalog-delete|delete||false'
+  [delete_tenant]='vmaas|delete||false'
+  [full_tenant]='vmaas|full||false'
+  [create_catalog]='vmaas-catalog|create||false'
+  [delete_catalog]='vmaas-catalog|delete||false'
   [full_catalog]='vmaas-catalog|full||false'
   [create_vm]='vmaas-full-flow|create||false'
   [delete_vm]='vmaas-full-flow-vm-delete|delete||false'
@@ -200,7 +204,7 @@ declare -A FLOW_CONFIG=(
 )
 
 if [[ -n "$FLOW_TAG" ]]; then
-  [[ "$FLOW_TAG" =~ ^[a-z_]+$ ]] ||
+  [[ "$FLOW_TAG" =~ ^[a-z0-9_-]+$ ]] ||
     fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags."
   [[ -n "${FLOW_CONFIG[$FLOW_TAG]+set}" ]] ||
     fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags."

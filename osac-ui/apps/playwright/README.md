@@ -54,7 +54,7 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
 export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=<keycloak-user>
 read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD && printf '\n'
 bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
-  --osac-ui-dir="$PWD" --tag=vmaas_happy_basic
+  --osac-ui-dir="$PWD" --tag=vmaas_all
 unset OSAC_ADMIN_PASSWORD
 ```
 
@@ -152,11 +152,11 @@ export OSAC_ADMIN_USERNAME=<keycloak-user>
 read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
 ```
 
-Run the tenant create and delete flows together. The `vmaas-delete` project
-depends on `vmaas`, so creation runs before deletion:
+Run the tenant create and delete flows together in `full` mode:
 
 ```bash
-pnpm --filter @osac/playwright exec playwright test --project=vmaas-delete
+OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas
 ```
 
 Run the tenant create and delete flows separately:
@@ -191,13 +191,14 @@ The creation and VM portion of the full-flow journey runs in this order:
 
 The full-flow projects run in this order:
 
-1. `vmaas-full-flow-resources` creates the infrastructure resources, catalog
+1. `vmaas-full-flow-pre-resource` creates the infrastructure resources, catalog
    item, and tenant.
 2. `vmaas-full-flow` creates and verifies the VM.
-3. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
-4. `vmaas-full-flow-pre-resource` removes the catalog item, disk image, instance
-   type, storage tier, tenant-admin RoleBinding and OSAC User, SSH public-key
-   Secret, tenant, and generated credential file as the admin user.
+3. `vmaas-full-happy-basic-flow` deletes the VM as the tenant admin.
+4. `vmaas-full-flow-pre-resource-delete` removes the catalog item, disk image,
+   instance type, storage tier, tenant-admin RoleBinding and OSAC User,
+   SSH public-key Secret, tenant, and generated credential file as the admin
+   user.
 
 Run the complete creation flow, including VM creation, with:
 
@@ -221,14 +222,14 @@ failed, the state file remains available for cleanup. VM deletion is
 idempotent when the tenant VM list is already empty; a different VM in the
 list is reported as a run-state mismatch instead of being deleted.
 
-The deletion target includes VM deletion first. In `full` mode, its dependency
-chain also runs the complete creation flow before cleanup.
+The full happy-flow project deletes the VM after the complete creation chain.
+Its pre-resource teardown then removes the remaining resources.
 
 Run the complete creation and deletion flow with:
 
 ```bash
 OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow-pre-resource
+  --project=vmaas-full-happy-basic-flow
 ```
 
 The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the

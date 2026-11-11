@@ -96,6 +96,10 @@ Environment variables:
 | `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                               |
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
+When `OSAC_API_BASE_URL` is unset, the runner derives the Fulfillment API
+route from a standard `osac-ui-...` route name. Set it explicitly for
+deployments that use a different route naming convention.
+
 ```bash
 export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=...
 read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD   # avoids leaving the password in shell history

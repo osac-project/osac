@@ -291,6 +291,18 @@ case "$OSAC_UI_BASE_URL" in
   *) fail "OSAC_UI_BASE_URL must use an HTTP or HTTPS URL." ;;
 esac
 
+if [[ -z "$OSAC_API_BASE_URL" ]]; then
+  ui_route_host="${OSAC_UI_BASE_URL#https://}"
+  ui_route_host="${ui_route_host#http://}"
+  ui_route_host="${ui_route_host%%/*}"
+  case "$ui_route_host" in
+    osac-ui-*.*)
+      OSAC_API_BASE_URL="https://fulfillment-api-${ui_route_host#osac-ui-}"
+      info "Derived OSAC_API_BASE_URL from the osac-ui route."
+      ;;
+  esac
+fi
+
 if [[ "$need_login" == true ]]; then
   [[ -n "$OSAC_ADMIN_USERNAME" ]] && ! placeholder_username "$OSAC_ADMIN_USERNAME" ||
     fail "Set OSAC_ADMIN_USERNAME to a real Keycloak test user before running tests."

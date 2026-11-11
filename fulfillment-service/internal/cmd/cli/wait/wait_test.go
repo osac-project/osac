@@ -173,6 +173,9 @@ var _ = Describe("Poll", func() {
 				return fakeResource{}, context.DeadlineExceeded
 			}
 			opts := fastOpts(deadlineFetch, "ALLOCATED")
+			// The fetch blocks on the context deadline, so keep the
+			// timeout short or the test waits it out in full.
+			opts.Timeout = 50 * time.Millisecond
 			_, err := wait.Poll(context.Background(), opts)
 			var toErr *wait.ErrTimeout
 			Expect(errors.As(err, &toErr)).To(BeTrue(),
@@ -186,6 +189,8 @@ var _ = Describe("Poll", func() {
 					"context deadline exceeded")
 			}
 			opts := fastOpts(deadlineFetch, "ALLOCATED")
+			// Same as above: the fetch blocks until the deadline.
+			opts.Timeout = 50 * time.Millisecond
 			_, err := wait.Poll(context.Background(), opts)
 			var toErr *wait.ErrTimeout
 			Expect(errors.As(err, &toErr)).To(BeTrue(),

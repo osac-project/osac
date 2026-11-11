@@ -46,7 +46,7 @@ def _area(path: Path) -> Path:
                 "identityFields": ["name"],
                 "configurationErrors": [],
                 "supportCondition": "conformant",
-                "registrationSource": "registration",
+                "registrationSource": "networking",
                 "titles": {},
                 "selectors": {"generic": ["test_passes"]},
                 "checks": [],

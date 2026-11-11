@@ -4,15 +4,18 @@
 # on the target cluster.
 #
 # Supports two per-backend modes:
-# - Shared-TBC mode (provider_config.profiles): performs a best-effort
-#   k8s_info check of the referenced customer TridentBackendConfig, pins
-#   parameters.storagePools when Bound, and creates per-tier StorageClasses
-#   selecting customer virtual pools via parameters.selector.
+# - Shared-TBC mode (provider_config.profiles): reads the referenced customer
+#   TridentBackendConfig, requires it to be Bound, and creates per-tier
+#   StorageClasses that select customer virtual pools via parameters.selector
+#   and are pinned to that backend via parameters.storagePools. A
+#   TridentBackendConfig that cannot be read fails the run.
 # - Dedicated-SVM mode (tenant_preparation): creates one TridentBackendConfig
 #   (netapp-<assignment_key>, ontap-san driver, block-only) and CSI Secret
 #   (netapp-csi-<assignment_key>) in the Trident install namespace with
 #   per-tier labeled virtual pools (osac_backend, tier), and one StorageClass
 #   per tier (netapp-<assignment_key>-<tier_key>) bound via parameters.selector.
+#   A call may name only some of the tenant's tiers on a backend: the pools of
+#   the other tiers stay on the TridentBackendConfig.
 
 - name: Include shared tier validation
   ansible.builtin.include_tasks: _validate_tiers.yaml
@@ -193,13 +196,20 @@
             and ((_existing_tbc[0].status | default({}, true)).phase | default('') == 'Bound')
             and ((_existing_tbc[0].status | default({}, true)).lastOperationStatus | default('Success', true) == 'Success') -%}
       {% set _espec = _existing_tbc[0].spec | default({}, true) -%}
+      {% set _epools = (_espec.storage | default([], true)) -%}
+      {% set _pools_present = namespace(ok=true) -%}
+      {% for _pool in _pools -%}
+      {% if _pool not in _epools -%}
+      {% set _pools_present.ok = false -%}
+      {% endif -%}
+      {% endfor -%}
       {% if (_espec.storageDriverName | default('') == 'ontap-san')
             and (_espec.backendName | default('') == _tbc_name)
             and (_espec.sanType | default('') == _san)
             and (_espec.managementLIF | default('') == _lif)
             and (_espec.svm | default('') == _svm)
             and (((_espec.credentials | default({}, true)).name | default('')) == _sec_name)
-            and ((_espec.storage | default([])) == _pools)
+            and _pools_present.ok
             and (not (netapp_storage_validate_certs is defined or netapp_storage_ca_bundle_path is defined)
                  or (not _ca_required and ((_espec.trustedCACertificate | default('', true)) | length == 0))
                  or (_ca_required and (_ca_b64 | length > 0) and ((_espec.trustedCACertificate | default('', true)) == _ca_b64))) -%}

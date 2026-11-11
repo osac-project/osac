@@ -20,6 +20,12 @@
 #      is true) + per-tier StorageClasses bound via parameters.selector,
 #      short-circuits on the second run when all resources exist, and omits
 #      trustedCACertificate when netapp_storage_validate_certs is false.
+#      Successive calls that each name some of the tenant's tiers build the TBC
+#      up pool by pool: a call keeps the pools of the tiers it does not name
+#      and their positions, rebuilds a changed tier in place, and short-circuits
+#      when its tiers are already on the TBC. The API server rejects, as a
+#      conflict, a server-side apply of another pool list without force and a
+#      patch carrying an outdated resourceVersion.
 #   4. ensure_storage_class: fails fast when the TBC enters phase Failed.
 #   5. teardown_backend: rejects tiers missing backend_id and succeeds as a
 #      retention no-op for valid tiers.
@@ -34,9 +40,9 @@
 #      StorageClasses with selector and storagePools without creating OSAC
 #      TBCs/Secrets, and recreates StorageClasses on selector/backendName
 #      updates (including dotted spec.backendName fallback).
-#   9. Shared-TBC ensure_storage_class (NotFound TBC): falls back to
-#      selector-only StorageClasses when the customer TBC is NotFound, and
-#      recreates with storagePools when the TBC later becomes Bound.
+#   9. Shared-TBC ensure_storage_class (NotFound TBC): fails and creates no
+#      StorageClass when the customer TBC cannot be read, and creates the
+#      StorageClass with storagePools once the TBC is Bound.
 #  10. Shared-TBC ensure_storage_class (Fail-fast): fails fast when a visible
 #      customer TBC is Failed, uses an unsupported storageDriverName/sanType,
 #      or has invalid characters in backendName.
@@ -698,6 +704,346 @@
           - _missing_ca_bundle_failed | default(false) | bool
         fail_msg: "ensure_storage_class must fail closed when netapp_storage_validate_certs is true and CA bundle is missing"
         success_msg: "ensure_storage_class failed closed on missing CA bundle"
+
+# ── Test 3 (tier subsets): successive ensure_storage_class calls that each name some tiers ──
+# VM creation dispatches only the tiers that have no StorageClass yet, so the
+# TBC is built up over several calls. Each call must keep the pools of the tiers
+# it does not name, and a write based on an outdated read must be rejected.
+- name: "ONTAP Storage Provider - Ensure keeps pools across calls with different tiers"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "test-ontap-subset"
+    tenant_namespace: "osac-system"
+    netapp_storage_ca_bundle_path: "{{ playbook_dir }}/../../../certs/mock.pem"
+    _t_assignment_key: "{{ (('netapp-be-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
+    _t_tbc_name: "netapp-{{ _t_assignment_key }}"
+    _sc_gold: "netapp-{{ _t_assignment_key }}-{{ ('gold' | hash('sha256'))[:16] | lower }}"
+    _sc_silver: "netapp-{{ _t_assignment_key }}-{{ ('silver' | hash('sha256'))[:16] | lower }}"
+    _t_gold_tier:
+      name: gold
+      protocol: block
+      provider: netapp
+      backend_id: netapp-be-1
+      encryption_enabled: true
+    _t_silver_tier:
+      name: silver
+      protocol: block
+      provider: netapp
+      backend_id: netapp-be-1
+      encryption_enabled: false
+      qos_limits:
+        static_limits:
+          max_reads_bw_mbps: 500
+          max_writes_bw_mbps: 250
+    _t_gold_pool:
+      labels:
+        osac_backend: "{{ _t_tbc_name }}"
+        tier: gold
+      defaults:
+        encryption: "true"
+    _t_silver_pool:
+      labels:
+        osac_backend: "{{ _t_tbc_name }}"
+        tier: silver
+      defaults:
+        encryption: "false"
+        qosPolicy: "acme_silver_qos"
+    storage_provider_backend_connections:
+      netapp-be-1:
+        endpoint: "https://10.46.246.90"
+        tenant_preparation:
+          tenant_id: "id-test-ontap-subset"
+          source:
+            namespace: "trident"
+            name: "test-netapp-primary-info"
+            uid: "uid-source-secret-1"
+            resource_version: "42"
+          provider_config:
+            username: "trident_test_ontap"
+            password: "{{ lookup('env', 'OSAC_TEST_NETAPP_RUNTIME_PASSWORD') | default(lookup('env', 'OSAC_TEST_TENANT_PASSWORD'), true) }}"
+            svm: "customer_acme_svm"
+            management_lif: "https://10.46.246.91"
+            qos_policies:
+              silver: "acme_silver_qos"
+
+  tasks:
+    - name: Delete any pre-existing TBC, CSI Secret, and StorageClasses (clean slate)
+      kubernetes.core.k8s:
+        state: absent
+        definition: "{{ item }}"
+      loop:
+        - apiVersion: trident.netapp.io/v1
+          kind: TridentBackendConfig
+          metadata:
+            name: "{{ _t_tbc_name }}"
+            namespace: trident
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "netapp-csi-{{ _t_assignment_key }}"
+            namespace: trident
+        - apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ _sc_gold }}"
+        - apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ _sc_silver }}"
+      loop_control:
+        label: "cleanup-resource"
+      failed_when: false
+      no_log: true
+
+    # ── First call names only gold: the TBC is created with one pool ──
+    - name: Call ensure_storage_class with only the gold tier
+      ansible.builtin.include_tasks: dispatch.yaml
+      vars:
+        storage_provider_action: ensure_storage_class
+        storage_provider_tiers:
+          - "{{ _t_gold_tier }}"
+
+    - name: Read back the TBC after the gold call
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "{{ _t_tbc_name }}"
+        namespace: trident
+      register: _subset_tbc_gold
+      no_log: true
+
+    - name: Assert the gold call created the TBC with the gold pool only
+      ansible.builtin.assert:
+        that:
+          - _subset_tbc_gold.resources | length == 1
+          - _subset_tbc_gold.resources[0].spec.storage == [_t_gold_pool]
+          - _subset_tbc_gold.resources[0].spec.trustedCACertificate == _mock_ca_b64
+          - storage_provider_storage_class_names | map(attribute='name') | list == [_sc_gold]
+        fail_msg: "The first call must create the TBC with one pool for its tier"
+        success_msg: "The first call created the TBC with one pool for its tier"
+      no_log: true
+
+    # ── A create by a run that did not see the TBC must not replace its pools ──
+    # A run that read no TBC writes with server-side apply without force. The API
+    # server must reject that write when the TBC exists with another pool list.
+    - name: Server-side apply another pool list under another field manager without force
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        server_side_apply:
+          field_manager: osac-aap-netapp-test-other-run
+          force_conflicts: false
+        definition:
+          apiVersion: trident.netapp.io/v1
+          kind: TridentBackendConfig
+          metadata:
+            name: "{{ _t_tbc_name }}"
+            namespace: trident
+          spec:
+            storage:
+              - "{{ _t_silver_pool }}"
+      register: _subset_other_apply
+      failed_when: false
+      no_log: true
+
+    - name: Read back the TBC after the rejected server-side apply
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "{{ _t_tbc_name }}"
+        namespace: trident
+      register: _subset_tbc_after_apply
+      no_log: true
+
+    - name: Assert the server-side apply was rejected as a conflict and changed nothing
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_subset_other_apply.reason | default('') == 'Conflict')
+            or ((_subset_other_apply.msg | default('') | string) is search('"reason":"Conflict"'))
+          - _subset_tbc_after_apply.resources[0].spec.storage == [_t_gold_pool]
+          - >-
+            _subset_tbc_after_apply.resources[0].metadata.resourceVersion
+            == _subset_tbc_gold.resources[0].metadata.resourceVersion
+        fail_msg: "A server-side apply of another pool list without force must be rejected as a conflict"
+        success_msg: "Server-side apply of another pool list without force was rejected as a conflict"
+      no_log: true
+
+    # ── Second call names only silver: the gold pool stays and keeps its position ──
+    - name: Call ensure_storage_class with only the silver tier
+      ansible.builtin.include_tasks: dispatch.yaml
+      vars:
+        storage_provider_action: ensure_storage_class
+        storage_provider_tiers:
+          - "{{ _t_silver_tier }}"
+
+    - name: Read back the TBC after the silver call
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "{{ _t_tbc_name }}"
+        namespace: trident
+      register: _subset_tbc_both
+      no_log: true
+
+    - name: Read back the StorageClasses after the silver call
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item }}"
+      loop:
+        - "{{ _sc_gold }}"
+        - "{{ _sc_silver }}"
+      loop_control:
+        label: "storage-class"
+      register: _subset_scs
+      no_log: true
+
+    - name: Assert the silver call added its pool and kept the gold pool in place
+      ansible.builtin.assert:
+        that:
+          - _subset_tbc_both.resources | length == 1
+          - _subset_tbc_both.resources[0].metadata.uid == _subset_tbc_gold.resources[0].metadata.uid
+          - _subset_tbc_both.resources[0].spec.storage == [_t_gold_pool, _t_silver_pool]
+          - _subset_tbc_both.resources[0].spec.trustedCACertificate == _mock_ca_b64
+          - _subset_tbc_both.resources[0].spec.credentials.name == 'netapp-csi-' ~ _t_assignment_key
+          - _subset_scs.results | map(attribute='resources') | flatten | length == 2
+          - storage_provider_storage_class_names | map(attribute='name') | list == [_sc_silver]
+        fail_msg: "A call for another tier must add its pool and keep the pools already on the TBC"
+        success_msg: "A call for another tier added its pool and kept the pools already on the TBC"
+      no_log: true
+
+    # ── An update based on an outdated read must not replace the pools ──
+    # A run that read the TBC writes a merge patch carrying the resourceVersion it
+    # read. The API server must reject that write when the TBC changed since.
+    - name: Patch the TBC with the pool list and resourceVersion read before the silver call
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: trident.netapp.io/v1
+          kind: TridentBackendConfig
+          metadata:
+            name: "{{ _t_tbc_name }}"
+            namespace: trident
+            resourceVersion: "{{ _subset_tbc_gold.resources[0].metadata.resourceVersion }}"
+          spec:
+            storage: "{{ _subset_tbc_gold.resources[0].spec.storage }}"
+      register: _subset_stale_patch
+      failed_when: false
+      no_log: true
+
+    - name: Read back the TBC after the rejected patch
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "{{ _t_tbc_name }}"
+        namespace: trident
+      register: _subset_tbc_after_patch
+      no_log: true
+
+    - name: Assert the outdated patch was rejected as a conflict and changed nothing
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_subset_stale_patch.reason | default('') == 'Conflict')
+            or ((_subset_stale_patch.msg | default('') | string) is search('"reason":"Conflict"'))
+          - _subset_tbc_after_patch.resources[0].spec.storage == [_t_gold_pool, _t_silver_pool]
+          - >-
+            _subset_tbc_after_patch.resources[0].metadata.resourceVersion
+            == _subset_tbc_both.resources[0].metadata.resourceVersion
+        fail_msg: "A patch carrying an outdated resourceVersion must be rejected as a conflict"
+        success_msg: "Patch carrying an outdated resourceVersion was rejected as a conflict"
+      no_log: true
+
+    # ── Third call names only gold again: nothing to write ──
+    - name: Call ensure_storage_class with only the gold tier again
+      ansible.builtin.include_tasks: dispatch.yaml
+      vars:
+        storage_provider_action: ensure_storage_class
+        storage_provider_tiers:
+          - "{{ _t_gold_tier }}"
+
+    - name: Read back the TBC after the repeated gold call
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "{{ _t_tbc_name }}"
+        namespace: trident
+      register: _subset_tbc_repeat
+      no_log: true
+
+    - name: Assert the repeated gold call short-circuited and left both pools as they were
+      ansible.builtin.assert:
+        that:
+          - _netapp_all_sc_exist | bool
+          - _subset_tbc_repeat.resources[0].spec.storage == [_t_gold_pool, _t_silver_pool]
+          - >-
+            _subset_tbc_repeat.resources[0].metadata.resourceVersion
+            == _subset_tbc_both.resources[0].metadata.resourceVersion
+          - storage_provider_storage_class_names | map(attribute='name') | list == [_sc_gold]
+        fail_msg: "A repeated call for one tier must not rewrite a TBC that also has other tiers' pools"
+        success_msg: "A repeated call for one tier left the TBC as it was"
+      no_log: true
+
+    # ── A changed tier is rebuilt in place and the other pool keeps its position ──
+    - name: Call ensure_storage_class with only the gold tier and encryption disabled
+      ansible.builtin.include_tasks: dispatch.yaml
+      vars:
+        storage_provider_action: ensure_storage_class
+        storage_provider_tiers:
+          - "{{ _t_gold_tier | combine({'encryption_enabled': false}) }}"
+
+    - name: Read back the TBC after the changed gold call
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "{{ _t_tbc_name }}"
+        namespace: trident
+      register: _subset_tbc_changed
+      no_log: true
+
+    - name: Assert the changed gold pool was rebuilt in place next to the unchanged silver pool
+      ansible.builtin.assert:
+        that:
+          - not (_netapp_all_sc_exist | bool)
+          - _subset_tbc_changed.resources[0].metadata.uid == _subset_tbc_gold.resources[0].metadata.uid
+          - _subset_tbc_changed.resources[0].spec.storage | length == 2
+          - >-
+            _subset_tbc_changed.resources[0].spec.storage[0]
+            == (_t_gold_pool | combine({'defaults': {'encryption': 'false'}}))
+          - _subset_tbc_changed.resources[0].spec.storage[1] == _t_silver_pool
+        fail_msg: "A changed tier must be rebuilt at its position without touching the other pools"
+        success_msg: "A changed tier was rebuilt at its position without touching the other pools"
+      no_log: true
+
+    - name: Delete the TBC, CSI Secret, and StorageClasses of this test
+      kubernetes.core.k8s:
+        state: absent
+        definition: "{{ item }}"
+      loop:
+        - apiVersion: trident.netapp.io/v1
+          kind: TridentBackendConfig
+          metadata:
+            name: "{{ _t_tbc_name }}"
+            namespace: trident
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "netapp-csi-{{ _t_assignment_key }}"
+            namespace: trident
+        - apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ _sc_gold }}"
+        - apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ _sc_silver }}"
+      loop_control:
+        label: "cleanup-resource"
+      no_log: true
 
 # ── Test 4: ensure_storage_class fails fast on a Failed TBC phase ──
 - name: "ONTAP Storage Provider - Ensure fails fast on Failed TBC"
@@ -1510,8 +1856,8 @@
       changed_when: true
       no_log: true
 
-# ── Test 9: Shared-TBC ensure_storage_class fallback when customer TBC is NotFound ──
-- name: "ONTAP Storage Provider - Shared-TBC NotFound TBC fallback to selector-only"
+# ── Test 9: Shared-TBC ensure_storage_class refuses an unreadable customer TBC ──
+- name: "ONTAP Storage Provider - Shared-TBC NotFound TBC creates no StorageClass"
   hosts: localhost
   gather_facts: false
 
@@ -1539,12 +1885,19 @@
                 tbc_name: unreadable-or-tridentctl-tbc
 
   tasks:
-    - name: Run ensure_storage_class when referenced TBC does not exist
-      ansible.builtin.include_tasks: dispatch.yaml
-      vars:
-        storage_provider_action: ensure_storage_class
+    - name: Attempt ensure_storage_class when referenced TBC does not exist
+      block:
+        - name: Call storage_provider ensure_storage_class with NotFound customer TBC
+          ansible.builtin.include_tasks: dispatch.yaml
+          vars:
+            storage_provider_action: ensure_storage_class
+      rescue:
+        - name: Record NotFound customer TBC error
+          ansible.builtin.set_fact:
+            _shared_nf_tbc_error: "{{ ansible_failed_result.msg | default('') }}"
+          no_log: true
 
-    - name: Read back fallback StorageClass
+    - name: Read back StorageClass after NotFound customer TBC
       kubernetes.core.k8s_info:
         api_version: storage.k8s.io/v1
         kind: StorageClass
@@ -1552,15 +1905,16 @@
       register: _nf_sc
       no_log: true
 
-    - name: Assert fallback StorageClass uses selector without storagePools
+    - name: Assert NotFound customer TBC failed the run and created no StorageClass
       ansible.builtin.assert:
         that:
-          - _nf_sc.resources | length == 1
-          - _nf_sc.resources[0].parameters['backendType'] == 'ontap-san'
-          - _nf_sc.resources[0].parameters['selector'] == 'performance=extreme'
-          - "'storagePools' not in _nf_sc.resources[0].parameters"
-        fail_msg: "NotFound TBC fallback should set selector without storagePools"
-        success_msg: "NotFound TBC fallback created selector-only StorageClass"
+          - _shared_nf_tbc_error | default('') | length > 0
+          - "'could not be read' in _shared_nf_tbc_error"
+          - _nf_sc.resources | length == 0
+        fail_msg: >-
+          Shared-TBC ensure_storage_class must fail without creating a
+          selector-only StorageClass when the customer TBC cannot be read
+        success_msg: "NotFound customer TBC failed the run and created no StorageClass"
       no_log: true
 
     - name: Re-run ensure_storage_class when referenced TBC becomes Bound with unchanged pool_selector
@@ -1584,15 +1938,15 @@
       register: _nf_bound_sc
       no_log: true
 
-    - name: Assert StorageClass was recreated with storagePools when TBC became Bound
+    - name: Assert StorageClass was created with storagePools when TBC became Bound
       ansible.builtin.assert:
         that:
           - _nf_bound_sc.resources | length == 1
           - _nf_bound_sc.resources[0].parameters['backendType'] == 'ontap-san'
           - _nf_bound_sc.resources[0].parameters['selector'] == 'performance=extreme'
           - _nf_bound_sc.resources[0].parameters['storagePools'] == 'osiscsibackend:.*'
-        fail_msg: "StorageClass was not updated with storagePools when customer TBC became Bound"
-        success_msg: "StorageClass recreated with storagePools after NotFound -> Bound transition"
+        fail_msg: "StorageClass was not created with storagePools when customer TBC became Bound"
+        success_msg: "StorageClass created with storagePools after NotFound -> Bound transition"
       no_log: true
 
 # ── Test 10: Shared-TBC ensure_storage_class fails fast on visible Failed customer TBC ──

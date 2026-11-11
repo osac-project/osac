@@ -23,6 +23,8 @@
 # osac_backend: netapp-<assignment_key> and tier: <tier.name>, and each
 # StorageClass binds to its tenant TBC + tier virtual pool via
 # parameters.selector: "osac_backend=netapp-<assignment_key>;tier=<tier.name>".
+# A dispatch adds or updates the pools of its own tiers and keeps every other
+# pool that is on the TBC.
 
 - name: Provision CSI Secret, TridentBackendConfig, and StorageClasses for dispatched backend
   block:
@@ -43,7 +45,7 @@
       when: _netapp_is_shared_tbc | bool
       no_log: true
 
-    - name: Inspect referenced customer TridentBackendConfigs (best-effort)
+    - name: Look up referenced customer TridentBackendConfigs
       kubernetes.core.k8s_info:
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
@@ -57,26 +59,29 @@
       when: _netapp_is_shared_tbc | bool
       no_log: true
 
-    # Only NotFound (an empty `resources` list, including a cluster without the
-    # TridentBackendConfig CRD) and Forbidden may fall back to selector-only
-    # StorageClasses. Any other lookup error (API unreachable, timeout, server
-    # error) must not silently drop the storagePools pin. failed_when: false
-    # resets `failed`, so a failed lookup is recognized by its missing
-    # `resources`; kubernetes.core reports Forbidden only in `msg`.
-    - name: Fail when a customer TridentBackendConfig lookup failed for a reason other than Forbidden
+    # A Shared-TBC StorageClass is created only when its TridentBackendConfig
+    # was read and is Bound, so the class can be pinned to that backend with
+    # parameters.storagePools. A selector alone matches equally labeled pools
+    # on any Trident backend. NotFound (an empty `resources` list, including a
+    # cluster without the TridentBackendConfig CRD), Forbidden, and every other
+    # lookup error therefore fail. failed_when: false resets `failed`, so a
+    # failed lookup is recognized by its missing `resources`.
+    - name: Fail when a referenced customer TridentBackendConfig cannot be read
       ansible.builtin.fail:
         msg: >-
-          Lookup of a referenced shared TridentBackendConfig failed for a
-          reason other than NotFound or Forbidden. Retry when the target
-          cluster API is reachable.
+          A referenced shared TridentBackendConfig could not be read on the
+          target cluster (not found, forbidden, or the API request failed).
+          Check the profile's tbc_namespace and tbc_name, and that the job's
+          credentials on the target cluster can get TridentBackendConfigs in
+          that namespace.
       when: >-
         (_netapp_is_shared_tbc | bool) and (
           (_shared_tbc_lookups.results | default([])
            | rejectattr('skipped', 'defined')
-           | rejectattr('resources', 'defined')
-           | map(attribute='msg', default='')
-           | map('string')
-           | reject('search', '(?i)forbidden')
+           | map(attribute='resources', default=[])
+           | map('default', [], true)
+           | map('length')
+           | select('equalto', 0)
            | list | length) > 0
         )
       no_log: true
@@ -201,14 +206,13 @@
     - name: Validate resolved bound Trident backend names against regex injection
       ansible.builtin.fail:
         msg: >-
-          Resolved Trident backendName contains invalid characters. Must match
-          ^[A-Za-z0-9._-]+$.
+          Resolved Trident backendName is empty or contains invalid
+          characters. Must match ^[A-Za-z0-9._-]+$.
       when: >-
         (_netapp_is_shared_tbc | bool) and (
           (_netapp_profile_backend_names | dict2items
-           | selectattr('value', 'string')
            | map(attribute='value')
-           | reject('equalto', '')
+           | map('string')
            | reject('regex', '^[A-Za-z0-9._-]+$')
            | list | length) > 0
         )
@@ -225,8 +229,9 @@
           {% endfor -%}
           {% set _sel = _parts | join(';') -%}
           {% set _bname = _netapp_profile_backend_names[item.provider_config.profile | trim] | default('') -%}
-          {% set _desired = {'backendType': 'ontap-san', 'selector': _sel}
-             | combine({'storagePools': (_bname | replace('.', '\\.')) ~ ':.*'} if (_bname | length > 0) else {}) -%}
+          {% set _desired = {'backendType': 'ontap-san',
+                             'selector': _sel,
+                             'storagePools': (_bname | replace('.', '\\.')) ~ ':.*'} -%}
           {% set _ = desired_map.update({item.name: _desired}) -%}
           {% endfor -%}
           {{ desired_map }}
@@ -355,65 +360,31 @@
       when: not (_netapp_is_shared_tbc | bool)
       no_log: true
 
-    # Virtual pools: one per tier. Trident's OntapStorageDriverPool schema has
-    # `labels` and `defaults` (`encryption`, `qosPolicy`) — no `name` field.
-    # Each pool carries `osac_backend: <tbc_name>` and `tier: <tier.name>` labels
-    # so the tier's StorageClass can uniquely select it via parameters.selector.
-    - name: Build the TBC virtual pools for dispatched backend
+    # The TridentBackendConfig gets one virtual pool per tier, and a dispatch adds
+    # or updates only the pools of its own tiers. Each attempt reads the object
+    # and writes it back conditionally, so a write that another run for this
+    # tenant and backend got ahead of is rejected and the next attempt starts
+    # from that run's result (see _write_backend_config.yaml).
+    - name: Mark the TridentBackendConfig as not yet written
       ansible.builtin.set_fact:
-        _virtual_pools: >-
-          {% set _pools = [] -%}
-          {% for tier in _backend_tiers -%}
-          {% set _enc = (tier.encryption_enabled | default(false) | bool) | ternary('true', 'false') -%}
-          {% set _defaults = {'encryption': _enc} -%}
-          {% if tier.name in _netapp_qos_policies -%}
-          {% set _ = _defaults.update({'qosPolicy': _netapp_qos_policies[tier.name] | string}) -%}
-          {% endif -%}
-          {% set _pool = {
-               'labels': {
-                 'osac_backend': _tbc_name,
-                 'tier': tier.name
-               },
-               'defaults': _defaults
-             } -%}
-          {% set _ = _pools.append(_pool) -%}
-          {% endfor -%}
-          {{ _pools }}
+        _tbc_written: false
       when: not (_netapp_is_shared_tbc | bool)
       no_log: true
 
-    - name: Create the TridentBackendConfig for dispatched backend
-      kubernetes.core.k8s:
-        state: present
-        definition: >-
-          {{ {'apiVersion': 'trident.netapp.io/v1',
-              'kind': 'TridentBackendConfig',
-              'metadata': {
-                'name': _tbc_name,
-                'namespace': netapp_storage_csi_operator_namespace,
-                'labels': {
-                  'app.kubernetes.io/managed-by': 'osac-aap',
-                  'osac.openshift.io/tenant': tenant_name,
-                  'osac.openshift.io/storage-provider': 'netapp'
-                }
-              },
-              'spec': (
-                {
-                  'version': 1,
-                  'storageDriverName': 'ontap-san',
-                  'backendName': _tbc_name,
-                  'sanType': netapp_storage_san_type,
-                  'managementLIF': _management_lif,
-                  'svm': _svm_name,
-                  'useREST': True,
-                  'deletionPolicy': 'delete',
-                  'credentials': {'name': 'netapp-csi-' ~ _assignment_key},
-                  'storage': _virtual_pools
-                }
-                | combine({'trustedCACertificate': (_trusted_ca_b64 if (_trusted_ca_b64 | default('') | length > 0) else none)})
-              )
-            } }}
+    - name: Write the TridentBackendConfig, retrying when another writer changes it first
+      ansible.builtin.include_tasks: _write_backend_config.yaml
+      loop: "{{ range(5) | list }}"
+      loop_control:
+        loop_var: _tbc_write_attempt
+        label: "tbc-write-attempt"
       when: not (_netapp_is_shared_tbc | bool)
+
+    - name: Fail when the TridentBackendConfig could not be written
+      ansible.builtin.fail:
+        msg: >-
+          The TridentBackendConfig was changed by another writer on every write
+          attempt, so this run did not write it. Run the job again.
+      when: not (_netapp_is_shared_tbc | bool) and not (_tbc_written | default(false) | bool)
       no_log: true
 
     # Fail fast on a Failed phase or lastOperationStatus instead of burning the full retry window.
@@ -533,6 +504,11 @@
         _tbc_status: {}
         _management_lif: ""
         _virtual_pools: []
+        _tbc_current: {}
+        _tbc_definition: {}
+        _tbc_create: {}
+        _tbc_update: {}
+        _tbc_written: false
         _shared_tbc_lookups: {}
         _netapp_profile_backend_names: {}
         _netapp_shared_profile_map: {}

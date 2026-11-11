@@ -326,7 +326,14 @@ Each dispatched `backend_id` uses exactly one of two modes, selected by its
   storage-administrator-prepared SVM. `ensure_storage_class` creates, on the target
   cluster, a per-tenant CSI `Secret` and `TridentBackendConfig` (one labeled virtual
   pool per tier, `useREST: true`) in the Trident namespace and one `StorageClass` per
-  tier. Expected input:
+  tier. A call may name only some of the tenant's tiers (VM creation dispatches just
+  the tiers that have no `StorageClass` yet): it adds or updates the virtual pools of
+  the tiers it names and keeps every other pool on the `TridentBackendConfig`, in the
+  same position. Pools are removed only when `teardown_cluster_storage` deletes the
+  `TridentBackendConfig`. The API server rejects the write (HTTP 409) when another
+  run for the same tenant and backend changed the object after this call read it;
+  the call then reads it again and retries, and fails after five rejected writes.
+  Expected input:
   ```yaml
   storage_provider_backend_connections:
     <backend_id>:
@@ -347,7 +354,8 @@ Each dispatched `backend_id` uses exactly one of two modes, selected by its
   Trident verifies the management LIF's TLS certificate against
   `TridentBackendConfig.trustedCACertificate`, which the role fills from the
   cluster trust bundle (`/etc/ca-bundle/bundle.pem`, the trust-manager `ca-bundle`
-  ConfigMap mounted in the storage-operations instance group). To trust an ONTAP
+  ConfigMap mounted in the storage-operations and compute-instance-operations
+  instance groups, where `ensure_storage_class` runs). To trust an ONTAP
   CA, add it as a Secret (key `ca.crt`) labeled `osac.openshift.io/ca-bundle:
   additional` in the cert-manager namespace. Verification is standard TLS, so the
   certificate must carry a SAN matching `management_lif` (an IP SAN when the LIF is
@@ -365,13 +373,15 @@ Each dispatched `backend_id` uses exactly one of two modes, selected by its
   of a customer-managed `TridentBackendConfig` shared by several tenants. Expected
   input: `storage_provider_backend_connections[backend_id].provider_config.profiles`
   (`[{name, shared: {tbc_namespace, tbc_name}}]`) and, per tier,
-  `provider_config.{profile, pool_selector}`. `ensure_storage_class` checks the
-  referenced `TridentBackendConfig` best-effort (failing fast if it is visibly
-  `Failed` or misconfigured, pinning `parameters.storagePools: "<backendName>:.*"`
-  when `Bound`, and using `parameters.selector` alone when it is `NotFound` or
-  `Forbidden`) and creates per-tenant per-tier `StorageClass`es; it never creates or
-  deletes customer TBCs or Secrets. Bandwidth QoS belongs to the customer's virtual
-  pools, so tiers with non-zero `qos_limits.static_limits` are rejected.
+  `provider_config.{profile, pool_selector}`. `ensure_storage_class` reads the
+  referenced `TridentBackendConfig` and fails unless it can be read, is `Bound`, and
+  uses `ontap-san` with a supported `sanType`, so the credentials the job uses on the
+  target cluster need `get` on `tridentbackendconfigs` in `tbc_namespace`. It then
+  creates per-tenant per-tier `StorageClass`es with `parameters.selector` and
+  `parameters.storagePools: "<backendName>:.*"`; the pin keeps a class from matching
+  equally labeled pools on another Trident backend. It never creates or deletes
+  customer TBCs or Secrets. Bandwidth QoS belongs to the customer's virtual pools, so
+  tiers with non-zero `qos_limits.static_limits` are rejected.
 
 `teardown_cluster_storage` removes only OSAC-managed resources
 (`app.kubernetes.io/managed-by=osac-aap`) and refuses to remove anything while a

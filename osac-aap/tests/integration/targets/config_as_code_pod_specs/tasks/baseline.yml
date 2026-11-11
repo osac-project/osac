@@ -52,6 +52,32 @@
           - "_pod_spec is search('storage-operations-ig')"
         fail_msg: Expected storage-operations-ig references in pod spec
 
+    - name: Assert compute-instance pod mounts the cluster trust bundle
+      ansible.builtin.assert:
+        that:
+          - >-
+            _pod.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | selectattr('mountPath', 'equalto', '/etc/ca-bundle')
+            | selectattr('readOnly', 'equalto', true)
+            | list | length == 1
+          - >-
+            _pod.spec.volumes
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | map(attribute='configMap')
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | selectattr('optional', 'equalto', true)
+            | list | length == 1
+          - >-
+            (_pod.spec.volumes | selectattr('name', 'equalto', 'ca-bundle')
+             | map(attribute='configMap.items') | first | default([]))
+            == [{'key': 'bundle.pem', 'path': 'bundle.pem'}]
+        fail_msg: >-
+          Compute-instance operations run the VM just-in-time storage dispatch,
+          so the pod must mount the optional trust-manager ca-bundle ConfigMap
+          read-only at /etc/ca-bundle (bundle.pem), which storage provider
+          roles read to verify storage management endpoints.
+
 - name: Compute-instance pod spec with remote kubeconfig
   hosts: localhost
   gather_facts: false

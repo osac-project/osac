@@ -1,8 +1,12 @@
 """Unit and contract tests for the netapp_storage provider role."""
 
 import base64
+import json
+import os
 import re
 import secrets
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
@@ -68,6 +72,14 @@ def _render_when(when_expression: str, variables: dict) -> bool:
     return str(result).strip().lower() == "true"
 
 
+def _write_backend_config_task() -> dict:
+    """Return the block task that makes one TridentBackendConfig write attempt."""
+    tasks = _load_yaml(NETAPP_ROLE_DIR / "tasks" / "_write_backend_config.yaml")
+    return _find_task(
+        tasks, "Write the TridentBackendConfig for dispatched backend from its current state"
+    )
+
+
 def _str_value_preserved(value: str) -> bool:
     """Report whether str() keeps the value intact, without returning it."""
     return str(value).strip() == value and len(str(value)) == len(value)
@@ -117,12 +129,17 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
     )
     block_tasks = provision_block["block"]
 
-    # 1. Render _virtual_pools for Dedicated-SVM tiers (with and without QoS / encryption).
-    pool_task = _find_task(block_tasks, "Build the TBC virtual pools for dispatched backend")
+    # 1. Render _virtual_pools for Dedicated-SVM tiers (with and without QoS / encryption)
+    # when no TridentBackendConfig exists yet.
+    pool_task = _find_task(
+        _write_backend_config_task()["block"],
+        "Build the TBC virtual pools for dispatched backend",
+    )
     vpool_expr = pool_task["ansible.builtin.set_fact"]["_virtual_pools"]
     rendered_pools = _render(
         vpool_expr,
         {
+            "_tbc_current": {"resources": []},
             "_tbc_name": "netapp-0000000000000001",
             "_assignment_key": "0000000000000001",
             "_backend_tiers": [
@@ -234,7 +251,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
     ) == [ded_sc_name]
 
     # 3. Render Shared-TBC StorageClass parameters: multi-key pool_selector sorted by key,
-    #    dot-escaped backendName in storagePools when resolved, and omitted when empty.
+    #    always pinned to the resolved backend with a dot-escaped storagePools value.
     desired_params_task = _find_task(
         block_tasks, "Build desired Shared-TBC StorageClass parameters per tier"
     )
@@ -273,22 +290,26 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
         "storagePools": r"trident\.shared-san\.01:.*",
     }
 
-    rendered_desired_without_bname = _render(
+    # The pin is unconditional: no input renders a selector-only class, and an
+    # unresolved (empty) backend name fails before the parameters are built.
+    assert "storagePools" in _render(
         desired_params_expr,
         {
             "_assignment_key": "0000000000000001",
             "_backend_tiers": [shared_tier],
             "_netapp_profile_backend_names": {"gold-prof": ""},
         },
+    )["gold"]
+    assert (
+        _render_when(
+            _find_task(
+                block_tasks, "Validate resolved bound Trident backend names against regex injection"
+            )["when"],
+            {"_netapp_is_shared_tbc": True, "_netapp_profile_backend_names": {"gold-prof": ""}},
+        )
+        is True
     )
-    rendered_shared_without_bname = _render(
-        shared_sc_task["kubernetes.core.k8s"]["definition"]["parameters"],
-        {"item": shared_tier, "_netapp_shared_sc_desired_params": rendered_desired_without_bname},
-    )
-    assert rendered_shared_without_bname == {
-        "backendType": "ontap-san",
-        "selector": "a_env=prod;z_tier=fast",
-    }
+    selector_only_params = {"backendType": "ontap-san", "selector": "a_env=prod;z_tier=fast"}
 
     # Verify stale Shared-TBC StorageClass detection agrees with rendered parameters.
     stale_task = _find_task(
@@ -323,7 +344,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
             "_netapp_shared_sc_desired_params": rendered_desired_with_bname,
             "_netapp_sc_checks": {
                 "resources": [
-                    {"metadata": {"name": sc_name}, "parameters": rendered_shared_without_bname}
+                    {"metadata": {"name": sc_name}, "parameters": selector_only_params}
                 ]
             },
         },
@@ -401,6 +422,527 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
         )
         is False
     )
+
+
+def test_netapp_tbc_write_keeps_pools_of_tiers_not_in_the_dispatch():
+    """A dispatch that names only some of a tenant's tiers (VM creation passes
+    just the tiers that have no StorageClass yet) keeps the virtual pools already
+    on the TridentBackendConfig, and a write never replaces a pool list the
+    attempt did not read.
+    """
+    write_task = _write_backend_config_task()
+    write_block = write_task["block"]
+    tbc_name = "netapp-0000000000000001"
+
+    def _pool(tier: str, encryption: str = "false", **defaults) -> dict:
+        return {
+            "labels": {"osac_backend": tbc_name, "tier": tier},
+            "defaults": {"encryption": encryption, **defaults},
+        }
+
+    def _current(storage, resource_version: str = "41") -> dict:
+        return {
+            "resources": [
+                {
+                    "metadata": {"name": tbc_name, "resourceVersion": resource_version},
+                    "spec": {"backendName": tbc_name, "storage": storage},
+                }
+            ]
+        }
+
+    vpool_expr = _find_task(write_block, "Build the TBC virtual pools for dispatched backend")[
+        "ansible.builtin.set_fact"
+    ]["_virtual_pools"]
+
+    def _merged(current: dict, tiers: list[dict], qos: dict | None = None):
+        return _render(
+            vpool_expr,
+            {
+                "_tbc_current": current,
+                "_tbc_name": tbc_name,
+                "_backend_tiers": tiers,
+                "_netapp_qos_policies": qos or {},
+            },
+        )
+
+    gold = _pool("gold", "true")
+    silver = _pool("silver")
+    bronze = _pool("bronze")
+
+    # Successive requests, each naming one tier: every earlier pool is kept and
+    # keeps its position (Trident names virtual pools by index).
+    assert _merged({"resources": []}, [{"name": "gold", "encryption_enabled": True}]) == [gold]
+    assert _merged(_current([gold]), [{"name": "silver"}]) == [gold, silver]
+    assert _merged(_current([gold, silver]), [{"name": "bronze"}]) == [gold, silver, bronze]
+
+    # A dispatched tier that already has a pool is updated where it is.
+    assert _merged(
+        _current([gold, silver, bronze]), [{"name": "silver"}], {"silver": "pg_silver"}
+    ) == [gold, _pool("silver", qosPolicy="pg_silver"), bronze]
+
+    # A dispatch listing every tier in another order does not reorder the pools.
+    assert _merged(
+        _current([gold, silver]),
+        [{"name": "silver"}, {"name": "gold", "encryption_enabled": True}],
+    ) == [gold, silver]
+
+    # Pools that are not this backend's pool for a dispatched tier are kept as is.
+    unrelated = [
+        {"labels": {"tier": "gold"}, "defaults": {"encryption": "false"}},
+        {"defaults": {"spaceReserve": "none"}},
+        {"labels": {"osac_backend": "netapp-other", "tier": "gold"}},
+    ]
+    assert _merged(_current(unrelated), [{"name": "gold", "encryption_enabled": True}]) == [
+        *unrelated,
+        gold,
+    ]
+
+    # A TridentBackendConfig without spec.storage behaves like one with no pools.
+    assert _merged(_current(None), [{"name": "silver"}]) == [silver]
+
+    # The read must fail the run rather than be treated as "no object yet".
+    read_task = _find_task(
+        write_block, "Read the current TridentBackendConfig for dispatched backend"
+    )
+    assert read_task["register"] == "_tbc_current"
+    assert "failed_when" not in read_task
+    assert "ignore_errors" not in read_task
+    assert read_task.get("no_log") is True
+
+    definition_expr = _find_task(
+        write_block, "Build the TridentBackendConfig definition for dispatched backend"
+    )["ansible.builtin.set_fact"]["_tbc_definition"]
+    definition_vars = {
+        "_tbc_name": tbc_name,
+        "_assignment_key": "0000000000000001",
+        "netapp_storage_csi_operator_namespace": "trident",
+        "tenant_name": "acme",
+        "netapp_storage_san_type": "fcp",
+        "_management_lif": "10.0.0.9",
+        "_svm_name": "svm1",
+        "_trusted_ca_b64": "",
+        "_virtual_pools": [gold, silver],
+    }
+    definition = _render(definition_expr, definition_vars)
+    assert definition["metadata"]["name"] == tbc_name
+    assert "resourceVersion" not in definition["metadata"]
+    assert definition["spec"]["storage"] == [gold, silver]
+    assert "trustedCACertificate" not in definition["spec"]
+    definition_with_ca = _render(definition_expr, {**definition_vars, "_trusted_ca_b64": "Q0E="})
+    assert definition_with_ca["spec"]["trustedCACertificate"] == "Q0E="
+
+    absent = {"_tbc_current": {"resources": []}}
+    present = {"_tbc_current": _current([gold], "41")}
+
+    # No object was read: server-side apply without force creates it, and is
+    # rejected when another writer created it first with a different pool list.
+    # Writers share a field manager only when they write the same pool list.
+    create_task = _find_task(write_block, "Create the TridentBackendConfig for dispatched backend")
+    create_args = create_task["kubernetes.core.k8s"]
+    assert create_args["state"] == "present"
+    assert create_args["apply"] is True
+    assert create_args["server_side_apply"]["force_conflicts"] is False
+    assert _render_when(create_task["when"], absent) is True
+    assert _render_when(create_task["when"], present) is False
+    assert _render(create_args["definition"], {"_tbc_definition": definition}) == definition
+    manager_expr = create_args["server_side_apply"]["field_manager"]
+    gold_manager = _render(manager_expr, {"_virtual_pools": [gold]})
+    assert gold_manager == _render(manager_expr, {"_virtual_pools": [dict(gold)]})
+    assert gold_manager != _render(manager_expr, {"_virtual_pools": [silver]})
+    assert gold_manager != _render(manager_expr, {"_virtual_pools": [gold, silver]})
+    assert gold_manager != _render(manager_expr, {"_virtual_pools": [_pool("gold")]})
+    assert 0 < len(gold_manager) <= 128
+
+    # An object was read: patch only (never create), carrying the
+    # resourceVersion the pools were merged from. A null CA removes a stale one.
+    update_task = _find_task(write_block, "Update the TridentBackendConfig for dispatched backend")
+    update_args = update_task["kubernetes.core.k8s"]
+    assert update_args["state"] == "patched"
+    assert "apply" not in update_args
+    assert "force" not in update_args
+    assert _render_when(update_task["when"], absent) is False
+    assert _render_when(update_task["when"], present) is True
+    update_expr = update_args["definition"]
+    updated = _render(update_expr, {"_tbc_definition": definition, **present})
+    assert updated["metadata"]["resourceVersion"] == "41"
+    assert updated["metadata"]["name"] == tbc_name
+    assert updated["spec"]["storage"] == [gold, silver]
+    assert updated["spec"]["trustedCACertificate"] is None
+    updated_with_ca = _render(update_expr, {"_tbc_definition": definition_with_ca, **present})
+    assert updated_with_ca["spec"]["trustedCACertificate"] == "Q0E="
+
+    # Only a write rejected because another writer got there first is tolerated;
+    # every other failure fails the task.
+    stale_msg = (
+        'Failed to patch object: b\'{"kind":"Status","apiVersion":"v1","status":"Failure",'
+        '"message":"Operation cannot be fulfilled on tridentbackendconfigs.trident.netapp.io '
+        '\\"netapp-0000000000000001\\": the object has been modified; please apply your '
+        'changes to the latest version and try again","reason":"Conflict","code":409}\''
+    )
+    owned_msg = (
+        'Failed to apply object: b\'{"kind":"Status","apiVersion":"v1","status":"Failure",'
+        '"message":"Apply failed with 1 conflict: conflict with \\"osac-aap-netapp-0a\\": '
+        '.spec.storage","reason":"Conflict","code":409}\''
+    )
+    forbidden_msg = (
+        'Failed to patch object: b\'{"kind":"Status","apiVersion":"v1","status":"Failure",'
+        '"message":"tridentbackendconfigs.trident.netapp.io is forbidden",'
+        '"reason":"Forbidden","code":403}\''
+    )
+    applied_result = {"metadata": {"name": tbc_name}, "spec": {"storage": [gold, silver]}}
+    for task, register in ((create_task, "_tbc_create"), (update_task, "_tbc_update")):
+        assert task["register"] == register
+        assert task.get("no_log") is True
+        failed_when = task["failed_when"]
+        for conflict in (
+            {"failed": True, "msg": stale_msg},
+            {"failed": True, "msg": owned_msg},
+            {"failed": True, "reason": "Conflict", "msg": "Failed to patch object"},
+        ):
+            assert _render_when(failed_when, {register: conflict}) is False
+        assert _render_when(failed_when, {register: {"failed": True, "msg": forbidden_msg}}) is True
+        assert _render_when(failed_when, {register: {"failed": True}}) is True
+        assert (
+            _render_when(failed_when, {register: {"changed": True, "result": applied_result}})
+            is False
+        )
+
+    # The attempt counts as written only when a write returned the object. A
+    # rejected write returns no object, and neither does a patch of an object
+    # that was deleted after it was read.
+    written_expr = _find_task(
+        write_block, "Record whether the TridentBackendConfig write was applied"
+    )["ansible.builtin.set_fact"]["_tbc_written"]
+    skipped = {"changed": False, "skipped": True}
+
+    def _written(create_result: dict, update_result: dict):
+        return _render(
+            written_expr,
+            {"_tbc_name": tbc_name, "_tbc_create": create_result, "_tbc_update": update_result},
+        )
+
+    assert _written({"changed": True, "result": applied_result}, skipped) is True
+    assert _written({"changed": False, "result": applied_result}, skipped) is True
+    assert _written(skipped, {"changed": True, "result": applied_result}) is True
+    assert _written(skipped, {"changed": False, "result": applied_result}) is True
+    assert _written({"failed": False, "msg": owned_msg}, skipped) is False
+    assert _written(skipped, {"failed": False, "msg": stale_msg}) is False
+    assert _written(skipped, {"changed": False, "result": {}}) is False
+
+    # Attempts after a successful write do nothing, and only retries wait.
+    assert _render_when(write_task["when"], {"_tbc_written": False}) is True
+    assert _render_when(write_task["when"], {"_tbc_written": True}) is False
+    pause_when = _find_task(
+        write_block, "Wait before re-reading a TridentBackendConfig that another writer changed"
+    )["when"]
+    assert _render_when(pause_when, {"_tbc_write_attempt": 0}) is False
+    assert _render_when(pause_when, {"_tbc_write_attempt": 1}) is True
+
+    # The backend task file starts unwritten, makes several attempts, and fails
+    # before waiting for Bound when none of them was applied.
+    backend_block = _find_task(
+        _load_yaml(NETAPP_ROLE_DIR / "tasks" / "_ensure_storage_class_backend.yaml"),
+        "Provision CSI Secret, TridentBackendConfig, and StorageClasses for dispatched backend",
+    )["block"]
+    init_name = "Mark the TridentBackendConfig as not yet written"
+    include_name = "Write the TridentBackendConfig, retrying when another writer changes it first"
+    fail_name = "Fail when the TridentBackendConfig could not be written"
+    assert _find_task(backend_block, init_name)["ansible.builtin.set_fact"]["_tbc_written"] is False
+    include_task = _find_task(backend_block, include_name)
+    assert include_task["ansible.builtin.include_tasks"] == "_write_backend_config.yaml"
+    assert include_task["loop_control"]["loop_var"] == "_tbc_write_attempt"
+    assert len(_render(include_task["loop"], {})) > 1
+    fail_task = _find_task(backend_block, fail_name)
+    assert fail_task.get("no_log") is True
+    assert (
+        _render_when(fail_task["when"], {"_netapp_is_shared_tbc": False, "_tbc_written": False})
+        is True
+    )
+    assert (
+        _render_when(fail_task["when"], {"_netapp_is_shared_tbc": False, "_tbc_written": True})
+        is False
+    )
+    assert _render_when(fail_task["when"], {"_netapp_is_shared_tbc": True}) is False
+    task_names = [task.get("name") for task in backend_block]
+    assert (
+        task_names.index(init_name)
+        < task_names.index(include_name)
+        < task_names.index(fail_name)
+        < task_names.index("Wait for the TridentBackendConfig to become Bound")
+    )
+
+
+# Stand-ins for kubernetes.core.k8s_info and kubernetes.core.k8s that keep one
+# TridentBackendConfig in a JSON file and apply the API server's conditions on a
+# write: a patch that carries an outdated resourceVersion is rejected, and so is
+# a server-side apply without force that would change a spec.storage owned by
+# another field manager. A write that carries neither condition is accepted.
+# After each read the next queued competing write is applied, which places it
+# between the role's read and the role's write.
+_TBC_STAND_IN_STATE = '''
+import json
+import os
+
+from ansible.module_utils.basic import AnsibleModule
+
+STATE_PATH = os.environ["OSAC_TBC_STAND_IN_STATE"]
+
+
+def load():
+    with open(STATE_PATH) as handle:
+        return json.load(handle)
+
+
+def save(state):
+    with open(STATE_PATH, "w") as handle:
+        json.dump(state, handle)
+
+
+def stamp(state):
+    state["version"] += 1
+    state["object"]["metadata"]["resourceVersion"] = str(state["version"])
+'''
+
+_TBC_STAND_IN_READ = '''
+module = AnsibleModule(argument_spec={
+    "api_version": {"type": "str"},
+    "kind": {"type": "str"},
+    "name": {"type": "str"},
+    "namespace": {"type": "str"},
+})
+state = load()
+resources = [json.loads(json.dumps(state["object"]))] if state["object"] else []
+if state["competing_writes"]:
+    competing = state["competing_writes"].pop(0)
+    if state["object"] is None:
+        state["object"] = {
+            "apiVersion": module.params["api_version"],
+            "kind": module.params["kind"],
+            "metadata": {
+                "name": module.params["name"],
+                "namespace": module.params["namespace"],
+            },
+            "spec": {},
+        }
+    if "storage" in competing:
+        state["object"]["spec"]["storage"] = competing["storage"]
+        state["storage_manager"] = "competing-run"
+    stamp(state)
+save(state)
+module.exit_json(changed=False, resources=resources)
+'''
+
+_TBC_STAND_IN_WRITE = '''
+def merge(target, patch):
+    for key, value in patch.items():
+        if value is None:
+            target.pop(key, None)
+        elif isinstance(value, dict) and isinstance(target.get(key), dict):
+            merge(target[key], value)
+        else:
+            target[key] = value
+
+
+module = AnsibleModule(argument_spec={
+    "state": {"type": "str"},
+    "apply": {"type": "bool", "default": False},
+    "server_side_apply": {"type": "dict"},
+    "definition": {"type": "dict"},
+})
+state = load()
+definition = module.params["definition"]
+apply_options = module.params["server_side_apply"] or {}
+current = state["object"]
+sent_version = definition["metadata"].get("resourceVersion")
+write = {"state": module.params["state"], "resourceVersion": sent_version, "accepted": False}
+state["writes"].append(write)
+
+if module.params["state"] == "patched":
+    if current is None:
+        save(state)
+        module.exit_json(changed=False, result={})
+    rejected = sent_version is not None and sent_version != current["metadata"]["resourceVersion"]
+    message = "the object has been modified"
+else:
+    rejected = (
+        current is not None
+        and bool(apply_options)
+        and not apply_options.get("force_conflicts")
+        and current["spec"].get("storage") != definition["spec"].get("storage")
+        and state["storage_manager"] != apply_options.get("field_manager")
+    )
+    message = "Apply failed with 1 conflict: .spec.storage"
+
+if rejected:
+    save(state)
+    module.fail_json(msg="Failed to write object: " + message, reason="Conflict", status=409)
+
+if current is None:
+    state["object"] = {"metadata": {}, "spec": {}}
+merge(state["object"], definition)
+if module.params["state"] != "patched":
+    state["storage_manager"] = apply_options.get("field_manager")
+stamp(state)
+write["accepted"] = True
+save(state)
+module.exit_json(changed=True, result=state["object"])
+'''
+
+_TBC_STAND_IN_NAME = "netapp-0000000000000001"
+_TBC_WRITE_FAIL_TASK = "Fail when the TridentBackendConfig could not be written"
+
+
+def _tbc_stand_in_pool(tier: str) -> dict:
+    """Return the virtual pool the role builds for an unencrypted tier without QoS."""
+    return {
+        "labels": {"osac_backend": _TBC_STAND_IN_NAME, "tier": tier},
+        "defaults": {"encryption": "false"},
+    }
+
+
+def _run_tbc_write(tmp_path, current_storage, competing_writes, dispatched_tier):
+    """Run the role's TridentBackendConfig write tasks with ansible-playbook
+    against the stand-in modules. Return the finished process and the stand-in's
+    final state."""
+    modules = tmp_path / "ansible_collections" / "kubernetes" / "core" / "plugins" / "modules"
+    modules.mkdir(parents=True)
+    (modules / "k8s_info.py").write_text(_TBC_STAND_IN_STATE + _TBC_STAND_IN_READ)
+    (modules / "k8s.py").write_text(_TBC_STAND_IN_STATE + _TBC_STAND_IN_WRITE)
+
+    role_tasks = NETAPP_ROLE_DIR / "tasks"
+    (tmp_path / "_write_backend_config.yaml").write_text(
+        (role_tasks / "_write_backend_config.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    backend_block = _find_task(
+        _load_yaml(role_tasks / "_ensure_storage_class_backend.yaml"),
+        "Provision CSI Secret, TridentBackendConfig, and StorageClasses for dispatched backend",
+    )["block"]
+    playbook = tmp_path / "write.json"
+    playbook.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "Write the TridentBackendConfig while another run writes it",
+                    "hosts": "localhost",
+                    "gather_facts": False,
+                    "vars": {
+                        "ansible_connection": "local",
+                        "ansible_python_interpreter": sys.executable,
+                        "tenant_name": "acme",
+                        "netapp_storage_csi_operator_namespace": "trident",
+                        "netapp_storage_san_type": "iscsi",
+                        "_netapp_is_shared_tbc": False,
+                        "_tbc_name": _TBC_STAND_IN_NAME,
+                        "_assignment_key": "0000000000000001",
+                        "_management_lif": "192.0.2.10",
+                        "_svm_name": "svm_acme",
+                        "_trusted_ca_b64": "",
+                        "_backend_tiers": [{"name": dispatched_tier}],
+                        "_netapp_qos_policies": {},
+                    },
+                    "tasks": [
+                        _find_task(backend_block, name)
+                        for name in (
+                            "Mark the TridentBackendConfig as not yet written",
+                            "Write the TridentBackendConfig, retrying when another writer"
+                            " changes it first",
+                            _TBC_WRITE_FAIL_TASK,
+                        )
+                    ],
+                }
+            ]
+        )
+    )
+
+    current = None
+    if current_storage is not None:
+        current = {
+            "apiVersion": "trident.netapp.io/v1",
+            "kind": "TridentBackendConfig",
+            "metadata": {
+                "name": _TBC_STAND_IN_NAME,
+                "namespace": "trident",
+                "resourceVersion": "1",
+            },
+            "spec": {"backendName": _TBC_STAND_IN_NAME, "storage": current_storage},
+        }
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "object": current,
+                "version": 1 if current else 0,
+                "storage_manager": "earlier-run" if current else None,
+                "competing_writes": competing_writes,
+                "writes": [],
+            }
+        )
+    )
+    result = subprocess.run(
+        ["ansible-playbook", "-i", "localhost,", str(playbook)],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "ANSIBLE_CONFIG": str(REPO_ROOT / "ansible.cfg"),
+            "ANSIBLE_COLLECTIONS_PATH": (
+                f"{tmp_path}:{REPO_ROOT / 'collections'}:{REPO_ROOT / 'vendor'}"
+            ),
+            "ANSIBLE_FORCE_COLOR": "false",
+            "ANSIBLE_STDOUT_CALLBACK": "default",
+            "OSAC_TBC_STAND_IN_STATE": str(state_path),
+        },
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    return result, json.loads(state_path.read_text())
+
+
+def _tbc_writes(state: dict) -> list[tuple]:
+    """Return (state, resourceVersion sent, accepted) for each write the role made."""
+    return [
+        (write["state"], write["resourceVersion"], write["accepted"]) for write in state["writes"]
+    ]
+
+
+def test_netapp_tbc_write_retries_when_the_object_changed_after_the_read(tmp_path):
+    """Another run adds a pool after this run read the object. The patch that
+    carries the outdated resourceVersion is rejected, and the next attempt reads
+    the object again and adds its pool to the other run's list."""
+    gold, silver, bronze = (_tbc_stand_in_pool(tier) for tier in ("gold", "silver", "bronze"))
+    result, state = _run_tbc_write(tmp_path, [gold], [{"storage": [gold, bronze]}], "silver")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _tbc_writes(state) == [("patched", "1", False), ("patched", "2", True)]
+    assert state["object"]["spec"]["storage"] == [gold, bronze, silver]
+    assert state["competing_writes"] == []
+
+
+def test_netapp_tbc_write_retries_when_the_object_was_created_after_the_read(tmp_path):
+    """Another run creates the object after this run found none. The server-side
+    apply is rejected because the other run owns spec.storage, and the next
+    attempt reads the object and adds its pool to the other run's list."""
+    gold, silver = (_tbc_stand_in_pool(tier) for tier in ("gold", "silver"))
+    result, state = _run_tbc_write(tmp_path, None, [{"storage": [silver]}], "gold")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _tbc_writes(state) == [("present", None, False), ("patched", "1", True)]
+    assert state["object"]["spec"]["storage"] == [silver, gold]
+    assert state["object"]["spec"]["backendName"] == _TBC_STAND_IN_NAME
+    assert state["competing_writes"] == []
+
+
+def test_netapp_tbc_write_fails_when_every_attempt_is_rejected(tmp_path):
+    """Another writer changes the object after every read. Every patch is
+    rejected, the pool list stays as it was, and the run fails."""
+    gold = _tbc_stand_in_pool("gold")
+    result, state = _run_tbc_write(tmp_path, [gold], [{} for _ in range(5)], "silver")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert _tbc_writes(state) == [("patched", str(sent), False) for sent in range(1, 6)]
+    assert state["object"]["spec"]["storage"] == [gold]
+    failed_task = result.stdout.rsplit("fatal:", 1)[0].rsplit("TASK [", 1)[1]
+    assert failed_task.startswith(_TBC_WRITE_FAIL_TASK + "]"), result.stdout
 
 
 def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
@@ -937,17 +1479,15 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
     block_tasks = provision_block["block"]
     always_tasks = provision_block.get("always", [])
 
-    lookup_task = _find_task(
-        block_tasks, "Inspect referenced customer TridentBackendConfigs (best-effort)"
-    )
+    lookup_task = _find_task(block_tasks, "Look up referenced customer TridentBackendConfigs")
     assert lookup_task.get("failed_when") is False
     assert lookup_task.get("no_log") is True
 
-    # Only NotFound (empty resources) and Forbidden fall back to selector-only;
-    # any other lookup error fails instead of dropping the storagePools pin.
+    # A StorageClass is created only for a TridentBackendConfig that was read:
+    # NotFound (empty resources), Forbidden, and any other lookup error all fail.
     lookup_error_when = _find_task(
         block_tasks,
-        "Fail when a customer TridentBackendConfig lookup failed for a reason other than Forbidden",
+        "Fail when a referenced customer TridentBackendConfig cannot be read",
     )["when"]
 
     def _lookup_error(results):
@@ -956,14 +1496,24 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
             {"_netapp_is_shared_tbc": True, "_shared_tbc_lookups": {"results": results}},
         )
 
-    assert _lookup_error([{"item": "p", "resources": []}]) is False
-    assert _lookup_error([{"item": "p", "failed": False, "msg": "403 Forbidden: denied"}]) is False
+    assert _lookup_error([{"item": "p", "resources": [{"status": {"phase": "Bound"}}]}]) is False
     assert _lookup_error([{"item": "p", "skipped": True}]) is False
+    assert _lookup_error([{"item": "p", "resources": []}]) is True
+    assert _lookup_error([{"item": "p", "failed": False, "msg": "403 Forbidden: denied"}]) is True
     assert (
         _lookup_error([{"item": "p", "failed": False, "msg": "Failed to get client: timed out"}])
         is True
     )
     assert _lookup_error([{"item": "p", "failed": False}]) is True
+    assert (
+        _lookup_error(
+            [
+                {"item": "p", "resources": [{"status": {"phase": "Bound"}}]},
+                {"item": "q", "resources": []},
+            ]
+        )
+        is True
+    )
     assert (
         _render_when(
             lookup_error_when,
@@ -1170,10 +1720,22 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
         )
         is False
     )
+    # A Bound TridentBackendConfig that reports no backend name cannot be pinned.
+    assert (
+        _render_when(
+            fail_bname_when,
+            {
+                "_netapp_is_shared_tbc": True,
+                "_netapp_profile_backend_names": {"p1": "trident.prod_backend-01", "p2": ""},
+            },
+        )
+        is True
+    )
 
     for dedicated_task_name in (
         "Create the CSI Secret in the Trident namespace",
-        "Create the TridentBackendConfig for dispatched backend",
+        "Mark the TridentBackendConfig as not yet written",
+        "Write the TridentBackendConfig, retrying when another writer changes it first",
     ):
         dedicated_when = _find_task(block_tasks, dedicated_task_name)["when"]
         assert _render_when(dedicated_when, {"_netapp_is_shared_tbc": False}) is True
@@ -1327,6 +1889,11 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
         "_assignment_key",
         "_tbc_name",
         "_virtual_pools",
+        "_tbc_current",
+        "_tbc_definition",
+        "_tbc_create",
+        "_tbc_update",
+        "_tbc_written",
         "_shared_tbc_lookups",
         "_netapp_shared_sc_desired_params",
         "_netapp_stale_dedicated_sc_names",
@@ -1618,6 +2185,52 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         "_netapp_expected_sc_names": [sc_names[0]],
     }
     assert _render(all_exist_expr, dedicated_only_vars) is True
+
+    # A dispatch names only some of the tenant's tiers when VM creation asks for
+    # a missing tier, so pools of other tiers on the TBC do not block the
+    # short-circuit. A dispatched tier's pool that is missing or differs does.
+    other_tier_pool = {
+        "labels": {"osac_backend": tbc_names[0], "tier": "ded-silver"},
+        "defaults": {"encryption": "true"},
+    }
+
+    def _exist_vars_with_storage(storage: list[dict]) -> dict:
+        return {
+            **dedicated_only_vars,
+            "_netapp_tbc_checks": {
+                "resources": [
+                    {
+                        "metadata": {"name": tbc_names[0]},
+                        "spec": {**expected_tbc_spec, "storage": storage},
+                        "status": {"phase": "Bound"},
+                    }
+                ]
+            },
+        }
+
+    assert (
+        _render(
+            all_exist_expr,
+            _exist_vars_with_storage([other_tier_pool, *expected_tbc_spec["storage"]]),
+        )
+        is True
+    )
+    assert _render(all_exist_expr, _exist_vars_with_storage([other_tier_pool])) is False
+    assert (
+        _render(
+            all_exist_expr,
+            _exist_vars_with_storage(
+                [
+                    other_tier_pool,
+                    {
+                        "labels": {"osac_backend": tbc_names[0], "tier": "ded-gold"},
+                        "defaults": {"encryption": "true"},
+                    },
+                ]
+            ),
+        )
+        is False
+    )
 
     # Prepared management_lif and qos_policies participate in the comparison.
     qos_tiers = [

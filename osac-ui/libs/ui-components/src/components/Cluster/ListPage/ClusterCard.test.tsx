@@ -53,8 +53,8 @@ describe('ClusterCard', () => {
     );
     expect(screen.getByText('cluster-node-sets-object')).toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
-    expect(screen.getByText('Current version')).toBeInTheDocument();
-    expect(screen.getByText('4.19.0')).toBeInTheDocument();
+    expect(screen.getByText('Cluster version')).toBeInTheDocument();
+    expect(screen.getByText('OpenShift 4.19.0')).toBeInTheDocument();
     expect(screen.getByText('Active')).toBeInTheDocument();
     expect(screen.getByText('Node sets')).toBeInTheDocument();
     expect(screen.getByText('1 pool · 3 of 3 nodes ready')).toBeInTheDocument();
@@ -71,7 +71,7 @@ describe('ClusterCard', () => {
       <ClusterCard cluster={create(ClusterSchema, { id: 'missing', spec: cluster.spec })} />,
     );
 
-    expect(screen.getByText('Current version').closest('dt')?.nextElementSibling).toHaveTextContent(
+    expect(screen.getByText('Cluster version').closest('dt')?.nextElementSibling).toHaveTextContent(
       '—',
     );
     expect(screen.queryByText('Active')).not.toBeInTheDocument();

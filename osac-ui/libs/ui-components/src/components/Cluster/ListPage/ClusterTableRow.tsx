@@ -1,7 +1,6 @@
 import { Td, Tr } from '@patternfly/react-table';
 
 import { type Cluster, ClusterState, type ClusterVersion } from '@osac/types';
-import ClusterCurrentVersion from '@osac/ui-components/components/Cluster/ListPage/ClusterCurrentVersion';
 import ClusterResources from '@osac/ui-components/components/Cluster/ListPage/ClusterResources';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
@@ -14,7 +13,6 @@ export type ClusterTableColumn =
   | 'name'
   | 'status'
   | 'project'
-  | 'currentVersion'
   | 'configuration'
   | 'created'
   | 'actions';
@@ -45,11 +43,8 @@ export const ClusterTableRow = ({
         <ClusterStatusLabel state={cluster.status?.state} />
       </Td>
       <Td dataLabel={columnLabels.project}>{cluster.metadata?.project || t('Default')}</Td>
-      <Td dataLabel={columnLabels.currentVersion}>
-        <ClusterCurrentVersion cluster={cluster} clusterVersion={clusterVersion} />
-      </Td>
       <Td dataLabel={columnLabels.configuration}>
-        <ClusterResources cluster={cluster} includeVersion={false} />
+        <ClusterResources cluster={cluster} clusterVersion={clusterVersion} />
       </Td>
       <Td dataLabel={columnLabels.created}>{formatClusterCreatedAt(cluster.metadata)}</Td>
       <Td dataLabel={columnLabels.actions} isActionCell>

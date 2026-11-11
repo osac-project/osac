@@ -122,7 +122,7 @@ describe('ClustersPage', () => {
     const { transport, getClusterListFilter } = createTransport([makeCluster('c-active', 'v4.17')]);
     const { user } = renderClustersPage(transport);
 
-    await screen.findByText('4.17.0');
+    await screen.findByText('OpenShift 4.17.0');
 
     await user.click(screen.getByRole('button', { name: 'Filter clusters by status' }));
     await user.click(screen.getByRole('option', { name: 'Ready' }));
@@ -152,7 +152,7 @@ describe('ClustersPage', () => {
     const { transport, getClusterListFilter } = createTransport([makeCluster('c-active', 'v4.17')]);
     const { user } = renderClustersPage(transport);
 
-    await screen.findByText('4.17.0');
+    await screen.findByText('OpenShift 4.17.0');
 
     await user.click(screen.getByRole('button', { name: 'Filter by cluster version' }));
     await user.click(screen.getByRole('checkbox', { name: 'OpenShift 4.17.0' }));
@@ -168,7 +168,7 @@ describe('ClustersPage', () => {
     const { transport, getClusterListFilter } = createTransport([makeCluster('c-active', 'v4.17')]);
     const { user } = renderClustersPage(transport);
 
-    await screen.findByText('4.17.0');
+    await screen.findByText('OpenShift 4.17.0');
 
     const searchInput = screen.getByRole('textbox', { name: 'Filter clusters by name' });
     await user.type(searchInput, 'c-active');
@@ -189,7 +189,7 @@ describe('ClustersPage', () => {
     const { transport } = createTransport([desiredActive]);
     renderClustersPage(transport);
 
-    expect(await screen.findByText('4.15.0')).toBeInTheDocument();
+    expect(await screen.findByText('OpenShift 4.15.0')).toBeInTheDocument();
     expect(screen.getByText('Obsolete')).toBeInTheDocument();
     expect(screen.queryByText('Active')).not.toBeInTheDocument();
   });

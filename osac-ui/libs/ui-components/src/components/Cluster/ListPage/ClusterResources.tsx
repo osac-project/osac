@@ -3,25 +3,41 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  Flex,
+  FlexItem,
 } from '@patternfly/react-core';
 
-import { type Cluster, type ClusterVersion } from '@osac/types';
+import { type Cluster, ClusterUpgradeState, type ClusterVersion } from '@osac/types';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
-import ClusterCurrentVersion from './ClusterCurrentVersion';
+import { GuestOsIcon } from '../../shared/GuestOsIcon';
+import ClusterVersionLifecycleLabel from '../ClusterVersionLifecycleLabel';
 
 interface ClusterResourcesProps {
   cluster: Cluster;
   clusterVersion?: ClusterVersion;
-  includeVersion?: boolean;
 }
 
-const ClusterResources = ({
-  cluster,
-  clusterVersion,
-  includeVersion = true,
-}: ClusterResourcesProps) => {
+const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) => {
   const { t } = useTranslation();
+  const observedVersion = cluster.status?.observedVersion?.trim();
+  const versionLabel = observedVersion
+    ? /^openshift\s/i.test(observedVersion)
+      ? observedVersion
+      : `OpenShift ${observedVersion}`
+    : '—';
+  const matchingVersion =
+    observedVersion && clusterVersion?.spec?.version === observedVersion
+      ? clusterVersion
+      : undefined;
+  const latestControlPlaneAttempt = cluster.status?.upgradeHistory.find(
+    (entry) => entry.component?.target.case === 'controlPlane',
+  );
+  const activeTarget =
+    latestControlPlaneAttempt?.state === ClusterUpgradeState.PENDING ||
+    latestControlPlaneAttempt?.state === ClusterUpgradeState.PROGRESSING
+      ? latestControlPlaneAttempt.targetVersion.trim()
+      : undefined;
 
   const specNodeSets = cluster.spec?.nodeSets;
   const statusNodeSets = cluster.status?.nodeSets ?? {};
@@ -48,14 +64,27 @@ const ClusterResources = ({
 
   return (
     <DescriptionList isHorizontal isCompact>
-      {includeVersion && (
-        <DescriptionListGroup>
-          <DescriptionListTerm>{t('Current version')}</DescriptionListTerm>
-          <DescriptionListDescription>
-            <ClusterCurrentVersion cluster={cluster} clusterVersion={clusterVersion} />
-          </DescriptionListDescription>
-        </DescriptionListGroup>
-      )}
+      <DescriptionListGroup>
+        <DescriptionListTerm>{t('Cluster version')}</DescriptionListTerm>
+        <DescriptionListDescription>
+          <Flex flexWrap={{ default: 'nowrap' }} gap={{ default: 'gapXs' }}>
+            {observedVersion ? (
+              <FlexItem>
+                <GuestOsIcon os="rhel" size="sm" />
+              </FlexItem>
+            ) : null}
+            <FlexItem>
+              {versionLabel}
+              {observedVersion && activeTarget ? ` → ${activeTarget}` : null}
+            </FlexItem>
+            {matchingVersion && (
+              <FlexItem>
+                <ClusterVersionLifecycleLabel clusterVersion={matchingVersion} />
+              </FlexItem>
+            )}
+          </Flex>
+        </DescriptionListDescription>
+      </DescriptionListGroup>
       <DescriptionListGroup>
         <DescriptionListTerm>{t('Node sets')}</DescriptionListTerm>
         <DescriptionListDescription>{nodeSetsSummary}</DescriptionListDescription>

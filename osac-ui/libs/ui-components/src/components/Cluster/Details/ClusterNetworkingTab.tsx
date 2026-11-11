@@ -26,7 +26,6 @@ const ClusterNodeSetsTab = ({ cluster }: ClusterNodeSetsTabProps) => {
                 <Th>{t('Name')}</Th>
                 <Th>{t('Host type')}</Th>
                 <Th>{t('Size')}</Th>
-                <Th>{t('Current version')}</Th>
               </Tr>
             </Thead>
             <Tbody>
@@ -37,9 +36,6 @@ const ClusterNodeSetsTab = ({ cluster }: ClusterNodeSetsTabProps) => {
                     {displayValue(nodeSet.baremetalInstanceType?.name)}
                   </Td>
                   <Td dataLabel={t('Size')}>{nodeSet.size}</Td>
-                  <Td dataLabel={t('Current version')}>
-                    {displayValue(cluster.status?.nodeSets[key]?.observedVersion)}
-                  </Td>
                 </Tr>
               ))}
             </Tbody>

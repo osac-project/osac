@@ -19,7 +19,6 @@ export const ClustersTable = ({ clusters, resolveClusterVersion }: ClustersTable
       name: t('Name'),
       status: t('Status'),
       project: t('Project'),
-      currentVersion: t('Current version'),
       configuration: t('Configuration'),
       created: t('Created'),
       actions: t('Actions'),
@@ -34,7 +33,6 @@ export const ClustersTable = ({ clusters, resolveClusterVersion }: ClustersTable
           <Th>{columnLabels.name}</Th>
           <Th>{columnLabels.status}</Th>
           <Th>{columnLabels.project}</Th>
-          <Th>{columnLabels.currentVersion}</Th>
           <Th>{columnLabels.configuration}</Th>
           <Th>{columnLabels.created}</Th>
           <Th aria-label={columnLabels.actions} />

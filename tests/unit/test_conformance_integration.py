@@ -11,6 +11,7 @@ from tests.conformance.area import load_areas
 from tests.conformance.cli import Runtime, main
 from tests.conformance.config import load_config
 from tests.conformance.output import OutputSink
+from tests.conformance.profiles import ProfileDefinition
 from tests.conformance.redact import Redactor
 from tests.conformance.testing.fake_lab import FakeLab, FakeLabClient
 from tests.conformance.testtree import PytestTestTree
@@ -21,8 +22,8 @@ def _config(path: Path, token: Path, ca: Path, hub: Path) -> Path:
         yaml.safe_dump(
             {
                 "osacRelease": "1.4.0",
+                "profiles": ["vm"],
                 "lab": {
-                    "selectors": ["generic"],
                     "kubeconfig": str(hub),
                     "apiURL": "http://lab.example.test",
                     "tokenFile": str(token),
@@ -42,13 +43,12 @@ def _area(path: Path) -> Path:
             {
                 "name": "networking",
                 "componentTests": ["test_passes"],
-                "profiles": {},
                 "identityFields": ["name"],
                 "configurationErrors": [],
                 "supportCondition": "conformant",
                 "registrationSource": "networking",
                 "titles": {},
-                "selectors": {"generic": ["test_passes"]},
+                "selectors": {"generic": ["test_passes"], "vmaas": ["test_passes"]},
                 "checks": [],
                 "timeoutDefaults": {},
                 "componentJobTimeout": "60m",
@@ -62,11 +62,16 @@ def _area(path: Path) -> Path:
     return path
 
 
+def _catalog() -> dict[str, ProfileDefinition]:
+    return {"generic": ProfileDefinition("generic", ("generic",)), "vm": ProfileDefinition("vm", ("vmaas",))}
+
+
 def _tree(path: Path) -> Path:
     path.mkdir()
     path.joinpath("test_sample.py").write_text(
         "import pytest\n"
         "@pytest.mark.conformance_generic\n"
+        "@pytest.mark.conformance_vmaas\n"
         "@pytest.mark.sig_networking\n"
         "@pytest.mark.conformance_blocking\n"
         "def test_passes():\n"
@@ -96,6 +101,7 @@ def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
     runtime = Runtime(
         config=config,
         areas=load_areas(areas_dir),
+        profile_catalog=_catalog(),
         tree=PytestTestTree(root=tree_dir),
         lab=FakeLabClient(FakeLab()),
         results=results,
@@ -148,6 +154,7 @@ def test_missing_podman_socket_and_empty_plan_are_config_errors(
         return Runtime(
             config=config,
             areas=load_areas(areas_dir),
+            profile_catalog=_catalog(),
             tree=PytestTestTree(root=tree_dir),
             lab=FakeLabClient(FakeLab()),
             results=path,
@@ -175,7 +182,7 @@ def test_missing_podman_socket_and_empty_plan_are_config_errors(
     assert "no tests" in capsys.readouterr().err
 
 
-def test_unknown_selector_is_a_config_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_unknown_profile_is_a_config_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     token = tmp_path / "token"
     token.write_text("admin")
     ca = tmp_path / "ca.pem"
@@ -187,8 +194,8 @@ def test_unknown_selector_is_a_config_error(tmp_path: Path, capsys: pytest.Captu
         yaml.safe_dump(
             {
                 "osacRelease": "1.4.0",
+                "profiles": ["frobnicate"],
                 "lab": {
-                    "selectors": ["frobnicate"],
                     "kubeconfig": str(hub),
                     "apiURL": "http://lab.example.test",
                     "tokenFile": str(token),

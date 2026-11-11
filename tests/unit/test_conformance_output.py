@@ -20,7 +20,7 @@ def _test() -> TestIdentity:
         labels=frozenset({"conformance_generic"}),
         area="networking",
         layer=Layer.COMPONENT,
-        profile=None,
+        profiles=(),
         classification=Classification.BLOCKING,
     )
 
@@ -51,7 +51,7 @@ def test_evidence_is_redacted_and_confined(tmp_path: Path) -> None:
 
 
 def test_write_plan_records_selectors_and_tests(tmp_path: Path) -> None:
-    plan = Plan((_test(),), ("generic",), True)
+    plan = Plan((_test(),), ("generic",), ("generic",), True)
 
     path = write_plan(plan, tmp_path)
 

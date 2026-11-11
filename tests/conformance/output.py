@@ -65,6 +65,7 @@ def _test_selectors(test: TestIdentity) -> list[str]:
 
 def plan_document(plan: Plan) -> dict[str, object]:
     return {
+        "profiles": list(plan.profiles),
         "selectors": list(plan.selectors),
         "tests": [{"id": test.id, "name": test.name, "selectors": _test_selectors(test)} for test in plan.tests],
         "complete": plan.complete,

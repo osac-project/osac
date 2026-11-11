@@ -15,7 +15,6 @@ def _area(name: str = "networking") -> dict[str, object]:
     return {
         "name": name,
         "componentTests": ["TC-COMP-01"],
-        "profiles": {"vm": "vmaas"},
         "identityFields": ["name", "ansibleRole"],
         "configurationErrors": ["vm needs evpn"],
         "supportCondition": "a conformant report is required",
@@ -44,7 +43,6 @@ def test_loads_a_valid_area(tmp_path: Path) -> None:
     assert set(areas) == {"networking"}
     area = areas["networking"]
     assert area.name == "networking"
-    assert area.profiles == {"vm": "vmaas"}
     assert area.component_tests == ("TC-COMP-01",)
     assert area.selectors["vmaas"] == ("TC-PROFILE-01",)
 
@@ -74,9 +72,9 @@ def test_duplicate_area_name_is_a_config_error(tmp_path: Path) -> None:
     assert "networking" in "\n".join(exc.value.checks)
 
 
-def test_profile_mapping_must_be_a_mapping(tmp_path: Path) -> None:
+def test_unknown_area_field_is_a_config_error(tmp_path: Path) -> None:
     data = _area()
-    data["profiles"] = ["vm"]
+    data["profiles"] = {"vm": "vmaas"}
     _write(tmp_path / "networking.yaml", data)
 
     with pytest.raises(ConfigError) as exc:

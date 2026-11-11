@@ -14,14 +14,14 @@ from tests.conformance.errors import ConfigError
 _LIST_FIELDS = ("componentTests", "identityFields", "configurationErrors", "checks", "evidence", "referenceComponents")
 _STRING_FIELDS = ("supportCondition", "registrationSource", "componentJobTimeout", "settingsSource")
 _MAPPING_LIST_FIELDS = ("selectors",)
-_MAPPING_STRING_FIELDS = ("profiles", "titles", "timeoutDefaults")
+_MAPPING_STRING_FIELDS = ("titles", "timeoutDefaults")
+_KNOWN_FIELDS = frozenset({"name", *_LIST_FIELDS, *_STRING_FIELDS, *_MAPPING_LIST_FIELDS, *_MAPPING_STRING_FIELDS})
 
 
 @dataclass(frozen=True)
 class AreaDeclaration:
     name: str
     component_tests: tuple[str, ...]
-    profiles: Mapping[str, str]
     identity_fields: tuple[str, ...]
     configuration_errors: tuple[str, ...]
     support_condition: str
@@ -72,6 +72,9 @@ def _parse(path: Path) -> AreaDeclaration:
         raise ConfigError([f"{path.name}: area declaration must be a mapping"])
 
     checks: list[str] = []
+    for key in data:
+        if key not in _KNOWN_FIELDS:
+            checks.append(f"{key} is not defined by this release")
     name = data.get("name")
     if not isinstance(name, str) or not name:
         checks.append("name must be a non-empty string")
@@ -90,7 +93,6 @@ def _parse(path: Path) -> AreaDeclaration:
     return AreaDeclaration(
         name=name,
         component_tests=_list_of_strings(data["componentTests"], "componentTests", path.name),
-        profiles=_mapping_of_strings(data["profiles"], "profiles", path.name),
         identity_fields=_list_of_strings(data["identityFields"], "identityFields", path.name),
         configuration_errors=_list_of_strings(data["configurationErrors"], "configurationErrors", path.name),
         support_condition=str(data["supportCondition"]),

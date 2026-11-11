@@ -23,7 +23,12 @@ def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:
         ],
         "enabledServices": list(report.enabled_services),
         "profiles": [
-            {"name": profile.name, "area": profile.area, "required": profile.required, "result": profile.result.value}
+            {
+                "name": profile.name,
+                "selectors": list(profile.selectors),
+                "required": profile.required,
+                "result": profile.result.value,
+            }
             for profile in report.profiles
         ],
         "tests": [
@@ -31,7 +36,7 @@ def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:
                 "id": test.identity.id,
                 "name": redactor.text(test.identity.name),
                 "layer": test.identity.layer.value,
-                "profile": test.identity.profile or "",
+                "profiles": list(test.identity.profiles),
                 "classification": test.identity.classification.value,
                 "result": test.result.value,
                 "durationSeconds": test.duration_seconds,

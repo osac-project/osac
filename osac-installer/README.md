@@ -702,6 +702,52 @@ make uninstall
 
 #### Makefile Targets
 
+Native Linux container-engine hosts can opt in to temporary inotify preparation
+before creating clusters or running workloads with many filesystem watchers:
+
+```bash
+make ensure-inotify
+```
+
+This raises only `fs.inotify.max_user_instances` to a floor of 512 and verifies
+the result. Equal or higher values are preserved. The change is not persisted
+to `/etc/sysctl.d/`; repeat preparation after a host restart if needed. Raising
+the limit requires root or already-authorized passwordless `sudo -n`; a host
+that already meets the floor needs neither. This is general host preparation,
+not an installation prerequisite: normal install and test targets do not run
+it automatically.
+
+Run this command on the actual native Linux container-engine host. Automated
+tuning refuses non-Linux systems, remote engine endpoints, named Podman
+connections and Docker contexts, because local procfs cannot establish their
+host's readiness. Prepare the Linux engine host manually in those cases. The
+helper follows the Kind runtime's selection: `KIND_EXPERIMENTAL_PROVIDER`
+overrides Podman-first auto-detection (Docker otherwise). For a Docker target,
+it checks `docker context show` before reading or changing the limit, including
+the context persisted by `docker context use`. A local Unix `DOCKER_HOST`
+overrides that persisted context; an explicit `DOCKER_CONTEXT` is still refused.
+For Podman, `podman info` must report a recognized client transport mode.
+Native local mode ignores unused saved connections. API mode requires a
+resolved local Unix URI: an explicit `CONTAINER_HOST` takes precedence over
+the saved default connection. SSH/TCP transports, failed metadata queries,
+and unknown or unresolved transport metadata are refused before checking
+even an already-sufficient limit. Unix API sockets are supported; API mode
+alone does not imply a remote host. Persisted connection names, URIs and
+metadata-query diagnostics are never printed. Docker selection never queries
+Podman, and Podman selection never queries Docker.
+For example,
+`make ensure-inotify KIND_EXPERIMENTAL_PROVIDER=docker` selects Docker even
+when Podman is also installed. The target passes the selected provider through
+an exported environment value, not shell-source interpolation; only `docker`
+and `podman` are accepted. Context names and context-query diagnostics are not
+printed. The helper reports an error if the value cannot be read, raised or
+verified. Write-command stdout is suppressed and arbitrary stderr is never
+printed. Fixed diagnostic categories distinguish read-only filesystem,
+invalid argument, permission denied, sudo policy plugin failure and sudo
+authorization denial; unrecognized errors report a generic write failure.
+A passwordless-sudo hint appears only for a recognized password-required
+diagnostic. Other write errors are not assumed to be authorization failures.
+
 ```bash
 make install       PLATFORM=... PROFILE=... NS=...  # Full install (infra + osac)
 make install-infra PLATFORM=... PROFILE=... NS=...  # Infrastructure only

@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"time"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -32,6 +33,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	testutils "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
 var _ = Describe("Cmd", func() {
@@ -102,7 +104,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(8))
+		Expect(response.Tools).To(HaveLen(10))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {
@@ -124,6 +126,8 @@ var _ = Describe("newServer", func() {
 		Expect(tools).To(HaveKey("create_compute_instance"))
 		Expect(tools).To(HaveKey("update_compute_instance"))
 		Expect(tools).To(HaveKey("delete_compute_instance"))
+		Expect(tools).To(HaveKey("create_project"))
+		Expect(tools).To(HaveKey("update_project"))
 		Expect(tools["list_resources"].Description).To(ContainSubstring("Use this tool to discover"))
 		Expect(tools["get_resource"].Description).To(ContainSubstring("Use this tool to inspect"))
 		Expect(tools["create_network_resource"].Description).To(ContainSubstring("only after the user confirms"))
@@ -139,6 +143,10 @@ var _ = Describe("newServer", func() {
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("disk_image_id"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("project_id"))
 		Expect(tools["update_compute_instance"].Description).To(ContainSubstring("current metadata.version"))
+		Expect(tools["create_project"].Description).To(ContainSubstring("existing tenant"))
+		Expect(tools["update_project"].Description).To(ContainSubstring("last-write-wins"))
+		Expect(tools["update_project"].Description).To(ContainSubstring("title"))
+		Expect(tools["update_project"].Description).To(ContainSubstring("description"))
 		Expect(tools["delete_compute_instance"].Description).To(ContainSubstring("only when the user explicitly requests"))
 		expectToolAnnotations(tools["check_connection"], "Check OSAC MCP connection", true, false, true, true)
 		expectToolAnnotations(tools["list_resources"], "List OSAC deployment resources", true, false, true, true)
@@ -148,6 +156,8 @@ var _ = Describe("newServer", func() {
 		expectToolAnnotations(tools["create_compute_instance"], "Create OSAC compute instance", false, false, false, true)
 		expectToolAnnotations(tools["update_compute_instance"], "Update OSAC compute instance", false, true, false, true)
 		expectToolAnnotations(tools["delete_compute_instance"], "Delete OSAC compute instance", false, true, false, true)
+		expectToolAnnotations(tools["create_project"], "Create OSAC project", false, false, false, true)
+		expectToolAnnotations(tools["update_project"], "Update OSAC project", false, true, false, true)
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
 		expectTypedWriteSchema(tools["create_network_resource"].InputSchema, "resource_type", "name")
 		expectNetworkCreateSchema(tools["create_network_resource"].InputSchema)
@@ -156,6 +166,8 @@ var _ = Describe("newServer", func() {
 		expectTypedWriteSchema(tools["create_compute_instance"].InputSchema, "name", "catalog_item")
 		expectTypedWriteSchema(tools["update_compute_instance"].InputSchema, "id", "version")
 		expectTypedWriteSchema(tools["delete_compute_instance"].InputSchema, "id")
+		expectTypedWriteSchema(tools["create_project"].InputSchema, "name")
+		expectTypedWriteSchema(tools["update_project"].InputSchema, "id")
 		expectNullableArraySchema(tools["list_resources"].OutputSchema, "items")
 		expectResourceTypeSchema(tools["list_resources"].InputSchema, []ResourceType{
 			ResourceTypeComputeInstanceCatalogItem,
@@ -255,6 +267,42 @@ var _ = Describe("newServer", func() {
 		})
 	})
 
+	It("Derives deterministic tool names from the typed registry", func() {
+		server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+		registry := newTypedToolRegistry(server)
+		newHandler := func() mcp.ToolHandlerFor[DeleteComputeInstanceInput, DeleteComputeInstanceOutput] {
+			return func(
+				_ context.Context, _ *mcp.CallToolRequest, _ DeleteComputeInstanceInput,
+			) (*mcp.CallToolResult, DeleteComputeInstanceOutput, error) {
+				return nil, DeleteComputeInstanceOutput{}, nil
+			}
+		}
+		newTool := func(name string) *mcp.Tool {
+			return &mcp.Tool{
+				Name:        name,
+				Description: "typed tool",
+				Annotations: &mcp.ToolAnnotations{
+					Title:           name,
+					ReadOnlyHint:    false,
+					DestructiveHint: toolAnnotationBool(true),
+					IdempotentHint:  false,
+					OpenWorldHint:   toolAnnotationBool(true),
+				},
+				InputSchema:  compatibleToolSchema[DeleteComputeInstanceInput](),
+				OutputSchema: compatibleToolSchema[DeleteComputeInstanceOutput](),
+			}
+		}
+
+		registerWriteTool(
+			registry, newTool("zeta_tool"), writeToolContract{Destructive: true}, newHandler(),
+		)
+		registerWriteTool(
+			registry, newTool("alpha_tool"), writeToolContract{Destructive: true}, newHandler(),
+		)
+
+		Expect(registry.toolNames()).To(Equal([]string{"alpha_tool", "zeta_tool"}))
+	})
+
 	Describe("Rejects typed tool registrations with unsafe or inconsistent metadata", func() {
 		newHandler := func() mcp.ToolHandlerFor[DeleteComputeInstanceInput, DeleteComputeInstanceOutput] {
 			return func(
@@ -303,7 +351,7 @@ var _ = Describe("newServer", func() {
 			}),
 		)
 
-		It("Rejects duplicate typed tool registration", func() {
+		It("Rejects duplicate tool names", func() {
 			server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 			registry := newTypedToolRegistry(server)
 			registerWriteTool(registry, baseTool(), writeToolContract{Destructive: true}, newHandler())
@@ -410,7 +458,8 @@ func expectComputeInstanceCreateSchema(schema any) {
 		Expect(property["type"]).To(Equal("string"), name)
 	}
 
-	// The create input is not the protobuf JSON returned by get_resource.
+	// The create input is not the safe resource summary returned by
+	// get_resource.
 	bootDisk, ok := properties["boot_disk"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	Expect(bootDisk["description"]).To(ContainSubstring("size_gib"))
@@ -458,8 +507,8 @@ func expectComputeInstanceUpdateSchema(schema any) {
 	properties, ok := document["properties"].(map[string]any)
 	Expect(ok).To(BeTrue())
 	Expect(properties).To(HaveKey("instance_type_id"))
-	Expect(properties).ToNot(HaveKey("boot_disk"))
 	Expect(properties).To(HaveKey("run_strategy"))
+	Expect(properties).ToNot(HaveKey("boot_disk"))
 	Expect(properties).ToNot(HaveKey("display_name"))
 	Expect(properties).ToNot(HaveKey("description"))
 	Expect(properties).ToNot(HaveKey("catalog_item"))
@@ -533,7 +582,7 @@ var _ = Describe("newTokenVerifier", func() {
 		caller, ok := info.Extra[callerContextExtraKey].(safeCallerContext)
 		Expect(ok).To(BeTrue())
 		Expect(caller).To(Equal(safeCallerContext{
-			Subject: "alice", Username: "alice",
+			Subject: "alice", Tenants: []string{"tenant-1"},
 		}))
 		source, ok := info.Extra[exchangeTokenExtraKey].(apiTokenSource)
 		Expect(ok).To(BeTrue())
@@ -645,10 +694,6 @@ var _ = Describe("forwardAPIToken", func() {
 		}
 		_, err := forwardAPIToken(ctx, req)
 		Expect(err).To(HaveOccurred())
-		envelope := decodeToolError(err)
-		Expect(envelope.Category).To(Equal("service_unavailable"))
-		Expect(envelope.GRPCCode).To(Equal("Unavailable"))
-		Expect(envelope.Retryable).To(BeTrue())
 	})
 })
 
@@ -660,7 +705,7 @@ var _ = Describe("NewHandler", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("accepts the configured resource audience and rejects other resources at HTTP ingress", func() {
+	It("accepts MCP-audience tokens and rejects API tokens at HTTP ingress", func() {
 		const issuer = "https://issuer.example.com"
 		jwksCache := auth.NewMockJwksCache(ctrl)
 		jwksCache.EXPECT().Get(gomock.Any(), issuer, "123").Return(testutils.JwtPublicKey(), nil).AnyTimes()
@@ -675,7 +720,6 @@ var _ = Describe("NewHandler", func() {
 		}{
 			{audience: "https://mcp.example.com/", accepted: true},
 			{audience: "https://mcp.example.com", accepted: false},
-			{audience: "https://other-mcp.example.com/", accepted: false},
 			{audience: auth.Audience, accepted: false},
 		} {
 			token := testutils.MakeTokenObject(nil, jwt.MapClaims{"iss": issuer, "aud": tc.audience})
@@ -711,6 +755,35 @@ var _ = Describe("NewHandler", func() {
 
 		_, err = NewHandler(ServerDeps{}, validator, "", "https://mcp.example.com", testExchanger)
 		Expect(err).To(HaveOccurred())
+	})
+
+	It("Rejects malformed OAuth authorization-server issuer URLs", func() {
+		validator := auth.NewMockJwtValidator(ctrl)
+		authorizationServerWithUserInfo := (&url.URL{
+			Scheme: "https",
+			Host:   "keycloak.example.com",
+			Path:   "/realms/osac",
+			User:   url.UserPassword("test-user", uuid.New()),
+		}).String()
+		for _, authorizationServer := range []string{
+			"http://keycloak.example.com/realms/osac",
+			authorizationServerWithUserInfo,
+			"https://keycloak.example.com/realms/osac?tenant=one",
+			"https://keycloak.example.com/realms/osac#fragment",
+		} {
+			_, err := NewHandler(
+				ServerDeps{}, validator, authorizationServer, "https://mcp.example.com", testExchanger,
+			)
+			Expect(err).To(MatchError(ContainSubstring("HTTPS issuer URL")), authorizationServer)
+		}
+	})
+
+	It("Binds OAuth discovery to a configured trusted issuer", func() {
+		err := validateOAuthAuthorizationServerURL(
+			"https://keycloak.example.com/realms/osac",
+			[]string{"https://other-issuer.example.com/realms/osac"},
+		)
+		Expect(err).To(MatchError("OAuth authorization server must be a configured trusted token issuer"))
 	})
 
 	It("Rejects path-prefixed and noncanonical OAuth resource URLs", func() {

@@ -81,6 +81,8 @@ ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_not_found"
   "cluster_working_namespace:test_predefined"
   "cluster_working_namespace:test_found"
+  "caas_core_lifecycle:install"
+  "caas_core_lifecycle:delete"
   "compute_instance_create:sysprep_secret_copy"
   "compute_instance_create:volume_id_validation"
   "compute_instance_create:volume_id_annotations"

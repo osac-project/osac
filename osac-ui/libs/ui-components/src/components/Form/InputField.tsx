@@ -1,19 +1,10 @@
 import { type ReactNode, useRef } from 'react';
-import {
-  FormGroup,
-  NumberInput,
-  Split,
-  SplitItem,
-  Stack,
-  TextArea,
-  TextInput,
-} from '@patternfly/react-core';
+import { FormGroup, NumberInput, Split, SplitItem, Stack } from '@patternfly/react-core';
 import { useField } from 'formik';
 
 import { getVisibleFieldError } from './fieldError';
 import { useShowFieldValidationErrors } from './FieldValidationContext';
 import { FormFieldHelper, getFormFieldHelperDescribedBy } from './FormFieldHelper';
-import { useTrimmedInput } from './useTrimmedInput';
 
 interface InputFieldProps {
   name: string;
@@ -21,10 +12,7 @@ interface InputFieldProps {
   fieldId: string;
   isRequired?: boolean;
   isDisabled?: boolean;
-  multiline?: boolean;
-  rows?: number;
-  resizeOrientation?: 'vertical' | 'horizontal' | 'both' | 'none';
-  type?: 'text' | 'number' | 'password';
+  type: 'number';
   helperText?: string;
   placeholder?: string;
   labelInfo?: ReactNode;
@@ -41,10 +29,6 @@ export const InputField = ({
   fieldId,
   isRequired = false,
   isDisabled = false,
-  multiline = false,
-  rows = 8,
-  resizeOrientation = 'vertical',
-  type = 'text',
   helperText,
   placeholder,
   labelInfo,
@@ -60,13 +44,7 @@ export const InputField = ({
   const error = getVisibleFieldError(meta, showValidationErrors);
   const validated = error ? 'error' : 'default';
   const helperDescribedBy = getFormFieldHelperDescribedBy(fieldId, error, helperText);
-  const trimmedInput = useTrimmedInput(field.value, helpers.setValue);
   const emptyNumberInputOnBlur = useRef(false);
-
-  const handleBlur = (event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    field.onBlur(event);
-    trimmedInput.onBlur();
-  };
 
   const handleNumberChange = (event: React.FormEvent<HTMLInputElement>) => {
     const value = event.currentTarget.value.trim();
@@ -101,73 +79,34 @@ export const InputField = ({
 
   const textComponent = (
     <Stack>
-      {multiline ? (
-        <TextArea
-          id={fieldId}
-          name={name}
-          value={trimmedInput.value}
-          placeholder={placeholder}
-          rows={rows}
-          resizeOrientation={resizeOrientation}
-          aria-label={label}
-          onChange={(_event, value) => trimmedInput.onChange(value)}
-          onBlur={handleBlur}
-          isDisabled={isDisabled}
-          validated={validated}
-          aria-invalid={error ? true : undefined}
-          aria-describedby={helperDescribedBy}
-        />
-      ) : (
-        <Split hasGutter>
-          <SplitItem isFilled>
-            {type === 'number' ? (
-              <NumberInput
-                value={numberValue}
-                min={min}
-                max={max}
-                inputName={name}
-                inputAriaLabel={label}
-                onMinus={() => adjustNumber(-1)}
-                onPlus={() => adjustNumber(1)}
-                onChange={handleNumberChange}
-                isDisabled={isDisabled}
-                validated={validated}
-                inputProps={{
-                  id: fieldId,
-                  placeholder,
-                  inputMode,
-                  min,
-                  max,
-                  step,
-                  onBlurCapture: handleNumberBlurCapture,
-                  'aria-invalid': error ? true : undefined,
-                  'aria-describedby': helperDescribedBy,
-                }}
-              />
-            ) : (
-              <TextInput
-                id={fieldId}
-                name={name}
-                type={type}
-                inputMode={inputMode}
-                value={trimmedInput.value}
-                placeholder={placeholder}
-                min={min}
-                max={max}
-                step={step}
-                onChange={(_event, value) => trimmedInput.onChange(value)}
-                onBlur={handleBlur}
-                isDisabled={isDisabled}
-                validated={validated}
-                aria-invalid={error ? true : undefined}
-                aria-describedby={helperDescribedBy}
-                aria-label={label}
-              />
-            )}
-          </SplitItem>
-          {children && <SplitItem>{children}</SplitItem>}
-        </Split>
-      )}
+      <Split hasGutter>
+        <SplitItem isFilled>
+          <NumberInput
+            value={numberValue}
+            min={min}
+            max={max}
+            inputName={name}
+            inputAriaLabel={label}
+            onMinus={() => adjustNumber(-1)}
+            onPlus={() => adjustNumber(1)}
+            onChange={handleNumberChange}
+            isDisabled={isDisabled}
+            validated={validated}
+            inputProps={{
+              id: fieldId,
+              placeholder,
+              inputMode,
+              min,
+              max,
+              step,
+              onBlurCapture: handleNumberBlurCapture,
+              'aria-invalid': error ? true : undefined,
+              'aria-describedby': helperDescribedBy,
+            }}
+          />
+        </SplitItem>
+        {children && <SplitItem>{children}</SplitItem>}
+      </Split>
       <FormFieldHelper error={error} description={helperText} fieldId={fieldId} />
     </Stack>
   );

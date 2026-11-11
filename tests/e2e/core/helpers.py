@@ -347,7 +347,7 @@ def wait_for_subnet_cr(*, k8s: K8sClient, uuid: str) -> str:
 
 def wait_for_subnet_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_ready_condition(resource="subnet", name=name, checked=False),
+        fn=lambda: k8s.get_ready_condition(resource="subnets.osac.openshift.io", name=name, checked=False),
         until=lambda v: v == "True",
         retries=60,
         delay=5,
@@ -438,7 +438,7 @@ def wait_for_grpc_security_group_ready(*, grpc: GRPCClient, sg_id: str) -> None:
 
 def wait_for_subnet_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="subnet", name=name),
+        fn=lambda: not k8s.is_present(resource="subnets.osac.openshift.io", name=name),
         until=lambda v: v is True,
         retries=120,
         delay=5,
@@ -1451,7 +1451,7 @@ def wait_for_security_group_cr(*, k8s: K8sClient, uuid: str) -> str:
 
 def wait_for_security_group_ready(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: k8s.get_ready_condition(resource="securitygroup", name=name, checked=False),
+        fn=lambda: k8s.get_ready_condition(resource="securitygroups.osac.openshift.io", name=name, checked=False),
         until=lambda v: v == "True",
         retries=60,
         delay=5,
@@ -1489,7 +1489,7 @@ def wait_for_security_group_update(*, grpc: GRPCClient, sg_id: str) -> None:
 
 def wait_for_security_group_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="securitygroup", name=name),
+        fn=lambda: not k8s.is_present(resource="securitygroups.osac.openshift.io", name=name),
         until=lambda v: v is True,
         retries=120,
         delay=5,

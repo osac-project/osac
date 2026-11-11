@@ -8,12 +8,12 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import type { ComputeInstance } from '@osac/types';
+import { type ComputeInstance, InstanceTypes } from '@osac/types';
+import { useGetResource } from '@osac/ui-components/api/use-resource';
 
 import VmDetailsActionButtons from './VmDetailsActionButtons';
 import VmDetailsSections from './VmDetailsSections';
 import { useDiskImage } from '../../../api/v1/disk-image';
-import { useInstanceType } from '../../../api/v1/instance-types';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import { VmStatusLabel } from '../../../VmStatusLabel';
@@ -25,11 +25,12 @@ interface Props {
 
 const VmDetails = ({ vm }: Props) => {
   const { t } = useTranslation();
+  const id = vm.spec?.instanceType?.id;
   const {
     data: instanceType,
     isLoading: isInstanceTypeLoading,
     error: instanceTypeError,
-  } = useInstanceType(vm.spec?.instanceType?.id);
+  } = useGetResource(InstanceTypes, { id }, { enabled: !!id });
   const {
     data: diskImage,
     isLoading: isDiskImageLoading,
@@ -92,7 +93,7 @@ const VmDetails = ({ vm }: Props) => {
 
       <VmDetailsSections
         vm={vm}
-        instanceType={instanceType}
+        instanceType={instanceType?.object}
         isInstanceTypeLoading={isInstanceTypeLoading}
         diskImage={diskImage}
         isDiskImageLoading={isDiskImageLoading}

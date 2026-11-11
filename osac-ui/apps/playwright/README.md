@@ -41,6 +41,46 @@ pnpm install
 pnpm --filter @osac/playwright exec playwright install chromium
 ```
 
+For a fresh RHEL 9 host, use the two-stage helper instead. Preparation does
+not read credentials, select a flow, or run tests; the second command does.
+The preparation step also validates the OSAC CLI and, when a privileged
+kubeconfig is available, checks that the configured VM can be scheduled before
+the browser flow starts.
+
+```bash
+bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
+  --osac-ui-dir="$PWD" --kubeconfig="${KUBECONFIG:-}"
+
+export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=<keycloak-user>
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD && printf '\n'
+bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
+  --osac-ui-dir="$PWD" --tag=happy_basic
+unset OSAC_ADMIN_PASSWORD
+```
+
+The preparation helper installs Node.js, npm, pnpm, Playwright dependencies,
+and Chromium. It installs `openshift-clients` when possible, validates the
+OSAC CLI, and validates the checkout's `extravars.yaml`. When `oc` and a
+reachable `KUBECONFIG` are available, it checks both OSAC routes and performs a
+VMaaS capacity preflight. A capacity failure means the cluster needs more
+allocatable memory/CPU or the configured instance type must be reduced; the
+script never changes cluster sizing automatically. The runner accepts the flow
+tags listed below, validates the deployment and VMaaS prerequisites, and keeps
+run-time credentials outside the setup step. The runner requires the admin
+password through `OSAC_ADMIN_PASSWORD` or `--admin-password-file=PATH` and does
+not print it. For VMaaS flows, the runner also authenticates the OSAC CLI for
+the duration of the run using the same credentials; temporary CLI files are
+removed on exit.
+
+If the CLI is not already installed, provide a stable fulfillment-service
+version to download it, or pass an existing binary:
+
+```bash
+bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
+  --osac-ui-dir="$PWD" --osac-cli-version=<version>
+# or: --osac-cli=/path/to/osac
+```
+
 ## Running
 
 Environment variables:
@@ -48,6 +88,8 @@ Environment variables:
 | Variable              | Description                                                                                       |
 | --------------------- | ------------------------------------------------------------------------------------------------- |
 | `OSAC_UI_BASE_URL`    | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
+| `OSAC_API_BASE_URL`   | Optional Fulfillment API URL; auto-discovered from the `fulfillment-api` route when possible      |
+| `OSAC_CLI_PATH`       | Optional path to the `osac` binary; the runner also checks `~/.local/bin/osac`                |
 | `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                               |
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
@@ -90,9 +132,8 @@ completes its first login. When it is omitted, the tenant name is used. The
 create flow logs in with the generated break-glass identity, which JIT-creates
 the OSAC User, then uses the private admin CLI to grant that user
 `tenant-admin` through a RoleBinding and waits for `READY`. The same credentials
-are reused for the VM and delete flows.
-The CLI must be authenticated as a private API administrator before running the
-full flow (for example, with `osac login --private`).
+are reused for the VM and delete flows. The runner authenticates the OSAC CLI
+for VMaaS flows before the first CLI action.
 Before running, set it to a tenant that does not already exist. The tenant
 create flow requires that the configured tenant does not already exist; the
 delete flow requires that it exists. All VMaaS specs skip before browser

@@ -1,0 +1,9 @@
+{
+  "last_successful_check": "2026-01-02T03:04:05Z",
+  "provider_key": "m360",
+  "state": "BILLING_PROVIDER_STATE_AVAILABLE",
+  "supported_capabilities": [
+    "BILLING_PROVIDER_CAPABILITY_PRICING"
+  ],
+  "usage_delivery_state": "BILLING_USAGE_DELIVERY_STATE_UNKNOWN"
+}

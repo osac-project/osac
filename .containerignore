@@ -34,3 +34,11 @@ tests/integration/caas/go.work.sum
 # packaged tests. Both are excluded by the allowlist above.
 !pyproject.toml
 !tests/
+
+# Never send local osac-ui state into an image: installed dependencies,
+# Playwright login sessions, run output, and local scratch specs.
+osac-ui/**/node_modules
+osac-ui/apps/playwright/.auth
+osac-ui/apps/playwright/test-results
+osac-ui/apps/playwright/playwright-report
+osac-ui/apps/playwright/scratch

@@ -1,0 +1,89 @@
+# Self-contained runner for the OSAC UI Playwright flows. It prepares the
+# checkout with run_scripts/prepare-setup-for-ui-run.sh at build time and
+# runs run_scripts/run-ui-e2e.sh at run time, so the host needs only podman
+# and network access to the cluster routes.
+#
+# Build context: mono-repo root.
+#   podman build -f osac-ui/apps/e2e-tests/container/Containerfile -t osac-ui-e2e .
+#
+# Use the osac CLI of the build under test: the flows create and delete
+# resources with it, so it must match the deployed fulfillment service. Pass
+# the image the cluster runs, for example:
+#   --build-arg FULFILLMENT_SERVICE_IMAGE=ghcr.io/osac-project/fulfillment-service@sha256:...
+#
+# See osac-ui/apps/e2e-tests/container/README.md for running it.
+
+ARG FULFILLMENT_SERVICE_IMAGE=ghcr.io/osac-project/fulfillment-service:latest
+
+FROM ${FULFILLMENT_SERVICE_IMAGE} AS osac-cli
+
+# UBI 9 with Node.js. The full image, not -minimal: the prepare script
+# installs the browser's system libraries with dnf through its RHEL 9 path.
+FROM registry.access.redhat.com/ubi9/nodejs-22:9.9-1793849239
+
+ARG TARGETARCH=amd64
+ARG OC_VERSION=4.22.22
+# Same pnpm as the workspace's packageManager field. Not named PNPM_VERSION:
+# build arguments are visible to RUN, and the prepare script reads that name
+# as a major version.
+ARG PNPM_RELEASE=9.15.9
+
+# The build runs as root: the prepare script installs packages with dnf.
+USER 0
+
+COPY --from=osac-cli /usr/local/bin/osac /usr/local/bin/osac
+
+# Installed system-wide so any run-time user finds it; the prepare script
+# then accepts it instead of installing pnpm under root's home.
+RUN npm install --global --prefix /usr/local "pnpm@${PNPM_RELEASE}"
+
+# Browsers outside root's home, so the run-time user can launch them.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+WORKDIR /work
+COPY osac-ui/ ./osac-ui/
+
+# The prepare script installs the browser's system libraries, the workspace
+# dependencies, and Chromium, then checks that Chromium launches. With no
+# kubeconfig at build time it skips its route and capacity checks. UBI 9
+# repositories have no Xvfb, so the image runs headless only.
+RUN bash osac-ui/apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
+      --osac-ui-dir=/work/osac-ui \
+      --osac-cli=/usr/local/bin/osac \
+    && dnf clean all
+
+# oc: run-ui-e2e.sh reads the osac-ui and fulfillment-api routes with it.
+RUN set -euo pipefail; \
+    case "${TARGETARCH}" in \
+      amd64|arm64) arch="${TARGETARCH}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    base="https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/${OC_VERSION}"; \
+    file="openshift-client-linux-${arch}-rhel9-${OC_VERSION}.tar.gz"; \
+    cd /tmp; \
+    curl --retry 5 --retry-delay 2 -fsSLO "${base}/${file}"; \
+    curl --retry 5 --retry-delay 2 -fsSL "${base}/sha256sum.txt" \
+      | grep -E "  ${file}\$" | sha256sum -c -; \
+    tar -xzf "${file}" --no-same-owner -C /usr/local/bin oc; \
+    rm -f "${file}"
+
+COPY osac-ui/apps/e2e-tests/container/entrypoint.sh /usr/local/bin/osac-ui-e2e
+
+# Any UID can run the image (rootless podman --userns=keep-id, OpenShift
+# arbitrary UIDs). run-ui-e2e.sh links the extravars file into the checkout,
+# and Playwright writes its login state and results there, so the checkout is
+# group-writable for group 0, which every arbitrary UID belongs to. The osac
+# CLI writes its config and cache under HOME.
+RUN chgrp -R 0 /work/osac-ui /ms-playwright \
+    && chmod -R g=u /work/osac-ui /ms-playwright \
+    && mkdir -m 1777 /home/e2e
+ENV HOME=/home/e2e \
+    OSAC_CLI_PATH=/usr/local/bin/osac \
+    OSAC_UI_DIR=/work/osac-ui \
+    OSAC_UI_E2E_OUTPUT=/tmp/test-output
+# run-ui-e2e.sh refuses credentialed runs as root. Group 0 gives the default
+# user the same checkout access as an arbitrary UID.
+USER 1001:0
+
+ENTRYPOINT ["/usr/local/bin/osac-ui-e2e"]
+CMD ["--help"]

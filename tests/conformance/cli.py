@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import yaml
 
-from tests.conformance.area import AreaDeclaration, load_areas
+from tests.conformance.area import AreaDeclaration, known_selectors, load_areas
 from tests.conformance.config import Config, load_config
 from tests.conformance.diagnostics import DiagnosticsCollector
 from tests.conformance.errors import CommandLineError, ConfigError
@@ -86,12 +86,26 @@ def _check_results(path: Path) -> None:
         path.mkdir(parents=True)
 
 
-def _redactor(config: Config) -> Redactor:
+def redactor_for_config(config: Config) -> Redactor:
     values: list[str] = []
     for token_file in (config.lab_token_file, config.lab_aap.token_file if config.lab_aap else None):
         if token_file is not None:
             with contextlib.suppress(OSError):
                 values.append(token_file.read_text().strip())
+    try:
+        hub = yaml.safe_load(config.lab_kubeconfig.read_text())
+    except (OSError, yaml.YAMLError):
+        hub = None
+    if isinstance(hub, dict):
+        for user in hub.get("users", []):
+            credentials = user.get("user", {}) if isinstance(user, dict) else {}
+            for key, value in credentials.items():
+                if key in {"token", "password", "client-key-data"} and isinstance(value, str):
+                    values.append(value)
+        for cluster in hub.get("clusters", []):
+            server = cluster.get("cluster", {}).get("server") if isinstance(cluster, dict) else None
+            if isinstance(server, str) and urlparse(server).hostname:
+                values.append(urlparse(server).hostname)
     redactor = Redactor(secrets=values)
     host = urlparse(config.lab_api_url).hostname
     if host:
@@ -102,9 +116,12 @@ def _redactor(config: Config) -> Redactor:
 def _build_runtime(args: argparse.Namespace) -> Runtime:
     areas = load_areas(Path(args.areas))
     config = load_config(Path(args.config), area_names=areas)
+    missing = set(config.selectors) - known_selectors(areas)
+    if missing:
+        raise ConfigError([f"selector {selector} is not shipped by this image" for selector in sorted(missing)])
     results = Path(args.results)
     _check_results(results)
-    redactor = _redactor(config)
+    redactor = redactor_for_config(config)
     return Runtime(
         config=config,
         areas=areas,

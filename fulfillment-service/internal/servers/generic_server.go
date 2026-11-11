@@ -714,8 +714,8 @@ func (s *GenericServer[O]) applyMaskAndRestoreProtectedFields(
 	requestMask *fieldmaskpb.FieldMask,
 ) (O, error) {
 	var tmpObject O
-	// Private updates must not change creator. Check the merged value rather than the mask:
-	// parent metadata masks are also used for finalizer updates.
+	// Private updates that explicitly select creator must not change it. Check the merged
+	// value rather than the mask: parent metadata masks are also used for finalizer updates.
 
 	if requestMask != nil {
 		// Reject public API requests that attempt to modify status fields via update mask.
@@ -743,7 +743,9 @@ func (s *GenericServer[O]) applyMaskAndRestoreProtectedFields(
 	} else {
 		tmpObject = proto.Clone(requestObject).(O)
 	}
-	if !isPublicAPIView(ctx) && s.getMetadata(tmpObject).GetCreator() != s.getMetadata(currentObject).GetCreator() {
+	if !isPublicAPIView(ctx) && requestMask != nil && len(requestMask.GetPaths()) > 0 &&
+		updateIncludesField(requestMask, "metadata.creator") &&
+		s.getMetadata(tmpObject).GetCreator() != s.getMetadata(currentObject).GetCreator() {
 		return tmpObject, grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.creator' is immutable")
 	}
 

@@ -143,5 +143,7 @@ func driveToAllocatedIn(reconciler *BareMetalInstanceReconciler, namespace, bmiN
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		http.Error(w, "encode failed", http.StatusInternalServerError)
+	}
 }

@@ -87,7 +87,7 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
           {(pending || progressing || succeeded) && attempt.message && (
             <Content component="p">{attempt.message}</Content>
           )}
-          <ProgressStepper aria-label={t('Upgrade progress steps')}>
+          <ProgressStepper isCenterAligned aria-label={t('Upgrade progress steps')}>
             <ProgressStep
               id="cluster-upgrade-accepted"
               titleId="cluster-upgrade-accepted-title"

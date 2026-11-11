@@ -162,7 +162,7 @@ OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
 Run the tenant create and delete flows separately:
 
 ```bash
-pnpm --filter @osac/playwright exec playwright test \
+OSAC_VM_FLOW_MODE=create pnpm --filter @osac/playwright exec playwright test \
   create.tenant.spec.ts --project=tenant
 
 pnpm --filter @osac/playwright exec playwright test \
@@ -196,9 +196,9 @@ The full-flow projects run in this order:
 2. `vm-flow` creates and verifies the VM.
 3. `vmaas_full_happy_basic` deletes the VM as the tenant admin.
 4. `vmaas-full-flow-pre-resource-delete` removes the catalog item, disk image,
-   instance type, storage tier, tenant-admin RoleBinding and OSAC User,
-   SSH public-key Secret, tenant, and generated credential file as the admin
-   user.
+   instance type, and storage tier as the admin user.
+5. `tenant-delete` removes the tenant-admin RoleBinding and OSAC User, SSH
+   public-key Secret, tenant, generated credential file, and full-flow state.
 
 `vmaas-all-full-flows` is the aggregator for complete VMaaS flows. It currently
 depends on `vmaas_full_happy_basic`; add future full-flow projects to its
@@ -217,6 +217,10 @@ Run the complete deletion flow for an existing creation run with:
 OSAC_VM_FLOW_MODE=delete pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-full-flow-pre-resource
 ```
+
+In delete mode, `vmaas-full-flow-pre-resource` depends on `vm-flow`, so VM
+deletion runs first. The resource cleanup and tenant deletion run only after
+that VM cleanup succeeds.
 
 The creation command stores the non-secret run IDs in
 `/tmp/osac-vmaas-full-flow-state.json`. The deletion-only command reuses those

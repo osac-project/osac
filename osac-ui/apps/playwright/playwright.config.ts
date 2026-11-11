@@ -38,12 +38,26 @@ if (flowMode !== 'create' && flowMode !== 'delete' && flowMode !== 'full') {
   throw new Error('OSAC_VM_FLOW_MODE must be create, delete, or full.');
 }
 
+const allFullFlowsProjectRequested = process.argv.some((argument) =>
+  argument.includes('vmaas-all-full-flows'),
+);
+const fullHappyFlowProjectRequested = process.argv.some(
+  (argument) => argument.includes('vmaas_full_happy_basic') || allFullFlowsProjectRequested,
+);
+const fullFlowProjectRequested = process.argv.some(
+  (argument) =>
+    argument.includes('vmaas-full-flow') ||
+    fullHappyFlowProjectRequested ||
+    argument.includes('vm-flow'),
+);
+const fullFlowDeletionRequested = flowMode === 'delete' && fullFlowProjectRequested;
+
 const hasExplicitRunState =
   Boolean(process.env.OSAC_CATALOG_TEST_RUN_ID) &&
   Boolean(process.env.OSAC_DISK_IMAGE_TEST_RUN_ID) &&
   Boolean(process.env.OSAC_STORAGE_TIER_TEST_RUN_ID);
 const persistedRunState =
-  flowMode === 'delete' && !hasExplicitRunState ? readVmaasFullFlowRunState() : undefined;
+  fullFlowDeletionRequested && !hasExplicitRunState ? readVmaasFullFlowRunState() : undefined;
 
 // Share one unique ID across Playwright projects so deletion only targets this run's image.
 const diskImageTestRunId =
@@ -75,18 +89,6 @@ if (!/^[a-z0-9]{1,32}$/i.test(catalogTestRunId)) {
 }
 process.env.OSAC_CATALOG_TEST_RUN_ID = catalogTestRunId.toLowerCase();
 
-const allFullFlowsProjectRequested = process.argv.some((argument) =>
-  argument.includes('vmaas-all-full-flows'),
-);
-const fullHappyFlowProjectRequested = process.argv.some(
-  (argument) => argument.includes('vmaas_full_happy_basic') || allFullFlowsProjectRequested,
-);
-const fullFlowProjectRequested = process.argv.some(
-  (argument) =>
-    argument.includes('vmaas-full-flow') ||
-    fullHappyFlowProjectRequested ||
-    argument.includes('vm-flow'),
-);
 if (flowMode !== 'delete' && fullFlowProjectRequested && !process.argv.includes('--list')) {
   writeVmaasFullFlowRunState({
     catalogTestRunId: catalogTestRunId.toLowerCase(),
@@ -106,7 +108,7 @@ const preResourceBaseCreateTestMatch =
   /create\.(instance_type|disk_images|storage_tier|tenant)\.spec\.ts/;
 const preResourceCatalogCreateTestMatch = /create\.catalog\.spec\.ts/;
 const preResourceDeleteTestMatch =
-  /delete\.(catalog|disk_images|instance_type|storage_tier|tenant)\.spec\.ts/;
+  /delete\.(catalog|disk_images|instance_type|storage_tier)\.spec\.ts/;
 const preResourceTestMatch =
   flowMode === 'delete' ? preResourceDeleteTestMatch : preResourceCatalogCreateTestMatch;
 const diskImageTestMatch =
@@ -194,8 +196,13 @@ export default defineConfig({
       testMatch: preResourceTestMatch,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: flowMode === 'delete' ? [] : ['vmaas-full-flow-pre-resource-base'],
-      teardown: flowMode === 'full' ? 'vmaas-full-flow-pre-resource-delete' : undefined,
+      dependencies: flowMode === 'delete' ? ['vm-flow'] : ['vmaas-full-flow-pre-resource-base'],
+      teardown:
+        flowMode === 'full'
+          ? 'vmaas-full-flow-pre-resource-delete'
+          : flowMode === 'delete'
+            ? 'tenant-delete'
+            : undefined,
     },
     {
       name: 'vm-flow',
@@ -203,8 +210,10 @@ export default defineConfig({
       testMatch: flowMode === 'delete' ? /delete\.vm\.spec\.ts/ : /create\.vm\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: flowMode === 'delete' ? [] : ['vmaas-full-flow-pre-resource'],
-      teardown:
-        flowMode === 'full' && !fullHappyFlowProjectRequested ? 'vm-flow-teardown' : undefined,
+      // Keep the fallback reachable when the happy-flow dependency is skipped
+      // after VM creation fails. A successful happy-flow deletion makes this
+      // idempotent teardown a no-op because the VM is already absent.
+      teardown: flowMode === 'full' ? 'vm-flow-teardown' : undefined,
     },
     {
       name: 'vm-flow-teardown',
@@ -235,6 +244,7 @@ export default defineConfig({
       testMatch: preResourceDeleteTestMatch,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: 'tenant-delete',
     },
     {
       name: 'storage-tier',

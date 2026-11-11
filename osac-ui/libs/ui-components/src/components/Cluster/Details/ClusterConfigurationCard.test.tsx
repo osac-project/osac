@@ -82,27 +82,33 @@ describe('ClusterConfigurationCard', () => {
     expect(upgradeButton).toHaveAccessibleDescription('Upgrade eligibility is unavailable.');
   });
 
-  it('shows an ongoing upgrade beside the current version in blue', () => {
-    const upgrading = clone(ClusterSchema, cluster);
-    if (!upgrading.status) {
-      throw new Error('The cluster fixture needs status');
-    }
-    upgrading.status.upgradeHistory = [
-      create(ClusterUpgradeHistoryEntrySchema, {
-        state: ClusterUpgradeState.PROGRESSING,
-        message: 'Updating the control plane',
-      }),
-    ];
-    renderWithProviders(<ClusterConfigurationCard cluster={upgrading} />);
+  it.each([ClusterUpgradeState.PENDING, ClusterUpgradeState.PROGRESSING])(
+    'shows an ongoing upgrade from observed to target in state %s',
+    (state) => {
+      const upgrading = clone(ClusterSchema, cluster);
+      if (!upgrading.status) {
+        throw new Error('The cluster fixture needs status');
+      }
+      upgrading.status.upgradeHistory = [
+        create(ClusterUpgradeHistoryEntrySchema, {
+          component: { target: { case: 'controlPlane', value: {} } },
+          sourceVersion: '4.17.0',
+          targetVersion: '4.18.0',
+          state,
+          message: 'Updating the control plane',
+        }),
+      ];
+      renderWithProviders(<ClusterConfigurationCard cluster={upgrading} />);
 
-    const progress = screen.getByText('Upgrade in progress');
-    expect(screen.getByText('4.17.0').closest('dd')).toContainElement(progress);
-    expect(progress.closest('.pf-v6-c-label')).toHaveClass('pf-m-blue');
-    const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
-    expect(upgradeButton).toBeDisabled();
-    expect(screen.getByText('Updating the control plane')).toBeInTheDocument();
-    expect(upgradeButton).toHaveAccessibleDescription('Updating the control plane');
-  });
+      const progress = screen.getByText('Upgrade in progress');
+      expect(screen.getByText('4.17.0 → 4.18.0').closest('dd')).toContainElement(progress);
+      expect(progress.closest('.pf-v6-c-label')).toHaveClass('pf-m-blue');
+      const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
+      expect(upgradeButton).toBeDisabled();
+      expect(screen.getByText('Updating the control plane')).toBeInTheDocument();
+      expect(upgradeButton).toHaveAccessibleDescription('Updating the control plane');
+    },
+  );
 
   it('uses only the latest upgrade history entry', async () => {
     const upgraded = clone(ClusterSchema, cluster);
@@ -110,8 +116,14 @@ describe('ClusterConfigurationCard', () => {
       throw new Error('The cluster fixture needs status');
     }
     upgraded.status.upgradeHistory = [
-      create(ClusterUpgradeHistoryEntrySchema, { state: ClusterUpgradeState.SUCCEEDED }),
       create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        targetVersion: '4.18.0',
+        state: ClusterUpgradeState.SUCCEEDED,
+      }),
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        targetVersion: '4.16.0',
         state: ClusterUpgradeState.PROGRESSING,
         message: 'An older upgrade is still running',
       }),
@@ -124,6 +136,7 @@ describe('ClusterConfigurationCard', () => {
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
     );
     expect(screen.queryByText('An older upgrade is still running')).not.toBeInTheDocument();
+    expect(screen.queryByText(/→/)).not.toBeInTheDocument();
   });
 
   it('shows the latest timed-out upgrade message without offering another upgrade', () => {
@@ -133,6 +146,8 @@ describe('ClusterConfigurationCard', () => {
     }
     timedOut.status.upgradeHistory = [
       create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        targetVersion: '4.18.0',
         state: ClusterUpgradeState.TIMED_OUT,
         message: 'Control plane upgrade timed out',
       }),
@@ -143,6 +158,7 @@ describe('ClusterConfigurationCard', () => {
     expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
       'Control plane upgrade timed out',
     );
+    expect(screen.queryByText(/→/)).not.toBeInTheDocument();
   });
 
   it('uses the observed worker count for the downtime warning', async () => {

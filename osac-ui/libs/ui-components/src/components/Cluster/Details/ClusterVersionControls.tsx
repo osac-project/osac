@@ -10,6 +10,7 @@ import {
 import UpgradeClusterDialog from './UpgradeClusterDialog';
 import { useGetResource, useListAllResources } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { getActiveControlPlaneUpgradeTarget } from '../ListPage/clusterDisplay';
 
 interface ClusterVersionControlsProps {
   cluster: Cluster;
@@ -43,6 +44,8 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
     cluster.status?.state === ClusterState.DELETING ||
     cluster.status?.state === ClusterState.DELETE_FAILED;
   const latestUpgrade = cluster.status?.upgradeHistory[0];
+  const observedVersion = cluster.status?.observedVersion?.trim();
+  const activeTarget = getActiveControlPlaneUpgradeTarget(cluster);
   const upgradeInProgress =
     latestUpgrade?.state === ClusterUpgradeState.PENDING ||
     latestUpgrade?.state === ClusterUpgradeState.PROGRESSING;
@@ -105,7 +108,10 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
         spaceItems={{ default: 'spaceItemsSm' }}
         flexWrap={{ default: 'wrap' }}
       >
-        <FlexItem>{cluster.status?.observedVersion || '—'}</FlexItem>
+        <FlexItem>
+          {observedVersion || '—'}
+          {upgradeInProgress && observedVersion && activeTarget ? ` → ${activeTarget}` : null}
+        </FlexItem>
         {action.kind === 'available' ? (
           <FlexItem>
             <Label color="orange">{t('Upgrade available')}</Label>

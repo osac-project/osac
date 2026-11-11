@@ -93,6 +93,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
       upgrading.status.state = ClusterState.PROGRESSING;
       upgrading.status.upgradeHistory = [
         create(ClusterUpgradeHistoryEntrySchema, {
+          component: { target: { case: 'controlPlane', value: {} } },
           state,
           sourceVersion: '4.17.0',
           targetVersion: '4.18.0',
@@ -102,6 +103,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
       renderPage(upgrading, [currentVersion, targetVersion]);
 
       await waitFor(() => expect(screen.getByText('Upgrade in progress')).toBeInTheDocument());
+      expect(screen.getByText('4.17.0 → 4.18.0')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
         'Upgrade accepted and running',
       );

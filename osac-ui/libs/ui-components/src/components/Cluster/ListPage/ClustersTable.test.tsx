@@ -137,6 +137,9 @@ describe('ClustersTable observed versions', () => {
       ]);
 
       expect(clusterRow('c-upgrading').getByText('OpenShift 4.17.0 → 4.18.0')).toBeInTheDocument();
+      const progress = clusterRow('c-upgrading').getByText('Upgrade in progress');
+      expect(progress.closest('.pf-v6-c-label')).toHaveClass('pf-m-blue');
+      expect(clusterRow('c-upgrading').queryByText('Active')).not.toBeInTheDocument();
     },
   );
 
@@ -149,6 +152,7 @@ describe('ClustersTable observed versions', () => {
 
     expect(clusterRow('c-node-only').getByText('OpenShift 4.17.0')).toBeInTheDocument();
     expect(clusterRow('c-node-only').queryByText(/→/)).not.toBeInTheDocument();
+    expect(clusterRow('c-node-only').queryByText('Upgrade in progress')).not.toBeInTheDocument();
   });
 
   it.each([
@@ -165,5 +169,6 @@ describe('ClustersTable observed versions', () => {
 
     expect(clusterRow('c-done').getByText('OpenShift 4.17.0')).toBeInTheDocument();
     expect(clusterRow('c-done').queryByText(/→/)).not.toBeInTheDocument();
+    expect(clusterRow('c-done').queryByText('Upgrade in progress')).not.toBeInTheDocument();
   });
 });

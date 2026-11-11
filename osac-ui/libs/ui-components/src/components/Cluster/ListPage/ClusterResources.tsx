@@ -5,14 +5,16 @@ import {
   DescriptionListTerm,
   Flex,
   FlexItem,
+  Label,
 } from '@patternfly/react-core';
 
-import { type Cluster, ClusterUpgradeState, type ClusterVersion } from '@osac/types';
+import { type Cluster, type ClusterVersion } from '@osac/types';
 import { formatClusterCatalogVersionLabel } from '@osac/ui-components/components/catalog/clusterCatalogItemResourceDisplay';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import { GuestOsIcon } from '../../shared/GuestOsIcon';
 import ClusterVersionLifecycleLabel from '../ClusterVersionLifecycleLabel';
+import { getActiveControlPlaneUpgradeTarget } from './clusterDisplay';
 
 interface ClusterResourcesProps {
   cluster: Cluster;
@@ -27,14 +29,7 @@ const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) =>
     observedVersion && clusterVersion?.spec?.version === observedVersion
       ? clusterVersion
       : undefined;
-  const latestControlPlaneAttempt = cluster.status?.upgradeHistory.find(
-    (entry) => entry.component?.target.case === 'controlPlane',
-  );
-  const activeTarget =
-    latestControlPlaneAttempt?.state === ClusterUpgradeState.PENDING ||
-    latestControlPlaneAttempt?.state === ClusterUpgradeState.PROGRESSING
-      ? latestControlPlaneAttempt.targetVersion.trim()
-      : undefined;
+  const activeTarget = getActiveControlPlaneUpgradeTarget(cluster);
 
   const specNodeSets = cluster.spec?.nodeSets;
   const statusNodeSets = cluster.status?.nodeSets ?? {};
@@ -74,11 +69,15 @@ const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) =>
               {versionLabel}
               {observedVersion && activeTarget ? ` → ${activeTarget}` : null}
             </FlexItem>
-            {matchingVersion && (
+            {observedVersion && activeTarget ? (
+              <FlexItem>
+                <Label color="blue">{t('Upgrade in progress')}</Label>
+              </FlexItem>
+            ) : matchingVersion ? (
               <FlexItem>
                 <ClusterVersionLifecycleLabel clusterVersion={matchingVersion} />
               </FlexItem>
-            )}
+            ) : null}
           </Flex>
         </DescriptionListDescription>
       </DescriptionListGroup>

@@ -58,6 +58,9 @@ bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
 unset OSAC_ADMIN_PASSWORD
 ```
 
+The default HTML reporter does not show the full live test log in the terminal.
+Add `--reporter=line` to the runner command for live progress and test output.
+
 The preparation helper installs Node.js, npm, pnpm, Playwright dependencies,
 and Chromium. It installs `openshift-clients` when possible, validates the
 OSAC CLI, and validates the checkout's `extravars.yaml`. When `oc` and a

@@ -28,6 +28,7 @@ SETUP_ONLY=true
 PW_PROJECT=""
 PW_TEST_PATH=""
 PW_GREP=""
+PW_REPORTER=""
 PW_HEADED=""
 PW_LIST=false
 NO_DEPS=false
@@ -63,6 +64,15 @@ while (($# > 0)); do
     --test=*)           PW_TEST_PATH="${arg#*=}"; SETUP_ONLY=false ;;
     --project=*)        PW_PROJECT="${arg#*=}"; SETUP_ONLY=false ;;
     --grep=*)           PW_GREP="${arg#*=}" ;;
+    --reporter=*)       PW_REPORTER="${arg#*=}" ;;
+    --reporter)
+      if (($# == 0)); then
+        echo "--reporter requires a reporter name." >&2
+        exit 1
+      fi
+      PW_REPORTER="$1"
+      shift
+      ;;
     --headed)           PW_HEADED="--headed"; SETUP_ONLY=false ;;
     --mode=*)           OSAC_VM_FLOW_MODE="${arg#*=}"; MODE_FLAG_SET=true ;;
     --extravars=*)      OSAC_EXTRAVARS="${arg#*=}" ;;
@@ -95,6 +105,7 @@ Options:
   --test=PATH            pass a test-path filter to Playwright
   --project=PROJECT      select a Playwright project
   --grep=PATTERN         filter test titles
+  --reporter=REPORTER    select a Playwright reporter (for example, line)
   --mode=MODE            set OSAC_VM_FLOW_MODE to create, delete, or full
   --extravars=PATH       temporarily use a VMaaS extravars.yaml
   --admin-user=USER      Keycloak admin user (default: admin)
@@ -427,6 +438,7 @@ PW_ARGS=()
 [[ -n "$PW_TEST_PATH" ]] && PW_ARGS+=("$PW_TEST_PATH")
 [[ -n "$PW_PROJECT" ]] && PW_ARGS+=(--project="$PW_PROJECT")
 [[ -n "$PW_GREP" ]] && PW_ARGS+=(-g "$PW_GREP")
+[[ -n "$PW_REPORTER" ]] && PW_ARGS+=(--reporter="$PW_REPORTER")
 [[ -n "$PW_HEADED" ]] && PW_ARGS+=(--headed)
 
 section "Running OSAC UI E2E flow"

@@ -598,6 +598,7 @@
   "Global resources are available to all tenants. Tenant-scoped resources must be assigned to one tenant.": "Global resources are available to all tenants. Tenant-scoped resources must be assigned to one tenant.",
   "Go to catalog": "Go to catalog",
   "GPU": "GPU",
+  "GPU configuration cannot change during resize. Only instance types with the same GPU configuration are listed.": "GPU configuration cannot change during resize. Only instance types with the same GPU configuration are listed.",
   "GPU count": "GPU count",
   "GPU resource name": "GPU resource name",
   "GPUs": "GPUs",

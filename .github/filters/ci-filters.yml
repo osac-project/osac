@@ -342,6 +342,10 @@ unit-tests-osac-metering-adapters:
   - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering-schema:
   - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
+# The selector policy tests read this repository's workflow callers and the
+# companion runner/decision implementations used by those callers.
+unit-tests-e2e-policy:
+  - '{.github/AGENTS.md,.github/CI.md,.github/ci-tests.yml,.github/e2e-policy.yml,.github/filters/ci-filters.yml,.github/workflows/e2e-*.yml,.github/workflows/tests.yml,.github/actions/setup-python/**,pyproject.toml,tests/e2e/vmaas/**,tests/workflow_policy/**}'
 # Offline preflight and metering reader rendering, the preflight harness, and stubbed Kind runner checks.
 # Preflight rendering also covers the osac-aap and osac-csi-driver hook Jobs.
 unit-tests-osac-installer:

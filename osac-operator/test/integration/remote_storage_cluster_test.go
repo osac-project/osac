@@ -41,12 +41,15 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/osac-operator/test/utils"
@@ -133,7 +136,7 @@ type cspFixtureStats struct {
 	AAPRequests         []string `json:"aapRequests"`
 }
 
-var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clusters", Ordered, Serial, func() {
+var _ = Describe("Remote cluster reconciliation across two Kind clusters", Ordered, Serial, func() {
 	var (
 		remoteKubeconfigPath   string
 		restorePatchFilePath   string
@@ -510,6 +513,10 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			)
 			Expect(err).NotTo(HaveOccurred())
 		}
+	})
+
+	registerTenantNamespaceSpecs(func() (string, map[string]string) {
+		return remoteKubeconfigPath, tenantUIDs
 	})
 
 	It(
@@ -1832,6 +1839,54 @@ func runKubectlWithKubeconfig(kubeconfigPath string, args ...string) ([]byte, er
 	return runMgmtKubectl(args...)
 }
 
+// updateRemoteNamespaceFinalizer uses the finalize subresource because the
+// regular Namespace endpoint does not persist spec.finalizers (OSAC-7297).
+func updateRemoteNamespaceFinalizer(
+	kubeconfigPath, namespaceName string,
+	finalizer corev1.FinalizerName,
+	add bool,
+) error {
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return fmt.Errorf("load remote kubeconfig: %w", err)
+	}
+	kubeClient, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("create remote Kubernetes client: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), kubectlCommandTimeout)
+	defer cancel()
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		namespace, err := kubeClient.CoreV1().Namespaces().Get(ctx, namespaceName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+
+		index := -1
+		for i, existing := range namespace.Spec.Finalizers {
+			if existing == finalizer {
+				index = i
+				break
+			}
+		}
+		if add {
+			if index >= 0 {
+				return nil
+			}
+			namespace.Spec.Finalizers = append(namespace.Spec.Finalizers, finalizer)
+		} else {
+			if index < 0 {
+				return nil
+			}
+			namespace.Spec.Finalizers = append(namespace.Spec.Finalizers[:index], namespace.Spec.Finalizers[index+1:]...)
+		}
+
+		_, err = kubeClient.CoreV1().Namespaces().Finalize(ctx, namespace, metav1.UpdateOptions{})
+		return err
+	})
+}
+
 // runKubectlWithStdin runs kubectl with stdin populated from manifest, binding
 // to the management Kind cluster context when kubeconfigPath is empty.
 func runKubectlWithStdin(kubeconfigPath, manifest string, args ...string) ([]byte, error) {
@@ -2540,6 +2595,20 @@ kind: Tenant
 metadata:
   name: %s
   namespace: %s
+spec: {}
+`, name, namespace)
+}
+
+func tenantNamespaceLifecycleCRYAML(name, namespace string) string {
+	return fmt.Sprintf(`apiVersion: osac.openshift.io/v1alpha1
+kind: Tenant
+metadata:
+  name: %s
+  namespace: %s
+  annotations:
+    osac.openshift.io/management-state: unmanaged
+  finalizers:
+    - test.osac.openshift.io/hold-tenant-namespace
 spec: {}
 `, name, namespace)
 }

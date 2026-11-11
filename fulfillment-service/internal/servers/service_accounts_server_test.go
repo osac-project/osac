@@ -146,6 +146,22 @@ var _ = Describe("Service account management", func() {
 	}, Entry("creator field", []string{"metadata.creator"}), Entry("parent metadata field", []string{"metadata"}),
 		Entry("normalized creator field", []string{"metadata..creator"}),
 		Entry("creator and another field", []string{"metadata.creator", "metadata.tenant"}))
+	It("does not let a creator-related mask bypass the private status allowlist", func() {
+		_, err := private.Update(tenantCtx, privatev1.ServiceAccountsUpdateRequest_builder{
+			Object: privatev1.ServiceAccount_builder{
+				Id:       stored.GetId(),
+				Metadata: proto.Clone(stored.GetMetadata()).(*privatev1.Metadata),
+				Status:   &privatev1.ServiceAccountStatus{},
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata", "status"}},
+		}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(status.Convert(err).Message()).To(Equal(`field "status" is not mutable`))
+
+		got, err := private.Get(tenantCtx, privatev1.ServiceAccountsGetRequest_builder{Id: stored.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(proto.Equal(got.GetObject().GetStatus(), stored.GetStatus())).To(BeTrue())
+	})
 	It("keeps other private update-mask paths restricted", func() {
 		_, err := private.Update(tenantCtx, privatev1.ServiceAccountsUpdateRequest_builder{
 			Object: privatev1.ServiceAccount_builder{

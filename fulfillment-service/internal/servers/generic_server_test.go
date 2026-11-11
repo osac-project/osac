@@ -149,6 +149,7 @@ var _ = Describe("Generic server", func() {
 			rejected            bool
 		}{
 			{name: "creator path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.creator"}}, updateCreator: true, rejected: true},
+			{name: "creator path with unchanged value", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.creator"}}, rejected: true},
 			{name: "normalized creator path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata..creator"}}, updateCreator: true, rejected: true},
 			{name: "parent metadata path", mask: &fieldmaskpb.FieldMask{Paths: []string{"metadata"}}, updateCreator: true, rejected: true},
 			{name: "empty mask is a no-op", mask: &fieldmaskpb.FieldMask{}, updateCreator: true,

@@ -573,4 +573,20 @@ var _ = Describe("Private projects server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(getResponse.GetObject().GetMetadata().GetCreator()).To(Equal(originalCreator))
 	})
+
+	It("preserves the creator for a maskless update without metadata", func() {
+		created, err := privateServer.Create(ctx, privatev1.ProjectsCreateRequest_builder{
+			Object: privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{Name: "maskless-project", Tenant: "my-tenant"}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		originalCreator := created.GetObject().GetMetadata().GetCreator()
+
+		updated, err := privateServer.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
+			Object: privatev1.Project_builder{Id: created.GetObject().GetId()}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updated.GetObject().GetMetadata().GetCreator()).To(Equal(originalCreator))
+	})
 })

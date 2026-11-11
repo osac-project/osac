@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tests.conformance.area import load_areas
@@ -88,6 +89,7 @@ def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
     tree_dir = _tree(tmp_path / "tree")
     results = tmp_path / "results"
     results.mkdir()
+    (tmp_path / "podman.sock").write_text("socket")
 
     config = load_config(config_path, area_names={"networking"})
     redactor = Redactor(secrets=("secret-value",))
@@ -100,6 +102,7 @@ def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
         redactor=redactor,
         output=OutputSink(results, redactor),
         suite_image_digest="sha256:test",
+        podman_socket=tmp_path / "podman.sock",
     )
 
     assert main(["list"], runtime=runtime) == 0
@@ -118,3 +121,55 @@ def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
     for path in results.rglob("*"):
         if path.is_file():
             assert "secret-value" not in path.read_text(errors="ignore")
+
+
+def test_missing_podman_socket_and_empty_plan_are_config_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    token = tmp_path / "token"
+    token.write_text("admin")
+    ca = tmp_path / "ca.pem"
+    ca.write_text("ca")
+    hub = tmp_path / "hub"
+    hub.write_text("hub")
+    config_path = _config(tmp_path / "conformance.yaml", token, ca, hub)
+    areas_dir = tmp_path / "areas"
+    areas_dir.mkdir()
+    _area(areas_dir / "networking.yaml")
+    tree_dir = _tree(tmp_path / "tree")
+    results = tmp_path / "results"
+    results.mkdir()
+    socket = tmp_path / "podman.sock"
+    socket.write_text("socket")
+    config = load_config(config_path, area_names={"networking"})
+    redactor = Redactor()
+
+    def runtime_for(path: Path, podman_socket: Path) -> Runtime:
+        return Runtime(
+            config=config,
+            areas=load_areas(areas_dir),
+            tree=PytestTestTree(root=tree_dir),
+            lab=FakeLabClient(FakeLab()),
+            results=path,
+            redactor=redactor,
+            output=OutputSink(path, redactor),
+            suite_image_digest="sha256:test",
+            podman_socket=podman_socket,
+        )
+
+    good = runtime_for(results, socket)
+    assert main(["list"], runtime=good) == 0
+    plan = results / "conformance-plan.yaml"
+
+    missing_socket = tmp_path / "missing.sock"
+    bad_results = tmp_path / "bad-results"
+    bad_results.mkdir()
+    assert main(["run", "--plan", str(plan)], runtime=runtime_for(bad_results, missing_socket)) == 2
+    assert "podman socket" in capsys.readouterr().err
+
+    empty_plan = tmp_path / "empty-plan.yaml"
+    empty_plan.write_text("tests: []\n")
+    empty_results = tmp_path / "empty-results"
+    empty_results.mkdir()
+    assert main(["run", "--plan", str(empty_plan)], runtime=runtime_for(empty_results, socket)) == 2
+    assert "no tests" in capsys.readouterr().err

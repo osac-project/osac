@@ -22,15 +22,16 @@ interface ClusterUpgradeProgressProps {
 const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
   const { t } = useTranslation();
   const attempt = getControlPlaneUpgradeHistory(cluster)[0];
-  if (!attempt || attempt.state === ClusterUpgradeState.SUCCEEDED) {
+  if (!attempt) {
     return null;
   }
 
   const pending = attempt.state === ClusterUpgradeState.PENDING;
   const progressing = attempt.state === ClusterUpgradeState.PROGRESSING;
+  const succeeded = attempt.state === ClusterUpgradeState.SUCCEEDED;
   const timedOut = attempt.state === ClusterUpgradeState.TIMED_OUT;
   const failed = attempt.state === ClusterUpgradeState.FAILED;
-  if (!pending && !progressing && !timedOut && !failed) {
+  if (!pending && !progressing && !succeeded && !timedOut && !failed) {
     return null;
   }
 
@@ -40,18 +41,20 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
     pending || progressing
       ? t('Upgrading from {{source}} to {{target}}', { source, target })
       : t('Upgrade from {{source}} to {{target}}', { source, target });
-  const stepVariant = timedOut
+  const progressVariant = succeeded
+    ? ProgressStepVariant.success
+    : progressing
+      ? ProgressStepVariant.pending
+      : ProgressStepVariant.default;
+  const progressStatus = succeeded ? t('Complete') : progressing ? t('In progress') : undefined;
+  const outcomeLabel = timedOut ? t('Timed out') : failed ? t('Failed') : t('Success');
+  const outcomeVariant = timedOut
     ? ProgressStepVariant.warning
     : failed
       ? ProgressStepVariant.danger
-      : ProgressStepVariant.pending;
-  const stepStatus = timedOut
-    ? t('Timed out')
-    : failed
-      ? t('Failed')
-      : pending
-        ? t('Pending')
-        : t('In progress');
+      : succeeded
+        ? ProgressStepVariant.success
+        : ProgressStepVariant.default;
 
   return (
     <StackItem>
@@ -67,7 +70,7 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
               {attempt.message}
             </Alert>
           )}
-          {(pending || progressing) && attempt.message && (
+          {(pending || progressing || succeeded) && attempt.message && (
             <Content component="p">{attempt.message}</Content>
           )}
           <ProgressStepper aria-label={t('Upgrade progress steps')}>
@@ -75,18 +78,30 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
               id="cluster-upgrade-accepted"
               titleId="cluster-upgrade-accepted-title"
               variant={ProgressStepVariant.success}
+              isCurrent={pending}
               aria-label={`${t('Request accepted')}, ${t('Complete')}`}
             >
               {t('Request accepted')}
             </ProgressStep>
             <ProgressStep
-              id="cluster-upgrade-control-plane"
-              titleId="cluster-upgrade-control-plane-title"
-              variant={stepVariant}
-              isCurrent
-              aria-label={`${t('Control plane')}, ${stepStatus}`}
+              id="cluster-upgrade-progressing"
+              titleId="cluster-upgrade-progressing-title"
+              variant={progressVariant}
+              isCurrent={progressing}
+              aria-label={
+                progressStatus ? `${t('Progressing')}, ${progressStatus}` : t('Progressing')
+              }
             >
-              {t('Control plane')}
+              {t('Progressing')}
+            </ProgressStep>
+            <ProgressStep
+              id="cluster-upgrade-outcome"
+              titleId="cluster-upgrade-outcome-title"
+              variant={outcomeVariant}
+              isCurrent={failed || timedOut}
+              aria-label={succeeded ? `${outcomeLabel}, ${t('Complete')}` : outcomeLabel}
+            >
+              {outcomeLabel}
             </ProgressStep>
           </ProgressStepper>
         </CardBody>

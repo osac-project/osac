@@ -81,6 +81,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     );
     expect(screen.getByText('Upgrade available')).toBeInTheDocument();
     expect(screen.getByText('4.17.0')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();
   });
 
   it.each([ClusterUpgradeState.PENDING, ClusterUpgradeState.PROGRESSING])(
@@ -110,9 +111,40 @@ describe('ClusterDetailsPage upgrade availability', () => {
       );
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
       expect(screen.getByText('Upgrading from 4.17.0 to 4.18.0')).toBeInTheDocument();
-      expect(screen.getByLabelText('Upgrade progress steps')).toBeInTheDocument();
+      const steps = within(screen.getByLabelText('Upgrade progress steps'));
+      expect(steps.getByLabelText('Request accepted, Complete')).toBeInTheDocument();
+      const progressStep = steps.getByLabelText(
+        state === ClusterUpgradeState.PENDING ? 'Progressing' : 'Progressing, In progress',
+      );
+      if (state === ClusterUpgradeState.PENDING) {
+        expect(progressStep).not.toHaveClass('pf-m-pending');
+      } else {
+        expect(progressStep).toHaveClass('pf-m-pending');
+      }
+      expect(steps.getByLabelText('Success')).not.toHaveClass('pf-m-success');
     },
   );
+
+  it('shows a completed Success step for a succeeded control-plane attempt', async () => {
+    const upgraded = clone(ClusterSchema, readyCluster);
+    if (!upgraded.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    upgraded.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        state: ClusterUpgradeState.SUCCEEDED,
+        sourceVersion: '4.17.0',
+        targetVersion: '4.18.0',
+      }),
+    ];
+    renderPage(upgraded, [currentVersion, targetVersion]);
+
+    const steps = within(await screen.findByLabelText('Upgrade progress steps'));
+    expect(steps.getByLabelText('Request accepted, Complete')).toBeInTheDocument();
+    expect(steps.getByLabelText('Progressing, Complete')).toHaveClass('pf-m-success');
+    expect(steps.getByLabelText('Success, Complete')).toHaveClass('pf-m-success');
+  });
 
   it('ignores node-set attempts for progress and history', async () => {
     const upgrading = clone(ClusterSchema, readyCluster);
@@ -193,6 +225,9 @@ describe('ClusterDetailsPage upgrade availability', () => {
 
     await waitFor(() => expect(screen.getByText('Upgrade timed out')).toBeInTheDocument());
     expect(screen.getAllByText('Still observing the control plane').length).toBeGreaterThan(0);
+    expect(
+      within(screen.getByLabelText('Upgrade progress steps')).getByLabelText('Timed out'),
+    ).toHaveClass('pf-m-warning');
     await user.click(screen.getByRole('button', { name: 'Upgrade history' }));
     expect(
       within(screen.getByRole('dialog', { name: 'Upgrade history' })).getByText('Timed out'),
@@ -220,6 +255,9 @@ describe('ClusterDetailsPage upgrade availability', () => {
     expect(screen.queryByText('Upgrade timed out')).not.toBeInTheDocument();
     expect(screen.queryByText('Still observing the control plane')).not.toBeInTheDocument();
     expect(
+      within(screen.getByLabelText('Upgrade progress steps')).getByLabelText('Success, Complete'),
+    ).toBeInTheDocument();
+    expect(
       within(screen.getByRole('dialog', { name: 'Upgrade history' })).getAllByRole('time'),
     ).toHaveLength(2);
   });
@@ -241,7 +279,9 @@ describe('ClusterDetailsPage upgrade availability', () => {
     renderPage(failed, [currentVersion, targetVersion]);
 
     await waitFor(() => expect(screen.getByText('Upgrade failed')).toBeInTheDocument());
-    expect(screen.getByLabelText('Control plane, Failed')).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText('Upgrade progress steps')).getByLabelText('Failed'),
+    ).toHaveClass('pf-m-danger');
     expect(screen.getAllByText('Control plane could not upgrade').length).toBeGreaterThan(0);
   });
 

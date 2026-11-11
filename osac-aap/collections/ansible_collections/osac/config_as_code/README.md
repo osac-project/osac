@@ -40,7 +40,7 @@ variables are used (injected from the configured config-as-code Secret, named
 | `OSAC_PUBLISH_TEMPLATES_ENABLED` | Whether the periodic **publish-templates** schedule is enabled in Controller (`true`/`false`) | Helm sets this from `instanceGroups.publishTemplates.enabled`; if unset for a manually managed deployment, `true` |
 | `NETRIS_CONTROLLER_URL` | Netris controller URL of the CaaS Netris steps, set on the cluster-fulfillment container group | — |
 | `NETRIS_VALIDATE_CERTS` | Whether Netris TLS certificates are validated by CaaS Netris jobs | `true` |
-| `NETRIS_CA_CONFIGMAP` | Optional customer-created ConfigMap name containing `bundle.pem` in the AAP namespace | — |
+| `NETRIS_CA_CONFIGMAP` | Optional customer-created ConfigMap name containing `bundle.pem` in the AAP namespace; config-as-code uses it to render the required CA mount in the cluster-fulfillment and networking-operations container groups | — |
 
 These variables must be defined in the configured config-as-code Secret
 (`configAsCode.secret`, default `config-as-code-ig`) in the namespace where AAP
@@ -52,14 +52,15 @@ fixed environment variables of the cluster-fulfillment container group, with
 the `netris.controller.protected_linear` strategy that rejects launch-time
 overrides. When `NETRIS_CA_CONFIGMAP` is configured, it adds a required,
 read-only `bundle.pem` mount at `/etc/netris/ca/bundle.pem` and sets
-`NETRIS_CA_PATH`. The CA ConfigMap applies only to cluster-fulfillment (CaaS)
-jobs; the networking-operations container group neither mounts nor reads it.
-The installer reads these values from the Netris settings in
+`NETRIS_CA_PATH` in the cluster-fulfillment container group and in the
+networking-operations container group, whose Fabric Manager jobs also call
+Netris. The installer reads these values from the Netris settings in
 `aap.instanceGroups.networkFulfillment.config` and fails the render unless the
 URL is `https://` and the validation flag is `true` or `false`; customers
 create the ConfigMap and the installer does not copy certificate contents into the
-execution-environment image. Networking jobs do not use these variables: they
-read the network managers' settings from `network-fulfillment-ig`.
+execution-environment image. Networking jobs read their manager settings and
+credentials from `network-fulfillment-ig` and receive only the CA mount from
+`NETRIS_CA_CONFIGMAP`.
 
 The content of license manifest file must be set in a secret named
 `config-as-code-manifest-ig` as `license.zip` in the namespace where AAP is
@@ -94,6 +95,10 @@ Networking jobs read the settings and credentials of the network managers from
 the ConfigMap and Secret named `network-fulfillment-ig` in the AAP namespace.
 Keys are prefixed with the registration name in upper case. Consult the
 selected manager's owner documentation for its settings.
+
+When `NETRIS_CA_CONFIGMAP` is configured, config-as-code mounts that ConfigMap's
+`bundle.pem` read-only at `/etc/netris/ca/bundle.pem` in the networking worker
+and exports `NETRIS_CA_PATH`, so Fabric Manager calls verify the private CA.
 
 ### Compute instance operations environment variables
 

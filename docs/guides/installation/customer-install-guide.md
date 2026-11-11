@@ -1330,16 +1330,17 @@ aap:
   use the corresponding resource's `--from-file=<KEY>=<path>` input instead of
   an env file.
 
-  **Netris CaaS CA bundle (`cluster-fulfillment`).** For chart-managed AAP,
-  `NETRIS_CA_CONFIGMAP` in
+  **Netris CA bundle (`cluster-fulfillment` and
+  `networking-operations`).** For chart-managed AAP, `NETRIS_CA_CONFIGMAP` in
   `aap.instanceGroups.networkFulfillment.config` tells config-as-code which
   ConfigMap contains the Netris CA under the `bundle.pem` key. With external
   AAP, the bootstrap does not create a mount for the external
-  `cluster-fulfillment` jobs. Ensure a ConfigMap with that same name and key is
-  present in the cluster and namespace where those jobs run. Creating the
-  ConfigMap or setting `NETRIS_CA_CONFIGMAP` alone does not expose its
-  certificate to a job. Add the following volume, volume-mount, and environment
-  entries to the external group's `pod_spec_override`; the path in
+  `cluster-fulfillment` or `networking-operations` jobs. Ensure a ConfigMap
+  with that same name and key is present in the cluster and namespace where
+  those jobs run. Creating the ConfigMap or setting `NETRIS_CA_CONFIGMAP`
+  alone does not expose its certificate to a job. Add the following volume,
+  volume-mount, and environment entries to each external group's
+  `pod_spec_override`; the path in
   `NETRIS_CA_PATH` must match the mounted file:
 
   ```yaml
@@ -1401,14 +1402,14 @@ retryable with "Missing or malformed setting in network-fulfillment-ig".
 | `NETRIS_PORT_SETTLE_SECONDS` | `config` | Optional. Default `15`. |
 | `NETRIS_BM_PROVISIONING_VNET`, `NETRIS_RESOURCE_CLASS_MAP` | `config` | BMaaS and FabricDomains only, so not used in this release: the provisioning V-Net name, and a non-empty JSON object that maps each resource class to its Netris server cluster template. |
 
-The `NETRIS_CA_CONFIGMAP` mount described above applies only to CaaS
-`cluster-fulfillment` jobs. The `network-fulfillment` jobs do not get a CA
-ConfigMap mount from the chart. With a Netris controller certificate from
-a private CA, build an execution environment image based on `osac-aap` that
-contains the CA certificate. Set it as `eeImage` and set `NETRIS_CA_PATH` to
-the CA file's path in the image. Setting `NETRIS_VALIDATE_CERTS: "false"`
-disables certificate validation and is suitable only for evaluation, never
-production. For every key, see
+The `NETRIS_CA_CONFIGMAP` mount described above applies to CaaS
+`cluster-fulfillment` jobs and to `networking-operations` jobs. With a Netris
+controller certificate from a private CA, set `NETRIS_CA_CONFIGMAP` to the
+name of a ConfigMap in the AAP namespace that holds the CA in `bundle.pem`;
+the chart mounts it read-only at `/etc/netris/ca/bundle.pem` in both job
+pods. Setting `NETRIS_VALIDATE_CERTS: "false"` disables certificate
+validation and is suitable only for evaluation, never production. For every
+key, see
 [`network-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/network-backend.md).
 
 Keep AAP job records at least as long as networking resources exist: OSAC
@@ -1734,7 +1735,7 @@ configures CUDN EVPN through `global.networking`, as shown in
 | `global.networking.excludedIpv4Cidrs` | schema | IPv4 CIDRs that your infrastructure uses: management, provisioning, and node networks and, with EVPN host networking, the EVPN ranges. No VirtualNetwork or ExternalIPPool can overlap them. You can add ranges later (see [Table 4.2](#table-42-settings-fixed-at-installation)). | `[]` |
 | `global.networking.fabricManager` | schema | The registration `name` of the Fabric Manager. Required for every deployment. | Not set |
 | `global.networking.k8sManager` | schema | The OSAC Kubernetes Manager: `cudn_evpn`, or empty. Required for VMaaS. | Not set |
-| `global.networking.caBundle.adminGroups` | schema | Groups allowed to create, update, or delete the customer-managed Netris CA ConfigMap used by CaaS `cluster-fulfillment` jobs. Its name comes from `aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP`; this protects the ConfigMap but does not mount it into networking jobs. Use `eeImage` and `NETRIS_CA_PATH` for private-CA networking jobs (see [Section 4.4.3](#443-setting-the-networking-helm-values)). Add identity-provider groups bound directly to `cluster-admin`; they are not included in the defaults. | `["system:masters", "system:cluster-admins"]` |
+| `global.networking.caBundle.adminGroups` | schema | Groups allowed to create, update, or delete the customer-managed Netris CA ConfigMap used by `cluster-fulfillment` and `networking-operations` jobs. Its name comes from `aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP`; config-as-code mounts that ConfigMap in both job pods (see [Section 4.4.3](#443-setting-the-networking-helm-values)). Add identity-provider groups bound directly to `cluster-admin`; they are not included in the defaults. | `["system:masters", "system:cluster-admins"]` |
 | `global.networking.networkClass.defaults.virtualNetworkIPv4CIDR`, `global.networking.networkClass.defaults.subnetIPv4CIDR` | schema | The CIDRs of every tenant's default VirtualNetwork and Subnet. The Subnet CIDR is inside the VirtualNetwork CIDR and meets the prefix limit of the address plan. The chart defaults suit evaluation, except with Netris, whose reserved `10.0.0.0/8` contains them ([Section 2.6](#26-evpn-host-networking-for-vmaas)); set them for your deployment, because they cannot change after installation. | `10.200.0.0/16` and `10.200.0.0/20` |
 | `global.networking.networkClass.defaults.ingressRules`, `global.networking.networkClass.defaults.egressRules` | schema | Rules of every tenant's default SecurityGroup, as camelCase SecurityGroup rules, for example `{protocol: PROTOCOL_TCP, ipv4Cidr: 0.0.0.0/0, portFrom: 22, portTo: 22}`. Set them for your deployment; they cannot change after installation. | `[]` and one allow-all egress rule |
 | `global.networking.networkClass.eastWestCapabilities.supportsEastWestEthernet` | schema | Enables Ethernet east-west FabricDomains. Needs BMaaS and a Fabric Manager that declares `eastWestEthernet`. In this release BMaaS runs with provider networking disabled, so a FabricDomain becomes `READY` (reason `ProvisioningDisabled`) without any fabric configuration. | `false` |

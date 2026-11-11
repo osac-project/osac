@@ -272,14 +272,14 @@ Run it with:
 
 ```bash
 bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
-  --osac-ui-dir="$PWD" --tag=resize
+  --osac-ui-dir="$PWD" --tag=vmaas_resize
 ```
 
 The same flow can be run directly after the common runner preparation:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-resize
+  --project=vmaas-full-resize
 ```
 
 ### Storage tier flow tests

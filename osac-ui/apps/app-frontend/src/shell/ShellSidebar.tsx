@@ -59,7 +59,7 @@ export const ShellSidebar = () => {
             {navRows.map((row) => {
               if (isNavSection(row)) {
                 return (
-                  <NavExpandable key={row.id} title={row.label}>
+                  <NavExpandable key={row.id} title={row.label} isExpanded>
                     {row.children.map((item) => (
                       <ShellNavItem key={item.id} item={item} />
                     ))}

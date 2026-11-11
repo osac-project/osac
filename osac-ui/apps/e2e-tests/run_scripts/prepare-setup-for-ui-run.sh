@@ -461,9 +461,15 @@ if [[ "$(uname)" == Linux ]]; then
     as_root dnf install -y \
       nspr nss atk at-spi2-atk at-spi2-core libX11 libXcomposite libXdamage \
       libXext libXfixes libXrandr libX11-xcb libXScrnSaver libXtst \
-      libxkbcommon libxkbcommon-x11 libxcb libdrm mesa-libEGL mesa-libgbm \
-      alsa-lib cairo cups-libs dbus-libs fontconfig freetype gtk3 pango \
-      xorg-x11-server-Xvfb xorg-x11-xauth
+      libxkbcommon libxcb libdrm mesa-libEGL mesa-libgbm \
+      alsa-lib cairo cups-libs dbus-libs fontconfig freetype gtk3 pango
+    # Headless runs do not need these, and UBI 9 repositories do not ship
+    # them, so install whichever are available. run-ui-e2e.sh --headed checks
+    # for Xvfb and xauth before it starts.
+    as_root dnf install -y --setopt=strict=0 \
+      libxkbcommon-x11 xorg-x11-server-Xvfb xorg-x11-xauth
+    command -v Xvfb >/dev/null 2>&1 ||
+      info "Xvfb is unavailable; only headless runs are possible."
   else
     info "Installing Playwright system dependencies ..."
     as_root npx playwright install-deps "$PW_BROWSER"

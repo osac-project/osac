@@ -29,3 +29,11 @@ tests/*
 tests/integration/*
 !tests/integration/caas/
 tests/integration/caas/go.work.sum
+
+# Never send local osac-ui state into an image: installed dependencies,
+# Playwright login sessions, run output, and local scratch specs.
+osac-ui/**/node_modules
+osac-ui/apps/playwright/.auth
+osac-ui/apps/playwright/test-results
+osac-ui/apps/playwright/playwright-report
+osac-ui/apps/playwright/scratch

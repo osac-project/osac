@@ -106,6 +106,10 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
 # or: --osac-cli=/path/to/osac
 ```
 
+To run the flows without preparing a host, use the container image that wraps
+both scripts. See
+[`apps/e2e-tests/container/README.md`](../e2e-tests/container/README.md).
+
 ## Running
 
 Environment variables:

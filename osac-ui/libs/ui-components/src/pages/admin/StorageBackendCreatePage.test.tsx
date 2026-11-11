@@ -20,6 +20,7 @@ import type {
 } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
+const testBackendUsername = 'test-admin';
 const testBackendPassword = 'test-password';
 
 const BACKENDS_LIST_PATH = '/admin/infrastructure/storage/backends';
@@ -81,7 +82,7 @@ describe('StorageBackendCreatePage', () => {
       await user.click(screen.getByLabelText(/^Provider/));
       await user.click(screen.getByRole('option', { name: 'VAST Data' }));
       await user.type(screen.getByRole('textbox', { name: 'Endpoint' }), 'vast.example.com:443');
-      await user.type(screen.getByLabelText(/^Username/), 'test-admin');
+      await user.type(screen.getByLabelText(/^Username/), testBackendUsername);
       await user.type(screen.getByLabelText(/^Password/), testBackendPassword);
     };
 
@@ -318,7 +319,7 @@ describe('StorageBackendCreatePage', () => {
       await user.type(screen.getByRole('textbox', { name: 'Name' }), 'netapp-shared');
       await user.click(screen.getByLabelText(/^Provider/));
       await user.click(screen.getByRole('option', { name: 'NetApp ONTAP' }));
-      await user.type(screen.getByLabelText(/^Username/), 'test-admin');
+      await user.type(screen.getByLabelText(/^Username/), testBackendUsername);
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
       expect(
@@ -333,7 +334,7 @@ describe('StorageBackendCreatePage', () => {
 
       await user.type(screen.getByRole('textbox', { name: 'Name' }), 'vast-prod-1');
       await user.type(screen.getByRole('textbox', { name: 'Endpoint' }), 'vast.example.com:443');
-      await user.type(screen.getByLabelText(/^Username/), 'test-admin');
+      await user.type(screen.getByLabelText(/^Username/), testBackendUsername);
       await user.type(screen.getByLabelText(/^Password/), testBackendPassword);
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -399,7 +400,7 @@ describe('StorageBackendCreatePage', () => {
         await user.type(screen.getByRole('textbox', { name: 'Name' }), 'backend-1');
         await user.type(screen.getByRole('textbox', { name: 'Endpoint' }), 'array.example.com:443');
         await user.type(screen.getByRole('textbox', { name: 'Description' }), 'primary array');
-        await user.type(screen.getByLabelText(/^Username/), 'test-admin');
+        await user.type(screen.getByLabelText(/^Username/), testBackendUsername);
         await user.type(screen.getByLabelText(/^Password/), testBackendPassword);
         await user.click(screen.getByLabelText(/^Provider/));
         await user.click(screen.getByRole('option', { name: label }));
@@ -412,7 +413,7 @@ describe('StorageBackendCreatePage', () => {
         expect(capturedRequest?.object?.spec?.cspManaged).toBe(provider === 'netapp');
         expect(capturedRequest?.object?.spec?.endpoint).toBe('array.example.com:443');
         expect(capturedRequest?.object?.spec?.description).toBe('primary array');
-        expect(capturedRequest?.object?.spec?.credentials?.username).toBe('test-admin');
+        expect(capturedRequest?.object?.spec?.credentials?.username).toBe(testBackendUsername);
         expect(capturedRequest?.object?.spec?.credentials?.password).toBe(testBackendPassword);
       },
       15000,

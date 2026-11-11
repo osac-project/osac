@@ -30,6 +30,10 @@ four places or CI/e2e would fail downstream.
 4. Commit **all** of: the `private/` (or `tests/`) source, the regenerated
    `public/`, and the regenerated `gen/`. CI (`Check generated code (proto)`)
    fails the PR if `gen/` or `public/` is stale.
+5. If you add, remove, or rename a `*Reference` / `*LocalReference` field (i.e.
+   change a cross-resource relation), update the relations map
+   [`../fulfillment-service/docs/DATA_MODEL.md`](../fulfillment-service/docs/DATA_MODEL.md)
+   in the same PR — see its "Maintaining this document" section.
 
 ## Consumers
 

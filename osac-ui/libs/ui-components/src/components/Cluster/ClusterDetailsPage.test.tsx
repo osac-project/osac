@@ -112,18 +112,32 @@ describe('ClusterDetailsPage upgrade availability', () => {
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
       expect(screen.getByText('Upgrading from 4.17.0 to 4.18.0')).toBeInTheDocument();
       const steps = within(screen.getByLabelText('Upgrade progress steps'));
+      const pending = state === ClusterUpgradeState.PENDING;
+      const acceptedDescription = pending
+        ? 'Accepted by OSAC; HyperShift has not yet reported it started.'
+        : 'Complete';
       expect(
-        within(steps.getByLabelText('Request accepted, Complete')).getByText('Complete'),
+        within(
+          steps.getByLabelText(
+            pending
+              ? `Request accepted, Complete, ${acceptedDescription}`
+              : 'Request accepted, Complete',
+          ),
+        ).getByText(acceptedDescription),
       ).toBeInTheDocument();
       const progressStep = steps.getByLabelText(
-        state === ClusterUpgradeState.PENDING ? 'Progressing' : 'Progressing, In progress',
+        pending
+          ? 'Progressing'
+          : 'Progressing, In progress, HyperShift is working toward the requested version.',
       );
-      if (state === ClusterUpgradeState.PENDING) {
+      if (pending) {
         expect(progressStep).not.toHaveClass('pf-m-pending');
       } else {
         expect(progressStep).toHaveClass('pf-m-pending');
         expect(progressStep.querySelector('svg')).toBeInTheDocument();
-        expect(within(progressStep).getByText('In progress')).toBeInTheDocument();
+        expect(
+          within(progressStep).getByText('HyperShift is working toward the requested version.'),
+        ).toBeInTheDocument();
       }
       expect(steps.getByLabelText('Success')).not.toHaveClass('pf-m-success');
     },
@@ -149,9 +163,13 @@ describe('ClusterDetailsPage upgrade availability', () => {
     const progressingStep = steps.getByLabelText('Progressing, Complete');
     expect(progressingStep).toHaveClass('pf-m-success');
     expect(within(progressingStep).getByText('Complete')).toBeInTheDocument();
-    const successStep = steps.getByLabelText('Success, Complete');
+    const successStep = steps.getByLabelText(
+      'Success, Complete, The component reached the requested version.',
+    );
     expect(successStep).toHaveClass('pf-m-success');
-    expect(within(successStep).getByText('Complete')).toBeInTheDocument();
+    expect(
+      within(successStep).getByText('The component reached the requested version.'),
+    ).toBeInTheDocument();
   });
 
   it('ignores node-set attempts for progress and history', async () => {
@@ -234,10 +252,12 @@ describe('ClusterDetailsPage upgrade availability', () => {
     await waitFor(() => expect(screen.getByText('Upgrade timed out')).toBeInTheDocument());
     expect(screen.getAllByText('Still observing the control plane').length).toBeGreaterThan(0);
     const timedOutStep = within(screen.getByLabelText('Upgrade progress steps')).getByLabelText(
-      'Timed out, Still observing the control plane',
+      'Timed out, No definitive result within the timeout.',
     );
     expect(timedOutStep).toHaveClass('pf-m-warning');
-    expect(within(timedOutStep).getByText('Still observing the control plane')).toBeInTheDocument();
+    expect(
+      within(timedOutStep).getByText('No definitive result within the timeout.'),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Upgrade history' }));
     expect(
       within(screen.getByRole('dialog', { name: 'Upgrade history' })).getByText('Timed out'),
@@ -265,7 +285,9 @@ describe('ClusterDetailsPage upgrade availability', () => {
     expect(screen.queryByText('Upgrade timed out')).not.toBeInTheDocument();
     expect(screen.queryByText('Still observing the control plane')).not.toBeInTheDocument();
     expect(
-      within(screen.getByLabelText('Upgrade progress steps')).getByLabelText('Success, Complete'),
+      within(screen.getByLabelText('Upgrade progress steps')).getByLabelText(
+        'Success, Complete, The component reached the requested version.',
+      ),
     ).toBeInTheDocument();
     expect(
       within(screen.getByRole('dialog', { name: 'Upgrade history' })).getAllByRole('time'),
@@ -290,11 +312,13 @@ describe('ClusterDetailsPage upgrade availability', () => {
 
     await waitFor(() => expect(screen.getByText('Upgrade failed')).toBeInTheDocument());
     const failedStep = within(screen.getByLabelText('Upgrade progress steps')).getByLabelText(
-      'Failed, Control plane could not upgrade',
+      'Failed, HyperShift reported a terminal error and stopped.',
     );
     expect(failedStep).toHaveClass('pf-m-danger');
     expect(failedStep.querySelector('svg')).toBeInTheDocument();
-    expect(within(failedStep).getByText('Control plane could not upgrade')).toBeInTheDocument();
+    expect(
+      within(failedStep).getByText('HyperShift reported a terminal error and stopped.'),
+    ).toBeInTheDocument();
     expect(screen.getAllByText('Control plane could not upgrade').length).toBeGreaterThan(0);
   });
 

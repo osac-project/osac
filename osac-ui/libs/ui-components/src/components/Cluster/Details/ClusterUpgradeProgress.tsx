@@ -48,6 +48,12 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
       ? ProgressStepVariant.pending
       : ProgressStepVariant.default;
   const progressStatus = succeeded ? t('Complete') : progressing ? t('In progress') : undefined;
+  const acceptedDescription = pending
+    ? t('Accepted by OSAC; HyperShift has not yet reported it started.')
+    : t('Complete');
+  const progressDescription = progressing
+    ? t('HyperShift is working toward the requested version.')
+    : progressStatus;
   const outcomeLabel = timedOut ? t('Timed out') : failed ? t('Failed') : t('Success');
   const outcomeVariant = timedOut
     ? ProgressStepVariant.warning
@@ -57,10 +63,12 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
         ? ProgressStepVariant.success
         : ProgressStepVariant.default;
   const outcomeDescription = succeeded
-    ? t('Complete')
-    : failed || timedOut
-      ? attempt.message || outcomeLabel
-      : undefined;
+    ? t('The component reached the requested version.')
+    : failed
+      ? t('HyperShift reported a terminal error and stopped.')
+      : timedOut
+        ? t('No definitive result within the timeout.')
+        : undefined;
 
   return (
     <StackItem>
@@ -85,8 +93,12 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
               titleId="cluster-upgrade-accepted-title"
               variant={ProgressStepVariant.success}
               isCurrent={pending}
-              description={t('Complete')}
-              aria-label={`${t('Request accepted')}, ${t('Complete')}`}
+              description={acceptedDescription}
+              aria-label={
+                pending
+                  ? `${t('Request accepted')}, ${t('Complete')}, ${acceptedDescription}`
+                  : `${t('Request accepted')}, ${t('Complete')}`
+              }
             >
               {t('Request accepted')}
             </ProgressStep>
@@ -96,9 +108,13 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
               variant={progressVariant}
               isCurrent={progressing}
               icon={progressing ? <RhUiInProgressIcon /> : undefined}
-              description={progressStatus}
+              description={progressDescription}
               aria-label={
-                progressStatus ? `${t('Progressing')}, ${progressStatus}` : t('Progressing')
+                progressing
+                  ? `${t('Progressing')}, ${progressStatus}, ${progressDescription}`
+                  : progressStatus
+                    ? `${t('Progressing')}, ${progressStatus}`
+                    : t('Progressing')
               }
             >
               {t('Progressing')}
@@ -110,8 +126,8 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
               isCurrent={failed || timedOut}
               description={outcomeDescription}
               aria-label={
-                outcomeDescription && outcomeDescription !== outcomeLabel
-                  ? `${outcomeLabel}, ${outcomeDescription}`
+                outcomeDescription
+                  ? `${outcomeLabel}, ${succeeded ? `${t('Complete')}, ` : ''}${outcomeDescription}`
                   : outcomeLabel
               }
             >

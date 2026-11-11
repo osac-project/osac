@@ -25,6 +25,18 @@ Deployments, so infra dependencies can still be starting when
 `make install-osac` begins; the `infra-ready-wait-test` suite guards that
 gap.
 
+## Dev-full virtualization
+
+Dev-full CDI Route permissions are checked by
+`bash scripts/test-dev-full-render.sh`. The Helm contract requires
+exactly `get`, `list`, and `watch` on `routes.route.openshift.io`, bound only to
+`cdi:cdi-sa`, and suppresses these resources when virtualization or RBAC creation
+is disabled. On a deployed Kind dev-full cluster, verify those permissions with
+`kubectl -n cdi auth can-i list routes.route.openshift.io --as=system:serviceaccount:cdi:cdi-sa --all-namespaces`
+and observe a real DataVolume create its PVC. The Route API is an OSAC
+placeholder; this check does not exercise an OpenShift router, guest boot, or
+disk I/O.
+
 ## Input validation gate (OSAC-7050)
 
 Every installation target (`install`, `install-infra`, `install-osac`,

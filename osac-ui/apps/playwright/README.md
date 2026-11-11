@@ -200,6 +200,10 @@ The full-flow projects run in this order:
    SSH public-key Secret, tenant, and generated credential file as the admin
    user.
 
+`vmaas-all-full-flows` is the aggregator for complete VMaaS flows. It currently
+depends on `vmaas-full-happy-basic-flow`; add future full-flow projects to its
+dependencies in `playwright.config.ts`.
+
 Run the complete creation flow, including VM creation, with:
 
 ```bash
@@ -229,7 +233,7 @@ Run the complete creation and deletion flow with:
 
 ```bash
 OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-happy-basic-flow
+  --project=vmaas-all-full-flows
 ```
 
 The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the

@@ -178,7 +178,7 @@ placeholder_username() {
 }
 
 declare -A FLOW_CONFIG=(
-  [vmaas_all]='vmaas-full-happy-basic-flow|full||false'
+  [vmaas_all]='vmaas-all-full-flows|full||false'
   [vmaas-full-happy-basic-flow]='vmaas-full-happy-basic-flow|full||false'
   [create_resources]='vmaas-full-flow-pre-resource|create||false'
   [delete_resources]='vmaas-full-flow-pre-resource|delete||false'

@@ -75,8 +75,11 @@ if (!/^[a-z0-9]{1,32}$/i.test(catalogTestRunId)) {
 }
 process.env.OSAC_CATALOG_TEST_RUN_ID = catalogTestRunId.toLowerCase();
 
-const fullHappyFlowProjectRequested = process.argv.some((argument) =>
-  argument.includes('vmaas-full-happy-basic-flow'),
+const allFullFlowsProjectRequested = process.argv.some((argument) =>
+  argument.includes('vmaas-all-full-flows'),
+);
+const fullHappyFlowProjectRequested = process.argv.some(
+  (argument) => argument.includes('vmaas-full-happy-basic-flow') || allFullFlowsProjectRequested,
 );
 const fullFlowProjectRequested = process.argv.some(
   (argument) =>
@@ -217,6 +220,14 @@ export default defineConfig({
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: flowMode === 'full' ? ['vm-flow'] : [],
+    },
+    {
+      name: 'vmaas-all-full-flows',
+      testDir: vmaasDir,
+      testMatch: /$^/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      // Add future complete VMaaS flows here as they become available.
+      dependencies: ['vmaas-full-happy-basic-flow'],
     },
     {
       name: 'vmaas-full-flow-pre-resource-delete',

@@ -428,6 +428,32 @@
               external_ip:
                 address: 198.51.100.1
 
+        - name: Inspect the saved ExternalIP reservation by API ID
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_net_contract_state_file }}"
+              - external_ip
+              - "{{ agentless_net_contract_external_ip.id }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_net_contract_eip_state
+          changed_when: false
+
+        - name: Confirm the provider reservation uses the Fulfillment API ID
+          vars:
+            _saved: "{{ agentless_net_contract_eip_state.stdout | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _saved.present
+              - _saved.entry.uid == agentless_net_contract_external_ip.id
+              - _saved.entry.fulfillment_id == agentless_net_contract_external_ip.id
+              - _saved.entry.uid != agentless_net_contract_external_ip.metadata.uid
+              - _saved.entry.pool_uid == agentless_net_contract_pool.id
+              - _saved.entry.address == '198.51.100.1'
+          no_log: true
+
         - name: Build the ExternalIPAttachment task input
           ansible.builtin.set_fact:
             agentless_net_contract_eia:
@@ -533,6 +559,28 @@
 
         - name: Run ExternalIP release with no typed result
           ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect ExternalIP state after release
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_net_contract_state_file }}"
+              - external_ip
+              - "{{ agentless_net_contract_external_ip.id }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_net_contract_eip_released_state
+          changed_when: false
+
+        - name: Confirm release removes the API-ID reservation
+          vars:
+            _saved: "{{ agentless_net_contract_eip_released_state.stdout | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - not _saved.present
+              - _saved.tombstoned
+          no_log: true
 
         - name: Delete the shared pool after address release
           ansible.builtin.set_fact:

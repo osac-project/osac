@@ -27,12 +27,12 @@ User ─► fulfillment-service (API) ─► osac-operator (watches K8s CRs) ─
 3. **osac-aap (this repo)** — The Ansible automation that actually creates
    infrastructure. Networking jobs run the generic playbook
    `playbook_osac_network_task.yml`, which includes the task file of the
-   manager role the operator names in `osac_job_vars` (network manager
-   contract); other playbooks receive their CR in `osac_job_vars.resource`.
-   No job template runs the per-resource networking playbooks
-   (`playbook_osac_create_subnet.yml` and the like) any more; they stay only
-   as entry points of the AgentlessNet tests until that manager adopts the
-   contract.
+   manager role the operator names in `osac_job_vars`, following the network
+   manager contract. `resource.id` is the stable Fulfillment API ID used for
+   backend ownership; `resource.metadata.uid` identifies the Kubernetes object
+   represented by the snapshot. Other playbooks receive their CR in
+   `osac_job_vars.resource`. The per-resource networking playbooks are not the
+   job-template entry points.
 
 For deployment environment variables and hosted-cluster DNS zone setup, see
 the [AAP configuration guide](docs/aap-configuration.md).
@@ -49,29 +49,33 @@ pluggable backends:
 | `cudn_net` | ClusterUserDefinedNetwork (CUDN) on OpenShift | OVN-Kubernetes |
 | `cudn_evpn` | OSAC Kubernetes Manager for network type `evpn`: VirtualNetwork namespace, EVPN CUDN and SecurityGroup NetworkPolicies ([README](collections/ansible_collections/osac/templates/roles/cudn_evpn/README.md)) | OVN-Kubernetes EVPN |
 | `netris` | Netris Controller API | Netris |
-| `agentless_net` | UID-keyed VirtualNetwork namespace plus Subnet VLAN, gateway, and per-VirtualNetwork DHCP | AgentlessNet |
+| `agentless_net` | API-ID-keyed VirtualNetwork namespace plus Subnet VLAN, gateway, and per-VirtualNetwork DHCP | AgentlessNet |
 | `openstack` | OpenStack Neutron | Neutron |
 
-The `agentless_net` unified-resource path provisions and removes the
-VirtualNetwork namespace, transit uplink, forwarding baseline, and child
-Subnet VLAN/gateway/DHCP state. Subnet VLANs are added to configured Cumulus
-trunks; the role never moves a host access port. AgentlessNet registers and
-removes ExternalIPPools in SQLite. Registration stores the pool's Kubernetes
-UID, Fulfillment UUID, tenant, IPv4 family, and single canonical IPv4 CIDR.
-ExternalIP allocation reserves a UID-owned address in the same state file. The
-operator validates the AAP allocation artifact and writes
-`ExternalIP.status.address`; release removes the provider reservation.
+The `agentless_net` Fabric Manager uses the generic network-task playbook.
+Its VirtualNetwork task provisions the namespace, transit uplink, and forwarding
+baseline. Subnet tasks manage VLAN, gateway, and DHCP state; Subnet VLANs are
+added to configured Cumulus trunks, and the role does not move a host access
+port. Task snapshots provide the Fulfillment API IDs used to own this state.
 
-For contract v1, ExternalIPAttachment AAP jobs consume the controller-supplied
-ExternalIP, BareMetalInstance, Subnet, and VirtualNetwork identity/address
-snapshot. AAP does not query or patch Kubernetes. It stores attachment state
-by attachment UID, installs all-protocol whole-address DNAT and narrowly scoped
-host forwarding, then adds the ExternalIP `/32` through local FRR using the
-saved VirtualNetwork transit next hop. Detach withdraws that route before
-removing forwarding, DNAT, and matching conntrack entries. The operator accepts
-the `osac_result` artifact before marking the attachment Ready or releasing its
-finalizers. BMaaS is the first supported consumer; VMaaS and CaaS target wiring
-remain follow-up work. Provider BGP peers are configured outside these jobs.
+AgentlessNet registers shared ExternalIPPools and reserves ExternalIP addresses
+in SQLite by Fulfillment API ID. An ExternalIP create task returns the typed
+`osac_result.external_ip.address`; the operator validates it before writing
+`ExternalIP.status.address`. Release removes the reservation. ExternalIP
+attachments receive the controller-supplied ExternalIP and destination
+snapshots without querying or patching Kubernetes. The role supports tenant
+VirtualNetwork destinations and rejects provider-management destinations. It
+stores attachment state by API ID, installs whole-address DNAT and scoped host
+forwarding, then announces the ExternalIP `/32` through local FRR. Detach
+withdraws the route before removing forwarding, DNAT, and matching conntrack
+entries. The provider reservation remains held until release succeeds and
+Fulfillment removes the ExternalIP record. Provider BGP peers are configured
+outside these jobs.
+
+The physical apply and DHCP lease query paths support BMaaS. AgentlessNet's
+SecurityGroup tasks are documented physical-policy no-ops; they do not establish
+SecurityGroup policy conformance. Its ExternalIP attachment path supports
+tenant-network destinations only.
 For NATGateway tasks, AAP reads the controller-supplied ExternalIP and
 VirtualNetwork snapshot and keeps the ExternalIP reservation until cleanup.
 It translates the complete immutable VirtualNetwork CIDR, excluding the saved
@@ -91,16 +95,18 @@ adding the missing consumer tables in one transaction; unknown layouts fail
 closed. These tables
 store VirtualNetwork, Subnet, immutable ExternalIPPool and ExternalIP state,
 attachment-owned cleanup snapshots, and NATGateway route cleanup identity.
-`external_ips` reserves one provider
-IPv4 address per ExternalIP Kubernetes UID and pool. `attachments` retains the
+The stored `uid` and `fulfillment_id` values for OSAC resources come from the
+snapshot's `id` field, which is the stable Fulfillment API ID; they are not the
+Kubernetes `metadata.uid`. `external_ips` reserves one provider IPv4 address
+per ExternalIP API ID and pool. `attachments` retains the
 ExternalIP, target, Subnet, VirtualNetwork and exact route/rule inputs until
 provider cleanup succeeds. `nat_gateways` retains the NATGateway, ExternalIP,
 VirtualNetwork, provider interfaces, route next hop, and cleanup identity until
 provider cleanup succeeds. The
-`virtual_networks` table stores each VirtualNetwork's immutable CR CIDR and one UID-keyed `/31` transit
-link carved from that CIDR. The `subnets` table stores each Kubernetes Subnet
-UID, its parent Kubernetes UID and tenant, the global VLAN ID, and saved
-gateway/DHCP state.
+`virtual_networks` table stores each VirtualNetwork's immutable CR CIDR and one
+API-ID-keyed `/31` transit link carved from that CIDR. The `subnets` table
+stores each Subnet API ID, its parent VirtualNetwork API ID and tenant, the
+global VLAN ID, and saved gateway/DHCP state.
 
 There is no SQLite migration or in-application downgrade path. An existing
 database with an unexpected v1 layout or a different `user_version` fails
@@ -142,16 +148,13 @@ cleanup above rather than deleting live resources indiscriminately.
 AgentlessNet ExternalIPPool and ExternalIP jobs use the same inventory and
 state-file settings as VirtualNetwork jobs. Inventory describes exactly one
 network node; pool registration and address reservation do not require switch
-inventory. ExternalIP allocation reserves an address by Kubernetes UID and
-returns it in `osac_result.data.address`; the operator validates the result and
-publishes the address in status. Release removes that UID-owned reservation;
-API pool capacity remains held until Fulfillment archives the ExternalIP.
-For Subnet provisioning, osac-operator resolves the parent VirtualNetwork by its
-Fulfillment UUID label in the Subnet namespace and sends its Fulfillment UUID,
-Kubernetes UID, tenant, and phase in `osac_job_vars.parent_virtual_network`.
-AgentlessNet validates that context against the Subnet before changing provider
-state, so its AAP job does not need separate Kubernetes API credentials for the
-parent UID lookup.
+inventory. ExternalIP create returns `osac_result.external_ip.address`, and
+release is keyed by the same stable API ID. Fulfillment holds pool capacity
+until the ExternalIP record is removed after successful provider cleanup.
+Subnet jobs receive the parent VirtualNetwork snapshot through
+`osac_job_vars.virtual_network`; AgentlessNet uses its API ID and the supplied
+Subnet data, so the AAP job does not need Kubernetes credentials to look up the
+parent.
 Both addresses are endpoints: the host uses the base address and acts as the
 namespace default gateway; the namespace uses the next address. The `/31` link
 reserves no network or broadcast address and is not an OSAC Subnet. This
@@ -166,10 +169,10 @@ rules isolate all such interfaces, keeping firewall rule count independent of
 the number of VirtualNetworks.
 
 The state-file flock protects short SQLite transactions. A bounded 256-file
-lock pool serializes operations for each resource UID while provider commands
-run; Subnet operations use the parent VirtualNetwork UID lock so siblings
+lock pool serializes operations for each resource API ID while provider commands
+run; Subnet operations use the parent VirtualNetwork API ID lock so siblings
 cannot overwrite shared DHCP configuration. Hash collisions can serialize
-unrelated UIDs. A short firewall lock protects the shared host `FORWARD` rules.
+unrelated IDs. A short firewall lock protects the shared host `FORWARD` rules.
 Failed creates retain their allocation for retry. Deletes retain Subnet rows
 until DHCP, namespace-interface, trunk-membership, and VLAN cleanup is verified.
 The module rejects unsupported database versions, corrupt state, and unsafe

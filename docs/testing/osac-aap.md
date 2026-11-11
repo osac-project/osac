@@ -49,9 +49,11 @@ AgentlessNet Fabric and switch-VLAN targets ([OSAC-7156](https://redhat.atlassia
 run generic-playbook child jobs with real SQLite against one stateful fake SSH
 switch endpoint: physical NetworkAttachment apply, partial-retry, delete-wins
 guards, port restoration, VLAN discovery and creation on declared trunks, and
-shared ExternalIPPool lifecycle. DHCP leases, Linux and provider commands,
-Kind, an AAP server, a live switch, BGP convergence and packet delivery are
-not run.
+shared ExternalIPPool and ExternalIP lifecycle. ExternalIP cases distinguish
+the stable `resource.id` from Kubernetes `metadata.uid`, inspect reservation
+ownership by API ID, and verify release tombstoning. DHCP leases, Linux and
+provider commands, Kind, an AAP server, a live switch, BGP convergence and
+packet delivery are not run.
 
 ## Network role coverage gate
 

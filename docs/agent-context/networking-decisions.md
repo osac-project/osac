@@ -6,9 +6,11 @@ including IP, MAC, or network-attachment data on any provisioned resource.
 ## Authoritative sources and implementation status
 
 This summary was checked against the accepted designs on `enhancement-proposals`
-`main` on 2026-09-30. Read the applicable full designs before finalizing scope:
+`main` on 2026-11-09. Read the applicable full designs before finalizing scope:
 
 - [Unified networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-unified-networking/design.md)
+- [Network Manager integration contract, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-network-manager-integration-contract-networking/design.md)
+- [Agentless VLAN Fabric Manager, OSAC-3664](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-3664-agentless-vlan-fabric-manager/design.md)
 - [Default networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-default-networking/design.md)
 - [VMaaS networking, OSAC-1435](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1435-vmaas-networking/design.md)
 - [CaaS networking, OSAC-1436](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1436-caas-networking/design.md)
@@ -30,10 +32,12 @@ superseded or extended design explicitly.
 
 ## Accepted contract
 
-1. **Manager responsibilities:** The fabric manager owns physical networking,
-   isolation, ACLs, address allocation, DNAT/SNAT, and inter-subnet routing.
-   The optional K8s manager connects VM overlays to the fabric. Keep these
-   responsibilities separate; check the full design for deployment profiles.
+1. **Manager responsibilities:** Each deployment selects a required Fabric
+   Manager, which owns the physical fabric, external addresses, routing, and
+   fabric policy. The Kubernetes Manager is optional and required for VMs; it
+   owns VM hub networking. ExternalIP pools and their addresses use Fabric
+   Manager tasks. Keep these responsibilities separate and follow the full
+   design's deployment profiles.
 2. **Shared networking resources:** VirtualNetwork, Subnet, SecurityGroup,
    ExternalIP, ExternalIPAttachment, and NATGateway serve VMaaS, CaaS, and BMaaS.
    A Subnet can host VMs, bare-metal servers, and cluster nodes.
@@ -177,6 +181,18 @@ as follows:
   `manager`, the resource snapshot) and returns `osac_result`/`osac_error`.
   The operator side is [`internal/networktask`](../../osac-operator/internal/networktask/doc.go).
   There is no dispatcher and no per-manager or per-kind playbook.
+- **Resource ownership and ExternalIP results:** `resource.id` is the stable
+  Fulfillment API ID used as the manager's backend ownership key.
+  `resource.metadata.uid` and `generation` describe the Kubernetes snapshot;
+  they do not own backend reservations. Fabric `create_external_ip` returns
+  `osac_result.external_ip.address`. The operator accepts only a canonical,
+  eligible address and writes it to `ExternalIP.status.address`. Release success
+  means the address is free; pool capacity remains held until the ExternalIP
+  record is removed after provider cleanup succeeds.
+- **Contract versioning:** the task contract has no version field or per-manager
+  version selector. The fulfillment service, operator, AAP templates, and base
+  execution environment are released together; Fabric Managers must pass that
+  release's conformance tests.
 - **Manager registrations:** each manager registers through an immutable
   ConfigMap in the operator namespace labelled
   `osac.openshift.io/network-fabric-manager` or
@@ -308,14 +324,29 @@ with the responsible QE/CI operators. See
 [E2E suite boundaries](../testing/e2e.md#suite-boundaries)
 for selections and execution prerequisites.
 
-## AgentlessNet NATGateway implementation status
+## AgentlessNet current implementation status
+
+The AgentlessNet code under review uses the generic network-task playbook.
+Tasks receive controller-supplied snapshots and use `resource.id` for backend
+ownership. ExternalIPPool and ExternalIP state is kept in the AgentlessNet
+SQLite database; ExternalIP creation returns the typed
+`osac_result.external_ip.address` output, and release removes the reservation.
+ExternalIPAttachment consumes the supplied ExternalIP and destination. Its
+attachment path accepts tenant VirtualNetwork destinations and rejects
+provider-management destinations. Physical apply and DHCP lease query are
+BMaaS-specific paths. SecurityGroup tasks are documented physical-policy
+no-ops and do not establish SecurityGroup policy conformance.
+
+The accepted integration design marks this implementation as under review;
+these code paths do not establish released or conformance status. Conformance
+requires the release test suite described by that design.
 
 The NATGateway controller runs `create_nat_gateway` and `delete_nat_gateway`
 through the generic network task for every manager. It stores the identity,
 tenant and address/CIDR snapshot of the ready VirtualNetwork and allocated
 ExternalIP as `nat_gateway_context`, and accepts a result only while they still
 match. `osac.templates.agentless_net` reads that input without querying
-Kubernetes. There is no per-manager `natGatewayContractVersion`.
+Kubernetes. The release-level task contract has no per-manager version field.
 
 AgentlessNet stores NATGateway ownership in schema-v1 SQLite. AAP translates the
 immutable VirtualNetwork IPv4 CIDR with a constant namespace rule pair: a saved
@@ -328,11 +359,6 @@ conntrack entries; ExternalIP and VirtualNetwork cleanup remain blocked until
 saved NATGateway state is removed. The accepted design amendment for VN-wide
 SNAT must be published through the enhancement-proposals design workflow.
 Deployed BGP convergence and packet delivery remain QE coverage under OSAC-5533.
-
-The other AgentlessNet tasks (VirtualNetwork, Subnet, ExternalIPPool, ExternalIP,
-ExternalIPAttachment) still read the per-kind playbook inputs, and AgentlessNet
-has no valid manager registration. NATGateway therefore cannot run on a deployed
-AgentlessNet until the role adopts the contract.
 
 ## Subnet compute eligibility
 

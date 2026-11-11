@@ -75,10 +75,13 @@ if (!/^[a-z0-9]{1,32}$/i.test(catalogTestRunId)) {
 }
 process.env.OSAC_CATALOG_TEST_RUN_ID = catalogTestRunId.toLowerCase();
 
+const fullHappyFlowProjectRequested = process.argv.some((argument) =>
+  argument.includes('vmaas-full-happy-basic-flow'),
+);
 const fullFlowProjectRequested = process.argv.some(
   (argument) =>
     argument.includes('vmaas-full-flow') ||
-    argument.includes('vmaas-full-happy-basic-flow') ||
+    fullHappyFlowProjectRequested ||
     argument.includes('vm-flow'),
 );
 if (flowMode !== 'delete' && fullFlowProjectRequested && !process.argv.includes('--list')) {
@@ -194,19 +197,18 @@ export default defineConfig({
     {
       name: 'vm-flow',
       testDir: vmaasDir,
-      testMatch: /create\.vm\.spec\.ts/,
+      testMatch: flowMode === 'delete' ? /delete\.vm\.spec\.ts/ : /create\.vm\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: ['vmaas-full-flow-pre-resource'],
+      dependencies: flowMode === 'delete' ? [] : ['vmaas-full-flow-pre-resource'],
+      teardown:
+        flowMode === 'full' && !fullHappyFlowProjectRequested ? 'vm-flow-teardown' : undefined,
     },
     {
-      name: 'vm-flow-delete',
+      name: 'vm-flow-teardown',
       testDir: vmaasDir,
       testMatch: /delete\.vm\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      // In delete mode this is the first cleanup project. In full mode it
-      // follows the complete creation chain before deleting the VM.
-      dependencies: flowMode === 'full' ? ['vm-flow'] : [],
     },
     {
       name: 'vmaas-full-happy-basic-flow',

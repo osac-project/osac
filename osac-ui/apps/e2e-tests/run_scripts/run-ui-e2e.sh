@@ -199,8 +199,8 @@ declare -A FLOW_CONFIG=(
   [delete_catalog]='catalog|delete||false'
   [full_catalog]='catalog|full||false'
   [create_vm]='vm-flow|create||false'
-  [delete_vm]='vm-flow-delete|delete||false'
-  [full_vm]='vm-flow-delete|full||false'
+  [delete_vm]='vm-flow|delete||false'
+  [full_vm]='vm-flow|full||false'
 )
 
 if [[ -n "$FLOW_TAG" ]]; then

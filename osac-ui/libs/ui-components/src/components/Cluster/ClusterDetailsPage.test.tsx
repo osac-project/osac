@@ -79,7 +79,8 @@ describe('ClusterDetailsPage upgrade availability', () => {
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
     );
     expect(screen.getByText('Upgrade available')).toBeInTheDocument();
-    expect(screen.getByText('4.17.0')).toBeInTheDocument();
+    const configurationCard = screen.getByText('Cluster configuration').closest('.pf-v6-c-card');
+    expect(configurationCard).toHaveTextContent('4.17.0');
   });
 
   it.each([ClusterUpgradeState.PENDING, ClusterUpgradeState.PROGRESSING])(

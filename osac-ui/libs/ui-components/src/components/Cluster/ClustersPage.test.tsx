@@ -182,7 +182,9 @@ describe('ClustersPage', () => {
 
   it('joins lifecycle metadata by observed semver instead of desired catalog reference', async () => {
     const desiredActive = makeCluster('c-mismatch', 'v4.17');
-    if (!desiredActive.status) throw new Error('Expected status');
+    if (!desiredActive.status) {
+      throw new Error('Expected status');
+    }
     desiredActive.status.observedVersion = '4.15.0';
     const { transport } = createTransport([desiredActive]);
     renderClustersPage(transport);

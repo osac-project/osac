@@ -40,8 +40,9 @@ Preparing NetApp storage for OSAC involves:
 5. **TridentBackendConfig** connecting Trident to the SVM and its pools. In
    the shared-tenancy profile, one shared backend config serves all tenants.
 6. **StorageClasses**: one per offered tier, carrying the OSAC labels (see
-   [StorageClass contract](#storageclass-contract)) and the
-   `csi.trident.netapp.io` provisioner.
+   [StorageClass contract](#storageclass-contract)), the
+   `csi.trident.netapp.io` provisioner, and a filesystem type (see
+   [Filesystem type](#filesystem-type)).
 
 Refer to the
 [NetApp Trident documentation](https://docs.netapp.com/us-en/trident/index.html)
@@ -356,12 +357,58 @@ metadata:
 provisioner: csi.trident.netapp.io
 parameters:
   backendType: ontap-san
+  fsType: ext4
   # ... Trident parameters selecting the SVM's pool for this tier
 ```
 
 Exactly one class must exist per configured tier. See
 [concepts/storageclass.md](../concepts/storageclass.md) for the resolution
 rules and the full label contract.
+
+### Filesystem type
+
+Every class must set a filesystem type in its parameters. Trident's
+parameter is `fsType`, with the value `ext4`, `ext3`, or `xfs` (see the
+Kubernetes attributes in NetApp's
+[Kubernetes and Trident objects](https://docs.netapp.com/us-en/trident/trident-reference/objects.html)).
+A class that already sets the Kubernetes parameter
+`csi.storage.k8s.io/fstype` meets the requirement. Do not add `fsType` to
+such a class: provisioning fails for a class that has both.
+
+OSAC creates every VM disk as a `ReadWriteOnce` volume in `Filesystem`
+mode. The pod that imports the disk image does not run as root and gets
+write access to the volume through its `fsGroup`. With Trident's default
+`fsGroupPolicy`, `ReadWriteOnceWithFSType`, Kubernetes applies `fsGroup` to
+such a volume only when its PersistentVolume has a filesystem type, and the
+PersistentVolume gets it from the class. Trident formats the LUN either
+way, so a class without the parameter still provisions and binds volumes,
+but they are mounted with root ownership and the disk image cannot be
+written.
+
+OSAC does not check the parameter, so a class without it passes
+onboarding. The failure appears when a tenant creates a ComputeInstance:
+the disk import fails, and the disk's importer pod logs:
+
+```text
+qemu-img: /data/disk.img: error while converting raw: Could not create '/data/disk.img': Permission denied
+```
+
+To check a class, and a volume provisioned from it:
+
+```shell
+oc get storageclass <class> -o jsonpath='{.parameters.fsType}'
+oc get pv <pv> -o jsonpath='{.spec.csi.fsType}'
+```
+
+Both print the filesystem type. The first prints nothing for a class that
+sets `csi.storage.k8s.io/fstype` instead. When the second prints nothing,
+Kubernetes does not apply `fsGroup` to that volume.
+
+The parameters of a StorageClass cannot be changed. To add the filesystem
+type, delete the class and create it again with the same name, labels, and
+other parameters. A volume provisioned before that keeps the empty
+filesystem type on its PersistentVolume, which cannot be changed either:
+delete each ComputeInstance whose disk import failed and create it again.
 
 ## Dev Preview boundaries
 

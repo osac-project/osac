@@ -47,7 +47,8 @@ Complete these before onboarding tenants to the storage service:
 - [ ] A shared TridentBackendConfig connecting Trident to the SVM
 - [ ] One StorageClass per offered tier with the
       `osac.openshift.io/tenant=csp-managed` and
-      `osac.openshift.io/storage-tier=<tier>` labels. See
+      `osac.openshift.io/storage-tier=<tier>` labels and a filesystem
+      type (`fsType`) in its parameters. See
       [providers/netapp.md](../providers/netapp.md#storageclass-contract)
 
 **OSAC side**
@@ -76,6 +77,10 @@ oc get tridentbackendconfigs -A
 oc get storageclass -l osac.openshift.io/tenant=csp-managed \
   -L osac.openshift.io/storage-tier
 
+# Every class sets a filesystem type: no <none> in the FSTYPE column
+oc get storageclass -l osac.openshift.io/tenant=csp-managed \
+  -o custom-columns=NAME:.metadata.name,FSTYPE:.parameters.fsType
+
 # Each worker that can run tenant VMs: multipathd is active and
 # find_multipaths is "off" (how multipathd reports "no")
 oc debug node/<node> -- chroot /host sh -c \
@@ -95,6 +100,12 @@ onboarding and volume provisioning, and first fails when a tenant VM
 attaches a disk there. See
 [Worker node preparation](../providers/netapp.md#worker-node-preparation)
 for the configuration and the failure messages.
+
+The filesystem type check has no OSAC equivalent either. A class without
+a filesystem type passes onboarding and provisions volumes, and VM disk
+imports on it fail. A class that sets `csi.storage.k8s.io/fstype` instead
+of `fsType` shows `<none>` in that check and needs no change. See
+[Filesystem type](../providers/netapp.md#filesystem-type).
 
 ## Configure storage in OSAC
 
@@ -164,9 +175,9 @@ does **not**:
   system, including during tenant teardown.
 - Use backend management credentials, even if they were supplied when the
   backend was registered.
-- Validate the transport (Fibre Channel zoning, iSCSI networking, worker
-  node multipath configuration), Trident health, or the
-  TridentBackendConfig. Readiness is StorageClass presence only.
+- Validate the classes' parameters, the transport (Fibre Channel zoning,
+  iSCSI networking, worker node multipath configuration), Trident health,
+  or the TridentBackendConfig. Readiness is StorageClass presence only.
 
 ## Troubleshooting
 
@@ -179,6 +190,7 @@ does **not**:
 | Classes exist for tiers OSAC doesn't know about | Extra classes for unconfigured tiers are ignored by design | No action needed; they don't affect readiness |
 | CSP-managed backend for a provider other than NetApp | Not supported in the Dev Preview | CSP-managed runtime support is NetApp-only; tiers from other CSP-managed providers are never dispatched to provider automation |
 | `StorageReady=True`, but the pod mounting a tenant disk stays in `ContainerCreating`; its events show `multipathd is not running` or `unsupported find_multipaths` | The worker node is not prepared for the block transport | Prepare the node. See [Worker node preparation](../providers/netapp.md#worker-node-preparation) |
+| `StorageReady=True`, but a VM disk import fails; its importer pod logs `Could not create '/data/disk.img': Permission denied` | The tier's StorageClass sets no filesystem type, so the volume is mounted with root ownership | Recreate the class with `fsType`, then recreate the ComputeInstance. See [Filesystem type](../providers/netapp.md#filesystem-type) |
 
 Warning events on the Tenant (reason `DuplicateStorageClass`) repeat the
 duplicate details:

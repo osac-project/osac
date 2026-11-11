@@ -22,6 +22,7 @@ import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/external_ip_pool_type.proto";
 import "osac/private/v1/external_ip_attribution_type.proto";
 import "osac/private/v1/metering_type.proto";
+import "osac/private/v1/quota_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -39,6 +40,16 @@ option (cleanapi.file).package = "osac.public.v1";
 // The lifecycle follows: PENDING (awaiting allocation) -> ALLOCATED (IP assigned).
 // FAILED is a terminal error state for provisioning failures. DELETING is set during deprovisioning.
 message ExternalIP {
+  // Quota: one external IP address. An automatic one holds its parent's ID and kind in two
+  // labels.
+  option (osac.private.v1.quota_message) = {
+    dimension: "network.external_ips"
+    created_for: {
+      id_label: "osac.openshift.io/auto-created-for"
+      kind_label: "osac.openshift.io/auto-created-kind"
+    }
+  };
+
   // Unique identifier of the external IP.
   string id = 1;
 

@@ -1,0 +1,66 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// One dimension's limit, usage, and room left, at one scope.
+message QuotaUsageDimension {
+  // The quota dimension, such as `compute.vcpus`.
+  string dimension = 1;
+
+  // The limit that applies at this scope: the project limit for a project, else the tenant's
+  // override, else the default, else 0.
+  int64 limit = 2;
+
+  // The usage counted from the database at this scope.
+  int64 usage = 3;
+
+  // The room left: the limit minus the usage. Negative when the usage is over the limit.
+  int64 room = 4;
+
+  // True when the usage exceeds the limit. Requests that add to the dimension are refused.
+  bool over_limit = 5;
+}
+
+// The quota usage of one project.
+message QuotaUsageProject {
+  // Full name of the project. Empty for the tenant's default project.
+  string project = 1;
+
+  // One entry per dimension that has a project limit or usage in the project.
+  repeated QuotaUsageDimension dimensions = 2;
+}
+
+// The quota usage of one tenant: its own dimensions and each project's.
+//
+// The tenant's entries cover every dimension that has a default, an override, or usage in the
+// tenant. Each project's entries cover every dimension that has a project limit or usage in the
+// project; a dimension with no project limit shows the limit the project inherits from the tenant.
+// A dimension with no default has limit 0.
+message QuotaUsageReport {
+  // The tenant the report covers. The built-in `shared` and `system` tenants hold no quota state
+  // and have no report.
+  string tenant = 1;
+
+  // The tenant's dimensions.
+  repeated QuotaUsageDimension dimensions = 2;
+
+  // One entry per project of the tenant.
+  repeated QuotaUsageProject projects = 3;
+}

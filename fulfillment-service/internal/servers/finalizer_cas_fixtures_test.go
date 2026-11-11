@@ -303,6 +303,64 @@ func finalizerCases() []finalizerCase {
 				b.AddAllowedTenants(auth.SharedTenant)
 			},
 		),
+		newFinalizerCase(privatev1.QuotaLimits_ServiceDesc,
+			func() *privatev1.QuotaLimit {
+				return privatev1.QuotaLimit_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: finalizerName("quota-limit"),
+					}.Build(),
+					Spec: privatev1.QuotaLimitSpec_builder{
+						Dimension: finalizerName("dimension"),
+						Value:     10,
+					}.Build(),
+				}.Build()
+			},
+		),
+		newFinalizerCase(privatev1.QuotaThresholds_ServiceDesc,
+			func() *privatev1.QuotaThreshold {
+				project := finalizerName("project")
+				dimension := finalizerName("dimension")
+				tx, err := database.TxFromContext(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tx.Exec(ctx, `insert into projects (id, tenant, project, name, creator, data)
+					values (uuidv7(), $1, ''::ltree, $2::ltree, 'system', '{}')`, testTenant, project)
+				Expect(err).ToNot(HaveOccurred())
+				// The threshold's update validation requires a limit of its dimension in its
+				// project, which the public update path below exercises.
+				_, err = tx.Exec(ctx, `insert into quota_limits (id, name, tenant, project, data)
+					values ($1, $1, $2, $3::ltree, jsonb_build_object(
+						'spec', jsonb_build_object('dimension', $4::text, 'value', '10')))`,
+					finalizerName("quota-limit"), testTenant, project, dimension)
+				Expect(err).ToNot(HaveOccurred())
+				return privatev1.QuotaThreshold_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:    finalizerName("quota-threshold"),
+						Project: project,
+					}.Build(),
+					Spec: privatev1.QuotaThresholdSpec_builder{
+						Dimension: dimension,
+						Value:     3,
+					}.Build(),
+				}.Build()
+			},
+		),
+		newFinalizerCase(privatev1.QuotaLimitRequests_ServiceDesc,
+			func() *privatev1.QuotaLimitRequest {
+				return privatev1.QuotaLimitRequest_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: finalizerName("quota-request"),
+					}.Build(),
+					Spec: privatev1.QuotaLimitRequestSpec_builder{
+						Dimension:      finalizerName("dimension"),
+						RequestedValue: 20,
+					}.Build(),
+					// The public update path only accepts a pending request:
+					Status: privatev1.QuotaLimitRequestStatus_builder{
+						State: privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_PENDING,
+					}.Build(),
+				}.Build()
+			},
+		),
 	}
 	return slices.Concat(leaves, finalizerPlatformCases(), finalizerTenantCases(), finalizerNetworkingCases())
 }

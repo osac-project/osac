@@ -127,10 +127,14 @@ message ComputeInstanceSpec {
   reserved "ssh_public_key";
 
   // Boot disk configuration.
+  //
+  // Quota: one volume for the boot disk.
   optional ComputeInstanceDisk boot_disk = 8;
 
   // Additional disk configurations. When creating from a Catalog Item, omit this field to use its default.
   // Set `items` to an empty list to request no additional disks.
+  //
+  // Quota: one volume per disk.
   ComputeInstanceDiskList additional_disks = 9;
 
   // Run strategy for the compute instance.
@@ -160,11 +164,16 @@ message ComputeInstanceSpec {
   // Reference to an instance type. Specifies the compute configuration (cores, memory)
   // for this instance. The API validates that the instance type exists and is not OBSOLETE;
   // resolution of cores/memory_gib happens in the reconciler.
+  //
+  // Quota: the instance uses what the type's annotations say, and the larger of that and
+  // what `status.instance_type` says while a resize is in progress.
   InstanceTypeReference instance_type = 17;
 
   // When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
   // with an ExternalIPAttachment for this instance atomically during creation.
   // Immutable after creation.
+  //
+  // Quota: one external IP address, when the field is true.
   optional bool auto_external_ip_attachment = 18 [(google.api.field_behavior) = IMMUTABLE];
 
   // Reference to a DiskImage resource. Required after template/catalog item

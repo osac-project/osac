@@ -1,0 +1,69 @@
+---
+# Check the driver settings and the record before contacting the server.
+# Messages name the environment variables, never their values or the record.
+- name: Check DNS_RFC2136_SERVER
+  ansible.builtin.assert:
+    that:
+      - dns_rfc2136_server | string | length > 0
+      - dns_rfc2136_server | string is ansible.utils.ip_address
+    fail_msg: >-
+      DNS_RFC2136_SERVER must be the IPv4 or IPv6 address of the primary DNS
+      server that accepts dynamic updates (host names are not supported).
+    quiet: true
+
+- name: Check DNS_RFC2136_PORT
+  ansible.builtin.assert:
+    that:
+      - dns_rfc2136_port | string is match('^[0-9]+$')
+      - dns_rfc2136_port | int >= 1
+      - dns_rfc2136_port | int <= 65535
+    fail_msg: DNS_RFC2136_PORT must be a port number between 1 and 65535.
+    quiet: true
+
+- name: Check DNS_RFC2136_PROTOCOL
+  ansible.builtin.assert:
+    that:
+      - dns_rfc2136_protocol in dns_rfc2136_protocols
+    fail_msg: DNS_RFC2136_PROTOCOL must be tcp or udp.
+    quiet: true
+
+- name: Check DNS_RFC2136_KEY_NAME
+  ansible.builtin.assert:
+    that:
+      - dns_rfc2136_key_name | string | length > 0
+    fail_msg: DNS_RFC2136_KEY_NAME must name the TSIG key allowed to update the zone.
+    quiet: true
+
+- name: Check DNS_RFC2136_KEY_ALGORITHM
+  ansible.builtin.assert:
+    that:
+      - dns_rfc2136_key_algorithm in dns_rfc2136_key_algorithms
+    fail_msg: >-
+      DNS_RFC2136_KEY_ALGORITHM must be one of hmac-md5, hmac-sha1,
+      hmac-sha224, hmac-sha256, hmac-sha384 or hmac-sha512.
+    quiet: true
+
+- name: Check DNS_RFC2136_KEY_SECRET
+  ansible.builtin.assert:
+    that:
+      - dns_rfc2136_key_secret | string | length > 0
+    fail_msg: DNS_RFC2136_KEY_SECRET must hold the base64-encoded TSIG secret.
+    quiet: true
+
+- name: Normalize DNS zone and record name
+  ansible.builtin.set_fact:
+    dns_rfc2136_zone: "{{ dns_zone | trim | lower | regex_replace('\\.$', '') }}"
+    dns_rfc2136_record: "{{ dns_record_name | trim | lower | regex_replace('\\.$', '') }}"
+  no_log: true
+
+- name: Check the record is inside the DNS zone
+  ansible.builtin.assert:
+    that:
+      - dns_rfc2136_zone | length > 0
+      - >-
+        dns_rfc2136_record == dns_rfc2136_zone
+        or dns_rfc2136_record.endswith('.' ~ dns_rfc2136_zone)
+    fail_msg: >-
+      The DNS record name is not inside DNS_ZONE. Set DNS_ZONE to the zone
+      configured on the DNS server that contains the cluster base domain.
+    quiet: true

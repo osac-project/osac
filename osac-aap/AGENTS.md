@@ -49,6 +49,10 @@ Under `collections/ansible_collections/osac/`, `workflows` orchestrates,
 
 See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap).
 
+For the `dns.rfc2136.dns` DNS driver, run
+`uv run --group development pytest tests/unit/test_dns_rfc2136.py` from
+`osac-aap/`; see [boundaries](../docs/testing/osac-aap.md#focused-harness-boundaries).
+
 Shared operator/AAP goldens bind physical NetworkAttachment apply/delete and
 `query_dhcp_lease` (including the `dhcp_lease` result), plus ClusterOrder ingress
 reservation. Update both operator Go suites, AAP's

@@ -40,16 +40,21 @@ file and they are applied during `make install-osac`.
 | `HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY` | `HighlyAvailable` | Infrastructure HA policy |
 | `DNS_CLASS` | `dns.route53.dns` | DNS backend driver role (see [DNS Backend](dns-backend.md)) |
 | `DNS_ZONE` | `EXTERNAL_ACCESS_BASE_DOMAIN` | DNS zone for record management |
+| `DNS_SERVER` | — | Optional recursive resolver that the DNS readiness waits query directly. Empty uses the execution environment's resolver |
+| `DNS_RFC2136_*` | — | Server and TSIG key settings for the `dns.rfc2136.dns` backend (see [DNS Backend](dns-backend.md#rfc-2136-configuration)) |
 
 ## Secret Variables
 
 Values must be **plaintext** — the script base64-encodes them when patching the
-Kubernetes Secret. Do not pre-encode them.
+Kubernetes Secret. Do not pre-encode them. The TSIG secret is already a base64
+string: paste the `secret` value from `tsig-keygen` or the server's key file
+unchanged, and the script encodes that string once more for Kubernetes.
 
 | Variable | Description |
 |----------|-------------|
 | `AWS_ACCESS_KEY_ID` | AWS credentials for Route53 DNS |
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials for Route53 DNS |
+| `DNS_RFC2136_KEY_SECRET` | TSIG secret for the `dns.rfc2136.dns` backend (see [DNS Backend](dns-backend.md)) |
 
 Network manager credentials go in `aap.instanceGroups.networkFulfillment.secret`
 (Secret `network-fulfillment-ig`).

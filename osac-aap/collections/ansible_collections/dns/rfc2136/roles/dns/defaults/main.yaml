@@ -1,0 +1,25 @@
+---
+# RFC 2136 dynamic DNS update driver settings. AAP injects these environment
+# variables from the cluster-fulfillment-ig ConfigMap and Secret.
+
+# IPv4 or IPv6 address of the primary DNS server that accepts updates.
+dns_rfc2136_server: "{{ lookup('env', 'DNS_RFC2136_SERVER') | trim }}"
+dns_rfc2136_port: "{{ lookup('env', 'DNS_RFC2136_PORT') | default('53', true) | trim }}"
+dns_rfc2136_protocol: "{{ lookup('env', 'DNS_RFC2136_PROTOCOL') | default('tcp', true) | trim | lower }}"
+
+# TSIG key that the server allows to update the zone.
+dns_rfc2136_key_name: "{{ lookup('env', 'DNS_RFC2136_KEY_NAME') | trim }}"
+dns_rfc2136_key_algorithm: "{{ lookup('env', 'DNS_RFC2136_KEY_ALGORITHM') | default('hmac-sha256', true) | trim }}"
+# Base64-encoded TSIG secret, from the Secret only.
+dns_rfc2136_key_secret: "{{ lookup('env', 'DNS_RFC2136_KEY_SECRET') | trim }}"
+
+dns_rfc2136_protocols:
+  - tcp
+  - udp
+dns_rfc2136_key_algorithms:
+  - hmac-md5
+  - hmac-sha1
+  - hmac-sha224
+  - hmac-sha256
+  - hmac-sha384
+  - hmac-sha512

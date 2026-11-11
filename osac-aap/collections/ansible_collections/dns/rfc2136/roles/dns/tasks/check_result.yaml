@@ -1,0 +1,38 @@
+---
+# Fail with a sanitized message when an nsupdate call did not succeed.
+#
+# Inputs:
+#   dns_rfc2136_result: registered nsupdate result (its task uses no_log).
+#   dns_rfc2136_ok_rcodes: DNS response codes that count as success.
+#
+# nsupdate treats any error response to its existence check as "record
+# absent", so a REFUSED or NOTAUTH delete reports success without changing
+# anything. Checking dns_rc_str catches that case.
+- name: Fail on RFC 2136 update error
+  when: >-
+    dns_rfc2136_result is failed
+    or (dns_rfc2136_result.dns_rc_str | default('NOERROR')) not in dns_rfc2136_ok_rcodes
+  vars:
+    dns_rfc2136_error_msg: "{{ dns_rfc2136_result.msg | default('') | string }}"
+    dns_rfc2136_rcode: "{{ dns_rfc2136_result.dns_rc_str | default('') }}"
+  ansible.builtin.fail:
+    msg: >-
+      RFC 2136 DNS update failed{{ (' (' ~ dns_rfc2136_rcode ~ ')') if dns_rfc2136_rcode | length > 0 else '' }}:
+      {% if dns_rfc2136_error_msg is match('TSIG key error') -%}
+      DNS_RFC2136_KEY_SECRET is not a valid base64 TSIG secret.
+      {%- elif dns_rfc2136_error_msg is match('TSIG update error') -%}
+      the server rejected the TSIG signature; check DNS_RFC2136_KEY_NAME,
+      DNS_RFC2136_KEY_ALGORITHM and DNS_RFC2136_KEY_SECRET.
+      {%- elif dns_rfc2136_error_msg is match('DNS server error') -%}
+      no answer from the server; check DNS_RFC2136_SERVER, DNS_RFC2136_PORT,
+      DNS_RFC2136_PROTOCOL and network access from the execution environment.
+      {%- elif dns_rfc2136_rcode == 'REFUSED' -%}
+      the server refused the update; check that its update policy allows
+      DNS_RFC2136_KEY_NAME to change records in DNS_ZONE.
+      {%- elif dns_rfc2136_rcode == 'NOTAUTH' -%}
+      the server is not authoritative for DNS_ZONE or did not accept the key.
+      {%- elif dns_rfc2136_rcode == 'NOTZONE' -%}
+      the record is outside the zone configured on the server; check DNS_ZONE.
+      {%- else -%}
+      unexpected nsupdate result; check the DNS server logs for this update.
+      {%- endif %}

@@ -9,7 +9,7 @@ argument_specs:
         default: dns.route53.dns
         description: >
           Fully-qualified Ansible role name of the DNS driver to use
-          (e.g., dns.route53.dns, dns.cloudflare.dns,
+          (e.g., dns.route53.dns, dns.noop.dns, dns.rfc2136.dns
           or a third-party role like myorg.mycollection.custom_dns).
       dns_zone:
         type: str

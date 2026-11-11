@@ -42,10 +42,16 @@ dependency review) do not stop an entry. When every suite passed, `result` write
 ## Optional: full regression tests on a pull request
 
 A pull request and merge queue entry get the sanity tests for VMaaS, CaaS, and BMaaS. The scheduled jobs run sanity and
-regression every 5 hours on `main`, with the service's applicable reference tests and BMaaS serial coverage. To validate a
-new or changed regression test before it merges, select **<service> Full Install · sanity + regression** in the E2E comment
-or comment `/test vmaas-full`, `/test caas-full`, or `/test bmaas-full`. The full selection uses the same suite job and
-check line as the sanity selection, and it runs the same cohort as the service's schedule.
+regression every 5 hours on `main`, with each service's applicable reference tests. BMaaS runs its full service root
+serially (`-n 0`), including sanity, regression, serial, and reference-marked tests. To validate a new or changed
+regression test before it merges, select **<service> Full Install · sanity + regression** in the E2E comment or comment
+`/test vmaas-full`, `/test caas-full`, or `/test bmaas-full`. The full selection uses the same suite job and check line as
+the sanity selection, and it runs the same cohort as the service's schedule.
+
+Scheduled runs are non-gating and send a Slack notification on failure. `wg-infra` owns workflow and runner failures; the
+working group for the affected service owns test failures and their follow-up. The expanded BMaaS schedule's duration and
+overlap behavior still need to be confirmed from a full run; the workflow does not currently serialize it against other
+scheduled suites.
 
 - Asking for the same thing while it runs does nothing. Asking for the other tier while one runs stops that run and starts
   the tier requested.

@@ -64,7 +64,7 @@ Readiness and fork authorization are independent of suite selection.
 
 | Area | Required coverage | Command (repository root) | Boundary |
 |---|---|---|---|
-| Service E2E CI suite policy | [DEV] Unit/Contract selection checks | `uv run pytest -n 0 tests/unit/test_caas_full_variant.py tests/unit/test_caas_ci_suite_policy.py` | Evaluates the checked-in workflow selectors and full variants. Companion CaaS runner checks are enabled with `OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra`. No deployed services. |
+| Service E2E CI suite policy | [DEV] Unit/Contract selection checks | `uv run --project osac-test-infra --with pydantic pytest -o addopts= -n 0 tests/unit/test_caas_full_variant.py tests/unit/test_caas_ci_suite_policy.py` | CI checks out `osac-test-infra@main` and `osac-ci` at the release pinned by the PR workflows, then sets `OSAC_TEST_INFRA_DIR` and `PYTHONPATH` so companion and policy checks run rather than skip. Collection verifies root-level VMaaS sanity modules. No deployed services. |
 
 ## Component-hooks and sandbox regression smoke tests
 

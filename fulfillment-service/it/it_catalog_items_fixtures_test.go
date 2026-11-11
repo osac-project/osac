@@ -15,7 +15,6 @@ package it
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -539,6 +538,34 @@ func createCatalogItemUserDataSecretFixture(ctx context.Context, tenant string) 
 		map[string][]byte{"userdata": []byte("#cloud-config\n")})
 }
 
+func createCatalogItemSSHKeySecretFixture(ctx context.Context, tenant string) string {
+	GinkgoHelper()
+	return createCatalogItemSecretFixture(ctx, tenant, privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+		map[string][]byte{"public_key": []byte(catalogItemFixtureSSHPublicKey)})
+}
+
+// createCatalogItemSSHKeySecretNameFixture registers an SSH-key Secret and
+// returns its name, for CLI paths that select the key by name.
+func createCatalogItemSSHKeySecretNameFixture(ctx context.Context, tenant string) string {
+	GinkgoHelper()
+	client := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+	name := catalogItemFixtureName()
+	response, err := client.Create(ctx, privatev1.SecretsCreateRequest_builder{
+		Object: privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Data:     map[string][]byte{"public_key": []byte(catalogItemFixtureSSHPublicKey)},
+		}.Build(),
+	}.Build())
+	Expect(err).NotTo(HaveOccurred())
+	id := response.GetObject().GetId()
+	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		_, err := client.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: id}.Build())
+		return err
+	}, nil)
+	return name
+}
+
 func createCatalogItemSecretFixture(ctx context.Context, tenant string, secretType privatev1.SecretType, data map[string][]byte) string {
 	GinkgoHelper()
 	client := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
@@ -579,28 +606,6 @@ func catalogItemParameterPolicies() map[string]*publicv1.TemplateParameterPolicy
 	}
 }
 
-func grantTenantAdminRealmRole(ctx context.Context, userID string) {
-	GinkgoHelper()
-
-	roleStatus, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/roles/tenant-admin", nil)
-	Expect(err).NotTo(HaveOccurred())
-	if roleStatus == http.StatusNotFound {
-		code, _, createErr := tool.KeycloakAdminRequest(ctx, http.MethodPost, "/roles", map[string]any{"name": "tenant-admin"})
-		Expect(createErr).NotTo(HaveOccurred())
-		Expect(code).To(Or(Equal(http.StatusCreated), Equal(http.StatusConflict)))
-		roleStatus, body, err = tool.KeycloakAdminRequest(ctx, http.MethodGet, "/roles/tenant-admin", nil)
-		Expect(err).NotTo(HaveOccurred())
-	}
-	Expect(roleStatus).To(Equal(http.StatusOK))
-
-	var role map[string]any
-	Expect(json.Unmarshal(body, &role)).To(Succeed())
-	code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPost,
-		"/users/"+userID+"/role-mappings/realm", []map[string]any{role})
-	Expect(err).NotTo(HaveOccurred())
-	Expect(code).To(Equal(http.StatusNoContent))
-}
-
 // Keycloak break-glass administration does not imply OSAC tenant-admin permissions.
 // Grant that realm role before logging in so the public API exercises genuine tenant scope.
 func createCatalogItemTenantAdminFixture(ctx context.Context) (string, *grpc.ClientConn) {
@@ -628,7 +633,8 @@ func createCatalogItemTenantAdminIdentityFixture(ctx context.Context) metadataTe
 	tenant, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 	Expect(err).NotTo(HaveOccurred())
 
-	grantTenantAdminRealmRole(ctx, tenant.GetObject().GetStatus().GetBreakGlassUserId())
+	role := getOrCreateKeycloakTenantAdminRole(ctx)
+	assignKeycloakRealmRole(ctx, tenant.GetObject().GetStatus().GetBreakGlassUserId(), role)
 
 	_, token := loginAsBreakGlass(ctx, tenants, name, id)
 	publicConn, err := tool.makeGrpcConn(externalServiceAddr, token)
@@ -692,13 +698,17 @@ func createCatalogItemComputeInstanceTemplateFixture(ctx context.Context, defaul
 	return id
 }
 
-func createCatalogItemClusterTemplateFixture(ctx context.Context, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition) string {
+func createCatalogItemClusterTemplateFixture(ctx context.Context, defaults *privatev1.ClusterTemplateSpecDefaults, parameters []*privatev1.ClusterTemplateParameterDefinition, tenants ...string) string {
 	GinkgoHelper()
+	tenant := auth.SharedTenant
+	if len(tenants) > 0 {
+		tenant = tenants[0]
+	}
 	client := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 	response, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 		Object: privatev1.ClusterTemplate_builder{
 			Id:           "catalog_item_cluster_" + uuid.New()[24:],
-			Metadata:     catalogItemFixtureMetadata("shared", ""),
+			Metadata:     catalogItemFixtureMetadata(tenant, ""),
 			Title:        "Catalog item integration Template",
 			SpecDefaults: defaults,
 			Parameters:   parameters,

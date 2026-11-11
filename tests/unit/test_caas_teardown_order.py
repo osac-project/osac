@@ -5,6 +5,7 @@ import subprocess
 import traceback
 from collections.abc import Iterator
 from itertools import chain, repeat
+from pathlib import Path
 from unittest.mock import Mock, call
 
 import pytest
@@ -13,6 +14,7 @@ from tests.e2e.caas.sanity import test_cluster_create as scenario
 from tests.e2e.core import helpers, runner
 from tests.e2e.core import k8s_client as k8s_client_module
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.metering import MeteringCollector
 
 _PARENT = "clusterorder"
 _INFRAENV = "infraenv.agent-install.openshift.io"
@@ -199,26 +201,37 @@ def test_stage_timeout_replaces_unsafe_message_without_chaining(monkeypatch: pyt
 
 
 def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
-    cli, grpc, private, metering = (Mock() for _ in range(4))
+    key_file = tmp_path / "id.pub"
+    key_file.write_text("ssh-ed25519 unit-test-key\n")
+    cli, grpc, private = (Mock() for _ in range(3))
+    metering = Mock(spec=MeteringCollector)
     k8s = Mock(spec=K8sClient)
     k8s.namespace = "osac"
     k8s._base.return_value = ["kubectl"]
     private.ensure_disk_image.return_value = "disk-id"
-    private.ensure_cluster_version.return_value = {"name": "version-name"}
+    private.ensure_cluster_version.return_value = {"id": "version-id", "name": "version-name"}
     cli.create_cluster.return_value = "cluster-id"
+    cli.create_cluster_with_catalog_item.return_value = "cluster-id"
     grpc.list_cluster_ids.return_value = ["cluster-id"]
+    catalog_item_id = Mock(name="catalog-item-id")
+    private.create_cluster_catalog_item.return_value = catalog_item_id
     grpc.get_cluster.return_value = {
         "object": {
             "metadata": {"tenant": "tenant1"},
             "spec": {
                 "version": {"name": "version-name"},
                 "nodeSets": {"workers": {"size": 1, "baremetalInstanceType": {"name": "ci-worker-bm"}}},
+                "catalogItem": {"id": catalog_item_id},
+                "template": {"id": "template-id"},
+                "sshKey": {"id": "secret-id", "name": "test-ssh-key-secret"},
+                "pullSecretSecret": {"name": "test-pull-secret"},
             },
         }
     }
     grpc.list_baremetal_instance_ids.side_effect = [["bmi-id"], ["bmi-id"], []]
+    grpc.call.side_effect = subprocess.CalledProcessError(returncode=1, cmd="grpc", stderr="Code: InvalidArgument")
     grpc.get_baremetal_instance.return_value = {
         "object": {
             "metadata": {
@@ -229,21 +242,35 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
             "spec": {
                 "template": {"id": "osac.templates.bm_host_provisioning", "shared": True},
                 "instanceType": {"name": "ci-worker-bm", "shared": True},
+                "sshKey": {"id": "secret-id"},
             },
         }
     }
-    k8s.get_json.side_effect = [
-        {"metadata": {"namespace": "osac", "annotations": {"osac.openshift.io/tenant": "tenant1"}}},
-        {
-            "metadata": {
-                "labels": {"osac.openshift.io/baremetalinstance-uuid": "bmi-id"},
-                "annotations": {
-                    "osac.openshift.io/tenant": "tenant1",
-                    "osac.openshift.io/owner-reference": "ClusterOrder/order-a",
-                },
-            }
-        },
-    ]
+    cluster_order = {
+        "metadata": {"namespace": "osac", "annotations": {"osac.openshift.io/tenant": "tenant1"}},
+        "spec": {"nodeRequests": [{"nodeSet": "workers", "numberOfNodes": 1}]},
+        "status": {"desiredWorkers": 1, "currentWorkers": 1, "readyWorkers": 1},
+    }
+    worker_bmi = {
+        "metadata": {
+            "labels": {"osac.openshift.io/baremetalinstance-uuid": "bmi-id"},
+            "annotations": {
+                "osac.openshift.io/tenant": "tenant1",
+                "osac.openshift.io/owner-reference": "ClusterOrder/order-a",
+            },
+        }
+    }
+
+    # The bring-up phases read the ClusterOrder repeatedly, so key the mock on the
+    # resource instead of handing out a fixed sequence.
+    def get_json(*, resource: str, **_kwargs: object) -> dict:
+        if resource == "clusterorder":
+            return cluster_order
+        if resource == "infraenvs.agent-install.openshift.io":
+            return {"spec": {"sshAuthorizedKey": "ssh-ed25519 unit-test-key"}}
+        return worker_bmi
+
+    k8s.get_json.side_effect = get_json
     k8s.list_json.return_value = {
         "items": [
             {
@@ -252,7 +279,10 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
                     "namespace": "osac",
                     "labels": {"infraenvs.agent-install.openshift.io": "order-a-infraenv"},
                 },
-                "status": {"debugInfo": {"state": "installing-in-progress"}},
+                "status": {
+                    "debugInfo": {"state": "installed"},
+                    "conditions": [{"type": "Installed", "status": "True"}],
+                },
             }
         ]
     }
@@ -260,38 +290,38 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
         f'# TYPE {metric} gauge\n{metric}{{tenant="tenant1",worker_type="baremetal",instance_type="ci-worker-bm"}} 1'
         for metric in scenario._WORKER_LEVEL_METRICS
     )
+    # This scenario is about teardown waits, so the cluster is already Ready.
+    k8s.get_cluster_order_phase.return_value = "Ready"
     k8s.get_cluster_order_spec.return_value = {
         "releaseImage": "release-image",
         "nodeRequests": [{"bareMetal": {"instanceType": "ci-worker-bm"}, "numberOfNodes": 1}],
+        "sshKey": {"id": "secret-id"},
     }
     k8s.get_cluster_order_hosted_cluster_name.return_value = "hosted-cluster"
     k8s.get_cluster_order_namespace.return_value = "hosted-namespace"
     k8s.get_baremetal_instance_name.return_value = "bmi-cr"
     k8s.get_cluster_order_infra_env_name.return_value = "order-a-infraenv"
-    metering.get_all_events.return_value = [
-        {"data": {"billing_dimensions": {"component": component}}} for component in ("control_plane", "worker")
-    ]
-    metering.get_event.side_effect = [
-        {"osacresourcetype": "cluster_order", "data": {"billing_dimensions": {"cluster_template": "template"}}},
-        {"data": {"billing_dimensions": {"node_set": "workers", "node_count": 2}}},
-    ]
     monkeypatch.setattr(scenario, "wait_for_cluster_order_cr", lambda **_kwargs: "order-a")
     for name in (
         "wait_for_cluster_progressing",
         "wait_for_cluster_order_condition",
+        "wait_for_cluster_ready",
         "wait_for_cluster_deleting",
         "wait_for_cluster_grpc_deleting_or_archived",
+        "_assert_cluster_metering",
+        "_assert_worker_metering",
     ):
         monkeypatch.setattr(scenario, name, Mock())
     monkeypatch.setattr(scenario, "run", Mock(return_value="release-image"))
     monkeypatch.setattr(scenario, "wait_for_hosted_cluster_kubeconfig", Mock(return_value=b"test-kubeconfig"))
     node_pool = {
         "metadata": {
+            "name": "nodepool-hosted-cluster-workers",
             "labels": {
                 "osac.openshift.io/clusterorder": "order-a",
                 "osac.openshift.io/node-set": "workers",
                 "osac.openshift.io/instance_type": "ci-worker-bm",
-            }
+            },
         },
         "spec": {
             "platform": {
@@ -336,7 +366,8 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
             k8s_hub_client=k8s,
             cluster_template="template",
             pull_secret_name="test-pull-secret",
-            ssh_public_key_path="/tmp/test-key.pub",
+            ssh_key_secret="test-ssh-key-secret",
+            ssh_public_key_path=str(key_file),
             metering=metering,
         )
 

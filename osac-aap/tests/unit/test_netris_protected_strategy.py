@@ -20,6 +20,7 @@ PLUGIN = (
     / "protected_linear.py"
 )
 COLLECTIONS = Path(__file__).parents[2] / "collections"
+NETWORK_PLAYBOOK = Path(__file__).parents[2] / "playbook_osac_network_task.yml"
 sys.path.insert(0, str(COLLECTIONS))
 _SPEC = importlib.util.spec_from_file_location("protected_linear", PLUGIN)
 protected_linear = importlib.util.module_from_spec(_SPEC)
@@ -118,7 +119,13 @@ def _run_ansible_with_protected_strategy(tmp_path, extra_vars):
     local_tmp.mkdir()
     environment = {
         **os.environ,
-        "ANSIBLE_COLLECTIONS_PATH": str(COLLECTIONS),
+        "ANSIBLE_COLLECTIONS_PATH": ":".join(
+            [
+                str(NETWORK_PLAYBOOK.parent / "vendor"),
+                str(COLLECTIONS),
+                "/usr/share/ansible/collections",
+            ]
+        ),
         "ANSIBLE_LOCAL_TEMP": str(local_tmp),
         "ANSIBLE_NOCOLOR": "1",
         "ANSIBLE_STRATEGY": "netris.controller.protected_linear",
@@ -161,3 +168,90 @@ def test_real_ansible_strategy_rejects_protected_launch_before_tasks(tmp_path):
     assert result.returncode != 0
     assert "protected Netris setting 'NETRIS_CONTROLLER_URL'" in output
     assert "PROTECTED_STRATEGY_TASK_RAN" not in output
+
+
+def _run_network_playbook(tmp_path, job_vars, launch_extra_vars_path):
+    launch_vars = {"osac_job_vars": job_vars}
+    if job_vars["manager"]["ansible_role"] == "osac.templates.netris":
+        launch_vars["NETRIS_CONTROLLER_URL"] = "https://attacker.example"
+    extra_vars_path = tmp_path / "network-extravars"
+    extra_vars_path.write_text(json.dumps(launch_vars))
+    local_tmp = tmp_path / "network-ansible-tmp"
+    local_tmp.mkdir()
+    environment = {
+        **os.environ,
+        "ANSIBLE_LOCAL_TEMP": str(local_tmp),
+        "ANSIBLE_NOCOLOR": "1",
+        "ANSIBLE_LOCALHOST_WARNING": "False",
+        "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
+        "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
+        "OSAC_LAUNCH_EXTRA_VARS_PATH": str(launch_extra_vars_path),
+    }
+    environment.pop("ANSIBLE_CONFIG", None)
+    environment.pop("ANSIBLE_STRATEGY", None)
+
+    return subprocess.run(
+        [
+            str(Path(sys.executable).with_name("ansible-playbook")),
+            "-i",
+            "localhost,",
+            "-c",
+            "local",
+            "-e",
+            f"@{extra_vars_path}",
+            str(NETWORK_PLAYBOOK),
+        ],
+        check=False,
+        capture_output=True,
+        cwd=NETWORK_PLAYBOOK.parent,
+        env=environment,
+        text=True,
+    )
+
+
+def test_generic_network_playbook_protects_netris_launch_vars(tmp_path):
+    result = _run_network_playbook(
+        tmp_path,
+        {
+            "manager": {
+                "name": "netris",
+                "type": "fabric",
+                "ansible_role": "osac.templates.netris",
+            },
+            "task": "create_virtual_network",
+        },
+        tmp_path / "network-extravars",
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "protected Netris setting 'NETRIS_CONTROLLER_URL'" in output
+    assert "Check the job input" not in output
+
+
+def test_generic_network_playbook_does_not_apply_netris_guard_to_agentlessnet(
+    tmp_path,
+):
+    result = _run_network_playbook(
+        tmp_path,
+        {
+            "manager": {
+                "name": "agentless_net",
+                "type": "fabric",
+                "ansible_role": "osac.templates.agentless_net",
+            },
+            "task": "reserve_cluster_ingress_ip",
+            "tenant": "tenant-1",
+            "resource": {
+                "kind": "ClusterOrder",
+                "id": "0e9d8c7b-6a5f-4e3d-8c2b-1a0f9e8d7c6b",
+                "metadata": {"uid": "cluster-order-uid", "generation": 1},
+            },
+        },
+        tmp_path / "missing-aap-extravars",
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "AgentlessNet does not support CaaS guest ingress reservation" in output
+    assert "original AAP launch extra_vars are unavailable" not in output

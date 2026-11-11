@@ -15,7 +15,10 @@ from tests.e2e.references import test_cluster_baremetal_references as references
 def _node_pool(node_set: str, instance_type: str, replicas: int = 1) -> dict[str, Any]:
     selector = {"osac.openshift.io/clusterorder": "order-a", "osac.openshift.io/node-set": node_set}
     return {
-        "metadata": {"labels": {**selector, "osac.openshift.io/instance_type": instance_type}},
+        "metadata": {
+            "name": f"nodepool-cluster-a-{node_set}",
+            "labels": {**selector, "osac.openshift.io/instance_type": instance_type},
+        },
         "spec": {"replicas": replicas, "platform": {"agent": {"agentLabelSelector": {"matchLabels": selector}}}},
     }
 

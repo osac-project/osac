@@ -1,18 +1,12 @@
-import { Button, Content, FormSection, Stack, StackItem, Title } from '@patternfly/react-core';
-import MinusCircleIcon from '@patternfly/react-icons/dist/esm/icons/minus-circle-icon';
-import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-icon';
-import { FieldArray, useFormikContext } from 'formik';
+import { Content, FormSection, Stack, StackItem, Title } from '@patternfly/react-core';
 
-import { InputField } from '@osac/ui-components/components/Form/InputField';
+import TextField from '@osac/ui-components/components/Form/base/TextField';
 import NameField from '@osac/ui-components/components/Form/NameField';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
-import type { ExternalIpPoolFormValues } from './values';
-
 const PoolStep = () => {
   const { t } = useTranslation();
-  const { values } = useFormikContext<ExternalIpPoolFormValues>();
 
   return (
     <Stack hasGutter>
@@ -24,51 +18,21 @@ const PoolStep = () => {
       <StackItem>
         <Content component="p">
           {t(
-            'Define routable addresses for tenant edge exposure. You will assign this pool to a tenant in the next step.',
+            'Define routable addresses for tenant edge exposure. The pool is shared by all tenants.',
           )}
         </Content>
       </StackItem>
       <StackItem>
         <OsacForm>
           <NameField isDisabled={false} />
-          <FormSection title={t('IPv4 CIDRs')}>
-            <FieldArray name="cidrs">
-              {(helpers) => (
-                <Stack hasGutter>
-                  {values.cidrs.map((_cidr, index) => (
-                    <StackItem key={index}>
-                      <InputField
-                        name={`cidrs.${index}`}
-                        label={t('CIDR {{number}}', { number: index + 1 })}
-                        fieldId={`external-ip-pool-cidr-${index}`}
-                        placeholder="10.128.0.0/14"
-                        isRequired
-                      >
-                        {values.cidrs.length > 1 && (
-                          <Button
-                            variant="plain"
-                            aria-label={t('Remove CIDR {{number}}', {
-                              number: index + 1,
-                            })}
-                            onClick={() => helpers.remove(index)}
-                            icon={<MinusCircleIcon />}
-                          />
-                        )}
-                      </InputField>
-                    </StackItem>
-                  ))}
-                  <StackItem>
-                    <Button
-                      variant="link"
-                      icon={<PlusCircleIcon />}
-                      onClick={() => helpers.push('')}
-                    >
-                      {t('Add CIDR')}
-                    </Button>
-                  </StackItem>
-                </Stack>
-              )}
-            </FieldArray>
+          <FormSection title={t('IPv4 CIDR')}>
+            <TextField
+              name="cidrs.0"
+              label={t('CIDR')}
+              fieldId="external-ip-pool-cidr-0"
+              placeholder="10.128.0.0/14"
+              isRequired
+            />
           </FormSection>
         </OsacForm>
       </StackItem>

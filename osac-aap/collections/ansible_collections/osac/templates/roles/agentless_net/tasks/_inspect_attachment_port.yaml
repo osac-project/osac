@@ -1,33 +1,25 @@
 ---
-- name: Inspect the physical port's current VLAN membership
-  ansible.builtin.raw: "bridge -j vlan show dev {{ _agentless_net_host_interface.value.port }}"
-  delegate_to: "{{ _agentless_net_host_interface.value.switch }}"
-  become: true
+- name: Inspect the physical port's normalized switch state
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: get_port_conf
+    apply:
+      delegate_to: "{{ _agentless_net_host_interface.value.switch }}"
+      become: true
   vars:
     ansible_connection: ssh
     ansible_host: "{{ hostvars[_agentless_net_host_interface.value.switch].ansible_host }}"
     ansible_user: "{{ hostvars[_agentless_net_host_interface.value.switch].ansible_user }}"
     ansible_port: "{{ hostvars[_agentless_net_host_interface.value.switch].ansible_port | default(22) }}"
-    ansible_network_os: cumulus
-  register: _agentless_net_attachment_port_before
-  changed_when: false
+    ansible_network_os: "{{ hostvars[_agentless_net_host_interface.value.switch].ansible_network_os }}"
+    port_name: "{{ _agentless_net_host_interface.value.port }}"
   no_log: true
 
 - name: Normalize access VLAN membership for this host port
   ansible.builtin.set_fact:
-    _agentless_net_attachment_port_entries: >-
-      {{ _agentless_net_attachment_port_before.stdout | from_json
-         | selectattr('ifname', 'equalto', _agentless_net_host_interface.value.port) | list }}
-    _agentless_net_attachment_port_vlans: >-
-      {{ ((_agentless_net_attachment_port_before.stdout | from_json
-           | selectattr('ifname', 'equalto', _agentless_net_host_interface.value.port)
-           | map(attribute='vlans') | first | default([]))
-          | map(attribute='vlan') | map('int') | unique | list) }}
-    _agentless_net_attachment_port_flags: >-
-      {{ (_agentless_net_attachment_port_before.stdout | from_json
-          | selectattr('ifname', 'equalto', _agentless_net_host_interface.value.port)
-          | map(attribute='vlans') | first | default([])
-          | first | default({})).get('flags', []) }}
+    _agentless_net_attachment_port_reported: >-
+      {{ network_runner_port.name == _agentless_net_host_interface.value.port }}
+    _agentless_net_attachment_port_vlans: "{{ network_runner_port.vlan_ids }}"
     _agentless_net_host_port_selected: >-
       {{ _agentless_net_host_interface.key == _agentless_net_attachment_interface_name }}
   no_log: true
@@ -35,14 +27,15 @@
 - name: Reject ambiguous or unexpected selected access-port state
   ansible.builtin.assert:
     that:
-      - _agentless_net_attachment_port_entries | length <= 1
+      - _agentless_net_attachment_port_reported | bool
       - >-
         not (_agentless_net_host_port_selected | bool)
         or _agentless_net_attachment_port_vlans in [[], [_agentless_net_provisioning_network.vlan_id | int], [_agentless_net_subnet_vlan | int]]
       - >-
         _agentless_net_attachment_port_vlans | length != 1
-        or ('PVID' in _agentless_net_attachment_port_flags
-            and 'Egress Untagged' in _agentless_net_attachment_port_flags)
+        or
+        (network_runner_port.pvid == _agentless_net_attachment_port_vlans[0]
+         and _agentless_net_attachment_port_vlans[0] in network_runner_port.untagged_vlan_ids)
       - >-
         _agentless_net_host_port_selected | bool
         or _agentless_net_provisioning_network.vlan_id | int not in _agentless_net_attachment_port_vlans

@@ -4,41 +4,16 @@
     _agentless_net_subnet_vlan_name: "osac-subnet-{{ _agentless_net_subnet.uid[:12] }}"
     _agentless_net_switch_trunk_ports: "{{ hostvars[_agentless_net_switch_name].trunk_ports }}"
 
-- name: Inspect Cumulus VLAN state before Subnet reconciliation
-  # Cumulus 5.3 ships Python 3.7; use raw SSH because the EE's Ansible Core
-  # requires Python 3.9 or newer on Python-based target modules.
-  ansible.builtin.raw: bridge -j vlan show
-  delegate_to: "{{ _agentless_net_switch_name }}"
-  become: true
-  vars:
-    ansible_connection: ssh
-    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
-    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
-    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
-    ansible_network_os: cumulus
-  register: _agentless_net_switch_bridge_before
-  changed_when: false
-  no_log: true
+- name: Read the normalized VLAN state before Subnet reconciliation
+  ansible.builtin.include_tasks: _read_subnet_switch_vlans.yaml
 
-- name: Parse Cumulus VLAN state
+- name: Detect whether the saved VLAN is present on this switch
   ansible.builtin.set_fact:
-    _agentless_net_switch_bridge_state: "{{ _agentless_net_switch_bridge_before.stdout | from_json }}"
-    _agentless_net_switch_vlan_present: false
-  no_log: true
+    _agentless_net_switch_vlan_present: >-
+      {{ _agentless_net_subnet.vlan_id | int
+         in network_runner_vlans.used_vlan_ids }}
 
-- name: Detect the saved VLAN ID across Cumulus interfaces
-  ansible.builtin.set_fact:
-    _agentless_net_switch_vlan_present: true
-  loop: >-
-    {{ _agentless_net_switch_bridge_state
-       | map(attribute='vlans', default=[]) | flatten }}
-  when:
-    - item.vlan is defined
-    - item.vlan | int <= _agentless_net_subnet.vlan_id | int
-    - item.vlanEnd | default(item.vlan) | int >= _agentless_net_subnet.vlan_id | int
-  no_log: true
-
-- name: Create the saved VLAN on Cumulus when it is absent
+- name: Create the saved VLAN when it is absent
   ansible.builtin.include_role:
     name: agentless_net.l2.vlan
     tasks_from: create
@@ -50,7 +25,7 @@
     ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
     ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
     ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
-    ansible_network_os: cumulus
+    ansible_network_os: "{{ hostvars[_agentless_net_switch_name].ansible_network_os }}"
     vlan_id: "{{ _agentless_net_subnet.vlan_id }}"
     vlan_name: "{{ _agentless_net_subnet_vlan_name }}"
   when:
@@ -65,44 +40,24 @@
     loop_var: _agentless_net_subnet_port
     label: "{{ _agentless_net_subnet_port }}"
 
-- name: Inspect Cumulus VLAN state after Subnet trunk reconciliation
-  ansible.builtin.raw: bridge -j vlan show
-  delegate_to: "{{ _agentless_net_switch_name }}"
-  become: true
-  vars:
-    ansible_connection: ssh
-    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
-    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
-    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
-    ansible_network_os: cumulus
-  register: _agentless_net_switch_bridge_after_trunks
-  changed_when: false
-  no_log: true
+- name: Read the normalized VLAN state after Subnet trunk reconciliation
+  ansible.builtin.include_tasks: _read_subnet_switch_vlans.yaml
   when: _agentless_net_subnet_action == 'delete'
 
-- name: Parse post-delete Cumulus VLAN state
+- name: Initialize the flag for saved VLAN memberships outside the trunks
   ansible.builtin.set_fact:
-    _agentless_net_switch_bridge_state: "{{ _agentless_net_switch_bridge_after_trunks.stdout | from_json }}"
     _agentless_net_unexpected_vlan_member: false
-    _agentless_net_switch_vlan_present: false
   when: _agentless_net_subnet_action == 'delete'
-  no_log: true
 
-- name: Detect VLAN membership on non-trunk switch interfaces
+- name: Detect the saved VLAN on interfaces outside the declared trunks
   ansible.builtin.set_fact:
     _agentless_net_unexpected_vlan_member: true
-  loop: "{{ _agentless_net_switch_bridge_state }}"
+  loop: "{{ network_runner_vlans.interfaces }}"
   when:
     - _agentless_net_subnet_action == 'delete'
-    - item.ifname != 'br_default'
-    - item.ifname not in _agentless_net_switch_trunk_ports
-    - >-
-      (item.vlans | default([]) | selectattr('vlan', 'equalto', _agentless_net_subnet.vlan_id | int) | list | length > 0)
-      or
-      (item.vlans | default([]) | selectattr('vlanEnd', 'defined')
-       | selectattr('vlan', 'le', _agentless_net_subnet.vlan_id | int)
-       | selectattr('vlanEnd', 'ge', _agentless_net_subnet.vlan_id | int)
-       | list | length > 0)
+    - item.name != 'br_default'
+    - item.name not in _agentless_net_switch_trunk_ports
+    - _agentless_net_subnet.vlan_id | int in item.vlan_ids
   no_log: true
 
 - name: Retain Subnet allocation if the saved VLAN is attached outside its declared trunks
@@ -115,20 +70,14 @@
   when: _agentless_net_subnet_action == 'delete'
   no_log: true
 
-- name: Detect whether the VLAN remains on Cumulus after trunk cleanup
+- name: Detect whether the VLAN remains on the switch after trunk cleanup
   ansible.builtin.set_fact:
-    _agentless_net_switch_vlan_present: true
-  loop: >-
-    {{ _agentless_net_switch_bridge_state
-       | map(attribute='vlans', default=[]) | flatten }}
-  when:
-    - _agentless_net_subnet_action == 'delete'
-    - item.vlan is defined
-    - item.vlan | int <= _agentless_net_subnet.vlan_id | int
-    - item.vlanEnd | default(item.vlan) | int >= _agentless_net_subnet.vlan_id | int
-  no_log: true
+    _agentless_net_switch_vlan_present: >-
+      {{ _agentless_net_subnet.vlan_id | int
+         in network_runner_vlans.used_vlan_ids }}
+  when: _agentless_net_subnet_action == 'delete'
 
-- name: Delete the VLAN from Cumulus after all memberships are removed
+- name: Delete the VLAN from the switch after all memberships are removed
   ansible.builtin.include_role:
     name: agentless_net.l2.vlan
     tasks_from: delete
@@ -140,7 +89,7 @@
     ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
     ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
     ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
-    ansible_network_os: cumulus
+    ansible_network_os: "{{ hostvars[_agentless_net_switch_name].ansible_network_os }}"
     vlan_id: "{{ _agentless_net_subnet.vlan_id }}"
     vlan_name: "{{ _agentless_net_subnet_vlan_name }}"
   when:
@@ -148,39 +97,16 @@
     - _agentless_net_switch_vlan_present | bool
   no_log: true
 
-- name: Verify the saved VLAN is absent from this Cumulus switch
-  ansible.builtin.raw: bridge -j vlan show
-  delegate_to: "{{ _agentless_net_switch_name }}"
-  become: true
-  vars:
-    ansible_connection: ssh
-    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
-    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
-    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port }}"
-    ansible_network_os: cumulus
-  register: _agentless_net_switch_bridge_final
-  changed_when: false
-  no_log: true
+- name: Read the normalized VLAN state after Subnet VLAN deletion
+  ansible.builtin.include_tasks: _read_subnet_switch_vlans.yaml
   when: _agentless_net_subnet_action == 'delete'
 
 - name: Require the saved VLAN to be absent after switch deletion
   ansible.builtin.assert:
     that:
-      - >-
-        ((_agentless_net_switch_bridge_final.stdout | from_json
-          | map(attribute='vlans', default=[]) | flatten
-          | selectattr('vlan', 'defined')
-          | selectattr('vlan', 'equalto', _agentless_net_subnet.vlan_id | int)
-          | list | length) == 0)
-        and
-        ((_agentless_net_switch_bridge_final.stdout | from_json
-          | map(attribute='vlans', default=[]) | flatten
-          | selectattr('vlanEnd', 'defined')
-          | selectattr('vlan', 'le', _agentless_net_subnet.vlan_id | int)
-          | selectattr('vlanEnd', 'ge', _agentless_net_subnet.vlan_id | int)
-          | list | length) == 0)
+      - _agentless_net_subnet.vlan_id | int not in network_runner_vlans.used_vlan_ids
     fail_msg: >-
       AgentlessNet could not verify the saved Subnet VLAN was removed from
-      Cumulus; the VLAN reservation is retained.
+      the switch; the VLAN reservation is retained.
   when: _agentless_net_subnet_action == 'delete'
   no_log: true

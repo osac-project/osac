@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,8 +35,8 @@ import (
 // VolumeFeedbackReconciler syncs Volume CR status from the hub cluster back
 // to the fulfillment-service via the private Volumes gRPC API. It maps CRD
 // phases to proto states and copies vendor-assigned fields (vendorVolumeID,
-// provider, protocol, and a tenant-safe failure message) so the
-// fulfillment-service inventory stays current.
+// provider, protocol, and the VendorProvisioned condition failure message)
+// so the fulfillment-service inventory stays current.
 type VolumeFeedbackReconciler struct {
 	bridge          *feedback.Bridge[*v1alpha1.Volume, *privatev1.Volume]
 	volumeNamespace string
@@ -211,16 +212,32 @@ func syncVolumePhase(obj *v1alpha1.Volume, remote *privatev1.Volume) error {
 	return nil
 }
 
-// syncVolumeStatusMessage exposes only a stable, tenant-safe failure message
-// through the fulfillment API. Detailed vendor errors remain in the operator
-// condition and logs, rather than being copied into a client-visible API
-// response. Clear stale messages once a volume is no longer failed.
+// syncVolumeStatusMessage copies the VendorProvisioned condition message to
+// the fulfillment API when the volume failed, so the provisioning failure
+// reason (for example an out-of-capacity vendor error) stays visible to volume
+// consumers. The condition message is copied as-is; the generic text is only
+// a fallback for a Failed volume without a usable condition. Clear stale
+// messages once a volume is no longer failed.
 func syncVolumeStatusMessage(obj *v1alpha1.Volume, remote *privatev1.Volume) {
 	if obj.Status.Phase == v1alpha1.VolumePhaseFailed {
-		remote.GetStatus().SetMessage("volume provisioning failed")
+		remote.GetStatus().SetMessage(failedProvisioningMessage(obj.Status.Conditions))
 		return
 	}
 	remote.GetStatus().ClearMessage()
+}
+
+// failedProvisioningMessage returns the message of the VendorProvisioned
+// condition when it reports False, copied as-is without parsing. It falls
+// back to a stable generic message when no such condition exists, the
+// condition is not False, or its message is empty.
+func failedProvisioningMessage(conditions []metav1.Condition) string {
+	for i := range conditions {
+		if conditions[i].Type == string(v1alpha1.VolumeConditionVendorProvisioned) &&
+			conditions[i].Status == metav1.ConditionFalse && conditions[i].Message != "" {
+			return conditions[i].Message
+		}
+	}
+	return "volume provisioning failed"
 }
 
 // syncVolumeVendorFields copies the vendor-assigned identifiers (and vendor

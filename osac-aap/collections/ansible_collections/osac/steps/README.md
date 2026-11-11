@@ -9,15 +9,14 @@ ESI-based step implementations for cluster infrastructure and external access pr
 
 ## Usage
 
-This collection can be selected at runtime via the `network_steps_collection`
-variable for legacy/provider-driven workflows. The generic
-`osac.service.cluster_infra` and `osac.service.external_access` roles dispatch
-through that variable.
+These are legacy ESI provider roles. Standard `ocp_small` CaaS endpoint
+lifecycle is owned by the ClusterOrder controller and generic networking tasks;
+it does not call these roles. CI keeps the service role's `caas_*` DNS tasks,
+and NICo keeps its direct provider-specific task overrides. Workflows that
+still need an ESI role must call that role directly.
 
-The CaaS `osac.templates.ocp_ci_small` workflow uses the service role's
-`caas_*` external-access entry points. The current CI endpoint contract uses
-the inventory IP of a ClusterOrder-labeled Agent for wildcard application DNS;
-the service role waits for that endpoint data directly. Agent lifecycle is
+The CI `caas_*` tasks discover the API IP from the `kube-apiserver` Service and
+the ingress IP from ClusterOrder-labeled Agent inventory. Agent lifecycle is
 owned by the operator and is not implemented in this provider step collection.
 
 ## License

@@ -1,6 +1,8 @@
 import { useParams } from 'react-router-dom';
 
-import { usePrivateStorageTier } from '../../api/v1/private/storage-tiers';
+import { StorageTiers } from '@osac/types/private';
+import { useGetResource } from '@osac/ui-components/api/use-resource';
+
 import { ResourceDetailsPageError } from '../../components/Resource/ResourceDetailsPageError';
 import { ResourceDetailsPageLoading } from '../../components/Resource/ResourceDetailsPageLoading';
 import { StorageTierDetails } from '../../components/Storage/StorageTierDetails';
@@ -11,7 +13,7 @@ const TIERS_LIST_PATH = '/admin/infrastructure/storage/tiers';
 export const StorageTierDetailsPage = () => {
   const { t } = useTranslation();
   const { id } = useParams() as { id: string };
-  const { data: tier, isLoading, isError, error, refetch } = usePrivateStorageTier(id);
+  const { data: tier, isLoading, isError, error, refetch } = useGetResource(StorageTiers, { id });
 
   if (isLoading) {
     return (
@@ -35,7 +37,7 @@ export const StorageTierDetailsPage = () => {
     );
   }
 
-  if (!tier) {
+  if (!tier?.object) {
     return (
       <ResourceDetailsPageError
         parentTo={TIERS_LIST_PATH}
@@ -46,5 +48,5 @@ export const StorageTierDetailsPage = () => {
     );
   }
 
-  return <StorageTierDetails tier={tier} />;
+  return <StorageTierDetails tier={tier.object} />;
 };

@@ -93,7 +93,7 @@ describe('VmDetailsCard', () => {
     expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });
 
-  it('uses a hyphen for unresolved VM user data', () => {
+  it('shows Not configured for unresolved VM user data', () => {
     renderWithProviders(
       <VmDetailsCard
         vm={{ id: 'vm-2', metadata: { name: 'legacy-vm' }, spec: {} } as ComputeInstance}
@@ -102,7 +102,7 @@ describe('VmDetailsCard', () => {
     );
 
     const cloudInitRow = screen.getByText('Cloud-init').closest('div') as HTMLElement;
-    expect(within(cloudInitRow).getByText('-')).toBeInTheDocument();
+    expect(within(cloudInitRow).getByText('Not configured')).toBeInTheDocument();
   });
 
   it('uses hyphens instead of Not set for unset VM details', () => {

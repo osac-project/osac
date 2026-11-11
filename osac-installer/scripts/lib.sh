@@ -6,6 +6,186 @@
 # is ever sourced by a script that forgot to.
 set -euo pipefail
 
+# Prepare only a verified local Linux engine host; never persist sysctl changes.
+ensure_inotify_instances() {
+    local floor=512
+    local instances_file="${_INOTIFY_INSTANCES_FILE:-/proc/sys/fs/inotify/max_user_instances}"
+
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        echo "ERROR: inotify tuning requires a native Linux host." >&2
+        echo "Ensure fs.inotify.max_user_instances >= ${floor} on" >&2
+        echo "the actual Linux engine host before creating Kind" >&2
+        echo "clusters.  Temporary: sudo sysctl -w" >&2
+        echo "fs.inotify.max_user_instances=${floor}" >&2
+        return 1
+    fi
+
+    if [[ -n "${CONTAINER_HOST:-}" && "${CONTAINER_HOST}" != unix://* ]]; then
+        echo "ERROR: CONTAINER_HOST indicates a remote" >&2
+        echo "container engine.  Local sysctl cannot tune" >&2
+        echo "the engine host.  Ensure" >&2
+        echo "fs.inotify.max_user_instances >= ${floor}" >&2
+        echo "on the actual engine host." >&2
+        return 1
+    fi
+    if [[ -n "${DOCKER_HOST:-}" && "${DOCKER_HOST}" != unix://* ]]; then
+        echo "ERROR: DOCKER_HOST indicates a remote" >&2
+        echo "container engine.  Local sysctl cannot tune" >&2
+        echo "the engine host.  Ensure" >&2
+        echo "fs.inotify.max_user_instances >= ${floor}" >&2
+        echo "on the actual engine host." >&2
+        return 1
+    fi
+    if [[ -n "${CONTAINER_CONNECTION:-}" ]]; then
+        echo "ERROR: a named Podman connection is active" >&2
+        echo "(CONTAINER_CONNECTION).  Cannot verify the" >&2
+        echo "local inotify setting applies to the engine" >&2
+        echo "host.  Ensure" >&2
+        echo "fs.inotify.max_user_instances >= ${floor}" >&2
+        echo "on the actual engine host." >&2
+        return 1
+    fi
+    if [[ -n "${DOCKER_CONTEXT:-}" ]]; then
+        echo "ERROR: a named Docker context is active" >&2
+        echo "(DOCKER_CONTEXT).  Cannot verify the local" >&2
+        echo "inotify setting applies to the engine host." >&2
+        echo "Ensure fs.inotify.max_user_instances >=" >&2
+        echo "${floor} on the actual engine host." >&2
+        return 1
+    fi
+
+    local provider="${1:-${_INOTIFY_PROVIDER:-${KIND_EXPERIMENTAL_PROVIDER:-}}}"
+    if [[ -z "${provider}" ]]; then
+        if command -v podman >/dev/null 2>&1; then
+            provider=podman
+        else
+            provider=docker
+        fi
+    fi
+    case "${provider}" in
+        docker|podman) ;;
+        *)
+            echo "ERROR: unsupported inotify provider; use docker or podman." >&2
+            return 1
+            ;;
+    esac
+    if [[ "${provider}" == docker ]]; then
+        local docker_context
+        if ! docker_context=$(docker context show 2>/dev/null); then
+            echo "ERROR: cannot determine the active Docker context." >&2
+            echo "Prepare the actual Linux engine host manually." >&2
+            return 1
+        fi
+        if [[ "${docker_context}" != default ]]; then
+            echo "ERROR: a non-default Docker context is active." >&2
+            echo "Cannot verify the local inotify setting applies" >&2
+            echo "to the engine host. Ensure" >&2
+            echo "fs.inotify.max_user_instances >= ${floor}" >&2
+            echo "on the actual engine host." >&2
+            return 1
+        fi
+    else
+        local podman_remote podman_uri
+        if ! podman_remote=$(podman info --format '{{.Host.ServiceIsRemote}}' 2>/dev/null); then
+            echo "ERROR: cannot determine Podman transport; prepare the engine host manually." >&2
+            return 1
+        fi
+        case "${podman_remote}" in
+            false) ;;
+            true)
+                podman_uri="${CONTAINER_HOST:-}"
+                if [[ -z "${podman_uri}" ]]; then
+                    if ! podman_uri=$(podman system connection list --format \
+                        '{{range .}}{{if .Default}}{{.URI}}{{end}}{{end}}' 2>/dev/null); then
+                        echo "ERROR: cannot resolve Podman connection; prepare the engine host manually." >&2
+                        return 1
+                    fi
+                fi
+                if [[ "${podman_uri}" != unix:///* || "${podman_uri}" == *$'\n'* ]]; then
+                    echo "ERROR: Podman transport is non-local or unresolved." >&2
+                    echo "Prepare inotify on the actual Linux engine host manually." >&2
+                    return 1
+                fi
+                ;;
+            *)
+                echo "ERROR: unsupported Podman transport metadata; prepare the engine host manually." >&2
+                return 1
+                ;;
+        esac
+    fi
+
+    if [[ ! -f "${instances_file}" ]]; then
+        echo "ERROR: ${instances_file} not found — cannot" >&2
+        echo "verify inotify capacity." >&2
+        return 1
+    fi
+
+    local current
+    if ! current=$(cat "${instances_file}" 2>/dev/null) || \
+       [[ ! "${current}" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: could not read a numeric value from" >&2
+        echo "${instances_file}." >&2
+        return 1
+    fi
+
+    if (( 10#${current} >= floor )); then
+        echo "ensure_inotify_instances: current ${current}" >&2
+        echo ">= ${floor}, no change needed" >&2
+        return 0
+    fi
+
+    echo "ensure_inotify_instances: current ${current}" >&2
+    echo "< ${floor}, raising to ${floor}" >&2
+
+    local diagnostic write_failed=false use_sudo=false
+    if [[ "$(id -u)" == "0" ]]; then
+        diagnostic=$(LC_ALL=C sysctl -w "fs.inotify.max_user_instances=${floor}" \
+             2>&1 >/dev/null) || write_failed=true
+    else
+        use_sudo=true
+        diagnostic=$(LC_ALL=C sudo -n sysctl -w \
+             "fs.inotify.max_user_instances=${floor}" \
+             2>&1 >/dev/null) || write_failed=true
+    fi
+    if [[ "${write_failed}" == true ]]; then
+        local normalized="${diagnostic,,}" category="write command failed"
+        if [[ "${use_sudo}" == true && "${normalized}" == *"sudo: a password is required"* ]]; then
+            category="passwordless sudo required; prepare the host manually if not authorized"
+        elif [[ "${use_sudo}" == true && "${normalized}" == *"unable to initialize policy plugin"* ]]; then
+            category="sudo policy plugin failure"
+        elif [[ "${use_sudo}" == true && "${normalized}" == *"sudo:"* && \
+            ( "${normalized}" == *"not allowed"* || "${normalized}" == *"authentication fail"* ) ]]; then
+            category="sudo authorization denied"
+        else
+            case "${normalized}" in
+                *"read-only file system"*) category="read-only filesystem" ;;
+                *"invalid argument"*) category="invalid argument" ;;
+                *"permission denied"*) category="permission denied" ;;
+            esac
+        fi
+        echo "ERROR: inotify write failed: ${category}." >&2
+        return 1
+    fi
+
+    local verified
+    if ! verified=$(cat "${instances_file}" 2>/dev/null) || \
+       [[ ! "${verified}" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: could not verify" >&2
+        echo "fs.inotify.max_user_instances after write." >&2
+        return 1
+    fi
+    if (( 10#${verified} < floor )); then
+        echo "ERROR: fs.inotify.max_user_instances is" >&2
+        echo "${verified} after write, expected" >&2
+        echo ">= ${floor}." >&2
+        return 1
+    fi
+
+    echo "ensure_inotify_instances: verified ${verified}" >&2
+    echo ">= ${floor}" >&2
+    return 0
+}
+
 ensure_podman_pid_limits() {
     local cluster="$1" kind_command="$2" podman_command="$3" nodes node limit
     if ! nodes=$("${kind_command}" get nodes --name "${cluster}") || [[ -z "${nodes}" ]]; then
@@ -132,6 +312,52 @@ wait_for_resource() {
     }
 
     oc wait --for="${condition}" "${resource}" ${ns_args[@]+"${ns_args[@]}"} --timeout="${timeout}s"
+}
+
+# Wait for what the osac-infra release leaves starting when its
+# `helm upgrade --install --wait-for-jobs` returns. That flag waits for hook
+# Jobs, not for Deployments, so the bundled PostgreSQL pod (it needs its server
+# certificate first) and the default CA issuer can still be coming up when the
+# next step starts. Each resource is waited for only if the profile created it.
+# Usage: wait_for_infra_ready <cli> [timeout_seconds]
+wait_for_infra_ready() {
+    local cli="$1"
+    local timeout="${2:-300}"
+    local entry resource namespace condition found rc message lookup_err
+    local -a ns_args
+    local -a targets=(
+        "clusterissuer/default-ca||condition=Ready"
+        "deployment/postgres|osac-infra|condition=Available"
+        "kafka/osac-kafka|osac-kafka|condition=Ready"
+    )
+
+    for entry in "${targets[@]}"; do
+        IFS='|' read -r resource namespace condition <<<"${entry}"
+        ns_args=()
+        [[ -n "${namespace}" ]] && ns_args=(-n "${namespace}")
+
+        # A resource the profile did not create is skipped: the object is absent
+        # (empty output) or its CRD is not installed. Any other failure (API
+        # unreachable, forbidden, timed out) is an error and not "absent".
+        lookup_err="$(mktemp)"
+        rc=0
+        found="$("${cli}" get "${resource}" "${ns_args[@]+"${ns_args[@]}"}" --ignore-not-found -o name --request-timeout=15s 2>"${lookup_err}")" || rc=$?
+        message="$(<"${lookup_err}")"
+        rm -f "${lookup_err}"
+        if (( rc != 0 )); then
+            if [[ "${message}" == *"the server doesn't have a resource type"* ]]; then
+                continue
+            fi
+            echo "ERROR: could not look up ${resource}: ${message}" >&2
+            return 1
+        fi
+        [[ -n "${found}" ]] || continue
+        echo "Waiting for ${resource} (${condition}, up to ${timeout}s)..."
+        "${cli}" wait --for="${condition}" "${resource}" "${ns_args[@]+"${ns_args[@]}"}" --timeout="${timeout}s" || {
+            echo "ERROR: ${resource} did not reach ${condition} within ${timeout}s" >&2
+            return 1
+        }
+    done
 }
 
 # Retry a command until it succeeds or times out.

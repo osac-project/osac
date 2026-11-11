@@ -14,17 +14,18 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const (
-	infraEnvNameSuffix   = "-infraenv"
+	infraEnvNameSuffix   = assistedservice.InfraEnvNameSuffix
 	pullSecretNameSuffix = "-pull-secret"
 	// ignitionSizeWarningThreshold is 75% of the 64 KiB BMI user data limit; above it the controller
 	// warns that discovery ignition is approaching that ceiling.
@@ -33,14 +34,14 @@ const (
 	eventReasonIgnitionSizeWarning   = "DiscoveryIgnitionSizeWarning"
 	reasonInfraEnvReady              = "InfraEnvReady"
 	reasonIgnitionPending            = "IgnitionPending"
+	reasonIgnitionInvalid            = "IgnitionInvalid"
 	reasonIgnitionPendingMessage     = "waiting for discovery ignition URL"
 	infraEnvUIDAnnotation            = "osac.openshift.io/infraenv-uid"
 	eventReasonStaleIgnition         = "StaleIgnition"
 	reasonInfraEnvRecreated          = "InfraEnvRecreated"
 	reasonStaleIgnitionWorkersMarked = "StaleIgnitionWorkersMarked"
+	sshKeyResolutionRetry            = time.Minute
 )
-
-var infraEnvGVK = schema.GroupVersionKind{Group: "agent-install.openshift.io", Version: agentInstallAPIVersion, Kind: "InfraEnv"}
 
 // infraEnvEvidence is the invocation-local result of the single InfraEnv
 // observation. object is nil only when absence was authoritative (an uncached
@@ -62,7 +63,7 @@ type infraEnvEvidence struct {
 // returned as evidence.err for the caller to merge, never as a global gate on
 // existing-worker work.
 func (r *Reconciler) observeInfraEnvEvidence(
-	ctx context.Context, co *v1alpha1.ClusterOrder,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 ) (infraEnvEvidence, ctrl.Result, bool, error) {
 	infraEnv, err := r.observeInfraEnvObject(ctx, co)
 	if err != nil {
@@ -71,7 +72,7 @@ func (r *Reconciler) observeInfraEnvEvidence(
 		return infraEnvEvidence{err: err}, ctrl.Result{}, false, nil
 	}
 	if infraEnv == nil {
-		return r.createMissingInfraEnv(ctx, co)
+		return r.createMissingInfraEnv(ctx, co, cluster)
 	}
 	// Current artifact evidence replaces a stale Ready claim. A published URL is
 	// not itself a claim: only the create stage's validated fetch reports Ready. A
@@ -102,9 +103,8 @@ func (r *Reconciler) observeInfraEnvEvidence(
 // a present object must be controlled by this ClusterOrder before its UID or boot
 // artifacts are consumed as evidence.
 func (r *Reconciler) observeInfraEnvObject(ctx context.Context, co *v1alpha1.ClusterOrder) (*unstructured.Unstructured, error) {
-	key := client.ObjectKey{Name: co.Name + infraEnvNameSuffix, Namespace: co.Namespace}
-	cached := &unstructured.Unstructured{}
-	cached.SetGroupVersionKind(infraEnvGVK)
+	key := client.ObjectKey{Name: assistedservice.InfraEnvName(co.Name), Namespace: co.Namespace}
+	cached := assistedservice.NewInfraEnvObject()
 	err := r.Get(ctx, key, cached)
 	if err == nil {
 		return cached, validateInfraEnvOwner(co, cached)
@@ -118,8 +118,7 @@ func (r *Reconciler) observeInfraEnvObject(ctx context.Context, co *v1alpha1.Clu
 	if reader == nil {
 		reader = r.Client
 	}
-	current := &unstructured.Unstructured{}
-	current.SetGroupVersionKind(infraEnvGVK)
+	current := assistedservice.NewInfraEnvObject()
 	switch err := reader.Get(ctx, key, current); {
 	case err == nil:
 		return current, validateInfraEnvOwner(co, current)
@@ -161,7 +160,7 @@ func (r *Reconciler) deriveInfraEnvPending(
 	ctx context.Context, co *v1alpha1.ClusterOrder, infraEnv *unstructured.Unstructured,
 ) error {
 	key := client.ObjectKeyFromObject(infraEnv)
-	ignitionURL, _, err := unstructured.NestedString(infraEnv.Object, "status", "bootArtifacts", "discoveryIgnitionURL")
+	ignitionURL, _, err := assistedservice.DiscoveryIgnitionURL(infraEnv)
 	if err != nil {
 		return fmt.Errorf("reading infraenv %s ignition URL: %w", key, err)
 	}
@@ -186,9 +185,9 @@ func (r *Reconciler) deriveInfraEnvPending(
 // deterministically named InfraEnv are then created; that Create is the durable
 // boundary. A missing prerequisite is returned as held evidence instead.
 func (r *Reconciler) createMissingInfraEnv(
-	ctx context.Context, co *v1alpha1.ClusterOrder,
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
 ) (infraEnvEvidence, ctrl.Result, bool, error) {
-	key := client.ObjectKey{Name: co.Name + infraEnvNameSuffix, Namespace: co.Namespace}
+	key := client.ObjectKey{Name: assistedservice.InfraEnvName(co.Name), Namespace: co.Namespace}
 	if apimeta.IsStatusConditionTrue(co.Status.Conditions, v1alpha1.ConditionInfraEnvReady) {
 		ctrllog.FromContext(ctx).Info("InfraEnv deleted while InfraEnvReady=True, resetting condition", "infraenv", key)
 		if err := r.setInfraEnvReady(ctx, co, metav1.ConditionFalse, reasonInfraEnvRecreated,
@@ -205,7 +204,19 @@ func (r *Reconciler) createMissingInfraEnv(
 	if err := r.ensurePullSecret(ctx, co); err != nil {
 		return infraEnvEvidence{err: fmt.Errorf("ensuring pull secret: %w", err)}, ctrl.Result{}, false, nil
 	}
-	infraEnv, err := r.buildInfraEnv(co, key.Name)
+	// Resolve the Cluster's registered SSH-key Secret only now, immediately
+	// before the InfraEnv Create. Key material goes into the InfraEnv spec and
+	// nowhere else. A resolution failure holds creation with a recoverable
+	// condition identifying the Secret by ID only.
+	sshAuthorizedKey, keyErr := r.resolveClusterSSHAuthorizedKey(ctx, co, cluster)
+	if keyErr != nil {
+		if condErr := r.setInfraEnvReady(ctx, co, metav1.ConditionFalse, v1alpha1.ReasonSSHKeyResolutionPending,
+			keyErr.Error()); condErr != nil {
+			return infraEnvEvidence{}, ctrl.Result{}, false, condErr
+		}
+		return infraEnvEvidence{err: keyErr}, ctrl.Result{RequeueAfter: sshKeyResolutionRetry}, false, nil
+	}
+	infraEnv, err := r.buildInfraEnv(co, key.Name, sshAuthorizedKey)
 	if err != nil {
 		return infraEnvEvidence{err: err}, ctrl.Result{}, false, nil
 	}
@@ -222,13 +233,14 @@ func (r *Reconciler) createMissingInfraEnv(
 
 // fetchDiscoveryIgnition is the create stage's input reader: it fetches and
 // validates the observed InfraEnv's discovery ignition and reports Ready only for
-// bytes it actually verified. A missing URL reports pending evidence and waits;
-// a failed fetch or invalid JSON is an error and never a successful input.
+// bytes it actually verified. A missing URL reports pending evidence and waits.
+// Invalid JSON reports blocked evidence and an error; fetch and status-write
+// failures also remain errors.
 func (r *Reconciler) fetchDiscoveryIgnition(
 	ctx context.Context, co *v1alpha1.ClusterOrder, infraEnv *unstructured.Unstructured,
 ) ([]byte, ctrl.Result, error) {
 	key := client.ObjectKeyFromObject(infraEnv)
-	ignitionURL, _, err := unstructured.NestedString(infraEnv.Object, "status", "bootArtifacts", "discoveryIgnitionURL")
+	ignitionURL, _, err := assistedservice.DiscoveryIgnitionURL(infraEnv)
 	if err != nil {
 		return nil, ctrl.Result{}, fmt.Errorf("reading infraenv %s ignition URL: %w", key, err)
 	}
@@ -245,6 +257,10 @@ func (r *Reconciler) fetchDiscoveryIgnition(
 		return nil, ctrl.Result{}, fmt.Errorf("fetching discovery ignition for %s: %w", key, err)
 	}
 	if !json.Valid(ignition) {
+		if err := r.setInfraEnvReady(ctx, co, metav1.ConditionFalse, reasonIgnitionInvalid,
+			"discovery ignition is not valid JSON"); err != nil {
+			return nil, ctrl.Result{}, err
+		}
 		return nil, ctrl.Result{}, fmt.Errorf("discovery ignition for %s is not valid JSON", key)
 	}
 	if len(ignition) > ignitionSizeWarningThreshold {
@@ -310,28 +326,38 @@ func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterO
 	return nil
 }
 
-// resolveSSHPublicKey extracts the SSH public key from co.Spec.SSHPublicKey,
-// falling back to co.Spec.TemplateParameters["ssh_public_key"] if unset.
-func (r *Reconciler) resolveSSHPublicKey(co *v1alpha1.ClusterOrder) string {
-	if co.Spec.SSHPublicKey != "" {
-		return co.Spec.SSHPublicKey
+// resolveClusterSSHAuthorizedKey resolves the Cluster's registered SSH-key
+// Secret through the fulfillment private API and returns its public-key
+// material for the InfraEnv. The tenant comes from the ClusterOrder
+// annotation. A nil Cluster reference or an empty Secret ID returns an empty
+// string so the provider default remains available. Resolution failures are
+// returned so the caller can hold creation with a recoverable condition; error
+// messages identify the Secret by ID only and never carry key material.
+func (r *Reconciler) resolveClusterSSHAuthorizedKey(
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
+) (string, error) {
+	if cluster == nil || cluster.GetSpec().GetSshKey().GetId() == "" {
+		return "", nil
 	}
-	if co.Spec.TemplateParameters != "" {
-		var params map[string]interface{}
-		if err := json.Unmarshal([]byte(co.Spec.TemplateParameters), &params); err == nil {
-			if key, ok := params["ssh_public_key"].(string); ok && key != "" {
-				return key
-			}
-		}
+	if r.secrets == nil {
+		return "", fmt.Errorf("ssh key secret resolution is not configured")
 	}
-	return ""
+	id := cluster.GetSpec().GetSshKey().GetId()
+	response, err := r.secrets.Get(ctx, privatev1.SecretsGetRequest_builder{Id: id}.Build())
+	if err != nil {
+		return "", err
+	}
+	key := string(response.GetObject().GetData()["public_key"])
+	if key == "" {
+		return "", fmt.Errorf("SSH key Secret %q has no public_key data", id)
+	}
+	return key, nil
 }
 
 // buildInfraEnv constructs the (unstructured) InfraEnv object: late binding (no clusterRef),
 // owned by the ClusterOrder, referencing the cluster pull secret and SSH key.
-func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name string) (*unstructured.Unstructured, error) {
-	infraEnv := &unstructured.Unstructured{}
-	infraEnv.SetGroupVersionKind(infraEnvGVK)
+func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name, sshAuthorizedKey string) (*unstructured.Unstructured, error) {
+	infraEnv := assistedservice.NewInfraEnvObject()
 	infraEnv.SetName(name)
 	infraEnv.SetNamespace(co.Namespace)
 
@@ -341,8 +367,8 @@ func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name string) (*uns
 	spec := map[string]interface{}{
 		"pullSecretRef": map[string]interface{}{"name": co.Name + pullSecretNameSuffix},
 	}
-	if sshKey := r.resolveSSHPublicKey(co); sshKey != "" {
-		spec["sshAuthorizedKey"] = sshKey
+	if sshAuthorizedKey != "" {
+		spec["sshAuthorizedKey"] = sshAuthorizedKey
 	}
 	if err := unstructured.SetNestedMap(infraEnv.Object, spec, "spec"); err != nil {
 		return nil, fmt.Errorf("building infraenv spec: %w", err)

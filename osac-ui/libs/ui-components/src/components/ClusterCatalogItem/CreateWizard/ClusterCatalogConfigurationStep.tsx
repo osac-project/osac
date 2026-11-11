@@ -6,7 +6,7 @@ import { CLUSTER_VERSION_ACTIVE_LIST_FILTER } from '../../../api/v1/cluster-vers
 import { useTranslation } from '../../../hooks/useTranslation';
 import CatalogField from '../../CatalogItem/CatalogField';
 import CatalogFieldPolicyDescription from '../../CatalogItem/CatalogFieldPolicyDescription';
-import ClusterNodeSetsArrayField from '../../Cluster/CreateWizard/ClusterNodeSetsArrayField';
+import ClusterNodeSetsArrayField from '../../Cluster/CreateWizard/fields/ClusterNodeSetsArrayField';
 import { isDeprecatedVersion, versionDisplayName } from '../../Cluster/CreateWizard/versionUtils';
 import OsacForm from '../../Form/OsacForm';
 import { ResourceSelectField } from '../../Form/ResourceSelectField';

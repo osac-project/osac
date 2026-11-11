@@ -198,5 +198,71 @@ var _ = Describe("Transactions interceptor", func() {
 			Expect(status.Code()).To(Equal(grpccodes.NotFound))
 			Expect(status.Message()).To(Equal("not found"))
 		})
+
+		It("Reports a panic of the handler to the transaction, ends it, and panics again", func() {
+			// Prepare the manager mock:
+			tx := NewMockTx(ctrl)
+			var reported error
+			manager.EXPECT().Begin(ctx).Return(tx, nil).Times(1)
+			reportCall := tx.EXPECT().ReportError(gomock.Any()).Do(func(err *error) {
+				reported = *err
+			}).Times(1)
+			tx.EXPECT().End(ctx).Return(nil).Times(1).After(reportCall)
+
+			// Call the interceptor:
+			var request any
+			info := &grpc.UnaryServerInfo{}
+			handler := func(ctx context.Context, request any) (response any, err error) {
+				panic("my panic")
+			}
+			Expect(func() {
+				_, _ = interceptor.UnaryServer(ctx, request, info, handler)
+			}).To(PanicWith("my panic"))
+			Expect(reported).To(MatchError(ContainSubstring("my panic")))
+		})
+	})
+
+	Describe("Behaviour with a database", func() {
+		It("Doesn't commit what a handler wrote before it panicked", func() {
+			db, err := server.NewInstance().Build()
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(db.Close)
+			pool, err := db.Pool(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(pool.Close)
+			_, err = pool.Exec(ctx, "create table my_table (my_column text)")
+			Expect(err).ToNot(HaveOccurred())
+			realManager, err := NewTxManager().
+				SetLogger(logger).
+				SetPool(pool).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			interceptor, err := NewTxInterceptor().
+				SetLogger(logger).
+				SetManager(realManager).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Write a row and register a commit hook, then panic.
+			committed := false
+			handler := func(ctx context.Context, request any) (response any, err error) {
+				tx, err := TxFromContext(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tx.Exec(ctx, "insert into my_table (my_column) values ($1)", "my_value")
+				Expect(err).ToNot(HaveOccurred())
+				tx.OnCommit(func() {
+					committed = true
+				})
+				panic("my panic")
+			}
+			Expect(func() {
+				_, _ = interceptor.UnaryServer(ctx, nil, &grpc.UnaryServerInfo{}, handler)
+			}).To(PanicWith("my panic"))
+
+			var count int
+			Expect(pool.QueryRow(ctx, "select count(*) from my_table").Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero(), "the row written before the panic must have been rolled back")
+			Expect(committed).To(BeFalse())
+		})
 	})
 })

@@ -1437,7 +1437,7 @@ var _ = Describe("Clusters server", func() {
 			Entry("named node set", "spec.node_set_attempt_ids.compute"),
 		)
 
-		It("preserves attempt IDs and history through a public full-object edit", func() {
+		It("preserves server-owned fields through a public spec-masked edit", func() {
 			created, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: "test-cluster"}.Build(),
@@ -1448,6 +1448,16 @@ var _ = Describe("Clusters server", func() {
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			id := created.GetObject().GetId()
+			privateCluster, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			privateCluster.GetObject().GetSpec().SetSupportsAutomaticCaasEndpoints(true)
+			clustersDAO, err := dao.NewGenericDAO[*privatev1.Cluster]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = clustersDAO.Update().SetObject(privateCluster.GetObject()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
 			seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
 				Id:       "full-object-target",
 				Metadata: privatev1.Metadata_builder{Name: "4-18-full-object", Tenant: testTenant}.Build(),
@@ -1486,11 +1496,15 @@ var _ = Describe("Clusters server", func() {
 			for _, attempt := range full.GetStatus().GetUpgradeHistory() {
 				attempt.SetState(publicv1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED)
 			}
-			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{Object: full}.Build())
+			_, err = server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
+				Object:     full,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels", "spec"}},
+			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			after, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(after.GetObject().GetMetadata().GetLabels()["example.com/review"]).To(Equal("updated"))
+			Expect(after.GetObject().GetSpec().GetSupportsAutomaticCaasEndpoints()).To(BeTrue())
 			Expect(after.GetObject().GetSpec().GetControlPlaneAttemptId()).To(Equal(cpID))
 			Expect(after.GetObject().GetSpec().GetNodeSetAttemptIds()["compute"]).To(Equal(computeID))
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(2))
@@ -2458,7 +2472,6 @@ var _ = Describe("Clusters server", func() {
 		})
 
 		It("Preserves explicit fields through create and get", func() {
-			sshKey := testSSHPublicKey
 			podCIDR := "10.128.0.0/14"
 			serviceCIDR := "172.30.0.0/16"
 
@@ -2485,9 +2498,8 @@ var _ = Describe("Clusters server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template:     publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
-						SshPublicKey: &sshKey,
-						Version:      &publicv1.ClusterVersionReference{Name: versionName},
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+						Version:  &publicv1.ClusterVersionReference{Name: versionName},
 						Network: publicv1.ClusterNetwork_builder{
 							PodCidr:     &podCIDR,
 							ServiceCidr: &serviceCIDR,
@@ -2503,7 +2515,6 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			spec := getResponse.GetObject().GetSpec()
 
-			Expect(spec.GetSshPublicKey()).To(Equal(sshKey))
 			Expect(spec.GetVersion().GetName()).To(Equal(versionName))
 			Expect(spec.GetNetwork().GetPodCidr()).To(Equal(podCIDR))
 			Expect(spec.GetNetwork().GetServiceCidr()).To(Equal(serviceCIDR))

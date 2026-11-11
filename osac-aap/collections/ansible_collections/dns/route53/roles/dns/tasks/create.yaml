@@ -1,5 +1,5 @@
 ---
-- name: "Create DNS record via Route 53 - {{ dns_record_name }}"
+- name: Create DNS record via Route 53
   amazon.aws.route53:
     state: present
     zone: "{{ dns_zone }}"

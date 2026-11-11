@@ -57,9 +57,18 @@ export const VmReviewStep = () => {
   const networking = values.spec.networking;
   const networkAttachment = networking.networkAttachment.value;
   const isCustomNetwork = !networkAttachment.useDefaultNetwork;
-  const userData = values.spec.userData.value;
-  const selectedUserData = userData.source === 'secret' ? userData.secret : userData.inline;
-  const userDataReview = selectedUserData.trim() ? t('Configured') : displayValue();
+  const {
+    source: userDataSource,
+    inline: userDataInline,
+    secret: userDataSecret,
+  } = values.spec.userData.value;
+  const userDataReview = (() => {
+    if (userDataSource === 'secret') {
+      const name = userDataSecret.trim();
+      return name ? name : t('Not configured');
+    }
+    return userDataInline.trim() ? t('Provided (hidden)') : t('Not configured');
+  })();
 
   return (
     <Stack hasGutter>
@@ -116,7 +125,7 @@ export const VmReviewStep = () => {
           </DescriptionListGroup>
 
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Cloud-init')}</DescriptionListTerm>
+            <DescriptionListTerm>{t('User data')}</DescriptionListTerm>
             <DescriptionListDescription>{userDataReview}</DescriptionListDescription>
           </DescriptionListGroup>
 

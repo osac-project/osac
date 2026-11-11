@@ -1,0 +1,9 @@
+---
+# Confirms the background driver started by drive_bmh_status.yml finished.
+- name: Confirm the BareMetalHost status driver completed
+  ansible.builtin.async_status:
+    jid: "{{ bmh_status_driver.ansible_job_id }}"
+  register: bmh_status_driver_result
+  until: bmh_status_driver_result.finished
+  retries: 10
+  delay: 1

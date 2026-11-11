@@ -1,0 +1,209 @@
+---
+- name: Verify AgentlessNet switch VLAN reconciliation
+  hosts: localhost
+  gather_facts: false
+  vars:
+    switch_test_subnet:
+      uid: "c0000000-0000-4000-8000-000000000002"
+      vlan_id: 100
+    switch_test_inventory:
+      all:
+        vars:
+          agentless_net_provisioning_network:
+            name: provisioning
+            vlan_id: 30
+        children:
+          net_nodes:
+            hosts:
+              network-node:
+                ansible_host: 127.0.0.1
+                ansible_user: contract-test
+          switches:
+            hosts:
+              leaf-1:
+                ansible_host: 127.0.0.1
+                ansible_user: contract-test
+                ansible_network_os: cumulus
+                trunk_ports: [swp100]
+  tasks:
+    - name: Exercise the AgentlessNet switch VLAN boundary
+      block:
+        - name: Create the switch fixture directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: osac-agentless-switch-
+          register: switch_test_tempdir
+
+        - name: Record the fixture paths
+          ansible.builtin.set_fact:
+            switch_test_state: "{{ switch_test_tempdir.path }}/switch.json"
+            switch_test_fail_marker: "{{ switch_test_tempdir.path }}/switch-failed-once"
+            switch_test_discovery_file: "{{ switch_test_tempdir.path }}/discovered.json"
+
+        - name: Create the child playbook inventory and SSH control directory
+          ansible.builtin.copy:
+            dest: "{{ switch_test_tempdir.path }}/inventory.yaml"
+            mode: "0600"
+            content: >-
+              {{ {'all': {'hosts': {'localhost': {}}, 'vars': {
+                  'ansible_connection': 'local', 'ansible_become': false,
+                  'ansible_python_interpreter': ansible_playbook_python}}} | to_nice_yaml }}
+
+        - name: Create a private SSH control directory for the fake transport
+          ansible.builtin.file:
+            path: "{{ switch_test_tempdir.path }}/ssh-control"
+            state: directory
+            mode: "0700"
+
+        - name: Seed a switch with access ports and no Subnet VLAN
+          ansible.builtin.copy:
+            dest: "{{ switch_test_state }}"
+            mode: "0600"
+            content: >-
+              {{ {'ports': {'swp1': [30], 'swp2': [30], 'swp3': [200]},
+                  'vlans': [], 'trunk_ports': [], 'trunk_vlans': {},
+                  'tombstones': []} | to_json }}
+
+        - name: Create the Subnet VLAN through the switch boundary
+          ansible.builtin.include_tasks: run_switch_playbook.yaml
+          vars:
+            switch_test_label: create
+            switch_test_action: create
+
+        - name: Require the Subnet VLAN creation to succeed
+          ansible.builtin.assert:
+            that: switch_test_run.rc == 0
+            fail_msg: >-
+              switch VLAN creation failed:
+              {{ switch_test_run.stdout | default('') }}
+
+        - name: Read the normalized discovery result
+          ansible.builtin.slurp:
+            src: "{{ switch_test_discovery_file }}"
+          register: switch_test_discovery
+
+        - name: Confirm the discovery result is normalized for every switch
+          vars:
+            _discovery: "{{ switch_test_discovery.content | b64decode | from_json }}"
+            _switch: "{{ _discovery | first }}"
+            _swp1: >-
+              {{ _switch.interfaces | selectattr('name', 'equalto', 'swp1') | first }}
+          ansible.builtin.assert:
+            that:
+              - _discovery | length == 1
+              - _switch.used_vlan_ids | sort == [30, 200]
+              - _switch.reserved_vlan_ids | length == 165
+              - 3600 in _switch.reserved_vlan_ids
+              - 4064 in _switch.reserved_vlan_ids
+              - _swp1.vlan_ids == [30]
+              - _swp1.pvid == 30
+              - _swp1.untagged_vlan_ids == [30]
+
+        - name: Read the switch state after VLAN creation
+          ansible.builtin.slurp:
+            src: "{{ switch_test_state }}"
+          register: switch_test_created
+
+        - name: Confirm the switch carries the Subnet VLAN on its declared trunk
+          vars:
+            _switch: "{{ switch_test_created.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _switch.vlans == [100]
+              - "'swp100' in _switch.trunk_ports"
+              - _switch.trunk_vlans.swp100 == [100]
+              - _switch.ports.swp1 == [30]
+              - _switch.ports.swp2 == [30]
+              - _switch.ports.swp3 == [200]
+
+        - name: Delete the Subnet VLAN through the switch boundary
+          ansible.builtin.include_tasks: run_switch_playbook.yaml
+          vars:
+            switch_test_label: delete
+            switch_test_action: delete
+
+        - name: Require the Subnet VLAN deletion to succeed
+          ansible.builtin.assert:
+            that: switch_test_run.rc == 0
+            fail_msg: >-
+              switch VLAN deletion failed:
+              {{ switch_test_run.stdout | default('') }}
+
+        - name: Read the switch state after VLAN deletion
+          ansible.builtin.slurp:
+            src: "{{ switch_test_state }}"
+          register: switch_test_deleted
+
+        - name: Confirm the VLAN is absent from the switch and its trunk
+          vars:
+            _switch: "{{ switch_test_deleted.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _switch.vlans == []
+              - _switch.trunk_vlans.swp100 == []
+              - _switch.ports.swp1 == [30]
+              - _switch.ports.swp2 == [30]
+              - _switch.ports.swp3 == [200]
+
+        - name: Seed a switch that already carries the Subnet VLAN
+          ansible.builtin.copy:
+            dest: "{{ switch_test_state }}"
+            mode: "0600"
+            content: >-
+              {{ {'ports': {'swp1': [30]}, 'vlans': [100],
+                  'trunk_ports': ['swp100'], 'trunk_vlans': {'swp100': [100]},
+                  'tombstones': []} | to_json }}
+
+        - name: Reconcile an already converged switch
+          ansible.builtin.include_tasks: run_switch_playbook.yaml
+          vars:
+            switch_test_label: idempotent
+            switch_test_action: create
+
+        - name: Require the converged switch reconciliation to succeed
+          ansible.builtin.assert:
+            that: switch_test_run.rc == 0
+
+        - name: Read the switch state after the no-op reconciliation
+          ansible.builtin.slurp:
+            src: "{{ switch_test_state }}"
+          register: switch_test_idempotent
+
+        - name: Confirm the no-op reconciliation changed nothing
+          vars:
+            _switch: "{{ switch_test_idempotent.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _switch.vlans == [100]
+              - _switch.trunk_vlans.swp100 == [100]
+              - _switch.ports.swp1 == [30]
+
+        - name: Seed a switch with the Subnet VLAN on an undeclared trunk
+          ansible.builtin.copy:
+            dest: "{{ switch_test_state }}"
+            mode: "0600"
+            content: >-
+              {{ {'ports': {'swp1': [30], 'swp3': [100]}, 'vlans': [100],
+                  'trunk_ports': ['swp100'], 'trunk_vlans': {'swp100': [100]},
+                  'tombstones': []} | to_json }}
+
+        - name: Attempt the Subnet VLAN deletion with a stray membership
+          ansible.builtin.include_tasks: run_switch_playbook.yaml
+          vars:
+            switch_test_label: stray
+            switch_test_action: delete
+
+        - name: Refuse the deletion and retain the VLAN
+          vars:
+            _switch: "{{ lookup('ansible.builtin.file', switch_test_state) | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - switch_test_run.rc != 0
+              - _switch.vlans == [100]
+              - _switch.ports.swp3 == [100]
+      always:
+        - name: Remove the AgentlessNet switch fixtures
+          ansible.builtin.file:
+            path: "{{ switch_test_tempdir.path }}"
+            state: absent
+          when: switch_test_tempdir is defined

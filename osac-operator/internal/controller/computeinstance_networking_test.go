@@ -78,6 +78,18 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 		return ci.GetStatusCondition(t)
 	}
 
+	// disabledVMNetwork is the ocp_virt_vm network input with provider
+	// networking disabled: the cluster default pod network with masquerade in
+	// the Tenant namespace (VMaaS design, Provider networking disabled).
+	disabledVMNetwork := func(namespace, id string) map[string]any {
+		return map[string]any{
+			"namespace":  namespace,
+			"networks":   []any{map[string]any{fieldName: vmNetworkDefault, "pod": map[string]any{}}},
+			"interfaces": []any{map[string]any{fieldName: vmNetworkDefault, "masquerade": map[string]any{}}},
+			"labels":     map[string]any{computeInstanceIDVMLabel: id},
+		}
+	}
+
 	newFixture := func(name string, enabled bool) *ciFixture {
 		GinkgoHelper()
 		id := name + "-id"
@@ -793,12 +805,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 			g.Expect(c.Status).To(Equal(metav1.ConditionTrue))
 			g.Expect(c.Reason).To(Equal(osacv1alpha1.ReasonProvisioningDisabled))
 		})
-		Expect(f.aap.last(computeInstanceProvisionTask).vars["vm_network"]).To(Equal(map[string]any{
-			"namespace":  ns,
-			"networks":   []any{map[string]any{"name": "default", "pod": map[string]any{}}},
-			"interfaces": []any{map[string]any{"name": "default", "masquerade": map[string]any{}}},
-			"labels":     map[string]any{computeInstanceIDVMLabel: f.id},
-		}))
+		Expect(f.aap.last(computeInstanceProvisionTask).vars["vm_network"]).To(Equal(disabledVMNetwork(ns, f.id)))
 		err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns,
 			Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, f.id)}, &osacv1alpha1.NetworkAttachment{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no NetworkAttachment with provider networking disabled")
@@ -811,6 +818,34 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 			g.Expect(ci.Status.ComputeNetworkAttachmentStatuses).To(BeEmpty())
 			g.Expect(condition(ci, osacv1alpha1.ComputeInstanceConditionReady).Status).To(Equal(metav1.ConditionTrue))
 		})
+	})
+
+	It("deprovisions in the Tenant namespace with provider networking disabled", func() {
+		f := newFixture("vmaas-disabled-delete", false)
+		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
+			g.Expect(networkJob(ci, computeInstanceProvisionTask)).NotTo(BeNil())
+			g.Expect(ci.Status.VirtualMachineReference).NotTo(BeNil())
+		})
+
+		Expect(k8sClient.Delete(ctx, &osacv1alpha1.ComputeInstance{ObjectMeta: metav1.ObjectMeta{Name: f.key.Name, Namespace: ns}})).To(Succeed())
+		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
+			g.Expect(ci.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseDeleting))
+			g.Expect(networkJob(ci, computeInstanceDeprovisionTask)).NotTo(BeNil())
+		})
+
+		deprovision := f.aap.last(computeInstanceDeprovisionTask)
+		Expect(deprovision.vars["vm_network"]).To(Equal(disabledVMNetwork(ns, f.id)))
+		err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns,
+			Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, f.id)}, &osacv1alpha1.NetworkAttachment{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no NetworkAttachment with provider networking disabled")
+
+		f.aap.finish(computeInstanceDeprovisionTask, "successful", "")
+		Eventually(func(g Gomega) {
+			_, err := f.r.Reconcile(ctx, request(f.key))
+			g.Expect(err).NotTo(HaveOccurred())
+			err = k8sClient.Get(ctx, f.key, &osacv1alpha1.ComputeInstance{})
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		}, 15*time.Second, 100*time.Millisecond).Should(Succeed())
 	})
 
 	It("cancels the provision job, deprovisions, then deletes the NetworkAttachment", func() {

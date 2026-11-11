@@ -65,6 +65,8 @@ type Container struct {
 	outWriter      *logging.Writer
 	errWriter      *logging.Writer
 	runCmd         *exec.Cmd
+	runDone        chan struct{}
+	runErr         error
 	count          int
 	instances      []*Instance
 }
@@ -199,21 +201,20 @@ func (c *Container) Start(ctx context.Context) error {
 	)
 	c.runCmd.Stdout = c.outWriter
 	c.runCmd.Stderr = c.errWriter
+	c.runCmd.WaitDelay = time.Second
 	err = c.runCmd.Start()
 	if err != nil {
 		return fmt.Errorf("failed to start database container: %w", err)
 	}
+	c.runDone = make(chan struct{})
+	go func() {
+		c.runErr = c.runCmd.Wait()
+		close(c.runDone)
+	}()
 
 	// Find out the port number assigned to the database server. Because the container runs in the foreground, the
 	// port mapping may not be available immediately, so we retry with exponential backoff.
-	findPortBo := backoff.NewExponentialBackOff()
-	findPortBo.InitialInterval = 100 * time.Millisecond
-	findPortBo.MaxInterval = 1 * time.Second
-	findPortBo.MaxElapsedTime = 30 * time.Second
-	findPortOp := func() error {
-		return c.findPort(ctx)
-	}
-	err = backoff.Retry(findPortOp, backoff.WithContext(findPortBo, ctx))
+	err = c.waitForPort(ctx, 30*time.Second, 3*time.Second)
 	if err != nil {
 		return err
 	}
@@ -222,11 +223,18 @@ func (c *Container) Start(ctx context.Context) error {
 	connectAdminBo := backoff.NewExponentialBackOff()
 	connectAdminBo.InitialInterval = 100 * time.Millisecond
 	connectAdminBo.MaxInterval = 2 * time.Second
-	connectAdminBo.MaxElapsedTime = 30 * time.Second
+	connectAdminBo.MaxElapsedTime = 0
+	connectCtx, connectCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer connectCancel()
 	connectAdminOp := func() error {
-		return c.connectAdmin(ctx)
+		if err := c.checkRunExit(); err != nil {
+			return backoff.Permanent(err)
+		}
+		attemptCtx, attemptCancel := context.WithTimeout(connectCtx, 3*time.Second)
+		defer attemptCancel()
+		return c.connectAdmin(attemptCtx)
 	}
-	err = backoff.Retry(connectAdminOp, backoff.WithContext(connectAdminBo, ctx))
+	err = backoff.Retry(connectAdminOp, backoff.WithContext(connectAdminBo, connectCtx))
 	if err != nil {
 		return err
 	}
@@ -282,6 +290,40 @@ func (c *Container) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *Container) waitForPort(ctx context.Context, timeout, attemptTimeout time.Duration) error {
+	portCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	findPortBo := backoff.NewExponentialBackOff()
+	findPortBo.InitialInterval = 100 * time.Millisecond
+	findPortBo.MaxInterval = 1 * time.Second
+	findPortBo.MaxElapsedTime = 0
+	findPortOp := func() error {
+		if err := c.checkRunExit(); err != nil {
+			return backoff.Permanent(err)
+		}
+		attemptCtx, attemptCancel := context.WithTimeout(portCtx, attemptTimeout)
+		defer attemptCancel()
+		err := c.findPort(attemptCtx)
+		if runErr := c.checkRunExit(); runErr != nil {
+			return backoff.Permanent(runErr)
+		}
+		return err
+	}
+	return backoff.Retry(findPortOp, backoff.WithContext(findPortBo, portCtx))
+}
+
+func (c *Container) checkRunExit() error {
+	select {
+	case <-c.runDone:
+		if c.runErr != nil {
+			return fmt.Errorf("database container exited during startup: %w", c.runErr)
+		}
+		return errors.New("database container exited during startup")
+	default:
+		return nil
+	}
 }
 
 // createConfigFile creates a temporary configuration file with performance and logging settings. The file name is
@@ -345,6 +387,7 @@ func (c *Container) findPort(ctx context.Context) error {
 	// Run the 'podman port' command to find out the host port mapped to the database server's port 5432:
 	portOut := &bytes.Buffer{}
 	portCmd := exec.CommandContext(ctx, c.tool, "port", c.id, "5432/tcp")
+	portCmd.WaitDelay = time.Second
 	portCmd.Stdout = portOut
 	portCmd.Stderr = c.errWriter
 	err := portCmd.Run()
@@ -476,19 +519,28 @@ func (c *Container) Stop(ctx context.Context) error {
 
 	// Stop the database server and wait for the foreground run command to exit so that all remaining output is
 	// flushed through the writers.
-	killCmd := exec.Command(c.tool, "kill", c.id)
-	killCmd.Stdout = c.outWriter
-	killCmd.Stderr = c.errWriter
-	err := killCmd.Run()
-	if err != nil {
-		c.logger.ErrorContext(
-			ctx,
-			"Failed to kill database container",
-			slog.Any("error", err),
-		)
-	}
-	if c.runCmd != nil {
-		_ = c.runCmd.Wait()
+	if c.runDone != nil {
+		shouldKill := true
+		select {
+		case <-c.runDone:
+			shouldKill = c.runErr != nil
+		default:
+		}
+		if shouldKill {
+			killCmd := exec.CommandContext(ctx, c.tool, "kill", c.id)
+			killCmd.Stdout = c.outWriter
+			killCmd.Stderr = c.errWriter
+			killCmd.WaitDelay = time.Second
+			err := killCmd.Run()
+			if err != nil {
+				c.logger.ErrorContext(ctx, "Failed to kill database container", slog.Any("error", err))
+			}
+		}
+		select {
+		case <-c.runDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	return nil

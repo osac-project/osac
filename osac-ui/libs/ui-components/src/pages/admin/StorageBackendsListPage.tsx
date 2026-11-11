@@ -1,5 +1,5 @@
 import { StorageBackends } from '@osac/types/private';
-import { usePrivateStorageBackends } from '@osac/ui-components/api/v1/private/storage-backends';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
@@ -10,7 +10,7 @@ import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 export const StorageBackendsListPage = () => {
   const { t } = useTranslation();
 
-  const { data: backends = [], isLoading, error } = usePrivateStorageBackends();
+  const { data: backends, isLoading, error } = useListResource(StorageBackends);
 
   return (
     <ListPage
@@ -23,12 +23,12 @@ export const StorageBackendsListPage = () => {
       }
     >
       <ListPageBody isLoading={isLoading} error={error}>
-        {backends.length === 0 ? (
+        {backends?.items.length === 0 ? (
           <SubtleContent component="p">
             {t('No storage backends yet. Create one to get started.')}
           </SubtleContent>
         ) : (
-          <StorageBackendsTable backends={backends} />
+          <StorageBackendsTable backends={backends?.items || []} />
         )}
       </ListPageBody>
     </ListPage>

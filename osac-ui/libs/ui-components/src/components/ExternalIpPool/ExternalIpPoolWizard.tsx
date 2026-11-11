@@ -13,7 +13,6 @@ import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import { toCreateRequest } from './payload';
 import PoolStep from './PoolStep';
 import ReviewStep from './ReviewStep';
-import TenantStep from './TenantStep';
 import { externalIpPoolStepHasErrors, getExternalIpPoolSchema } from './validation';
 import {
   EXTERNAL_IP_POOLS_LIST_PATH,
@@ -66,9 +65,6 @@ const ExternalIpPoolWizard = () => {
           >
             <WizardStep id="pool" name={t('External IP pool')}>
               {currentStep === 'pool' && <PoolStep />}
-            </WizardStep>
-            <WizardStep id="tenant" name={t('Tenant')}>
-              {currentStep === 'tenant' && <TenantStep />}
             </WizardStep>
             <WizardStep id="review" name={t('Review')}>
               {currentStep === 'review' && <ReviewStep />}

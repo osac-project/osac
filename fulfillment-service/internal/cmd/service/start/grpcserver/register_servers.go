@@ -24,6 +24,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -76,6 +77,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetSecretStore(deps.SecretStore).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cluster templates server: %w", err)
@@ -128,6 +130,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetSecretStore(deps.SecretStore).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private cluster templates server: %w", err)
@@ -181,6 +184,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetNetworkingSettings(deps.NetworkingSettings).
+			SetSecretStore(deps.SecretStore).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create clusters server: %w", err)
@@ -194,6 +198,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetNetworkingSettings(deps.NetworkingSettings).
+			SetSecretStore(deps.SecretStore).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private clusters server: %w", err)
@@ -316,6 +321,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetSecretStore(deps.SecretStore).
+			SetNetworkingSettings(deps.NetworkingSettings).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bare metal instances server: %w", err)
@@ -353,6 +359,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetSecretStore(deps.SecretStore).
+			SetNetworkingSettings(deps.NetworkingSettings).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private bare metal instances server: %w", err)
@@ -710,6 +717,16 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterRolesServer(registrar, privateRolesServer)
 
+	userReferenceDAO, err := dao.NewGenericDAO[*privatev1.User]().
+		SetLogger(deps.Logger).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create User DAO for public reference redaction: %w", err)
+	}
+	userReferenceLookup := references.NewTenantScopedDAOLookupFunc(userReferenceDAO)
+
 	// Create the role bindings server:
 	deps.Logger.InfoContext(ctx, "Creating role bindings server")
 	roleBindingsServer, err := servers.NewRoleBindingsServer().
@@ -717,6 +734,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetUserReferenceLookup(userReferenceLookup).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create role bindings server: %w", err)
@@ -765,6 +783,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetUserReferenceLookup(userReferenceLookup).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project memberships server: %w", err)

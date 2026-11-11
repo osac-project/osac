@@ -9,6 +9,7 @@ import {
   ProgressStepper,
   StackItem,
 } from '@patternfly/react-core';
+import { RhUiInProgressIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-in-progress-icon';
 
 import { type Cluster, ClusterUpgradeState } from '@osac/types';
 
@@ -88,6 +89,7 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
               titleId="cluster-upgrade-progressing-title"
               variant={progressVariant}
               isCurrent={progressing}
+              icon={progressing ? <RhUiInProgressIcon /> : undefined}
               aria-label={
                 progressStatus ? `${t('Progressing')}, ${progressStatus}` : t('Progressing')
               }

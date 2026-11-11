@@ -120,6 +120,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
         expect(progressStep).not.toHaveClass('pf-m-pending');
       } else {
         expect(progressStep).toHaveClass('pf-m-pending');
+        expect(progressStep.querySelector('svg')).toBeInTheDocument();
       }
       expect(steps.getByLabelText('Success')).not.toHaveClass('pf-m-success');
     },
@@ -282,6 +283,11 @@ describe('ClusterDetailsPage upgrade availability', () => {
     expect(
       within(screen.getByLabelText('Upgrade progress steps')).getByLabelText('Failed'),
     ).toHaveClass('pf-m-danger');
+    expect(
+      within(screen.getByLabelText('Upgrade progress steps'))
+        .getByLabelText('Failed')
+        .querySelector('svg'),
+    ).toBeInTheDocument();
     expect(screen.getAllByText('Control plane could not upgrade').length).toBeGreaterThan(0);
   });
 

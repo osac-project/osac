@@ -37,6 +37,11 @@ and observe a real DataVolume create its PVC. The Route API is an OSAC
 placeholder; this check does not exercise an OpenShift router, guest boot, or
 disk I/O.
 
+The same dev-full render suite checks the ARM VM compatibility policy and its
+`osac.openshift.io/tenant-ref` namespace selector. Deployed admission evidence
+requires a server-side VM update in a real tenant namespace, verifying removal
+of the x86-only SMM and Hyper-V fields. VM boot remains a separate boundary.
+
 ## Input validation gate (OSAC-7050)
 
 Every installation target (`install`, `install-infra`, `install-osac`,

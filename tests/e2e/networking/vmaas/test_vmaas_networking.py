@@ -934,8 +934,31 @@ def _attach_external_ip(
     assert ipaddress.IPv4Address(record["address"]) in ipaddress.IPv4Network(pool["cidr"]), (
         f"ExternalIP {record['address']} is outside the pool {pool['cidr']}"
     )
+    _wait_for_compute_instance_external_ip(
+        client=client, vm=vm, expected_address=record["address"], external_ip=record["address"]
+    )
     stack.wait_for_attribution(private_grpc=private_grpc, eip_id=eip_id, ci_id=vm["id"])
     return record
+
+
+def _wait_for_compute_instance_external_ip(
+    *, client: GRPCClient, vm: dict[str, str], expected_address: str, external_ip: str
+) -> None:
+    """Wait for the public ComputeInstance status to reflect its ExternalIP attachment state."""
+    stack.poll_or_fail(
+        hint=H,
+        fn=lambda: (client.get_compute_instance(ci_id=vm["id"]).get("object", {}).get("status") or {}).get(
+            "externalIpAddress", ""
+        ),
+        until=lambda address: address == expected_address,
+        retries=30,
+        delay=5,
+        description=f"ComputeInstance {vm['id']} external IP status to become {expected_address or 'empty'}",
+        kind=Kind.STUCK_STATE,
+        ids={"ci_id": vm["id"], "external_ip": external_ip},
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=vm["id"],
+    )
 
 
 def _assert_external_ip_ssh(*, state: dict[str, Any], vm: dict[str, str], external_ip: str, description: str) -> None:
@@ -1511,6 +1534,7 @@ class TestVmaasNetworking:
             resource_id=attachment_id,
         )
         record["attachment_id"] = ""
+        _wait_for_compute_instance_external_ip(client=grpc, vm=vm, expected_address="", external_ip=record["address"])
 
         def ingress_stopped() -> bool:
             try:

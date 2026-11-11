@@ -101,13 +101,13 @@ title: Sandbox Cluster
 description: Small development cluster.
 template:
   name: sandbox
-  shared: true
+  tenant: shared
 published: true
 fields:
   version:
     locked:
       name: 4-17-0
-      shared: true
+      tenant: shared
   node_sets:
     editable:
       default_value:
@@ -115,7 +115,7 @@ fields:
           workers:
             baremetal_instance_type:
               name: fc430
-              shared: true
+              tenant: shared
             size: 1
   network:
     pod_cidr:
@@ -166,18 +166,18 @@ title: Standard Virtual Machine
 description: Fedora virtual machine with customizable compute resources and boot-disk size.
 template:
   id: osac.templates.ocp_virt_vm
-  shared: true
+  tenant: shared
 published: true
 fields:
   disk_image:
     locked:
       name: fedora
-      shared: true
+      tenant: shared
   instance_type:
     editable:
       default_value:
         name: u1-small
-        shared: true
+        tenant: shared
   boot_disk:
     size_gib:
       editable:
@@ -228,11 +228,12 @@ The input file can contain multiple documents separated by `---`. Create depende
 
 ### Reference scope
 
-You can reference an object by ID or name. An ID must be visible to you, but does not need `shared`
+You can reference an object by ID or name. An ID must be visible to you, but does not need `tenant`
 or `project` selectors. If you supply both an ID and a name, they must identify the same object.
 
-When using a name, set `shared: true` for an object in the shared tenant. Set `project` to reference
-an object in another project within the same tenant. See
+When using a name, set `tenant: shared` for an object in the shared tenant. Set `project` to reference
+an object in another project within the same tenant. Legacy `shared: true` remains accepted during
+the compatibility period. See
 [Object references](API.md#object-references) for the reference format.
 
 Shared catalogs use shared dependencies. Tenant catalogs can use shared objects or objects from
@@ -399,7 +400,7 @@ fields:
     locked:
       items:
         - name: cert-manager
-          shared: true
+          tenant: shared
 ```
 
 The referenced operators must be published platform operators. A locked list is applied when the
@@ -464,9 +465,9 @@ and is visible to you:
 ```bash
 # The catalog fixes the image, so neither command can override it:
 osac create computeinstance --catalog-item <standard-vm-id> \
-  --disk-image another-image --set disk_image.shared=true
+  --disk-image another-image --set disk_image.tenant=shared
 osac create computeinstance --catalog-item <standard-vm-id> \
-  --disk-image fedora --set disk_image.shared=true
+  --disk-image fedora --set disk_image.tenant=shared
 # Error includes: disk_image: field is not editable
 ```
 

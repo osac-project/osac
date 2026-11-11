@@ -1592,6 +1592,34 @@ var _ = Describe("Private clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetSpec().GetAddOnOperators()).To(HaveLen(1))
 			Expect(response.GetObject().GetSpec().GetAddOnOperators()[0].GetId()).To(Equal(operator.GetId()))
+			Expect(response.GetObject().GetSpec().GetAddOnOperators()[0].GetTenant()).To(Equal(auth.SharedTenant))
+		})
+
+		It("resolves same-name add-on references from their selected tenants", func() {
+			shared := newTestAddOnOperator("operator-shared-scope", "same-operator-name", true)
+			seedAddOnOperatorObject(ctx, shared)
+
+			local := newTestAddOnOperator("operator-local-scope", "same-operator-name", true)
+			local.GetMetadata().SetTenant(testTenant)
+			seedAddOnOperatorObject(ctx, local)
+
+			object, err := createClusterWithAddOnOperators(ctx, server, []*privatev1.AddOnOperatorReference{
+				privatev1.AddOnOperatorReference_builder{Name: "same-operator-name", Tenant: auth.SharedTenant}.Build(),
+				privatev1.AddOnOperatorReference_builder{Name: "same-operator-name", Tenant: testTenant}.Build(),
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			operators := object.GetSpec().GetAddOnOperators()
+			Expect(operators).To(HaveLen(2))
+			resolvedByID := make(map[string]*privatev1.AddOnOperatorReference, len(operators))
+			for _, operator := range operators {
+				resolvedByID[operator.GetId()] = operator
+			}
+			Expect(resolvedByID).To(HaveKey(shared.GetId()))
+			Expect(resolvedByID).To(HaveKey(local.GetId()))
+			Expect(resolvedByID[shared.GetId()].GetTenant()).To(Equal(auth.SharedTenant))
+			Expect(resolvedByID[local.GetId()].GetTenant()).To(Equal(testTenant))
+			Expect(resolvedByID[local.GetId()].GetShared()).To(BeFalse())
 		})
 
 		It("rejects a deleted operator", func() {

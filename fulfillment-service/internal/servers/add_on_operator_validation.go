@@ -56,6 +56,7 @@ type addOnOperatorResourceResolver struct {
 type addOnOperatorReferenceCacheKey struct {
 	id           string
 	name         string
+	tenant       string
 	ownerTenant  string
 	ownerProject string
 	project      string
@@ -82,6 +83,7 @@ func (r *addOnOperatorReferenceResolver) resolve(
 		ownerProject: ownerMetadata.GetProject(),
 	}
 	if fullReference, ok := ref.(fullResourceReference); ok {
+		key.tenant = fullReference.GetTenant()
 		key.project = fullReference.GetProject()
 		key.shared = fullReference.GetShared()
 	}
@@ -178,14 +180,24 @@ func (r *addOnOperatorResourceResolver) resolve(
 // resolver must see this scope selector during lookup rather than after canonicalization.
 func defaultAddOnOperatorReferenceScope(ref resourceReference) {
 	fullReference, ok := ref.(fullResourceReference)
-	if ok && fullReference.GetId() == "" && fullReference.GetProject() == "" && !fullReference.GetShared() {
-		fullReference.SetShared(true)
+	if !ok {
+		return
 	}
+	if fullReference.GetId() != "" || fullReference.GetTenant() != "" ||
+		fullReference.GetProject() != "" || fullReference.GetShared() {
+		return
+	}
+	fullReference.SetTenant(auth.SharedTenant)
 }
 
 func addOnOperatorOwnerMetadata(ownerMetadata *privatev1.Metadata, ref resourceReference) *privatev1.Metadata {
 	fullReference, ok := ref.(fullResourceReference)
-	if ok && fullReference.GetShared() && fullReference.GetProject() == "" && ownerMetadata.GetProject() != "" {
+	if !ok {
+		return ownerMetadata
+	}
+	selectsSharedTenant := fullReference.GetTenant() == auth.SharedTenant ||
+		(fullReference.GetTenant() == "" && fullReference.GetShared())
+	if selectsSharedTenant && fullReference.GetProject() == "" && ownerMetadata.GetProject() != "" {
 		ownerMetadata = cloneMessage(ownerMetadata)
 		ownerMetadata.SetProject("")
 	}

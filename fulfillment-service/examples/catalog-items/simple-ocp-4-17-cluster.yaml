@@ -10,7 +10,7 @@ description: A small OpenShift 4.17 cluster with 2 worker nodes on fc430 hardwar
   testing workloads.
 template:
   id: osac.templates.ocp_4_17_small
-  shared: true
+  tenant: shared
 published: true
 fields:
   network:

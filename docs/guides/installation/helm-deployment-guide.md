@@ -144,7 +144,7 @@ production default. Production operators should supply their own compatible
 artifact.
 `architecture` defaults to `[ARCHITECTURE_AMD64]` when omitted; ARM64 and S390X
 are also supported metadata values. The hook creates a shared Linux registry
-DiskImage first, then references it by name with `shared: true` in the version.
+DiskImage first, then references it by name with `tenant: shared` in the version.
 Non-default versions may omit `diskImage`.
 
 On retry, HTTP 409 retains existing named records without updating their image

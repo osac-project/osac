@@ -10,7 +10,7 @@ description: An OpenShift 4.20 cluster pre-configured for AI workloads. Includes
   GPU node support, and Models-as-a-Service. Ready-to-use for model serving, training, and inference.
 template:
   id: osac.templates.ocp_4_20_openshift_ai
-  shared: true
+  tenant: shared
 published: true
 fields:
   network:

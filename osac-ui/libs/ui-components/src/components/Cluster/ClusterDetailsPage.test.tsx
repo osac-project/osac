@@ -112,7 +112,9 @@ describe('ClusterDetailsPage upgrade availability', () => {
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
       expect(screen.getByText('Upgrading from 4.17.0 to 4.18.0')).toBeInTheDocument();
       const steps = within(screen.getByLabelText('Upgrade progress steps'));
-      expect(steps.getByLabelText('Request accepted, Complete')).toBeInTheDocument();
+      expect(
+        within(steps.getByLabelText('Request accepted, Complete')).getByText('Complete'),
+      ).toBeInTheDocument();
       const progressStep = steps.getByLabelText(
         state === ClusterUpgradeState.PENDING ? 'Progressing' : 'Progressing, In progress',
       );
@@ -121,6 +123,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
       } else {
         expect(progressStep).toHaveClass('pf-m-pending');
         expect(progressStep.querySelector('svg')).toBeInTheDocument();
+        expect(within(progressStep).getByText('In progress')).toBeInTheDocument();
       }
       expect(steps.getByLabelText('Success')).not.toHaveClass('pf-m-success');
     },
@@ -143,8 +146,12 @@ describe('ClusterDetailsPage upgrade availability', () => {
 
     const steps = within(await screen.findByLabelText('Upgrade progress steps'));
     expect(steps.getByLabelText('Request accepted, Complete')).toBeInTheDocument();
-    expect(steps.getByLabelText('Progressing, Complete')).toHaveClass('pf-m-success');
-    expect(steps.getByLabelText('Success, Complete')).toHaveClass('pf-m-success');
+    const progressingStep = steps.getByLabelText('Progressing, Complete');
+    expect(progressingStep).toHaveClass('pf-m-success');
+    expect(within(progressingStep).getByText('Complete')).toBeInTheDocument();
+    const successStep = steps.getByLabelText('Success, Complete');
+    expect(successStep).toHaveClass('pf-m-success');
+    expect(within(successStep).getByText('Complete')).toBeInTheDocument();
   });
 
   it('ignores node-set attempts for progress and history', async () => {
@@ -226,9 +233,11 @@ describe('ClusterDetailsPage upgrade availability', () => {
 
     await waitFor(() => expect(screen.getByText('Upgrade timed out')).toBeInTheDocument());
     expect(screen.getAllByText('Still observing the control plane').length).toBeGreaterThan(0);
-    expect(
-      within(screen.getByLabelText('Upgrade progress steps')).getByLabelText('Timed out'),
-    ).toHaveClass('pf-m-warning');
+    const timedOutStep = within(screen.getByLabelText('Upgrade progress steps')).getByLabelText(
+      'Timed out, Still observing the control plane',
+    );
+    expect(timedOutStep).toHaveClass('pf-m-warning');
+    expect(within(timedOutStep).getByText('Still observing the control plane')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Upgrade history' }));
     expect(
       within(screen.getByRole('dialog', { name: 'Upgrade history' })).getByText('Timed out'),
@@ -280,14 +289,12 @@ describe('ClusterDetailsPage upgrade availability', () => {
     renderPage(failed, [currentVersion, targetVersion]);
 
     await waitFor(() => expect(screen.getByText('Upgrade failed')).toBeInTheDocument());
-    expect(
-      within(screen.getByLabelText('Upgrade progress steps')).getByLabelText('Failed'),
-    ).toHaveClass('pf-m-danger');
-    expect(
-      within(screen.getByLabelText('Upgrade progress steps'))
-        .getByLabelText('Failed')
-        .querySelector('svg'),
-    ).toBeInTheDocument();
+    const failedStep = within(screen.getByLabelText('Upgrade progress steps')).getByLabelText(
+      'Failed, Control plane could not upgrade',
+    );
+    expect(failedStep).toHaveClass('pf-m-danger');
+    expect(failedStep.querySelector('svg')).toBeInTheDocument();
+    expect(within(failedStep).getByText('Control plane could not upgrade')).toBeInTheDocument();
     expect(screen.getAllByText('Control plane could not upgrade').length).toBeGreaterThan(0);
   });
 

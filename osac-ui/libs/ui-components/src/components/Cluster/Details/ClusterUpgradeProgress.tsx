@@ -56,6 +56,11 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
       : succeeded
         ? ProgressStepVariant.success
         : ProgressStepVariant.default;
+  const outcomeDescription = succeeded
+    ? t('Complete')
+    : failed || timedOut
+      ? attempt.message || outcomeLabel
+      : undefined;
 
   return (
     <StackItem>
@@ -80,6 +85,7 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
               titleId="cluster-upgrade-accepted-title"
               variant={ProgressStepVariant.success}
               isCurrent={pending}
+              description={t('Complete')}
               aria-label={`${t('Request accepted')}, ${t('Complete')}`}
             >
               {t('Request accepted')}
@@ -90,6 +96,7 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
               variant={progressVariant}
               isCurrent={progressing}
               icon={progressing ? <RhUiInProgressIcon /> : undefined}
+              description={progressStatus}
               aria-label={
                 progressStatus ? `${t('Progressing')}, ${progressStatus}` : t('Progressing')
               }
@@ -101,7 +108,12 @@ const ClusterUpgradeProgress = ({ cluster }: ClusterUpgradeProgressProps) => {
               titleId="cluster-upgrade-outcome-title"
               variant={outcomeVariant}
               isCurrent={failed || timedOut}
-              aria-label={succeeded ? `${outcomeLabel}, ${t('Complete')}` : outcomeLabel}
+              description={outcomeDescription}
+              aria-label={
+                outcomeDescription && outcomeDescription !== outcomeLabel
+                  ? `${outcomeLabel}, ${outcomeDescription}`
+                  : outcomeLabel
+              }
             >
               {outcomeLabel}
             </ProgressStep>

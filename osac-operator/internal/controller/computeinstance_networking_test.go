@@ -860,6 +860,10 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 			g.Expect(ci.Status.Jobs).To(HaveLen(1))
 			g.Expect(ci.Status.Jobs[0].JobID).NotTo(BeEmpty())
 		})
+		na := networkAttachmentOf(f)
+		const anotherNetworkAttachmentFinalizer = "test.example.com/network-cleanup"
+		na.Finalizers = append(na.Finalizers, anotherNetworkAttachmentFinalizer)
+		Expect(k8sClient.Update(ctx, na)).To(Succeed())
 		provisionJob := f.aap.last(computeInstanceProvisionTask)
 
 		Expect(k8sClient.Delete(ctx, &osacv1alpha1.ComputeInstance{ObjectMeta: metav1.ObjectMeta{Name: f.key.Name, Namespace: ns}})).To(Succeed())
@@ -875,6 +879,17 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 		Expect(networkAttachmentOf(f).DeletionTimestamp).To(BeNil(), "the NetworkAttachment goes after the VM")
 
 		f.aap.finish(computeInstanceDeprovisionTask, "successful", "")
+		reconcileUntil(f, func(g Gomega, ci *osacv1alpha1.ComputeInstance) {
+			g.Expect(ci.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
+			na := networkAttachmentOf(f)
+			g.Expect(na.DeletionTimestamp).NotTo(BeNil())
+			g.Expect(na.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
+			g.Expect(na.Finalizers).To(ContainElement(anotherNetworkAttachmentFinalizer))
+		})
+
+		na = networkAttachmentOf(f)
+		na.Finalizers = []string{osacComputeInstanceFinalizer}
+		Expect(k8sClient.Update(ctx, na)).To(Succeed())
 		Eventually(func(g Gomega) {
 			_, _ = f.r.Reconcile(ctx, request(f.key))
 			err := k8sClient.Get(ctx, f.key, &osacv1alpha1.ComputeInstance{})

@@ -504,7 +504,7 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		},
 		InputSchema:  computeInstancePowerToolSchema(),
 		OutputSchema: compatibleToolSchema[SetComputeInstancePowerOutput](),
-	}, writeToolContract{Destructive: false, Idempotent: true}, handleSetComputeInstancePower(deps.ComputeInstancesClient))
+	}, writeToolContract{Destructive: false, Idempotent: true}, handleSetComputeInstancePower(newComputeInstanceClients(deps)))
 	registerWriteTool(registry, &mcp.Tool{
 		Name: "restart_compute_instance",
 		Description: "Use this tool only when the user explicitly requests a VM restart and you have the current " +

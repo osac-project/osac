@@ -532,6 +532,19 @@ func getComputeInstanceAtVersion(
 	return current, nil
 }
 
+func nextComputeInstanceRestartRequestedAt(
+	now time.Time, previous *timestamppb.Timestamp,
+) *timestamppb.Timestamp {
+	next := now.UTC().Truncate(time.Second)
+	if previous != nil {
+		previousSecond := previous.AsTime().UTC().Truncate(time.Second)
+		if !next.After(previousSecond) {
+			next = previousSecond.Add(time.Second)
+		}
+	}
+	return timestamppb.New(next)
+}
+
 func safeComputeInstanceUpdateError(err error) error {
 	if status.Code(err) == codes.Aborted {
 		return safeStaleVersionError()
@@ -543,7 +556,7 @@ func safeComputeInstanceUpdateError(err error) error {
 }
 
 func handleSetComputeInstancePower(
-	client publicv1.ComputeInstancesClient,
+	clients computeInstanceClients,
 ) mcp.ToolHandlerFor[SetComputeInstancePowerInput, SetComputeInstancePowerOutput] {
 	return func(
 		ctx context.Context, req *mcp.CallToolRequest, input SetComputeInstancePowerInput,
@@ -559,7 +572,8 @@ func handleSetComputeInstancePower(
 		if err != nil {
 			return nil, SetComputeInstancePowerOutput{}, err
 		}
-		if _, err = getComputeInstanceAtVersion(ctx, client, input.ID, input.Version); err != nil {
+		current, err := getComputeInstanceAtVersion(ctx, clients.instances, input.ID, input.Version)
+		if err != nil {
 			return nil, SetComputeInstancePowerOutput{}, err
 		}
 
@@ -567,7 +581,23 @@ func handleSetComputeInstancePower(
 		if input.Action == "stop" {
 			runStrategy = publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED
 		}
-		response, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+		catalogItemID := current.GetSpec().GetCatalogItem().GetId()
+		if catalogItemID != "" {
+			catalogResponse, catalogErr := clients.catalogItems.Get(ctx,
+				publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: catalogItemID}.Build())
+			if catalogErr != nil {
+				return nil, SetComputeInstancePowerOutput{}, safePrerequisiteError(
+					"catalog item", catalogItemID, catalogErr,
+				)
+			}
+			if err := validateUpdateAgainstCatalogItem(UpdateComputeInstanceInput{
+				RunStrategy: computeInstanceRunStrategyName(runStrategy),
+			}, catalogResponse.GetObject().GetFields()); err != nil {
+				return nil, SetComputeInstancePowerOutput{}, err
+			}
+		}
+
+		response, err := clients.instances.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 			Object: publicv1.ComputeInstance_builder{
 				Id:       input.ID,
 				Metadata: publicv1.Metadata_builder{Version: input.Version}.Build(),
@@ -612,11 +642,14 @@ func handleRestartComputeInstance(
 		if err != nil {
 			return nil, RestartComputeInstanceOutput{}, err
 		}
-		if _, err = getComputeInstanceAtVersion(ctx, client, input.ID, input.Version); err != nil {
+		current, err := getComputeInstanceAtVersion(ctx, client, input.ID, input.Version)
+		if err != nil {
 			return nil, RestartComputeInstanceOutput{}, err
 		}
 
-		restartRequestedAt := timestamppb.New(time.Now().UTC())
+		restartRequestedAt := nextComputeInstanceRestartRequestedAt(
+			time.Now().UTC(), current.GetSpec().GetRestartRequestedAt(),
+		)
 		response, err := client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 			Object: publicv1.ComputeInstance_builder{
 				Id:       input.ID,

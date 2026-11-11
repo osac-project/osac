@@ -28,6 +28,7 @@ import ClusterExternalIpCard from './ClusterExternalIpCard';
 import { ClusterNetworkingDetailsTab } from './ClusterNetworkingDetailsTab';
 import ClusterNodeSetsTab from './ClusterNetworkingTab';
 import { ClusterOverviewTab } from './ClusterOverviewTab';
+import ClusterUpgradeProgress from './ClusterUpgradeProgress';
 import DetachExternalIpModal from './DetachExternalIpModal';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceConditionsTable } from '../../Resource/ResourceConditionsTable';
@@ -82,6 +83,7 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
               </FlexItem>
             </Flex>
           </StackItem>
+          <ClusterUpgradeProgress cluster={cluster} />
           <StackItem>
             <ClusterDetailsSummary cluster={cluster} />
           </StackItem>

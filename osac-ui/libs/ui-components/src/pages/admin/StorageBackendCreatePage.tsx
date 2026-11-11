@@ -182,7 +182,7 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
           validationSchema={getStorageBackendSchema(t, isEdit)}
           onSubmit={onSubmit}
         >
-          {({ submitForm, isSubmitting, setFieldValue, values }) => (
+          {({ submitForm, isSubmitting, setValues, values }) => (
             <Stack hasGutter>
               <LeaveFormConfirmation />
               <StackItem>
@@ -195,7 +195,13 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
                     isRequired
                     isDisabled={isEdit}
                     options={providerOptions}
-                    onSelect={(provider) => void setFieldValue('cspManaged', provider === 'netapp')}
+                    onSelect={(provider) =>
+                      void setValues({
+                        ...values,
+                        provider: String(provider),
+                        cspManaged: provider === 'netapp',
+                      })
+                    }
                   />
                   <CheckboxField
                     name="cspManaged"

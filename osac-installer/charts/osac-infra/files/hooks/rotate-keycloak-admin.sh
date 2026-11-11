@@ -6,7 +6,7 @@ set -euo pipefail
 : "${NEW_ADMIN_PASSWORD:?NEW_ADMIN_PASSWORD must be set}"
 : "${KEYCLOAK_URL:?KEYCLOAK_URL must be set}"
 
-KEYCLOAK_CA_FILE=/etc/keycloak/ca/ca.crt
+KEYCLOAK_CA_FILE="${KEYCLOAK_CA_FILE:-/etc/keycloak/ca/ca.crt}"
 keycloak_curl() {
     curl --cacert "${KEYCLOAK_CA_FILE}" --fail --silent --show-error "$@"
 }

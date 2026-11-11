@@ -179,9 +179,10 @@ def test_get_storage_class_for_tier_fallback_uses_target_tenant(monkeypatch: pyt
 
     hub_client = K8sClient(namespace="osac-devel", kubeconfig="/tmp/hub-kubeconfig")
     virt_client = K8sClient(namespace="osac-devel", kubeconfig="/tmp/virt-kubeconfig")
-    assert hub_client.get_storage_class_for_tier(
-        tier_name="gold", tenant_name="tenant1", storage_class_client=virt_client
-    ) == "tenant-gold-sc"
+    assert (
+        hub_client.get_storage_class_for_tier(tier_name="gold", tenant_name="tenant1", storage_class_client=virt_client)
+        == "tenant-gold-sc"
+    )
     assert (
         "kubectl",
         "--kubeconfig",

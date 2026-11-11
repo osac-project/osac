@@ -112,6 +112,8 @@ def check_database(pod: dict[str, Any], label: str, *, kind_profile: bool) -> No
     assert "runAsUser" not in server.get("securityContext", {}), (
         f"{label} database server must keep its image UID for existing PVC data"
     )
+    server_env = {entry["name"]: entry.get("value") for entry in server.get("env", [])}
+    assert server_env.get("HOME") == "/tmp", f"{label} database scratch files must use the writable /tmp volume"
     assert_mount(server, "data", "/var/lib/pgsql/data")
     assert_mount(server, "postgres-run", "/var/run/postgresql")
     assert_mount(server, "tmp", "/tmp")

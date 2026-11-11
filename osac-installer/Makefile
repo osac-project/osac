@@ -677,52 +677,81 @@ endif
 .PHONY: install-dry-run
 install-dry-run: helm-deps validate-osac-chart-oci-ref ## Render every release in make install without connecting to a cluster
 ifeq ($(PLATFORM),kind)
-	helm template cert-manager oci://quay.io/jetstack/charts/cert-manager \
-		--version v1.20.0 --namespace cert-manager \
-		--set crds.enabled=true
-	helm template trust-manager oci://quay.io/jetstack/charts/trust-manager \
-		--version v0.22.0 --namespace cert-manager \
-		--set defaultPackage.enabled=false
-	helm template envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
-		--version v1.6.5 --namespace envoy-gateway
-	helm template strimzi-cluster-operator oci://quay.io/strimzi-helm/strimzi-kafka-operator \
-		--version 1.1.0 --namespace osac-kafka
-	helm template osac-infra $(INFRA_CHART) \
-		--namespace osac-infra \
-		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
-		--set osacNamespace=$(NS) \
-		$(OIDC_IDP_CA_HELM_ARGS) \
-		$(KEYCLOAK_HELM_ARGS)
+	@set -euo pipefail; \
+		render_file="$$(mktemp "$${TMPDIR:-/tmp}/osac-install-kind-render.XXXXXX")"; \
+		chmod 600 "$$render_file"; \
+		if { \
+			helm template cert-manager oci://quay.io/jetstack/charts/cert-manager \
+				--version v1.20.0 --namespace cert-manager \
+				--set crds.enabled=true && \
+			helm template trust-manager oci://quay.io/jetstack/charts/trust-manager \
+				--version v0.22.0 --namespace cert-manager \
+				--set defaultPackage.enabled=false && \
+			helm template envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
+				--version v1.6.5 --namespace envoy-gateway && \
+			helm template strimzi-cluster-operator oci://quay.io/strimzi-helm/strimzi-kafka-operator \
+				--version 1.1.0 --namespace osac-kafka && \
+				helm template osac-infra $(INFRA_CHART) \
+				--namespace osac-infra \
+				-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
+				--set osacNamespace=$(NS) \
+				$(OIDC_IDP_CA_HELM_ARGS) \
+				$(KEYCLOAK_HELM_ARGS) && \
+			helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+				-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
+				--namespace $(NS) \
+				--set-string global.osacDeploymentId=$(NS)/osac \
+				$(EXTRA_HELM_ARGS) && \
+			{ [ "$(PROFILE)" != "dev-full" ] || { \
+				helm dependency build charts/osac-devstack >/dev/null && \
+				helm template osac-devstack charts/osac-devstack \
+					--namespace $(NS) \
+					--set osacNamespace=$(NS) \
+					--set kindClusterName=$(KIND_CLUSTER_NAME) \
+					--set ui.enabled=true; \
+			}; }; \
+		} > "$$render_file" 2>&1; then \
+			printf 'Rendered manifests (including Secrets) to %s\n' "$$render_file"; \
+		else \
+			printf 'Dry-run rendering failed; protected diagnostics are at %s\n' "$$render_file" >&2; \
+			exit 1; \
+		fi
 else
-	helm template osac-deps $(DEPS_CHART) \
-		--namespace osac-deps \
-		--values $(INFRA_VALUES) \
-		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION)
-	helm template osac-infra $(INFRA_CHART) \
-		--namespace osac-infra \
-		--values $(INFRA_VALUES) \
-		--set osacNamespace=$(NS) \
-		--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION) \
-		--set keycloak.hostname=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
-		--set keycloak.route.hostname=keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
-		--set keycloak.uiUrl=https://osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) \
-		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac" \
-		$(OIDC_IDP_CA_HELM_ARGS) \
-		$(KEYCLOAK_HELM_ARGS)
-endif
-	helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
-		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
-		--namespace $(NS) \
-		--set-string global.osacDeploymentId=$(NS)/osac \
-		$(if $(filter openshift,$(PLATFORM)),--set service.externalHostname=fulfillment-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set global.clusterDomain=$(DRY_RUN_CLUSTER_DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac --set ui.externalHostname=osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN)) \
-		$(EXTRA_HELM_ARGS)
-ifeq ($(PROFILE),dev-full)
-	helm dependency build charts/osac-devstack
-	helm template osac-devstack charts/osac-devstack \
-		--namespace $(NS) \
-		--set osacNamespace=$(NS) \
-		--set kindClusterName=$(KIND_CLUSTER_NAME) \
-		--set ui.enabled=true
+	@set -euo pipefail; \
+		render_file="$$(mktemp "$${TMPDIR:-/tmp}/osac-install-openshift-render.XXXXXX")"; \
+		chmod 600 "$$render_file"; \
+		if { \
+			helm template osac-deps $(DEPS_CHART) \
+				--namespace osac-deps \
+				--values $(INFRA_VALUES) \
+				--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION) && \
+			helm template osac-infra $(INFRA_CHART) \
+				--namespace osac-infra \
+				--values $(INFRA_VALUES) \
+				--set osacNamespace=$(NS) \
+				--set lvms.channel=stable-$(DRY_RUN_OCP_VERSION) \
+				--set keycloak.hostname=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
+				--set keycloak.route.hostname=keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
+				--set keycloak.uiUrl=https://osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) \
+				--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac" \
+				$(OIDC_IDP_CA_HELM_ARGS) \
+				$(KEYCLOAK_HELM_ARGS) && \
+				helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+				-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
+				--namespace $(NS) \
+				--set-string global.osacDeploymentId=$(NS)/osac \
+				--set service.externalHostname=fulfillment-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) \
+				--set service.internalHostname=fulfillment-internal-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) \
+				--set global.clusterDomain=$(DRY_RUN_CLUSTER_DOMAIN) \
+				--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac \
+				--set ui.externalHostname=osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) \
+				$(EXTRA_HELM_ARGS); \
+		} > "$$render_file" 2>&1; then \
+			printf 'Rendered manifests (including Secrets) to %s\n' "$$render_file"; \
+		else \
+			printf 'Dry-run rendering failed; protected diagnostics are at %s\n' "$$render_file" >&2; \
+			exit 1; \
+		fi
 endif
 
 .PHONY: install-multicluster
@@ -894,14 +923,22 @@ helm-lint: helm-deps helm-infra-deps ## Lint all charts
 	helm lint $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 .PHONY: helm-template
-helm-template: helm-infra-deps ## Dry-run render all templates
-	helm template osac-deps $(DEPS_CHART)
-# This render-only value satisfies the chart's required admin password without
-# writing rendered Keycloak Secrets to the terminal or CI logs.
-	@helm template osac-infra $(INFRA_CHART) \
-		--set-string keycloak.adminPassword=helm-template-only \
-		$(KEYCLOAK_HELM_ARGS) >/dev/null
-	helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
+helm-template: helm-infra-deps ## Render all templates to a protected temporary file
+	@set -euo pipefail; \
+		render_file="$$(mktemp "$${TMPDIR:-/tmp}/osac-helm-template-render.XXXXXX")"; \
+		chmod 600 "$$render_file"; \
+		if { \
+			helm template osac-deps $(DEPS_CHART) && \
+			helm template osac-infra $(INFRA_CHART) \
+				--set keycloak.devFixtures.enabled=true \
+				$(KEYCLOAK_HELM_ARGS) && \
+			helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES); \
+		} > "$$render_file" 2>&1; then \
+			printf 'Rendered manifests (including Secrets) to %s\n' "$$render_file"; \
+		else \
+			printf 'Helm template failed; protected diagnostics are at %s\n' "$$render_file" >&2; \
+			exit 1; \
+		fi
 
 # Schema-error patterns accept Helm 3 dotted paths and Helm 4 JSON pointers.
 .PHONY: csi-render-test

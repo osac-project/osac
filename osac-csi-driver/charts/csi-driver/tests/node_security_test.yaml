@@ -8,6 +8,12 @@ tests:
           path: spec.template.spec.containers[0].securityContext.privileged
           value: false
       - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 1001
+      - equal:
           path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
           value: false
       - equal:
@@ -17,14 +23,45 @@ tests:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           value:
             - ALL
-      - contains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: kubelet-dir
-            mountPath: /var/lib/kubelet
-            readOnly: true
       - notContains:
           path: spec.template.spec.containers[0].volumeMounts
           content:
             name: kubelet-dir
-            mountPropagation: Bidirectional
+            mountPath: /var/lib/kubelet
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: kubelet-dir
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: prepare-osac-socket-dir
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.privileged
+          value: false
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.runAsUser
+          value: 0
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.capabilities.add
+          value:
+            - CHOWN
+            - FOWNER
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.capabilities.drop
+          value:
+            - ALL
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: osac-socket-dir
+            mountPath: /csi/osac
+      - notContains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: kubelet-dir

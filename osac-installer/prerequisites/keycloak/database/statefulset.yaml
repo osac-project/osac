@@ -98,6 +98,8 @@ spec:
               key: POSTGRES_PASSWORD
         - name: POSTGRESQL_DATABASE
           value: keycloak
+        - name: HOME
+          value: /tmp
         volumeMounts:
         - name: data
           mountPath: /var/lib/pgsql/data

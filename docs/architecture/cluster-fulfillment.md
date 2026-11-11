@@ -148,7 +148,7 @@ When a ClusterOrder is created or updated, the controller performs these steps:
 2. **Infrastructure Preparation**: Creates prerequisite Kubernetes objects:
    - **Namespace**: A dedicated namespace for the cluster (named after the cluster ID)
    - **ServiceAccount**: Identity for cluster-related automation
-   - **RoleBindings**: RBAC permissions for the service account to manage cluster resources
+   - **RoleBindings**: RBAC permissions for the service account to manage cluster resources. The operator's fail-closed admission webhook permits its built-in `admin` binding only for an existing ClusterOrder's generated namespace and the fixed `osac` ServiceAccount.
 
 3. **AAP Job Launch**: Launches the cluster provisioning workflow template via the AAP REST API:
    - The template receives the complete ClusterOrder specification in `ansible_eda.event.payload` format.

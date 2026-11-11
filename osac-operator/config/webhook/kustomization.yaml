@@ -1,0 +1,59 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: osac-devel
+resources:
+- certificate.yaml
+- service.yaml
+- validatingwebhookconfiguration.yaml
+replacements:
+- source:
+    kind: Service
+    name: osac-operator-clusterorder-rbac
+    fieldPath: metadata.namespace
+  targets:
+  - select:
+      kind: ValidatingWebhookConfiguration
+      name: osac-operator-clusterorder-rbac-webhook
+    fieldPaths:
+    - webhooks.[name=clusterorder-admin-rolebinding.osac.openshift.io].clientConfig.service.namespace
+- source:
+    kind: Service
+    name: osac-operator-clusterorder-rbac
+    fieldPath: metadata.namespace
+  targets:
+  - select:
+      kind: ValidatingWebhookConfiguration
+      name: osac-operator-clusterorder-rbac-webhook
+    fieldPaths:
+    - metadata.annotations.[cert-manager.io/inject-ca-from]
+    options:
+      delimiter: "/"
+      index: 0
+- source:
+    kind: Service
+    name: osac-operator-clusterorder-rbac
+    fieldPath: metadata.namespace
+  targets:
+  - select:
+      kind: ValidatingWebhookConfiguration
+      name: osac-operator-clusterorder-rbac-webhook
+    fieldPaths:
+    - webhooks.[name=clusterorder-admin-rolebinding.osac.openshift.io].matchConditions.[name=osac-serviceaccounts-in-manager-namespace].expression
+    options:
+      delimiter: ":"
+      index: 2
+- source:
+    kind: Service
+    name: osac-operator-clusterorder-rbac
+    fieldPath: metadata.namespace
+  targets:
+  - select:
+      kind: Certificate
+      name: osac-operator-clusterorder-rbac
+    fieldPaths:
+    - spec.dnsNames.1
+    - spec.dnsNames.2
+    - spec.dnsNames.3
+    options:
+      delimiter: "."
+      index: 1

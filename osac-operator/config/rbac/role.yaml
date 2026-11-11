@@ -149,21 +149,8 @@ rules:
   - osac.openshift.io
   resources:
   - clusterorders
-  - computeinstances
-  - externalipattachments
-  - externalippools
-  - externalips
-  - fabricdomains
-  - natgateways
-  - networkattachments
-  - securitygroups
-  - subnets
-  - tenants
-  - virtualnetworks
-  - volumes
+  - networkclasses
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
@@ -193,8 +180,21 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
-  - networkclasses
+  - computeinstances
+  - externalipattachments
+  - externalippools
+  - externalips
+  - fabricdomains
+  - natgateways
+  - networkattachments
+  - securitygroups
+  - subnets
+  - tenants
+  - virtualnetworks
+  - volumes
   verbs:
+  - create
+  - delete
   - get
   - list
   - patch

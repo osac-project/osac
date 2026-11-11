@@ -158,7 +158,6 @@ rules:
   - osac.openshift.io
   resources:
   - baremetalinstances
-  - clusterorders
   - computeinstances
   - externalipattachments
   - externalippools
@@ -173,6 +172,16 @@ rules:
   verbs:
   - create
   - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - osac.openshift.io
+  resources:
+  - clusterorders
+  verbs:
   - get
   - list
   - patch
@@ -264,6 +273,7 @@ rules:
   - get
   - patch
   - update
+{{- if eq (include "osac-operator.controllerEnabled" (list . "clusterOrder" "caas")) "true" }}
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
@@ -283,6 +293,7 @@ rules:
   - admin
   verbs:
   - bind
+{{- end }}
 - apiGroups:
   - storage.k8s.io
   resources:

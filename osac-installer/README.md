@@ -189,8 +189,11 @@ To preview the full Kind install without making cluster changes:
 make install PLATFORM=kind PROFILE=dev NS=osac DRY_RUN=1
 ```
 
-The Kind profile generates random Keycloak credentials for the render. The
-dry-run output includes the rendered Secret; treat it as sensitive.
+The Kind profile generates random Keycloak credentials for the render. All
+rendered manifests, including Secrets, are written to a temporary file with
+mode `0600`; the terminal prints only its path. Treat the file as
+sensitive and remove it when finished. For production values, pass the Keycloak
+password with `KEYCLOAK_HELM_ARGS="--set-file keycloak.adminPassword=/secure/path"`.
 
 For OpenShift, provide the cluster-specific values explicitly because dry-run
 mode does not query the cluster:
@@ -203,9 +206,11 @@ make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac DRY_RUN=1 \
 `DRY_RUN=1` routes the composite target through `helm template` for every
 release. It skips Kind cluster creation, `oc`/`kubectl` operations, and the
 dev-full host setup script. Since `helm template` does not connect to a cluster,
-no Kubernetes resources are changed. The generated manifests are printed to
-the terminal; `EXTRA_HELM_ARGS` still applies to the OSAC chart. Do not include a
-Helm `--dry-run` flag in `EXTRA_HELM_ARGS`; rendering is intrinsic to this mode.
+no Kubernetes resources are changed. All rendered manifests are written to a
+mode-`0600` temporary file so Secret data is not printed; the terminal shows
+only the file path. Treat the file as sensitive and remove it when finished.
+`EXTRA_HELM_ARGS` still applies to the OSAC chart. Do not include a Helm
+`--dry-run` flag in `EXTRA_HELM_ARGS`; rendering is intrinsic to this mode.
 
 #### Two-cluster VMaaS installation (OpenShift)
 
@@ -770,7 +775,7 @@ make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage # API/operator disk handoff
 make helm-lint                                       # Lint all charts
-make helm-template       # Dry-run render all templates
+make helm-template       # Render all templates to a protected temporary file
 make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)

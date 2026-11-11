@@ -120,22 +120,24 @@ sys.exit(1)
 }
 
 assert_secret_role_scope() {
-    local render="$1" role_name="$2" readable_secret="$3" description="$4"
+    local render="$1" role_name="$2" readable_secret="$3" description="$4" patchable_secret="${5:-}"
     python3 -c "
 import sys, yaml
-role_name, readable_secret = sys.argv[1:3]
+role_name, readable_secret, patchable_secret = sys.argv[1:4]
 for doc in yaml.safe_load_all(sys.stdin.read()):
     if not doc or doc.get('kind') != 'Role' or doc.get('metadata', {}).get('name') != role_name:
         continue
     rules = doc.get('rules', [])
     get_rules = [rule for rule in rules if 'get' in rule.get('verbs', [])]
     create_rules = [rule for rule in rules if 'create' in rule.get('verbs', [])]
+    patch_rules = [rule for rule in rules if 'patch' in rule.get('verbs', [])]
+    expected_access_verbs = ['get', 'patch'] if patchable_secret else ['get']
     scoped_get = (
         len(get_rules) == 1
         and get_rules[0].get('apiGroups') == ['']
         and get_rules[0].get('resources') == ['secrets']
         and get_rules[0].get('resourceNames') == [readable_secret]
-        and get_rules[0].get('verbs') == ['get']
+        and get_rules[0].get('verbs') == expected_access_verbs
     )
     create_secret = (
         len(create_rules) == 1
@@ -144,9 +146,15 @@ for doc in yaml.safe_load_all(sys.stdin.read()):
         and create_rules[0].get('verbs') == ['create']
         and 'resourceNames' not in create_rules[0]
     )
-    sys.exit(0 if scoped_get and create_secret else 1)
+    scoped_patch = (
+        len(patch_rules) == 1
+        and patchable_secret != ''
+        and patch_rules[0] is get_rules[0]
+        and patch_rules[0].get('resourceNames') == [patchable_secret]
+    ) if patchable_secret else len(patch_rules) == 0
+    sys.exit(0 if scoped_get and create_secret and scoped_patch else 1)
 sys.exit(1)
-" "${role_name}" "${readable_secret}" <<<"${render}" || fail "${description}"
+" "${role_name}" "${readable_secret}" "${patchable_secret}" <<<"${render}" || fail "${description}"
 }
 
 assert_keycloak_ca_mount() {
@@ -256,15 +264,18 @@ OVERRIDE_RENDER=$(helm template "${CHART_DIR}" \
 assert_contains "${OVERRIDE_RENDER}" 'admin-username: "demo-admin"' "Overridden admin-username in Secret"
 assert_contains "${OVERRIDE_RENDER}" "admin-password: \"${TEST_ADMIN_PASSWORD}\"" "Overridden admin-password in Secret"
 assert_contains "${OVERRIDE_RENDER}" "default-user-password: \"${TEST_DEFAULT_USER_PASSWORD}\"" "Overridden default-user-password in Secret"
-assert_secret_key_ref "${OVERRIDE_RENDER}" Deployment keycloak-service keycloak KEYCLOAK_ADMIN keycloak-admin-credentials admin-username "Deployment's KEYCLOAK_ADMIN must source from keycloak-admin-credentials/admin-username"
-assert_secret_key_ref "${OVERRIDE_RENDER}" Deployment keycloak-service keycloak KEYCLOAK_ADMIN_PASSWORD keycloak-admin-credentials admin-password "Deployment's KEYCLOAK_ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
+assert_secret_key_ref "${OVERRIDE_RENDER}" Deployment keycloak-service keycloak KC_BOOTSTRAP_ADMIN_USERNAME keycloak-admin-credentials admin-username "Deployment's KC_BOOTSTRAP_ADMIN_USERNAME must source from keycloak-admin-credentials/admin-username"
+assert_secret_key_ref "${OVERRIDE_RENDER}" Deployment keycloak-service keycloak KC_BOOTSTRAP_ADMIN_PASSWORD keycloak-admin-credentials admin-password "Deployment's KC_BOOTSTRAP_ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
+assert_not_contains "${OVERRIDE_RENDER}" '- name: KEYCLOAK_ADMIN' "Deployment must use the current KC_BOOTSTRAP_ADMIN_USERNAME option"
+assert_not_contains "${OVERRIDE_RENDER}" '- name: KEYCLOAK_ADMIN_PASSWORD' "Deployment must use the current KC_BOOTSTRAP_ADMIN_PASSWORD option"
 assert_secret_key_ref "${OVERRIDE_RENDER}" Deployment keycloak-service resolve-realm-secrets REALM_ADMIN_USERNAME keycloak-admin-credentials admin-username "resolve-realm-secrets init container's REALM_ADMIN_USERNAME must source from the Secret"
 assert_secret_key_ref "${OVERRIDE_RENDER}" Deployment keycloak-service resolve-realm-secrets REALM_ADMIN_PASSWORD keycloak-admin-credentials admin-password "resolve-realm-secrets init container's REALM_ADMIN_PASSWORD must source from the Secret"
 assert_secret_key_ref "${OVERRIDE_RENDER}" Job keycloak-set-passwords set-passwords ADMIN_USERNAME keycloak-admin-credentials admin-username "keycloak-set-passwords Job's ADMIN_USERNAME must source from the Secret"
 assert_secret_key_ref "${OVERRIDE_RENDER}" Job keycloak-set-passwords set-passwords ADMIN_PASSWORD keycloak-admin-credentials admin-password "keycloak-set-passwords Job's ADMIN_PASSWORD must source from the Secret"
 assert_secret_key_ref "${OVERRIDE_RENDER}" Job keycloak-set-passwords set-passwords DEFAULT_USER_PASSWORD keycloak-admin-credentials default-user-password "keycloak-set-passwords Job's DEFAULT_USER_PASSWORD must source from the Secret"
 assert_secret_role_scope "${OVERRIDE_RENDER}" keycloak-database keycloak-database-password "Database Secret reads must be name-scoped; create remains required for bootstrap"
-assert_secret_role_scope "${OVERRIDE_RENDER}" keycloak-service keycloak-client-secrets "Keycloak client Secret reads must remain name-scoped"
+assert_secret_role_scope "${OVERRIDE_RENDER}" keycloak-service keycloak-client-secrets \
+    "Keycloak client Secret reads and upgrades must remain name-scoped" keycloak-client-secrets
 assert_keycloak_tls_certificate_contract "${OVERRIDE_RENDER}" "Keycloak internal TLS must use the default CA and include the keycloak service DNS name"
 assert_container_security_context "${OVERRIDE_RENDER}" StatefulSet keycloak-database password-generator "Database password generator must use restricted container settings"
 assert_container_security_context "${OVERRIDE_RENDER}" StatefulSet keycloak-database server "Keycloak database must run non-root with restricted container settings"
@@ -366,6 +377,64 @@ sys.exit(0 if decoded == os.environ['EXPECTED_REALM_PASSWORD'] else 1)
 else
     fail "resolve-realm-secrets.sh did not produce ${TMP_DIR}/realm-resolved.json"
 fi
+
+echo "=== Test 6b: existing client Secret upgrades add missing keys ==="
+
+PATCH_STATE="${TMP_DIR}/patched-client-secret-keys"
+PATCH_LOG="${TMP_DIR}/client-secret-patches.log"
+mkdir -p "${TMP_DIR}/upgrade-bin"
+cat >"${TMP_DIR}/upgrade-bin/oc" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+args="$*"
+if [[ "${args}" == *"patch secret keycloak-client-secrets"* ]]; then
+    case "${args}" in
+        *osac-csi-driver*) key=osac-csi-driver ;;
+        *osac-ui-backend*) key=osac-ui-backend ;;
+        *osac-mcp-exchange*) key=osac-mcp-exchange ;;
+        *) exit 2 ;;
+    esac
+    printf '%s\n' "${key}" >>"${OC_PATCH_STATE}"
+    printf '%s\n' "${key}" >>"${OC_PATCH_LOG}"
+    exit 0
+fi
+if [[ "${args}" == *"get secret keycloak-client-secrets"* ]]; then
+    if [[ "${args}" != *"jsonpath="* ]]; then
+        exit 0
+    fi
+    case "${args}" in
+        *osac-controller*) printf '%s' "$(printf 'controller-secret' | base64)" ;;
+        *osac-admin*) printf '%s' "$(printf 'admin-secret' | base64)" ;;
+        *osac-csi-driver*) key=osac-csi-driver ;;
+        *osac-ui-backend*) key=osac-ui-backend ;;
+        *osac-mcp-exchange*) key=osac-mcp-exchange ;;
+        *) exit 2 ;;
+    esac
+    if [[ "${key:-}" != "" ]] && [[ -f "${OC_PATCH_STATE}" ]] && grep -qx "${key}" "${OC_PATCH_STATE}"; then
+        printf '%s' "$(printf '%s' "${key}-secret" | base64)"
+    fi
+    exit 0
+fi
+exit 0
+EOF
+chmod +x "${TMP_DIR}/upgrade-bin/oc"
+
+PATH="${TMP_DIR}/upgrade-bin:${TMP_DIR}/bin:${PATH}" \
+OC_PATCH_STATE="${PATCH_STATE}" \
+OC_PATCH_LOG="${PATCH_LOG}" \
+REALM_RAW_PATH="${TMP_DIR}/realm-raw.json" \
+REALM_OUTPUT_PATH="${TMP_DIR}/realm-upgraded.json" \
+REALM_ADMIN_USERNAME="demo-admin" \
+REALM_ADMIN_PASSWORD="${SPECIAL_REALM_PASSWORD}" \
+OSAC_UI_URL="https://osac-ui-osac.apps.example.com" \
+    bash "${CHART_DIR}/files/hooks/resolve-realm-secrets.sh" >/dev/null 2>&1 || {
+        fail "resolve-realm-secrets.sh failed to add missing keys to an existing Secret"
+    }
+for key in osac-csi-driver osac-ui-backend osac-mcp-exchange; do
+    if ! grep -qx "${key}" "${PATCH_STATE}"; then
+        fail "Existing client Secret upgrade did not patch ${key}"
+    fi
+done
 
 echo "=== Test 7: dev fixture requests verify TLS and reset-password JSON handles special chars ==="
 # Extracts and executes the ACTUAL embedded set-passwords.sh scripts (not a
@@ -491,7 +560,8 @@ assert_container_security_context "${STATIC_PASSWORD_JOB}" Job keycloak-set-pass
 STATIC_DATABASE_RBAC=$(<"${SCRIPT_DIR}/../prerequisites/keycloak/database/rbac.yaml")
 STATIC_SERVICE_RBAC=$(<"${SCRIPT_DIR}/../prerequisites/keycloak/service/rbac.yaml")
 assert_secret_role_scope "${STATIC_DATABASE_RBAC}" keycloak-database keycloak-database-password "Static database Role must scope Secret reads to its generated password"
-assert_secret_role_scope "${STATIC_SERVICE_RBAC}" keycloak-service keycloak-client-secrets "Static service Role must scope Secret reads to its generated client credentials"
+assert_secret_role_scope "${STATIC_SERVICE_RBAC}" keycloak-service keycloak-client-secrets \
+    "Static service Role must scope Secret reads and upgrades to its generated client credentials" keycloak-client-secrets
 
 STATIC_DATABASE_STATEFULSET=$(<"${SCRIPT_DIR}/../prerequisites/keycloak/database/statefulset.yaml")
 assert_container_security_context "${STATIC_DATABASE_STATEFULSET}" StatefulSet keycloak-database password-generator "Static database password generator must use restricted container settings"
@@ -569,11 +639,13 @@ echo "=== Test 9: static deployment.yaml sources credentials via secretKeyRef, n
 # Structural checks per env var (assert_secret_key_ref), not a substring
 # search: "name: keycloak-admin-credentials" appearing *somewhere* in the
 # file doesn't prove any specific env var points at the right secret/key --
-# e.g. KEYCLOAK_ADMIN could be wired to the wrong key and this would have
-# still passed under the old string-based check.
+# e.g. KC_BOOTSTRAP_ADMIN_USERNAME could be wired to the wrong key and this
+# would still pass under the old string-based check.
 STATIC_DEPLOYMENT=$(cat "${SCRIPT_DIR}/../prerequisites/keycloak/service/deployment.yaml")
-assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service keycloak KEYCLOAK_ADMIN keycloak-admin-credentials admin-username "Static deployment.yaml's KEYCLOAK_ADMIN must source from keycloak-admin-credentials/admin-username"
-assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service keycloak KEYCLOAK_ADMIN_PASSWORD keycloak-admin-credentials admin-password "Static deployment.yaml's KEYCLOAK_ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
+assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service keycloak KC_BOOTSTRAP_ADMIN_USERNAME keycloak-admin-credentials admin-username "Static deployment.yaml's KC_BOOTSTRAP_ADMIN_USERNAME must source from keycloak-admin-credentials/admin-username"
+assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service keycloak KC_BOOTSTRAP_ADMIN_PASSWORD keycloak-admin-credentials admin-password "Static deployment.yaml's KC_BOOTSTRAP_ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
+assert_not_contains "${STATIC_DEPLOYMENT}" '- name: KEYCLOAK_ADMIN' "Static deployment must use the current KC_BOOTSTRAP_ADMIN_USERNAME option"
+assert_not_contains "${STATIC_DEPLOYMENT}" '- name: KEYCLOAK_ADMIN_PASSWORD' "Static deployment must use the current KC_BOOTSTRAP_ADMIN_PASSWORD option"
 assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service resolve-realm-secrets REALM_ADMIN_USERNAME keycloak-admin-credentials admin-username "Static deployment.yaml's REALM_ADMIN_USERNAME must source from keycloak-admin-credentials/admin-username"
 assert_secret_key_ref "${STATIC_DEPLOYMENT}" Deployment keycloak-service resolve-realm-secrets REALM_ADMIN_PASSWORD keycloak-admin-credentials admin-password "Static deployment.yaml's REALM_ADMIN_PASSWORD must source from keycloak-admin-credentials/admin-password"
 assert_container_security_context "${STATIC_DEPLOYMENT}" Deployment keycloak-service wait-for-database "Static database wait container must use restricted container settings"

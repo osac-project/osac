@@ -117,6 +117,9 @@ func TestManagerDoesNotDeleteServiceAccountsOrRoleBindings(t *testing.T) {
 				t.Errorf("ClusterRole at %s grants %v on %s.%s, want %v",
 					target.path, got, rule.apiGroup, rule.resource, want)
 			}
+			if clusterRoleGrantsAnyName(role, rule.apiGroup, rule.resource, "delete") {
+				t.Errorf("ClusterRole at %s grants delete on %s.%s", target.path, rule.apiGroup, rule.resource)
+			}
 		}
 	}
 }
@@ -146,13 +149,75 @@ func TestManagerCanBindOnlyTheAdminClusterRole(t *testing.T) {
 
 		var bindRules []policyRule
 		for _, rule := range role.Rules {
-			if clusterRoleRuleGrants(rule, "rbac.authorization.k8s.io", "clusterroles", "bind") {
+			if clusterRoleRuleGrantsAnyName(rule, "rbac.authorization.k8s.io", "clusterroles", "bind") {
 				bindRules = append(bindRules, rule)
 			}
 		}
 		if !reflect.DeepEqual(bindRules, []policyRule{want}) {
 			t.Errorf("ClusterRole at %s grants bind via %v, want only %v", target.path, bindRules, want)
 		}
+	}
+}
+
+func TestManagerCannotCreateOrDeleteClusterOrders(t *testing.T) {
+	targets := []struct {
+		path string
+		helm bool
+	}{
+		{path: filepath.Join(repoRoot(), "osac-operator/config/rbac/role.yaml")},
+		{path: filepath.Join(repoRoot(), "osac-operator/charts/operator/templates/clusterrole.yaml"), helm: true},
+	}
+	want := []string{"get", "list", "patch", "update", "watch"}
+
+	for _, target := range targets {
+		var role clusterRole
+		if target.helm {
+			role = loadHelmClusterRoleTemplate(t, target.path)
+		} else {
+			role = loadClusterRoleFile(t, target.path)
+		}
+		verbs, found := clusterRoleRuleVerbs(role, "osac.openshift.io", "clusterorders")
+		sort.Strings(verbs)
+		if !found || !reflect.DeepEqual(verbs, want) {
+			t.Errorf("ClusterRole at %s grants ClusterOrder verbs %v, found=%t; want %v",
+				target.path, verbs, found, want)
+		}
+		if clusterRoleGrantsAnyName(role, "osac.openshift.io", "clusterorders", "create") ||
+			clusterRoleGrantsAnyName(role, "osac.openshift.io", "clusterorders", "delete") {
+			t.Errorf("ClusterRole at %s can create or delete ClusterOrders", target.path)
+		}
+	}
+}
+
+func TestClusterRoleRuleResourceNamesAreMatchedPrecisely(t *testing.T) {
+	rule := policyRule{
+		APIGroups:     []string{""},
+		Resources:     []string{"secrets"},
+		ResourceNames: []string{"bootstrap"},
+		Verbs:         []string{"create", "get"},
+	}
+	role := clusterRole{Rules: []policyRule{rule}}
+
+	if verbs, found := clusterRoleRuleVerbs(role, "", "secrets"); found || len(verbs) != 0 {
+		t.Fatalf("name-restricted rule granted broad verbs %v, found=%t", verbs, found)
+	}
+	if !clusterRoleRuleMatchesForName(rule, "", "secrets", "bootstrap") {
+		t.Fatal("rule did not match its named Secret")
+	}
+	if clusterRoleRuleMatchesForName(rule, "", "secrets", "other") {
+		t.Fatal("rule matched a different Secret name")
+	}
+	if clusterRoleRuleGrantsForName(rule, "", "secrets", "bootstrap", "create") {
+		t.Fatal("resourceNames-restricted create was treated as a grant")
+	}
+	if !clusterRoleRuleGrantsForName(rule, "", "secrets", "bootstrap", "get") {
+		t.Fatal("rule did not grant get for its named Secret")
+	}
+	if !clusterRoleRuleGrantsAnyName(rule, "", "secrets", "get") {
+		t.Fatal("name-restricted get was not detected for an any-name permission check")
+	}
+	if clusterRoleRuleGrantsAnyName(rule, "", "secrets", "create") {
+		t.Fatal("resourceNames-restricted create was treated as a grant")
 	}
 }
 

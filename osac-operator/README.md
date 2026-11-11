@@ -186,6 +186,17 @@ enabled.
 - `OSAC_ENABLE_BAREMETAL_INSTANCE_CONTROLLER` — enable BareMetalInstance
   controller (truthy/falsy).
 
+When the ClusterOrder controller is enabled, the Helm chart also installs a
+fail-closed RoleBinding admission webhook. The operator manager may bind the
+built-in `admin` ClusterRole only to the fixed `osac` ServiceAccount in the
+generated namespace of an existing, managed ClusterOrder. The webhook uses a
+cert-manager-issued service certificate; the chart scopes admission matching to
+the operator manager identity. The chart supplies the manager namespace and
+ServiceAccount identity through the Downward API and mounts the webhook
+certificate. For a legacy non-Helm deployment, use the staged resources and
+Deployment patch in [`config/webhook/README.md`](config/webhook/README.md); apply
+the generated RBAC only after the webhook certificate is ready.
+
 ### Fulfillment trust reconciliation
 
 `OSAC_ENABLE_FULFILLMENT_TRUST_RECONCILER` registers the additional

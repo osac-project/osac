@@ -665,7 +665,10 @@ fixtures, which generate random credentials on first install and reuse the
 `keycloak/keycloak-admin-credentials` Secret during upgrades. For production,
 keep the admin password in a protected local overlay or provide a password file
 with `KEYCLOAK_HELM_ARGS`; do not put real passwords in tracked profile values.
-A dry-run render includes the resulting Secret and must be handled as sensitive.
+In `DRY_RUN=1`, the installer writes all rendered manifests, including Secret
+data, to a mode-`0600` temporary file and prints only its path. Treat the file as
+sensitive and remove it when finished; Secret data is not printed to the
+terminal.
 
 ## EVPN host networking (VMaaS)
 

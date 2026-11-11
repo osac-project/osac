@@ -105,14 +105,21 @@ func loadHelmRBACDocuments(t *testing.T, path string) []rbacDocument {
 }
 
 func clusterRoleRuleVerbs(role clusterRole, apiGroup, resource string) ([]string, bool) {
+	return clusterRoleRuleVerbsForName(role, apiGroup, resource, "")
+}
+
+func clusterRoleRuleVerbsForName(role clusterRole, apiGroup, resource, resourceName string) ([]string, bool) {
 	verbSet := make(map[string]struct{})
 	found := false
 	for _, rule := range role.Rules {
-		if !clusterRoleRuleMatches(rule, apiGroup, resource) {
+		if !clusterRoleRuleMatchesForName(rule, apiGroup, resource, resourceName) {
 			continue
 		}
 		found = true
 		for _, verb := range rule.Verbs {
+			if verb == "create" && len(rule.ResourceNames) > 0 {
+				continue
+			}
 			verbSet[verb] = struct{}{}
 		}
 	}
@@ -124,12 +131,41 @@ func clusterRoleRuleVerbs(role clusterRole, apiGroup, resource string) ([]string
 	return verbs, found
 }
 
-func clusterRoleRuleMatches(rule policyRule, apiGroup, resource string) bool {
+func clusterRoleRuleMatchesForName(rule policyRule, apiGroup, resource, resourceName string) bool {
+	return clusterRoleRuleMatchesResource(rule, apiGroup, resource) &&
+		(len(rule.ResourceNames) == 0 || (resourceName != "" && slices.Contains(rule.ResourceNames, resourceName)))
+}
+
+func clusterRoleRuleMatchesResource(rule policyRule, apiGroup, resource string) bool {
 	return (slices.Contains(rule.APIGroups, apiGroup) || slices.Contains(rule.APIGroups, "*")) &&
 		(slices.Contains(rule.Resources, resource) || slices.Contains(rule.Resources, "*"))
 }
 
-func clusterRoleRuleGrants(rule policyRule, apiGroup, resource, verb string) bool {
-	return clusterRoleRuleMatches(rule, apiGroup, resource) &&
-		(slices.Contains(rule.Verbs, verb) || slices.Contains(rule.Verbs, "*"))
+func clusterRoleRuleGrantsForName(rule policyRule, apiGroup, resource, resourceName, verb string) bool {
+	if !clusterRoleRuleMatchesForName(rule, apiGroup, resource, resourceName) {
+		return false
+	}
+	if verb == "create" && len(rule.ResourceNames) > 0 {
+		return false
+	}
+	return slices.Contains(rule.Verbs, verb) || slices.Contains(rule.Verbs, "*")
+}
+
+func clusterRoleRuleGrantsAnyName(rule policyRule, apiGroup, resource, verb string) bool {
+	if !clusterRoleRuleMatchesResource(rule, apiGroup, resource) {
+		return false
+	}
+	if verb == "create" && len(rule.ResourceNames) > 0 {
+		return false
+	}
+	return slices.Contains(rule.Verbs, verb) || slices.Contains(rule.Verbs, "*")
+}
+
+func clusterRoleGrantsAnyName(role clusterRole, apiGroup, resource, verb string) bool {
+	for _, rule := range role.Rules {
+		if clusterRoleRuleGrantsAnyName(rule, apiGroup, resource, verb) {
+			return true
+		}
+	}
+	return false
 }

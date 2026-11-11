@@ -40,6 +40,33 @@ spec:
         app.kubernetes.io/component: node
     spec:
       serviceAccountName: {{ include "csi-driver.nodeServiceAccountName" . }}
+      initContainers:
+        - name: prepare-osac-socket-dir
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -ec
+            - chown 1001:0 /csi/osac && chmod 0750 /csi/osac
+          volumeMounts:
+            - name: osac-socket-dir
+              mountPath: /csi/osac
+          resources:
+            {{- toYaml .Values.node.resources | nindent 12 }}
+          securityContext:
+            # The node plugin directory is a hostPath created root-owned by
+            # kubelet. This one-shot init container changes only that directory
+            # so the main proxy can run as the image's non-root UID.
+            privileged: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+            seccompProfile:
+              type: RuntimeDefault
       containers:
         - name: osac-csi-driver
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -110,9 +137,6 @@ spec:
           volumeMounts:
             - name: osac-socket-dir
               mountPath: /csi/osac
-            - name: kubelet-dir
-              mountPath: /var/lib/kubelet
-              readOnly: true
             - name: lvms-socket-dir
               mountPath: {{ .Values.node.lvmsNodeSocketDir }}
               readOnly: true
@@ -131,15 +155,14 @@ spec:
           securityContext:
             # This container only proxies CSI calls to vendor sockets; the
             # vendor node plugins own mount operations and privilege needs.
-            # The kubelet plugin directory is a hostPath and does not receive
-            # fsGroup ownership changes, so the proxy needs UID 0 to create
-            # csi.sock there. It remains unprivileged with no capabilities.
             privileged: false
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-            runAsUser: 0
 
         - name: csi-node-driver-registrar
           image: "{{ .Values.sidecars.registrar.image.repository }}:{{ .Values.sidecars.registrar.image.tag }}"
@@ -163,10 +186,6 @@ spec:
           hostPath:
             path: /var/lib/kubelet/plugins/{{ .Values.driverName }}
             type: DirectoryOrCreate
-        - name: kubelet-dir
-          hostPath:
-            path: /var/lib/kubelet
-            type: Directory
         - name: registration-dir
           hostPath:
             path: /var/lib/kubelet/plugins_registry

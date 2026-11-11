@@ -239,7 +239,7 @@ def _run_plan(runtime: Runtime, *, plan_path: Path | None, keep: bool) -> int:
     ):
         raise ConfigError([f"podman socket {runtime.podman_socket} is missing"])
 
-    facts = read_lab(runtime.config, runtime.lab)
+    facts = read_lab(runtime.config, runtime.lab, runtime.areas)
     run_id = new_run_id()
     context = RunContext(
         run_id=run_id,

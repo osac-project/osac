@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.request import Request, urlopen
 
+from tests.conformance.area import AreaDeclaration
 from tests.conformance.config import Config
 from tests.conformance.errors import ConfigError
 from tests.e2e.core.runner import run
@@ -86,7 +87,7 @@ class KubectlLabClient(HttpLabClient):
         return f"{name}-{revision}"
 
 
-def read_lab(config: Config, client: LabClient) -> LabFacts:
+def read_lab(config: Config, client: LabClient, areas: Mapping[str, AreaDeclaration] | None = None) -> LabFacts:
     try:
         token = config.lab_token_file.read_text().strip()
     except OSError as exc:
@@ -103,7 +104,14 @@ def read_lab(config: Config, client: LabClient) -> LabFacts:
     services = capabilities.get("enabled_services", [])
     if not isinstance(services, list) or any(not isinstance(item, str) for item in services):
         raise ConfigError(["Capabilities enabled_services must be a list of strings"])
-    components = tuple(
-        ComponentIdentity(area=name, fields=dict(fields)) for name, fields in sorted(registrations.items())
-    )
+    if areas:
+        components = tuple(
+            ComponentIdentity(area=area.name, fields=dict(registrations[area.registration_source]))
+            for area in sorted(areas.values(), key=lambda item: item.name)
+            if area.registration_source in registrations
+        )
+    else:
+        components = tuple(
+            ComponentIdentity(area=name, fields=dict(fields)) for name, fields in sorted(registrations.items())
+        )
     return LabFacts(enabled_services=tuple(services), components=components, installed_release=release)

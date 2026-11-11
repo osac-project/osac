@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.conformance.area import AreaDeclaration
 from tests.conformance.config import Config
 from tests.conformance.errors import ConfigError
 from tests.conformance.lab import HttpLabClient, KubectlLabClient, read_lab
@@ -118,3 +119,28 @@ def test_kubectl_client_parses_registrations_and_release(monkeypatch: pytest.Mon
     assert registrations == {"networking": {"name": "acme", "ansibleRole": "acme.fabric"}}
     assert release == "osac-7"
     assert commands
+
+
+def test_read_lab_filters_registrations_by_area_source(tmp_path: Path) -> None:
+    area = AreaDeclaration(
+        name="networking",
+        component_tests=(),
+        profiles={},
+        identity_fields=(),
+        configuration_errors=(),
+        support_condition="",
+        registration_source="networking",
+        titles={},
+        selectors={},
+        checks=(),
+        timeout_defaults={},
+        component_job_timeout="60m",
+        settings_source="",
+        evidence=(),
+        reference_components=(),
+    )
+    fake = FakeLab(registrations={"networking": {"name": "acme"}, "unrelated": {"name": "other"}})
+
+    facts = read_lab(_config(tmp_path), FakeLabClient(fake), {"networking": area})
+
+    assert [component.area for component in facts.components] == ["networking"]

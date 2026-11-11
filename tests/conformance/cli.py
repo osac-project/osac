@@ -52,6 +52,7 @@ class Runtime:
     redactor: Redactor
     output: OutputSink
     suite_image_digest: str = ""
+    podman_socket: Path | None = None
 
 
 class _Parser(argparse.ArgumentParser):
@@ -65,6 +66,7 @@ def _parser() -> argparse.ArgumentParser:
     parent.add_argument("--results", default="/results")
     parent.add_argument("--areas", default=str(_DEFAULT_AREAS))
     parent.add_argument("--tree", default="tests/e2e")
+    parent.add_argument("--podman-socket", default="/run/podman/podman.sock")
 
     parser = _Parser(prog="osac-conformance", add_help=True)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -112,6 +114,7 @@ def _build_runtime(args: argparse.Namespace) -> Runtime:
         redactor=redactor,
         output=OutputSink(results, redactor),
         suite_image_digest=os.environ.get("OSAC_CONFORMANCE_SUITE_IMAGE_DIGEST", ""),
+        podman_socket=Path(args.podman_socket),
     )
 
 
@@ -212,6 +215,12 @@ def _run_plan(runtime: Runtime, *, plan_path: Path | None, keep: bool) -> int:
         plan = plan_from_names(tests, _plan_names(plan_path), runtime.config.selectors)
     if not plan.tests:
         raise ConfigError(["the execution plan holds no tests"])
+    if (
+        runtime.podman_socket is not None
+        and any(test.layer is Layer.COMPONENT for test in plan.tests)
+        and not runtime.podman_socket.exists()
+    ):
+        raise ConfigError([f"podman socket {runtime.podman_socket} is missing"])
 
     facts = read_lab(runtime.config, runtime.lab)
     run_id = new_run_id()

@@ -1,0 +1,17 @@
+{{- if eq (include "osac-operator.controllerEnabled" (list . "clusterOrder" "caas")) "true" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "osac-operator.clusterOrderRBACWebhookName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+spec:
+  ports:
+  - name: https
+    port: 443
+    targetPort: webhook
+    protocol: TCP
+  selector:
+    {{- include "osac-operator.selectorLabels" . | nindent 4 }}
+{{- end }}

@@ -579,6 +579,28 @@ resource that does not become ready fails the step with its name. It does not
 start a cluster; the wait was also exercised once by hand against a Kind API
 server with a slow-starting and a never-ready Deployment.
 
+The `make osac-deps-hook-security-render-test` Helm contract checks the AAP and
+cert-manager hook Jobs' non-root pod context in the default OpenShift render
+and the explicit UID/group supplied by the Kind profile. It also verifies the
+CLI containers retain a read-only root filesystem, no privilege escalation,
+and no added capabilities. This is render-only; it does not execute the hooks
+against a cluster.
+
+The `make keycloak-security-context-test` Helm contract checks read-only root
+filesystems and writable-volume mounts for the bundled Keycloak and PostgreSQL
+containers, and verifies that the database pod does not override the image UID
+used by existing Kind PVCs. It also checks the standalone prerequisite
+manifests. This is render-only; it does not start Keycloak/PostgreSQL or verify
+an in-place upgrade against an existing PVC.
+
+The `make keycloak-admin-rotation-test` contract renders an upgrade against a
+fake Kubernetes API containing the existing admin Secret, verifies that the
+old credential remains in the canonical Secret until the post-upgrade hook,
+and checks the hook's narrowly scoped RBAC and Secret references. It also runs
+the actual rotation script against stubbed Keycloak HTTP and Kubernetes
+commands, including recovery when a prior attempt already changed the password.
+This does not contact a live Keycloak server or cluster.
+
 The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
 implementation work. It uses command stubs to check runtime selection, sudo
 authentication and credential expiry, Makefile/host setup routing, native
@@ -813,6 +835,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
 | Unit | Co-located `*_test.go`; `make test` | Controller helpers, validation, provisioning state logic | External APIs and providers are mocked. |
 | Envtest | Existing Controller Suite in `internal/controller/`; run by `make test` | Kubernetes API server, etcd, loaded CRDs and public in-process reconciliation | Provider/fulfillment responses and external CR progression are test-controlled; this is not a deployed worker. |
 | Component integration | `test/integration/`; deploy the current operator into Kind, then `make integration-tests` | Installed operator, Kubernetes API, CRDs, controller-manager, console proxy, networking, worker service-account authorization and startup without LVMS/TopoLVM | AAP/provider provisioning and external infrastructure are not real; some existing tests remove finalizers to bypass external-provider boundaries. |
+| ClusterOrder admin RoleBinding admission ([DEV] [OSAC-6809](https://redhat.atlassian.net/browse/OSAC-6809)) | `internal/clusterorderadmission/rolebinding_test.go` and `test/contract/clusterorder_rolebinding_webhook_test.go` in `make test`; `test/integration/clusterorder_admin_rolebinding_admission_test.go` in `make integration-tests` | Unit/contract checks bind authorization to an existing ClusterOrder, its generated namespace, the `osac` ServiceAccount, and the fail-closed webhook. The contract checks both the Helm chart and the legacy standalone Kustomize bundle/manager patch. Kind uses the real API server and impersonates the deployed manager identity to verify a valid binding and reject out-of-scope or wrong-subject admin bindings | The Kind boundary runs against the Helm deployment; the standalone files are rendered/contract-checked but not separately installed in Kind. No AAP launch or HostedCluster provisioning is exercised. |
 | ComputeInstance disk Volume ID handoff ([DEV] OSAC-6612) | `internal/controller/computeinstance_envtest_test.go`, `pkg/provisioning/aap_provider_test.go`, and `test/integration/computeinstance_disk_volume_ids_test.go`; `make test` and `make integration-tests` | Envtest retains `diskVolumeIDs`, the provider test checks the serialized map after a failed launch and retry, and the Kind suite round-trips the optional map through the installed CRD | Fulfillment status is test-controlled. This does not exercise the AAP task or Volume API/database recovery; dispatch readiness belongs to [OSAC-6613](https://redhat.atlassian.net/browse/OSAC-6613), and deployed cross-component coverage belongs to [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614). |
 | Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` (repository root) | Thin Kind deployment with the Fulfillment client disabled | Same external-provider limitations as the local Kind suite; installation-setting verification needs a separate deployed test. |
 | Combined ComputeInstance disk handoff ([DEV] OSAC-6685) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage` | Real Fulfillment APIs/PostgreSQL, installed storage and ComputeInstance controllers, CR/status persistence, target StorageClass lookup and AAP HTTP requests | AAP is a recording double; tenant compute readiness is supplied by the fixture. No provider or VM execution; see [coverage details](#computeinstance-disk-handoff-osac-6685). |
@@ -1042,6 +1065,7 @@ Touched-area requirements: [component guide](../bare-metal-fulfillment-operator/
 | Envtest | Controller tests under `internal/controller/*_envtest_test.go`; run by `make test` | Kubernetes API server, etcd, OSAC CRDs, and static Metal3 CRDs | Metal3 controller, Ironic/BMC, hardware, and some provider clients are faked. |
 | Component integration | `test/integration/`; deploy the current operator into a Kind cluster, then run `make integration-tests` | Deployed operator behavior, CRDs, Kubernetes API, pool/instance flows, and status transitions | The suite creates static `BareMetalHost` state and simulates provider transitions; it does not run a real Metal3 operator, Ironic, BMC, or hardware. |
 | Component integration (CI) | `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf` (from repository root) | Thin Kind deployment with the installation API endpoint unset | Same static Metal3/provider boundary as the local suite; installation-setting verification needs a separate deployed test. |
+| BareMetalPool admin aggregate RBAC ([DEV] OSAC-6809) | `test/contract/aggregate_roles_test.go` in `make test`; `test/integration/aggregate_rbac_test.go` in `make integration-tests` | Contract checks exact Helm ClusterRole verbs; Kind checks that Kubernetes aggregates them into the built-in admin ClusterRole | The test inspects RBAC aggregation only; no provider or hardware behavior is exercised. |
 | Contract | No dedicated contract suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying provider-contract coverage | No real external provider boundary is exercised by the current suite | Static Metal3 CRDs, patched status, and simulated provider transitions do not exercise a real Metal3/Ironic/BMC contract. |
 | E2E | Cross-component OSAC E2E suites | Fulfillment-to-operator user journeys where the environment provides them | Real hardware and provider availability remain environment-dependent. |
 
@@ -1070,6 +1094,7 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 |---|---|---|---|
 | Unit | `tests/unit/`; `uv run pytest tests/unit` | Filter and isolated plugin behavior | Kubernetes, AAP, cloud, and storage services are mocked or fixture-driven. |
 | Unit / local HTTP transport | `tests/unit/test_netris_external_ip_transport.py`; `uv run pytest tests/unit/test_netris_external_ip_transport.py` | Real Ansible HTTP transport and module subprocesses: authenticated GET/POST/DELETE, allocate/release, sanitized 401 errors, and Cookie isolation for same-origin and same-host cross-port redirects, with and without response `Set-Cookie` headers (session and unrelated cookies). The loopback provider (`tests/unit/netris_session_fixture.py`) rejects missing/incorrect sessions. | Synthetic loopback provider only; no Kind, deployed AAP, provider login, or real Netris. Both supplied and response-derived cookies are excluded on redirects; response-cookie refresh is not accepted by this client. POST/DELETE 307/308 remain rejected under the default urllib policy; explicit `all` tests also check method/body/Content-Type preservation. Live provider compatibility and cookie-refresh requirements remain unverified. |
+| Unit / Helm render | `tests/unit/test_aap_chart_security.py`; from `osac-aap/`, run `uv run pytest tests/unit/test_aap_chart_security.py` | Real Helm render checks the bootstrap container security context and the named admin-secret read-only Role | No Kubernetes cluster or AAP API is contacted. |
 | Unit | `tests/unit/plugins/lookup/test_fulfillment_token.py`; included by `uv run pytest tests/unit` | OIDC discovery validation, Keycloak client-credentials exchange, token caching/refresh, and sanitized failures | Keycloak and Fulfillment are mocked; this does not prove deployed credentials or cross-cluster reachability. |
 | Unit | `tests/unit/test_publish_templates_auth_config.py`; included by `uv run pytest tests/unit` | Parsed publisher pod spec, Kubernetes service-account projection, and OAuth Secret/ConfigMap references | No Kubernetes objects are created and no AAP API or external issuer is contacted. |
 | Unit / isolated role transform ([DEV]) | `uv run --group development ansible-playbook collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml` | Executable NodePool definition transforms: distinct NodeSet names and selectors for the same hardware profile, independent replica counts and scale-up | No Kubernetes resources are created. This is not component-integration or deployed AAP/provider coverage; those gaps remain owned by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). |
@@ -1172,6 +1197,7 @@ Touched-area requirements: [component guide](../osac-csi-driver/AGENTS.md#integr
 - **Fulfillment private Volume API contract:** A fake generated client does not prove compatibility with the deployed service.
 - **Vendor attach, detach, mount, or storage lifecycle:** The fake vendor cannot satisfy a real storage-backend requirement.
 - **Helm/deployment changes:** Build an image when container/deployment inputs change.
+- **CSI controller pod security context:** `make -C ../osac-installer csi-render-test` renders the controller Deployment and verifies the OSAC container enforces its image's non-root identity; this does not exercise a deployed CSI controller or storage vendor.
 
 ### Coverage gaps
 

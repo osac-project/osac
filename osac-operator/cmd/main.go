@@ -59,6 +59,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 	"sigs.k8s.io/multicluster-runtime/providers/single"
@@ -66,6 +67,7 @@ import (
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/helpers"
+	"github.com/osac-project/osac/osac-operator/internal/clusterorderadmission"
 	"github.com/osac-project/osac/osac-operator/internal/controller"
 	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
 	"github.com/osac-project/osac/osac-operator/internal/networktask"
@@ -84,6 +86,9 @@ const (
 	envComputeInstanceNamespace   = "OSAC_COMPUTE_INSTANCE_NAMESPACE"
 	envNetworkingNamespace        = "OSAC_NETWORKING_NAMESPACE"
 	envClusterOrderNamespace      = "OSAC_CLUSTER_ORDER_NAMESPACE"
+	envOperatorNamespace          = "OSAC_OPERATOR_NAMESPACE"
+	envOperatorServiceAccount     = "OSAC_OPERATOR_SERVICE_ACCOUNT"
+	envWebhookCertDir             = "OSAC_WEBHOOK_CERT_DIR"
 	envBareMetalInstanceNamespace = "OSAC_BARE_METAL_INSTANCE_NAMESPACE"
 	envVolumeNamespace            = "OSAC_VOLUME_NAMESPACE"
 	// envStorageConfigNamespace is the namespace holding the per-tenant
@@ -1199,6 +1204,8 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 	}
 
 	webhookServer := webhook.NewServer(webhook.Options{
+		Port:    9443,
+		CertDir: os.Getenv(envWebhookCertDir),
 		TLSOpts: tlsOpts,
 	})
 
@@ -1298,6 +1305,39 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
+	}
+	if ctrlFlags.Cluster {
+		clusterOrderNamespace := os.Getenv(envClusterOrderNamespace)
+		if clusterOrderNamespace == "" {
+			clusterOrderNamespace = controller.DefaultClusterOrderNamespace
+		}
+		operatorNamespace := os.Getenv(envOperatorNamespace)
+		operatorServiceAccount := os.Getenv(envOperatorServiceAccount)
+		webhookCertDir := os.Getenv(envWebhookCertDir)
+		if operatorNamespace == "" || operatorServiceAccount == "" || webhookCertDir == "" {
+			setupLog.Error(
+				fmt.Errorf("operator namespace, service account identity, and webhook certificate directory are required"),
+				"unable to configure ClusterOrder admin RoleBinding admission",
+			)
+			os.Exit(1)
+		}
+		localManager := mgr.GetLocalManager()
+		if localManager == nil {
+			setupLog.Error(fmt.Errorf("local manager is nil"), "unable to configure admission webhook")
+			os.Exit(1)
+		}
+		roleBindingHandler, err := clusterorderadmission.NewHandler(localManager.GetAPIReader(), clusterorderadmission.Config{
+			ClusterOrderNamespace: clusterOrderNamespace,
+			ManagerUsername:       fmt.Sprintf("system:serviceaccount:%s:%s", operatorNamespace, operatorServiceAccount),
+		})
+		if err != nil {
+			setupLog.Error(err, "unable to configure ClusterOrder admin RoleBinding admission")
+			os.Exit(1)
+		}
+		localManager.GetWebhookServer().Register(
+			clusterorderadmission.RoleBindingValidationPath,
+			&admission.Webhook{Handler: roleBindingHandler},
+		)
 	}
 
 	// Create the gRPC connection:

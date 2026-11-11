@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: osac-operator-controller-manager
+spec:
+  template:
+    metadata:
+      labels:
+        osac.openshift.io/clusterorder-rbac-webhook: "true"
+    spec:
+      containers:
+      - name: manager
+        ports:
+        - name: webhook
+          containerPort: 9443
+          protocol: TCP
+        env:
+        - name: OSAC_CLUSTER_ORDER_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: OSAC_OPERATOR_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: OSAC_OPERATOR_SERVICE_ACCOUNT
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.serviceAccountName
+        - name: OSAC_WEBHOOK_CERT_DIR
+          value: /etc/webhook/tls
+        volumeMounts:
+        - name: clusterorder-webhook-tls
+          mountPath: /etc/webhook/tls
+          readOnly: true
+      volumes:
+      - name: clusterorder-webhook-tls
+        secret:
+          secretName: osac-operator-clusterorder-rbac-tls

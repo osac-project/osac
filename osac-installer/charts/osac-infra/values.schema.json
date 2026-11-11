@@ -72,6 +72,58 @@
       "type": "object",
       "description": "Keycloak deployment configuration.",
       "properties": {
+        "initContainerResources": {
+          "type": "object",
+          "description": "Resource requests and limits for the Keycloak Quarkus seed and build init containers.",
+          "additionalProperties": false,
+          "properties": {
+            "seed": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": { "type": "string", "description": "CPU request as a Kubernetes quantity" },
+                    "memory": { "type": "string", "description": "Memory request as a Kubernetes quantity" }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": { "type": "string", "description": "CPU limit as a Kubernetes quantity" },
+                    "memory": { "type": "string", "description": "Memory limit as a Kubernetes quantity" }
+                  }
+                }
+              }
+            },
+            "build": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "requests": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": { "type": "string", "description": "CPU request as a Kubernetes quantity" },
+                    "memory": { "type": "string", "description": "Memory request as a Kubernetes quantity" }
+                  }
+                },
+                "limits": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "cpu": { "type": "string", "description": "CPU limit as a Kubernetes quantity" },
+                    "memory": { "type": "string", "description": "Memory limit as a Kubernetes quantity" }
+                  }
+                }
+              }
+            }
+          },
+          "required": ["seed", "build"]
+        },
         "oidcIdpTrust": {
           "type": "object",
           "description": "CA certificates for external OIDC identity providers. The configured PEM bundle is added to the shared trust-manager bundle.",

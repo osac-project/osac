@@ -7,12 +7,15 @@ import (
 )
 
 const (
-	ClusterOrderControllerName          = "clusterorder-controller"
+	ClusterOrderControllerName = "clusterorder-controller"
+	// DefaultClusterOrderNamespace is the namespace used when the controller
+	// namespace is not configured.
+	DefaultClusterOrderNamespace        = "osac-orders"
 	subjectKindServiceAccount    string = "ServiceAccount"
 	defaultServiceAccountName    string = "osac"
 	defaultHostedClusterName     string = "cluster"
 	defaultRoleBindingName       string = "osac"
-	defaultClusterOrderNamespace string = "osac-orders"
+	defaultClusterOrderNamespace        = DefaultClusterOrderNamespace
 	hubAccessServiceAccountName  string = "hub-access"
 	hubAccessRoleBindingName     string = "hub-access"
 	hubAccessClusterRoleBaseName string = "hub-access-hosted-clusters"

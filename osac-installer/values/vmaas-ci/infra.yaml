@@ -21,8 +21,7 @@ caIssuer:
   enabled: true
 keycloak:
   enabled: true
-  # Seed known passwords for the realm's built-in test users -- the e2e
-  # suite logs in as these accounts by password.
+  # Seed built-in test users with random credentials persisted in the Secret.
   devFixtures:
     enabled: true
 kafka:

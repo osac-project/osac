@@ -27,6 +27,8 @@ spec:
         app: keycloak-database
     spec:
       serviceAccountName: keycloak-database
+      securityContext:
+        runAsNonRoot: true
       volumes:
       - name: server-cert
         secret:
@@ -41,9 +43,29 @@ spec:
       - name: data
         persistentVolumeClaim:
           claimName: keycloak-database
+      - name: postgres-run
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
       initContainers:
       - name: password-generator
         image: quay.io/openshift/origin-cli:4.21
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: HOME
+          value: /tmp
+        - name: TMPDIR
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
         command:
         - /bin/bash
         - -c
@@ -58,6 +80,14 @@ spec:
       - name: server
         image: quay.io/sclorg/postgresql-18-c10s:c10s
         imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
         env:
         - name: POSTGRESQL_USER
           value: keycloak
@@ -68,9 +98,15 @@ spec:
               key: POSTGRES_PASSWORD
         - name: POSTGRESQL_DATABASE
           value: keycloak
+        - name: HOME
+          value: /tmp
         volumeMounts:
         - name: data
           mountPath: /var/lib/pgsql/data
+        - name: postgres-run
+          mountPath: /var/run/postgresql
+        - name: tmp
+          mountPath: /tmp
         - name: server-cert
           mountPath: /secrets/cert
         - name: server-config

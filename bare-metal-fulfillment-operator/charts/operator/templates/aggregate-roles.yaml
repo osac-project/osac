@@ -83,7 +83,13 @@ rules:
   resources:
   - baremetalpools
   verbs:
-  - '*'
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - osac.openshift.io
   resources:

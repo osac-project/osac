@@ -232,7 +232,9 @@ describe('SecurityGroupRulesTable', () => {
         />,
       );
 
-      expect(screen.getByText(reason)).toBeInTheDocument();
+      expect(
+        screen.getByRole('heading', { name: /Automatic security group rules cannot be edited/ }),
+      ).toBeInTheDocument();
       expect(screen.getByText('No inbound rules')).toBeInTheDocument();
       expect(screen.queryByText(/No inbound rules yet/)).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Add rule/i })).not.toBeInTheDocument();
@@ -254,7 +256,9 @@ describe('SecurityGroupRulesTable', () => {
         />,
       );
 
-      expect(screen.getByText(reason)).toBeInTheDocument();
+      expect(
+        screen.getByRole('heading', { name: /Automatic security group rules cannot be edited/ }),
+      ).toBeInTheDocument();
       const add = screen.getByRole('button', { name: /Add rule/i });
       const edit = screen.getAllByRole('button', { name: /Edit/i })[0];
       const remove = screen.getAllByRole('button', { name: /Delete/i })[0];

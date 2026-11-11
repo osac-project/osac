@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { Button, Tooltip } from '@patternfly/react-core';
+import { Alert, Button, Tooltip } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import type { TFunction } from 'i18next';
 
@@ -65,7 +65,7 @@ export const SecurityGroupRulesTable = ({
       variant="primary"
       isAriaDisabled={editingDisabled}
       aria-describedby={editingDisabled ? reasonId : undefined}
-      onClick={onAddRule}
+      onClick={editingDisabled ? undefined : onAddRule}
       className={className}
     >
       {t('Add rule')}
@@ -80,9 +80,7 @@ export const SecurityGroupRulesTable = ({
     );
 
   const reason = disabledReason ? (
-    <SubtleContent component="p" id={reasonId}>
-      {disabledReason}
-    </SubtleContent>
+    <Alert id={reasonId} variant="info" isInline title={disabledReason} />
   ) : null;
 
   if (rules.length === 0) {
@@ -130,13 +128,7 @@ export const SecurityGroupRulesTable = ({
               <Td dataLabel={t('Actions')}>
                 {disabledReason ? (
                   <Tooltip content={disabledReason}>
-                    <Button
-                      variant="link"
-                      isInline
-                      isAriaDisabled
-                      aria-describedby={reasonId}
-                      onClick={() => onEditRule(index)}
-                    >
+                    <Button variant="link" isInline isAriaDisabled aria-describedby={reasonId}>
                       {t('Edit')}
                     </Button>
                   </Tooltip>
@@ -151,7 +143,7 @@ export const SecurityGroupRulesTable = ({
                   isInline
                   canDelete={!editingDisabled}
                   disabledReason={disabledReason}
-                  onClick={() => onDeleteRule(index)}
+                  onClick={editingDisabled ? undefined : () => onDeleteRule(index)}
                 />
               </Td>
             </Tr>

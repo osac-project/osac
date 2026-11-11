@@ -24,4 +24,10 @@ describe('buildVirtualNetworkListFilter', () => {
       'this.status.state in [1] && this.metadata.name.contains("vn")',
     );
   });
+
+  it('builds a project filter', () => {
+    expect(buildVirtualNetworkListFilter([], '', '', ['', 'team-a'])).toBe(
+      'this.metadata.project in ["", "team-a"]',
+    );
+  });
 });

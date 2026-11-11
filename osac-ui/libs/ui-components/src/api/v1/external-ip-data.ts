@@ -1,12 +1,20 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import type { ExternalIP, ExternalIPAttachment, ExternalIPPool, NATGateway } from '@osac/types';
-import { ExternalIPAttachments, ExternalIPPools, ExternalIPs, NATGateways } from '@osac/types';
+import {
+  ExternalIPAttachments,
+  ExternalIPPools,
+  ExternalIPState,
+  ExternalIPs,
+  NATGateways,
+} from '@osac/types';
 
 import { cel, escapeCelStringLiteral } from '../cel';
 import type { CelFilter } from '../cel';
-import { type ListParams } from '../types';
-import { useListResource } from '../use-resource';
+import { useListAllResources } from '../use-resource';
+
+const AUTO_CREATED_LABEL = 'osac.openshift.io/auto-created';
+const DEFAULT_LABEL = 'osac.openshift.io/default';
 
 export type ExternalIpAttachedTargetKind =
   | 'computeInstance'
@@ -24,12 +32,6 @@ export const uniqueIds = (values: Array<string | undefined>): string[] => [
   ...new Set(values.filter((id): id is string => Boolean(id))),
 ];
 
-export const poolIdsFilter = (ids: readonly string[]) =>
-  cel<ExternalIPPool>((filter) => filter.field('id').isIn(ids));
-
-export const attachmentExternalIpIdsFilter = (ids: readonly string[]) =>
-  cel<ExternalIPAttachment>((filter) => filter.field('spec.externalIp.id').isIn(ids));
-
 export const computeInstanceAttachmentFilter = (computeInstanceId: string) =>
   cel<ExternalIPAttachment>(
     () =>
@@ -44,12 +46,6 @@ export const clusterAttachmentFilter = (clusterId: string) =>
     ),
   );
 
-export const natGatewayExternalIpIdsFilter = (ids: readonly string[]) =>
-  cel<NATGateway>((filter) => filter.field('spec.externalIp.id').isIn(ids));
-
-export const externalIpPoolId = (externalIp: ExternalIP): string | undefined =>
-  externalIp.spec?.pool?.id;
-
 export const attachedTargetFromAttachment = (
   attachment: ExternalIPAttachment,
 ): ExternalIpAttachedTarget | undefined => {
@@ -57,21 +53,21 @@ export const attachedTargetFromAttachment = (
   if (target?.case === 'computeInstance' && target.value.id) {
     return {
       kind: 'computeInstance',
-      name: target.value.name,
+      name: target.value.name || target.value.id,
       href: `/vms/${encodeURIComponent(target.value.id)}`,
     };
   }
   if (target?.case === 'cluster' && target.value.id) {
     return {
       kind: 'cluster',
-      name: target.value.name,
+      name: target.value.name || target.value.id,
       href: `/clusters/${encodeURIComponent(target.value.id)}`,
     };
   }
   if (target?.case === 'baremetalInstance' && target.value.id) {
     return {
       kind: 'baremetalInstance',
-      name: target.value.name,
+      name: target.value.name || target.value.id,
       href: `/bare-metal/${encodeURIComponent(target.value.id)}`,
     };
   }
@@ -82,14 +78,15 @@ export const attachedTargetFromNatGateway = (
   natGateway: NATGateway,
 ): ExternalIpAttachedTarget | undefined => {
   const virtualNetworkId = natGateway.spec?.virtualNetwork?.id;
-  const name = natGateway.metadata?.name;
+  const name = natGateway.metadata?.name || natGateway.id;
   if (!natGateway.id || !virtualNetworkId || !name) {
     return undefined;
   }
   return {
     kind: 'natGateway',
     name,
-    href: `/networking/virtual-networks/${encodeURIComponent(virtualNetworkId)}`,
+    // A virtual network has one NAT gateway, so its NAT gateway tab is the gateway's page.
+    href: `/networking/virtual-networks/${encodeURIComponent(virtualNetworkId)}?tab=nat-gateway`,
   };
 };
 
@@ -115,57 +112,92 @@ export const buildAttachedTargetsByExternalIpId = (
   return byExternalIpId;
 };
 
+/**
+ * IDs of the ExternalIPs that a NATGateway or an ExternalIPAttachment references.
+ * `status.attached` alone is not enough: the server sets it only for a READY
+ * ExternalIPAttachment, never for a NATGateway.
+ */
+export const buildConsumedExternalIpIds = (
+  natGateways: readonly NATGateway[],
+  attachments: readonly ExternalIPAttachment[],
+): Set<string> =>
+  new Set(
+    uniqueIds([
+      ...natGateways.map((natGateway) => natGateway.spec?.externalIp?.id),
+      ...attachments.map((attachment) => attachment.spec?.externalIp?.id),
+    ]),
+  );
+
+/**
+ * The picker rule for an ExternalIP: ALLOCATED, not automatic, not a tenant
+ * default, and without a consumer.
+ */
+export const isSelectableExternalIp = (
+  externalIp: ExternalIP,
+  consumedExternalIpIds: ReadonlySet<string>,
+): boolean =>
+  Boolean(externalIp.id) &&
+  externalIp.status?.state === ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED &&
+  externalIp.status?.attached !== true &&
+  externalIp.metadata?.labels?.[AUTO_CREATED_LABEL] === undefined &&
+  externalIp.metadata?.labels?.[DEFAULT_LABEL] === undefined &&
+  !consumedExternalIpIds.has(externalIp.id);
+
+/** Loads every NATGateway and ExternalIPAttachment to tell which ExternalIPs are in use. */
+export const useExternalIpConsumers = () => {
+  const natGatewaysQuery = useListAllResources(NATGateways);
+  const attachmentsQuery = useListAllResources(ExternalIPAttachments);
+  const natGateways = natGatewaysQuery.data?.items;
+  const attachments = attachmentsQuery.data?.items;
+  const consumedExternalIpIds = useMemo(
+    () => buildConsumedExternalIpIds(natGateways ?? [], attachments ?? []),
+    [natGateways, attachments],
+  );
+  const isSelectable = useCallback(
+    (externalIp: ExternalIP) => isSelectableExternalIp(externalIp, consumedExternalIpIds),
+    [consumedExternalIpIds],
+  );
+
+  return {
+    natGateways: natGateways ?? [],
+    consumedExternalIpIds,
+    isSelectable,
+    isLoading: natGatewaysQuery.isLoading || attachmentsQuery.isLoading,
+    error: natGatewaysQuery.error ?? attachmentsQuery.error,
+  };
+};
+
 export const buildPoolsById = (pools: readonly ExternalIPPool[]): Record<string, ExternalIPPool> =>
   Object.fromEntries(pools.map((pool) => [pool.id, pool]));
 
 export const useExternalIpJoins = (externalIps: readonly ExternalIP[]) => {
-  const poolIds = useMemo(() => uniqueIds(externalIps.map(externalIpPoolId)), [externalIps]);
-  const externalIpIds = useMemo(
-    () => externalIps.map((externalIp) => externalIp.id),
-    [externalIps],
-  );
-
-  const poolsQuery = useListResource(
-    ExternalIPPools,
-    poolIds.length > 0 ? { filter: poolIdsFilter(poolIds), limit: poolIds.length } : {},
-    { enabled: poolIds.length > 0 },
-  );
-  const attachmentsQuery = useListResource(
-    ExternalIPAttachments,
-    externalIpIds.length > 0
-      ? { filter: attachmentExternalIpIdsFilter(externalIpIds), limit: externalIpIds.length }
-      : {},
-    { enabled: externalIpIds.length > 0 },
-  );
-  const natGatewaysQuery = useListResource(
-    NATGateways,
-    externalIpIds.length > 0
-      ? { filter: natGatewayExternalIpIdsFilter(externalIpIds), limit: externalIpIds.length }
-      : {},
-    { enabled: externalIpIds.length > 0 },
-  );
+  const enabled = externalIps.length > 0;
+  // Every pool, NAT gateway and attachment, without an ID filter: a filter listing every
+  // displayed ID outgrows the server's filter size limit on a long list. The NAT gateway and
+  // attachment lists are the ones the in-use checks load, so they come from the same cache.
+  const poolsQuery = useListAllResources(ExternalIPPools, undefined, { enabled });
+  const attachmentsQuery = useListAllResources(ExternalIPAttachments, undefined, { enabled });
+  const natGatewaysQuery = useListAllResources(NATGateways, undefined, { enabled });
 
   return {
-    poolsById: useMemo(
-      () => buildPoolsById(poolsQuery.data?.items ?? []),
-      [poolsQuery.data?.items],
-    ),
+    poolsById: useMemo(() => buildPoolsById(poolsQuery.data?.items ?? []), [poolsQuery.data]),
     attachedTargetsByExternalIpId: useMemo(
       () =>
         buildAttachedTargetsByExternalIpId(
           attachmentsQuery.data?.items ?? [],
           natGatewaysQuery.data?.items ?? [],
         ),
-      [attachmentsQuery.data?.items, natGatewaysQuery.data?.items],
+      [attachmentsQuery.data, natGatewaysQuery.data],
     ),
     isLoading: poolsQuery.isLoading || attachmentsQuery.isLoading || natGatewaysQuery.isLoading,
     error: poolsQuery.error ?? attachmentsQuery.error ?? natGatewaysQuery.error,
   };
 };
 
-export const useExternalIpsData = (params: ListParams = {}) => {
-  const externalIpsQuery = useListResource(ExternalIPs, params);
-  const externalIps = externalIpsQuery.data?.items ?? [];
+/** The External IPs list has no page controls, so it loads every page of the filter. */
+export const useExternalIpsData = ({ filter }: { filter?: string } = {}) => {
+  const externalIpsQuery = useListAllResources(ExternalIPs, filter);
+  const externalIps = useMemo(() => externalIpsQuery.data?.items ?? [], [externalIpsQuery.data]);
   const joins = useExternalIpJoins(externalIps);
   const hasDisplayedIps = externalIps.length > 0;
 

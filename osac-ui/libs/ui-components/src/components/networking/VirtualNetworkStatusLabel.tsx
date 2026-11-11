@@ -1,33 +1,33 @@
 import { VirtualNetworkState } from '@osac/types';
 
+import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatusLabel';
 
 interface VirtualNetworkStatusLabelProps {
   state?: VirtualNetworkState;
 }
 
-const VIRTUAL_NETWORK_STATUS_MAP: Record<
-  VirtualNetworkState,
-  { status: StatusKind; text: string }
-> = {
-  [VirtualNetworkState.UNSPECIFIED]: { status: 'unspecified', text: 'Unknown' },
-  [VirtualNetworkState.PENDING]: { status: 'progressing', text: 'Provisioning' },
-  [VirtualNetworkState.READY]: { status: 'ready', text: 'Ready' },
-  [VirtualNetworkState.FAILED]: { status: 'failed', text: 'Failed' },
-  [VirtualNetworkState.DELETING]: { status: 'progressing', text: 'Deleting' },
-};
-
-const resolveVirtualNetworkStatus = (
-  state?: VirtualNetworkState,
-): { status: StatusKind; text: string } => {
-  if (state !== undefined && state in VIRTUAL_NETWORK_STATUS_MAP) {
-    return VIRTUAL_NETWORK_STATUS_MAP[state];
-  }
-  return VIRTUAL_NETWORK_STATUS_MAP[VirtualNetworkState.UNSPECIFIED];
+const STATUS_KIND: Record<VirtualNetworkState, StatusKind> = {
+  [VirtualNetworkState.UNSPECIFIED]: 'unspecified',
+  [VirtualNetworkState.PENDING]: 'progressing',
+  [VirtualNetworkState.READY]: 'ready',
+  [VirtualNetworkState.FAILED]: 'failed',
+  [VirtualNetworkState.DELETING]: 'progressing',
 };
 
 export const VirtualNetworkStatusLabel = ({ state }: VirtualNetworkStatusLabelProps) => {
-  const { status, text } = resolveVirtualNetworkStatus(state);
+  const { t } = useTranslation();
+  const text: Record<VirtualNetworkState, string> = {
+    [VirtualNetworkState.UNSPECIFIED]: t('Unknown'),
+    [VirtualNetworkState.PENDING]: t('Provisioning'),
+    [VirtualNetworkState.READY]: t('Ready'),
+    [VirtualNetworkState.FAILED]: t('Failed'),
+    [VirtualNetworkState.DELETING]: t('Deleting'),
+  };
+  const resolved =
+    state !== undefined && state in STATUS_KIND ? state : VirtualNetworkState.UNSPECIFIED;
 
-  return <ResourceStatusLabel status={status} text={text} />;
+  return (
+    <ResourceStatusLabel status={STATUS_KIND[resolved]} text={text[resolved]} noIcon={false} />
+  );
 };

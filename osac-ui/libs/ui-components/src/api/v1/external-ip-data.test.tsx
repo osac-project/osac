@@ -2,9 +2,15 @@ import type { ReactNode } from 'react';
 import { create } from '@bufbuild/protobuf';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { ExternalIP, ExternalIPAttachment, ExternalIPPool, NATGateway } from '@osac/types';
+import type {
+  ExternalIP,
+  ExternalIPAttachment,
+  ExternalIPPool,
+  NATGateway,
+  NATGatewaysListRequest,
+} from '@osac/types';
 import {
   ExternalIPAttachmentSchema,
   ExternalIPPoolSchema,
@@ -15,11 +21,8 @@ import {
 } from '@osac/types';
 
 import {
-  attachmentExternalIpIdsFilter,
   buildAttachedTargetsByExternalIpId,
   computeInstanceAttachmentFilter,
-  natGatewayExternalIpIdsFilter,
-  poolIdsFilter,
   useExternalIpsData,
 } from './external-ip-data';
 import { createMockConnectTransport } from '../../test-utils/createMockConnectTransport';
@@ -66,16 +69,6 @@ const makeNatGateway = (id: string, externalIpId: string, virtualNetworkId: stri
   });
 
 describe('external IP list join helpers', () => {
-  it('filters pools, attachments, and NAT gateways by the displayed ids', () => {
-    expect(poolIdsFilter(['pool-2', 'pool-1'])).toBe('this.id in ["pool-2", "pool-1"]');
-    expect(attachmentExternalIpIdsFilter(['eip-2', 'eip-1'])).toBe(
-      'this.spec.external_ip.id in ["eip-2", "eip-1"]',
-    );
-    expect(natGatewayExternalIpIdsFilter(['eip-2', 'eip-1'])).toBe(
-      'this.spec.external_ip.id in ["eip-2", "eip-1"]',
-    );
-  });
-
   it('filters VM attachments by the compute instance', () => {
     expect(computeInstanceAttachmentFilter('vm-1')).toBe('this.spec.compute_instance.id == "vm-1"');
   });
@@ -90,21 +83,21 @@ describe('external IP list join helpers', () => {
     });
   });
 
-  it('maps a NAT gateway to the virtual network details link', () => {
+  it('maps a NAT gateway to the NAT gateway tab of its virtual network', () => {
     expect(
       buildAttachedTargetsByExternalIpId([], [makeNatGateway('nat-1', 'eip-2', 'vn-1')]),
     ).toEqual({
       'eip-2': {
         kind: 'natGateway',
         name: 'edge-nat',
-        href: '/networking/virtual-networks/vn-1',
+        href: '/networking/virtual-networks/vn-1?tab=nat-gateway',
       },
     });
   });
 });
 
 describe('useExternalIpsData', () => {
-  it('loads pools and attachments for the currently displayed external IPs', async () => {
+  it('joins the pools and attachments of the displayed external IPs', async () => {
     const transport = createMockConnectTransport({
       externalIps: [makeExternalIp('eip-1', 'pool-1', true), makeExternalIp('eip-2', 'pool-1')],
       externalIpPools: [makePool('pool-1', 'public-edge'), makePool('pool-unused', 'other')],
@@ -130,12 +123,46 @@ describe('useExternalIpsData', () => {
       'eip-2',
     ]);
     expect(result.current.poolsById['pool-1']?.metadata?.name).toBe('public-edge');
-    expect(result.current.poolsById['pool-unused']).toBeUndefined();
     expect(result.current.attachedTargetsByExternalIpId['eip-1']?.href).toBe('/vms/vm-1');
     expect(result.current.attachedTargetsByExternalIpId['eip-2']).toBeUndefined();
   });
 
-  it('loads NAT gateways for the currently displayed external IPs', async () => {
+  it('loads every page, because the list has no page controls', async () => {
+    const onExternalIpList = vi.fn();
+    const onNatGatewayList = vi.fn<(req: NATGatewaysListRequest) => void>();
+    const transport = createMockConnectTransport(
+      {
+        externalIps: Array.from({ length: 120 }, (_, index) =>
+          makeExternalIp(`eip-${index}`, 'pool-1'),
+        ),
+        externalIpPools: [makePool('pool-1', 'public-edge')],
+        natGateways: [makeNatGateway('nat-1', 'eip-119', 'vn-1')],
+      },
+      { onExternalIpList, onNatGatewayList },
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <ApiProvider transport={transport}>
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      </ApiProvider>
+    );
+
+    const { result } = renderHook(() => useExternalIpsData(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.externalIps).toHaveLength(120);
+    });
+    expect(result.current.externalIps.at(-1)?.id).toBe('eip-119');
+    expect(onExternalIpList.mock.calls.length).toBeGreaterThan(1);
+    // The joins never list the displayed IDs, which would outgrow the server's filter limit.
+    expect(onNatGatewayList).toHaveBeenCalled();
+    expect(onNatGatewayList.mock.calls.every(([req]) => !req.filter)).toBe(true);
+    expect(result.current.attachedTargetsByExternalIpId['eip-119']?.name).toBe('edge-nat');
+  });
+
+  it('joins the NAT gateway of a displayed external IP', async () => {
     const transport = createMockConnectTransport({
       externalIps: [makeExternalIp('eip-2', 'pool-1', true)],
       externalIpPools: [makePool('pool-1', 'public-edge')],
@@ -159,7 +186,7 @@ describe('useExternalIpsData', () => {
     expect(result.current.attachedTargetsByExternalIpId['eip-2']).toEqual({
       kind: 'natGateway',
       name: 'edge-nat',
-      href: '/networking/virtual-networks/vn-1',
+      href: '/networking/virtual-networks/vn-1?tab=nat-gateway',
     });
   });
 });

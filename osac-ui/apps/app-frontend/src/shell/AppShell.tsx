@@ -19,8 +19,12 @@ import VMCatalogItemDetailPage from '@osac/ui-components/components/VMCatalogIte
 import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import AttachNatGatewayWizardPage from '@osac/ui-components/pages/networking/AttachNatGatewayWizardPage';
+import { NatGatewaysListPage } from '@osac/ui-components/pages/networking/NatGatewaysListPage';
+import { NetworkClassPage } from '@osac/ui-components/pages/networking/NetworkClassPage';
 import { SecurityGroupDetailPage } from '@osac/ui-components/pages/networking/SecurityGroupDetailPage';
+import { SecurityGroupEditRulesPage } from '@osac/ui-components/pages/networking/SecurityGroupEditRulesPage';
 import { SecurityGroupsListPage } from '@osac/ui-components/pages/networking/SecurityGroupsListPage';
+import { SubnetsListPage } from '@osac/ui-components/pages/networking/SubnetsListPage';
 import { VirtualNetworkDetailPage } from '@osac/ui-components/pages/networking/VirtualNetworkDetailPage';
 import { VirtualNetworksListPage } from '@osac/ui-components/pages/networking/VirtualNetworksListPage';
 import { BareMetalRoutes } from '@osac/ui-components/pages/tenant/BareMetalRoutes';
@@ -34,6 +38,7 @@ import { DiskImageRoutes } from './DiskImageRoutes';
 import { InstanceTypeRoutes } from './InstanceTypeRoutes';
 import { ServiceRoute } from './ServiceRoute';
 import { ShellMasthead } from './ShellMasthead';
+import { NETWORK_CLASS_PATH } from './shellNav';
 import { defaultRouteForRole } from './shellRoutes';
 import { ShellSidebar } from './ShellSidebar';
 import { StorageRoutes } from './StorageRoutes';
@@ -184,6 +189,16 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
             </ShellRoute>
           }
         />
+        {role === 'admin' && (
+          <Route
+            path={NETWORK_CLASS_PATH}
+            element={
+              <ShellRoute>
+                <NetworkClassPage />
+              </ShellRoute>
+            }
+          />
+        )}
         <Route
           path="/tenant/identity-provider/*"
           element={
@@ -269,10 +284,42 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           }
         />
         <Route
+          path="/networking/subnets"
+          element={
+            <ShellRoute>
+              <SubnetsListPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/networking/nat-gateways"
+          element={
+            <ShellRoute>
+              <NatGatewaysListPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/networking/nat-gateways/create/:id"
+          element={
+            <ShellRoute>
+              <AttachNatGatewayWizardPage fromNatGatewaysList />
+            </ShellRoute>
+          }
+        />
+        <Route
           path="/networking/security-groups"
           element={
             <ShellRoute>
               <SecurityGroupsListPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/networking/security-groups/:id/edit-rules"
+          element={
+            <ShellRoute>
+              <SecurityGroupEditRulesPage />
             </ShellRoute>
           }
         />

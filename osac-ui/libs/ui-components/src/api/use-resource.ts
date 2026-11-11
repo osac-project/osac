@@ -141,6 +141,7 @@ export const useListAllResources = <Input extends DescMessage, Output extends De
       return { ...page, items, size: items.length } as MessageShape<Output>;
     },
     placeholderData: keepPreviousData,
+    enabled: options.enabled ?? true,
   });
 };
 

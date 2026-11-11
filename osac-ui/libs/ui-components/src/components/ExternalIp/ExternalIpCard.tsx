@@ -43,12 +43,7 @@ const ExternalIpCard = ({ externalIp, pool, attachedTarget }: ExternalIpCardProp
         />
       }
       icon={<RhUiConnectedIcon />}
-      statusLabel={
-        <ExternalIpStatusLabel
-          state={externalIp.status?.state}
-          attached={externalIp.status?.attached}
-        />
-      }
+      statusLabel={<ExternalIpStatusLabel state={externalIp.status?.state} />}
       actionMenu={<ExternalIpActionsMenu externalIp={externalIp} />}
     >
       <CardBody>

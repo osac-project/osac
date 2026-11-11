@@ -26,7 +26,7 @@ import { useApiFetch } from '../api-context';
 import { type CelFilter, cel } from '../cel';
 import { type ListParams, apiQueryKey } from '../types';
 import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
-import { useListResource } from '../use-resource';
+import { useListAllResources, useListResource } from '../use-resource';
 
 type NetworkingQueryOptions = {
   enabled?: boolean;
@@ -37,37 +37,68 @@ export interface NatGatewayWithAddress {
   address?: string;
 }
 
+const LIST_ALL_PAGE_SIZE = 100;
+
+interface ListPage<Item> {
+  items: Item[];
+  total: number;
+}
+
+/**
+ * Loads every page of a list. The networking lists feed counts and joins, so a
+ * single page would silently drop resources.
+ */
+export const listAllPages = async <Item>(
+  listPage: (request: {
+    filter?: string;
+    limit: number;
+    offset: number;
+  }) => Promise<ListPage<Item>>,
+  filter?: string,
+): Promise<{ items: Item[] }> => {
+  let page = await listPage({ filter, limit: LIST_ALL_PAGE_SIZE, offset: 0 });
+  const items = [...page.items];
+  while (items.length < page.total && page.items.length > 0) {
+    page = await listPage({ filter, limit: LIST_ALL_PAGE_SIZE, offset: items.length });
+    items.push(...page.items);
+  }
+  return { items };
+};
+
 export const useVirtualNetworks = (
-  params: ListParams = {},
+  params: Pick<ListParams, 'filter'> = {},
   options: NetworkingQueryOptions = {},
 ) => {
   const client = useApiFetch(VirtualNetworks);
   return useApiQuery({
     queryKey: apiQueryKey('v1/virtual_networks', undefined, params),
-    queryFn: () => client.list(params),
+    queryFn: () => listAllPages((request) => client.list(request), params.filter),
     select: (data) => data.items,
     enabled: options.enabled ?? true,
   });
 };
 
-export const useSubnets = (params: ListParams = {}, options: NetworkingQueryOptions = {}) => {
+export const useSubnets = (
+  params: Pick<ListParams, 'filter'> = {},
+  options: NetworkingQueryOptions = {},
+) => {
   const client = useApiFetch(Subnets);
   return useApiQuery({
     queryKey: apiQueryKey('v1/subnets', undefined, params),
-    queryFn: () => client.list(params),
+    queryFn: () => listAllPages((request) => client.list(request), params.filter),
     select: (data) => data.items,
     enabled: options.enabled ?? true,
   });
 };
 
 export const useSecurityGroups = (
-  params: ListParams = {},
+  params: Pick<ListParams, 'filter'> = {},
   options: NetworkingQueryOptions = {},
 ) => {
   const client = useApiFetch(SecurityGroups);
   return useApiQuery({
     queryKey: apiQueryKey('v1/security_groups', undefined, params),
-    queryFn: () => client.list(params),
+    queryFn: () => listAllPages((request) => client.list(request), params.filter),
     select: (data) => data.items,
     enabled: options.enabled ?? true,
   });
@@ -117,12 +148,28 @@ export const defaultSecurityGroupListFilter = (project: string, virtualNetworkId
     ),
   );
 
+// Server side of the ExternalIP picker rule. A NATGateway consumer never sets
+// status.attached, so callers must also drop the IDs from useExternalIpConsumers.
 export const unallocatedExternalIpFilter = (project?: string) =>
   cel<ExternalIP>((filter) =>
     filter.and(
       project !== undefined ? filter.field('metadata.project').equals(project) : undefined,
       filter.field('status.state').equals(ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED),
       filter.field('status.attached').equals(false),
+      '!("osac.openshift.io/auto-created" in this.metadata.labels)' as CelFilter<ExternalIP>,
+      '!("osac.openshift.io/default" in this.metadata.labels)' as CelFilter<ExternalIP>,
+    ),
+  );
+
+/**
+ * Limits a list to one project and, when given, one tenant. Pickers use it so the first
+ * page already holds only resources the server accepts.
+ */
+export const projectScopeFilter = (project: string, tenant?: string) =>
+  cel<{ metadata?: { project?: string; tenant?: string } }>((filter) =>
+    filter.and(
+      filter.field('metadata.project').equals(project),
+      tenant !== undefined ? filter.field('metadata.tenant').equals(tenant) : undefined,
     ),
   );
 
@@ -199,34 +246,30 @@ export const useNatGateway = (virtualNetworkId: string) => {
 // Since those values come from separate backend resources, this hook joins both query results
 // and indexes the result by virtual network ID for direct component lookup.
 export const useNatGateways = () => {
-  const natGatewaysQuery = useListResource(NATGateways);
-  const { data: natGatewaysResponse } = natGatewaysQuery;
+  const natGatewaysQuery = useListAllResources(NATGateways);
+  const natGateways = natGatewaysQuery.data?.items;
   const externalIpIds = useMemo(
     () =>
-      (natGatewaysResponse?.items ?? [])
+      (natGateways ?? [])
         .map((natGateway) => natGateway.spec?.externalIp?.id)
         .filter((id): id is string => Boolean(id)),
-    [natGatewaysResponse?.items],
+    [natGateways],
   );
-  // NAT Gateways expose only External IP IDs. Fetch exactly those records and
-  // size the page to the reference count so no joined address is omitted.
-  const externalIpsQuery = useListResource(
-    ExternalIPs,
-    externalIpIds.length > 0
-      ? { filter: externalIpIdsFilter(externalIpIds), limit: externalIpIds.length }
-      : {},
-    { enabled: externalIpIds.length > 0 },
-  );
-  const { data: externalIpsResponse } = externalIpsQuery;
+  // NAT Gateways expose only External IP IDs. Fetch every page of exactly those records.
+  const externalIpsQuery = useListAllResources(ExternalIPs, externalIpIdsFilter(externalIpIds), {
+    enabled: externalIpIds.length > 0,
+  });
+  const externalIps = externalIpIds.length > 0 ? externalIpsQuery.data?.items : undefined;
 
   return {
+    natGateways: natGateways ?? [],
     natGatewaysByVirtualNetworkId: useMemo(
-      () =>
-        buildNatGatewaysByVirtualNetworkId(
-          natGatewaysResponse?.items ?? [],
-          externalIpsResponse?.items ?? [],
-        ),
-      [natGatewaysResponse?.items, externalIpsResponse?.items],
+      () => buildNatGatewaysByVirtualNetworkId(natGateways ?? [], externalIps ?? []),
+      [natGateways, externalIps],
+    ),
+    addressByExternalIpId: useMemo(
+      () => buildExternalIpAddressById(externalIps ?? []),
+      [externalIps],
     ),
     isLoading: natGatewaysQuery.isLoading || externalIpsQuery.isLoading,
     error: natGatewaysQuery.error ?? externalIpsQuery.error,

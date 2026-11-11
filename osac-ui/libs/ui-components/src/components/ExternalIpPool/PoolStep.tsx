@@ -18,7 +18,7 @@ const PoolStep = () => {
       <StackItem>
         <Content component="p">
           {t(
-            'Define routable addresses for tenant edge exposure. The pool is shared by all tenants.',
+            'Define the addresses that tenants attach to make workloads reachable from outside the virtual network. The pool is shared by all tenants.',
           )}
         </Content>
       </StackItem>

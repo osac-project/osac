@@ -7,6 +7,7 @@ import type {
   SelfSubjectAccessReviewsCreateRequest,
 } from '@osac/types';
 import {
+  BareMetalInstance,
   BareMetalInstanceCatalogItem,
   BareMetalInstanceCatalogItemsCreateRequest,
   BareMetalInstanceCatalogItemsCreateResponse,
@@ -54,6 +55,7 @@ import {
   ExternalIPsCreateRequest,
   ExternalIPsCreateResponse,
   ExternalIPsListRequest,
+  FabricDomain,
   IdentityProvider,
   IdentityProvidersCreateRequest,
   IdentityProvidersCreateResponse,
@@ -79,13 +81,21 @@ import {
   RoleBinding,
   Secret,
   SecurityGroup,
+  SecurityGroupsCreateRequest,
+  SecurityGroupsCreateResponse,
+  SecurityGroupsUpdateRequest,
+  SecurityGroupsUpdateResponse,
   SelfSubjectAccessReviews,
   SelfSubjectAccessReviewsCreateResponseSchema,
   ServiceTier,
   Subnet,
+  SubnetsCreateRequest,
+  SubnetsCreateResponse,
+  SubnetsDeleteRequest,
   SubnetsGetRequest,
   User,
   VirtualNetwork,
+  VirtualNetworksDeleteRequest,
   Volume,
   VolumesCreateRequest,
   VolumesCreateResponse,
@@ -124,6 +134,7 @@ import {
   ExternalIPAttachments,
   ExternalIPState,
   ExternalIPs,
+  FabricDomains,
   IdentityProviders,
   InstanceTypeState,
   InstanceTypes,
@@ -170,6 +181,7 @@ import type {
   InstanceTypesListResponse,
   InstanceTypesUpdateRequest,
   InstanceTypesUpdateResponse,
+  NetworkClass,
   BareMetalInstanceType as PrivateBareMetalInstanceType,
   InstanceType as PrivateInstanceType,
   Tenant as PrivateTenant,
@@ -200,6 +212,7 @@ import {
   ExternalIPPoolState,
   ExternalIPPools,
   ExternalIPPoolsListResponseSchema,
+  NetworkClasses,
   BareMetalInstanceTypes as PrivateBareMetalInstanceTypes,
   InstanceTypes as PrivateInstanceTypes,
   Tenants as PrivateTenants,
@@ -253,6 +266,9 @@ export type MockApiFixtures = {
   natGateways?: NATGateway[];
   externalIps?: ExternalIP[];
   externalIpAttachments?: ExternalIPAttachment[];
+  bareMetalInstances?: BareMetalInstance[];
+  networkClasses?: NetworkClass[];
+  fabricDomains?: FabricDomain[];
   volumes?: Volume[];
 };
 
@@ -617,6 +633,18 @@ export type MockTransportOverrides = {
   onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet };
   onSubnetList?: (req: unknown) => void;
   onSecurityGroupList?: (req: unknown) => void;
+  onSubnetDelete?: (req: SubnetsDeleteRequest) => void | Promise<void>;
+  onSubnetCreate?: (
+    req: SubnetsCreateRequest,
+  ) => SubnetsCreateResponse | Promise<SubnetsCreateResponse>;
+  onSecurityGroupCreate?: (
+    req: SecurityGroupsCreateRequest,
+  ) => SecurityGroupsCreateResponse | Promise<SecurityGroupsCreateResponse>;
+  onSecurityGroupUpdate?: (
+    req: SecurityGroupsUpdateRequest,
+  ) => SecurityGroupsUpdateResponse | Promise<SecurityGroupsUpdateResponse>;
+  onNetworkClassList?: () => never;
+  onVirtualNetworkDelete?: (req: VirtualNetworksDeleteRequest) => void | Promise<void>;
   onNatGatewayList?: (req: NATGatewaysListRequest) => void;
   onNatGatewayCreate?: (
     req: NATGatewaysCreateRequest,
@@ -625,6 +653,10 @@ export type MockTransportOverrides = {
     req: NATGatewaysDeleteRequest,
   ) => NATGatewaysDeleteResponse | Promise<NATGatewaysDeleteResponse>;
   onExternalIpList?: (req: ExternalIPsListRequest) => void;
+  /** Called on every Clusters.List, so a test can tell whether the UI asked. */
+  onClusterList?: () => void;
+  /** Called on every FabricDomains.List, so a test can tell whether the UI asked. */
+  onFabricDomainList?: () => void;
   onExternalIpCreate?: (
     req: ExternalIPsCreateRequest,
   ) => ExternalIPsCreateResponse | Promise<ExternalIPsCreateResponse>;
@@ -683,6 +715,9 @@ export const createMockConnectTransport = (
   const natGateways = [...(fixtures.natGateways ?? [])];
   const externalIps = [...(fixtures.externalIps ?? [])];
   const externalIpAttachments = [...(fixtures.externalIpAttachments ?? [])];
+  const bareMetalInstances = fixtures.bareMetalInstances ?? [];
+  const networkClasses = fixtures.networkClasses ?? [];
+  const fabricDomains = fixtures.fabricDomains ?? [];
   const volumes = [...(fixtures.volumes ?? [])];
 
   return wrapWithAuthInterceptor(
@@ -725,15 +760,17 @@ export const createMockConnectTransport = (
 
       router.service(ComputeInstances, {
         list: (req) => {
-          if (overrides.onComputeInstanceList) {
-            return overrides.onComputeInstanceList(req);
+          // The override may replace the page, or only observe the request.
+          const overridden = overrides.onComputeInstanceList?.(req);
+          if (overridden) {
+            return overridden;
           }
-          return {
-            items: computeInstances,
-            size: computeInstances.length,
-            total: computeInstances.length,
-          };
+          // Paginate like the server, which returns 100 items with no explicit limit.
+          const offset = req.offset ?? 0;
+          const items = computeInstances.slice(offset, offset + (req.limit || 100));
+          return { items, size: items.length, total: computeInstances.length };
         },
+        get: (req) => ({ object: computeInstances.find((item) => item.id === req.id) }),
         create: (req) => {
           if (overrides.onComputeInstanceCreate) {
             return overrides.onComputeInstanceCreate(req);
@@ -822,6 +859,11 @@ export const createMockConnectTransport = (
       });
 
       router.service(BareMetalInstances, {
+        list: () => ({
+          items: bareMetalInstances,
+          size: bareMetalInstances.length,
+          total: bareMetalInstances.length,
+        }),
         create: (req) => {
           if (overrides.onBareMetalInstanceCreate) {
             return overrides.onBareMetalInstanceCreate(req);
@@ -871,7 +913,12 @@ export const createMockConnectTransport = (
           const items = virtualNetworks.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, undefined),
+              matchesVirtualNetworkScopeFilter(req.filter, undefined) &&
+              matchesStringEqualityFilter(
+                req.filter,
+                'this.metadata.tenant',
+                item.metadata?.tenant,
+              ),
           );
           const total = virtualNetworks.length;
           if (req.limit === 0) {
@@ -882,6 +929,10 @@ export const createMockConnectTransport = (
         get: (req) => ({
           object: virtualNetworks.find((i) => i.id === req.id),
         }),
+        delete: async (req) => {
+          await overrides.onVirtualNetworkDelete?.(req);
+          return {};
+        },
       });
 
       router.service(Subnets, {
@@ -902,6 +953,16 @@ export const createMockConnectTransport = (
             object: subnets.find((i) => i.id === req.id),
           };
         },
+        create: async (req) => {
+          if (overrides.onSubnetCreate) {
+            return overrides.onSubnetCreate(req);
+          }
+          return { object: { ...req.object, id: req.object?.id || 'subnet-new' } as Subnet };
+        },
+        delete: async (req) => {
+          await overrides.onSubnetDelete?.(req);
+          return {};
+        },
       });
 
       router.service(SecurityGroups, {
@@ -913,6 +974,45 @@ export const createMockConnectTransport = (
               matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
           );
           return { items, size: items.length, total: items.length };
+        },
+        get: (req) => ({
+          object: securityGroups.find((item) => item.id === req.id),
+        }),
+        create: async (req) => {
+          if (overrides.onSecurityGroupCreate) {
+            return overrides.onSecurityGroupCreate(req);
+          }
+          return { object: { ...req.object, id: req.object?.id || 'sg-new' } as SecurityGroup };
+        },
+        update: async (req) => {
+          if (overrides.onSecurityGroupUpdate) {
+            return overrides.onSecurityGroupUpdate(req);
+          }
+          return { object: req.object };
+        },
+      });
+
+      router.service(FabricDomains, {
+        list: (req) => {
+          overrides.onFabricDomainList?.();
+          // Matches the virtual network filter of the UI by the quoted ID.
+          const items = fabricDomains.filter(
+            (item) => !req.filter || req.filter.includes(`"${item.spec?.virtualNetwork}"`),
+          );
+          return { items, size: items.length, total: items.length };
+        },
+      });
+
+      router.service(NetworkClasses, {
+        list: () => {
+          if (overrides.onNetworkClassList) {
+            return overrides.onNetworkClassList();
+          }
+          return {
+            items: networkClasses,
+            size: networkClasses.length,
+            total: networkClasses.length,
+          };
         },
       });
 
@@ -1065,11 +1165,10 @@ export const createMockConnectTransport = (
           if (overrides.onExternalIPPoolList) {
             return overrides.onExternalIPPoolList(req);
           }
-          return {
-            items: privateExternalIpPools,
-            size: privateExternalIpPools.length,
-            total: privateExternalIpPools.length,
-          };
+          // Pages like the server, which returns 100 items when the caller sets no limit.
+          const offset = req.offset ?? 0;
+          const items = privateExternalIpPools.slice(offset, offset + (req.limit || 100));
+          return { items, size: items.length, total: privateExternalIpPools.length };
         },
         get: (req) => ({
           object: privateExternalIpPools.find((p) => p.id === req.id),
@@ -1297,7 +1396,10 @@ export const createMockConnectTransport = (
       });
 
       router.service(Clusters, {
-        list: () => ({ items: clusters, size: clusters.length, total: clusters.length }),
+        list: () => {
+          overrides.onClusterList?.();
+          return { items: clusters, size: clusters.length, total: clusters.length };
+        },
         get: (req) =>
           overrides.onClusterGet?.(req) ?? { object: clusters.find((c) => c.id === req.id) },
         create: (req) => {
@@ -1374,13 +1476,16 @@ export const createMockConnectTransport = (
       router.service(NATGateways, {
         list: (req) => {
           overrides.onNatGatewayList?.(req);
+          const items = natGateways.filter(
+            (item) =>
+              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
+              matchesSpecExternalIpIdInFilter(req.filter, item.spec?.externalIp?.id),
+          );
           return {
-            items: natGateways.filter(
-              (item) =>
-                matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
-                matchesSpecExternalIpIdInFilter(req.filter, item.spec?.externalIp?.id),
-            ),
-          } satisfies Pick<NATGatewaysListResponse, 'items'>;
+            items,
+            size: items.length,
+            total: items.length,
+          } satisfies Pick<NATGatewaysListResponse, 'items' | 'size' | 'total'>;
         },
         get: (req) => ({
           object: natGateways.find((item) => item.id === req.id),
@@ -1411,20 +1516,28 @@ export const createMockConnectTransport = (
       router.service(ExternalIPs, {
         list: (req) => {
           overrides.onExternalIpList?.(req);
-          const items = externalIps.filter(
+          const matching = externalIps.filter(
             (item) =>
               matchesIdInFilter(req.filter, item.id) &&
+              matchesStringEqualityFilter(
+                req.filter,
+                'this.metadata.tenant',
+                item.metadata?.tenant,
+              ) &&
               matchesUnallocatedExternalIpFilter(
                 req.filter,
                 item.status?.state,
                 item.status?.attached,
               ),
           );
-          return {
-            items: req.limit === 0 ? [] : items,
-            size: items.length,
-            total: items.length,
-          };
+          // A limit of 0 asks for the total only, as the server does for counts.
+          if (req.limit === 0) {
+            return { items: [], size: 0, total: matching.length };
+          }
+          // Paginate like the server, which returns 100 items with no explicit limit.
+          const offset = req.offset ?? 0;
+          const items = matching.slice(offset, offset + (req.limit || 100));
+          return { items, size: items.length, total: matching.length };
         },
         get: (req) => ({
           object: externalIps.find((item) => item.id === req.id),

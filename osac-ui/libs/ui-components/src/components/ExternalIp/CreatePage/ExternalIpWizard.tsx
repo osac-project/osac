@@ -7,7 +7,9 @@ import { ExternalIPs } from '@osac/types';
 import { useCreateResource } from '@osac/ui-components/api/use-resource';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
+import { emptyResourceSelectValue } from '@osac/ui-components/components/Form/ResourceSelectField';
 import { OSACWizardFooter } from '@osac/ui-components/components/Wizard/OSACWizardFooter';
+import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import ExternalIpConfigurationStep from './ExternalIpConfigurationStep';
@@ -22,6 +24,9 @@ const ExternalIpWizard = () => {
   const navigate = useNavigate();
   const { mutateAsync: createExternalIp, error } = useCreateResource(ExternalIPs);
   const [currentStep, setCurrentStep] = useState('general');
+  const { role } = useSession();
+  const isAdmin = role === 'admin';
+  const initialValues = getExternalIpValues();
 
   const onSubmit = async (values: ExternalIpFormValues) => {
     try {
@@ -34,8 +39,15 @@ const ExternalIpWizard = () => {
 
   return (
     <Formik<ExternalIpFormValues>
-      initialValues={getExternalIpValues()}
-      validationSchema={getExternalIpSchema(t)}
+      initialValues={
+        isAdmin
+          ? {
+              ...initialValues,
+              metadata: { ...initialValues.metadata, tenant: emptyResourceSelectValue() },
+            }
+          : initialValues
+      }
+      validationSchema={getExternalIpSchema(t, isAdmin)}
       onSubmit={onSubmit}
     >
       <FieldValidationProvider>

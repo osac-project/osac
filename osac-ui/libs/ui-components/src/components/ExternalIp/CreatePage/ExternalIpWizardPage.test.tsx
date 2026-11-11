@@ -13,8 +13,10 @@ import {
   type Project,
   ProjectState,
 } from '@osac/types';
+import type { Tenant } from '@osac/types/private';
 
 import ExternalIpWizardPage from './ExternalIpWizardPage';
+import type { UserRole } from '../../../shellTypes';
 import type { MockTransportOverrides } from '../../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
@@ -38,24 +40,27 @@ const makeProject = (id: string, name: string): Project =>
     status: { state: ProjectState.ACTIVE },
   }) as Project;
 
-const makePool = (id: string, name: string): ExternalIPPool =>
+const makePool = (id: string, name: string, available = 8n): ExternalIPPool =>
   create(ExternalIPPoolSchema, {
     id,
     metadata: { name },
     spec: { ipFamily: IPFamily.IP_FAMILY_IPV4 },
-    status: { available: 8n },
+    status: { available },
   });
 
 const renderCreatePage = (
   overrides?: MockTransportOverrides,
   pools: ExternalIPPool[] = [makePool('pool-1', 'public-edge')],
+  role: UserRole = 'tenant-admin',
 ) =>
   renderWithProviders(<ExternalIpWizardPage />, {
     transportOverrides: overrides,
     apiFixtures: {
       projects: [makeProject('p-1', '')],
       externalIpPools: pools,
+      tenants: [{ id: 'tenant-1', metadata: { name: 'Tenant One' } } as Tenant],
     },
+    session: { role },
   });
 
 const clickNext = async (user: UserEvent) => {
@@ -134,6 +139,56 @@ describe('ExternalIpWizardPage', () => {
 
     expect(await screen.findByText('Failed to create external IP')).toBeInTheDocument();
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it("shows each pool's available addresses and disables an exhausted pool", async () => {
+    const { user } = renderCreatePage(undefined, [
+      makePool('pool-1', 'public-edge'),
+      makePool('pool-2', 'exhausted', 0n),
+    ]);
+
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'edge-ip');
+    await clickNext(user);
+    await screen.findByRole('heading', { name: 'Configuration' });
+    const pool = await waitFor(() => {
+      const toggle = screen.getByLabelText(/^IP pool/);
+      expect(toggle).not.toBeDisabled();
+      return toggle;
+    });
+    await user.click(pool);
+
+    expect(screen.getByRole('option', { name: 'public-edge · 8 available' })).toBeEnabled();
+    expect(screen.getByRole('option', { name: 'exhausted · 0 available' })).toBeDisabled();
+  });
+
+  it('asks a provider admin for the tenant first and sends it', async () => {
+    let createRequest: ExternalIPsCreateRequest | undefined;
+    const { user } = renderCreatePage(
+      {
+        onExternalIpCreate: (req: ExternalIPsCreateRequest) => {
+          createRequest = req;
+          return create(ExternalIPsCreateResponseSchema, { object: { id: 'eip-1' } });
+        },
+      },
+      undefined,
+      'admin',
+    );
+
+    const projectToggle = await waitFor(() => {
+      const toggle = screen.getByRole('button', {
+        name: (_accessibleName, element) => element.id === 'metadata.project',
+      });
+      return toggle;
+    });
+    expect(projectToggle).toBeDisabled();
+
+    await user.click(await screen.findByRole('button', { name: 'Tenant' }));
+    await user.click(await screen.findByRole('option', { name: 'Tenant One' }));
+    await fillValidWizard(user);
+    expect(screen.getByText('Tenant One')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Create external IP' }));
+
+    await waitFor(() => expect(createRequest?.object?.metadata?.tenant).toBe('tenant-1'));
   });
 
   it('cancels back to the list without creating', async () => {

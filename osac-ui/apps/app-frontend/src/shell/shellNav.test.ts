@@ -111,33 +111,47 @@ describe('navRowsForRole', () => {
     expect(findLink('tenant-idp-manager', 'projects')).toBeUndefined();
   });
 
-  it('includes Networking section for all roles except IDP manager', () => {
-    for (const role of [...nonIdpRoles, 'admin'] as UserRole[]) {
-      const networking = findSection(role, 'nav-tenant-networking');
-      expect(networking).toBeDefined();
-      expect(networking?.children).toEqual([
-        {
-          kind: 'link',
-          id: 'virtual-networks',
-          label: 'Virtual networks',
-          path: '/networking/virtual-networks',
-        },
-        {
-          kind: 'link',
-          id: 'security-groups',
-          label: 'Security groups',
-          path: '/networking/security-groups',
-        },
-        {
-          kind: 'link',
-          id: 'external-ips',
-          label: 'External IPs',
-          path: '/networking/external-ips',
-        },
-      ]);
+  const tenantNetworkingLinks: NavLink[] = [
+    {
+      kind: 'link',
+      id: 'virtual-networks',
+      label: 'Virtual networks',
+      path: '/networking/virtual-networks',
+    },
+    { kind: 'link', id: 'subnets', label: 'Subnets', path: '/networking/subnets' },
+    {
+      kind: 'link',
+      id: 'security-groups',
+      label: 'Security groups',
+      path: '/networking/security-groups',
+    },
+    { kind: 'link', id: 'nat-gateways', label: 'NAT gateways', path: '/networking/nat-gateways' },
+    { kind: 'link', id: 'external-ips', label: 'External IPs', path: '/networking/external-ips' },
+  ];
+
+  it('includes the tenant Networking section for tenant admins and tenant users', () => {
+    for (const role of nonIdpRoles) {
+      expect(findSection(role, 'nav-tenant-networking')?.children).toEqual(tenantNetworkingLinks);
     }
-    const networking = findSection('tenant-idp-manager', 'nav-tenant-networking');
-    expect(networking).toBeUndefined();
+    expect(findSection('tenant-idp-manager', 'nav-tenant-networking')).toBeUndefined();
+  });
+
+  it('adds External IP pools and Network class, last, to Networking for the provider admin', () => {
+    expect(findSection('admin', 'nav-tenant-networking')?.children).toEqual([
+      ...tenantNetworkingLinks,
+      {
+        kind: 'link',
+        id: 'external-ip-pools',
+        label: 'External IP pools',
+        path: '/admin/infrastructure/external-ip-pools',
+      },
+      {
+        kind: 'link',
+        id: 'network-class',
+        label: 'Network class',
+        path: '/admin/infrastructure/network-class',
+      },
+    ]);
   });
 
   it('Administration section shows up only for admin role', () => {
@@ -153,7 +167,7 @@ describe('navRowsForRole', () => {
     ]);
   });
 
-  it('Infrastructure section shows up only for admin role and contains instance types, external IP pools, bare metal instance types, and disk images', () => {
+  it('Infrastructure section shows up only for admin role and contains instance types, bare metal instance types, and disk images', () => {
     expect(findSection('admin', 'nav-infrastructure')).toEqual({
       kind: 'section',
       id: 'nav-infrastructure',
@@ -165,12 +179,6 @@ describe('navRowsForRole', () => {
           label: 'Instance types',
           path: '/admin/infrastructure/instance-types',
           service: ServiceTier.VMAAS,
-        },
-        {
-          kind: 'link',
-          id: 'external-ip-pools',
-          label: 'External IP pools',
-          path: '/admin/infrastructure/external-ip-pools',
         },
         {
           kind: 'link',

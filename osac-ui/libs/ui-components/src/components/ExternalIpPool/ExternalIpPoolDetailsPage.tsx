@@ -7,6 +7,7 @@ import DeleteResourceButton from '@osac/ui-components/components/Resource/Delete
 
 import ExternalIpPoolDeleteConfirmModal from './ExternalIpPoolDeleteConfirmModal';
 import ExternalIpPoolDetailsPageContent from './ExternalIpPoolDetailsPageContent';
+import { poolDeleteDisabledReason } from './poolDelete';
 import { useGetResource } from '../../api/use-resource';
 import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceDetailHeader } from '../Resource/ResourceDetailHeader';
@@ -21,6 +22,7 @@ export const ExternalIpPoolDetailsPage = () => {
   const { data, isLoading, error, refetch } = useGetResource(ExternalIPPools, { id });
   const pool = data?.object;
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const deleteDisabledReason = pool ? poolDeleteDisabledReason(t, pool) : undefined;
 
   return (
     <ResourceDetailsPage
@@ -63,7 +65,11 @@ export const ExternalIpPoolDetailsPage = () => {
                     />
                   </FlexItem>
                   <FlexItem>
-                    <DeleteResourceButton onClick={() => setDeleteOpen(true)} />
+                    <DeleteResourceButton
+                      canDelete={!deleteDisabledReason}
+                      disabledReason={deleteDisabledReason}
+                      onClick={deleteDisabledReason ? undefined : () => setDeleteOpen(true)}
+                    />
                   </FlexItem>
                 </Flex>
               </StackItem>

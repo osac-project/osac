@@ -16,9 +16,12 @@ import * as Yup from 'yup';
 
 import type { SecurityGroupSchema } from '@osac/types';
 
+import { useNetworkingTenants } from './useNetworkingTenants';
+import { isVirtualNetworkReady, virtualNetworkOptionLabel } from './virtualNetworkReadiness';
 import { useCreateSecurityGroup, useVirtualNetworks } from '../../api/v1/networking';
 import OsacForm from '../../components/Form/OsacForm';
 import { SelectField } from '../../components/Form/SelectField';
+import { useSession } from '../../hooks/use-session';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import NameField from '../Form/NameField';
@@ -49,14 +52,19 @@ export const SecurityGroupCreateModal = ({
   virtualNetworkId,
 }: SecurityGroupCreateModalProps) => {
   const { t } = useTranslation();
+  const { isAdmin, tenantName } = useNetworkingTenants();
   const navigate = useNavigate();
+  const { role } = useSession();
   const createSecurityGroup = useCreateSecurityGroup();
   const { data: virtualNetworks = [], isLoading, error: vnError } = useVirtualNetworks();
 
-  const virtualNetworkOptions = virtualNetworks.map((vn) => ({
-    value: vn.id,
-    label: `${vn.metadata?.name ?? vn.id} (${vn.spec?.ipv4Cidr ?? ''})`,
-  }));
+  // Security groups can only be created in a READY virtual network.
+  const virtualNetworkOptions = virtualNetworks
+    .filter((vn) => isVirtualNetworkReady(vn) || vn.id === virtualNetworkId)
+    .map((vn) => ({
+      value: vn.id,
+      label: virtualNetworkOptionLabel(vn, isAdmin ? tenantName : undefined),
+    }));
 
   return (
     <Formik<FormValues>
@@ -70,11 +78,15 @@ export const SecurityGroupCreateModal = ({
       validationSchema={validationSchema(t)}
       onSubmit={async (values) => {
         try {
+          const parent = virtualNetworks.find(({ id }) => id === values.virtualNetwork);
           const body: MessageInitShape<typeof SecurityGroupSchema> = {
             metadata: {
               name: values.metadata.name,
-              project: virtualNetworks.find(({ id }) => id === values.virtualNetwork)?.metadata
-                ?.project,
+              project: parent?.metadata?.project,
+              // A provider admin creates the group in the virtual network's tenant.
+              ...(role === 'admin' && parent?.metadata?.tenant
+                ? { tenant: parent.metadata.tenant }
+                : {}),
             },
             spec: {
               virtualNetwork: {
@@ -120,12 +132,13 @@ export const SecurityGroupCreateModal = ({
                 <OsacForm>
                   <SelectField
                     name="virtualNetwork"
-                    label={t('Virtual Network')}
+                    label={t('Virtual network')}
                     fieldId="sg-vn"
                     isRequired
                     isLoading={isLoading}
                     isDisabled={Boolean(virtualNetworkId)}
                     placeholder={t('Select a virtual network')}
+                    helperText={t('Only ready virtual networks are listed.')}
                     options={virtualNetworkOptions}
                   />
                   <NameField />

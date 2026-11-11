@@ -1,5 +1,4 @@
-import { MemoryRouter } from 'react-router-dom';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,6 +6,8 @@ import { VirtualNetworkState } from '@osac/types';
 
 import { SecurityGroupCreateModal } from './SecurityGroupCreateModal';
 import * as networkingApi from '../../api/v1/networking';
+import type { UserRole } from '../../shellTypes';
+import { renderWithProviders } from '../../test-utils/TestProviders';
 
 vi.mock('../../api/v1/networking', async (importOriginal) => {
   const actual = await importOriginal<typeof networkingApi>();
@@ -27,9 +28,15 @@ describe('SecurityGroupCreateModal', () => {
     },
     {
       id: 'vn-2',
-      metadata: { name: 'vn-dev' },
+      metadata: { name: 'vn-dev', project: 'proj-b', tenant: 'tenant-b' },
       spec: { ipv4Cidr: '192.168.0.0/16' },
       status: { state: VirtualNetworkState.READY },
+    },
+    {
+      id: 'vn-3',
+      metadata: { name: 'vn-pending' },
+      spec: { ipv4Cidr: '172.16.0.0/16' },
+      status: { state: VirtualNetworkState.PENDING },
     },
   ];
 
@@ -49,18 +56,14 @@ describe('SecurityGroupCreateModal', () => {
     } as unknown as ReturnType<typeof networkingApi.useCreateSecurityGroup>);
   });
 
-  const renderModal = (onClose = vi.fn()) =>
-    render(
-      <MemoryRouter>
-        <SecurityGroupCreateModal onClose={onClose} />
-      </MemoryRouter>,
-    );
+  const renderModal = (onClose = vi.fn(), role: UserRole = 'tenant-user') =>
+    renderWithProviders(<SecurityGroupCreateModal onClose={onClose} />, { session: { role } });
 
   it('renders modal with VN dropdown and Name field', () => {
     renderModal();
 
     expect(screen.getByText('Create security group')).toBeInTheDocument();
-    expect(screen.getByLabelText(/Virtual Network/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Virtual network/)).toBeInTheDocument();
     expect(screen.getByLabelText(/Name/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument();
@@ -72,7 +75,7 @@ describe('SecurityGroupCreateModal', () => {
 
     renderModal();
 
-    await user.click(screen.getByLabelText(/Virtual Network/i));
+    await user.click(screen.getByLabelText(/^Virtual network/));
     await user.click(screen.getByRole('option', { name: /vn-prod/i }));
     await user.type(screen.getByLabelText(/Name/i), 'sg-web');
     await user.click(screen.getByRole('button', { name: /Create/i }));
@@ -97,13 +100,56 @@ describe('SecurityGroupCreateModal', () => {
 
     renderModal();
 
-    await user.click(screen.getByLabelText(/Virtual Network/i));
+    await user.click(screen.getByLabelText(/^Virtual network/));
     await user.click(screen.getByRole('option', { name: /vn-prod/i }));
     await user.type(screen.getByLabelText(/Name/i), 'sg-web');
     await user.click(screen.getByRole('button', { name: /Create/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/API error/i)).toBeInTheDocument();
+    });
+  });
+
+  it('offers only ready virtual networks', async () => {
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(screen.getByLabelText(/^Virtual network/));
+    expect(screen.getByRole('option', { name: /vn-prod/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /vn-pending/ })).not.toBeInTheDocument();
+  });
+
+  it('names the tenant in the network options for a provider admin only', async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderModal(vi.fn(), 'admin');
+
+    await user.click(screen.getByLabelText(/^Virtual network/));
+    expect(
+      screen.getByRole('option', { name: 'vn-dev (192.168.0.0/16, tenant-b)' }),
+    ).toBeInTheDocument();
+    unmount();
+
+    renderModal();
+    await user.click(screen.getByLabelText(/^Virtual network/));
+    expect(screen.getByRole('option', { name: 'vn-dev (192.168.0.0/16)' })).toBeInTheDocument();
+  });
+
+  it("creates the group in the virtual network's project and, for an admin, its tenant", async () => {
+    const user = userEvent.setup();
+    mutateAsync.mockResolvedValue({ id: 'sg-new' });
+    renderModal(vi.fn(), 'admin');
+
+    await user.click(screen.getByLabelText(/^Virtual network/));
+    await user.click(screen.getByRole('option', { name: /vn-dev/ }));
+    await user.type(screen.getByLabelText(/Name/i), 'sg-web');
+    await user.click(screen.getByRole('button', { name: /Create/i }));
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: { name: 'sg-web', project: 'proj-b', tenant: 'tenant-b' },
+        }),
+      );
     });
   });
 

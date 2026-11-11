@@ -5,7 +5,7 @@ import { TypeaheadSelect, type TypeaheadSelectOption } from '@patternfly/react-t
 import { useField } from 'formik';
 
 import type { ListParams } from '@osac/ui-components/api/types';
-import { useListResource } from '@osac/ui-components/api/use-resource';
+import { useListAllResources, useListResource } from '@osac/ui-components/api/use-resource';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 import { getVisibleFieldError } from './fieldError';
@@ -45,9 +45,18 @@ export interface ResourceSelectFieldProps<TResource extends ResourceListItem = R
   onSelectResource?: (value: ResourceSelectValue, resource?: TResource) => void;
   /** Client-side filter applied after the list response (e.g. GPU-class). */
   filterItems?: (item: TResource) => boolean;
+  /**
+   * Loads every page instead of the first one. Set it when `filterItems` drops items the
+   * server filter cannot, so a usable item past the first page is still offered.
+   */
+  loadAllPages?: boolean;
+  /** False holds the list query, for example until a parent selection gives its filter. */
+  isQueryEnabled?: boolean;
   /** Label for options and the closed toggle. Defaults to metadata.name. */
   formatOptionLabel?: (item: TResource) => string;
   getOptionDescription?: (item: TResource) => string | undefined;
+  /** Lists an item but keeps it from being selected (e.g. a pool without free addresses). */
+  isOptionDisabled?: (item: TResource) => boolean;
 }
 
 const resourceFromItem = (item: ResourceListItem): ResourceSelectValue => ({
@@ -77,23 +86,33 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
   createOption,
   onSelectResource,
   filterItems,
+  loadAllPages = false,
+  isQueryEnabled = true,
   formatOptionLabel = defaultOptionLabel,
   getOptionDescription,
+  isOptionDisabled,
 }: ResourceSelectFieldProps<TResource>) => {
   const [field, meta, helpers] = useField<ResourceSelectValue>(name);
   const [typeaheadKey, setTypeaheadKey] = useState(0);
   const showValidationErrors = useShowFieldValidationErrors();
   const error = getVisibleFieldError(meta, showValidationErrors);
-  const { data, isLoading, isFetching, error: loadError } = useListResource(service, request);
+  const onePage = useListResource(service, request, {
+    enabled: !loadAllPages && isQueryEnabled,
+  });
+  const allPages = useListAllResources(service as never, request?.filter, {
+    enabled: loadAllPages && isQueryEnabled,
+  });
+  const { isLoading, isFetching, error: loadError } = loadAllPages ? allPages : onePage;
+  const loaded = loadAllPages
+    ? (allPages.data as { items?: TResource[] } | undefined)?.items
+    : (onePage.data as { items?: TResource[] } | undefined)?.items;
   const items = useMemo(() => {
-    const listed = ((data as { items?: TResource[] } | undefined)?.items ?? []).filter(
-      (item) => item.id,
-    );
+    const listed = (loaded ?? []).filter((item) => item.id);
     return filterItems ? listed.filter(filterItems) : listed;
-  }, [data, filterItems]);
+  }, [loaded, filterItems]);
 
   const listFailed = Boolean(loadError);
-  const listEmpty = !isLoading && !listFailed && items.length === 0;
+  const listEmpty = isQueryEnabled && !isLoading && !listFailed && items.length === 0;
   const controlDisabled = isDisabled || isLoading || listFailed || (listEmpty && !createOption);
   const effectivePlaceholder = isLoading ? loadingPlaceholder : placeholder;
   const selectedId = field.value?.id ?? '';
@@ -108,13 +127,14 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
         value: item.id,
         content: detail ? `${baseLabel} · ${detail}` : baseLabel,
         selected: item.id === selectedId,
+        isDisabled: isOptionDisabled?.(item),
       };
     });
     if (createLabel) {
       options.push({ value: -1, content: createLabel, icon: <PlusIcon /> });
     }
     return options;
-  }, [createLabel, formatOptionLabel, getOptionDescription, items, selectedId]);
+  }, [createLabel, formatOptionLabel, getOptionDescription, isOptionDisabled, items, selectedId]);
 
   useEffect(() => {
     if (
@@ -123,7 +143,8 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
       isFetching ||
       controlDisabled ||
       items.length !== 1 ||
-      selectedId !== ''
+      selectedId !== '' ||
+      isOptionDisabled?.(items[0])
     ) {
       return;
     }
@@ -136,6 +157,7 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
     helpers,
     isFetching,
     isLoading,
+    isOptionDisabled,
     items,
     onSelectResource,
     selectedId,

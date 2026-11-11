@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { ExternalIP, NATGateway, SecurityGroup, Subnet, VirtualNetwork } from '@osac/types';
 import { ExternalIPState, SecurityGroupState, SubnetState, VirtualNetworkState } from '@osac/types';
+import { type NetworkClass, NetworkClassState, type Tenant } from '@osac/types/private';
 import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 
 import { VirtualNetworksListPage } from './VirtualNetworksListPage';
+import type { UserRole } from '../../shellTypes';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const virtualNetworks = [
@@ -71,6 +73,7 @@ const renderPage = (
     onSecurityGroupList?: (req: unknown) => void;
   },
   routerEntries?: string[],
+  role: UserRole = 'tenant-user',
 ) =>
   renderWithProviders(<VirtualNetworksListPage />, {
     apiFixtures: {
@@ -86,6 +89,7 @@ const renderPage = (
       onSecurityGroupList: overrides?.onSecurityGroupList,
     },
     routerEntries,
+    session: { role },
   });
 
 const getTableCellByLabel = (row: HTMLElement, label: string) => {
@@ -122,27 +126,19 @@ describe('VirtualNetworksListPage', () => {
   it('shows an empty state when no virtual networks exist', async () => {
     renderPage({ virtualNetworks: [] });
 
-    await waitFor(() => {
-      expect(
-        screen.getByRole('heading', { name: 'No virtual networks found', level: 2 }),
-      ).toBeInTheDocument();
-    });
-    expect(screen.getByText('No virtual networks are available yet.')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: 'No virtual networks', level: 2 }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Create virtual network' })).toHaveLength(2);
   });
 
   it('shows a filter-specific empty state when the search matches nothing', async () => {
     renderPage({ virtualNetworks: [] }, ['/?search=no-such-vn']);
 
-    await waitFor(() => {
-      expect(
-        screen.getByRole('heading', {
-          name: 'No virtual networks match your filters',
-          level: 2,
-        }),
-      ).toBeInTheDocument();
-    });
-    expect(screen.getByText('Try a different state or search term.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: 'No results found', level: 2 }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Clear all filters' })).toHaveLength(1);
   });
 
   it('renders the state filter toggle', async () => {
@@ -176,11 +172,33 @@ describe('VirtualNetworksListPage', () => {
     expect(devRow).toBeDefined();
 
     const prodNatCell = getTableCellByLabel(prodRow as HTMLElement, 'NAT gateway');
-    expect(within(prodNatCell).getByText('nat-egress')).toBeInTheDocument();
-    expect(within(prodNatCell).getByText('203.0.113.10')).toBeInTheDocument();
+    // One line: the gateway opens the network's NAT gateway tab; an external IP has no page.
+    expect(prodNatCell).toHaveTextContent('nat-egress (203.0.113.10)');
+    expect(within(prodNatCell).getByRole('link', { name: 'nat-egress' })).toHaveAttribute(
+      'href',
+      '/networking/virtual-networks/vn-1?tab=nat-gateway',
+    );
+    expect(
+      within(prodNatCell).queryByRole('link', { name: '203.0.113.10' }),
+    ).not.toBeInTheDocument();
     expect(within(prodNatCell).queryByText('Ready')).not.toBeInTheDocument();
     const devNatCell = getTableCellByLabel(devRow as HTMLElement, 'NAT gateway');
     expect(devNatCell).toHaveTextContent('—');
+  });
+
+  it('shows the project, the IPv4 CIDR and the NAT gateway on one line on a card', async () => {
+    renderPage();
+
+    const card = (await screen.findByRole('link', { name: 'vn-prod' })).closest(
+      '.pf-v6-c-card',
+    ) as HTMLElement;
+    expect(within(card).getByText('IPv4 CIDR')).toBeInTheDocument();
+    expect(within(card).queryByText('IPv4')).not.toBeInTheDocument();
+    expect(within(card).getByText('Project')).toBeInTheDocument();
+    // Without a project record to link to, the root project is still named Root.
+    expect(within(card).getByText('Root')).toBeInTheDocument();
+    const natLink = await within(card).findByRole('link', { name: 'nat-egress' });
+    expect(natLink.parentElement).toHaveTextContent('nat-egress (203.0.113.10)');
   });
 
   it('shows subnet and security group counts in the table', async () => {
@@ -246,6 +264,146 @@ describe('VirtualNetworksListPage', () => {
     await screen.findByRole('link', { name: 'vn-prod' });
     await waitFor(() => {
       expect(listCalls).toBe(1);
+    });
+  });
+
+  it('shows the tenant and the Default badge to a cloud provider admin in the table view', async () => {
+    localStorage.setItem(getViewTypePrefKey('virtual-networks'), 'list');
+    renderWithProviders(<VirtualNetworksListPage />, {
+      apiFixtures: {
+        virtualNetworks: [
+          {
+            id: 'vn-default',
+            metadata: {
+              name: 'default',
+              tenant: 'tenant-a',
+              labels: { 'osac.openshift.io/default': 'true' },
+            },
+            spec: { ipv4Cidr: '10.200.0.0/16' },
+            status: { state: VirtualNetworkState.READY },
+          },
+        ] as unknown as VirtualNetwork[],
+        subnets: [],
+        securityGroups: [],
+        natGateways: [],
+        externalIps: [],
+      },
+      session: { role: 'admin', tenantId: '' },
+    });
+
+    expect(await screen.findByRole('columnheader', { name: 'Tenant' })).toBeInTheDocument();
+    const row = (await screen.findByRole('link', { name: 'default' })).closest('tr') as HTMLElement;
+    expect(getTableCellByLabel(row, 'Tenant')).toHaveTextContent('tenant-a');
+    expect(within(row).getByText('Default')).toBeInTheDocument();
+  });
+
+  it('filters by tenant and shows the tenant on cards for a provider admin', async () => {
+    const tenants = [
+      { id: 'tenant-a', metadata: { name: 'Acme' } },
+      { id: 'tenant-b', metadata: { name: 'Globex' } },
+    ] as Tenant[];
+    const { user } = renderWithProviders(<VirtualNetworksListPage />, {
+      apiFixtures: {
+        virtualNetworks: [
+          { ...virtualNetworks[0], metadata: { name: 'default', tenant: 'tenant-a' } },
+          { ...virtualNetworks[1], metadata: { name: 'default', tenant: 'tenant-b' } },
+        ] as VirtualNetwork[],
+        subnets: [],
+        securityGroups: [],
+        natGateways: [],
+        externalIps: [],
+        tenants,
+      },
+      session: { role: 'admin', tenantId: '' },
+    });
+
+    expect(
+      await screen.findByText('Networks for workloads and catalog networking.'),
+    ).toBeInTheDocument();
+    expect(await screen.findAllByRole('link', { name: 'default' })).toHaveLength(2);
+    expect(await screen.findByText('Acme')).toBeInTheDocument();
+    expect(screen.getByText('Globex')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Filter by tenant' }));
+    await user.click(screen.getByRole('option', { name: 'Globex' }));
+
+    await waitFor(() => expect(screen.getAllByRole('link', { name: 'default' })).toHaveLength(1));
+    const card = screen.getByRole('link', { name: 'default' }).closest('.pf-v6-c-card');
+    expect(within(card as HTMLElement).getByText('Globex')).toBeInTheDocument();
+    expect(screen.queryByText('Acme')).not.toBeInTheDocument();
+  });
+
+  it('puts the Tenant column last for a provider admin', async () => {
+    localStorage.setItem(getViewTypePrefKey('virtual-networks'), 'list');
+    renderPage(undefined, undefined, 'admin');
+
+    await screen.findByRole('link', { name: 'vn-prod' });
+    const headers = screen.getAllByRole('columnheader').map((header) => header.textContent);
+    expect(headers.slice(-2)).toEqual(['Tenant', '']);
+  });
+
+  it('shows no Tenant filter to a tenant user', async () => {
+    renderPage();
+
+    await screen.findByRole('link', { name: 'vn-prod' });
+    expect(screen.queryByRole('button', { name: 'Filter by tenant' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Tenant')).not.toBeInTheDocument();
+  });
+
+  it('shows no Tenant column to a tenant user', async () => {
+    localStorage.setItem(getViewTypePrefKey('virtual-networks'), 'list');
+    renderWithProviders(<VirtualNetworksListPage />, {
+      apiFixtures: { virtualNetworks, subnets, securityGroups, natGateways, externalIps },
+      session: { role: 'tenant-user', tenantId: 'tenant-a' },
+    });
+
+    await screen.findByRole('link', { name: 'vn-prod' });
+    expect(screen.queryByRole('columnheader', { name: 'Tenant' })).not.toBeInTheDocument();
+  });
+
+  describe('network class gate', () => {
+    const renderWithClass = (role: UserRole, state: NetworkClassState) =>
+      renderWithProviders(<VirtualNetworksListPage />, {
+        apiFixtures: {
+          virtualNetworks,
+          subnets,
+          securityGroups,
+          natGateways,
+          externalIps,
+          networkClasses: [{ id: 'nc-1', status: { state } } as unknown as NetworkClass],
+        },
+        session: { role, tenantId: '' },
+      });
+
+    it('disables Create virtual network for the provider admin until the network class is Ready', async () => {
+      const { user } = renderWithClass('admin', NetworkClassState.PENDING);
+      expect(await screen.findAllByText('vn-prod')).not.toHaveLength(0);
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Create virtual network' })).toHaveAttribute(
+          'aria-disabled',
+          'true',
+        ),
+      );
+      const create = screen.getByRole('button', { name: 'Create virtual network' });
+      await user.hover(create);
+      expect(
+        await screen.findByText('Available when the network class is Ready.'),
+      ).toBeInTheDocument();
+    });
+
+    it('enables Create virtual network for the provider admin when the network class is Ready', async () => {
+      renderWithClass('admin', NetworkClassState.READY);
+
+      const create = await screen.findByRole('button', { name: 'Create virtual network' });
+      await waitFor(() => expect(create).not.toHaveAttribute('aria-disabled', 'true'));
+    });
+
+    it('does not gate a tenant, who cannot read the network class', async () => {
+      renderWithClass('tenant-admin', NetworkClassState.PENDING);
+
+      const create = await screen.findByRole('button', { name: 'Create virtual network' });
+      await waitFor(() => expect(create).not.toHaveAttribute('aria-disabled', 'true'));
     });
   });
 });

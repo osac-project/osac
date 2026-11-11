@@ -2,7 +2,7 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ExternalIP } from '@osac/types';
+import type { ExternalIP, ExternalIPAttachment, NATGateway } from '@osac/types';
 import { ExternalIPState } from '@osac/types';
 
 import AttachExternalIpModal from './AttachExternalIpModal';
@@ -34,12 +34,16 @@ const renderModal = ({
   onAttach = vi.fn().mockResolvedValue(undefined),
   onClose = vi.fn(),
   externalIps = [eligibleIp],
+  natGateways = [],
+  externalIpAttachments = [],
   project,
   transportOverrides,
 }: {
   onAttach?: (externalIpId: string) => Promise<unknown>;
   onClose?: () => void;
   externalIps?: ExternalIP[];
+  natGateways?: NATGateway[];
+  externalIpAttachments?: ExternalIPAttachment[];
   project?: string;
   transportOverrides?: MockTransportOverrides;
 } = {}) =>
@@ -51,7 +55,11 @@ const renderModal = ({
       onClose={onClose}
       project={project}
     />,
-    { apiFixtures: { externalIps }, transportOverrides },
+    {
+      apiFixtures: { externalIps, natGateways, externalIpAttachments },
+      transportOverrides,
+      session: { role: 'tenant-user' },
+    },
   );
 
 describe('AttachExternalIpModal', () => {
@@ -77,6 +85,51 @@ describe('AttachExternalIpModal', () => {
 
     expect(screen.getByRole('option', { name: 'edge-ip' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'in-use-ip' })).not.toBeInTheDocument();
+  });
+
+  it('excludes IPs used by a NAT gateway or an attachment, and default and automatic IPs', async () => {
+    const allocatedIp = (id: string, labels: Record<string, string> = {}) =>
+      ({
+        id,
+        metadata: { name: id, labels },
+        // status.attached stays false: a NATGateway consumer never sets it, and an
+        // attachment sets it only once READY.
+        status: { state: ExternalIPState.EXTERNAL_IP_STATE_ALLOCATED, attached: false },
+      }) as ExternalIP;
+    const { user } = renderModal({
+      externalIps: [
+        eligibleIp,
+        allocatedIp('nat-used-ip'),
+        allocatedIp('attachment-used-ip'),
+        allocatedIp('default-ip', { 'osac.openshift.io/default': 'true' }),
+        allocatedIp('auto-ip', { 'osac.openshift.io/auto-created': 'true' }),
+      ],
+      natGateways: [
+        {
+          id: 'nat-1',
+          spec: { virtualNetwork: { id: 'vn-1' }, externalIp: { id: 'nat-used-ip' } },
+        },
+      ] as NATGateway[],
+      externalIpAttachments: [
+        {
+          id: 'att-1',
+          spec: {
+            externalIp: { id: 'attachment-used-ip' },
+            target: { case: 'computeInstance', value: { id: 'vm-1', name: 'web-1' } },
+          },
+        },
+      ] as ExternalIPAttachment[],
+    });
+
+    await waitFor(() => {
+      expect(getResourceSelectCombobox(/^External IP/)).toHaveValue('edge-ip');
+    });
+    await user.click(screen.getByLabelText(/^External IP/));
+
+    expect(screen.getByRole('option', { name: 'edge-ip' })).toBeInTheDocument();
+    for (const name of ['nat-used-ip', 'attachment-used-ip', 'default-ip', 'auto-ip']) {
+      expect(screen.queryByRole('option', { name })).not.toBeInTheDocument();
+    }
   });
 
   it('requests unattached external IPs from the target project', async () => {

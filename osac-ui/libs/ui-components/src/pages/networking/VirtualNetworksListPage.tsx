@@ -1,9 +1,6 @@
-import { useMemo, useState } from 'react';
+import { startTransition, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Button,
-  EmptyState,
-  EmptyStateBody,
   Gallery,
   GalleryItem,
   Stack,
@@ -30,7 +27,6 @@ import VirtualNetworkTable from '@osac/ui-components/components/networking/Virtu
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
 import ListPageToolbar from '@osac/ui-components/components/Page/ListPageToolbar';
-import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 import DebounceSearchInput from '@osac/ui-components/components/Primitives/DebounceSearchInput';
 import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
 import {
@@ -38,17 +34,33 @@ import {
   useArrayPageFilter,
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter.ts';
+import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
+import { resourceDisplayName } from '../../api/v1/networking';
+import GatedCreateButton from '../../components/networking/GatedCreateButton';
+import NetworkingListEmptyState from '../../components/networking/NetworkingListEmptyState';
+import NetworkingSelectFilter from '../../components/networking/NetworkingSelectFilter';
+import { useNetworkClassNotReadyReason } from '../../components/networking/useNetworkClassNotReadyReason';
+import { TENANT_FILTER_PARAM } from '../../components/networking/useNetworkingListFilters';
+import { useNetworkingTenants } from '../../components/networking/useNetworkingTenants';
 import { VirtualNetworkCreateModal } from '../../components/networking/VirtualNetworkCreateModal';
+import ProjectFilter from '../../components/Page/ProjectFilter';
 
 const VIRTUAL_NETWORKS_VIEW_KEY = 'virtual-networks';
 
 export const VirtualNetworksListPage = () => {
   const { t } = useTranslation();
+  // Cloud provider admins see every tenant's networks, so the table names the tenant.
+  const { isAdmin, tenants, tenantName } = useNetworkingTenants();
+  // A virtual network needs a READY network class; only the provider admin can see it.
+  const networkClassNotReadyReason = useNetworkClassNotReadyReason();
   const [, setSearchParams] = useSearchParams();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
+  const [tenantParam, setTenantId] = usePageFilter(TENANT_FILTER_PARAM);
+  const tenantId = isAdmin ? tenantParam : '';
+  const { projects, setProjects } = useSession();
   const [searchResetKey, setSearchResetKey] = useState(0);
   const [stateFilters, toggleStateFilter] = useArrayPageFilter<VirtualNetworkStateFilterValue>(
     STATE_FILTER_PARAM,
@@ -63,8 +75,8 @@ export const VirtualNetworksListPage = () => {
   );
 
   const filter = useMemo(
-    () => buildVirtualNetworkListFilter(stateEnumValues, search.trim()),
-    [stateEnumValues, search],
+    () => buildVirtualNetworkListFilter(stateEnumValues, search.trim(), tenantId, projects),
+    [stateEnumValues, search, tenantId, projects],
   );
 
   const { data, isLoading, error } = useListResource(VirtualNetworks, { filter });
@@ -136,37 +148,48 @@ export const VirtualNetworksListPage = () => {
   const totalItems = totalsData?.total ?? 0;
   const hasTotals = totalsData !== undefined && !totalsError;
 
-  const isFiltered = Boolean(search.trim() || stateEnumValues.length);
+  const isFiltered = Boolean(
+    search.trim() || stateEnumValues.length || tenantId || projects.length > 0,
+  );
   const showEmptyState = !isLoading && !error && items.length === 0;
 
   const clearAllFilters = () => {
     setSearchResetKey((key) => key + 1);
+    if (projects.length > 0) {
+      // In the router's transition, so the project filter sees the cleared URL.
+      startTransition(() => setProjects([]));
+    }
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete(SEARCH_PARAM);
         next.delete(STATE_FILTER_PARAM);
+        next.delete(TENANT_FILTER_PARAM);
         return next;
       },
       { replace: true },
     );
   };
 
-  const emptyState =
-    totalItems === 0 && !isFiltered ? (
-      <EmptyState titleText={t('No virtual networks found')} headingLevel="h2">
-        <EmptyStateBody>{t('No virtual networks are available yet.')}</EmptyStateBody>
-      </EmptyState>
-    ) : (
-      <EmptyState titleText={t('No virtual networks match your filters')} headingLevel="h2">
-        <EmptyStateBody>
-          {t('Try a different state or search term.')}{' '}
-          <Button variant="link" isInline onClick={clearAllFilters}>
-            {t('Clear all filters')}
-          </Button>
-        </EmptyStateBody>
-      </EmptyState>
-    );
+  const createButton = (
+    <GatedCreateButton
+      service={VirtualNetworks}
+      onClick={() => setIsCreateModalOpen(true)}
+      disabledReason={networkClassNotReadyReason}
+    >
+      {t('Create virtual network')}
+    </GatedCreateButton>
+  );
+
+  const emptyState = (
+    <NetworkingListEmptyState
+      isFiltered={isFiltered}
+      emptyTitle={t('No virtual networks')}
+      emptyBody={t('Create a virtual network to hold subnets and security groups for workloads.')}
+      emptyAction={createButton}
+      onClearFilters={clearAllFilters}
+    />
+  );
 
   const filteredText = hasTotals
     ? items.length === totalItems
@@ -181,13 +204,9 @@ export const VirtualNetworksListPage = () => {
     <>
       <ListPage
         title={t('Virtual networks')}
-        description={t('Virtual networks your tenant uses for workloads and catalog networking.')}
+        description={t('Networks for workloads and catalog networking.')}
         error={error}
-        actions={
-          <CreateButton service={VirtualNetworks} onClick={() => setIsCreateModalOpen(true)}>
-            {t('Create virtual network')}
-          </CreateButton>
-        }
+        actions={createButton}
       >
         <Stack hasGutter>
           <StackItem>
@@ -199,6 +218,23 @@ export const VirtualNetworksListPage = () => {
               <Toolbar>
                 <ToolbarContent>
                   <ToolbarGroup>
+                    {isAdmin ? (
+                      <ToolbarItem>
+                        <NetworkingSelectFilter
+                          allLabel={t('All tenants')}
+                          ariaLabel={t('Filter by tenant')}
+                          options={tenants.map((tenant) => ({
+                            value: tenant.id,
+                            label: resourceDisplayName(tenant.metadata, tenant.id),
+                          }))}
+                          selected={tenantId}
+                          onChange={setTenantId}
+                        />
+                      </ToolbarItem>
+                    ) : null}
+                    <ToolbarItem>
+                      <ProjectFilter />
+                    </ToolbarItem>
                     <VirtualNetworkStateFilter
                       stateFilters={stateFilters}
                       onToggle={toggleStateFilter}
@@ -241,6 +277,7 @@ export const VirtualNetworksListPage = () => {
                         natGatewayWithAddress={natGatewaysByVirtualNetworkId[vn.id]}
                         natGatewaysLoading={isLoadingNatGateways}
                         natGatewaysError={natGatewaysError}
+                        tenantName={isAdmin ? tenantName : undefined}
                       />
                     </GalleryItem>
                   ))}
@@ -257,6 +294,7 @@ export const VirtualNetworksListPage = () => {
                   natGatewaysByVirtualNetworkId={natGatewaysByVirtualNetworkId}
                   natGatewaysLoading={isLoadingNatGateways}
                   natGatewaysError={natGatewaysError}
+                  tenantName={isAdmin ? tenantName : undefined}
                 />
               )}
             </ListPageBody>

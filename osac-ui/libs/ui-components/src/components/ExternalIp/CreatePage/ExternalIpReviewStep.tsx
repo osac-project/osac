@@ -27,10 +27,18 @@ const ExternalIpReviewStep = () => {
       </StackItem>
       <StackItem>
         <DescriptionList isHorizontal isCompact aria-label={t('Review')}>
+          {values.metadata.tenant ? (
+            <DescriptionListGroup>
+              <DescriptionListTerm>{t('Tenant')}</DescriptionListTerm>
+              <DescriptionListDescription>
+                {displayValue(values.metadata.tenant.name || values.metadata.tenant.id)}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          ) : null}
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {values.metadata.project || t('Default')}
+              {values.metadata.project || t('Root')}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

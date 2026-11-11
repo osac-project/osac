@@ -17,11 +17,13 @@ import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
 import OsacCardFooterRow from '@osac/ui-components/components/Primitives/OsacCardFooterRow';
 
 import { CidrDisplay } from './CidrDisplay';
+import NetworkingProjectName from './NetworkingProjectName';
+import NetworkingResourceName from './NetworkingResourceName';
+import StatusWithMessage from './StatusWithMessage';
 import { getVirtualNetworkName } from './virtual-network-list-utils';
 import VirtualNetworkNatGatewayCell from './VirtualNetworkNatGatewayCell';
 import { VirtualNetworkStatusLabel } from './VirtualNetworkStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
-import ResourceNameField from '../Resource/ResourceNameField';
 
 interface VirtualNetworkCardProps {
   virtualNetwork: VirtualNetwork;
@@ -34,6 +36,8 @@ interface VirtualNetworkCardProps {
   natGatewayWithAddress?: NatGatewayWithAddress;
   natGatewaysLoading?: boolean;
   natGatewaysError?: unknown;
+  /** Adds the Tenant, for cloud provider admins who see every tenant's networks. */
+  tenantName?: (tenantId?: string) => string;
 }
 
 const VirtualNetworkCard = ({
@@ -47,26 +51,48 @@ const VirtualNetworkCard = ({
   natGatewayWithAddress,
   natGatewaysLoading,
   natGatewaysError,
+  tenantName,
 }: VirtualNetworkCardProps) => {
   const { t } = useTranslation();
 
   return (
     <ListPageCard
       title={
-        <ResourceNameField
+        <NetworkingResourceName
           resource={virtualNetwork}
           title={getVirtualNetworkName(virtualNetwork)}
           detailsUrl={`/networking/virtual-networks/${virtualNetwork.id}`}
         />
       }
       icon={<RhUiZoneIcon />}
-      statusLabel={<VirtualNetworkStatusLabel state={virtualNetwork.status?.state} />}
+      statusLabel={
+        <StatusWithMessage message={virtualNetwork.status?.message}>
+          <VirtualNetworkStatusLabel state={virtualNetwork.status?.state} />
+        </StatusWithMessage>
+      }
       actionMenu={<VirtualNetworkActionsMenu virtualNetwork={virtualNetwork} />}
     >
       <CardBody>
         <DescriptionList isCompact isHorizontal>
+          {tenantName ? (
+            <DescriptionListGroup>
+              <DescriptionListTerm>{t('Tenant')}</DescriptionListTerm>
+              <DescriptionListDescription>
+                {tenantName(virtualNetwork.metadata?.tenant)}
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          ) : null}
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('IPv4')}</DescriptionListTerm>
+            <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              <NetworkingProjectName
+                project={virtualNetwork.metadata?.project}
+                tenant={virtualNetwork.metadata?.tenant}
+              />
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('IPv4 CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>
               <CidrDisplay ipv4Cidr={virtualNetwork.spec?.ipv4Cidr} />
             </DescriptionListDescription>

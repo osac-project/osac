@@ -8,6 +8,8 @@ export interface ExternalIpFormValues {
   metadata: {
     name: string;
     project: string;
+    /** Asked of a provider admin only; tenant users create in their own tenant. */
+    tenant?: ResourceSelectValue;
   };
   pool: ResourceSelectValue;
 }

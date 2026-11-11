@@ -16,6 +16,17 @@ describe('SecurityGroupStatusLabel', () => {
     expect(screen.getByText('Ready')).toBeInTheDocument();
   });
 
+  it('shows Updating for a READY group whose message is Updating', () => {
+    render(<SecurityGroupStatusLabel state={SecurityGroupState.READY} message="Updating" />);
+    expect(screen.getByText('Updating')).toBeInTheDocument();
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
+  });
+
+  it('keeps Ready for a READY group with another message', () => {
+    render(<SecurityGroupStatusLabel state={SecurityGroupState.READY} message="Rules applied" />);
+    expect(screen.getByText('Ready')).toBeInTheDocument();
+  });
+
   it('maps FAILED to failed/Failed', () => {
     render(<SecurityGroupStatusLabel state={SecurityGroupState.FAILED} />);
     expect(screen.getByText('Failed')).toBeInTheDocument();

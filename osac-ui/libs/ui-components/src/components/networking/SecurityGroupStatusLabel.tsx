@@ -1,29 +1,41 @@
 import { SecurityGroupState } from '@osac/types';
 
+import { SECURITY_GROUP_UPDATING_MESSAGE } from './securityGroupRuleUtils';
+import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatusLabel';
 
 interface SecurityGroupStatusLabelProps {
   state?: SecurityGroupState;
+  /** The API status message; a READY group with the message `Updating` shows Updating. */
+  message?: string;
 }
 
-const SECURITY_GROUP_STATUS_MAP: Record<SecurityGroupState, { status: StatusKind; text: string }> =
-  {
-    [SecurityGroupState.UNSPECIFIED]: { status: 'unspecified', text: 'Unknown' },
-    [SecurityGroupState.PENDING]: { status: 'progressing', text: 'Provisioning' },
-    [SecurityGroupState.READY]: { status: 'ready', text: 'Ready' },
-    [SecurityGroupState.FAILED]: { status: 'failed', text: 'Failed' },
-    [SecurityGroupState.DELETING]: { status: 'progressing', text: 'Deleting' },
+const STATUS_KIND: Record<SecurityGroupState, StatusKind> = {
+  [SecurityGroupState.UNSPECIFIED]: 'unspecified',
+  [SecurityGroupState.PENDING]: 'progressing',
+  [SecurityGroupState.READY]: 'ready',
+  [SecurityGroupState.FAILED]: 'failed',
+  [SecurityGroupState.DELETING]: 'progressing',
+};
+
+export const SecurityGroupStatusLabel = ({ state, message }: SecurityGroupStatusLabelProps) => {
+  const { t } = useTranslation();
+
+  if (state === SecurityGroupState.READY && message === SECURITY_GROUP_UPDATING_MESSAGE) {
+    return <ResourceStatusLabel status="progressing" text={t('Updating')} noIcon={false} />;
+  }
+
+  const text: Record<SecurityGroupState, string> = {
+    [SecurityGroupState.UNSPECIFIED]: t('Unknown'),
+    [SecurityGroupState.PENDING]: t('Provisioning'),
+    [SecurityGroupState.READY]: t('Ready'),
+    [SecurityGroupState.FAILED]: t('Failed'),
+    [SecurityGroupState.DELETING]: t('Deleting'),
   };
+  const resolved =
+    state !== undefined && state in STATUS_KIND ? state : SecurityGroupState.UNSPECIFIED;
 
-const resolveSecurityGroupStatus = (
-  state?: SecurityGroupState,
-): { status: StatusKind; text: string } =>
-  state !== undefined && state in SECURITY_GROUP_STATUS_MAP
-    ? SECURITY_GROUP_STATUS_MAP[state]
-    : SECURITY_GROUP_STATUS_MAP[SecurityGroupState.UNSPECIFIED];
-
-export const SecurityGroupStatusLabel = ({ state }: SecurityGroupStatusLabelProps) => {
-  const { status, text } = resolveSecurityGroupStatus(state);
-
-  return <ResourceStatusLabel status={status} text={text} />;
+  return (
+    <ResourceStatusLabel status={STATUS_KIND[resolved]} text={text[resolved]} noIcon={false} />
+  );
 };

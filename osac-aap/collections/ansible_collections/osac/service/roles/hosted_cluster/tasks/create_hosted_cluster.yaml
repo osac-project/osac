@@ -1,3 +1,6 @@
+- name: Validate hub auto-import policy before creating resources
+  ansible.builtin.include_tasks: validate_acm_import_policy.yaml
+
 - name: Create Secret resource containing pull-secret
   kubernetes.core.k8s:
     state: present
@@ -34,7 +37,7 @@
       metadata:
         name: "{{ hosted_cluster_name }}"
         namespace: "{{ hosted_cluster_namespace }}"
-        labels: "{{ {'cluster.open-cluster-management.io/clusterset': 'default'} | combine(hosted_cluster_default_cluster_order_label) }}"
+        labels: "{{ hosted_cluster_acm_clusterset_label | combine(hosted_cluster_default_cluster_order_label) }}"
       spec:
         release:
           image: "{{ ocp_release_image }}"
@@ -133,6 +136,10 @@
         - apiGroups: ["agent-install.openshift.io"]
           resources: ["agents"]
           verbs: ["*"]
+
+- name: Register only opted-in HostedClusters with the hub
+  ansible.builtin.include_tasks: register_managed_cluster.yaml
+  when: hosted_cluster_enable_acm_registration | bool
 
 - name: Set nodepool prefix
   ansible.builtin.set_fact:

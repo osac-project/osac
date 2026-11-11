@@ -8,6 +8,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 from typing import Any
 
@@ -96,6 +97,23 @@ def assert_configuration_contract(infra: list[dict[str, Any]]) -> None:
         "annotations", {}
     ), "MCE image service must remain enabled when MCE is enabled"
 
+    assert "acm-import-policy.yaml" in config["data"], "render the import policy for the bootstrap hook"
+    policy = yaml.safe_load(config["data"]["acm-import-policy.yaml"])
+    assert policy == {
+        "apiVersion": "addon.open-cluster-management.io/v1alpha1",
+        "kind": "AddOnDeploymentConfig",
+        "metadata": {
+            "name": "hypershift-addon-deploy-config",
+            "namespace": "multicluster-engine",
+            "annotations": {
+                "osac.openshift.io/tenant": "platform",
+                "osac.openshift.io/owner-reference": "MultiClusterEngine/multiclusterengine",
+            },
+        },
+        "spec": {"customizedVariables": [{"name": "autoImportDisabled", "value": "true"}]},
+    }, "apply only the import policy, leaving MCE's other configuration untouched"
+    assert_absent(infra, (("AddOnDeploymentConfig", "hypershift-addon-deploy-config"),))
+
     selected(infra, CONFIGURE_HOOK_RESOURCES)
     job = resource(infra, "Job", "osac-infra-configure-mce")
     pod_spec = job["spec"]["template"]["spec"]
@@ -105,6 +123,22 @@ def assert_configuration_contract(infra: list[dict[str, Any]]) -> None:
     assert {"name": "config", "mountPath": "/config"} in container["volumeMounts"]
     assert {"name": "scripts", "mountPath": "/scripts"} in container["volumeMounts"]
     assert container["command"] == ["/bin/bash", "/scripts/configure-mce.sh"]
+    role = resource(infra, "Role", "osac-infra-configure-mce")
+    assert {
+        "apiGroups": ["addon.open-cluster-management.io"],
+        "resources": ["addondeploymentconfigs"],
+        "verbs": ["get", "patch"],
+        "resourceNames": ["hypershift-addon-deploy-config"],
+    } in role["rules"]
+    assert {
+        "apiGroups": ["addon.open-cluster-management.io"],
+        "resources": ["addondeploymentconfigs"],
+        "verbs": ["create"],
+    } in role["rules"]
+    scripts = resource(infra, "ConfigMap", "osac-infra-hook-scripts")["data"]
+    assert "acm-import-policy.yaml" in scripts["configure-mce.sh"]
+    assert "jq" not in scripts["configure-mce.sh"]
+    assert "configure-mce-auto-import.sh" not in scripts
 
 
 def assert_dependencies_contract(deps: list[dict[str, Any]], expected_mce: dict[str, Any]) -> None:
@@ -256,7 +290,8 @@ def main() -> None:
     check_empty_overrides()
     check_absent_overrides()
     check_caas_inherits_defaults()
-    print("MCE disabled-default, configured-value, no-override, and CaaS render checks passed.")
+    subprocess.run([sys.executable, str(INSTALLER / "scripts/test-mce-auto-import.py")], check=True)
+    print("MCE disabled-default, configured-value, no-override, CaaS and auto-import checks passed.")
 
 
 if __name__ == "__main__":

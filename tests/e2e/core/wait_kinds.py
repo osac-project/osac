@@ -26,6 +26,7 @@ class WaitResourceKind(StrEnum):
     CLUSTER_ORDER = "ClusterOrder"
     CLUSTER = "Cluster"
     HOSTED_CONTROL_PLANE = "HostedControlPlane"
+    MANAGED_CLUSTER = "ManagedCluster"
     NODE_POOL = "NodePool"
     INFRA_ENV = "InfraEnv"
     TENANT = "Tenant"

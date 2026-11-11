@@ -58,7 +58,12 @@ def test_cluster_create_with_two_node_sets(
     )
     try:
         cluster = assert_cluster_with_two_node_sets_available(
-            grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, instance_types=instance_types
+            grpc=grpc,
+            k8s=k8s_hub_client,
+            metering=metering,
+            uuid=uuid,
+            instance_types=instance_types,
+            cluster_template=cluster_template,
         )
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)

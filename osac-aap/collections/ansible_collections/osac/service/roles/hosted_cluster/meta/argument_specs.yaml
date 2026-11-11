@@ -13,6 +13,23 @@ argument_specs:
       hosted_cluster_namespace:
         type: str
         required: true
+      hosted_cluster_enable_acm_registration:
+        type: bool
+        required: false
+        default: false
+        description: >
+          Explicitly create a Hosted-mode ManagedCluster and optional ACM addon
+          configuration. Default false for regular CaaS; AI MaaS opts in for
+          WorkloadCluster import (OSAC-6488). The hub administrator must disable
+          HyperShift automatic import independently; labels are not an import gate.
+      hosted_cluster_acm_config_namespace:
+        type: str
+        default: multicluster-engine
+        description: Namespace of the administrator-owned hypershift-addon-deploy-config.
+      hosted_cluster_acm_hosting_cluster_name:
+        type: str
+        default: local-cluster
+        description: Hub ManagedCluster name used by Hosted-mode registration.
       hosted_cluster_node_requests:
         type: list
         elements: dict

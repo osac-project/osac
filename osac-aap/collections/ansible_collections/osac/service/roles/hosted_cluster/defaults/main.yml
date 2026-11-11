@@ -2,6 +2,21 @@
 hosted_cluster_base_domain: box.massopen.cloud
 hosted_cluster_default_agent_namespace: "hardware-inventory"
 hosted_cluster_default_cluster_order_label: "{{ {cluster_order_label: hosted_cluster_name} }}"
+# The hub's HyperShift auto-import must be disabled before provisioning.
+# Labels do not control import. This flag explicitly creates a Hosted-mode
+# ManagedCluster only for templates that need hub registration (OSAC-6313),
+# e.g. AI MaaS WorkloadCluster import (OSAC-6488).
+hosted_cluster_enable_acm_registration: false
+hosted_cluster_acm_config_namespace: multicluster-engine
+hosted_cluster_acm_hosting_cluster_name: local-cluster
+hosted_cluster_acm_registration_annotations:
+  osac.openshift.io/tenant: "{{ hosted_cluster_order_annotations.get('osac.openshift.io/tenant', '') }}"
+  osac.openshift.io/owner-reference: "ClusterOrder/{{ hosted_cluster_name }}"
+# Lazily resolved from hosted_cluster_enable_acm_registration at use time,
+# so template overrides of the flag are respected.
+hosted_cluster_acm_clusterset_label: >-
+  {{ {'cluster.open-cluster-management.io/clusterset': 'default'}
+  if hosted_cluster_enable_acm_registration | bool else {} }}
 hosted_cluster_node_requests: []
 hosted_cluster_order_annotations: >-
   {{ (cluster_order | default({})).get('metadata', {}).get('annotations', {}) }}

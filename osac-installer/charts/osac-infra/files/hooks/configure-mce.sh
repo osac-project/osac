@@ -47,6 +47,11 @@ else
     "${IMAGE_OVERRIDES_ANNOTATION}-" --overwrite 2>/dev/null || true
 fi
 
+# Own only the auto-import entry in the name-keyed variables list, preserving
+# MCE's other settings. AAP validates the effective agent rollout before provisioning.
+oc apply --server-side --force-conflicts --field-manager=osac-acm-policy \
+  -n "${MCE_NAMESPACE}" -f /config/acm-import-policy.yaml
+
 echo "Applying AgentServiceConfig..."
 until oc apply -n "${MCE_NAMESPACE}" -f /config/config.yaml; do
   echo "Retrying AgentServiceConfig apply (webhooks may not be ready)..."

@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -1009,6 +1010,15 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(e).NotTo(HaveOccurred())
 			Expect(stored.GetObject().GetSpec().GetVersion().GetId()).To(Equal(firstVersion))
 			By("updating the original cluster through its ordinary version field")
+			privateClient := privatev1.NewClustersClient(tool.InternalView().AdminConn())
+			current, e := privateClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: first.GetId()}.Build())
+			Expect(e).NotTo(HaveOccurred())
+			current.GetObject().GetStatus().SetObservedVersion("4.20.0")
+			_, e = privateClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+				Object:     current.GetObject(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.observed_version"}},
+			}.Build())
+			Expect(e).NotTo(HaveOccurred())
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object:     publicv1.Cluster_builder{Id: first.GetId(), Spec: publicv1.ClusterSpec_builder{Version: publicv1.ClusterVersionReference_builder{Id: secondVersion}.Build()}.Build()}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.version"),

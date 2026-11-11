@@ -1,5 +1,18 @@
 ---
+- name: Require an explicit release image for every requested NodeSet
+  no_log: true
+  ansible.builtin.assert:
+    that:
+      - item.releaseImage | default('', true) | length > 0
+    fail_msg: >-
+      Node set {{ item.nodeSet }} requires an explicit releaseImage;
+      the control-plane image is not a node-set fallback.
+  loop: "{{ hosted_cluster_node_requests }}"
+  loop_control:
+    label: "{{ item.nodeSet }}"
+
 - name: Build one NodePool definition per requested NodeSet
+  no_log: true
   ansible.builtin.set_fact:
     nodepool_definitions: >-
       {{ nodepool_definitions | default([]) + [{
@@ -10,8 +23,8 @@
           'namespace': hosted_cluster_namespace,
           'labels': {agent_instance_type_label: item.bareMetal.instanceType, agent_node_set_label: item.nodeSet}
             | combine(hosted_cluster_default_cluster_order_label)
-        } | combine({'annotations': {'osac.openshift.io/upgrade-attempt-id': hosted_cluster_node_set_attempt_ids[item.nodeSet]}}
-          if item.nodeSet in hosted_cluster_node_set_attempt_ids else {})),
+        } | combine({'annotations': {'osac.openshift.io/upgrade-attempt-id': hosted_cluster_upgrade_attempt_id}}
+          if hosted_cluster_upgrade_attempt_id | length > 0 else {})),
         'spec': {
           'clusterName': hosted_cluster_name,
           'replicas': item.numberOfNodes | int,
@@ -28,12 +41,10 @@
             }
           },
           'release': {
-            'image': nodepool_ocp_release_image
+            'image': item.releaseImage
           }
         }
       }] }}
-  vars:
-    nodepool_ocp_release_image: "{{ item.releaseImage | default(ocp_release_image, true) }}"
   loop: "{{ hosted_cluster_node_requests }}"
   loop_control:
     label: "{{ item.nodeSet }}"

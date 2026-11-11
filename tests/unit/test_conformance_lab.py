@@ -23,7 +23,7 @@ def _config(tmp_path: Path, *, token: str = "admin-token") -> Config:
     kubeconfig.write_text("hub")
     return Config(
         osac_release="1.4.0",
-        selectors=("generic",),
+        profiles=("generic",),
         lab_kubeconfig=kubeconfig,
         lab_api_url="http://127.0.0.1:1",
         lab_token_file=token_file,
@@ -125,7 +125,6 @@ def test_read_lab_filters_registrations_by_area_source(tmp_path: Path) -> None:
     area = AreaDeclaration(
         name="networking",
         component_tests=(),
-        profiles={},
         identity_fields=(),
         configuration_errors=(),
         support_condition="",

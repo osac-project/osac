@@ -11,8 +11,8 @@ import yaml
 
 from tests.conformance.errors import ConfigError
 
-_COMMON_KEYS = frozenset({"osacRelease", "lab", "timeouts"})
-_LAB_KEYS = frozenset({"selectors", "kubeconfig", "apiURL", "tokenFile", "caFile", "aap"})
+_COMMON_KEYS = frozenset({"osacRelease", "profiles", "lab", "timeouts"})
+_LAB_KEYS = frozenset({"kubeconfig", "apiURL", "tokenFile", "caFile", "aap"})
 _AAP_KEYS = frozenset({"url", "tokenFile"})
 
 
@@ -25,7 +25,7 @@ class AapConfig:
 @dataclass(frozen=True)
 class Config:
     osac_release: str
-    selectors: tuple[str, ...]
+    profiles: tuple[str, ...]
     lab_kubeconfig: Path
     lab_api_url: str
     lab_token_file: Path
@@ -55,11 +55,13 @@ def _path(value: object, name: str, checks: list[str]) -> Path | None:
     return Path(text) if text is not None else None
 
 
-def _selectors(value: object, checks: list[str]) -> tuple[str, ...]:
+def _profiles(value: object, checks: list[str]) -> tuple[str, ...]:
+    if value is None:
+        return ("generic",)
     if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
-        checks.append("lab.selectors must be a list of non-empty strings")
+        checks.append("profiles must be a list of non-empty strings")
         return ()
-    ordered: list[str] = ["generic"]
+    ordered: list[str] = []
     for item in value:
         if item not in ordered:
             ordered.append(item)
@@ -86,14 +88,12 @@ def load_config(path: Path, *, area_names: Collection[str]) -> Config:
             checks.append(f"{key} is not defined by this release")
 
     release = _string(document.get("osacRelease"), "osacRelease", checks)
+    profiles = _profiles(document.get("profiles"), checks)
     lab = _mapping(document.get("lab"), "lab", checks)
     if lab is not None:
         for key in lab:
             if key not in _LAB_KEYS:
                 checks.append(f"lab.{key} is not defined by this release")
-        if "selectors" not in lab:
-            checks.append("lab.selectors is required")
-        selectors = _selectors(lab.get("selectors"), checks)
         kubeconfig = _path(lab.get("kubeconfig"), "lab.kubeconfig", checks)
         api_url = _string(lab.get("apiURL"), "lab.apiURL", checks)
         token_file = _path(lab.get("tokenFile"), "lab.tokenFile", checks)
@@ -110,7 +110,6 @@ def load_config(path: Path, *, area_names: Collection[str]) -> Config:
                 if aap_url is not None and aap_token is not None:
                     aap = AapConfig(url=aap_url, token_file=aap_token)
     else:
-        selectors = ("generic",)
         kubeconfig = api_url = token_file = ca_file = None  # type: ignore[assignment]
         aap = None
 
@@ -136,7 +135,7 @@ def load_config(path: Path, *, area_names: Collection[str]) -> Config:
     assert timeouts is not None
     return Config(
         osac_release=release,
-        selectors=selectors,
+        profiles=profiles,
         lab_kubeconfig=kubeconfig,
         lab_api_url=api_url,
         lab_token_file=token_file,

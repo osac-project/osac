@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import yaml
 
-from tests.conformance.area import AreaDeclaration, known_selectors, load_areas
+from tests.conformance.area import AreaDeclaration, load_areas
 from tests.conformance.config import Config, load_config
 from tests.conformance.diagnostics import DiagnosticsCollector
 from tests.conformance.errors import CommandLineError, ConfigError
@@ -32,6 +32,7 @@ from tests.conformance.model import (
     Verdict,
 )
 from tests.conformance.output import OutputSink, new_run_id, write_plan
+from tests.conformance.profiles import ProfileDefinition, expand_profiles, load_profiles
 from tests.conformance.redact import Redactor
 from tests.conformance.report import write_junit, write_report
 from tests.conformance.selection import compute_plan, enrich_identities, plan_from_names
@@ -39,6 +40,7 @@ from tests.conformance.testtree import PytestTestTree, TestTree
 from tests.conformance.verdict import evaluate, exit_code
 
 _DEFAULT_AREAS = Path(__file__).with_name("areas")
+_DEFAULT_PROFILES = Path(__file__).with_name("profiles.yaml")
 _ALLOWED_RESULTS = {"conformance-plan.yaml"}
 
 
@@ -46,6 +48,7 @@ _ALLOWED_RESULTS = {"conformance-plan.yaml"}
 class Runtime:
     config: Config
     areas: dict[str, AreaDeclaration]
+    profile_catalog: dict[str, ProfileDefinition]
     tree: TestTree
     lab: LabClient
     results: Path
@@ -65,6 +68,7 @@ def _parser() -> argparse.ArgumentParser:
     parent.add_argument("--config", default="/config/conformance.yaml")
     parent.add_argument("--results", default="/results")
     parent.add_argument("--areas", default=str(_DEFAULT_AREAS))
+    parent.add_argument("--profile-catalog", default=str(_DEFAULT_PROFILES))
     parent.add_argument("--tree", default="tests/e2e")
     parent.add_argument("--podman-socket", default="/run/podman/podman.sock")
 
@@ -115,16 +119,16 @@ def redactor_for_config(config: Config) -> Redactor:
 
 def _build_runtime(args: argparse.Namespace) -> Runtime:
     areas = load_areas(Path(args.areas))
+    catalog = load_profiles(Path(args.profile_catalog))
     config = load_config(Path(args.config), area_names=areas)
-    missing = set(config.selectors) - known_selectors(areas)
-    if missing:
-        raise ConfigError([f"selector {selector} is not shipped by this image" for selector in sorted(missing)])
+    expand_profiles(config.profiles, catalog)
     results = Path(args.results)
     _check_results(results)
     redactor = redactor_for_config(config)
     return Runtime(
         config=config,
         areas=areas,
+        profile_catalog=catalog,
         tree=PytestTestTree(root=Path(args.tree)),
         lab=KubectlLabClientAdapter(),
         results=results,
@@ -175,29 +179,34 @@ def _plan_names(plan_path: Path) -> list[str]:
 
 
 def _derive_profiles(
-    plan: Plan, outcomes: Sequence[TestOutcome], areas: dict[str, AreaDeclaration]
+    plan: Plan, outcomes: Sequence[TestOutcome], catalog: dict[str, ProfileDefinition]
 ) -> tuple[ProfileResult, ...]:
     by_id = {outcome.identity.id: outcome for outcome in outcomes}
     results: list[ProfileResult] = []
-    for area_name, area in sorted(areas.items()):
-        for profile_name in sorted(area.profiles):
-            selected = [test for test in plan.tests if test.layer is Layer.PROFILE and test.profile == profile_name]
-            if not selected:
-                results.append(ProfileResult(profile_name, area_name, False, Result.SKIP))
-                continue
-            blocking = [by_id.get(test.id) for test in selected if test.classification is Classification.BLOCKING]
-            if not blocking:
-                results.append(ProfileResult(profile_name, area_name, True, Result.SKIP))
-                continue
-            if all(outcome is not None and outcome.result is Result.PASS for outcome in blocking):
-                results.append(ProfileResult(profile_name, area_name, True, Result.PASS))
-            else:
-                results.append(ProfileResult(profile_name, area_name, True, Result.FAIL))
+    for name in sorted(catalog):
+        profile = catalog[name]
+        required = name in plan.profiles
+        selected = [test for test in plan.tests if name in test.profiles]
+        if not required:
+            results.append(ProfileResult(name, profile.selectors, False, Result.SKIP))
+            continue
+        blocking = [by_id.get(test.id) for test in selected if test.classification is Classification.BLOCKING]
+        if not blocking:
+            results.append(ProfileResult(name, profile.selectors, True, Result.SKIP))
+            continue
+        if all(outcome is not None and outcome.result is Result.PASS for outcome in blocking):
+            results.append(ProfileResult(name, profile.selectors, True, Result.PASS))
+        else:
+            results.append(ProfileResult(name, profile.selectors, True, Result.FAIL))
     return tuple(results)
 
 
 def _derive_components(
-    facts: LabFacts, plan: Plan, outcomes: Sequence[TestOutcome], profiles: Sequence[ProfileResult]
+    facts: LabFacts,
+    plan: Plan,
+    outcomes: Sequence[TestOutcome],
+    profiles: Sequence[ProfileResult],
+    areas: dict[str, AreaDeclaration],
 ) -> tuple[ComponentResult, ...]:
     by_id = {outcome.identity.id: outcome for outcome in outcomes}
     results: list[ComponentResult] = []
@@ -206,35 +215,40 @@ def _derive_components(
         component_tests_pass = bool(tests) and all(
             by_id.get(test.id) is not None and by_id[test.id].result is Result.PASS for test in tests
         )
-        area_profiles_pass = all(
-            profile.result is Result.PASS for profile in profiles if profile.area == component.area and profile.required
-        )
+        area = areas.get(component.area)
+        area_selectors = set(area.selectors) if area is not None else set()
+        relevant_profiles = [
+            profile for profile in profiles if profile.required and area_selectors.intersection(profile.selectors)
+        ]
+        area_profiles_pass = all(profile.result is Result.PASS for profile in relevant_profiles)
         verdict = Verdict.CONFORMANT if component_tests_pass and area_profiles_pass else Verdict.IN_PROGRESS
         results.append(ComponentResult(component.area, component.fields, verdict))
     return tuple(results)
 
 
 def _run_list(runtime: Runtime) -> int:
+    selected_profiles, selectors = expand_profiles(runtime.config.profiles, runtime.profile_catalog)
     raw = runtime.tree.collect()
-    tests: tuple[TestIdentity, ...] = enrich_identities(raw, runtime.areas)
-    plan = compute_plan(tests, runtime.config.selectors)
+    tests: tuple[TestIdentity, ...] = enrich_identities(raw, runtime.areas, runtime.profile_catalog, selected_profiles)
+    plan = compute_plan(tests, selectors, selected_profiles)
     path = write_plan(plan, runtime.results)
     runtime.output.line(path.read_text().rstrip())
     return 0
 
 
 def _run_plan(runtime: Runtime, *, plan_path: Path | None, keep: bool) -> int:
+    selected_profiles, selectors = expand_profiles(runtime.config.profiles, runtime.profile_catalog)
     raw = runtime.tree.collect()
-    tests = enrich_identities(raw, runtime.areas)
+    tests = enrich_identities(raw, runtime.areas, runtime.profile_catalog, selected_profiles)
     if plan_path is None:
-        plan = compute_plan(tests, runtime.config.selectors)
+        plan = compute_plan(tests, selectors, selected_profiles)
     else:
-        plan = plan_from_names(tests, _plan_names(plan_path), runtime.config.selectors)
+        plan = plan_from_names(tests, _plan_names(plan_path), selectors, selected_profiles)
     if not plan.tests:
         raise ConfigError(["the execution plan holds no tests"])
     if (
-        runtime.podman_socket is not None
-        and any(test.layer is Layer.COMPONENT for test in plan.tests)
+        any(test.layer is Layer.COMPONENT for test in plan.tests)
+        and runtime.podman_socket is not None
         and not runtime.podman_socket.exists()
     ):
         raise ConfigError([f"podman socket {runtime.podman_socket} is missing"])
@@ -262,8 +276,8 @@ def _run_plan(runtime: Runtime, *, plan_path: Path | None, keep: bool) -> int:
     finally:
         gate.restore()
 
-    profiles = _derive_profiles(plan, outcomes, runtime.areas)
-    components = _derive_components(facts, plan, outcomes, profiles)
+    profiles = _derive_profiles(plan, outcomes, runtime.profile_catalog)
+    components = _derive_components(facts, plan, outcomes, profiles, runtime.areas)
     report = evaluate(
         plan,
         outcomes,

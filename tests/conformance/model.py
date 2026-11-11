@@ -60,7 +60,7 @@ class TestIdentity:
     labels: frozenset[str]
     area: str
     layer: Layer
-    profile: str | None
+    profiles: tuple[str, ...]
     classification: Classification
 
 
@@ -78,6 +78,7 @@ class TestOutcome:
 @dataclass(frozen=True)
 class Plan:
     tests: tuple[TestIdentity, ...]
+    profiles: tuple[str, ...]
     selectors: tuple[str, ...]
     complete: bool
 
@@ -94,7 +95,7 @@ class Check:
 @dataclass(frozen=True)
 class ProfileResult:
     name: str
-    area: str
+    selectors: tuple[str, ...]
     required: bool
     result: Result
 

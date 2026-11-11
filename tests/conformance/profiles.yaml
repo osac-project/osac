@@ -1,0 +1,6 @@
+# The suite-level profile catalog. A profile is a named bundle of selectors.
+generic: [generic]
+vm: [vmaas]
+baremetal: [bmaas]
+cluster: [caas]
+netris: [netris]

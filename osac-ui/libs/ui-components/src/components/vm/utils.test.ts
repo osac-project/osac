@@ -38,12 +38,10 @@ describe('areGpuSpecsEqual', () => {
   it('requires count, resource name, and PCI selector to match', () => {
     expect(areGpuSpecsEqual(a100Gpu, { ...a100Gpu })).toBe(true);
     expect(areGpuSpecsEqual(a100Gpu, { ...a100Gpu, count: 2 })).toBe(false);
-    expect(
-      areGpuSpecsEqual(a100Gpu, { ...a100Gpu, resourceName: 'nvidia.com/Tesla-T4' }),
-    ).toBe(false);
-    expect(
-      areGpuSpecsEqual(a100Gpu, { ...a100Gpu, pciDeviceSelector: '10DE:1EB8' }),
-    ).toBe(false);
+    expect(areGpuSpecsEqual(a100Gpu, { ...a100Gpu, resourceName: 'nvidia.com/Tesla-T4' })).toBe(
+      false,
+    );
+    expect(areGpuSpecsEqual(a100Gpu, { ...a100Gpu, pciDeviceSelector: '10DE:1EB8' })).toBe(false);
   });
 });
 

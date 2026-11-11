@@ -42,9 +42,7 @@ def evaluate(
     by_id = {outcome.identity.id: outcome for outcome in outcomes}
     tests = tuple(_outcome_for(plan, by_id, test.id) for test in plan.tests)
     blocking_pass = all(
-        outcome.result is Result.PASS
-        for outcome in tests
-        if outcome.identity.classification is Classification.BLOCKING
+        outcome.result is Result.PASS for outcome in tests if outcome.identity.classification is Classification.BLOCKING
     )
     checks = [
         Check(
@@ -99,9 +97,7 @@ def exit_code(report: Report, *, focused: bool = False) -> int:
     if report.result is Verdict.CONFORMANT:
         return 0
     if focused and not report.leftovers:
-        selected_blocking = [
-            test for test in report.tests if test.identity.classification is Classification.BLOCKING
-        ]
+        selected_blocking = [test for test in report.tests if test.identity.classification is Classification.BLOCKING]
         if all(test.result is Result.PASS for test in selected_blocking):
             return 0
     return 1

@@ -27,13 +27,7 @@ def _safe_component(value: str) -> str:
 
 
 class OutputSink:
-    def __init__(
-        self,
-        results_dir: Path,
-        redactor: Redactor,
-        *,
-        stream: TextIO | None = None,
-    ) -> None:
+    def __init__(self, results_dir: Path, redactor: Redactor, *, stream: TextIO | None = None) -> None:
         self.results_dir = results_dir
         self.redactor = redactor
         self.stream = stream if stream is not None else sys.stdout
@@ -62,7 +56,9 @@ def _test_selectors(test: TestIdentity) -> list[str]:
     for label in sorted(test.labels):
         if label.startswith("conformance/"):
             selectors.append(label.split("/", 1)[1])
-        elif label.startswith("conformance_") and not label.startswith(("conformance_blocking", "conformance_informing")):
+        elif label.startswith("conformance_") and not label.startswith(
+            ("conformance_blocking", "conformance_informing")
+        ):
             selectors.append(label.removeprefix("conformance_"))
     return selectors
 
@@ -70,14 +66,7 @@ def _test_selectors(test: TestIdentity) -> list[str]:
 def plan_document(plan: Plan) -> dict[str, object]:
     return {
         "selectors": list(plan.selectors),
-        "tests": [
-            {
-                "id": test.id,
-                "name": test.name,
-                "selectors": _test_selectors(test),
-            }
-            for test in plan.tests
-        ],
+        "tests": [{"id": test.id, "name": test.name, "selectors": _test_selectors(test)} for test in plan.tests],
         "complete": plan.complete,
     }
 

@@ -53,9 +53,7 @@ def plan_from_names(tests: Sequence[TestIdentity], names: Sequence[str], selecto
     full = compute_plan(tests, ordered)
     full_ids = {test.id for test in full.tests}
     return Plan(
-        tests=tuple(selected[key] for key in sorted(selected)),
-        selectors=ordered,
-        complete=set(selected) == full_ids,
+        tests=tuple(selected[key] for key in sorted(selected)), selectors=ordered, complete=set(selected) == full_ids
     )
 
 
@@ -76,7 +74,11 @@ def enrich_identities(tests: Sequence[TestIdentity], areas: Mapping[str, AreaDec
             enriched.append(replace(test, area=area_name, layer=Layer.COMPONENT, profile=None))
             continue
         profile = next(
-            (name for name, selector in area.profiles.items() if f"conformance/{selector}" in test.labels or f"conformance_{selector}" in test.labels),
+            (
+                name
+                for name, selector in area.profiles.items()
+                if f"conformance/{selector}" in test.labels or f"conformance_{selector}" in test.labels
+            ),
             None,
         )
         if profile is not None:

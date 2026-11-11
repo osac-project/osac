@@ -1,0 +1,149 @@
+"""Load and validate the conformance configuration."""
+
+from __future__ import annotations
+
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from tests.conformance.errors import ConfigError
+
+_COMMON_KEYS = frozenset({"osacRelease", "lab", "timeouts"})
+_LAB_KEYS = frozenset({"selectors", "kubeconfig", "apiURL", "tokenFile", "caFile", "aap"})
+_AAP_KEYS = frozenset({"url", "tokenFile"})
+
+
+@dataclass(frozen=True)
+class AapConfig:
+    url: str
+    token_file: Path
+
+
+@dataclass(frozen=True)
+class Config:
+    osac_release: str
+    selectors: tuple[str, ...]
+    lab_kubeconfig: Path
+    lab_api_url: str
+    lab_token_file: Path
+    lab_ca_file: Path
+    lab_aap: AapConfig | None
+    timeouts: Mapping[str, str]
+    areas: Mapping[str, Mapping[str, Any]]
+    raw: Mapping[str, Any]
+
+
+def _mapping(value: object, name: str, checks: list[str]) -> Mapping[str, Any] | None:
+    if not isinstance(value, Mapping):
+        checks.append(f"{name} must be a mapping")
+        return None
+    return value
+
+
+def _string(value: object, name: str, checks: list[str]) -> str | None:
+    if not isinstance(value, str) or not value:
+        checks.append(f"{name} must be a non-empty string")
+        return None
+    return value
+
+
+def _path(value: object, name: str, checks: list[str]) -> Path | None:
+    text = _string(value, name, checks)
+    return Path(text) if text is not None else None
+
+
+def _selectors(value: object, checks: list[str]) -> tuple[str, ...]:
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        checks.append("lab.selectors must be a list of non-empty strings")
+        return ()
+    ordered: list[str] = ["generic"]
+    for item in value:
+        if item not in ordered:
+            ordered.append(item)
+    return tuple(ordered)
+
+
+def load_config(path: Path, *, area_names: Collection[str]) -> Config:
+    checks: list[str] = []
+    try:
+        raw = yaml.safe_load(path.read_text())
+    except FileNotFoundError:
+        raise ConfigError([f"{path} does not exist"]) from None
+    except OSError as exc:
+        raise ConfigError([f"{path} cannot be read: {exc}"]) from None
+    except yaml.YAMLError as exc:
+        raise ConfigError([f"{path} is not valid YAML: {exc}"]) from None
+
+    document = _mapping(raw, str(path), checks)
+    if document is None:
+        raise ConfigError(checks)
+
+    for key in document:
+        if key not in _COMMON_KEYS and key not in area_names:
+            checks.append(f"{key} is not defined by this release")
+
+    release = _string(document.get("osacRelease"), "osacRelease", checks)
+    lab = _mapping(document.get("lab"), "lab", checks)
+    if lab is not None:
+        for key in lab:
+            if key not in _LAB_KEYS:
+                checks.append(f"lab.{key} is not defined by this release")
+        if "selectors" not in lab:
+            checks.append("lab.selectors is required")
+        selectors = _selectors(lab.get("selectors"), checks)
+        kubeconfig = _path(lab.get("kubeconfig"), "lab.kubeconfig", checks)
+        api_url = _string(lab.get("apiURL"), "lab.apiURL", checks)
+        token_file = _path(lab.get("tokenFile"), "lab.tokenFile", checks)
+        ca_file = _path(lab.get("caFile"), "lab.caFile", checks)
+        aap: AapConfig | None = None
+        if lab.get("aap") is not None:
+            aap_doc = _mapping(lab.get("aap"), "lab.aap", checks)
+            if aap_doc is not None:
+                for key in aap_doc:
+                    if key not in _AAP_KEYS:
+                        checks.append(f"lab.aap.{key} is not defined by this release")
+                aap_url = _string(aap_doc.get("url"), "lab.aap.url", checks)
+                aap_token = _path(aap_doc.get("tokenFile"), "lab.aap.tokenFile", checks)
+                if aap_url is not None and aap_token is not None:
+                    aap = AapConfig(url=aap_url, token_file=aap_token)
+    else:
+        selectors = ("generic",)
+        kubeconfig = api_url = token_file = ca_file = None  # type: ignore[assignment]
+        aap = None
+
+    timeouts_doc = document.get("timeouts", {})
+    timeouts = _mapping(timeouts_doc, "timeouts", checks)
+    if timeouts is not None:
+        if any(not isinstance(k, str) or not isinstance(v, str) for k, v in timeouts.items()):
+            checks.append("timeouts must map keys to duration strings")
+            timeouts = {}
+
+    areas: dict[str, Mapping[str, Any]] = {}
+    for name in area_names:
+        section = document.get(name)
+        if section is not None:
+            section_doc = _mapping(section, name, checks)
+            if section_doc is not None:
+                areas[name] = section_doc
+
+    if checks:
+        raise ConfigError(checks)
+
+    assert release is not None
+    assert kubeconfig is not None and api_url is not None and token_file is not None and ca_file is not None
+    assert timeouts is not None
+    return Config(
+        osac_release=release,
+        selectors=selectors,
+        lab_kubeconfig=kubeconfig,
+        lab_api_url=api_url,
+        lab_token_file=token_file,
+        lab_ca_file=ca_file,
+        lab_aap=aap,
+        timeouts=timeouts,
+        areas=areas,
+        raw=document,
+    )

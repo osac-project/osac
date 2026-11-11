@@ -1,5 +1,5 @@
 import { create } from '@bufbuild/protobuf';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -14,86 +14,87 @@ import {
 import { ClustersTable } from './ClustersTable';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-const makeCluster = (id: string, versionName: string): Cluster =>
+const makeCluster = (id: string, versionName: string, observedVersion = ''): Cluster =>
   create(ClusterSchema, {
     id,
     metadata: { name: id, project: 'Root' },
     status: {
       state: ClusterState.READY,
-      nodeSets: {
-        worker: { size: 3 },
-      },
+      observedVersion,
+      nodeSets: { worker: { size: 3 } },
     },
     spec: {
       version: { name: versionName },
-      nodeSets: {
-        worker: { size: 3 },
-      },
+      nodeSets: { worker: { size: 3 } },
       network: { podCidr: '10.128.0.0/24', serviceCidr: '10.1.0.0/24' },
     },
   });
 
-const makeClusterVersion = (
-  name: string,
-  version: string,
-  state: ClusterVersionState,
-  enabled = true,
-): ClusterVersion =>
+const makeClusterVersion = (version: string, state: ClusterVersionState): ClusterVersion =>
   create(ClusterVersionSchema, {
-    id: name,
-    metadata: { name },
-    spec: { version, state, enabled },
+    id: version,
+    metadata: { name: version },
+    spec: { version, state, enabled: true },
   });
 
 const clusterVersions = [
-  makeClusterVersion('v4.17', '4.17.0', ClusterVersionState.ACTIVE),
-  makeClusterVersion('v4.16', '4.16.0', ClusterVersionState.DEPRECATED),
-  makeClusterVersion('v4.15', '4.15.0', ClusterVersionState.OBSOLETE),
-  makeClusterVersion('v4.14', '4.14.0', ClusterVersionState.ACTIVE, false),
+  makeClusterVersion('4.17.0', ClusterVersionState.ACTIVE),
+  makeClusterVersion('4.16.0', ClusterVersionState.DEPRECATED),
+  makeClusterVersion('4.15.0', ClusterVersionState.OBSOLETE),
 ];
-
-const makeResolveClusterVersion = (versions: ClusterVersion[]) => {
-  const byName = new Map(versions.map((version) => [version.metadata?.name, version]));
-  return (cluster: Cluster): ClusterVersion | undefined => {
-    const versionRef = cluster.spec?.version;
-    if (!versionRef?.name) {
-      return undefined;
-    }
-    return byName.get(versionRef.name);
-  };
-};
 
 const renderTable = (clusters: Cluster[], versions: ClusterVersion[] = clusterVersions) =>
   renderWithProviders(
     <ClustersTable
       clusters={clusters}
-      resolveClusterVersion={makeResolveClusterVersion(versions)}
+      resolveClusterVersion={(cluster) =>
+        versions.find((version) => version.spec?.version === cluster.status?.observedVersion)
+      }
     />,
   );
 
-describe('ClustersTable version join', () => {
-  it('renders list columns and resolved OpenShift versions in configuration', () => {
-    renderTable([makeCluster('c-active', 'v4.17'), makeCluster('c-obsolete', 'v4.15')]);
+const clusterRow = (name: string) => {
+  const row = screen.getByText(name).closest('tr');
+  if (!row) {
+    throw new Error('Expected a cluster table row');
+  }
+  return within(row);
+};
 
-    expect(screen.getByText('OpenShift 4.17.0')).toBeInTheDocument();
-    expect(screen.getByText('OpenShift 4.15.0')).toBeInTheDocument();
-    expect(screen.getAllByText('Ready')).toHaveLength(2);
-    expect(screen.getAllByText('Root')).toHaveLength(2);
-    expect(screen.getByText('Configuration')).toBeInTheDocument();
+describe('ClustersTable observed versions', () => {
+  it('shows observed versions and their lifecycle badges in a Current version column', () => {
+    renderTable([
+      makeCluster('c-active', 'desired-4.18', '4.17.0'),
+      makeCluster('c-obsolete', 'desired-4.18', '4.15.0'),
+    ]);
+
+    expect(screen.getByRole('columnheader', { name: 'Current version' })).toBeInTheDocument();
+    expect(clusterRow('c-active').getByText('4.17.0')).toBeInTheDocument();
+    expect(clusterRow('c-active').getByText('Active')).toBeInTheDocument();
+    expect(clusterRow('c-obsolete').getByText('4.15.0')).toBeInTheDocument();
+    expect(clusterRow('c-obsolete').getByText('Obsolete')).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Desired version' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Cluster version')).not.toBeInTheDocument();
     expect(screen.getAllByText('Node sets')).toHaveLength(2);
     expect(screen.getAllByText('1 pool · 3 of 3 nodes ready')).toHaveLength(2);
   });
 
-  it('falls back to unresolved version labels in configuration', () => {
-    renderTable([makeCluster('c-missing', 'v-deleted')], []);
+  it('does not infer a current version or lifecycle from the desired version', () => {
+    renderTable([makeCluster('c-missing', '4.17.0')]);
 
-    expect(screen.getByText('OpenShift v-deleted')).toBeInTheDocument();
+    const versionCell = screen
+      .getByText('c-missing')
+      .closest('tr')
+      ?.querySelector('td[data-label="Current version"]');
+    expect(versionCell).toHaveTextContent('—');
+    expect(clusterRow('c-missing').queryByText('Active')).not.toBeInTheDocument();
+    expect(clusterRow('c-missing').queryByText('4.17.0')).not.toBeInTheDocument();
   });
 
-  it('renders clusters without a version reference', () => {
-    renderTable([create(ClusterSchema, { id: 'c-none', metadata: { name: 'c-none' } })]);
+  it('hides the lifecycle badge when the observed version has no catalog match', () => {
+    renderTable([makeCluster('c-unknown', '4.17.0', '4.19.0')]);
 
-    expect(screen.getByText('c-none')).toBeInTheDocument();
-    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    expect(clusterRow('c-unknown').getByText('4.19.0')).toBeInTheDocument();
+    expect(clusterRow('c-unknown').queryByText('Active')).not.toBeInTheDocument();
   });
 });

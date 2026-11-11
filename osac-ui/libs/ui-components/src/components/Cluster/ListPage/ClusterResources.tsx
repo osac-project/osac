@@ -3,25 +3,25 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
-  Flex,
-  FlexItem,
 } from '@patternfly/react-core';
 
 import { type Cluster, type ClusterVersion } from '@osac/types';
-import { formatClusterCatalogVersionLabel } from '@osac/ui-components/components/catalog/clusterCatalogItemResourceDisplay';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
-import { GuestOsIcon } from '../../shared/GuestOsIcon';
+import ClusterCurrentVersion from './ClusterCurrentVersion';
 
 interface ClusterResourcesProps {
   cluster: Cluster;
   clusterVersion?: ClusterVersion;
+  includeVersion?: boolean;
 }
 
-const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) => {
+const ClusterResources = ({
+  cluster,
+  clusterVersion,
+  includeVersion = true,
+}: ClusterResourcesProps) => {
   const { t } = useTranslation();
-
-  const versionLabel = formatClusterCatalogVersionLabel(clusterVersion, cluster.spec?.version);
 
   const specNodeSets = cluster.spec?.nodeSets;
   const statusNodeSets = cluster.status?.nodeSets ?? {};
@@ -48,19 +48,14 @@ const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) =>
 
   return (
     <DescriptionList isHorizontal isCompact>
-      <DescriptionListGroup>
-        <DescriptionListTerm>{t('Cluster version')}</DescriptionListTerm>
-        <DescriptionListDescription>
-          <Flex flexWrap={{ default: 'nowrap' }} gap={{ default: 'gapXs' }}>
-            {versionLabel !== '—' ? (
-              <FlexItem>
-                <GuestOsIcon os="rhel" size="sm" />
-              </FlexItem>
-            ) : null}
-            <FlexItem>{versionLabel || '—'}</FlexItem>
-          </Flex>
-        </DescriptionListDescription>
-      </DescriptionListGroup>
+      {includeVersion && (
+        <DescriptionListGroup>
+          <DescriptionListTerm>{t('Current version')}</DescriptionListTerm>
+          <DescriptionListDescription>
+            <ClusterCurrentVersion cluster={cluster} clusterVersion={clusterVersion} />
+          </DescriptionListDescription>
+        </DescriptionListGroup>
+      )}
       <DescriptionListGroup>
         <DescriptionListTerm>{t('Node sets')}</DescriptionListTerm>
         <DescriptionListDescription>{nodeSetsSummary}</DescriptionListDescription>

@@ -79,26 +79,23 @@ export const ClustersPage = () => {
   });
   const clusterVersions = useMemo(() => clusterVersionReply?.items ?? [], [clusterVersionReply]);
 
-  const clusterVersionById = useMemo(() => {
-    const versionsById = new Map<string, ClusterVersion>();
+  const clusterVersionBySemver = useMemo(() => {
+    const versionsBySemver = new Map<string, ClusterVersion>();
     for (const clusterVersion of clusterVersions) {
-      const id = clusterVersion.id;
-      if (id) {
-        versionsById.set(id, clusterVersion);
+      const semver = clusterVersion.spec?.version;
+      if (semver) {
+        versionsBySemver.set(semver, clusterVersion);
       }
     }
-    return versionsById;
+    return versionsBySemver;
   }, [clusterVersions]);
 
   const resolveClusterVersion = useCallback(
     (cluster: Cluster): ClusterVersion | undefined => {
-      const versionRef = cluster.spec?.version;
-      if (!versionRef?.id) {
-        return undefined;
-      }
-      return clusterVersionById.get(versionRef.id);
+      const observedVersion = cluster.status?.observedVersion?.trim();
+      return observedVersion ? clusterVersionBySemver.get(observedVersion) : undefined;
     },
-    [clusterVersionById],
+    [clusterVersionBySemver],
   );
 
   const isFiltered = Boolean(

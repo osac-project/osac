@@ -440,7 +440,7 @@ You write 16 task files for VMaaS:
 | Tasks | What to do |
 |---|---|
 | `create_virtual_network`, `delete_virtual_network`, `create_external_ip_pool`, `delete_external_ip_pool`, `create_external_ip`, `delete_external_ip`, `attach_external_ip`, `detach_external_ip`, `create_nat_gateway`, `delete_nat_gateway` | Implement. `create_virtual_network` allocates and returns `l3_vni`. |
-| `create_subnet`, `delete_subnet` | Implement the segment and EVPN duties. Leave DHCP off at creation; the CaaS physical-attachment path may enable DHCP only over `physical_ipv4_cidrs` ([Address layout](#use-the-subnet-address-layout)). |
+| `create_subnet`, `delete_subnet` | Implement the segment and EVPN duties. When `ipam.physical_ipv4_cidrs` is non-empty, create or enable Fabric DHCP over that recorded range at Subnet creation and repair it on every rerun; a physical attachment also repairs it before moving a port. An empty physical pool leaves DHCP off. OSAC's Netris manager with `netris_evpn_vnet_gateway_mode: none` deliberately creates no gateway and no DHCP ([Address layout](#use-the-subnet-address-layout)). |
 | `create_security_group`, `delete_security_group` | Enforce SecurityGroups with your fabric's ACLs, or make both documented no-ops ([SecurityGroup tasks](#securitygroup-tasks)). |
 | `apply_network_attachment`, `delete_network_attachment` | For VM overlay attachments, bind or unbind the address and SecurityGroups in your fabric, or use the documented no-op when your fabric does not enforce them. For physical CaaS workers, apply and clean up the host-port attachment ([CaaS worker physical attachments](#caas-worker-physical-attachments)). |
 

@@ -173,9 +173,9 @@ describe('ExternalIpPoolWizardPage', () => {
       await clickNext(user);
 
       const cidrInput = screen.getByRole('textbox', { name: 'CIDR' });
-      await screen.findByText('CIDR must use the network address (for example, 2.3.4.0/23)');
+      await screen.findByText('Use 2.3.4.0/23 instead. CIDRs must start at the network address.');
       expect(cidrInput).toHaveAttribute('aria-invalid', 'true');
-      expect(cidrInput).toHaveAccessibleDescription(/CIDR must use the network address/);
+      expect(cidrInput).toHaveAccessibleDescription(/Use 2\.3\.4\.0\/23 instead/);
       expect(screen.queryByRole('heading', { name: 'Review' })).not.toBeInTheDocument();
       expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
 

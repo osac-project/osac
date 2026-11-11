@@ -746,6 +746,7 @@ func computeInstanceLogFixtures() (
 	return request, response, nil
 }
 
+// computeInstanceUpdateLogFixtures returns update messages for testing body-log redaction.
 func computeInstanceUpdateLogFixtures(updatePath string) (
 	*publicv1.ComputeInstancesUpdateRequest,
 	*publicv1.ComputeInstancesUpdateResponse,
@@ -772,6 +773,7 @@ func computeInstanceUpdateLogFixtures(updatePath string) (
 	return request, response
 }
 
+// computeInstancesListLogFixtures returns list messages with a customer-controlled filter.
 func computeInstancesListLogFixtures() (
 	*publicv1.ComputeInstancesListRequest,
 	*publicv1.ComputeInstancesListResponse,
@@ -794,6 +796,7 @@ func computeInstancesListLogFixtures() (
 	return request, response
 }
 
+// expectComputeInstancesListBodyLogs checks redacted filters and retained list fields.
 func expectComputeInstancesListBodyLogs(buffer *bytes.Buffer, requestEvent, responseEvent string) {
 	messages := Parse(buffer)
 	requestLogs := Find(messages, requestEvent)
@@ -816,6 +819,7 @@ func expectComputeInstancesListBodyLogs(buffer *bytes.Buffer, requestEvent, resp
 	Expect(items[0].(map[string]any)).To(HaveKeyWithValue("id", "compute-instance-list-fixture"))
 }
 
+// expectComputeInstanceBodyLogs checks that instance identifiers remain in body logs.
 func expectComputeInstanceBodyLogs(buffer *bytes.Buffer, requestEvent, responseEvent string) {
 	messages := Parse(buffer)
 	requestLogs := Find(messages, requestEvent)

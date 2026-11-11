@@ -591,10 +591,12 @@ func redactProtoMessageFields(message protoreflect.Message, redactMetadata bool)
 	}
 }
 
+// isMetadata reports whether the descriptor represents public or private metadata.
 func isMetadata(message protoreflect.MessageDescriptor) bool {
 	return message.FullName() == publicMetadataMessage || message.FullName() == privateMetadataMessage
 }
 
+// isSensitiveComputeInstancesListFilter identifies list filters that may expose customer data.
 func isSensitiveComputeInstancesListFilter(field protoreflect.FieldDescriptor) bool {
 	if field.Name() != "filter" {
 		return false
@@ -606,6 +608,7 @@ func isSensitiveComputeInstancesListFilter(field protoreflect.FieldDescriptor) b
 	return false
 }
 
+// isSensitiveComputeInstanceField identifies ComputeInstance fields omitted from body logs.
 func isSensitiveComputeInstanceField(field protoreflect.FieldDescriptor) bool {
 	name := field.Name()
 	switch field.ContainingMessage().FullName() {

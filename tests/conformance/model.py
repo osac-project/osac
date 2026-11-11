@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from tests.conformance.config import Config
+    from tests.conformance.output import OutputSink
+    from tests.conformance.redact import Redactor
 
 
 class Layer(str, Enum):
@@ -43,6 +46,8 @@ class RunContext:
     results_dir: Path
     config: Config
     tenant: str | None = None
+    redactor: Redactor | None = None
+    output: OutputSink | None = None
 
 
 @dataclass(frozen=True)

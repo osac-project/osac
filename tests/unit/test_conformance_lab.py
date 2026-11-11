@@ -76,7 +76,7 @@ def test_client_failure_is_a_config_error(tmp_path: Path) -> None:
     assert "api down" in "\n".join(exc.value.checks)
 
 
-def test_http_client_reads_capabilities(monkeypatch) -> None:
+def test_http_client_reads_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:
     class Response:
         def __enter__(self) -> Response:
             return self
@@ -94,14 +94,18 @@ def test_http_client_reads_capabilities(monkeypatch) -> None:
     assert payload["enabled_services"] == ["vmaas", "bmaas"]
 
 
-def test_kubectl_client_parses_registrations_and_release(monkeypatch, tmp_path: Path) -> None:
+def test_kubectl_client_parses_registrations_and_release(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     commands: list[tuple[str, ...]] = []
 
     def fake_run(*args: str, timeout: int = 300) -> str:
         commands.append(args)
         if "configmaps" in args:
             return json.dumps(
-                {"items": [{"metadata": {"name": "networking"}, "data": {"name": "acme", "ansibleRole": "acme.fabric"}}]}
+                {
+                    "items": [
+                        {"metadata": {"name": "networking"}, "data": {"name": "acme", "ansibleRole": "acme.fabric"}}
+                    ]
+                }
             )
         return json.dumps({"items": [{"metadata": {"labels": {"name": "osac", "version": "7"}}}]})
 

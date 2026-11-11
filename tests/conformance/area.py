@@ -11,14 +11,7 @@ import yaml
 
 from tests.conformance.errors import ConfigError
 
-_LIST_FIELDS = (
-    "componentTests",
-    "identityFields",
-    "configurationErrors",
-    "checks",
-    "evidence",
-    "referenceComponents",
-)
+_LIST_FIELDS = ("componentTests", "identityFields", "configurationErrors", "checks", "evidence", "referenceComponents")
 _STRING_FIELDS = ("supportCondition", "registrationSource", "componentJobTimeout", "settingsSource")
 _MAPPING_LIST_FIELDS = ("selectors",)
 _MAPPING_STRING_FIELDS = ("profiles", "titles", "timeoutDefaults")
@@ -50,7 +43,9 @@ def _list_of_strings(value: object, field: str, filename: str) -> tuple[str, ...
 
 
 def _mapping_of_strings(value: object, field: str, filename: str) -> Mapping[str, str]:
-    if not isinstance(value, Mapping) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in value.items()):
+    if not isinstance(value, Mapping) or any(
+        not isinstance(k, str) or not isinstance(v, str) for k, v in value.items()
+    ):
         raise ConfigError([f"{filename}: {field} must map strings to strings"])
     return dict(value)
 

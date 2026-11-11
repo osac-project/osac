@@ -15,16 +15,12 @@ def _append(path: str, entry: dict[str, Any]) -> None:
         stream.write(json.dumps(entry, sort_keys=True) + "\n")
 
 
-def pytest_collection_finish(session: Any) -> None:
+def pytest_collection_finish(session: Any) -> None:  # noqa: ANN401
     path = os.environ.get("OSAC_CONFORMANCE_MANIFEST")
     if not path:
         return
     items = [
-        {
-            "nodeid": item.nodeid,
-            "name": item.name,
-            "markers": sorted({marker.name for marker in item.iter_markers()}),
-        }
+        {"nodeid": item.nodeid, "name": item.name, "markers": sorted({marker.name for marker in item.iter_markers()})}
         for item in session.items
     ]
     target = Path(path)
@@ -32,7 +28,7 @@ def pytest_collection_finish(session: Any) -> None:
     target.write_text(json.dumps(items, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def pytest_runtest_logreport(report: Any) -> None:
+def pytest_runtest_logreport(report: Any) -> None:  # noqa: ANN401
     path = os.environ.get("OSAC_CONFORMANCE_RESULTS")
     if not path or report.when not in ("call", "setup"):
         return

@@ -40,7 +40,9 @@ class HttpLabClient:
     def capabilities(self, *, url: str, token: str, ca_file: Path | None) -> Mapping[str, Any]:
         endpoint = url.rstrip("/") + "/api/fulfillment/v1/capabilities"
         request = Request(endpoint, headers={"Authorization": f"Bearer {token}"})
-        context = ssl.create_default_context(cafile=str(ca_file)) if ca_file and endpoint.startswith("https://") else None
+        context = (
+            ssl.create_default_context(cafile=str(ca_file)) if ca_file and endpoint.startswith("https://") else None
+        )
         with urlopen(request, timeout=30, context=context) as response:
             payload = json.loads(response.read())
         if not isinstance(payload, Mapping):
@@ -58,17 +60,7 @@ class KubectlLabClient(HttpLabClient):
     """Read Capabilities over HTTP and registrations and release from the lab hub."""
 
     def registrations(self, *, kubeconfig: Path) -> Mapping[str, Mapping[str, Any]]:
-        output = run(
-            "kubectl",
-            "--kubeconfig",
-            str(kubeconfig),
-            "get",
-            "configmaps",
-            "-n",
-            "osac",
-            "-o",
-            "json",
-        )
+        output = run("kubectl", "--kubeconfig", str(kubeconfig), "get", "configmaps", "-n", "osac", "-o", "json")
         payload = json.loads(output)
         result: dict[str, Mapping[str, Any]] = {}
         for item in payload.get("items", []):
@@ -80,17 +72,7 @@ class KubectlLabClient(HttpLabClient):
 
     def installed_release(self, *, kubeconfig: Path) -> str:
         output = run(
-            "kubectl",
-            "--kubeconfig",
-            str(kubeconfig),
-            "get",
-            "secrets",
-            "-n",
-            "osac",
-            "-l",
-            "owner=helm",
-            "-o",
-            "json",
+            "kubectl", "--kubeconfig", str(kubeconfig), "get", "secrets", "-n", "osac", "-l", "owner=helm", "-o", "json"
         )
         payload = json.loads(output)
         items = payload.get("items", [])

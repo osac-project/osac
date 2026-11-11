@@ -23,12 +23,7 @@ def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:
         ],
         "enabledServices": list(report.enabled_services),
         "profiles": [
-            {
-                "name": profile.name,
-                "area": profile.area,
-                "required": profile.required,
-                "result": profile.result.value,
-            }
+            {"name": profile.name, "area": profile.area, "required": profile.required, "result": profile.result.value}
             for profile in report.profiles
         ],
         "tests": [
@@ -90,9 +85,7 @@ def write_junit(report: Report, results_dir: Path, redactor: Redactor) -> Path:
             },
         )
         if test.result is Result.FAIL:
-            failure = ElementTree.SubElement(
-                case, "failure", {"message": redactor.text(test.message)}
-            )
+            failure = ElementTree.SubElement(case, "failure", {"message": redactor.text(test.message)})
             failure.text = redactor.text(test.message)
         elif test.result is Result.SKIP:
             ElementTree.SubElement(case, "skipped", {"message": redactor.text(test.message)})

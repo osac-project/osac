@@ -55,6 +55,7 @@ permissions, before installing the platform chart.
 |-------------|---------|
 | OpenShift | 4.17+ with cluster-admin access |
 | CLI tools | `oc`, Helm 4 for Kubernetes versions it supports; Helm 3.17.x or 3.18.x for OpenShift 4.17 (Kubernetes 1.30), `git` |
+| External Keycloak with tenant identity providers | Keycloak 26.6.0 or later. Earlier versions do not apply OSAC's hide-on-unresolved-organization setting. The bundled chart uses 26.6.4. See the [Keycloak version requirement](../keycloak-configuration.md#keycloak-version-requirement). |
 | Network | Outbound access to github.com, ghcr.io, quay.io, and registry.redhat.io. Building the `osac-infra` dependency also requires Helm workstation access to topolvm.github.io and netbox-community.github.io. |
 | AAP license | Subscription manifest (`license.zip`) from [Red Hat Customer Portal](https://access.redhat.com/) |
 

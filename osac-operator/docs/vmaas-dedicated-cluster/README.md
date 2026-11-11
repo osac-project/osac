@@ -17,15 +17,18 @@ cluster are managed by different personas.
 | Controller | Management cluster | VMaaS cluster (remote) |
 |---|---|---|
 | ComputeInstance controller | reconciles ComputeInstance CRs | watch KubeVirt VirtualMachine/VirtualMachineInstance |
-| Tenant controller | reconciles Tenant CRs | manage Tenant namespace, UDN resources |
+| Tenant controller | reconciles Tenant CRs | manages only the Tenant-named namespace when provider networking is disabled |
 | Storage controller | reconciles Tenant CRs | watch and list StorageClasses |
 | AAP | executes playbooks | manage KubeVirt VirtualMachine/VirtualMachineInstance |
 | Console Proxy | -- | connects to KubeVirt VM subresources (console, VNC) via WebSocket |
 
 All OSAC custom resources remain on the management cluster. The
-`ComputeInstance`, `Tenant`, and `Storage` controllers watch the downstream
+`ComputeInstance`, `Tenant`, and `Storage` controllers watch downstream
 Kubernetes objects (VMs, namespaces, UDN, StorageClasses) on the remote cluster
-via a dedicated kubeconfig.
+via a dedicated kubeconfig. When provider networking is disabled, the Tenant
+controller creates and removes only the namespace named for that Tenant. It
+leaves `Tenant.status.namespace` unset. AAP checks that the selected namespace
+exists before creating VM resources but does not manage namespace lifecycle.
 
 osac-operator relies on
 [multicluster-runtime](https://github.com/kubernetes-sigs/multicluster-runtime)

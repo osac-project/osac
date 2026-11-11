@@ -1,0 +1,54 @@
+---
+- name: Reject VM creation when the target namespace is missing
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+  vars:
+    compute_instance: "{{ lookup('file', '../../../fixtures/computeinstance-test.yaml') | from_yaml }}"
+    compute_instance_name: "{{ compute_instance.metadata.name }}"
+    template_id: "{{ compute_instance.spec.templateID }}"
+    template_parameters: {}
+    guest_os_family: linux
+    tenant_storage_class_storage_classes:
+      - name: test-storage-class
+        tier: local
+    osac_job_vars:
+      resource: "{{ compute_instance }}"
+      vm_network:
+        namespace: osac-7297-missing-target
+        networks: [{name: default, pod: {}}]
+        interfaces: [{name: default, masquerade: {}}]
+    create_step_secrets_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    create_step_resources_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    create_step_wait_annotate_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+  collections:
+    - osac.service
+    - osac.templates
+  tasks:
+    - name: Run create and require the missing target namespace check to stop it
+      block:
+        - name: Run VM create tasks
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create.yaml
+
+        - name: Fail if create accepted a missing target namespace
+          ansible.builtin.fail:
+            msg: VM create accepted a target namespace that does not exist
+      rescue:
+        - name: Verify create stopped at the namespace check
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require target namespace to exist'
+              - "'osac-7297-missing-target' in ansible_failed_result.msg"
+            fail_msg: >-
+              Create stopped for an unexpected reason:
+              {{ ansible_failed_task.name }}: {{ ansible_failed_result.msg | default('') }}

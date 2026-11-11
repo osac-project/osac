@@ -110,6 +110,10 @@ func (c *testRemoteCluster) GetClient() client.Client {
 	return c.client
 }
 
+func (c *testRemoteCluster) GetAPIReader() client.Reader {
+	return c.client
+}
+
 // newRemoteTestMcManager wraps the local test manager with a single-cluster
 // provider named "remote" backed by remoteClient.
 func newRemoteTestMcManager(remoteClient client.Client) mcmanager.Manager {

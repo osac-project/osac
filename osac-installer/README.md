@@ -525,6 +525,9 @@ The `topolvm-provisioner` StorageClass is not the cluster default. Kind's
 PostgreSQL. OSAC registers the existing `local` storage tier. AWX's storage
 templates create a tenant-labeled class for that tier, and the operator passes
 the tenant's resolved class to compute provisioning.
+The devstack grants CDI read-only access to Kind's placeholder OpenShift Route
+API. Without that permission, CDI's informer cache cannot synchronize and
+DataVolumes remain without PVCs, leaving VMs in `ErrorPvcNotFound`.
 Local AWX jobs receive `OSAC_STORAGE_CONFIG_NAMESPACE` from the selected OSAC
 namespace so they can find storage config Secrets without a mounted
 service-account namespace file.

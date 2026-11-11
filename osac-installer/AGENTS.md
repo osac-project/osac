@@ -49,6 +49,7 @@ respective areas.
 | MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | Deployed dev-full OSAC UI Gateway reachability | Component integration | `./scripts/test-ui-gateway.sh` |
+| Dev-full CDI Route reader permissions | Helm contract plus deployed authorization and DataVolume reconciliation | `bash scripts/test-dev-full-render.sh`; verify `cdi:cdi-sa` can get/list/watch the placeholder Route API and an existing DataVolume creates its PVC. This does not by itself prove guest boot or disk I/O. |
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |
 | `install-infra` readiness waits for the CA issuer, bundled PostgreSQL, or Kafka | Unit with command stubs | `make infra-ready-wait-test` |
 | Fulfillment integration report opt-in and output paths | Unit with expanded Makefile commands | `make kind-runtime-test` |

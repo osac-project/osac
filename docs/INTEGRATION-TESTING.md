@@ -447,6 +447,16 @@ installer command in the tier table remains the component-integration check.
 
 Touched-area requirements: [component guide](../osac-installer/AGENTS.md#integration-testing).
 
+Dev-full CDI Route permissions are checked by
+`bash osac-installer/scripts/test-dev-full-render.sh`. The Helm contract requires
+exactly `get`, `list`, and `watch` on `routes.route.openshift.io`, bound only to
+`cdi:cdi-sa`, and suppresses these resources when virtualization or RBAC creation
+is disabled. On a deployed Kind dev-full cluster, verify those permissions with
+`kubectl -n cdi auth can-i list routes.route.openshift.io --as=system:serviceaccount:cdi:cdi-sa --all-namespaces`
+and observe a real DataVolume create its PVC. The Route API is an OSAC
+placeholder; this check does not exercise an OpenShift router, guest boot, or
+disk I/O.
+
 The `make mce-render-test` Helm contract renders the prerequisite charts from
 local sources. It asserts disabled defaults, explicit standalone MCE
 enablement, configuration, Assisted image overrides, compatibility RBAC,

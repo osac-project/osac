@@ -30,6 +30,7 @@ import (
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/directclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
@@ -47,9 +48,14 @@ type SecretWriter struct {
 
 var _ credentials.Writer = (*SecretWriter)(nil)
 
-// NewSecretWriter creates a Secret writer using the supplied direct Kubernetes client.
-func NewSecretWriter(client client.Client, namespace string) *SecretWriter {
-	return &SecretWriter{client: client, namespace: namespace}
+// NewSecretWriter creates a Secret writer using the supplied direct Kubernetes
+// client.
+//
+// direct must be built with directclient.New. Secrets are written with
+// CreateOrUpdate, whose internal read must reach the API server: through the
+// cached client it would start a cluster-wide Secret informer.
+func NewSecretWriter(direct directclient.Client, namespace string) *SecretWriter {
+	return &SecretWriter{client: direct, namespace: namespace}
 }
 
 // Create creates or updates the Secret consumed by BMO for its BMI owner.

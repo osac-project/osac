@@ -191,7 +191,7 @@ var _ = Describe("NetBox inventory client", func() {
 				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-old"}},
 			}
 			manager, k8sClient := newNetBoxResourceManager(bareMetalHost)
-			writer := bmh.NewSecretWriter(k8sClient, "metal3-system")
+			writer := bmh.NewSecretWriter(directclient.Wrap(k8sClient), "metal3-system")
 			Expect(writer.Create(ctx, credentials.Reference{HostID: "netbox-5", BMIID: "bmi-old"}, credentials.BMC{
 				Username: []byte("admin"), Password: []byte("password"),
 			})).To(Succeed())
@@ -233,7 +233,7 @@ var _ = Describe("NetBox inventory client", func() {
 			}
 			manager, k8sClient := newNetBoxResourceManager(bareMetalHost)
 			secretKey := client.ObjectKey{Namespace: "metal3-system", Name: "netbox-46-bmc-secret"}
-			writer := bmh.NewSecretWriter(k8sClient, "metal3-system")
+			writer := bmh.NewSecretWriter(directclient.Wrap(k8sClient), "metal3-system")
 			Expect(writer.Create(ctx, credentials.Reference{HostID: "netbox-46", BMIID: "bmi-B"}, credentials.BMC{
 				Username: []byte("admin"), Password: []byte("password"),
 			})).To(Succeed())
@@ -250,7 +250,7 @@ var _ = Describe("NetBox inventory client", func() {
 			ctx := context.Background()
 			manager, k8sClient := newNetBoxResourceManager()
 			secretKey := client.ObjectKey{Namespace: "metal3-system", Name: "netbox-46-bmc-secret"}
-			writer := bmh.NewSecretWriter(k8sClient, "metal3-system")
+			writer := bmh.NewSecretWriter(directclient.Wrap(k8sClient), "metal3-system")
 			Expect(writer.Create(ctx, credentials.Reference{HostID: "netbox-46", BMIID: "bmi-A"}, credentials.BMC{
 				Username: []byte("admin"), Password: []byte("password"),
 			})).To(Succeed())
@@ -328,7 +328,7 @@ var _ = Describe("NetBox inventory client", func() {
 			k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bareMetalHost).Build()
 			manager := baremetalhost.NewManager(k8sClient, directclient.Wrap(k8sClient), "metal3-system")
 			secretKey := client.ObjectKey{Namespace: "metal3-system", Name: "netbox-46-bmc-secret"}
-			writer := bmh.NewSecretWriter(k8sClient, "metal3-system")
+			writer := bmh.NewSecretWriter(directclient.Wrap(k8sClient), "metal3-system")
 			Expect(writer.Create(ctx, credentials.Reference{HostID: "netbox-46", BMIID: "bmi-123"}, credentials.BMC{
 				Username: []byte("admin"), Password: []byte("test-password"),
 			})).To(Succeed())

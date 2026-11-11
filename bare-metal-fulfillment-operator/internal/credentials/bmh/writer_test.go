@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/directclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
@@ -58,7 +59,7 @@ func newWriter(objects ...client.Object) (*SecretWriter, client.Client) {
 	Expect(corev1.AddToScheme(scheme)).To(Succeed())
 	Expect(metal3api.AddToScheme(scheme)).To(Succeed())
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
-	return NewSecretWriter(k8sClient, testNamespace), k8sClient
+	return NewSecretWriter(directclient.Wrap(k8sClient), testNamespace), k8sClient
 }
 
 var _ = Describe("BMC Secret Writer", func() {

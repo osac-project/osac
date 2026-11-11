@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.conformance.config import load_config
+from tests.conformance.cli import redactor_for_config
+from tests.conformance.config import Config, load_config
 from tests.conformance.errors import ConfigError
 
 
@@ -107,3 +108,41 @@ def test_missing_config_file_is_a_config_error(tmp_path: Path) -> None:
         load_config(tmp_path / "missing.yaml", area_names=set())
 
     assert "missing.yaml" in "\n".join(exc.value.checks)
+
+
+def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
+    token = tmp_path / "admin-token"
+    token.write_text("admin-token-value")
+    ca = tmp_path / "ca.pem"
+    ca.write_text("ca")
+    hub = tmp_path / "hub.kubeconfig"
+    hub.write_text(
+        yaml.safe_dump(
+            {
+                "users": [{"user": {"token": "hub-token-value", "password": "hub-password-value"}}],
+                "clusters": [{"cluster": {"server": "https://api.hub.example.test"}}],
+            }
+        )
+    )
+    config = Config(
+        osac_release="1.4.0",
+        selectors=("generic",),
+        lab_kubeconfig=hub,
+        lab_api_url="https://api.lab.example.test",
+        lab_token_file=token,
+        lab_ca_file=ca,
+        lab_aap=None,
+        timeouts={},
+        areas={},
+        raw={},
+    )
+
+    text = redactor_for_config(config).text(
+        "admin-token-value hub-token-value hub-password-value api.hub.example.test api.lab.example.test"
+    )
+
+    assert "admin-token-value" not in text
+    assert "hub-token-value" not in text
+    assert "hub-password-value" not in text
+    assert "api.hub.example.test" not in text
+    assert "api.lab.example.test" not in text

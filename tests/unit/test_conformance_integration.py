@@ -173,3 +173,51 @@ def test_missing_podman_socket_and_empty_plan_are_config_errors(
     empty_results.mkdir()
     assert main(["run", "--plan", str(empty_plan)], runtime=runtime_for(empty_results, socket)) == 2
     assert "no tests" in capsys.readouterr().err
+
+
+def test_unknown_selector_is_a_config_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    token = tmp_path / "token"
+    token.write_text("admin")
+    ca = tmp_path / "ca.pem"
+    ca.write_text("ca")
+    hub = tmp_path / "hub"
+    hub.write_text("hub")
+    config_path = tmp_path / "conformance.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "osacRelease": "1.4.0",
+                "lab": {
+                    "selectors": ["frobnicate"],
+                    "kubeconfig": str(hub),
+                    "apiURL": "http://lab.example.test",
+                    "tokenFile": str(token),
+                    "caFile": str(ca),
+                },
+                "networking": {},
+            },
+            sort_keys=False,
+        )
+    )
+    areas_dir = tmp_path / "areas"
+    areas_dir.mkdir()
+    _area(areas_dir / "networking.yaml")
+    results = tmp_path / "results"
+
+    assert (
+        main(
+            [
+                "list",
+                "--config",
+                str(config_path),
+                "--results",
+                str(results),
+                "--areas",
+                str(areas_dir),
+                "--tree",
+                str(tmp_path / "tree"),
+            ]
+        )
+        == 2
+    )
+    assert "frobnicate" in capsys.readouterr().err

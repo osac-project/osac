@@ -109,7 +109,7 @@ if ! grep -Fq 'apiVersion: admissionregistration.k8s.io/v1' <<<"$arm64_compat_re
   || ! grep -Fq 'resources: ["virtualmachines"]' <<<"$arm64_compat_render" \
   || ! grep -Fq 'failurePolicy: Fail' <<<"$arm64_compat_render" \
   || ! grep -Fq 'operator: Exists' <<<"$arm64_compat_render" \
-  || ! grep -Fq 'key: osac.openshift.io/tenant' <<<"$arm64_compat_render" \
+  || ! grep -Fq 'key: osac.openshift.io/tenant-ref' <<<"$arm64_compat_render" \
   || ! grep -Fq '/spec/template/spec/domain/features/smm' <<<"$arm64_compat_render" \
   || ! grep -Fq '/spec/template/spec/domain/features/hyperv' <<<"$arm64_compat_render" \
   || ! grep -Fq '/spec/template/spec/domain/clock/timer/hyperv' <<<"$arm64_compat_render"; then

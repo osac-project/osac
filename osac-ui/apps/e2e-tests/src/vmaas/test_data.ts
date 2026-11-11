@@ -361,24 +361,6 @@ export const instanceTypeNameOrSkip = (): string | undefined => {
   return undefined;
 };
 
-export const resizeInstanceTypeNameOrSkip = (): string | undefined => {
-  if (rawResizeInstanceType.name !== undefined) {
-    return rawResizeInstanceType.name;
-  }
-
-  test.skip(true, 'resize_instance_type.name is not set in apps/e2e-tests/extravars.yaml.');
-  return undefined;
-};
-
-export const resizeMixedInstanceTypeNameOrSkip = (): string | undefined => {
-  if (rawResizeMixedInstanceType.name !== undefined) {
-    return rawResizeMixedInstanceType.name;
-  }
-
-  test.skip(true, 'resize_mixed_instance_type.name is not set in apps/e2e-tests/extravars.yaml.');
-  return undefined;
-};
-
 export const diskImageNameOrSkip = (): string | undefined => {
   if (diskImageTestName !== undefined) {
     return diskImageTestName;

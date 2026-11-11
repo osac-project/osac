@@ -89,7 +89,7 @@ Environment variables:
 | --------------------- | ------------------------------------------------------------------------------------------------- |
 | `OSAC_UI_BASE_URL`    | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
 | `OSAC_API_BASE_URL`   | Optional Fulfillment API URL; auto-discovered from the `fulfillment-api` route when possible      |
-| `OSAC_CLI_PATH`       | Optional path to the `osac` binary; the runner also checks `~/.local/bin/osac`                |
+| `OSAC_CLI_PATH`       | Optional path to the `osac` binary; the runner also checks `~/.local/bin/osac`                    |
 | `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                               |
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
@@ -254,16 +254,18 @@ pnpm --filter @osac/playwright exec playwright test \
 
 ### VM resize flow tests
 
-The resize flow is independent from `vmaas-full-flow`. Its prerequisite blocks
-create the base instance type, resize target instance type, disk image, storage
-tier, tenant, and published catalog item. Each resize scenario then creates its
-own VM at the start and deletes that VM in `afterEach`; the prerequisite teardown
-removes the catalog and infrastructure resources after all scenarios finish.
+The resize flow reuses the existing `vmaas-full-flow-resources` and
+`vmaas-full-flow-catalog` projects for its base instance type, disk image,
+storage tier, tenant, and published catalog item. The resize spec creates its
+target and mixed-direction instance types in `beforeAll`, creates a fresh VM at
+the start of each scenario, and deletes that VM in `afterEach`. The existing
+delete specs clean up the shared resources after the resize project finishes.
 
-The scenario files are under `apps/e2e-tests/src/vmaas/resize/` and use the
-test-plan names `TC-NFR1-01` and `TC-FR1-02`. The first verifies that a running
-VM reports `RESTART REQUIRED=True` after Save and applies the new sizing only
-after Restart. The second resizes a stopped VM, starts it, and verifies the new
+The scenario is in
+`apps/e2e-tests/src/vmaas/resize/resize.vm.spec.ts` and uses the test-plan
+names `TC-NFR1-01` and `TC-FR1-02`. The first verifies that a running VM reports
+`RESTART REQUIRED=True` after Save and applies the new sizing only after
+Restart. The second resizes a stopped VM, starts it, and verifies the new
 mixed-direction sizing for `TC-FR2-02`.
 
 Run it with:

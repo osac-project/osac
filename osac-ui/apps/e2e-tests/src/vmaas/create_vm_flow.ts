@@ -48,7 +48,7 @@ export const createVmFromCatalog = async (
   } catch {
     test.skip(
       true,
-      `Tenant credentials were not found at ${credentialsFile}; run the full flow first.`,
+      `Tenant credentials were not found at ${credentialsFile}; run the VMaaS prerequisites first.`,
     );
     return;
   }

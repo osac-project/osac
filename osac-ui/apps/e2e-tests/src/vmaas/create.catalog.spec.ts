@@ -1,7 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { access, writeFile } from 'node:fs/promises';
 
-import { markResizeOwnershipIfApplicable } from './resize/ownership';
 import { catalogOwnershipFilePath, catalogTestData } from './test_data';
 import { CatalogCreatePage } from '../../../../libs/locators/catalog';
 import {
@@ -101,14 +100,14 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
     await expect(page).toHaveURL(
       (url) => /^\/catalog\/vm\/[^/]+$/.test(url.pathname) && url.pathname !== '/catalog/vm/create',
     );
-    await expect(
-      page.getByRole('heading', { name: catalogTestData.name, exact: true }),
-    ).toBeVisible();
     await writeFile(ownershipFile, '', {
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600,
     });
+    await expect(
+      page.getByRole('heading', { name: catalogTestData.name, exact: true }),
+    ).toBeVisible();
   });
 
   await testStep('catalog-create', 'Publish the catalog item', async () => {
@@ -132,12 +131,5 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
         },
       );
     },
-  );
-
-  await markResizeOwnershipIfApplicable(
-    test.info().project.name,
-    ['vmaas-resize-catalog'],
-    'catalog',
-    'catalog-create',
   );
 });

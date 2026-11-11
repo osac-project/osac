@@ -1,6 +1,5 @@
 import { test } from '@playwright/test';
 
-import { markResizeOwnershipIfApplicable } from './resize/ownership';
 import { instanceTypeNameOrSkip, instanceTypeTestData } from './test_data';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
@@ -55,12 +54,6 @@ test('creates an instance type from Infrastructure', async ({ page }) => {
       instanceTypeTestData.memoryGib,
       instanceTypeTestData.gpu,
     ),
-  );
-  await markResizeOwnershipIfApplicable(
-    test.info().project.name,
-    ['vmaas-resize-prerequisites'],
-    'instance-type-base',
-    'instance-type-create',
   );
 
   await testStep(

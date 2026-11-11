@@ -1,6 +1,5 @@
 import { test } from '@playwright/test';
 
-import { markResizeOwnershipIfApplicable } from './resize/ownership';
 import { storageTierNameOrSkip, storageTierTestData } from './test_data';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
@@ -52,12 +51,6 @@ test('creates a storage tier from Storage > Storage Tiers', async ({ page }) => 
 
   await testStep('storage-tier-create', 'Create the configured storage tier', () =>
     createStorageTier(page, storageTier),
-  );
-  await markResizeOwnershipIfApplicable(
-    test.info().project.name,
-    ['vmaas-resize-prerequisites'],
-    'storage-tier',
-    'storage-tier-create',
   );
 
   await testStep(

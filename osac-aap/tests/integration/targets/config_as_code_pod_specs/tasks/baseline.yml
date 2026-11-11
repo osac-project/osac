@@ -272,15 +272,14 @@
           - >-
             _networking_pod_no_ca.spec.containers[0].env
             | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
-            | selectattr('value', 'equalto', '')
-            | list | length == 1
+            | list | length == 0
           - >-
             _networking_pod_no_ca.spec.volumes
             | selectattr('name', 'equalto', 'netris-ca-bundle')
             | list | length == 0
         fail_msg: >-
-          Networking jobs without a configured CA must export an empty CA path
-          and omit the CA volume.
+          Networking jobs without a configured CA must not set NETRIS_CA_PATH
+          and must omit the CA volume.
 
 - name: Cluster fulfillment pod spec without a Netris CA
   hosts: localhost

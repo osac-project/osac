@@ -47,8 +47,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+{% if netris_ca_config_map_name %}
         - name: NETRIS_CA_PATH
           value: "{{ netris_ca_path }}"
+{% endif %}
   volumes:
     - name: kube-api-access
       projected:

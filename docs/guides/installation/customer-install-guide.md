@@ -1398,7 +1398,7 @@ retryable with "Missing or malformed setting in network-fulfillment-ig".
 | `NETRIS_SITE_ID`, `NETRIS_TENANT_ID` | `config` | Every task. Positive integers. |
 | `NETRIS_MGMT_VPC_ID` | `config` | ExternalIP attachments whose destination uses the `provider_management` routing domain. A positive integer. Tenant NATGateways and tenant-network attachments use the VirtualNetwork's VPC instead. |
 | `NETRIS_VALIDATE_CERTS` | `config` | Optional. `"true"` (the default) or `"false"`; the chart rejects other values. |
-| `NETRIS_CA_PATH` | `config` | Optional. The path of a CA file inside the job pod. |
+| `NETRIS_CA_PATH` | `config` | Optional. Path of a CA file inside the job pod. Ignored when `NETRIS_CA_CONFIGMAP` is set. Cluster-fulfillment pods always derive this value from `NETRIS_CA_CONFIGMAP`; networking-operations pods use the configured value only when `NETRIS_CA_CONFIGMAP` is unset. |
 | `NETRIS_PORT_SETTLE_SECONDS` | `config` | Optional. Default `15`. |
 | `NETRIS_BM_PROVISIONING_VNET`, `NETRIS_RESOURCE_CLASS_MAP` | `config` | BMaaS and FabricDomains only, so not used in this release: the provisioning V-Net name, and a non-empty JSON object that maps each resource class to its Netris server cluster template. |
 

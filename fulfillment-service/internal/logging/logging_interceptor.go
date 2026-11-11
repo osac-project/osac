@@ -471,6 +471,11 @@ const (
 	publicPermissionRuleMessage  = protoreflect.FullName("osac.public.v1.PermissionRule")
 	privatePermissionRuleMessage = protoreflect.FullName("osac.private.v1.PermissionRule")
 
+	publicComputeInstanceMessage  = protoreflect.FullName("osac.public.v1.ComputeInstance")
+	privateComputeInstanceMessage = protoreflect.FullName("osac.private.v1.ComputeInstance")
+	publicMetadataMessage         = protoreflect.FullName("osac.public.v1.Metadata")
+	privateMetadataMessage        = protoreflect.FullName("osac.private.v1.Metadata")
+
 	publicComputeInstanceSpec        = protoreflect.FullName("osac.public.v1.ComputeInstanceSpec")
 	privateComputeInstanceSpec       = protoreflect.FullName("osac.private.v1.ComputeInstanceSpec")
 	publicComputeInstanceStatus      = protoreflect.FullName("osac.public.v1.ComputeInstanceStatus")
@@ -489,17 +494,23 @@ const (
 	)
 )
 
-// redactProtoMessage returns a copy with Secret data, permission rule values, and
-// sensitive ComputeInstance and catalog fields redacted.
+// redactProtoMessage returns a copy with Secret data, permission rule values,
+// metadata, and sensitive ComputeInstance and catalog fields redacted.
 // The copy ensures that logging never changes the message sent through gRPC.
 func redactProtoMessage(message proto.Message) proto.Message {
 	result := proto.Clone(message)
-	redactProtoMessageFields(result.ProtoReflect())
+	redactProtoMessageFields(result.ProtoReflect(), false)
 	return result
 }
 
 // redactProtoMessageFields redacts Secret payloads and sensitive instance and catalog data in place.
-func redactProtoMessageFields(message protoreflect.Message) {
+func redactProtoMessageFields(message protoreflect.Message, redactAnnotations bool) {
+	switch message.Descriptor().FullName() {
+	case publicComputeInstanceMessage, privateComputeInstanceMessage,
+		publicComputeInstanceCatalogItem, privateComputeInstanceCatalogItem:
+		redactAnnotations = true
+	}
+
 	fields := message.Descriptor().Fields()
 	for index := 0; index < fields.Len(); index++ {
 		field := fields.Get(index)
@@ -509,6 +520,14 @@ func redactProtoMessageFields(message protoreflect.Message) {
 			} else {
 				message.Clear(field)
 			}
+			continue
+		}
+		if redactAnnotations && field.Name() == "annotations" && isMetadata(message.Descriptor()) {
+			annotations := message.Mutable(field).Map()
+			annotations.Range(func(key protoreflect.MapKey, _ protoreflect.Value) bool {
+				annotations.Set(key, protoreflect.ValueOfString(redactMark))
+				return true
+			})
 			continue
 		}
 		if field.IsMap() {
@@ -522,7 +541,7 @@ func redactProtoMessageFields(message protoreflect.Message) {
 			}
 			if field.MapValue().Kind() == protoreflect.MessageKind || field.MapValue().Kind() == protoreflect.GroupKind {
 				message.Get(field).Map().Range(func(_ protoreflect.MapKey, value protoreflect.Value) bool {
-					redactProtoMessageFields(value.Message())
+					redactProtoMessageFields(value.Message(), redactAnnotations)
 					return true
 				})
 			}
@@ -532,7 +551,7 @@ func redactProtoMessageFields(message protoreflect.Message) {
 			if field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind {
 				list := message.Get(field).List()
 				for index := 0; index < list.Len(); index++ {
-					redactProtoMessageFields(list.Get(index).Message())
+					redactProtoMessageFields(list.Get(index).Message(), redactAnnotations)
 				}
 				continue
 			}
@@ -551,9 +570,13 @@ func redactProtoMessageFields(message protoreflect.Message) {
 			continue
 		}
 		if (field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind) && message.Has(field) {
-			redactProtoMessageFields(message.Get(field).Message())
+			redactProtoMessageFields(message.Get(field).Message(), redactAnnotations)
 		}
 	}
+}
+
+func isMetadata(message protoreflect.MessageDescriptor) bool {
+	return message.FullName() == publicMetadataMessage || message.FullName() == privateMetadataMessage
 }
 
 func isSensitiveComputeInstanceField(field protoreflect.FieldDescriptor) bool {

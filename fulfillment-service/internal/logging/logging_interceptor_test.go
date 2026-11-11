@@ -446,6 +446,7 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("192.0.2.4"))
 		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.5"))
 		Expect(buffer.String()).ToNot(ContainSubstring("subnet-private-id"))
+		Expect(buffer.String()).ToNot(ContainSubstring("compute-instance-annotation-fixture-value"))
 		Expect(buffer.String()).To(ContainSubstring(redactMark))
 		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
@@ -475,6 +476,7 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("192.0.2.4"))
 		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.5"))
 		Expect(buffer.String()).ToNot(ContainSubstring("subnet-private-id"))
+		Expect(buffer.String()).ToNot(ContainSubstring("compute-instance-annotation-fixture-value"))
 		Expect(buffer.String()).To(ContainSubstring(redactMark))
 		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
@@ -507,6 +509,19 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("locked-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("default-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("inline-user-data-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-annotation-fixture-value"))
+
+		messages := Parse(buffer)
+		requestLogs := Find(messages, "Sending unary request")
+		Expect(requestLogs).To(HaveLen(1))
+		Expect(requestLogs[0]).To(HaveKey("request"))
+		responseLogs := Find(messages, "Received unary response")
+		Expect(responseLogs).To(HaveLen(1))
+		responseBody, ok := responseLogs[0]["response"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		object, ok := responseBody["object"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(object).To(HaveKeyWithValue("id", "catalog-item-fixture"))
 		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
 	})
@@ -532,6 +547,19 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("locked-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("default-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("inline-user-data-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-annotation-fixture-value"))
+
+		messages := Parse(buffer)
+		requestLogs := Find(messages, "Received unary request")
+		Expect(requestLogs).To(HaveLen(1))
+		Expect(requestLogs[0]).To(HaveKey("request"))
+		responseLogs := Find(messages, "Sent unary response")
+		Expect(responseLogs).To(HaveLen(1))
+		responseBody, ok := responseLogs[0]["response"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		object, ok := responseBody["object"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(object).To(HaveKeyWithValue("id", "catalog-item-fixture"))
 		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
 	})
@@ -552,12 +580,18 @@ func computeInstanceLogFixtures() (
 		TemplateParameters: map[string]*anypb.Any{"fixture-param": fixtureTemplateParameter},
 		UserDataSource:     publicv1.UserDataSource_builder{Inline: &fixtureUserData}.Build(),
 	}.Build()
+	metadata := publicv1.Metadata_builder{
+		Annotations: map[string]string{
+			"customer.example.test/private": "compute-instance-annotation-fixture-value",
+		},
+	}.Build()
 	request := publicv1.ComputeInstancesCreateRequest_builder{
-		Object: publicv1.ComputeInstance_builder{Spec: spec}.Build(),
+		Object: publicv1.ComputeInstance_builder{Metadata: metadata, Spec: spec}.Build(),
 	}.Build()
 	response := publicv1.ComputeInstancesCreateResponse_builder{
 		Object: publicv1.ComputeInstance_builder{
-			Spec: spec,
+			Metadata: metadata,
+			Spec:     spec,
 			Status: publicv1.ComputeInstanceStatus_builder{
 				InternalIpAddress: "10.1.2.3",
 				ExternalIpAddress: "192.0.2.4",
@@ -588,8 +622,14 @@ func computeInstanceCatalogItemLogFixtures() (
 		return nil, nil, err
 	}
 	inlineUserData := "inline-user-data-fixture"
+	metadata := publicv1.Metadata_builder{
+		Annotations: map[string]string{
+			"customer.example.test/private": "catalog-item-annotation-fixture-value",
+		},
+	}.Build()
 	item := publicv1.ComputeInstanceCatalogItem_builder{
-		Id: "catalog-item-fixture",
+		Id:       "catalog-item-fixture",
+		Metadata: metadata,
 		TemplateParameters: map[string]*publicv1.TemplateParameterPolicy{
 			"locked-param": publicv1.TemplateParameterPolicy_builder{
 				Locked: lockedTemplateParameter,

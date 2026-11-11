@@ -8,7 +8,7 @@ import {
   resizeRunningVmAndVerify,
   restartVmAndVerify,
   useResizeVmLifecycle,
-} from './resize_test';
+} from './resize.helpers';
 import { expectComputeInstanceConfiguration } from '../../../../../libs/osac-cli/src/compute_instance';
 import { openAndLogin } from '../../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../../libs/test-utils/src/general/test_progress';

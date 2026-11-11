@@ -1,6 +1,6 @@
 import { test } from '@playwright/test';
 
-import { createResizeVm, deleteResizeVm } from './resize_vm';
+import { createResizeVm, deleteResizeVm } from './resize.vm.lifecycle';
 import { expectComputeInstanceConfiguration } from '../../../../../libs/osac-cli/src/compute_instance';
 import {
   type VmPowerAction,

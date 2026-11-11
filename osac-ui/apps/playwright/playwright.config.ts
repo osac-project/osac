@@ -77,7 +77,9 @@ process.env.OSAC_CATALOG_TEST_RUN_ID = catalogTestRunId.toLowerCase();
 
 const fullFlowProjectRequested = process.argv.some(
   (argument) =>
-    argument.includes('vmaas-full-flow') || argument.includes('vmaas-full-happy-basic-flow'),
+    argument.includes('vmaas-full-flow') ||
+    argument.includes('vmaas-full-happy-basic-flow') ||
+    argument.includes('vm-flow'),
 );
 if (flowMode !== 'delete' && fullFlowProjectRequested && !process.argv.includes('--list')) {
   writeVmaasFullFlowRunState({
@@ -167,11 +169,11 @@ export default defineConfig({
       dependencies: ['setup'],
     },
     {
-      name: 'vmaas',
+      name: 'tenant',
       testDir: vmaasDir,
       testMatch: tenantTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: flowMode === 'full' ? 'vmaas-delete' : undefined,
+      teardown: flowMode === 'full' ? 'tenant-delete' : undefined,
     },
     {
       name: 'vmaas-full-flow-pre-resource-base',
@@ -190,21 +192,21 @@ export default defineConfig({
       teardown: flowMode === 'full' ? 'vmaas-full-flow-pre-resource-delete' : undefined,
     },
     {
-      name: 'vmaas-full-flow',
+      name: 'vm-flow',
       testDir: vmaasDir,
       testMatch: /create\.vm\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: ['vmaas-full-flow-pre-resource'],
     },
     {
-      name: 'vmaas-full-flow-vm-delete',
+      name: 'vm-flow-delete',
       testDir: vmaasDir,
       testMatch: /delete\.vm\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       // In delete mode this is the first cleanup project. In full mode it
       // follows the complete creation chain before deleting the VM.
-      dependencies: flowMode === 'full' ? ['vmaas-full-flow'] : [],
+      dependencies: flowMode === 'full' ? ['vm-flow'] : [],
     },
     {
       name: 'vmaas-full-happy-basic-flow',
@@ -212,7 +214,7 @@ export default defineConfig({
       testMatch: /delete\.vm\.spec\.ts/,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: flowMode === 'full' ? ['vmaas-full-flow'] : [],
+      dependencies: flowMode === 'full' ? ['vm-flow'] : [],
     },
     {
       name: 'vmaas-full-flow-pre-resource-delete',
@@ -222,74 +224,74 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-storage-tier',
+      name: 'storage-tier',
       testDir: vmaasDir,
       testMatch: storageTierTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: flowMode === 'full' ? 'vmaas-storage-tier-delete' : undefined,
+      teardown: flowMode === 'full' ? 'storage-tier-delete' : undefined,
     },
     {
-      name: 'vmaas-storage-tier-delete',
+      name: 'storage-tier-delete',
       testDir: vmaasDir,
       testMatch: /delete\.storage_tier\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-instance-type',
+      name: 'instance-type',
       testDir: vmaasDir,
       testMatch: instanceTypeTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: flowMode === 'full' ? 'vmaas-instance-type-delete' : undefined,
+      teardown: flowMode === 'full' ? 'instance-type-delete' : undefined,
     },
     {
-      name: 'vmaas-instance-type-lifecycle',
+      name: 'instance-type-lifecycle',
       testDir: vmaasDir,
       testMatch: /lifecycle\.instance_type\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: ['vmaas-instance-type'],
+      dependencies: ['instance-type'],
     },
     {
-      name: 'vmaas-instance-type-delete',
+      name: 'instance-type-delete',
       testDir: vmaasDir,
       testMatch: /delete\.instance_type\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-delete',
+      name: 'tenant-delete',
       testDir: vmaasDir,
       testMatch: /delete\.tenant\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-disk-image',
+      name: 'disk-image',
       testDir: vmaasDir,
       testMatch: diskImageTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: flowMode === 'full' ? 'vmaas-disk-image-delete' : undefined,
+      teardown: flowMode === 'full' ? 'disk-image-delete' : undefined,
     },
     {
-      name: 'vmaas-disk-image-lifecycle',
+      name: 'disk-image-lifecycle',
       testDir: vmaasDir,
       testMatch: /lifecycle\.disk_images\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: ['vmaas-disk-image'],
+      dependencies: ['disk-image'],
     },
     {
-      name: 'vmaas-disk-image-delete',
+      name: 'disk-image-delete',
       testDir: vmaasDir,
       testMatch: /delete\.disk_images\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-catalog',
+      name: 'catalog',
       testDir: vmaasDir,
       testMatch: catalogTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: flowMode === 'delete' ? [] : ['vmaas-disk-image', 'vmaas-instance-type'],
-      teardown: flowMode === 'full' ? 'vmaas-catalog-delete' : undefined,
+      dependencies: flowMode === 'delete' ? [] : ['disk-image', 'instance-type'],
+      teardown: flowMode === 'full' ? 'catalog-delete' : undefined,
     },
     {
-      name: 'vmaas-catalog-delete',
+      name: 'catalog-delete',
       testDir: vmaasDir,
       testMatch: /delete\.catalog\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },

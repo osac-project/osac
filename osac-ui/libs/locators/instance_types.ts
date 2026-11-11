@@ -20,7 +20,7 @@ export const InstanceTypesMainPage = {
   instanceTypeMemoryGibCell: ['td[data-label="Memory (GiB)"]'],
   instanceTypeGpusCell: ['td[data-label="GPUs"]'],
   instanceTypeActionsToggle: ['button[aria-label^="Actions for "]'],
-  emptyStateTitle: ['heading', { name: 'No instance types yet.', exact: true }],
+  emptyStateTitle: ['heading', { name: 'No instance types found', exact: true }],
 } as const satisfies Record<string, InstanceTypesLocator>;
 
 export const InstanceTypesActionsMenu = {

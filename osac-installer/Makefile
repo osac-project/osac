@@ -266,7 +266,8 @@ endif
 ifeq ($(PLATFORM)/$(PROFILE)/$(KIND_RUNTIME_REQUIRED),kind/dev/false)
 ifeq ($(strip $(KIND_EXPERIMENTAL_PROVIDER)),)
 ifneq ($(shell command -v podman 2>/dev/null),)
-override export KIND_EXPERIMENTAL_PROVIDER := podman
+override KIND_EXPERIMENTAL_PROVIDER := podman
+export KIND_EXPERIMENTAL_PROVIDER
 endif
 endif
 endif

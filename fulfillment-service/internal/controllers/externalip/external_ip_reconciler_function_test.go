@@ -224,11 +224,11 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(externalIPID, hubID, hubCache)
 		ctx, cancel := context.WithCancel(ctx)
 		DeferCleanup(cancel)
-		signalCalled := make(chan struct{}, 1)
+		signaledID := make(chan string, 1)
 		externalIPsClient := NewMockExternalIPsClient(ctrl)
 		externalIPsClient.EXPECT().Signal(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(context.Context, *privatev1.ExternalIPsSignalRequest, ...grpc.CallOption) (*privatev1.ExternalIPsSignalResponse, error) {
-				signalCalled <- struct{}{}
+			func(_ context.Context, request *privatev1.ExternalIPsSignalRequest, _ ...grpc.CallOption) (*privatev1.ExternalIPsSignalResponse, error) {
+				signaledID <- request.GetId()
 				return nil, grpcstatus.Error(grpccodes.NotFound, "resource is gone")
 			},
 		)
@@ -240,7 +240,7 @@ var _ = Describe("delete", func() {
 		Expect(deleteCalled).To(BeTrue())
 		// Finalizer should NOT be removed: K8s object still exists
 		Expect(hasFinalizer(t.externalIP)).To(BeTrue())
-		Eventually(signalCalled).Should(Receive())
+		Eventually(signaledID).Should(Receive(Equal(externalIPID)))
 	})
 
 	It("should not call hubClient.Delete when K8s object has DeletionTimestamp", func() {

@@ -620,7 +620,7 @@ func isSensitiveComputeInstanceField(field protoreflect.FieldDescriptor) bool {
 			return true
 		}
 	case publicComputeInstanceCatalogItem, privateComputeInstanceCatalogItem:
-		return name == "template_parameters"
+		return name == "description" || name == "template_parameters"
 	case publicComputeInstanceCatalogItemFields, privateComputeInstanceCatalogItemFields:
 		switch name {
 		case "network_attachments", "ssh_key", "user_data_source":

@@ -591,7 +591,7 @@ var _ = Describe("Interceptor", func() {
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
 	})
 
-	It("Redacts ComputeInstance catalog policies from unary client body logs", func() {
+	It("Redacts ComputeInstance catalog policies and descriptions from unary client body logs", func() {
 		redactedInterceptor, err := NewInterceptor().
 			SetLogger(logger).
 			SetBodies(true).
@@ -618,6 +618,7 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("locked-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("default-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("inline-user-data-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-description-fixture-value"))
 		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-annotation"))
 		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-annotation-fixture-value"))
 		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/catalog-private-label"))
@@ -634,11 +635,12 @@ var _ = Describe("Interceptor", func() {
 		object, ok := responseBody["object"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(object).To(HaveKeyWithValue("id", "catalog-item-fixture"))
+		Expect(object).To(HaveKeyWithValue("description", redactMark))
 		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
 	})
 
-	It("Redacts ComputeInstance catalog policies from unary server body logs", func() {
+	It("Redacts ComputeInstance catalog policies and descriptions from unary server body logs", func() {
 		redactedInterceptor, err := NewInterceptor().
 			SetLogger(logger).
 			SetBodies(true).
@@ -659,6 +661,7 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("locked-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("default-template-parameter-fixture"))
 		Expect(buffer.String()).ToNot(ContainSubstring("inline-user-data-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-description-fixture-value"))
 		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-annotation"))
 		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-annotation-fixture-value"))
 		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/catalog-private-label"))
@@ -675,8 +678,23 @@ var _ = Describe("Interceptor", func() {
 		object, ok := responseBody["object"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(object).To(HaveKeyWithValue("id", "catalog-item-fixture"))
+		Expect(object).To(HaveKeyWithValue("description", redactMark))
 		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts private ComputeInstance catalog descriptions in copied messages", func() {
+		const description = "private-catalog-description-fixture-value"
+		response := privatev1.ComputeInstanceCatalogItemsGetResponse_builder{
+			Object: privatev1.ComputeInstanceCatalogItem_builder{
+				Id:          "private-catalog-item-fixture",
+				Description: description,
+			}.Build(),
+		}.Build()
+
+		redacted := redactProtoMessage(response).(*privatev1.ComputeInstanceCatalogItemsGetResponse)
+		Expect(redacted.GetObject().GetDescription()).To(Equal(redactMark))
+		Expect(response.GetObject().GetDescription()).To(Equal(description))
 	})
 })
 
@@ -841,8 +859,9 @@ func computeInstanceCatalogItemLogFixtures() (
 		},
 	}.Build()
 	item := publicv1.ComputeInstanceCatalogItem_builder{
-		Id:       "catalog-item-fixture",
-		Metadata: metadata,
+		Id:          "catalog-item-fixture",
+		Description: "catalog-item-description-fixture-value",
+		Metadata:    metadata,
 		TemplateParameters: map[string]*publicv1.TemplateParameterPolicy{
 			"locked-param": publicv1.TemplateParameterPolicy_builder{
 				Locked: lockedTemplateParameter,

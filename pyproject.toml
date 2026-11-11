@@ -10,6 +10,9 @@ dependencies = [
     "websocket-client>=1.6",
 ]
 
+[project.scripts]
+osac-conformance = "tests.conformance.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["tests*"]
 

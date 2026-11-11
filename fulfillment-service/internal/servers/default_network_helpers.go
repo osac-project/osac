@@ -15,6 +15,8 @@ package servers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 
 	grpccodes "google.golang.org/grpc/codes"
@@ -24,15 +26,78 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+type ambiguousDefaultResourceError struct {
+	resource string
+	count    int
+}
+
+func (e *ambiguousDefaultResourceError) Error() string {
+	return fmt.Sprintf("multiple default %s resources found (count %d)", e.resource, e.count)
+}
+
+func defaultResourceLookupFailure(err error, resource string) error {
+	var ambiguous *ambiguousDefaultResourceError
+	if errors.As(err, &ambiguous) {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"tenant default networking is misconfigured: %s", ambiguous)
+	}
+	return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default %s: %v", resource, err)
+}
+
+func findDefaultVirtualNetwork(
+	ctx context.Context,
+	logger *slog.Logger,
+	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork],
+	tenant, _ string,
+) (*privatev1.VirtualNetwork, error) {
+	return findUniqueTenantDefault(ctx, logger, virtualNetworksDao, tenant, "VirtualNetwork", func(*privatev1.VirtualNetwork) bool {
+		return true
+	})
+}
+
+func findUniqueTenantDefault[O lifecycleResource](
+	ctx context.Context,
+	logger *slog.Logger,
+	objectDao *dao.GenericDAO[O],
+	tenant, resource string,
+	match func(O) bool,
+) (O, error) {
+	var zero O
+	response, err := objectDao.List().SetFilter(fmt.Sprintf(
+		`this.metadata.tenant == %q && this.metadata.labels[%q] == "true"`, tenant, defaultLabel,
+	)).Do(ctx)
+	if err != nil {
+		return zero, grpcstatus.Error(grpccodes.Internal, "failed to find the tenant defaults")
+	}
+	var found O
+	count := 0
+	for _, item := range response.GetItems() {
+		if !match(item) {
+			continue
+		}
+		found = item
+		count++
+	}
+	if count > 1 {
+		logger.ErrorContext(ctx, "multiple default networking resources found",
+			slog.String("resource", resource), slog.Int("count", count))
+		return zero, &ambiguousDefaultResourceError{resource: resource, count: count}
+	}
+	if count == 0 {
+		return zero, nil
+	}
+	return found, nil
+}
+
 // findDefaultSubnet returns the tenant's default Subnet with an IPv4 CIDR, or nil. Tenant defaults are
 // tenant-wide (Default Networking design), so the project isn't used.
 func findDefaultSubnet(
 	ctx context.Context,
-	_ *slog.Logger,
+	logger *slog.Logger,
 	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
 	tenant, _ string,
 ) (*privatev1.Subnet, error) {
-	return findTenantDefault(ctx, subnetsDao, tenant, func(subnet *privatev1.Subnet) bool {
+	return findUniqueTenantDefault(ctx, logger, subnetsDao, tenant, "Subnet", func(subnet *privatev1.Subnet) bool {
 		return subnet.GetSpec().GetIpv4Cidr() != ""
 	})
 }
@@ -41,12 +106,12 @@ func findDefaultSubnet(
 // Tenant defaults are tenant-wide (Default Networking design), so the project isn't used.
 func findDefaultSecurityGroup(
 	ctx context.Context,
-	_ *slog.Logger,
+	logger *slog.Logger,
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup],
 	virtualNetworkID string,
 	tenant, _ string,
 ) (*privatev1.SecurityGroup, error) {
-	return findTenantDefault(ctx, securityGroupsDao, tenant, func(group *privatev1.SecurityGroup) bool {
+	return findUniqueTenantDefault(ctx, logger, securityGroupsDao, tenant, "SecurityGroup", func(group *privatev1.SecurityGroup) bool {
 		return refKey(group.GetSpec().GetVirtualNetwork()) == virtualNetworkID
 	})
 }

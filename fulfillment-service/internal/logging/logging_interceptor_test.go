@@ -30,6 +30,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -490,6 +491,54 @@ var _ = Describe("Interceptor", func() {
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
 	})
 
+	expectLifecycleUpdateCreatorRedacted := func(updatePath string) {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response := computeInstanceUpdateLogFixtures(updatePath)
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+		responseTemplate := proto.Clone(response)
+
+		invoker := func(_ context.Context, _ string, _, response any, _ *grpc.ClientConn,
+			_ ...grpc.CallOption) error {
+			proto.Reset(response.(proto.Message))
+			proto.Merge(response.(proto.Message), responseTemplate)
+			return nil
+		}
+		err = redactedInterceptor.UnaryClient(ctx, "/osac.public.v1.ComputeInstances/Update",
+			request, response, conn, invoker)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("mcp-owner@example.test"))
+		Expect(buffer.String()).To(ContainSubstring(redactMark))
+		messages := Parse(buffer)
+		responseLogs := Find(messages, "Received unary response")
+		Expect(responseLogs).To(HaveLen(1))
+		responseBody, ok := responseLogs[0]["response"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		object, ok := responseBody["object"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(object).To(HaveKeyWithValue("id", "compute-instance-fixture"))
+		metadata, ok := object["metadata"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(metadata).To(HaveKeyWithValue("creator", redactMark))
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	}
+
+	It("Redacts creator addresses from power update response body logs", func() {
+		expectLifecycleUpdateCreatorRedacted("spec.run_strategy")
+	})
+
+	It("Redacts creator addresses from restart update response body logs", func() {
+		expectLifecycleUpdateCreatorRedacted("spec.restart_requested_at")
+	})
+
 	It("Redacts ComputeInstance catalog policies from unary client body logs", func() {
 		redactedInterceptor, err := NewInterceptor().
 			SetLogger(logger).
@@ -625,6 +674,32 @@ func computeInstanceLogFixtures() (
 		}.Build(),
 	}.Build()
 	return request, response, nil
+}
+
+func computeInstanceUpdateLogFixtures(updatePath string) (
+	*publicv1.ComputeInstancesUpdateRequest,
+	*publicv1.ComputeInstancesUpdateResponse,
+) {
+	request := publicv1.ComputeInstancesUpdateRequest_builder{
+		Object: publicv1.ComputeInstance_builder{
+			Id: "compute-instance-fixture",
+			Metadata: publicv1.Metadata_builder{
+				Version: 1,
+			}.Build(),
+		}.Build(),
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{updatePath}},
+		Lock:       true,
+	}.Build()
+	response := publicv1.ComputeInstancesUpdateResponse_builder{
+		Object: publicv1.ComputeInstance_builder{
+			Id: "compute-instance-fixture",
+			Metadata: publicv1.Metadata_builder{
+				Creator: "mcp-owner@example.test",
+				Version: 2,
+			}.Build(),
+		}.Build(),
+	}.Build()
+	return request, response
 }
 
 func expectComputeInstanceBodyLogs(buffer *bytes.Buffer, requestEvent, responseEvent string) {

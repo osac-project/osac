@@ -524,6 +524,11 @@ func redactProtoMessageFields(message protoreflect.Message, redactMetadata bool)
 		}
 		if redactMetadata && isMetadata(message.Descriptor()) {
 			switch field.Name() {
+			case "creator":
+				if message.Has(field) {
+					message.Set(field, protoreflect.ValueOfString(redactMark))
+				}
+				continue
 			case "annotations", "labels":
 				message.Clear(field)
 				continue

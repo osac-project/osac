@@ -89,7 +89,7 @@ Environment variables:
 | --------------------- | ------------------------------------------------------------------------------------------------- |
 | `OSAC_UI_BASE_URL`    | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
 | `OSAC_API_BASE_URL`   | Optional Fulfillment API URL; auto-discovered from the `fulfillment-api` route when possible      |
-| `OSAC_CLI_PATH`       | Optional path to the `osac` binary; the runner also checks `~/.local/bin/osac`                    |
+| `OSAC_CLI_PATH`       | Optional path to the `osac` binary; the runner also checks `~/.local/bin/osac`                |
 | `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                               |
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
@@ -279,20 +279,6 @@ The same flow can be run directly after the common runner preparation:
 pnpm --filter @osac/playwright exec playwright test \
   --project=vmaas-resize
 ```
-
-These browser checks are manual deployed-cluster verification, not CI-tracked
-E2E coverage. They do not replace the documented VMaaS API/provider E2E case
-(`tests/e2e/vmaas/regression/test_compute_instance_instance_type.py`); the UI
-boundary remains an explicitly manual verification gap until a browser-capable
-CI suite is available.
-
-Validation evidence (2026-11-10): the baseline two-case flow completed 9
-passed tests on a deployed OCP test cluster, including both resize cases and
-prerequisite/VM cleanup. The run used a temporary 4 vCPU/4 GiB target because
-the validation cluster could not schedule the checked-in 8 vCPU/16 GiB target.
-The follow-up run containing the mixed-direction case was blocked during
-tenant-admin provisioning before either resize test; its teardown completed
-and removed the resources created before the timeout.
 
 ### Storage tier flow tests
 

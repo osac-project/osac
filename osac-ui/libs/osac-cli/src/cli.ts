@@ -10,21 +10,6 @@ export interface OsacCommandResult {
   stdout: string;
 }
 
-export const parseOsacResource = <T>(stdout: string, description: string): T => {
-  const parsed: unknown = JSON.parse(stdout);
-  if (Array.isArray(parsed) && parsed[0]) {
-    return parsed[0] as T;
-  }
-  if (parsed !== null && typeof parsed === 'object') {
-    const items = (parsed as { items?: unknown }).items;
-    if (Array.isArray(items) && items[0]) {
-      return items[0] as T;
-    }
-    return parsed as T;
-  }
-  throw new Error(`The CLI returned an unexpected response while getting ${description}.`);
-};
-
 const cliPath = process.env.OSAC_CLI_PATH ?? 'osac';
 
 const cliPrefix = process.env.OSAC_CLI_CONFIG ? ['--config', process.env.OSAC_CLI_CONFIG] : [];

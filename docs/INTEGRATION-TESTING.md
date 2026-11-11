@@ -462,6 +462,18 @@ The same dev-full render suite checks the ARM VM compatibility policy and its
 requires a server-side VM update in a real tenant namespace, verifying removal
 of the x86-only SMM and Hyper-V fields. VM boot remains a separate boundary.
 
+Mac dev-full Fedora disk preparation and catalog migration have command-stub
+coverage in `make -C osac-installer dev-full-fedora-test`. It checks build/save/load
+ordering, failure propagation and archive cleanup, default versus Mac catalog
+payloads, and an existing catalog item's version-locked disk-default update.
+`bash osac-installer/scripts/test-dev-full-render.sh` checks Mac-only Make wiring,
+the selected image/architecture passed to the seed hook, and unchanged Linux
+and ordinary dev behavior. These checks do not run libguestfs, CDI, or a guest.
+Deployed evidence requires building/loading the prepared image, executing the
+catalog hook, and creating a fresh OSAC VM from `linux-vm`; verify DataVolume
+import, guest-agent connection, and successful guest execution with `pci=nomsi`
+in the kernel command line. Repairing an existing disk does not cover this path.
+
 The `make mce-render-test` Helm contract renders the prerequisite charts from
 local sources. It asserts disabled defaults, explicit standalone MCE
 enablement, configuration, Assisted image overrides, compatibility RBAC,

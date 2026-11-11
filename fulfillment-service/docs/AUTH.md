@@ -379,7 +379,17 @@ The fulfillment service maintains a single list of trusted token issuers, config
 The service-account token file is sent to the Kubernetes issuer's discovery and JWKS endpoints.
 By default, the discovered `jwks_uri` must use the issuer's HTTPS origin. If Kubernetes discovery
 advertises JWKS on a separate API-server origin, configure that exact origin in the service chart
-or OSAC installer values:
+or OSAC installer values.
+
+For standalone service-chart values, use `auth.kubernetesJWKSOrigins`:
+
+```yaml
+auth:
+  kubernetesJWKSOrigins:
+    - https://api.cluster.example.com:6443
+```
+
+For OSAC installer values, use `service.auth.kubernetesJWKSOrigins`:
 
 ```yaml
 service:

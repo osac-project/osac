@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net"
@@ -13,10 +15,35 @@ import (
 	"time"
 )
 
+func oidcTestCertPool(servers ...*httptest.Server) *x509.CertPool {
+	pool := x509.NewCertPool()
+	for _, server := range servers {
+		pool.AddCert(server.Certificate())
+	}
+	return pool
+}
+
+func oidcTestClient(t *testing.T, servers ...*httptest.Server) *http.Client {
+	t.Helper()
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    oidcTestCertPool(servers...),
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	return &http.Client{Transport: transport}
+}
+
 func TestFetchOIDCConfigRejectsInvalidIssuerURLs(t *testing.T) {
+	userInfoIssuer := (&url.URL{
+		Scheme: "https",
+		Host:   "issuer.example",
+		User:   url.User("test-user"),
+		Path:   "/realms/osac",
+	}).String()
 	for _, issuer := range []string{
 		"http://issuer.example/realms/osac",
-		"https://user@issuer.example/realms/osac",
+		userInfoIssuer,
 		"https://issuer.example/realms/osac?tenant=one",
 		"https://issuer.example/realms/osac#fragment",
 		"relative/issuer",
@@ -29,7 +56,7 @@ func TestFetchOIDCConfigRejectsInvalidIssuerURLs(t *testing.T) {
 	}
 }
 
-func TestFetchOIDCConfigDefaultClientRejectsLoopbackResolution(t *testing.T) {
+func TestFetchOIDCConfigSafeClientRejectsLoopbackResolution(t *testing.T) {
 	var requests atomic.Int32
 	issuerServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
@@ -37,8 +64,9 @@ func TestFetchOIDCConfigDefaultClientRejectsLoopbackResolution(t *testing.T) {
 	}))
 	defer issuerServer.Close()
 
-	if _, err := FetchOIDCConfig(issuerServer.URL, nil); err == nil {
-		t.Fatal("default OIDC client accepted a loopback issuer")
+	client := NewOIDCHTTPClient(&tls.Config{RootCAs: oidcTestCertPool(issuerServer)})
+	if _, err := FetchOIDCConfig(issuerServer.URL, client); err == nil {
+		t.Fatal("safe OIDC client accepted a loopback issuer")
 	}
 	if got := requests.Load(); got != 0 {
 		t.Fatalf("loopback issuer received %d requests, want none", got)
@@ -127,7 +155,10 @@ func TestFetchOIDCConfigDefersCrossOriginOptionalLogoutEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OIDC discovery rejected an optional logout endpoint: %v", err)
 	}
-	if err := EndSession(config, "osac-ui", "refresh-token", "id-token", issuerServer.Client()); err == nil {
+	client := oidcTestClient(t, issuerServer, otherOrigin)
+	testRefreshToken := "fixture-refresh-token"
+	testIDToken := "fixture-id-token"
+	if err := EndSession(config, "osac-ui", testRefreshToken, testIDToken, client); err == nil {
 		t.Fatal("cross-origin end-session endpoint was accepted")
 	}
 	if got := otherOriginRequests.Load(); got != 0 {
@@ -149,7 +180,7 @@ func TestFetchOIDCConfigDoesNotFollowCrossOriginDiscoveryRedirect(t *testing.T) 
 	defer issuerServer.Close()
 	issuer := issuerServer.URL + "/cross-origin-redirect"
 
-	if _, err := FetchOIDCConfig(issuer, issuerServer.Client()); err == nil {
+	if _, err := FetchOIDCConfig(issuer, oidcTestClient(t, issuerServer, redirectTarget)); err == nil {
 		t.Fatal("redirected OIDC discovery unexpectedly succeeded")
 	}
 	if got := redirectRequests.Load(); got != 0 {
@@ -190,9 +221,15 @@ func TestOIDCRedirectPolicyRejectsDowngradeAndUserInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := withOIDCIssuerRedirects(nil, issuer)
+	userInfoURL := (&url.URL{
+		Scheme: "https",
+		Host:   "keycloak.example.com",
+		User:   url.User("test-user"),
+		Path:   "/realms/osac/token",
+	}).String()
 	for _, rawURL := range []string{
 		"http://keycloak.example.com/realms/osac/token",
-		"https://user@keycloak.example.com/realms/osac/token",
+		userInfoURL,
 	} {
 		t.Run(rawURL, func(t *testing.T) {
 			target, err := url.Parse(rawURL)
@@ -220,10 +257,14 @@ func TestTokenAndLogoutRequestsRejectCrossOriginEndpoints(t *testing.T) {
 		TokenEndpoint:      otherOrigin.URL + "/token",
 		EndSessionEndpoint: otherOrigin.URL + "/logout",
 	}
-	if _, err := ExchangeCode(config, "osac-ui", "code", "verifier", "https://ui.example.com/callback", otherOrigin.Client()); err == nil {
+	testAuthorizationCode := "fixture-authorization-code"
+	testPKCEVerifier := "fixture-pkce-verifier"
+	testRefreshToken := "fixture-refresh-token"
+	testIDToken := "fixture-id-token"
+	if _, err := ExchangeCode(config, "osac-ui", testAuthorizationCode, testPKCEVerifier, "https://ui.example.com/callback", otherOrigin.Client()); err == nil {
 		t.Fatal("cross-origin token endpoint was accepted")
 	}
-	if err := EndSession(config, "osac-ui", "refresh-token", "id-token", otherOrigin.Client()); err == nil {
+	if err := EndSession(config, "osac-ui", testRefreshToken, testIDToken, otherOrigin.Client()); err == nil {
 		t.Fatal("cross-origin end-session endpoint was accepted")
 	}
 	if got := requests.Load(); got != 0 {
@@ -252,13 +293,17 @@ func TestTokenAndLogoutRequestsDoNotFollowCrossOriginRedirects(t *testing.T) {
 				TokenEndpoint:      issuerServer.URL + "/token",
 				EndSessionEndpoint: issuerServer.URL + "/logout",
 			}
+			testAuthorizationCode := "fixture-authorization-code"
+			testPKCEVerifier := "fixture-pkce-verifier"
+			testRefreshToken := "fixture-refresh-token"
+			testIDToken := "fixture-id-token"
 
 			if endpoint == "token" {
-				_, err := ExchangeCode(config, "osac-ui", "code", "verifier", "https://ui.example.com/callback", issuerServer.Client())
+				_, err := ExchangeCode(config, "osac-ui", testAuthorizationCode, testPKCEVerifier, "https://ui.example.com/callback", oidcTestClient(t, issuerServer, redirectTarget))
 				if err == nil {
 					t.Fatal("redirected token request unexpectedly succeeded")
 				}
-			} else if err := EndSession(config, "osac-ui", "refresh-token", "id-token", issuerServer.Client()); err == nil {
+			} else if err := EndSession(config, "osac-ui", testRefreshToken, testIDToken, oidcTestClient(t, issuerServer, redirectTarget)); err == nil {
 				t.Fatal("redirected end-session request unexpectedly succeeded")
 			}
 			if got := redirectRequests.Load(); got != 0 {

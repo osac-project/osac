@@ -977,7 +977,7 @@
               "items": {
                 "type": "string",
                 "minLength": 1,
-                "pattern": "^https://[^/*@?#\\s]+/?$"
+                "pattern": "^https://[^/*@?#,\\s]+/?$"
               },
               "uniqueItems": true,
               "default": []

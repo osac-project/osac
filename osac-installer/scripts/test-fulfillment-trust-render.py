@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import subprocess
 
 CHART = pathlib.Path(__file__).resolve().parents[1] / "charts/osac"
+SERVICE_CHART = CHART.parents[2] / "fulfillment-service/charts/service"
 VALUES = CHART.parents[1] / "values"
 HOOKS = {
     "fulfillment-create-hub",
@@ -74,8 +76,10 @@ def render(
     if server_address is not None:
         cmd.extend(("--set", f"operator.fulfillment.serverAddress={server_address}"))
     if kubernetes_jwks_origins:
-        for index, origin in enumerate(kubernetes_jwks_origins):
-            cmd.extend(("--set-string", f"service.auth.kubernetesJWKSOrigins[{index}]={origin}"))
+        cmd.extend((
+            "--set-json",
+            f"service.auth.kubernetesJWKSOrigins={json.dumps(kubernetes_jwks_origins)}",
+        ))
     if mcp_enabled:
         cmd.extend(
             (
@@ -278,6 +282,28 @@ def check_kubernetes_jwks_origins() -> None:
     default_docs = render()
     default_grpc = select(default_docs, "osac/charts/service/templates/grpc-server/deployment.yaml")
     assert "--grpc-authn-kubernetes-jwks-origins" not in default_grpc
+
+    invalid_origin = "https://api.cluster.example.com,other.example.com"
+    try:
+        render(kubernetes_jwks_origins=[invalid_origin])
+    except subprocess.CalledProcessError as error:
+        assert "kubernetesJWKSOrigins" in error.stderr, error.stderr
+    else:
+        raise AssertionError("installer schema accepted a comma-separated JWKS origin")
+
+    command = [
+        "helm",
+        "template",
+        "fulfillment-service",
+        str(SERVICE_CHART),
+        "--values",
+        str(SERVICE_CHART / "ci-values.yaml"),
+        "--set-json",
+        f"auth.kubernetesJWKSOrigins={json.dumps([invalid_origin])}",
+    ]
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert result.returncode != 0, "service-chart schema accepted a comma-separated JWKS origin"
+    assert "kubernetesJWKSOrigins" in result.stderr, result.stderr
 
 
 def check_profile_emergency_service_accounts() -> None:

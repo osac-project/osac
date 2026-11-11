@@ -83,6 +83,21 @@ type jwksCache struct {
 	cacheLock       sync.RWMutex
 }
 
+// sanitizedError preserves a cause for internal inspection while exposing only
+// a fixed summary to callers and logs.
+type sanitizedError struct {
+	message string
+	cause   error
+}
+
+func (e *sanitizedError) Error() string { return e.message }
+
+func (e *sanitizedError) Unwrap() error { return e.cause }
+
+func withSanitizedError(message string, cause error) error {
+	return &sanitizedError{message: message, cause: cause}
+}
+
 // ErrBadKey is returned when the key is not found.
 var ErrBadKey = errors.New("bad key")
 
@@ -226,7 +241,7 @@ func (b *JwksCacheBuilder) Build() (result JwksCache, err error) {
 		var origin *url.URL
 		origin, err = parseHTTPSOrigin(value)
 		if err != nil {
-			err = fmt.Errorf("invalid Kubernetes JWKS origin '%s': %w", value, err)
+			err = fmt.Errorf("invalid Kubernetes JWKS origin: %w", err)
 			return
 		}
 		duplicate := false
@@ -329,14 +344,14 @@ func parseConfiguredIssuerURL(raw string) (*url.URL, error) {
 	raw = strings.TrimSpace(raw)
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("invalid issuer URL '%s': %w", raw, err)
+		return nil, withSanitizedError("invalid issuer URL", err)
 	}
 	if parsed.Scheme != "https" {
-		return nil, fmt.Errorf("issuer URL '%s' must use the HTTPS scheme", raw)
+		return nil, errors.New("issuer URL must use the HTTPS scheme")
 	}
 	if parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Opaque != "" ||
 		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" {
-		return nil, fmt.Errorf("issuer URL '%s' must have a host and no credentials, query, or fragment", raw)
+		return nil, errors.New("issuer URL must have a host and no credentials, query, or fragment")
 	}
 	return parsed, nil
 }
@@ -356,7 +371,7 @@ func parseHTTPSIssuerURL(raw string) (*url.URL, error) {
 func parseHTTPSJWKSURL(raw string) (*url.URL, error) {
 	jwksURL, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return nil, err
+		return nil, withSanitizedError("invalid discovered JSON web key set URL", err)
 	}
 	if !strings.EqualFold(jwksURL.Scheme, "https") {
 		return nil, errors.New("discovered JSON web key set URL must use the HTTPS scheme")
@@ -372,7 +387,7 @@ func parseHTTPSJWKSURL(raw string) (*url.URL, error) {
 func parseHTTPSOrigin(raw string) (*url.URL, error) {
 	origin, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return nil, err
+		return nil, withSanitizedError("invalid HTTPS origin", err)
 	}
 	if !strings.EqualFold(origin.Scheme, "https") {
 		return nil, errors.New("must use the HTTPS scheme")
@@ -514,7 +529,6 @@ func (c *jwksCache) Get(ctx context.Context, issuerUrl string, keyId string) (re
 					c.logger.ErrorContext(
 						refreshCtx,
 						"Failed to refresh JSON web key set",
-						slog.String("issuer", issuerUrl),
 						slog.Any("error", err),
 					)
 				}
@@ -617,7 +631,7 @@ func (c *jwksCache) discoverJwksUrl(ctx context.Context, issuerInfo *jwksCacheIs
 	discoUrl := strings.TrimSuffix(issuerURL.String(), "/") + "/.well-known/openid-configuration"
 	discoRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, discoUrl, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create discovery request: %w", err)
+		return withSanitizedError("failed to create OIDC discovery request", err)
 	}
 	if issuerInfo.tokenFile != "" {
 		tokenText, err := c.loadTokenFile(issuerInfo.tokenFile)
@@ -628,38 +642,35 @@ func (c *jwksCache) discoverJwksUrl(ctx context.Context, issuerInfo *jwksCacheIs
 	}
 	discoResponse, err := clientForURLOrigin(c.httpClient, issuerURL).Do(discoRequest)
 	if err != nil {
-		return fmt.Errorf("failed to fetch discovery document from '%s': %w", discoUrl, err)
+		return withSanitizedError("failed to fetch OIDC discovery document", err)
 	}
 	defer discoResponse.Body.Close()
 	if discoResponse.StatusCode != http.StatusOK {
-		return fmt.Errorf(
-			"discovery request to '%s' failed with status code %d",
-			discoUrl, discoResponse.StatusCode,
-		)
+		return fmt.Errorf("OIDC discovery request failed with status code %d", discoResponse.StatusCode)
 	}
 	discoveryData, err := io.ReadAll(io.LimitReader(discoResponse.Body, jwksMaxSize+1))
 	if err != nil {
-		return fmt.Errorf("failed to read discovery document from '%s': %w", discoUrl, err)
+		return withSanitizedError("failed to read OIDC discovery document", err)
 	}
 	if len(discoveryData) > jwksMaxSize {
-		return fmt.Errorf("discovery document from '%s' is too large", discoUrl)
+		return errors.New("OIDC discovery document is too large")
 	}
 	var discoDoc struct {
 		Issuer  string `json:"issuer"`
 		JwksUri string `json:"jwks_uri"`
 	}
 	if err := json.Unmarshal(discoveryData, &discoDoc); err != nil {
-		return fmt.Errorf("failed to parse discovery document from '%s': %w", discoUrl, err)
+		return withSanitizedError("failed to parse OIDC discovery document", err)
 	}
 	if !sameIssuerURL(issuerInfo.issuerUrl, discoDoc.Issuer) {
-		return fmt.Errorf("discovery document from '%s' did not match the trusted issuer", discoUrl)
+		return errors.New("OIDC discovery document did not match the trusted issuer")
 	}
 	if discoDoc.JwksUri == "" {
-		return fmt.Errorf("discovery document from '%s' does not contain a 'jwks_uri' value", discoUrl)
+		return errors.New("OIDC discovery document does not contain a 'jwks_uri' value")
 	}
 	jwksUri, err := parseHTTPSJWKSURL(discoDoc.JwksUri)
 	if err != nil {
-		return fmt.Errorf("failed to parse discovered JSON web key set URL '%s': %w", discoDoc.JwksUri, err)
+		return err
 	}
 	// A Kubernetes service-account token is attached to the JWKS request. The
 	// issuer origin is trusted by default; any other origin must be explicitly
@@ -668,12 +679,7 @@ func (c *jwksCache) discoverJwksUrl(ctx context.Context, issuerInfo *jwksCacheIs
 	if issuerInfo.tokenFile != "" && !c.isTrustedKubernetesJWKSOrigin(issuerURL, jwksUri) {
 		return errors.New("discovered Kubernetes JSON web key set URL must use the trusted issuer origin or a configured Kubernetes JWKS origin")
 	}
-	c.logger.InfoContext(
-		ctx,
-		"Discovered JSON web key set URL",
-		slog.String("issuer", issuerInfo.issuerUrl),
-		slog.String("url", discoDoc.JwksUri),
-	)
+	c.logger.InfoContext(ctx, "Discovered JSON web key set URL")
 	issuerInfo.jwksUrl = jwksUri.String()
 	return nil
 }
@@ -683,12 +689,12 @@ func (c *jwksCache) loadJwksUrl(ctx context.Context, issuerInfo *jwksCacheIssuer
 	err error) {
 	jwksURL, err := parseHTTPSJWKSURL(issuerInfo.jwksUrl)
 	if err != nil {
-		return nil, fmt.Errorf("invalid discovered JSON web key set URL: %w", err)
+		return nil, err
 	}
 	if issuerInfo.tokenFile != "" {
 		issuerURL, issuerErr := parseHTTPSIssuerURL(issuerInfo.issuerUrl)
 		if issuerErr != nil {
-			return nil, fmt.Errorf("invalid trusted issuer URL: %w", issuerErr)
+			return nil, withSanitizedError("invalid trusted issuer URL", issuerErr)
 		}
 		if !c.isTrustedKubernetesJWKSOrigin(issuerURL, jwksURL) {
 			return nil, errors.New("discovered Kubernetes JSON web key set URL must use the trusted issuer origin or a configured Kubernetes JWKS origin")
@@ -696,7 +702,7 @@ func (c *jwksCache) loadJwksUrl(ctx context.Context, issuerInfo *jwksCacheIssuer
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL.String(), nil)
 	if err != nil {
-		return
+		return nil, withSanitizedError("failed to create JWKS request", err)
 	}
 	if issuerInfo.tokenFile != "" {
 		var tokenText string
@@ -708,7 +714,7 @@ func (c *jwksCache) loadJwksUrl(ctx context.Context, issuerInfo *jwksCacheIssuer
 	}
 	response, err := clientForURLOrigin(c.httpClient, jwksURL).Do(request)
 	if err != nil {
-		return
+		return nil, withSanitizedError("failed to fetch JSON web key set", err)
 	}
 	defer func() {
 		err := response.Body.Close()
@@ -716,16 +722,12 @@ func (c *jwksCache) loadJwksUrl(ctx context.Context, issuerInfo *jwksCacheIssuer
 			c.logger.ErrorContext(
 				ctx,
 				"Failed to close response body",
-				slog.String("url", issuerInfo.jwksUrl),
-				slog.Any("error", err),
+				slog.Any("error", withSanitizedError("failed to close JWKS response body", err)),
 			)
 		}
 	}()
 	if response.StatusCode != http.StatusOK {
-		err = fmt.Errorf(
-			"request to load keys from '%s' failed with status code %d",
-			issuerInfo.jwksUrl, response.StatusCode,
-		)
+		err = fmt.Errorf("JWKS request failed with status code %d", response.StatusCode)
 		return
 	}
 	result, err = c.readKeys(ctx, issuerInfo, response.Body)
@@ -749,7 +751,7 @@ func (c *jwksCache) readKeys(ctx context.Context, issuerInfo *jwksCacheIssuerInf
 	jsonReader := io.LimitReader(reader, jwksMaxSize+1)
 	jsonData, err := io.ReadAll(jsonReader)
 	if err != nil {
-		return
+		return nil, withSanitizedError("failed to read JSON web key set", err)
 	}
 	if len(jsonData) > jwksMaxSize {
 		err = fmt.Errorf("JSON web key set is too large, maximum size is %d bytes", jwksMaxSize)
@@ -758,7 +760,7 @@ func (c *jwksCache) readKeys(ctx context.Context, issuerInfo *jwksCacheIssuerInf
 	var setData jwksCacheKeySetData
 	err = json.Unmarshal(jsonData, &setData)
 	if err != nil {
-		return
+		return nil, withSanitizedError("failed to parse JSON web key set", err)
 	}
 	keyMap := map[string]any{}
 	for _, keyData := range setData.Keys {
@@ -774,8 +776,6 @@ func (c *jwksCache) readKeys(ctx context.Context, issuerInfo *jwksCacheIssuerInf
 			c.logger.WarnContext(
 				ctx,
 				"Skipping key that cannot be parsed",
-				slog.String("kid", keyData.Kid),
-				slog.Any("error", err),
 			)
 			continue
 		}
@@ -787,8 +787,6 @@ func (c *jwksCache) readKeys(ctx context.Context, issuerInfo *jwksCacheIssuerInf
 		c.logger.InfoContext(
 			ctx,
 			"Loaded key",
-			slog.String("issuer", keyTag.issuerUrl),
-			slog.String("kid", keyTag.keyId),
 		)
 	}
 	result = keyMap

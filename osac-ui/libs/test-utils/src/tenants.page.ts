@@ -45,12 +45,31 @@ const credentialFromFile = (contents: string, label: string): string => {
   return value;
 };
 
+// Filesystem errors include the credentials file path, which contains the
+// tenant name (possibly also the replacement password), and testStep logs
+// error messages verbatim. Rethrow them without the path.
+const readCredentialsFile = async (credentialsFile: string): Promise<string> => {
+  try {
+    return await readFile(credentialsFile, 'utf8');
+  } catch {
+    throw new Error('Could not read the tenant credentials file.');
+  }
+};
+
+const writeCredentialsFile = async (credentialsFile: string, contents: string): Promise<void> => {
+  try {
+    await writeFile(credentialsFile, contents, { encoding: 'utf8', mode: 0o600 });
+  } catch {
+    throw new Error('Could not write the tenant credentials file.');
+  }
+};
+
 /** Read tenant credentials previously saved by createTenant. */
 export const readTenantCredentials = async (
   credentialsFile: string,
 ): Promise<TenantCredentials> => {
   logProgress('tenant-credentials', 'Reading the generated tenant credentials.');
-  const contents = await readFile(credentialsFile, 'utf8');
+  const contents = await readCredentialsFile(credentialsFile);
   return {
     username: credentialFromFile(contents, 'Username'),
     password: credentialFromFile(contents, 'Password'),
@@ -63,7 +82,7 @@ export const updateTenantCredentialsPassword = async (
   password?: string,
 ): Promise<void> => {
   logProgress('tenant-credentials', 'Updating the generated tenant credentials.');
-  const contents = await readFile(credentialsFile, 'utf8');
+  const contents = await readCredentialsFile(credentialsFile);
   const tenantName = credentialFromFile(contents, 'Tenant');
   const replacementPassword = password?.trim() || tenantName;
   logProgress(
@@ -79,7 +98,7 @@ export const updateTenantCredentialsPassword = async (
   if (updatedContents === contents) {
     throw new Error('Tenant credentials file is missing Password.');
   }
-  await writeFile(credentialsFile, updatedContents, { encoding: 'utf8', mode: 0o600 });
+  await writeCredentialsFile(credentialsFile, updatedContents);
 };
 
 /** Remove the saved credentials for a tenant, if present. */

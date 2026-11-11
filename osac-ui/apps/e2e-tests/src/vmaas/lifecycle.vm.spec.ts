@@ -55,6 +55,16 @@ test(`stops, starts and restarts VM ${vmTestName} from its details page`, async 
     await openVmDetailsPage(page, vmTestName);
   });
 
+  // A retry after a failed attempt can find the VM still stopped, so start it
+  // again before the checks instead of waiting for Running forever.
+  await testStep('vm-lifecycle', 'Start the VM if a previous attempt left it stopped', async () => {
+    const status = await waitForVmDetailsStatus(page, vmTestName, ['Running', 'Stopped']);
+    if (status === 'Stopped') {
+      logProgress('vm-lifecycle', 'The VM is stopped; starting it before the checks.');
+      await runVmPowerActionWithToast(page, vmTestName, 'start');
+    }
+  });
+
   await testStep(
     'vm-lifecycle',
     'Verify the VM is Running with Stop and Restart enabled',

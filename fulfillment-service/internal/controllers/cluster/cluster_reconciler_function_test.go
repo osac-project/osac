@@ -17,9 +17,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -28,6 +30,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -49,15 +53,20 @@ import (
 )
 
 var _ = Describe("upgrade attempt projection", func() {
-	It("projects independent current component IDs", func() {
-		spec := &privatev1.ClusterSpec{}
-		spec.SetControlPlaneAttemptId("control-plane-id")
-		spec.SetNodeSetAttemptIds(map[string]string{"compute": "compute-id", "gpu": "gpu-id"})
+	It("projects one shared ID for every component", func() {
+		cluster := privatev1.Cluster_builder{
+			Spec: privatev1.ClusterSpec_builder{
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"compute": {}, "gpu": {},
+				},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{UpgradeAttemptId: "cluster-id"}.Build(),
+		}.Build()
 		values := map[string]string{annotations.Tenant: "tenant-1"}
-		Expect(setUpgradeAttemptAnnotations(values, spec)).To(Succeed())
-		Expect(values[osacv1alpha1.UpgradeAttemptIDsAnnotation]).To(Equal(`{"controlPlane":"control-plane-id","nodeSets":{"compute":"compute-id","gpu":"gpu-id"}}`))
+		setUpgradeAttemptAnnotations(values, cluster.GetStatus())
+		Expect(values[osacv1alpha1.UpgradeAttemptIDAnnotation]).To(Equal("cluster-id"))
 		Expect(values[annotations.Tenant]).To(Equal("tenant-1"))
-		Expect(setUpgradeAttemptAnnotations(values, &privatev1.ClusterSpec{})).To(Succeed())
+		setUpgradeAttemptAnnotations(values, &privatev1.ClusterStatus{})
 		Expect(values).To(Equal(map[string]string{annotations.Tenant: "tenant-1"}))
 	})
 })
@@ -224,6 +233,15 @@ var _ = Describe("update tenant annotation", func() {
 				Client:    fakeClient,
 			}, nil)
 
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsGetResponse_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Spec: privatev1.ClusterVersionSpec_builder{Image: "quay.io/ocp/release:4.17.0"}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
 		// Create a cluster in READY state with updated node set size (5):
 		cluster := privatev1.Cluster_builder{
 			Id: clusterID,
@@ -233,6 +251,7 @@ var _ = Describe("update tenant annotation", func() {
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				Version:  &privatev1.ClusterVersionReference{Id: "version-id"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
@@ -241,16 +260,23 @@ var _ = Describe("update tenant annotation", func() {
 				},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
-				State: privatev1.ClusterState_CLUSTER_STATE_READY,
-				Hub:   hubID,
+				UpgradeAttemptId: "shared-id",
+				State:            privatev1.ClusterState_CLUSTER_STATE_READY,
+				Hub:              hubID,
+				NodeSets: map[string]*privatev1.ClusterNodeSetStatus{
+					"gpu-gb200": privatev1.ClusterNodeSetStatus_builder{
+						Version: &privatev1.ClusterVersionReference{Id: "version-id"},
+					}.Build(),
+				},
 			}.Build(),
 		}.Build()
 
 		t := &task{
 			r: &function{
-				logger:         logger,
-				hubCache:       hubCache,
-				maskCalculator: nil,
+				logger:                logger,
+				hubCache:              hubCache,
+				clusterVersionsClient: clusterVersionsClient,
+				maskCalculator:        nil,
 			},
 			cluster: cluster,
 		}
@@ -297,11 +323,20 @@ var _ = Describe("update tenant annotation", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existingOrder).Build()
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsGetResponse_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Spec: privatev1.ClusterVersionSpec_builder{Image: "quay.io/ocp/release:4.17.0"}.Build(),
+				}.Build(),
+			}.Build(), nil)
 		var logOutput bytes.Buffer
 		t := &task{
 			r: &function{
-				logger:              slog.New(slog.NewTextHandler(&logOutput, nil)),
-				networkingHubReader: readyClusterNetworkingHubReader(hubID, hubNamespace, fakeClient),
+				logger:                slog.New(slog.NewTextHandler(&logOutput, nil)),
+				networkingHubReader:   readyClusterNetworkingHubReader(hubID, hubNamespace, fakeClient),
+				clusterVersionsClient: clusterVersionsClient,
 			},
 			cluster: privatev1.Cluster_builder{
 				Id: clusterID,
@@ -311,6 +346,7 @@ var _ = Describe("update tenant annotation", func() {
 				}.Build(),
 				Spec: privatev1.ClusterSpec_builder{
 					Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+					Version:  &privatev1.ClusterVersionReference{Id: "version-id"},
 					NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
 						Subnet:         &privatev1.SubnetLocalReference{Name: "requested-subnet"},
 						SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Name: "requested-security-group"}},
@@ -325,6 +361,11 @@ var _ = Describe("update tenant annotation", func() {
 				Status: privatev1.ClusterStatus_builder{
 					State: privatev1.ClusterState_CLUSTER_STATE_READY,
 					Hub:   hubID,
+					NodeSets: map[string]*privatev1.ClusterNodeSetStatus{
+						"gpu-gb200": privatev1.ClusterNodeSetStatus_builder{
+							Version: &privatev1.ClusterVersionReference{Id: "version-id"},
+						}.Build(),
+					},
 				}.Build(),
 			}.Build(),
 		}
@@ -380,6 +421,15 @@ var _ = Describe("update tenant annotation", func() {
 				Client:    fakeClient,
 			}, nil)
 
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsGetResponse_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Spec: privatev1.ClusterVersionSpec_builder{Image: "quay.io/ocp/release:4.17.0"}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
 		// Create a cluster in PROGRESSING state with updated node set size (5):
 		cluster := privatev1.Cluster_builder{
 			Id: clusterID,
@@ -389,6 +439,7 @@ var _ = Describe("update tenant annotation", func() {
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				Version:  &privatev1.ClusterVersionReference{Id: "version-id"},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
@@ -399,14 +450,20 @@ var _ = Describe("update tenant annotation", func() {
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
 				Hub:   hubID,
+				NodeSets: map[string]*privatev1.ClusterNodeSetStatus{
+					"gpu-gb200": privatev1.ClusterNodeSetStatus_builder{
+						Version: &privatev1.ClusterVersionReference{Id: "version-id"},
+					}.Build(),
+				},
 			}.Build(),
 		}.Build()
 
 		t := &task{
 			r: &function{
-				logger:         logger,
-				hubCache:       hubCache,
-				maskCalculator: nil,
+				logger:                logger,
+				hubCache:              hubCache,
+				clusterVersionsClient: clusterVersionsClient,
+				maskCalculator:        nil,
 			},
 			cluster: cluster,
 		}
@@ -528,17 +585,13 @@ var _ = Describe("update tenant annotation", func() {
 
 		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
 		clusterVersionsClient.EXPECT().
-			List(gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(privatev1.ClusterVersionsListResponse_builder{
-				Total: 1,
-				Size:  1,
-				Items: []*privatev1.ClusterVersion{
-					privatev1.ClusterVersion_builder{
-						Spec: privatev1.ClusterVersionSpec_builder{
-							Image: resolvedImage,
-						}.Build(),
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsGetResponse_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Spec: privatev1.ClusterVersionSpec_builder{
+						Image: resolvedImage,
 					}.Build(),
-				},
+				}.Build(),
 			}.Build(), nil)
 
 		cluster := privatev1.Cluster_builder{
@@ -550,13 +603,12 @@ var _ = Describe("update tenant annotation", func() {
 			Spec: privatev1.ClusterSpec_builder{
 				Template:                       &privatev1.ClusterTemplateReference{Name: "test-template"},
 				SshKey:                         privatev1.SecretReference_builder{Id: "canonical-key-id"}.Build(),
-				Version:                        &privatev1.ClusterVersionReference{Name: versionName},
+				Version:                        &privatev1.ClusterVersionReference{Id: "version-id", Name: versionName},
 				SupportsAutomaticCaasEndpoints: true,
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"workers": privatev1.ClusterNodeSet_builder{
 						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "bm.large"},
 						Size:                  proto.Int32(2),
-						Version:               &privatev1.ClusterVersionReference{Name: versionName},
 					}.Build(),
 				},
 				Network: privatev1.ClusterNetwork_builder{
@@ -567,6 +619,11 @@ var _ = Describe("update tenant annotation", func() {
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
 				Hub:   hubID,
+				NodeSets: map[string]*privatev1.ClusterNodeSetStatus{
+					"workers": privatev1.ClusterNodeSetStatus_builder{
+						Version: &privatev1.ClusterVersionReference{Id: "version-id", Name: versionName},
+					}.Build(),
+				},
 			}.Build(),
 		}.Build()
 
@@ -993,17 +1050,13 @@ var _ = Describe("update tenant annotation", func() {
 
 		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
 		clusterVersionsClient.EXPECT().
-			List(gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(privatev1.ClusterVersionsListResponse_builder{
-				Total: 1,
-				Size:  1,
-				Items: []*privatev1.ClusterVersion{
-					privatev1.ClusterVersion_builder{
-						Spec: privatev1.ClusterVersionSpec_builder{
-							Image: resolvedImage,
-						}.Build(),
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsGetResponse_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Spec: privatev1.ClusterVersionSpec_builder{
+						Image: resolvedImage,
 					}.Build(),
-				},
+				}.Build(),
 			}.Build(), nil)
 
 		// Cluster spec has updated node-set size (5), simulating a resize:
@@ -1015,7 +1068,7 @@ var _ = Describe("update tenant annotation", func() {
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
-				Version:  &privatev1.ClusterVersionReference{Name: versionName},
+				Version:  &privatev1.ClusterVersionReference{Id: "version-id", Name: versionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
@@ -1026,6 +1079,11 @@ var _ = Describe("update tenant annotation", func() {
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
 				Hub:   hubID,
+				NodeSets: map[string]*privatev1.ClusterNodeSetStatus{
+					"gpu-gb200": privatev1.ClusterNodeSetStatus_builder{
+						Version: &privatev1.ClusterVersionReference{Id: "version-id"},
+					}.Build(),
+				},
 			}.Build(),
 		}.Build()
 
@@ -1051,7 +1109,7 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(patchedCR.Spec.ReleaseImage).To(Equal(resolvedImage))
 		Expect(patchedCR.Spec.NodeRequests).To(HaveLen(1))
 		Expect(patchedCR.Spec.NodeRequests[0].NumberOfNodes).To(Equal(5))
-		Expect(patchedCR.Spec.NodeRequests[0].ReleaseImage).To(BeEmpty())
+		Expect(patchedCR.Spec.NodeRequests[0].ReleaseImage).To(Equal(resolvedImage))
 	})
 
 	It("should update ReleaseImage when version changes", func() {
@@ -1103,24 +1161,20 @@ var _ = Describe("update tenant annotation", func() {
 		// Mock resolves each requested version independently:
 		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
 		clusterVersionsClient.EXPECT().
-			List(gomock.Any(), gomock.Any(), gomock.Any()).
-			DoAndReturn(func(_ context.Context, req *privatev1.ClusterVersionsListRequest,
-				_ ...grpc.CallOption) (*privatev1.ClusterVersionsListResponse, error) {
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, req *privatev1.ClusterVersionsGetRequest,
+				_ ...grpc.CallOption) (*privatev1.ClusterVersionsGetResponse, error) {
 				images := map[string]string{
-					`this.metadata.name == "4-18-0"`: newImage,
-					`this.metadata.name == "4-17-0"`: oldImage,
-					`this.metadata.name == "4-16-0"`: otherImage,
+					"version-id-4-18": newImage,
+					"version-id-4-17": oldImage,
+					"version-id-4-16": otherImage,
 				}
-				image, ok := images[req.GetFilter()]
-				Expect(ok).To(BeTrue(), "unexpected version filter: %s", req.GetFilter())
-				return privatev1.ClusterVersionsListResponse_builder{
-					Total: 1,
-					Size:  1,
-					Items: []*privatev1.ClusterVersion{
-						privatev1.ClusterVersion_builder{
-							Spec: privatev1.ClusterVersionSpec_builder{Image: image}.Build(),
-						}.Build(),
-					},
+				image, ok := images[req.GetId()]
+				Expect(ok).To(BeTrue(), "unexpected version ID: %s", req.GetId())
+				return privatev1.ClusterVersionsGetResponse_builder{
+					Object: privatev1.ClusterVersion_builder{
+						Spec: privatev1.ClusterVersionSpec_builder{Image: image}.Build(),
+					}.Build(),
 				}.Build(), nil
 			}).AnyTimes()
 
@@ -1133,27 +1187,29 @@ var _ = Describe("update tenant annotation", func() {
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
-				Version:  &privatev1.ClusterVersionReference{Name: newVersionName},
+				Version:  &privatev1.ClusterVersionReference{Id: "version-id-4-18", Name: newVersionName},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
 					"gpu-gb200": privatev1.ClusterNodeSet_builder{
 						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
 						Size:                  proto.Int32(3),
-						Version:               &privatev1.ClusterVersionReference{Name: "4-17-0"},
 					}.Build(),
 					"batch": privatev1.ClusterNodeSet_builder{
 						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
 						Size:                  proto.Int32(2),
-						Version:               &privatev1.ClusterVersionReference{Name: "4-16-0"},
-					}.Build(),
-					"legacy": privatev1.ClusterNodeSet_builder{
-						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "gpu.gb200"},
-						Size:                  proto.Int32(1),
 					}.Build(),
 				},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
 				Hub:   hubID,
+				NodeSets: map[string]*privatev1.ClusterNodeSetStatus{
+					"gpu-gb200": privatev1.ClusterNodeSetStatus_builder{
+						Version: &privatev1.ClusterVersionReference{Id: "version-id-4-17", Name: "4-17-0"},
+					}.Build(),
+					"batch": privatev1.ClusterNodeSetStatus_builder{
+						Version: &privatev1.ClusterVersionReference{Id: "version-id-4-16", Name: "4-16-0"},
+					}.Build(),
+				},
 			}.Build(),
 		}.Build()
 
@@ -1184,12 +1240,18 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(images).To(Equal(map[string]string{
 			"gpu-gb200": oldImage,
 			"batch":     otherImage,
-			"legacy":    "",
 		}))
 	})
 })
 
-var _ = Describe("resolveVersionImage", func() {
+var _ = Describe("whole-cluster node-set scheduling", func() {
+	const (
+		clusterID    = "test-cluster-id"
+		tenantName   = "my-tenant"
+		hubID        = "test-hub"
+		hubNamespace = "test-ns"
+	)
+
 	var (
 		ctx  context.Context
 		ctrl *gomock.Controller
@@ -1201,38 +1263,310 @@ var _ = Describe("resolveVersionImage", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("should return error when gRPC List fails", func() {
-		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
-		clusterVersionsClient.EXPECT().
-			List(gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(nil, fmt.Errorf("connection refused"))
+	newSucceededControlPlane := func(attemptID, targetVersion string) *privatev1.ClusterUpgradeHistoryEntry {
+		component := &privatev1.ClusterUpgradeComponent{}
+		component.SetControlPlane(&emptypb.Empty{})
+		entry := &privatev1.ClusterUpgradeHistoryEntry{}
+		entry.SetAttemptId(attemptID)
+		entry.SetComponent(component)
+		entry.SetSourceVersion("4.17.0")
+		entry.SetTargetVersion(targetVersion)
+		entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+		entry.SetAcceptedTime(timestamppb.New(time.Unix(1000, 0)))
+		entry.SetStateTransitionTime(timestamppb.New(time.Unix(1100, 0)))
+		return entry
+	}
 
-		t := &task{
-			r: &function{
-				clusterVersionsClient: clusterVersionsClient,
+	newScheduledNodeSetEntry := func(name string, state privatev1.ClusterUpgradeState) *privatev1.ClusterUpgradeHistoryEntry {
+		component := &privatev1.ClusterUpgradeComponent{}
+		component.SetNodeSetId(name)
+		entry := &privatev1.ClusterUpgradeHistoryEntry{}
+		entry.SetAttemptId("shared-id")
+		entry.SetComponent(component)
+		entry.SetSourceVersion("4.17.0")
+		entry.SetTargetVersion("4.18.0")
+		entry.SetAcceptedTime(timestamppb.New(time.Unix(1200, 0)))
+		entry.SetStateTransitionTime(timestamppb.New(time.Unix(1200, 0)))
+		entry.SetState(state)
+		entry.SetTimeoutNodeCount(2)
+		return entry
+	}
+
+	newUpgradeCluster := func() *privatev1.Cluster {
+		return privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				Version:  &privatev1.ClusterVersionReference{Id: "version-id-4-18", Name: "4-18-0"},
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"compute": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "bm.large"},
+						Size:                  proto.Int32(3),
+					}.Build(),
+					"gpu": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "bm.gpu"},
+						Size:                  proto.Int32(2),
+					}.Build(),
+				},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				UpgradeAttemptId: "shared-id",
+				State:            privatev1.ClusterState_CLUSTER_STATE_READY,
+				Hub:              hubID,
+				NodeSets: map[string]*privatev1.ClusterNodeSetStatus{
+					"compute": privatev1.ClusterNodeSetStatus_builder{
+						ObservedVersion: "4.17.0", Version: &privatev1.ClusterVersionReference{Id: "version-id-4-18", Name: "4-18-0"},
+					}.Build(),
+					"gpu": privatev1.ClusterNodeSetStatus_builder{
+						ObservedVersion: "4.18.0", Version: &privatev1.ClusterVersionReference{Id: "version-id-4-18", Name: "4-18-0"},
+					}.Build(),
+				},
+				UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{
+					newScheduledNodeSetEntry("compute", privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING),
+					newScheduledNodeSetEntry("gpu", privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED),
+					newSucceededControlPlane("shared-id", "4.18.0"),
+				},
+			}.Build(),
+		}.Build()
+	}
+
+	newExistingOrder := func() *osacv1alpha1.ClusterOrder {
+		return &osacv1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "order-upgrade",
+				Namespace: hubNamespace,
+				Labels:    map[string]string{labels.ClusterOrderUuid: clusterID},
+				Annotations: map[string]string{
+					annotations.Tenant: tenantName,
+				},
+			},
+			Spec: osacv1alpha1.ClusterOrderSpec{
+				TemplateID:   "test-template",
+				ReleaseImage: "quay.io/ocp/release:4.17.0",
+				NodeRequests: []osacv1alpha1.NodeRequest{
+					{NodeSet: "compute", BareMetal: &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm.large"}, NumberOfNodes: 3},
+					{NodeSet: "gpu", BareMetal: &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm.gpu"}, NumberOfNodes: 2},
+				},
 			},
 		}
+	}
 
-		_, err := t.resolveVersionImage(ctx, "4-17-0")
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("failed to look up cluster version '4-17-0'"))
+	newVersionClient := func(image string) *MockClusterVersionsClient {
+		client := NewMockClusterVersionsClient(ctrl)
+		client.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(privatev1.ClusterVersionsGetResponse_builder{
+				Object: privatev1.ClusterVersion_builder{
+					Spec: privatev1.ClusterVersionSpec_builder{Image: image}.Build(),
+				}.Build(),
+			}.Build(), nil).
+			AnyTimes()
+		return client
+	}
+
+	It("projects every node-set image in one update after control-plane success", func() {
+		order := newExistingOrder()
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		patchCalls := 0
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(order).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Patch: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, patch clnt.Patch, opts ...clnt.PatchOption) error {
+					patchCalls++
+					return client.Patch(ctx, obj, patch, opts...)
+				},
+			}).
+			Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
+			AnyTimes()
+		cluster := newUpgradeCluster()
+		t := &task{
+			r: &function{
+				logger:                logger,
+				hubCache:              hubCache,
+				clusterVersionsClient: newVersionClient("quay.io/ocp/release:4.18.0"),
+			},
+			cluster: cluster,
+		}
+
+		Expect(t.update(ctx)).To(Succeed())
+
+		Expect(patchCalls).To(Equal(1))
+		updated := &osacv1alpha1.ClusterOrder{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(order), updated)).To(Succeed())
+		Expect(updated.Spec.ReleaseImage).To(Equal("quay.io/ocp/release:4.18.0"))
+		Expect(updated.Annotations[osacv1alpha1.UpgradeAttemptIDAnnotation]).To(Equal("shared-id"))
+		for _, request := range updated.Spec.NodeRequests {
+			Expect(request.ReleaseImage).To(Equal("quay.io/ocp/release:4.18.0"))
+		}
+		Expect(cluster.GetStatus().GetNodeSets()["compute"].GetVersion().GetName()).To(Equal("4-18-0"))
+		Expect(cluster.GetStatus().GetNodeSets()["gpu"].GetVersion().GetName()).To(Equal("4-18-0"))
+		history := cluster.GetStatus().GetUpgradeHistory()
+		Expect(history).To(HaveLen(3))
+		Expect(history[0].GetComponent().GetNodeSetId()).To(Equal("compute"))
+		Expect(history[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+		Expect(history[1].GetComponent().GetNodeSetId()).To(Equal("gpu"))
+		Expect(history[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
+		Expect(history[2].GetComponent().GetControlPlane()).NotTo(BeNil())
+		for _, entry := range history {
+			Expect(entry.GetAttemptId()).To(Equal("shared-id"))
+		}
+
+		specAfterFirstUpdate := updated.Spec
+		Expect(t.update(ctx)).To(Succeed())
+		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(order), updated)).To(Succeed())
+		Expect(updated.Spec).To(Equal(specAfterFirstUpdate))
+		Expect(cluster.GetStatus().GetUpgradeHistory()).To(HaveLen(3))
 	})
 
-	It("should return error when version is not found", func() {
-		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
-		clusterVersionsClient.EXPECT().
-			List(gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(privatev1.ClusterVersionsListResponse_builder{}.Build(), nil)
-
-		t := &task{
-			r: &function{
-				clusterVersionsClient: clusterVersionsClient,
-			},
+	It("keeps scheduled state while image resolution fails and retries after recovery", func() {
+		order := newExistingOrder()
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(order).Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
+			AnyTimes()
+		cluster := newUpgradeCluster()
+		emptyVersionClient := NewMockClusterVersionsClient(ctrl)
+		emptyVersionClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "cluster version not found")).
+			AnyTimes()
+		var persisted *privatev1.Cluster
+		clustersClient := NewMockClustersClient(ctrl)
+		clustersClient.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, req *privatev1.ClustersUpdateRequest, _ ...grpc.CallOption) (*privatev1.ClustersUpdateResponse, error) {
+				persisted = req.GetObject()
+				return &privatev1.ClustersUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			Times(1)
+		f := &function{
+			logger:                logger,
+			hubCache:              hubCache,
+			clustersClient:        clustersClient,
+			clusterVersionsClient: emptyVersionClient,
+			maskCalculator:        masks.NewCalculator().Build(),
 		}
 
-		_, err := t.resolveVersionImage(ctx, "nonexistent")
+		Expect(f.run(ctx, cluster)).To(Succeed())
+		Expect(persisted).NotTo(BeNil())
+		Expect(persisted.GetStatus().GetUpgradeHistory()).To(HaveLen(3))
+		Expect(persisted.GetStatus().GetNodeSets()["compute"].GetVersion().GetName()).To(Equal("4-18-0"))
+		Expect(persisted.GetStatus().GetNodeSets()["gpu"].GetVersion().GetName()).To(Equal("4-18-0"))
+		unchanged := &osacv1alpha1.ClusterOrder{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(order), unchanged)).To(Succeed())
+		Expect(unchanged.Spec.NodeRequests[0].ReleaseImage).To(BeEmpty())
+
+		retryTask := &task{
+			r: &function{
+				logger:                logger,
+				hubCache:              hubCache,
+				clusterVersionsClient: newVersionClient("quay.io/ocp/release:4.18.0"),
+			},
+			cluster: persisted,
+		}
+		Expect(retryTask.update(ctx)).To(Succeed())
+		recovered := &osacv1alpha1.ClusterOrder{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(order), recovered)).To(Succeed())
+		Expect(recovered.Spec.NodeRequests[0].ReleaseImage).To(Equal("quay.io/ocp/release:4.18.0"))
+		Expect(recovered.Spec.NodeRequests[1].ReleaseImage).To(Equal("quay.io/ocp/release:4.18.0"))
+		Expect(persisted.GetStatus().GetUpgradeHistory()).To(HaveLen(3))
+	})
+})
+
+var _ = Describe("addNodeReleaseImages", func() {
+	var (
+		ctx  context.Context
+		ctrl *gomock.Controller
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		ctrl = gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+	})
+
+	It("resolves canonical node-set version references by ID", func() {
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, request *privatev1.ClusterVersionsGetRequest, _ ...grpc.CallOption) (*privatev1.ClusterVersionsGetResponse, error) {
+				Expect(request.GetId()).To(Equal("node-version-id"))
+				return privatev1.ClusterVersionsGetResponse_builder{
+					Object: privatev1.ClusterVersion_builder{
+						Spec: privatev1.ClusterVersionSpec_builder{
+							Image: "quay.io/ocp/release:4.17.0",
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			}).
+			Times(1)
+
+		cluster := privatev1.Cluster_builder{
+			Status: privatev1.ClusterStatus_builder{
+				NodeSets: map[string]*privatev1.ClusterNodeSetStatus{
+					"compute": privatev1.ClusterNodeSetStatus_builder{
+						Version: &privatev1.ClusterVersionReference{Id: "node-version-id"},
+					}.Build(),
+					"gpu": privatev1.ClusterNodeSetStatus_builder{
+						Version: &privatev1.ClusterVersionReference{Id: "node-version-id"},
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		spec := &osacv1alpha1.ClusterOrderSpec{
+			NodeRequests: []osacv1alpha1.NodeRequest{
+				{NodeSet: "compute"}, {NodeSet: "gpu"},
+			},
+		}
+		t := &task{
+			r:       &function{clusterVersionsClient: clusterVersionsClient},
+			cluster: cluster,
+		}
+
+		Expect(t.addNodeReleaseImages(ctx, spec)).To(Succeed())
+		Expect(spec.NodeRequests[0].ReleaseImage).To(Equal("quay.io/ocp/release:4.17.0"))
+		Expect(spec.NodeRequests[1].ReleaseImage).To(Equal("quay.io/ocp/release:4.17.0"))
+	})
+
+	It("returns cluster-version-not-found for a gRPC NotFound response", func() {
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "cluster version not found"))
+
+		t := &task{
+			r: &function{clusterVersionsClient: clusterVersionsClient},
+		}
+
+		_, err := t.resolveVersionImageByID(ctx, "missing-node-version-id")
+		Expect(err).To(MatchError(fmt.Errorf(
+			"%w: %q", errClusterVersionNotFound, "missing-node-version-id",
+		)))
+	})
+
+	It("wraps non-NotFound gRPC failures without classifying them as missing", func() {
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.Unavailable, "connection refused"))
+
+		t := &task{
+			r: &function{clusterVersionsClient: clusterVersionsClient},
+		}
+
+		_, err := t.resolveVersionImageByID(ctx, "node-version-id")
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("cluster version not found: 'nonexistent'"))
+		Expect(err.Error()).To(ContainSubstring("failed to get cluster version \"node-version-id\""))
+		Expect(errors.Is(err, errClusterVersionNotFound)).To(BeFalse())
 	})
 })
 
@@ -1270,8 +1604,8 @@ var _ = Describe("update version resolution failure", func() {
 
 		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
 		clusterVersionsClient.EXPECT().
-			List(gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(privatev1.ClusterVersionsListResponse_builder{}.Build(), nil)
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "cluster version not found"))
 
 		var updateReq *privatev1.ClustersUpdateRequest
 		clustersClient := NewMockClustersClient(ctrl)
@@ -1292,7 +1626,7 @@ var _ = Describe("update version resolution failure", func() {
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
 				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
-				Version:  &privatev1.ClusterVersionReference{Name: versionName},
+				Version:  &privatev1.ClusterVersionReference{Id: "version-id", Name: versionName},
 			}.Build(),
 			Status: privatev1.ClusterStatus_builder{
 				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
@@ -1321,6 +1655,95 @@ var _ = Describe("update version resolution failure", func() {
 				Expect(c.GetMessage()).To(ContainSubstring("cluster version not found"))
 				found = true
 			}
+		}
+		Expect(found).To(BeTrue(), "should have set ResourcesUnavailable condition")
+	})
+
+	It("should set ResourcesUnavailable condition when a canonical node-set version is not found", func() {
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil).
+			AnyTimes()
+
+		clusterVersionsClient := NewMockClusterVersionsClient(ctrl)
+		clusterVersionsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, request *privatev1.ClusterVersionsGetRequest,
+				_ ...grpc.CallOption) (*privatev1.ClusterVersionsGetResponse, error) {
+				if request.GetId() != "version-id-4-17" {
+					return nil, status.Error(codes.NotFound, "cluster version not found")
+				}
+				return privatev1.ClusterVersionsGetResponse_builder{
+					Object: privatev1.ClusterVersion_builder{
+						Spec: privatev1.ClusterVersionSpec_builder{
+							Image: "quay.io/ocp/release:4.17.0",
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			}).
+			AnyTimes()
+
+		var updateReq *privatev1.ClustersUpdateRequest
+		clustersClient := NewMockClustersClient(ctrl)
+		clustersClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(ctx context.Context, req *privatev1.ClustersUpdateRequest, opts ...grpc.CallOption) (*privatev1.ClustersUpdateResponse, error) {
+				updateReq = req
+				return &privatev1.ClustersUpdateResponse{Object: req.GetObject()}, nil
+			}).
+			Times(1)
+
+		cluster := privatev1.Cluster_builder{
+			Id: clusterID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     tenantName,
+			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				Version:  &privatev1.ClusterVersionReference{Id: "version-id-4-17", Name: "4-17-0"},
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"compute": privatev1.ClusterNodeSet_builder{Size: proto.Int32(1)}.Build(),
+				},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING,
+				Hub:   hubID,
+				NodeSets: map[string]*privatev1.ClusterNodeSetStatus{
+					"compute": privatev1.ClusterNodeSetStatus_builder{
+						Version: &privatev1.ClusterVersionReference{Id: "missing-node-version-id"},
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+
+		f := &function{
+			logger:                logger,
+			hubCache:              hubCache,
+			clustersClient:        clustersClient,
+			clusterVersionsClient: clusterVersionsClient,
+			maskCalculator:        masks.NewCalculator().Build(),
+		}
+
+		Expect(f.run(ctx, cluster)).To(Succeed())
+		Expect(updateReq).NotTo(BeNil(), "Update should have been called")
+
+		found := false
+		for _, condition := range updateReq.GetObject().GetStatus().GetConditions() {
+			if condition.GetType() != privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_PROGRESSING {
+				continue
+			}
+			Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+			Expect(condition.GetReason()).To(Equal("ResourcesUnavailable"))
+			Expect(condition.GetMessage()).To(ContainSubstring("cluster version not found: \"missing-node-version-id\""))
+			found = true
 		}
 		Expect(found).To(BeTrue(), "should have set ResourcesUnavailable condition")
 	})

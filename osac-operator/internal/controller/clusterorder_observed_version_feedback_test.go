@@ -143,9 +143,9 @@ var _ = Describe("ClusterOrder live version feedback", func() {
 
 		status := &privatev1.ClusterStatus{}
 		status.SetObservedVersion("4.22.0")
-		workers := &privatev1.ClusterNodeSet{}
+		workers := &privatev1.ClusterNodeSetStatus{}
 		workers.SetObservedVersion("4.22.0")
-		status.SetNodeSets(map[string]*privatev1.ClusterNodeSet{"workers": workers})
+		status.SetNodeSets(map[string]*privatev1.ClusterNodeSetStatus{"workers": workers})
 		spec := &privatev1.ClusterSpec{}
 		spec.SetNodeSets(map[string]*privatev1.ClusterNodeSet{
 			"workers": privatev1.ClusterNodeSet_builder{
@@ -218,7 +218,7 @@ var _ = Describe("ClusterOrder live version feedback", func() {
 		Expect(remote.GetStatus().GetObservedVersion()).To(Equal("4.22.1"))
 		Expect(remote.GetStatus().GetNodeSets()["workers"].GetObservedVersion()).To(Equal("4.22.1"))
 		Expect(remote.GetStatus().GetUpgradeHistory()).To(BeEmpty())
-		Expect(remote.GetSpec().GetControlPlaneAttemptId()).To(BeEmpty())
+		Expect(remote.GetStatus().GetUpgradeAttemptId()).To(BeEmpty())
 		Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElements("status.observed_version", "status.node_sets"))
 
 		updates := mockClient.updateCount
@@ -254,7 +254,7 @@ var _ = Describe("ClusterOrder live version feedback", func() {
 		newPool("sibling", "another-order", "workers", "4.22.3")
 		newPool("removed", orderName, "removed", "4.22.3")
 		remote := mockClient.getResponse.GetObject()
-		removed := &privatev1.ClusterNodeSet{}
+		removed := &privatev1.ClusterNodeSetStatus{}
 		removed.SetObservedVersion("4.21.0")
 		remote.GetStatus().GetNodeSets()["removed"] = removed
 
@@ -282,7 +282,7 @@ var _ = Describe("ClusterOrder live version feedback", func() {
 		})
 		newPool("workers-pool", orderName, "workers", "4.22.1")
 		remote := mockClient.getResponse.GetObject()
-		remote.GetSpec().SetControlPlaneAttemptId("attempt-id")
+		remote.GetStatus().SetUpgradeAttemptId("attempt-id")
 		component := &privatev1.ClusterUpgradeComponent{}
 		component.SetControlPlane(&emptypb.Empty{})
 		entry := privatev1.ClusterUpgradeHistoryEntry_builder{

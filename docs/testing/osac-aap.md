@@ -36,6 +36,13 @@ in `osac-aap/Makefile`.
 - `config_as_code_job_templates`, `config_as_code_pod_specs`: rendered AAP
   template/pod configuration only; no controller, Kubernetes objects or live
   provider.
+- `cluster_upgrade_workflow`
+  ([OSAC-7232](https://redhat.atlassian.net/browse/OSAC-7232)): runs the
+  existing cluster workflow through its same-type Lease against real Kind and
+  minimal HyperShift CRDs, covering the control-plane and NodePool image batch,
+  shared attempt annotations, later image preservation, and malformed
+  NodePool-hook rejection. No deployed AAP, HyperShift controller, operator
+  dispatch loop, or provider/data-plane upgrade runs.
 - Netris transport unit tests: real HTTP transport and module subprocesses
   against a synthetic loopback provider; no live Netris login, so cookie
   refresh and live-provider compatibility remain unverified.

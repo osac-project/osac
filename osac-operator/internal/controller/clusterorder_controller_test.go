@@ -552,6 +552,65 @@ var _ = Describe("ClusterOrder Controller", func() {
 			Expect(instance.Status.DesiredConfigVersion).To(Equal(firstHash))
 		})
 
+		It("should include node-request release images in the spec hash", func() {
+			reconciler := &ClusterOrderReconciler{}
+			nodeRequest := v1alpha1.NodeRequest{
+				NodeSet: "compute", NumberOfNodes: 1,
+				BareMetal: &v1alpha1.BareMetalNodeSpec{InstanceType: "worker"},
+			}
+			instance1 := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "template-a",
+					NodeRequests: []v1alpha1.NodeRequest{func() v1alpha1.NodeRequest {
+						request := nodeRequest
+						request.ReleaseImage = "quay.io/ocp/release:4.17.0"
+						return request
+					}()},
+				},
+			}
+			instance2 := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					TemplateID: "template-a",
+					NodeRequests: []v1alpha1.NodeRequest{func() v1alpha1.NodeRequest {
+						request := nodeRequest
+						request.ReleaseImage = "quay.io/ocp/release:4.18.0"
+						return request
+					}()},
+				},
+			}
+			Expect(reconciler.handleDesiredConfigVersion(instance1)).To(Succeed())
+			Expect(reconciler.handleDesiredConfigVersion(instance2)).To(Succeed())
+			Expect(instance1.Status.DesiredConfigVersion).NotTo(Equal(instance2.Status.DesiredConfigVersion))
+		})
+
+		It("should skip dispatch after an annotation-only edit", func() {
+			instance := &v1alpha1.ClusterOrder{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{v1alpha1.UpgradeAttemptIDAnnotation: "cluster-id"},
+				},
+				Spec: v1alpha1.ClusterOrderSpec{TemplateID: "template-a"},
+				Status: v1alpha1.ClusterOrderStatus{
+					ProvisioningJobs: []v1alpha1.JobStatus{{
+						Type: v1alpha1.JobTypeProvision, JobID: "job-1",
+						State: v1alpha1.JobStateSucceeded,
+					}},
+				},
+			}
+			reconciler := &ClusterOrderReconciler{}
+			Expect(reconciler.handleDesiredConfigVersion(instance)).To(Succeed())
+			job := &instance.Status.ProvisioningJobs[0]
+			job.ConfigVersion = instance.Status.DesiredConfigVersion
+
+			instance.Annotations[v1alpha1.UpgradeAttemptIDAnnotation] = "annotation-only-id"
+			Expect(reconciler.handleDesiredConfigVersion(instance)).To(Succeed())
+			action, latestJob := provisioning.EvaluateAction(&provisioning.State{
+				Jobs:                 &instance.Status.ProvisioningJobs,
+				DesiredConfigVersion: instance.Status.DesiredConfigVersion,
+			}, func() bool { return false })
+			Expect(action).To(Equal(provisioning.Skip))
+			Expect(latestJob.JobID).To(Equal("job-1"))
+		})
+
 		It("should produce different hash for different spec", func() {
 			reconciler := &ClusterOrderReconciler{}
 			instance1 := &v1alpha1.ClusterOrder{

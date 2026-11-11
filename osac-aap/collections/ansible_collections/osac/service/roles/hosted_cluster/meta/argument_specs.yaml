@@ -25,7 +25,7 @@ argument_specs:
             required: true
           releaseImage:
             type: str
-            required: false
+            required: true
           bareMetal:
             type: dict
             required: true

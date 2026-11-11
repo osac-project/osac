@@ -299,6 +299,46 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			Expect(job.State).To(Equal(osacv1alpha1.JobStateRunning))
 		})
 
+		It("dispatches one job for a node-image batch", func() {
+			const name = "cluster-order-node-image-dispatch"
+			instance := newTestClusterOrder(name)
+			instance.Annotations = map[string]string{osacv1alpha1.UpgradeAttemptIDAnnotation: "cluster-id"}
+			instance.Spec.NodeRequests = []osacv1alpha1.NodeRequest{{
+				NodeSet: "compute", NumberOfNodes: 1,
+				BareMetal:    &osacv1alpha1.BareMetalNodeSpec{InstanceType: "worker"},
+				ReleaseImage: "quay.io/ocp/release:4.17.0",
+			}}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+
+			instance = getClusterOrder(name)
+			Expect(reconciler.handleDesiredConfigVersion(instance)).To(Succeed())
+			_, err := reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			provider.setProvisionJobState(osacv1alpha1.JobStateSucceeded, "Completed")
+			instance = getClusterOrder(name)
+			_, err = reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+			instance = getClusterOrder(name)
+			instance.Spec.NodeRequests[0].ReleaseImage = "quay.io/ocp/release:4.18.0"
+			instance.Annotations[osacv1alpha1.UpgradeAttemptIDAnnotation] = "cluster-id-next"
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+			instance = getClusterOrder(name)
+			Expect(reconciler.handleDesiredConfigVersion(instance)).To(Succeed())
+			_, err = reconciler.handleProvisioning(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+
+			provider.mu.Lock()
+			callsAfterImageBatch := provider.provisionCallCount
+			provider.mu.Unlock()
+			Expect(callsAfterImageBatch).To(Equal(2))
+
+			instance = getClusterOrder(name)
+			Expect(countProvisionJobs(instance)).To(Equal(2))
+		})
+
 		It("should provision through the full lifecycle: trigger, running, succeeded", func() {
 			const name = "cluster-order-provision-success"
 			instance := newTestClusterOrder(name)

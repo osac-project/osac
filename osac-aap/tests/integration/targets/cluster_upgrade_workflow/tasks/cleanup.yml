@@ -1,0 +1,116 @@
+---
+- name: Clean up the cluster upgrade workflow fixtures
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_id: >-
+      {{ lookup('env', 'POD_UID') | default('local', true)
+      | regex_replace('[^a-z0-9]', '') | truncate(8, true, '') }}
+    fixture_namespace: "cluster-upgrade-{{ fixture_id }}"
+    cluster_order_name: "upgrade-{{ fixture_id }}"
+    malformed_run_vars_dir: >-
+      {{ (lookup('env', 'TMPDIR') | default('/tmp', true) | regex_replace('/+$', ''))
+         ~ '/osac-cluster-upgrade-' ~ fixture_id }}
+    malformed_run_vars_file: "{{ malformed_run_vars_dir }}/malformed-run-vars.json"
+  tasks:
+    - name: Remove the malformed-run variable file
+      ansible.builtin.file:
+        path: "{{ malformed_run_vars_file }}"
+        state: absent
+      when: malformed_run_vars_file | length > 0
+      register: cleanup_malformed_run_vars_file
+      ignore_errors: true
+
+    - name: Check whether the ClusterOrder exists before removing its finalizer
+      no_log: true
+      kubernetes.core.k8s_info:
+        api_version: osac.openshift.io/v1alpha1
+        kind: ClusterOrder
+        name: "{{ cluster_order_name }}"
+        namespace: osac-system
+      register: cleanup_cluster_order_info
+      ignore_errors: true
+
+    - name: Remove the workflow finalizer from the ClusterOrder
+      no_log: true
+      kubernetes.core.k8s:
+        state: patched
+        merge_type: merge
+        definition:
+          apiVersion: osac.openshift.io/v1alpha1
+          kind: ClusterOrder
+          metadata:
+            name: "{{ cluster_order_name }}"
+            namespace: osac-system
+            finalizers: []
+      register: cleanup_cluster_order_finalizer
+      ignore_errors: true
+      when: cleanup_cluster_order_info.resources | default([]) | length > 0
+
+    - name: Remove the projected ClusterOrder
+      no_log: true
+      kubernetes.core.k8s:
+        api_version: osac.openshift.io/v1alpha1
+        kind: ClusterOrder
+        name: "{{ cluster_order_name }}"
+        namespace: osac-system
+        state: absent
+      register: cleanup_cluster_order
+      ignore_errors: true
+
+    - name: Check whether the namespace exists before removing its finalizer
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ fixture_namespace }}"
+      register: cleanup_namespace_info
+      ignore_errors: true
+
+    - name: Remove the workflow finalizer from the namespace
+      kubernetes.core.k8s:
+        state: patched
+        merge_type: merge
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ fixture_namespace }}"
+            finalizers: []
+      register: cleanup_namespace_finalizer
+      ignore_errors: true
+      when: cleanup_namespace_info.resources | default([]) | length > 0
+
+    - name: Remove the working namespace
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ fixture_namespace }}"
+        state: absent
+        wait: true
+      register: cleanup_namespace
+      ignore_errors: true
+
+    - name: Remove any remaining workflow Lease
+      kubernetes.core.k8s:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "cluster-{{ cluster_order_name }}-lock"
+        namespace: osac-system
+        state: absent
+      register: cleanup_lease
+      ignore_errors: true
+
+    - name: Report cluster upgrade cleanup failures
+      ansible.builtin.assert:
+        that:
+          - not cleanup_malformed_run_vars_file.failed | default(false)
+          - not cleanup_cluster_order_info.failed | default(false)
+          - not cleanup_cluster_order_finalizer.failed | default(false)
+          - not cleanup_cluster_order.failed | default(false)
+          - not cleanup_namespace_info.failed | default(false)
+          - not cleanup_namespace_finalizer.failed | default(false)
+          - not cleanup_namespace.failed | default(false)
+          - not cleanup_lease.failed | default(false)
+        quiet: true
+        fail_msg: Cluster upgrade cleanup failed; inspect the preceding cleanup tasks.

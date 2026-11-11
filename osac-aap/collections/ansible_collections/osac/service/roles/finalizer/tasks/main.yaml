@@ -5,10 +5,12 @@
     namespace: "{{ finalizer_target.namespace | default(omit) }}"
     name: "{{ finalizer_target.name }}"
   register: finalizer_resources
+  no_log: true
 
 - name: Set finalizer_target_resource variable
   ansible.builtin.set_fact:
     finalizer_target_resource: "{{ (finalizer_resources.resources | first) if (finalizer_resources.resources | length > 0) else None }}"
+  no_log: true
 
 - name: "Skip finalizer update — target resource not found" # noqa: name[template]
   ansible.builtin.debug:
@@ -28,6 +30,7 @@
         namespace: "{{ finalizer_target.namespace | default(omit) }}"
         name: "{{ finalizer_target.name }}"
         finalizers: "{{ (finalizer_target_resource.metadata.finalizers | default([])) | union([finalizer_name]) }}"
+  no_log: true
 
 - name: "Remove finalizer from {{ finalizer_target.kind }}/{{ finalizer_target.name }}" # noqa: name[template]
   when:
@@ -44,3 +47,4 @@
         value: "{{ finalizer_list | default([]) }}"
   vars:
     finalizer_list: "{{ (finalizer_target_resource.metadata.finalizers | default([])) | difference([finalizer_name]) }}"
+  no_log: true

@@ -864,7 +864,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			component.SetControlPlane(&emptypb.Empty{})
 			entry.SetComponent(component)
 			remote := mockClient.getResponse.GetObject()
-			remote.GetSpec().SetControlPlaneAttemptId("cp-id")
+			remote.GetStatus().SetUpgradeAttemptId("cp-id")
 			remote.GetStatus().SetUpgradeHistory([]*privatev1.ClusterUpgradeHistoryEntry{entry})
 
 			result, err := reconciler.Reconcile(testCtx, reconcile.Request{NamespacedName: typeNamespacedName})
@@ -1779,8 +1779,8 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 		})
 
 		It("repairs a status node set missing its BMIT reference", func() {
-			mockClient.getResponse.GetObject().GetStatus().SetNodeSets(map[string]*privatev1.ClusterNodeSet{
-				"workers": privatev1.ClusterNodeSet_builder{Size: ptr.To(int32(3))}.Build(),
+			mockClient.getResponse.GetObject().GetStatus().SetNodeSets(map[string]*privatev1.ClusterNodeSetStatus{
+				"workers": privatev1.ClusterNodeSetStatus_builder{Size: ptr.To(int32(3))}.Build(),
 			})
 
 			_, err := reconciler.Reconcile(testCtx, reconcile.Request{NamespacedName: typeNamespacedName})

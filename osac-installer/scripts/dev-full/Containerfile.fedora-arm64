@@ -1,0 +1,20 @@
+# Local Mac dev-full guest disk. Keep the upstream disk immutable and separate
+# from this image: disabling PCI MSI is a workaround for nested virtualization.
+FROM quay.io/containerdisks/fedora@sha256:4e905e6cdb66b93a82af98192452988c7f6777e67b7b2fdfd67598301ea4d759 AS upstream
+
+FROM registry.fedoraproject.org/fedora:45 AS customize
+RUN dnf install -y guestfs-tools qemu-system-aarch64-core kernel-core && dnf clean all
+COPY --from=upstream /disk/ /disk/
+# The customization appliance uses software emulation so it does not depend on
+# working nested KVM or on the guest's unmodified PCI interrupt configuration.
+ENV LIBGUESTFS_BACKEND=direct LIBGUESTFS_BACKEND_SETTINGS=force_tcg=1
+RUN set -eu; \
+    set -- /disk/*; test "$#" = 1; test -f "$1"; \
+    virt-customize --no-network -a "$1" \
+      --run-command 'grubby --update-kernel=ALL --args=pci=nomsi' \
+      --run-command 'mkdir -p /etc/kernel; for entry in /boot/loader/entries/*.conf; do sed -n "s/^options //p" "$entry" > /etc/kernel/cmdline; break; done; grep -qw pci=nomsi /etc/kernel/cmdline' \
+      --run-command 'grep -q pci=nomsi /boot/loader/entries/*.conf'; \
+    mv "$1" /fedora.qcow2
+
+FROM scratch
+COPY --from=customize --chown=107:107 /fedora.qcow2 /disk/fedora.qcow2

@@ -716,6 +716,7 @@ func normalizeRestartComputeInstanceInput(input RestartComputeInstanceInput) (Re
 	return input, nil
 }
 
+// computeInstanceRunStrategyName returns the stable API name for a run strategy.
 func computeInstanceRunStrategyName(value publicv1.ComputeInstanceRunStrategy) string {
 	switch value {
 	case publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS:

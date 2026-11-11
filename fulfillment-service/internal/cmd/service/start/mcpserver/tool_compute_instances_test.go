@@ -454,10 +454,12 @@ func int32Pointer(value int32) *int32 {
 	return &value
 }
 
+// currentComputeInstance builds a catalog-backed instance at the given version.
 func currentComputeInstance(version int32) *publicv1.ComputeInstance {
 	return currentComputeInstanceWithRestart(version, nil)
 }
 
+// currentComputeInstanceWithRestart builds an instance with an optional restart signal.
 func currentComputeInstanceWithRestart(
 	version int32, restartRequestedAt *timestamppb.Timestamp,
 ) *publicv1.ComputeInstance {
@@ -471,6 +473,7 @@ func currentComputeInstanceWithRestart(
 	}.Build()
 }
 
+// instancesWithCurrent returns a client that serves an instance at the given version.
 func instancesWithCurrent(version int32) *mockComputeInstancesClient {
 	return &mockComputeInstancesClient{
 		getFunc: func(

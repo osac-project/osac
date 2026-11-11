@@ -471,14 +471,26 @@ const (
 	publicPermissionRuleMessage  = protoreflect.FullName("osac.public.v1.PermissionRule")
 	privatePermissionRuleMessage = protoreflect.FullName("osac.private.v1.PermissionRule")
 
-	publicComputeInstanceSpec    = protoreflect.FullName("osac.public.v1.ComputeInstanceSpec")
-	privateComputeInstanceSpec   = protoreflect.FullName("osac.private.v1.ComputeInstanceSpec")
-	publicComputeInstanceStatus  = protoreflect.FullName("osac.public.v1.ComputeInstanceStatus")
-	privateComputeInstanceStatus = protoreflect.FullName("osac.private.v1.ComputeInstanceStatus")
+	publicComputeInstanceSpec        = protoreflect.FullName("osac.public.v1.ComputeInstanceSpec")
+	privateComputeInstanceSpec       = protoreflect.FullName("osac.private.v1.ComputeInstanceSpec")
+	publicComputeInstanceStatus      = protoreflect.FullName("osac.public.v1.ComputeInstanceStatus")
+	privateComputeInstanceStatus     = protoreflect.FullName("osac.private.v1.ComputeInstanceStatus")
+	publicComputeInstanceCatalogItem = protoreflect.FullName(
+		"osac.public.v1.ComputeInstanceCatalogItem",
+	)
+	privateComputeInstanceCatalogItem = protoreflect.FullName(
+		"osac.private.v1.ComputeInstanceCatalogItem",
+	)
+	publicComputeInstanceCatalogItemFields = protoreflect.FullName(
+		"osac.public.v1.ComputeInstanceCatalogItemFields",
+	)
+	privateComputeInstanceCatalogItemFields = protoreflect.FullName(
+		"osac.private.v1.ComputeInstanceCatalogItemFields",
+	)
 )
 
-// redactProtoMessage returns a copy with Secret data, permission rule values, and sensitive
-// ComputeInstance fields redacted.
+// redactProtoMessage returns a copy with Secret data, permission rule values, and
+// sensitive ComputeInstance and catalog fields redacted.
 // The copy ensures that logging never changes the message sent through gRPC.
 func redactProtoMessage(message proto.Message) proto.Message {
 	result := proto.Clone(message)
@@ -486,7 +498,7 @@ func redactProtoMessage(message proto.Message) proto.Message {
 	return result
 }
 
-// redactProtoMessageFields redacts Secret payloads and sensitive ComputeInstance data in place.
+// redactProtoMessageFields redacts Secret payloads and sensitive instance and catalog data in place.
 func redactProtoMessageFields(message protoreflect.Message) {
 	fields := message.Descriptor().Fields()
 	for index := 0; index < fields.Len(); index++ {
@@ -555,6 +567,13 @@ func isSensitiveComputeInstanceField(field protoreflect.FieldDescriptor) bool {
 	case publicComputeInstanceStatus, privateComputeInstanceStatus:
 		switch name {
 		case "internal_ip_address", "external_ip_address", "compute_network_attachment_statuses":
+			return true
+		}
+	case publicComputeInstanceCatalogItem, privateComputeInstanceCatalogItem:
+		return name == "template_parameters"
+	case publicComputeInstanceCatalogItemFields, privateComputeInstanceCatalogItemFields:
+		switch name {
+		case "network_attachments", "ssh_key", "user_data_source":
 			return true
 		}
 	}

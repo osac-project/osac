@@ -440,8 +440,8 @@ var _ = Describe("Interceptor", func() {
 			request, response, conn, invoker)
 		Expect(err).ToNot(HaveOccurred())
 
-		Expect(buffer.String()).ToNot(ContainSubstring("template-parameter-private-value"))
-		Expect(buffer.String()).ToNot(ContainSubstring("user-data-private-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("template-parameter-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("user-data-fixture-value"))
 		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.3"))
 		Expect(buffer.String()).ToNot(ContainSubstring("192.0.2.4"))
 		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.5"))
@@ -469,13 +469,69 @@ var _ = Describe("Interceptor", func() {
 			func(context.Context, any) (any, error) { return response, nil })
 		Expect(err).ToNot(HaveOccurred())
 
-		Expect(buffer.String()).ToNot(ContainSubstring("template-parameter-private-value"))
-		Expect(buffer.String()).ToNot(ContainSubstring("user-data-private-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("template-parameter-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("user-data-fixture-value"))
 		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.3"))
 		Expect(buffer.String()).ToNot(ContainSubstring("192.0.2.4"))
 		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.5"))
 		Expect(buffer.String()).ToNot(ContainSubstring("subnet-private-id"))
 		Expect(buffer.String()).To(ContainSubstring(redactMark))
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts ComputeInstance catalog policies from unary client body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response, err := computeInstanceCatalogItemLogFixtures()
+		Expect(err).ToNot(HaveOccurred())
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+		responseTemplate := proto.Clone(response)
+
+		invoker := func(_ context.Context, _ string, _, response any, _ *grpc.ClientConn,
+			_ ...grpc.CallOption) error {
+			proto.Reset(response.(proto.Message))
+			proto.Merge(response.(proto.Message), responseTemplate)
+			return nil
+		}
+		err = redactedInterceptor.UnaryClient(ctx, "/osac.public.v1.ComputeInstanceCatalogItems/Get",
+			request, response, conn, invoker)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("locked-template-parameter-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("default-template-parameter-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("inline-user-data-fixture"))
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts ComputeInstance catalog policies from unary server body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response, err := computeInstanceCatalogItemLogFixtures()
+		Expect(err).ToNot(HaveOccurred())
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+
+		_, err = redactedInterceptor.UnaryServer(ctx, request,
+			&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.ComputeInstanceCatalogItems/Get"},
+			func(context.Context, any) (any, error) { return response, nil })
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("locked-template-parameter-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("default-template-parameter-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("inline-user-data-fixture"))
 		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
 	})
@@ -487,14 +543,14 @@ func computeInstanceLogFixtures() (
 	*publicv1.ComputeInstancesCreateResponse,
 	error,
 ) {
-	templateParameter, err := anypb.New(wrapperspb.String("template-parameter-private-value"))
+	fixtureTemplateParameter, err := anypb.New(wrapperspb.String("template-parameter-fixture-value"))
 	if err != nil {
 		return nil, nil, err
 	}
-	userData := "user-data-private-value"
+	fixtureUserData := "user-data-fixture-value"
 	spec := publicv1.ComputeInstanceSpec_builder{
-		TemplateParameters: map[string]*anypb.Any{"credential": templateParameter},
-		UserDataSource:     publicv1.UserDataSource_builder{Inline: &userData}.Build(),
+		TemplateParameters: map[string]*anypb.Any{"fixture-param": fixtureTemplateParameter},
+		UserDataSource:     publicv1.UserDataSource_builder{Inline: &fixtureUserData}.Build(),
 	}.Build()
 	request := publicv1.ComputeInstancesCreateRequest_builder{
 		Object: publicv1.ComputeInstance_builder{Spec: spec}.Build(),
@@ -515,6 +571,45 @@ func computeInstanceLogFixtures() (
 		}.Build(),
 	}.Build()
 	return request, response, nil
+}
+
+// computeInstanceCatalogItemLogFixtures returns catalog policies with fake sensitive values.
+func computeInstanceCatalogItemLogFixtures() (
+	*publicv1.ComputeInstanceCatalogItemsGetRequest,
+	*publicv1.ComputeInstanceCatalogItemsGetResponse,
+	error,
+) {
+	lockedTemplateParameter, err := anypb.New(wrapperspb.String("locked-template-parameter-fixture"))
+	if err != nil {
+		return nil, nil, err
+	}
+	defaultTemplateParameter, err := anypb.New(wrapperspb.String("default-template-parameter-fixture"))
+	if err != nil {
+		return nil, nil, err
+	}
+	inlineUserData := "inline-user-data-fixture"
+	item := publicv1.ComputeInstanceCatalogItem_builder{
+		Id: "catalog-item-fixture",
+		TemplateParameters: map[string]*publicv1.TemplateParameterPolicy{
+			"locked-param": publicv1.TemplateParameterPolicy_builder{
+				Locked: lockedTemplateParameter,
+			}.Build(),
+			"default-param": publicv1.TemplateParameterPolicy_builder{
+				Editable: publicv1.EditableTemplateParameter_builder{
+					DefaultValue: defaultTemplateParameter,
+				}.Build(),
+			}.Build(),
+		},
+		Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+			UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{
+				Editable: publicv1.EditableUserDataSourceField_builder{
+					DefaultValue: publicv1.UserDataSource_builder{Inline: &inlineUserData}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build()
+	return publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: item.GetId()}.Build(),
+		publicv1.ComputeInstanceCatalogItemsGetResponse_builder{Object: item}.Build(), nil
 }
 
 type mockClientStream struct {

@@ -538,6 +538,7 @@ func expectComputeInstanceUpdateSchema(schema any) {
 	Expect(version["minimum"]).To(Equal(float64(1)))
 }
 
+// expectComputeInstancePowerSchema asserts the typed power tool's input contract.
 func expectComputeInstancePowerSchema(schema any) {
 	document, ok := schema.(map[string]any)
 	Expect(ok).To(BeTrue())
@@ -557,6 +558,7 @@ func expectComputeInstancePowerSchema(schema any) {
 	Expect(properties).ToNot(HaveKey("run_strategy"))
 }
 
+// expectComputeInstanceRestartSchema asserts the typed restart tool's input contract.
 func expectComputeInstanceRestartSchema(schema any) {
 	document, ok := schema.(map[string]any)
 	Expect(ok).To(BeTrue())

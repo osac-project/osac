@@ -749,6 +749,7 @@ func networkCreateToolSchema() json.RawMessage {
 	)
 }
 
+// computeInstancePowerToolSchema returns a schema for versioned start and stop requests.
 func computeInstancePowerToolSchema() json.RawMessage {
 	return withToolSchemaProperties(
 		compatibleToolSchema[SetComputeInstancePowerInput](),
@@ -768,6 +769,7 @@ func computeInstancePowerToolSchema() json.RawMessage {
 	)
 }
 
+// computeInstanceRestartToolSchema returns a schema for versioned restart requests.
 func computeInstanceRestartToolSchema() json.RawMessage {
 	return withToolSchemaProperties(
 		compatibleToolSchema[RestartComputeInstanceInput](),

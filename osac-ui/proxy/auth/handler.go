@@ -266,6 +266,7 @@ func (h *Handler) GetLoginRefresh(w http.ResponseWriter, r *http.Request) {
 // PostLogout handles POST /api/logout — logs out from Keycloak and expires all session cookies.
 func (h *Handler) PostLogout(w http.ResponseWriter, r *http.Request) {
 	tokenData := LookupSessionCookies(r)
+	ClearSessionCookies(w, r, h.BaseUIURL)
 
 	if tokenData != nil {
 		issuerURL, err := h.issuerURL()
@@ -284,13 +285,11 @@ func (h *Handler) PostLogout(w http.ResponseWriter, r *http.Request) {
 
 		if err := EndSession(oidcCfg, h.ClientID, tokenData.RefreshToken, tokenData.IDToken, h.OIDCHTTPClient); err != nil {
 			log.WithError(err).Error("Keycloak end_session failed")
-			ClearSessionCookies(w, r, h.BaseUIURL)
 			http.Error(w, "logout from identity provider failed", http.StatusBadGateway)
 			return
 		}
 	}
 
-	ClearSessionCookies(w, r, h.BaseUIURL)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -175,7 +175,6 @@ def test_scp_keeps_shell_metacharacters_in_a_single_source_argument():
         {"host": "-oProxyCommand=invalid"},
         {"user": "-oProxyCommand=invalid"},
         {"user": "core;touch"},
-        {"bastion_host": "bastion.example;touch"},
         {
             "bastion_host": "bastion.example",
             "bastion_user": "ubuntu;touch",
@@ -186,6 +185,49 @@ def test_scp_keeps_shell_metacharacters_in_a_single_source_argument():
 def test_invalid_host_and_login_values_are_rejected(overrides):
     with pytest.raises(AnsibleFilterError):
         FILTERS["nmstate_ssh_argv"](_connection(**overrides), "apply_nmstate")
+
+
+@pytest.mark.parametrize(
+    "bastion_host",
+    ["bastion.example;touch", "-oProxyCommand=invalid", "user@bastion.example"],
+)
+def test_invalid_bastion_hosts_are_rejected(bastion_host: str) -> None:
+    connection = _connection(
+        bastion_host=bastion_host,
+        bastion_user="ubuntu",
+        bastion_key="/tmp/bastion",
+    )
+
+    with pytest.raises(AnsibleFilterError):
+        FILTERS["nmstate_ssh_argv"](connection, "apply_nmstate")
+
+
+@pytest.mark.parametrize(
+    "interface",
+    ["", ".", "..", "ens4 with-space", "ens4/child", "ens4:1", "x" * 16],
+)
+def test_invalid_management_interfaces_are_rejected(interface: str) -> None:
+    with pytest.raises(AnsibleFilterError):
+        FILTERS["nmstate_ssh_argv"](_connection(), "disable_rp_filter", interface)
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["relative.yaml", "/tmp/*.yaml", "/tmp/name[1].yaml", "/tmp/name\nsecond-line.yaml"],
+)
+def test_invalid_scp_source_paths_are_rejected(source: str) -> None:
+    with pytest.raises(AnsibleFilterError):
+        FILTERS["nmstate_scp_argv"](_connection(), source)
+
+
+def test_unknown_ssh_operation_is_rejected() -> None:
+    with pytest.raises(AnsibleFilterError):
+        FILTERS["nmstate_ssh_argv"](_connection(), "run-arbitrary-command")
+
+
+def test_apply_nmstate_rejects_a_management_interface() -> None:
+    with pytest.raises(AnsibleFilterError):
+        FILTERS["nmstate_ssh_argv"](_connection(), "apply_nmstate", "ens4")
 
 
 def test_bastion_requires_its_own_login_and_key():

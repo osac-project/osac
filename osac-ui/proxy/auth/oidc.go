@@ -118,6 +118,13 @@ func withOIDCIssuerRedirects(client *http.Client, issuer *url.URL) *http.Client 
 type oidcIPLookup func(context.Context, string) ([]net.IPAddr, error)
 type oidcDialContext func(context.Context, string, string) (net.Conn, error)
 
+type oidcDialResult struct {
+	conn net.Conn
+	err  error
+}
+
+const oidcDialFallbackDelay = 250 * time.Millisecond
+
 func safeOIDCDialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	dialer := &net.Dialer{}
 	return dialResolvedOIDCAddress(
@@ -152,17 +159,103 @@ func dialResolvedOIDCAddress(
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	dialCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan oidcDialResult, len(addresses))
+	nextAddress := 0
+	activeDials := 0
+	var fallbackTimer *time.Timer
+	var fallbackTimerC <-chan time.Time
+	resetFallbackTimer := func() {
+		if fallbackTimer == nil {
+			fallbackTimer = time.NewTimer(oidcDialFallbackDelay)
+		} else {
+			if !fallbackTimer.Stop() {
+				select {
+				case <-fallbackTimer.C:
+				default:
+				}
+			}
+			fallbackTimer.Reset(oidcDialFallbackDelay)
+		}
+		fallbackTimerC = fallbackTimer.C
+	}
+	stopFallbackTimer := func() {
+		if fallbackTimer == nil {
+			return
+		}
+		if !fallbackTimer.Stop() {
+			select {
+			case <-fallbackTimer.C:
+			default:
+			}
+		}
+		fallbackTimerC = nil
+	}
+	defer stopFallbackTimer()
+	startNextDial := func() {
+		address := addresses[nextAddress]
+		nextAddress++
+		activeDials++
+		go func() {
+			dialHost := address.IP.String()
+			if address.Zone != "" {
+				dialHost += "%" + address.Zone
+			}
+			conn, err := dial(dialCtx, network, net.JoinHostPort(dialHost, port))
+			results <- oidcDialResult{conn: conn, err: err}
+		}()
+		if nextAddress < len(addresses) {
+			resetFallbackTimer()
+		} else {
+			stopFallbackTimer()
+		}
+	}
+	closeActiveDials := func() {
+		for activeDials > 0 {
+			result := <-results
+			activeDials--
+			if result.conn != nil {
+				_ = result.conn.Close()
+			}
+		}
+	}
+
 	var lastErr error
-	for _, address := range addresses {
-		dialHost := address.IP.String()
-		if address.Zone != "" {
-			dialHost += "%" + address.Zone
+	startNextDial()
+	for activeDials > 0 || nextAddress < len(addresses) {
+		if activeDials == 0 {
+			startNextDial()
 		}
-		conn, err := dial(ctx, network, net.JoinHostPort(dialHost, port))
-		if err == nil {
-			return conn, nil
+		select {
+		case result := <-results:
+			activeDials--
+			if result.err == nil && result.conn != nil {
+				cancel()
+				closeActiveDials()
+				return result.conn, nil
+			}
+			if result.conn != nil {
+				_ = result.conn.Close()
+			}
+			if result.err != nil {
+				lastErr = result.err
+			} else {
+				lastErr = errors.New("OIDC dial returned no connection")
+			}
+		case <-fallbackTimerC:
+			if nextAddress < len(addresses) {
+				startNextDial()
+			}
+		case <-ctx.Done():
+			cancel()
+			closeActiveDials()
+			return nil, ctx.Err()
 		}
-		lastErr = err
 	}
 	if lastErr != nil {
 		return nil, lastErr

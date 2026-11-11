@@ -3,12 +3,14 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestFetchOIDCConfigRejectsInvalidIssuerURLs(t *testing.T) {
@@ -293,6 +295,53 @@ func TestDialResolvedOIDCAddressPinsTrustedPrivateDestination(t *testing.T) {
 	defer connection.Close()
 	if dialed != "10.0.0.10:443" {
 		t.Fatalf("dialed %q, want pinned IP address", dialed)
+	}
+}
+
+func TestDialResolvedOIDCAddressFallsBackWhenFirstAddressStalls(t *testing.T) {
+	const firstAddress = "10.0.0.10:443"
+	const secondAddress = "10.0.0.11:443"
+	lookup := func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{
+			{IP: net.ParseIP("10.0.0.10")},
+			{IP: net.ParseIP("10.0.0.11")},
+		}, nil
+	}
+	firstAttempted := make(chan struct{})
+	secondAttempted := make(chan struct{})
+	dial := func(ctx context.Context, _, address string) (net.Conn, error) {
+		switch address {
+		case firstAddress:
+			close(firstAttempted)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		case secondAddress:
+			close(secondAttempted)
+			client, peer := net.Pipe()
+			t.Cleanup(func() { _ = peer.Close() })
+			return client, nil
+		default:
+			return nil, errors.New("unexpected dial destination")
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	connection, err := dialResolvedOIDCAddress(ctx, "tcp", "issuer.example:443", lookup, dial)
+	if err != nil {
+		t.Fatalf("dial resolved issuer with fallback: %v", err)
+	}
+	defer connection.Close()
+
+	for name, attempted := range map[string]<-chan struct{}{
+		"first":  firstAttempted,
+		"second": secondAttempted,
+	} {
+		select {
+		case <-attempted:
+		case <-ctx.Done():
+			t.Fatalf("%s address was not attempted before the context expired", name)
+		}
 	}
 }
 

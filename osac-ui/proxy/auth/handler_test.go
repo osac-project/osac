@@ -250,6 +250,69 @@ func TestPostLogoutClearsLocalSessionWhenIdPEndpointIsUntrusted(t *testing.T) {
 	if got := oidcRequests.Load(); got != 1 {
 		t.Fatalf("made %d OIDC requests, want discovery only", got)
 	}
+	assertSessionCookiesCleared(t, recorder)
+}
+
+func TestPostLogoutClearsLocalSessionWhenIssuerLookupOrDiscoveryFails(t *testing.T) {
+	const trustedIssuer = "https://keycloak.example.test/realms/osac"
+
+	for _, test := range []struct {
+		name             string
+		failIssuerLookup bool
+		wantOIDCRequests int32
+	}{
+		{name: "issuer lookup failure", failIssuerLookup: true},
+		{name: "discovery failure", wantOIDCRequests: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var oidcRequests atomic.Int32
+			fulfillment := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/fulfillment/v1/capabilities" {
+					http.NotFound(w, r)
+					return
+				}
+				if test.failIssuerLookup {
+					http.Error(w, "capabilities unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(capabilitiesResponse{
+					Authn: struct {
+						TrustedTokenIssuers []string `json:"trusted_token_issuers"`
+					}{TrustedTokenIssuers: []string{trustedIssuer}},
+				})
+			}))
+			defer fulfillment.Close()
+
+			h := &Handler{
+				FulfillmentAPIURL:     fulfillment.URL,
+				FulfillmentHTTPClient: fulfillment.Client(),
+				OIDCHTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+					oidcRequests.Add(1)
+					return nil, errors.New("OIDC discovery unavailable")
+				})},
+			}
+
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/logout", nil)
+			request.AddCookie(&http.Cookie{Name: accessTokenCookieName, Value: "access-token"})
+			request.AddCookie(&http.Cookie{Name: refreshTokenCookieName, Value: "refresh-token"})
+			request.AddCookie(&http.Cookie{Name: idTokenCookieName, Value: "id-token"})
+			recorder := httptest.NewRecorder()
+			h.PostLogout(recorder, request)
+
+			if recorder.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d, want %d; body: %s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+			}
+			if got := oidcRequests.Load(); got != test.wantOIDCRequests {
+				t.Fatalf("made %d OIDC requests, want %d", got, test.wantOIDCRequests)
+			}
+			assertSessionCookiesCleared(t, recorder)
+		})
+	}
+}
+
+func assertSessionCookiesCleared(t *testing.T, recorder *httptest.ResponseRecorder) {
+	t.Helper()
 	cleared := make(map[string]bool)
 	for _, cookie := range recorder.Result().Cookies() {
 		if cookie.MaxAge < 0 {

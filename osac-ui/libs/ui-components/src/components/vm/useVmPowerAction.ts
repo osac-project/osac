@@ -3,9 +3,12 @@ import { timestampNow } from '@bufbuild/protobuf/wkt';
 
 import { ComputeInstanceRunStrategy, ComputeInstanceSchema, ComputeInstances } from '@osac/types';
 
-import { getPowerActionErrorTitle, getPowerActionSuccessTitle } from './powerActionErrorTitle';
+import {
+  type ComputeInstancePowerAction,
+  getPowerActionErrorTitle,
+  getPowerActionSuccessTitle,
+} from './powerActionErrorTitle';
 import { useUpdateResource } from '../../api/use-resource';
-import type { ComputeInstancePowerAction } from '../../api/v1/compute-instance';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { useToast } from '../Toast/useToast';

@@ -1,14 +1,17 @@
-import { Content, Flex, FlexItem } from '@patternfly/react-core';
+import { useMemo } from 'react';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import type { ExternalIP, ExternalIPPool } from '@osac/types';
 import type { ExternalIpAttachedTarget } from '@osac/ui-components/api/v1/external-ip-data';
+import ExternalIpPool from '@osac/ui-components/components/ExternalIp/Details/ExternalIpPool';
 
 import ExternalIpAttachedTo from './Details/ExternalIpAttachedTo';
 import ExternalIpStatusLabel from './Details/ExternalIpStatusLabel';
 import ExternalIpActionsMenu from './ExternalIpActionsMenu';
 import { useTranslation } from '../../hooks/useTranslation';
 import { Timestamp } from '../Primitives/Timestamp';
+
+const EMPTY_STATE = '—';
 
 interface ExternalIpsTableProps {
   externalIps: ExternalIP[];
@@ -31,17 +34,32 @@ const ExternalIpsTable = ({
 }: ExternalIpsTableProps) => {
   const { t } = useTranslation();
 
+  const columnLabels = useMemo(
+    () => ({
+      name: t('Name'),
+      status: t('Status'),
+      project: t('Project'),
+      attachedTo: t('Attached to'),
+      address: t('Address'),
+      ipPool: t('IP pool'),
+      created: t('Created'),
+      actions: t('Actions'),
+    }),
+    [t],
+  );
+
   return (
     <Table aria-label={t('External IPs')} variant="compact">
       <Thead>
         <Tr>
-          <Th>{t('Name')}</Th>
-          <Th>{t('Status')}</Th>
-          <Th>{t('Project')}</Th>
-          <Th>{t('Address')}</Th>
-          <Th>{t('IP pool')}</Th>
-          <Th>{t('Created')}</Th>
-          <Th aria-label={t('Actions')} />
+          <Th>{columnLabels.name}</Th>
+          <Th>{columnLabels.status}</Th>
+          <Th>{columnLabels.project}</Th>
+          <Th>{columnLabels.attachedTo}</Th>
+          <Th>{columnLabels.address}</Th>
+          <Th>{columnLabels.ipPool}</Th>
+          <Th>{columnLabels.created}</Th>
+          <Th aria-label={columnLabels.actions} />
         </Tr>
       </Thead>
       <Tbody>
@@ -49,53 +67,37 @@ const ExternalIpsTable = ({
           const address = externalIp.status?.address || '—';
           const name = externalIp.metadata?.name;
           const pool = resolvePool(externalIp, poolsById);
-          const poolName =
-            pool?.metadata?.name ||
-            externalIp.spec?.pool?.name ||
-            externalIp.spec?.pool?.id ||
-            externalIp.status?.pool ||
-            '—';
-          const available = pool?.status?.available;
 
           return (
             <Tr key={externalIp.id}>
-              <Td dataLabel={t('Name')}>{name}</Td>
-              <Td dataLabel={t('Status')}>
-                <Flex direction={{ default: 'column' }} spaceItems={{ default: 'spaceItemsXs' }}>
-                  <FlexItem>
-                    <ExternalIpStatusLabel
-                      state={externalIp.status?.state}
-                      attached={externalIp.status?.attached}
-                    />
-                  </FlexItem>
-                  {externalIp.status?.attached && attachedTargetsByExternalIpId[externalIp.id] ? (
-                    <FlexItem>
-                      <ExternalIpAttachedTo
-                        attached={externalIp.status.attached}
-                        target={attachedTargetsByExternalIpId[externalIp.id]}
-                      />
-                    </FlexItem>
-                  ) : null}
-                </Flex>
+              <Td dataLabel={columnLabels.name}>{name}</Td>
+              <Td dataLabel={columnLabels.status}>
+                <ExternalIpStatusLabel
+                  state={externalIp.status?.state}
+                  attached={externalIp.status?.attached}
+                />
               </Td>
-              <Td dataLabel={t('Project')}>{externalIp.metadata?.project || t('Default')}</Td>
-              <Td dataLabel={t('Address')}>{address}</Td>
-              <Td dataLabel={t('IP pool')}>
-                <Flex direction={{ default: 'column' }} spaceItems={{ default: 'spaceItemsXs' }}>
-                  <FlexItem>{poolName}</FlexItem>
-                  {available !== undefined ? (
-                    <FlexItem>
-                      <Content component="small">
-                        {t('{{available}} available', { available: available.toString() })}
-                      </Content>
-                    </FlexItem>
-                  ) : null}
-                </Flex>
+              <Td dataLabel={columnLabels.project}>
+                {externalIp.metadata?.project || t('Default')}
               </Td>
-              <Td dataLabel={t('Created')}>
+              <Td dataLabel={columnLabels.attachedTo}>
+                {externalIp.status?.attached && attachedTargetsByExternalIpId[externalIp.id] ? (
+                  <ExternalIpAttachedTo
+                    attached={externalIp.status.attached}
+                    target={attachedTargetsByExternalIpId[externalIp.id]}
+                  />
+                ) : (
+                  EMPTY_STATE
+                )}
+              </Td>
+              <Td dataLabel={columnLabels.address}>{address}</Td>
+              <Td dataLabel={columnLabels.ipPool}>
+                <ExternalIpPool externalIp={externalIp} pool={pool} />
+              </Td>
+              <Td dataLabel={columnLabels.created}>
                 <Timestamp value={externalIp.metadata?.creationTimestamp} />
               </Td>
-              <Td dataLabel={t('Actions')} isActionCell>
+              <Td dataLabel={columnLabels.actions} isActionCell>
                 <ExternalIpActionsMenu externalIp={externalIp} />
               </Td>
             </Tr>

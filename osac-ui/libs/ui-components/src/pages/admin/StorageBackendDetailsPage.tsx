@@ -14,7 +14,9 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import { usePrivateStorageBackend } from '../../api/v1/private/storage-backends';
+import { StorageBackends } from '@osac/types/private';
+import { useGetResource } from '@osac/ui-components/api/use-resource';
+
 import { ResourceDetailHeader } from '../../components/Resource/ResourceDetailHeader';
 import { ResourceDetailsPageError } from '../../components/Resource/ResourceDetailsPageError';
 import { ResourceDetailsPageLoading } from '../../components/Resource/ResourceDetailsPageLoading';
@@ -29,7 +31,13 @@ const BACKENDS_LIST_PATH = '/admin/infrastructure/storage/backends';
 export const StorageBackendDetailsPage = () => {
   const { t } = useTranslation();
   const { id = '' } = useParams<{ id: string }>();
-  const { data: backend, isLoading, isError, error, refetch } = usePrivateStorageBackend(id);
+  const { data, isLoading, isError, error, refetch } = useGetResource(
+    StorageBackends,
+    { id },
+    { enabled: !!id },
+  );
+
+  const backend = data?.object;
 
   if (isLoading) {
     return (

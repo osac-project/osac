@@ -1,7 +1,7 @@
-import type { StorageTier } from '@osac/types/private';
+import { type StorageTier, StorageTiers } from '@osac/types/private';
+import { useDeleteResource } from '@osac/ui-components/api/use-resource';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal.tsx';
 
-import { useDeleteStorageTier } from '../../api/v1/private/storage-tiers';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface StorageTierDeleteConfirmModalProps {
@@ -16,7 +16,7 @@ const StorageTierDeleteConfirmModal = ({
   onSuccess,
 }: StorageTierDeleteConfirmModalProps) => {
   const { t } = useTranslation();
-  const deleteTier = useDeleteStorageTier();
+  const deleteTier = useDeleteResource(StorageTiers);
   const tierName = tier.metadata?.name ?? tier.id;
 
   return (
@@ -27,7 +27,7 @@ const StorageTierDeleteConfirmModal = ({
       onClose={onClose}
       onSuccess={onSuccess}
       mutation={deleteTier}
-      variables={tier.id}
+      variables={{ id: tier.id }}
     />
   );
 };

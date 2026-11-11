@@ -697,6 +697,32 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create public attribution logic: %w", err)
 	}
 
+	// Resolve the billing provider once; this makes no provider call:
+	billingProvider := newBillingProvider(os.Getenv, os.ReadFile, c.logger)
+
+	// Create the billing provider statuses servers:
+	c.logger.InfoContext(ctx, "Creating billing provider statuses servers")
+	privateBillingProviderStatusesServer, err := servers.NewPrivateBillingProviderStatusesServer().
+		SetLogger(c.logger).
+		SetProvider(billingProvider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private billing provider statuses server: %w", err)
+	}
+	billingProviderStatusesServer, err := servers.NewBillingProviderStatusesServer().
+		SetLogger(c.logger).
+		SetDelegate(privateBillingProviderStatusesServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public billing provider statuses server: %w", err)
+	}
+	// The public and private services share the same private server so that they report the same last successful
+	// check.
+	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
+	publicv1.RegisterBillingProviderStatusesServer(grpcServer, billingProviderStatusesServer)
+	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
+	privatev1.RegisterBillingProviderStatusesServer(grpcServer, privateBillingProviderStatusesServer)
+
 	// Create the capabilities servers:
 	c.logger.InfoContext(ctx, "Creating capabilities servers")
 	capabilitiesServer, err := servers.NewCapabilitiesServer().

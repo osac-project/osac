@@ -237,6 +237,7 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 | Component integration | `it/`; `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` | Deployed Fulfillment Service, its database, and the CLI binary built from this checkout. The specs labelled `networking-operator` run in a second phase with the local OSAC Operator image deployed and `global.networking.provisioningEnabled=false`; the first phase excludes them. | CaaS, VMaaS, BMaaS, and external provider workflows unless a specific test exercises them. |
 | Component integration ([DEV] OSAC-6553, OSAC-6554, OSAC-6555) | `it/it_service_accounts*.go`, `it/it_managed_service_account_authorization_test.go`; focused commands in [service-account coverage](#coverage-notes) | Deployed Fulfillment API, PostgreSQL, Keycloak, the controller's IDP management principal, and the configured runtime IDP principal for CRUD, tenant isolation, PENDING-to-READY credential Secret provisioning with client ID and secret retrieval, rotation, client lifecycle, and managed-token role authorization | Failure tests run the service and reconciler in process against PostgreSQL and Keycloak, injecting Keycloak transport and persistence failures; external provider provisioning is out of scope. |
 | Component integration ([DEV] OSAC-6307) | `internal/servers` and `internal/database/migrations/126_hold_external_ip_capacity_until_archive_test.go`; from `fulfillment-service/`, run `go test ./internal/servers ./internal/database/migrations -timeout 20m` | Fulfillment server logic and PostgreSQL test container, including archive-time capacity and exclusivity for terminating consumers | Kubernetes and provider cleanup are not run; release completion is exercised by operator tests with provider fixtures. |
+| Component integration ([DEV] OSAC-6882) | `internal/testing/billingfake`, `internal/testing/billingstub`, `internal/servers`; from `fulfillment-service/`, run `go test ./internal/testing/billingfake ./internal/testing/billingstub ./internal/billing/... && go test ./internal/servers -ginkgo.focus Billing` | Fulfillment billing handlers and guard against the adapter contract; the real `m360` adapter against the stub server | The billing provider is a deterministic in-process fake; no M360 endpoint, token or network. Not wired into the deployed `it/` suite yet, see below. |
 | E2E | `../tests/e2e/` | Cross-component OSAC user journeys | Depends on the deployed test environment and its configured providers. |
 
 ### ComputeInstance disk handoff (OSAC-6685)
@@ -277,6 +278,112 @@ or ambiguous mapping therefore retains those tracked records and blocks the
 VM job; it does not imply that no Volume record was created. Parent correlation
 uses `ComputeInstance.status.volumes`, CR `spec.diskVolumeIDs`, and stable disk
 record names, rather than a reverse attachment field on Volume.
+
+### Billing provider fake
+
+`internal/testing/billingfake` is a deterministic `billing.Adapter` for tests. It
+implements the adapter contract, not HTTP; keep HTTP fakes for adapter unit
+tests. Selecting it needs no production change: build a `billingfake.Scenario`,
+call `billingfake.New(scenario)`, and inject `fake.Provider()` (a configured
+`billing.Provider` with key `fake`) where a server takes a `*billing.Provider`.
+A disabled deployment is `billing.NewProvider("", fake, nil)`; assert
+`fake.Calls()` is empty.
+
+Every `Fake` owns its scenario and call log (no globals), so suites running in
+parallel cannot see each other's state. `New` copies the scenario.
+
+Scenario fixture (Go struct, or JSON through `billingfake.Load`, which rejects
+unknown fields):
+
+```json
+{
+  "correlationWrite": false,
+  "accounts": [{"id": "a1", "name": "n", "externalId": "ext", "state": "ACTIVE",
+                "rawStatus": "active", "approvalStatus": "Approved"}],
+  "services": [{"id": "s1", "name": "GPU Hours",
+                "attributes": [{"id": "gpu_hours", "name": "gpu_hours"}],
+                "rates": {"USD": {"rows": [{"dimensionId": "gpu_hours",
+                                            "priceMethod": "QUANTITY",
+                                            "unitRate": "0.25"}]}}}],
+  "failures": {"ListAccounts": {"reason": "UNAVAILABLE", "status": 503}}
+}
+```
+
+- Accounts: any `state` (`ACTIVE`, `INACTIVE`, `UNKNOWN`) with its raw status;
+  zero, one or two accounts sharing an `externalId` (the correlation value);
+  `ListAccounts` filters by exact external id and name and pages by token.
+- Correlation write: `correlationWrite` false behaves like M360
+  (`SupportsCorrelationWrite()` false, `SetCorrelationValue` fails UNSUPPORTED);
+  true stores the value.
+- Services and rates: services are found by exact name only; two services with
+  one name give AMBIGUOUS. Rate cards are keyed by requested currency; an
+  unscripted currency gives NOT_FOUND, a card `currency` that differs from the
+  key scripts a currency mismatch. Rows are returned verbatim, so
+  `QUANTITY`, other units, duplicate or missing dimensions script the shapes
+  the consumer must classify.
+- Failures: per method name, with `reason` (`TIMEOUT`, `UNAVAILABLE`, ...),
+  `retryable`, `status` and `times` (first N calls fail, 0 means always),
+  which scripts timeouts, 5xx and retry scenarios.
+- Recording: `Calls()`, `Count(op)` and `Succeeded(op)`. A retried write that
+  failed once has `Count` 2 and `Succeeded` 1, because `Count` includes failed
+  attempts; a write-unsupported fake still records an attempted
+  `SetCorrelationValue`, so assert `Succeeded` is 0.
+
+#### Deployed stub M360 server
+
+The fake is in-process only: the configuration loader accepts only `m360` as
+`OSAC_BILLING_PROVIDER`, and no `fake` provider key is reachable in a
+deployment. The deployed `it/` suite instead uses
+`internal/testing/billingstub`, an HTTP server that speaks the M360 read API
+(`/api/<version>/accounts`, `/accounts/{id}`, `/services?q=`,
+`/services/{id}/priceable-attributes`, `/services/{id}/rate-cards/{currency}`,
+errors as a flat body with `status`, `error`, `message` and `path`), so a real
+M360 configuration (`OSAC_BILLING_PROVIDER=m360`, base URL including the
+full `/api/v1/external` path,
+credential file) runs the real adapter against it.
+
+- Same fixture: the stub is driven by `billingfake.Scenario` (the JSON above,
+  `billingfake.Load`). `accounts`, `services`, `rates` and `failures` apply;
+  `correlationWrite` does not, because the stub is read-only like M360.
+- Failures are keyed by adapter method. `status` sets the HTTP status; when
+  omitted it follows `reason` (`UNAUTHORIZED` 401, `NOT_FOUND` 404,
+  `TIMEOUT` 408, `UNAVAILABLE` 503, otherwise 500). `times` counts failing
+  responses, not logical calls: the adapter retries 5xx, so `"times": 2`
+  recovers within one call. The status probe (a one-item unfiltered
+  `/accounts` page) counts as `HealthCheck`, and a `ListAccounts` failure
+  applies to it too.
+- Recording: `Requests()`, `Count(op)`, `Succeeded(op)`. Every non-GET is
+  answered 405 and recorded; assert `Writes()` is empty to prove no
+  PUT/PATCH. A disabled deployment is proven by `Requests()` being empty.
+- Use: `stub := billingstub.New(scenario)`, `stub.Start("127.0.0.1:0")`,
+  `stub.URL()`, `stub.SetScenario(...)` to change a running stub, `Close()`.
+  Each stub owns its state, so parallel suites do not share scenarios.
+
+`it/it_billing_provider_status_test.go` ("with a stub M360") starts a stub in
+the test process, creates the credential Secret, patches the
+`fulfillment-grpc-server` Deployment in `osac` with the four `OSAC_BILLING_*`
+settings and the Secret volume, waits for the rollout, and expects `AVAILABLE`,
+then `UNAVAILABLE` after `SetScenario` scripts a 503. Cleanup restores the
+original pod spec. The specs are `Serial` and skip unless
+`OSAC_IT_BILLING_STUB_LISTEN` (bind address) and `OSAC_IT_BILLING_STUB_URL`
+(that listener as seen from the cluster, for kind the host side of the docker
+network) are set. No installer or chart setting exists for either variable,
+and the suite does not set them.
+
+What runs where:
+
+| Seam | Run in CI | Notes |
+|---|---|---|
+| `billingfake` and `billingstub` unit specs | Yes, `ginkgo run -r internal` in the fulfillment-service unit leg | No cluster needed. |
+| Real `m360` adapter against the stub (happy path, 5xx, 401) | Yes, in the `billingstub` unit specs | |
+| Deployed stub spec in `it/` | No | Skipped without the two variables, and no CI job sets them. |
+| Default `it/` billing specs | Yes | They cover only the unconfigured, `NOT_CONFIGURED` case. |
+
+To run the deployed spec, a developer must start the suite with the two
+variables set and a network path from the kind nodes to the test host. The
+same configured-provider boundary is listed as unresolved in the billing
+provider-status coverage note above; no follow-up ticket exists yet for
+wiring these specs into CI.
 
 ### Fulfillment integration timings
 
@@ -413,7 +520,14 @@ installer command in the tier table remains the component-integration check.
   Projects and Secret references for two tenants, verifies caller-scoped
   Project and Secret-reference listing, confirms Secret-reference results
   contain only reference metadata, and checks list-only Secret Get rejection
-  through the shared safe-error contract. `it_mcp_deployed_test.go` runs in the
+  through the shared safe-error contract. The `mcpserver` unit suite also
+  verifies the shared missing-Secret guidance envelope, the compute Create
+  handler's mapping of Fulfillment's missing-Secret rejection, and the absence
+  of Secret-value or bearer-token fields. `it_mcp_server_test.go` also creates
+  a catalog item whose user-data Secret reference does not resolve and invokes
+  typed MCP Create through the real Fulfillment boundary; it asserts the safe
+  guidance envelope, no persisted ComputeInstance, and no synthetic Secret or
+  bearer-token value. `it_mcp_deployed_test.go` runs in the
   Fulfillment Kind CI job with `MCP_TEST_ENABLED=true` and real Keycloak; it
   checks TLS metadata and valid calls, plus rejection of the Fulfillment API
   audience, a wrong issuer, an expired token, and a wrong resource. It also
@@ -442,6 +556,7 @@ installer command in the tier table remains the component-integration check.
 - **FabricDomain to Netris lifecycle:** The complete BMaaS E2E journey is tracked by [OSAC-4786](https://redhat.atlassian.net/browse/OSAC-4786). It requires reserved real Netris hosts and owned cleanup; API-only integration cases are not substitutes.
 - **Catalog Items:** `it/` checks creation and update behavior, publication visibility, CLI creation, and the ClusterOrder release image written by Fulfillment. Catalog-backed provisioning journeys that exercise other components remain in the CaaS, VMaaS, BMaaS, and reference E2E suites.
 - **ComputeInstance additional-disk defaults:** the VMaaS regression test `test_compute_instance_empty_additional_disks_disables_catalog_item_default` covers the API contract for omitted and explicitly empty disk lists through provisioning and the resulting operator resource.
+- **Billing provider status ([DEV] [OSAC-6879](https://redhat.atlassian.net/browse/OSAC-6879), [OSAC-6881](https://redhat.atlassian.net/browse/OSAC-6881)):** `internal/servers/billing_provider_statuses_server_test.go` covers the statuses servers against a counting adapter double: one bounded probe per read, the shared last successful check, and failure reasons; authorization (admin group, service accounts, tenant-role denial on the public and private Get) is covered by `internal/auth/authorization_evaluator_test.go` at Unit tier. `it/it_billing_provider_status_test.go` retains the deployed CLI/gRPC disabled (`NOT_CONFIGURED`) specs that the fulfillment CI leg runs, and the `Billing provider status with a stub M360` AVAILABLE/UNAVAILABLE specs, which skip unless `OSAC_IT_BILLING_STUB_LISTEN` and `OSAC_IT_BILLING_STUB_URL` are set; no CI job sets either variable, so CI does not run them. The REST gateway routes have no route-level test — only handler-list membership in `start_rest_gateway_cmd_test.go` and a simulated gateway error-mapping case in the guard spec. Deployed `lastSuccessfulCheck` retention, provider failure messages, the statuses REST routes and status-Get non-admin denial remain unresolved gaps without owning follow-up tickets.
 
 ## osac-installer
 
@@ -468,6 +583,7 @@ The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
 implementation work. It uses command stubs to check runtime selection, sudo
 authentication and credential expiry, Makefile/host setup routing, native
 Ginkgo report opt-in and output-path configuration for all three phases, the
+operator phase's AAP recorder URL and poll interval for GATE-VM-04, the
 operator being deployed only in the networking-operator phase, safe
 credential reset, resuming stopped nodes after storage preparation and waiting
 for API readiness, Helm 3/4 apply flags for devstack and OSAC releases,
@@ -507,6 +623,74 @@ it does not start the hooks or prove a deployed fulfillment endpoint accepts
 the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject
 to the profile's configured CA and enabled services.
+
+The `make billing-render-test` Helm contract renders the umbrella chart with
+and without `global.billing.provider`, and the fulfillment-service subchart on
+its own. It asserts that nothing billing-related renders in the gRPC server
+Deployment without a provider; that a configured provider renders the
+`OSAC_BILLING_*` environment variables and mounts the credential Secret by
+name and key; that `caSecret` adds a read-only CA Secret mount and
+`OSAC_BILLING_CA_FILE` only when it is set; that the standalone subchart falls
+back to its own retry and breaker defaults and keeps a zero instead of
+replacing it; and that the schema rejects a missing provider field, a second
+provider, an inline credential key, an invalid `baseUrl` (a non-http scheme,
+http on a non-loopback host, URL credentials, a nonnumeric port, or a query),
+a `caSecret` without
+`name` or `key`, a negative or non-integer retry count, or an out-of-range breaker value. The chart
+takes only a Secret reference, and the script does not scan the manifests for
+credential text. It checks rendered manifests only: it does not check that a
+referenced Secret exists or that a running pod can read it, does not install
+against a provider (the fulfillment install test is design-doc Story 1.05; no
+Jira ticket exists yet) and does not cover how metering consumes the block; no
+Jira ticket exists yet for that gap. CI runs it in the `helm-lint-installer`
+job.
+
+Not proven by this contract or by any suite that runs in CI today, each
+unresolved with no owning ticket:
+
+- A deployed `fulfillment-grpc-server` reaching `AVAILABLE` over TLS. The
+  deployed stub-based `AVAILABLE` and `UNAVAILABLE` cases in
+  `fulfillment-service/it/it_billing_provider_status_test.go` skip unless
+  `OSAC_IT_BILLING_STUB_LISTEN` and `OSAC_IT_BILLING_STUB_URL` are set, and no
+  CI job sets them.
+- The `Authorization` header and the request paths as sent by a running pod.
+  Only the `m360` and `billingstub` unit specs cover them.
+- The mounted CA Secret reaching the process, in CI. The render test asserts
+  the volume, mount and variable only. The env-gated deployed `AVAILABLE` case
+  above covers it through a hand-patched mount, but no CI job runs it.
+
+The new `global.billing` block is validated by both the umbrella and standalone
+Fulfillment chart schemas; the umbrella `values.schema.json` is also rendered by
+the Enclave Wizard pipeline. Verify that the consuming Enclave plugin version
+picks up the changed schema and that the Wizard renders and validates the
+billing fields before declaring the feature available there; that pipeline is
+outside this repository's chart-render tests and is not verified by them; no
+Jira ticket exists yet for that gap.
+
+The chart hands the block to the fulfillment gRPC server as `OSAC_BILLING_*`
+environment variables. `OSAC_BILLING_PROVIDER`, `_BASE_URL`,
+`_CREDENTIAL_FILE`, the optional `_CA_FILE`, `_RETRY_COUNT` and
+`_PRICING_BREAKER_FAILURE_THRESHOLD`, `_PRICING_BREAKER_FAILURE_WINDOW_SECONDS`
+and `_PRICING_BREAKER_OPEN_SECONDS` are consumed by the fulfillment loader
+`billing.LoadConfig`. `OSAC_BILLING_BASE_URL` carries the whole path to the
+provider API, for example `https://billing.example.com/api/v1/external`; the
+adapter appends only the endpoint paths. It requires HTTPS except for loopback
+HTTP, has no userinfo, query or fragment, forbids percent escapes in the host,
+and permits only well-formed percent escapes in the path. `retryCount` is
+nonnegative, `failureThreshold` is positive, and `failureWindowSeconds` and
+`openSeconds` are each in `1..9223372036` so they fit in a Go `time.Duration`.
+When a tuning variable is absent the loader applies the chart defaults: three
+retries, a failure threshold of five, and a 30-second window and open time.
+The chart schemas enforce these bounds; the loader additionally requires every
+tuning value to fit in the deployment architecture's Go `int`. Oversized counter
+values remain a schema/runtime validation gap. The per-item timeout, list
+deadline and cache settings are not
+chart values: [OSAC-6894](https://redhat.atlassian.net/browse/OSAC-6894)
+(`[DEV] Catalog pricing timeout, cache, and freshness`, In Progress) adds them
+together with their consumers. [OSAC-6899](https://redhat.atlassian.net/browse/OSAC-6899)
+(`[DEV] Pricing availability classification, retries, and circuit breaker`,
+New) owns the breaker and retry classification. Renaming a variable breaks
+that contract on both sides.
 
 ### Install preflight (OSAC-6561)
 
@@ -656,6 +840,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   checks the Secret references and issuer ConfigMap.
 - **VMaaS network-attachment IP feedback and ExternalIP DNAT ([OSAC-2479](https://redhat.atlassian.net/browse/OSAC-2479), [OSAC-2485](https://redhat.atlassian.net/browse/OSAC-2485), DEV):** `test/integration/computeinstance_network_status_test.go` writes and reads `computeNetworkAttachmentStatuses` through the installed ComputeInstance CRD status subresource in Kind. Controller unit tests cover selection of the default KubeVirt interface, Subnet CR name-to-ID resolution, Fulfillment status feedback, and waiting for/using the reported IP as the ExternalIP target. This verifies the operator API and controller contract; the Kind suite does not run a real VMI, AAP workflow, or network fabric, so it makes no claim about provider-level reachability.
 - **ComputeInstance disk status feedback ([OSAC-6608](https://redhat.atlassian.net/browse/OSAC-6608), DEV):** `internal/controller/computeinstance_feedback_controller_test.go` verifies normal and deleting feedback keep the public correlation and private registration lists in the fetched object while omitting both paths from the update mask. Run `make test` from `osac-operator/`. The shared Envtest Controller Suite uses a real Kubernetes API server, etcd, and CRDs; its Fulfillment client is controlled, and it does not exercise a deployed Fulfillment service or Volume API.
+- **Provider networking disabled ComputeInstance provisioning ([OSAC-5997](https://redhat.atlassian.net/browse/OSAC-5997), DEV):** `internal/controller/computeinstance_networking_test.go` drives the public reconciler with the in-memory AAP and covers the disabled `vm_network` (default pod network with masquerade), `NetworkReady=True` reason `ProvisioningDisabled`, the Tenant-namespace delete, and no NetworkAttachment. `test/integration/computeinstance_disabled_test.go` runs in `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` after the CI `install-infra` step, and records the operator's AAP launch on create and delete. The deployed suite runs the real operator, Kubernetes API/CRDs, and a recording AAP double; no real AAP, KubeVirt VM, network provider, or Fulfillment service runs. The spec runs only when the phase sets `IT_TEST_SUITE=operator`, so the standalone `make integration-tests` deployment using the AWX URL skips it. The operator phase keeps the Tenant controller enabled, so its Tenant has an empty `status.namespace` and the Kind case asserts the documented Tenant-name fallback; the Envtest spec covers the design's `status.namespace` value.
 - **Cross-cluster fulfillment OAuth:** No deployed suite currently covers this
   boundary. With bundled Keycloak, the dev installer provisions the existing
   `osac-controller` credentials through `osac-infra`, but the local
@@ -669,7 +854,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   tests.
 - **Controller reconciliation, finalizers, status and CRDs:** Drive the public
   reconciler against real API persistence in the existing Controller Suite.
-- **Networking controllers and the network task engine:** `internal/networktask/engine_test.go` and `result_test.go` cover launch, job tracking, retries, backoff, cancellation and typed result validation against an in-memory AAP. Envtest specs in `internal/controller/networking_resources_test.go`, `networking_attachments_test.go`, `computeinstance_networking_test.go` and `clusterorder_networking_test.go` drive the public reconcilers with the in-memory AAP of `networking_harness_test.go`: task order, `status.jobs`, `status.taskInput`, the `Ready` condition, delete order and the provisioning-disabled fallback. `networking_crd_contract_test.go` checks the CRD CEL rules; `networking_feedback_state_test.go` and `workload_networking_feedback_test.go` the feedback mapping. No real AAP job, manager role or fabric runs; that boundary is E2E under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+- **Networking controllers and the network task engine:** `internal/networktask/engine_test.go` and `result_test.go` cover launch, job tracking, retries, backoff, cancellation and typed result validation against an in-memory AAP. Envtest specs in `internal/controller/networking_resources_test.go`, `networking_attachments_test.go`, `computeinstance_networking_test.go` and `clusterorder_networking_test.go` drive the public reconcilers with the in-memory AAP of `networking_harness_test.go`: task order, `status.jobs`, `status.taskInput`, the `Ready` condition, delete order, the provisioning-disabled fallback, disabled deletion with recorded ingress/DNS jobs (no reserve, release, DNS or remove launch and no fabricated removal claim) and disabled continuity to `Ready` without the endpoint gate (OSAC-5998). `networking_crd_contract_test.go` checks the CRD CEL rules; `networking_feedback_state_test.go` and `workload_networking_feedback_test.go` the feedback mapping. No real AAP job, manager role or fabric runs; that boundary is E2E under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 - **Operator and AAP wire contract (OSAC-6766, OSAC-7152):** `tests/contract/network-task/` holds golden JSON read by both sides: `inputs/<task>.<manager>.json` is the `osac_job_vars` the operator launches (VirtualNetwork with `network_type`, Subnet with the `network_segment` launch key and `virtual_network.status.l3Vni`, ExternalIPPool, ExternalIP, ExternalIPAttachment, ClusterOrder ingress reservation with `cluster_id`, NetworkAttachment on both managers, and NATGateway with `nat_gateway_context`) and `results/<task>.<manager>.json` is the job artifacts a manager returns (`l3_vni`, `network_segment.l2_vni`, `external_ip.address`, `cluster_ingress.address`, and `vm_attachment`). Operator side: the envtest spec `networking_wire_golden_test.go` ("Operator and AAP wire contract goldens") drives the real reconcilers on the in-memory AAP, compares every launch with its input golden after fixing names and UIDs, and feeds each result golden through the engine and its parser. The ClusterOrder ingress-reservation case calls `runReserveClusterIngress` directly; it does not exercise public `Reconcile` dispatch to that task. `internal/networktask/wire_golden_test.go` runs the parsers on the result goldens. Run `make test` from `osac-operator/`; `UPDATE_GOLDEN=1` rewrites the input goldens for review. The AAP half is in the osac-aap section. Shapes are bound at unit and envtest tier, not by a deployed AAP job: no real AAP, role on a cluster or Netris runs here; that stays [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). **Not bound (no ticket):** all `delete_*` and `detach_*` tasks, `create_security_group`/`delete_security_group`, `query_dhcp_lease` and its `dhcp_lease` result, FabricDomain tasks, ingress release, and physical (bare-metal) interfaces; their inputs and results are covered only by each side's own fixtures.
 - **NATGateway dependency snapshot ([DEV] OSAC-6202):** `natgateway_contract_test.go` and the NATGateway specs in `networking_attachments_test.go` cover the `nat_gateway_context` snapshot, tenant and identity rejection without a job, rejection of a result when a dependency changed during the job, the failed-delete finalizer and the input staying the same when a same-VN Subnet is created or deleted. `osac-aap` unit tests cover VN-wide SNAT, the saved transit exemption, ExternalIP consumer exclusivity and cleanup; the `agentless_net_nat_gateway` target runs both tasks through `playbook_osac_network_task.yml` with provider commands replaced by fixtures. AAP, SSH, BGP convergence and packet delivery are not exercised.
 - **CSP-managed ComputeInstance storage readiness and tier filtering ([OSAC-6596](https://redhat.atlassian.net/browse/OSAC-6596), DEV):** Covered by `internal/controller/computeinstance_controller_test.go` and `internal/controller/storage_controller_test.go` in `make test` (Envtest with mocked Fulfillment gRPC and the in-memory AAP). Specs drive public `ComputeInstanceReconciler.Reconcile` through initial and day-2 provisioning triggers: requested tiers already mapped in `Tenant.status.storageClasses` (with `StorageReady` unset or `True`) provision without any storage tier catalog, backend, or credential lookup; an unmapped tier, or any tier while `StorageReady=False`, resolves the catalog and stays gated on a catalog or credential failure or on CSP readiness; a tenant without storage status gates on a catalog failure unless the target cluster already has a StorageClass for every requested tier; a CSP-managed backend of any provider, including VAST with supplied credentials, never has its credentials resolved or forwarded and provisions with the supplied StorageClass; and a day-2 job on a running VM is gated on `ConfigurationApplied` without overwriting the VM's `Provisioned` or `Ready` status. Tables of `checkStorageReadiness` and `storageClassesCoverRequestedTiers` decisions cover the tenant storage states. Deployed AAP jobs and KubeVirt VM creation remain E2E coverage.
@@ -899,14 +1084,15 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 | Component integration (OSAC-1433) | `tests/integration/targets/network_task_playbook/tasks/baseline.yml`; from `tests/integration/` run `uv run ansible-playbook targets/network_task_playbook/tasks/baseline.yml -e '@common_vars.yml'`; also registered in `make test` | The generic playbook contract: the fixed Fabric (21) and Kubernetes (8) task sets, a task of the set run through a real manager role (the Netris SecurityGroup no-op) with no typed output, invalid task/manager/input rejection that runs no manager task, launch extra-var validation, and retryable errors for missing roles, collections or task files. Running every task of each set is covered by `netris_fabric` (Fabric) and `cudn_evpn` (Kubernetes) | No Kubernetes, AAP or backend; each case is a child `ansible-playbook -e @extravars` process, as AAP launches a job. |
 | AgentlessNet Fabric task contract | `tests/integration/targets/agentless_net_contract/tasks/baseline.yml`; from `tests/integration/` run `uv run ansible-playbook targets/agentless_net_contract/tasks/baseline.yml -e '@common_vars.yml'`; also registered in `make test` | Generic-playbook child jobs with real SQLite: physical NetworkAttachment apply through the network-runner provider, partial switch-mutation retry, DHCP lease output, delete-wins switch guards and port restoration, plus shared ExternalIPPool/ExternalIP/ExternalIPAttachment lifecycle and typed ExternalIP output | Switch state is the shared stateful fake SSH endpoint (`tests/integration/fixtures/agentless_switch/ssh`); DHCP lease and Linux/provider operations are fixture-driven. No Kind, AAP server, real Cumulus switch, dnsmasq process, BMF handoff, BGP, or packet delivery. |
 | AgentlessNet switch VLAN boundary (OSAC-7156) | `tests/integration/targets/agentless_net_switch/tasks/baseline.yml`; from `tests/integration/` run `uv run ansible-playbook targets/agentless_net_switch/tasks/baseline.yml -e '@common_vars.yml'`; also registered in `make test` | Real `_discover_subnet_switch` and `_reconcile_subnet_switch` task files in a child Ansible process: normalized VLAN discovery (interface memberships, used and reserved VLAN IDs) through the network-runner provider, Subnet VLAN creation on declared trunks, idempotent rerun, verified deletion, and refusal to delete while the VLAN membership sits on an interface outside the declared trunks | The switch is the shared stateful fake SSH endpoint; the node, DHCP, Linux and provider sides are not run. No Kind, AAP server, live switch, or traffic. |
-| Component integration (OSAC-6766) | `tests/integration/targets/netris_fabric/tasks/baseline.yml`; from `tests/integration/` run `uv run ansible-playbook targets/netris_fabric/tasks/baseline.yml -e '@common_vars.yml'`; also registered in `make test` | The Netris Fabric Manager (`osac.templates.netris`) through `playbook_osac_network_task.yml`: all 21 Fabric tasks, VirtualNetwork and Subnet results (`backend_id`, `l3_vni`, evpn `network_segment.l2_vni`) and reruns, EVPN V-Net gateway with DHCP over the physical range at creation and on rerun, `l3Vni` mismatch, physical attachment port move and DHCP lease, ExternalIP/NAT names and addresses, FabricDomain, ordered and absent-tolerant deletes with the VNI freed last, 5xx versus 4xx classification and sanitised messages, tenant isolation, drift, fail-closed owner proof, partial-create and lost-response recovery | Netris is a stateful in-process fake (`tests/integration/fixtures/netris/fake_netris.py`). No Kubernetes API, AAP, operator, switches or live Netris. Gap: the real Netris controller and the deployed journey stay the lab E2E (QE); the live ExternalIP path remains [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). |
-| Operator Unit / Envtest (OSAC-7152) | From `osac-operator/`: `make test` | `internal/controller/clusterorder_networking_test.go`, `clusterorder_envtest_test.go` and related ClusterOrder specs cover capability-based lifecycle selection (including a custom CaaS template), one-time migration of the endpoint capability from unset to enabled, endpoint discovery/readiness, automatic ExternalIP attachment ordering, ingress reservation/release, DNS lifecycle and retained HostedCluster names through partial-publication cleanup and endpoint replacement, disabled networking, and holding automatic endpoint IPs until DNS cleanup succeeds. `clusterorder_management_test.go` checks separate Ignition Route CA selection. | Real Kubernetes API/etcd and OSAC CRDs in Envtest; Fulfillment and AAP are controlled doubles. This does not prove a deployed AAP or provider boundary. |
+| Component integration (OSAC-6766) | `tests/integration/targets/netris_fabric/tasks/baseline.yml`; from `tests/integration/` run `uv run ansible-playbook targets/netris_fabric/tasks/baseline.yml -e '@common_vars.yml'`; also registered in `make test` (creates no cluster objects) | The Netris Fabric Manager (`osac.templates.netris`) through `playbook_osac_network_task.yml`: all 21 Fabric tasks, VirtualNetwork and Subnet results (`backend_id`, `l3_vni`, evpn `network_segment.l2_vni`) and reruns, EVPN V-Net gateway with DHCP over the physical range at creation and on rerun, `l3Vni` mismatch, physical attachment port move and DHCP lease, ExternalIP/NAT names and addresses, FabricDomain, ClusterOrder ingress reservation and release (OSAC-7152), ordered and absent-tolerant deletes with the VNI freed last, 5xx versus 4xx classification and sanitised messages, tenant isolation, drift, fail-closed owner proof, partial-create and lost-response recovery | Netris is a stateful in-process fake (`tests/integration/fixtures/netris/fake_netris.py`) and the hub kubeconfig is unusable; no AAP, operator, switches or live Netris. Gap: the real Netris controller and the deployed journey stay the lab E2E (QE); the live ExternalIP path remains [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). |
+| Operator Unit / Envtest (OSAC-7152) | From `osac-operator/`: `make test` | `internal/controller/clusterorder_networking_test.go`, `clusterorder_envtest_test.go` and related ClusterOrder specs cover capability-based lifecycle selection (including a custom CaaS template), one-time migration of the endpoint capability from unset to enabled, endpoint discovery/readiness, automatic ExternalIP attachment ordering, ingress reservation/release, DNS lifecycle and retained HostedCluster names through partial-publication cleanup and endpoint replacement, disabled networking, and holding automatic endpoint IPs until DNS cleanup succeeds. OSAC-5998 adds disabled-mode deletion with recorded ingress/DNS jobs (no reserve, release, DNS or remove task launches and no fabricated removal in status) and disabled continuity, where a ready HostedCluster and workers reach `Ready` without the endpoint gate or any networking job. `clusterorder_management_test.go` checks separate Ignition Route CA selection. | Real Kubernetes API/etcd and OSAC CRDs in Envtest; Fulfillment and AAP are controlled doubles. This does not prove a deployed AAP or provider boundary. |
 | AAP Unit and component integration (OSAC-7152) | From `osac-aap/`: `uv run --group development pytest tests/unit/test_cluster_endpoints_contract.py tests/unit/test_netris_cluster_ingress.py tests/unit/test_netris_fabric_domain.py`; for the fake-backed component target, from `osac-aap/tests/integration/`: `uv run ansible-playbook targets/netris_fabric/tasks/baseline.yml -e '@common_vars.yml'` | `test_cluster_endpoints_contract.py` runs the endpoint playbook with controller-shaped `osac_job_vars` against test-only Kubernetes and DNS doubles; it checks that the recorded HostedCluster name drives DNS records, supported-domain rejection, retryable cleanup errors, and retryable operational failures. The operator Envtest separately checks that the automatic endpoint IP hold remains until DNS cleanup succeeds; these are independent tests, not a combined AAP-to-operator check. `test_netris_cluster_ingress.py` exercises the Python reservation module directly with an in-memory Netris client. `test_netris_fabric_domain.py` runs the reserve/release Fabric tasks through the generic playbook with a stateful Netris fake. The `netris_fabric` integration target exercises all 21 Fabric tasks, including retryable reservation without a VPC and release after VPC deletion, against that fake and an unusable hub kubeconfig. It creates no Kubernetes objects and does not require Kind when run standalone. | The unit tests do not contact a Kubernetes cluster, AAP, DNS provider, or live Netris. The standalone integration target only needs `common_vars.yml`; it does not prove deployed AAP or a live provider. |
+| CaaS core lifecycle with provider networking at its default ([DEV] OSAC-5998, GATE-CAAS-04) | `tests/integration/targets/caas_core_lifecycle/tasks/install.yml` and `delete.yml`; from `tests/integration/` run `uv run ansible-playbook targets/caas_core_lifecycle/tasks/install.yml -e '@common_vars.yml'` (and `delete.yml`); also registered in `make test` | Runs the real `osac.templates.ocp_small` install and delete workflows against real Kind APIs with only the core steps overridden: the external-access step resolves to the template no-op, and the roles captured by the workflow-complete hook prove the template and its core lease/finalizer steps ran while no `osac.service.external_access`, `netris.steps.external_access`, `cluster_infra` or Netris template role was included. Core install/delete still complete through the lease, finalizer and template-discovery roles. | No guest cluster is created: hosted-cluster, kubeconfig, node and cluster-operator steps are overridden. No AAP controller, provider API, Netris controller, DNS record or ingress reservation runs. The deployed journey remains the lab E2E under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). |
 | Existing CaaS E2E regression (OSAC-7152) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py tests/e2e/caas/sanity/test_cluster_delete_feedback_light.py` | Runs the existing CaaS create and delete-feedback journeys unchanged; this work adds no E2E tests. The default `ocp-ci-small` template does not declare `supports_automatic_caas_endpoints`, so a passing default run does not exercise the new endpoint lifecycle. | Requires a deployed CaaS environment with Fulfillment, the operator, AAP, and worker provisioning, plus hub access through `KUBECONFIG`. The kubeconfig identity must be allowed to impersonate `system:admin`, which the fixtures use to obtain private API tokens. The fixtures also create Keycloak organization memberships; set `OSAC_KEYCLOAK_ADMIN_PASSWORD` to the Keycloak administrator password (it defaults to `admin`). The host must have `kubectl`, `grpcurl`, and the `osac` CLI installed; `uv run` does not install these executables. Set `OSAC_CLI_PATH` to select a non-default OSAC CLI executable. It also requires the variables listed in `tests/e2e/caas/contract` (`OSAC_NAMESPACE` and `OSAC_PULL_SECRET_PATH`; `OSAC_NAMESPACE` has a default). Both journeys require a readable SSH public key at `~/.ssh/id_rsa.pub` by default; set `OSAC_SSH_PUBLIC_KEY_PATH` to use another path. Both journeys are metering-marked; set `METERING_ADAPTER_URL` or provide a reachable echo-adapter route in `OSAC_NAMESPACE`. Local unit and component tests do not replace this deployed boundary. Retry-safe persistence and orphan recovery remain OSAC-6655. |
 | Component integration (OSAC-6766) | `tests/integration/targets/cudn_evpn/tasks/baseline.yml`; from `tests/integration/` run `uv run ansible-playbook targets/cudn_evpn/tasks/baseline.yml -e '@common_vars.yml'`; also registered in `make test` | The eight `cudn_evpn` Kubernetes Manager tasks through `playbook_osac_network_task.yml`: namespace, CUDN EVPN spec, NetworkPolicy and attachment results, ownership refusals, VNI validation, idempotent reruns and absent-tolerant deletes against a real Kubernetes API, plus every state of a hub object (a VTEP or CUDN that never gets ready, objects held in deletion, drift, objects of someone else) and API errors and dropped connections | The ClusterUserDefinedNetwork and VTEP CRDs are fakes (accept-anything schema, no status subresource); the play sets the VTEP and CUDN conditions, not OVN-Kubernetes. API faults come from `fixtures/kube/fault_proxy.py`, which forwards everything else to Kind unchanged; timeouts run `files/short_waits.yml`, the generic playbook with the role's waits cut to seconds. No AAP. Not covered: OVN-Kubernetes behavior, real CRD validation, EVPN/DHCP data plane. The target refuses to run if those CRDs already exist. |
 | Component contract (OSAC-1433) | `tests/integration/targets/config_as_code_job_templates/tasks/baseline.yml`; also registered in `make test` (no Kind needed) | Rendered config-as-code `controller_templates`: networking templates run the generic playbook in the networking-operations instance group with `ask_labels_on_launch` and timeout 3600 and the launch-policy guard | No AAP controller; the templates are not created. |
 | Component contract (OSAC-7152) | `tests/integration/targets/config_as_code_pod_specs/tasks/baseline.yml`; also registered in `make test` (no Kind needed); with `tests/unit/test_config_as_code_network_netris_settings.py` and `tests/unit/test_publish_templates_auth_config.py` | Rendered container-group pod specs: networking operations reference `network-fulfillment-ig` settings and credentials, protect Netris launch inputs, and mount the configured CA bundle; cluster fulfillment uses its own instance-group references rather than importing the networking group | No AAP controller or Kubernetes; container groups and referenced ConfigMaps/Secrets are not created or inspected. Migration of legacy cluster-fulfillment manager settings is outside this contract test and deferred from this PR. |
-| Component integration (OSAC-1435) | `compute_instance_create`/`compute_instance_delete` (baseline and overrides), `compute_instance_with_gpu_create`, `compute_instance_create:sysprep_secret_copy` in `make test` | `osac_job_vars.vm_network` as the operator sends it: target namespace, VM template `networks`/`interfaces` taken unchanged (enabled-mode `l2bridge` and disabled-mode default pod network with masquerade), the `osac.openshift.io/compute-instance-id` VM label, and a delete without `vm_network` failing before any resource is touched | VM/DataVolume creation is overridden; no KubeVirt VM runs on Kind. |
+| Component integration (OSAC-1435, GATE-VM-05) | `compute_instance_create`/`compute_instance_delete` (baseline and overrides), `compute_instance_with_gpu_create`, `compute_instance_create:sysprep_secret_copy` in `make test` | `osac_job_vars.vm_network` as the operator sends it: target namespace, VM template `networks`/`interfaces` taken unchanged (enabled-mode `l2bridge` and disabled-mode default pod network with masquerade), the `osac.openshift.io/compute-instance-id` VM label, and a delete without `vm_network` failing before any resource is touched | VM/DataVolume creation is overridden; no KubeVirt VM runs on Kind. |
 | Component integration (focused) | A target under `tests/integration/targets/`; run the corresponding playbook from `tests/integration/` | The specific role workflow and its documented fixtures | Only the dependencies declared by that target; inspect its setup and overrides before claiming a real boundary. |
 | Contract | No dedicated contract suite; use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task for AAP/provider coverage | No AAP or provider endpoint is exercised as a contract | The Kind API, mock VMS server, and fixture-driven provider behavior do not prove an AAP or provider contract. |
 | E2E | Cross-component OSAC E2E suites | Complete fulfillment and provisioning flows | Depends on the deployed AAP and provider environment. |

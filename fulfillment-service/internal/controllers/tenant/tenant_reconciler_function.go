@@ -909,21 +909,19 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 	if t.r.vaultLifecycle == nil {
 		return nil
 	}
-	if t.isConditionTrue(condType) {
-		return nil
-	}
 
 	tenantName := t.tenant.GetMetadata().GetName()
 	err := t.r.vaultLifecycle.EnsureTenantNamespace(ctx, tenantName)
 	if err != nil {
+		code := grpcstatus.Code(vault.ToGrpcError(err))
 		t.r.logger.ErrorContext(ctx, "Failed to provision vault namespace for tenant",
 			slog.String("tenant_id", t.tenant.GetId()),
 			slog.String("tenant_name", tenantName),
-			slog.Any("error", err),
+			slog.String("error_code", code.String()),
 		)
 
 		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"ProvisionFailed", fmt.Sprintf("Failed to provision vault namespace: %v", err))
+			"ProvisionFailed", "Failed to provision vault namespace ("+code.String()+")")
 		return nil
 	}
 

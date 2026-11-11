@@ -19,6 +19,8 @@ import { instanceTypeFieldIds } from '../fieldIds';
 import { InstanceTypeCreateFormValues, instanceTypeCreateValues } from './values';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
+import TextAreaField from '../../Form/base/TextAreaField';
+import TextField from '../../Form/base/TextField';
 import { InputField } from '../../Form/InputField';
 import LeaveFormConfirmation from '../../Form/LeaveFormConfirmation';
 import NameField from '../../Form/NameField';
@@ -74,11 +76,10 @@ const InstanceTypeCreateForm = () => {
             <StackItem>
               <OsacForm>
                 <NameField fieldId={instanceTypeFieldIds.name} />
-                <InputField
+                <TextAreaField
                   name="spec.description"
                   label={t('Description')}
                   fieldId={instanceTypeFieldIds.description}
-                  multiline
                 />
                 <InputField
                   name="spec.vcpus"
@@ -102,14 +103,14 @@ const InstanceTypeCreateForm = () => {
                     type="number"
                     helperText={t('Number of GPU devices of this type.')}
                   />
-                  <InputField
+                  <TextField
                     name="spec.gpu.resourceName"
                     label={t('Resource name')}
                     fieldId={instanceTypeFieldIds.gpuResourceName}
                     placeholder={t('e.g. nvidia.com/A100')}
                     helperText={t('Kubernetes device plugin resource name.')}
                   />
-                  <InputField
+                  <TextField
                     name="spec.gpu.pciDeviceSelector"
                     label={t('PCI device selector')}
                     fieldId={instanceTypeFieldIds.gpuPciDeviceSelector}

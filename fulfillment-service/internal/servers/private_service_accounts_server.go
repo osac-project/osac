@@ -271,5 +271,17 @@ func (s *PrivateServiceAccountsServer) prepareUpdate(_ context.Context, current,
 	if current.GetMetadata().GetName() != candidate.GetMetadata().GetName() {
 		return status.Error(codes.InvalidArgument, "service-account name is immutable")
 	}
+
+	// Creator updates are rejected by GenericServer. When a request includes creator in
+	// its mask but leaves it unchanged, still enforce this server's metadata allowlist.
+	// Labels and finalizers are the only metadata fields this API permits to change.
+	currentMetadata := current.GetMetadata()
+	candidateMetadata := candidate.GetMetadata()
+	allowedMetadata := proto.Clone(currentMetadata).(*privatev1.Metadata)
+	allowedMetadata.SetLabels(candidateMetadata.GetLabels())
+	allowedMetadata.SetFinalizers(candidateMetadata.GetFinalizers())
+	if !proto.Equal(allowedMetadata, candidateMetadata) {
+		return status.Error(codes.InvalidArgument, `field "metadata" is not mutable`)
+	}
 	return nil
 }

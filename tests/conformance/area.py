@@ -106,6 +106,10 @@ def _parse(path: Path) -> AreaDeclaration:
     )
 
 
+def known_selectors(areas: Mapping[str, AreaDeclaration]) -> frozenset[str]:
+    return frozenset({"generic"} | {selector for area in areas.values() for selector in area.selectors})
+
+
 def load_areas(path: Path) -> dict[str, AreaDeclaration]:
     """Return area declarations found under ``path`` keyed by area name."""
     if not path.exists():

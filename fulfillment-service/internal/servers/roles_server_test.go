@@ -344,7 +344,8 @@ var _ = Describe("Public roles server", func() {
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring(`unknown service "osac.public.nope"`))
+			Expect(err.Error()).To(ContainSubstring(`unknown service`))
+			Expect(err.Error()).ToNot(ContainSubstring(`osac.public.nope`), "the error must not echo the rule values")
 
 			listResponse, err := rolesServer.List(ctx, publicv1.RolesListRequest_builder{
 				Filter: new("this.metadata.name == 'invalid-role'"),
@@ -371,7 +372,7 @@ var _ = Describe("Public roles server", func() {
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring(`unknown method "fake"`))
+			Expect(err.Error()).To(ContainSubstring(`unknown method`))
 		})
 
 		It("Rejects updating the permission rules with a malformed wildcard", func() {

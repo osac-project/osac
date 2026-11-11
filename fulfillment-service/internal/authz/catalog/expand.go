@@ -26,7 +26,7 @@ func (c *Catalog) ValidateRule(service string, methods []string) error {
 	if err != nil {
 		return err
 	}
-	return validateMethods(service, services, methods)
+	return validateMethods(services, methods)
 }
 
 // Expand resolves a permission rule to the sorted list of full gRPC methods that it grants, for
@@ -40,7 +40,7 @@ func (c *Catalog) Expand(service string, methods []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := validateMethods(service, services, methods); err != nil {
+	if err := validateMethods(services, methods); err != nil {
 		return nil, err
 	}
 	granted := make(map[string]bool)
@@ -74,7 +74,7 @@ func (c *Catalog) matchServices(service string) ([]*Service, error) {
 	default:
 		result, ok := c.services[service]
 		if !ok {
-			return nil, fmt.Errorf("unknown service %q", service)
+			return nil, fmt.Errorf("unknown service")
 		}
 		return []*Service{result}, nil
 	}
@@ -83,7 +83,7 @@ func (c *Catalog) matchServices(service string) ([]*Service, error) {
 // validateMethods checks that the method names of a rule are cataloged for the selected services.
 // A method is valid if at least one of the selected services has it, so a layer wildcard can be
 // combined with methods that only some of its services provide.
-func validateMethods(service string, services []*Service, methods []string) error {
+func validateMethods(services []*Service, methods []string) error {
 	if len(methods) == 0 {
 		return fmt.Errorf("at least one method is required")
 	}
@@ -99,7 +99,7 @@ func validateMethods(service string, services []*Service, methods []string) erro
 			}
 		}
 		if !found {
-			return fmt.Errorf("unknown method %q for service %q", method, service)
+			return fmt.Errorf("unknown method")
 		}
 	}
 	return nil

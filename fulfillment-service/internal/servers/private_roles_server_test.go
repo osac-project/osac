@@ -296,6 +296,10 @@ var _ = Describe("Private roles server", func() {
 				Expect(err).To(HaveOccurred())
 				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 				Expect(err.Error()).To(ContainSubstring(expectedError))
+				Expect(err.Error()).ToNot(ContainSubstring(rule.Service), "the error must not echo the rule values")
+				for _, method := range rule.Methods {
+					Expect(err.Error()).ToNot(ContainSubstring(method), "the error must not echo the rule values")
+				}
 
 				listResponse, err := rolesServer.List(ctx, privatev1.RolesListRequest_builder{
 					Filter: new("this.metadata.name == 'invalid-role'"),
@@ -307,27 +311,27 @@ var _ = Describe("Private roles server", func() {
 				&privatev1.PermissionRule_builder{
 					Service: "osac.public.nope",
 					Methods: []string{"create"},
-				}, `invalid permissions rule 1: unknown service "osac.public.nope"`),
+				}, `invalid permissions rule 1: unknown service`),
 			Entry("Unknown method",
 				&privatev1.PermissionRule_builder{
 					Service: "osac.public.clusters",
 					Methods: []string{"fake"},
-				}, `invalid permissions rule 1: unknown method "fake" for service "osac.public.clusters"`),
+				}, `invalid permissions rule 1: unknown method`),
 			Entry("Malformed service wildcard",
 				&privatev1.PermissionRule_builder{
 					Service: "osac.public.clus*",
 					Methods: []string{"get"},
-				}, `invalid permissions rule 1: unknown service "osac.public.clus*"`),
+				}, `invalid permissions rule 1: unknown service`),
 			Entry("Malformed method wildcard",
 				&privatev1.PermissionRule_builder{
 					Service: "osac.public.clusters",
 					Methods: []string{"crea*"},
-				}, `invalid permissions rule 1: unknown method "crea*"`),
+				}, `invalid permissions rule 1: unknown method`),
 			Entry("Capitalized method",
 				&privatev1.PermissionRule_builder{
 					Service: "osac.public.clusters",
 					Methods: []string{"Get"},
-				}, `invalid permissions rule 1: unknown method "Get"`),
+				}, `invalid permissions rule 1: unknown method`),
 		)
 
 		It("Rejects the creation of roles with an empty method list", func() {
@@ -453,7 +457,8 @@ var _ = Describe("Private roles server", func() {
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring(`unknown service "osac.public.nope"`))
+			Expect(err.Error()).To(ContainSubstring(`unknown service`))
+			Expect(err.Error()).ToNot(ContainSubstring(`osac.public.nope`), "the error must not echo the rule values")
 
 			getResponse, err := rolesServer.Get(ctx, privatev1.RolesGetRequest_builder{
 				Id: createResponse.GetObject().GetId(),

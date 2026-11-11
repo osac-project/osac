@@ -27,6 +27,11 @@ in `osac-aap/Makefile`.
   is not exercised. VM readiness may be overridden; synthetic Volume IDs prove no Volume
   API recovery, CDI/KubeVirt, PVC binding or guest I/O; minimal CRDs prove no
   provider admission.
+- `compute_instance_create:missing_target_namespace` ([OSAC-7297](https://redhat.atlassian.net/browse/OSAC-7297))
+  checks the selected namespace against the real Kind API. A missing namespace
+  stops VM creation and publishes a retryable `osac_error`; an existing namespace
+  publishes no error. The test reads Ansible's custom stats, not a deployed AAP
+  job; it runs no operator or KubeVirt.
 - Storage target-routing scenarios: separate management/workload Kind APIs;
   placement and kubeconfig use are real. Tenant status resolution, VM boot and
   deployed AAP/provider lifecycle are outside the fixture.

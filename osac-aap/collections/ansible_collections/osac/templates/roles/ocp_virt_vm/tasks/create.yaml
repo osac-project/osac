@@ -25,6 +25,34 @@
 - name: Determine target namespace for VM resources
   ansible.builtin.include_tasks: resolve_target_namespace.yaml
 
+- name: Read target namespace
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Namespace
+    name: "{{ compute_instance_target_namespace }}"
+  register: target_namespace_info
+
+- name: Handle a missing VM namespace
+  when: target_namespace_info.resources | length == 0
+  block:
+    - name: Mark a missing namespace as retryable
+      ansible.builtin.set_stats:
+        aggregate: false
+        per_host: false
+        data:
+          osac_error:
+            message: >-
+              VM target namespace '{{ compute_instance_target_namespace }}' does not exist
+              on the target cluster.
+            retryable: true
+
+    - name: Require target namespace to exist
+      ansible.builtin.fail:
+        msg: >-
+          VM target namespace '{{ compute_instance_target_namespace }}' does not exist
+          on the target cluster.
+
 - name: Log namespace selection
   ansible.builtin.debug:
     msg: "VM will be created in namespace: {{ compute_instance_target_namespace }}"

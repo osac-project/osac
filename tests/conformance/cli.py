@@ -185,8 +185,8 @@ def _derive_profiles(
     results: list[ProfileResult] = []
     for name in sorted(catalog):
         profile = catalog[name]
-        required = name in plan.profiles
-        selected = [test for test in plan.tests if name in test.profiles]
+        selected = [test for test in plan.tests if test.layer is Layer.PROFILE and name in test.profiles]
+        required = name in plan.profiles and bool(selected)
         if not required:
             results.append(ProfileResult(name, profile.selectors, False, Result.SKIP))
             continue

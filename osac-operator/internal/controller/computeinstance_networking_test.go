@@ -836,7 +836,7 @@ var _ = Describe("ComputeInstance VMaaS networking", func() {
 		deprovision := f.aap.last(computeInstanceDeprovisionTask)
 		Expect(deprovision.vars["vm_network"]).To(Equal(disabledVMNetwork(ns, f.id)))
 		err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns,
-			Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, f.id)}, &osacv1alpha1.NetworkAttachment{})
+			Name: osacv1alpha1.NetworkAttachmentName(osacv1alpha1.NetworkAttachmentTargetComputeInstance, f.id, "")}, &osacv1alpha1.NetworkAttachment{})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no NetworkAttachment with provider networking disabled")
 
 		f.aap.finish(computeInstanceDeprovisionTask, "successful", "")

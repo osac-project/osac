@@ -34,6 +34,9 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+// testToken is a non-secret fixture used only by the local HTTP tests.
+const testToken = "test-token"
+
 // deletionUsersClient records the finalizer write; no database is involved.
 type deletionUsersClient struct {
 	privatev1.UsersClient
@@ -97,7 +100,7 @@ var _ = Describe("Cached identity deletion", func() {
 				server.Close() // A transport failure leaves the outcome unknown.
 			}
 			users := &deletionUsersClient{}
-			reconciler := deletionFunction(server.URL, "configured-realm", "test-token", users)
+			reconciler := deletionFunction(server.URL, "configured-realm", testToken, users)
 			user := deletingUser("tenant-a", "cached-id")
 			err := reconciler.Run(context.Background(), user)
 			if succeeds {
@@ -142,7 +145,7 @@ var _ = Describe("Cached identity deletion", func() {
 		}))
 		DeferCleanup(server.Close)
 		users := &deletionUsersClient{}
-		reconciler := deletionFunction(server.URL, "configured-realm", "test-token", users)
+		reconciler := deletionFunction(server.URL, "configured-realm", testToken, users)
 		original := deletingUser("tenant-a", "cached-id")
 		Expect(reconciler.Run(context.Background(), proto.Clone(original).(*privatev1.User))).ToNot(Succeed())
 		Expect(users.updates).To(BeEmpty())
@@ -162,7 +165,7 @@ var _ = Describe("Cached identity deletion", func() {
 		}))
 		DeferCleanup(server.Close)
 		users := &deletionUsersClient{err: status.Error(codes.Aborted, "stale version")}
-		reconciler := deletionFunction(server.URL, "configured-realm", "test-token", users)
+		reconciler := deletionFunction(server.URL, "configured-realm", testToken, users)
 		original := deletingUser("tenant-a", "cached-id")
 		Expect(status.Code(reconciler.Run(context.Background(), proto.Clone(original).(*privatev1.User)))).To(Equal(codes.Aborted))
 		expectFinalizerUpdate(users)
@@ -178,7 +181,7 @@ var _ = Describe("Cached identity deletion", func() {
 
 	It("does not delete a cached identity without an explicit deletion request", func() {
 		users := &deletionUsersClient{err: errors.New("unexpected update")}
-		reconciler := deletionFunction("http://127.0.0.1:1", "configured-realm", "test-token", users)
+		reconciler := deletionFunction("http://127.0.0.1:1", "configured-realm", testToken, users)
 		user := deletingUser("tenant-b", "unaffected-id")
 		user.GetMetadata().ClearDeletionTimestamp()
 		Expect(reconciler.Run(context.Background(), user)).To(Succeed())

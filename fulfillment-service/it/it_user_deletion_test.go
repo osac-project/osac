@@ -16,6 +16,7 @@ package it
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -47,7 +48,7 @@ var _ = Describe("User deletion with a cached Keycloak ID", Label("user-deletion
 			createUser := func(tenant, name, username string) (string, string) {
 				id, keycloakID := createRoleBindingTestUser(ctx, users, username,
 					privatev1.Metadata_builder{Name: name, Tenant: tenant}.Build())
-				Expect(tool.ensureUserInOrg(ctx, username, tenant)).To(Succeed())
+				Expect(userDeletionKeycloakError(tool.ensureUserInOrg(ctx, username, tenant))).To(Succeed())
 				_, err := users.Update(ctx, privatev1.UsersUpdateRequest_builder{
 					Object: privatev1.User_builder{
 						Id:   id,
@@ -74,10 +75,10 @@ var _ = Describe("User deletion with a cached Keycloak ID", Label("user-deletion
 			if alreadyAbsent {
 				By("removing only the exact cached account before requesting User deletion")
 				code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodDelete, "/users/"+cachedID, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(userDeletionKeycloakError(err)).ToNot(HaveOccurred())
 				Expect(code).To(Equal(http.StatusNoContent))
 				code, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/users/"+cachedID, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(userDeletionKeycloakError(err)).ToNot(HaveOccurred())
 				Expect(code).To(Equal(http.StatusNotFound))
 				var failure struct {
 					Error string `json:"error"`
@@ -91,7 +92,7 @@ var _ = Describe("User deletion with a cached Keycloak ID", Label("user-deletion
 				preserved[replacementID] = replacementKeycloakID
 			} else {
 				code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/users/"+cachedID, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(userDeletionKeycloakError(err)).ToNot(HaveOccurred())
 				Expect(code).To(Equal(http.StatusOK))
 			}
 
@@ -103,7 +104,7 @@ var _ = Describe("User deletion with a cached Keycloak ID", Label("user-deletion
 				return status.Code(err)
 			}, time.Minute, 200*time.Millisecond).Should(Equal(codes.NotFound))
 			code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/users/"+cachedID, nil)
-			Expect(err).ToNot(HaveOccurred())
+			Expect(userDeletionKeycloakError(err)).ToNot(HaveOccurred())
 			Expect(code).To(Equal(http.StatusNotFound))
 
 			By("checking the replacement and second tenant through both real APIs")
@@ -113,7 +114,7 @@ var _ = Describe("User deletion with a cached Keycloak ID", Label("user-deletion
 				Expect(response.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
 				Expect(response.GetObject().GetStatus().GetKeycloakUserId()).To(Equal(keycloakID))
 				code, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/users/"+keycloakID, nil)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(userDeletionKeycloakError(err)).ToNot(HaveOccurred())
 				Expect(code).To(Equal(http.StatusOK))
 				var account struct {
 					ID string `json:"id"`
@@ -126,3 +127,12 @@ var _ = Describe("User deletion with a cached Keycloak ID", Label("user-deletion
 		Entry("already-absent account with a same-username replacement", true),
 	)
 })
+
+// userDeletionKeycloakError keeps endpoint and authentication details out of
+// assertion output, including errors wrapped by the integration harness.
+func userDeletionKeycloakError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New("Keycloak admin request failed")
+}

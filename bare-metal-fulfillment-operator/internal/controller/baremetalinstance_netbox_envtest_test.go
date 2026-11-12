@@ -401,6 +401,8 @@ func netboxDeviceFields(cpuCores int) map[string]any {
 	}
 }
 
+// Cases TC-INT-001 to TC-INT-003 from the NetBox testplan:
+// enhancement-proposals/enhancements/OSAC-1610-netbox-inventory/testplan.md.
 var _ = Describe("BareMetalInstance NetBox Integration", func() {
 	var mock *mockNetBox
 
@@ -421,7 +423,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			cleanupNetBoxHost(bmiName, hostname)
 		})
 
-		It("TC-INT-001 allocates a matching staged NetBox device", func() {
+		It("allocates a host through a BareMetalInstance (TC-INT-001)", func() {
 			mock.addDevice(42, "staged", netboxDeviceFields(16))
 			mock.addDevice(43, "staged", netboxDeviceFields(8))
 			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialsReader(42))
@@ -488,7 +490,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(bmi.IsStatusConditionTrue(v1alpha1.HostConditionAllocated)).To(BeTrue())
 		})
 
-		It("TC-INT-002 releases the NetBox claim on deletion", func() {
+		It("releases the NetBox claim when the BareMetalInstance is deleted (TC-INT-002)", func() {
 			mock.addDevice(42, "staged", netboxDeviceFields(16))
 			reconciler := newNetBoxReconciler(mock, newNetBoxCredentialsReader(42))
 
@@ -528,7 +530,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			cleanupNetBoxHost(bmiName, hostname)
 		})
 
-		It("TC-INT-003 keeps the claim and retries preparation after a failure", func() {
+		It("retries host preparation without losing the NetBox claim (TC-INT-003)", func() {
 			mock.addDevice(42, "staged", netboxDeviceFields(16))
 
 			// A foreign BMH with the generated name makes CreateBMH fail after the

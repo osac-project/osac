@@ -19,6 +19,7 @@ import (
 
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
+
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	gen "github.com/osac-project/osac/terraform-provider/internal/gen/datasource_bare_metal_instance_type"
@@ -35,11 +36,8 @@ type bareMetalInstanceTypeDataSource struct {
 
 // bareMetalInstanceTypeModel is the generated model plus the `name` lookup attribute.
 type bareMetalInstanceTypeModel struct {
-	Name     types.String      `tfsdk:"name"`
-	Id       types.String      `tfsdk:"id"`
-	Metadata gen.MetadataValue `tfsdk:"metadata"`
-	Spec     gen.SpecValue     `tfsdk:"spec"`
-	Status   gen.StatusValue   `tfsdk:"status"`
+	Name types.String `tfsdk:"name"`
+	gen.BareMetalInstanceTypeModel
 }
 
 // NewBareMetalInstanceTypeDataSource creates a new data source.
@@ -78,19 +76,8 @@ func (d *bareMetalInstanceTypeDataSource) Read(ctx context.Context,
 	}
 
 	// Resolve the identifier, by name when necessary:
-	id, err := lookupIdentifier(ctx, "bare metal instance type",
-		state.Name.ValueString(), state.Id.ValueString(),
-		func(ctx context.Context) ([]string, error) {
-			items, err := d.client.list(ctx, bareMetalInstanceTypesPath, nameFilter(state.Name.ValueString()))
-			if err != nil {
-				return nil, err
-			}
-			ids := make([]string, 0, len(items))
-			for _, item := range items {
-				ids = append(ids, item.Id)
-			}
-			return ids, nil
-		})
+	id, err := d.client.lookupID(ctx, bareMetalInstanceTypesPath, "bare metal instance type",
+		state.Name.ValueString(), state.Id.ValueString())
 	if err != nil {
 		response.Diagnostics.AddError("Failed to find bare metal instance type", err.Error())
 		return
@@ -116,5 +103,6 @@ func (d *bareMetalInstanceTypeDataSource) Read(ctx context.Context,
 	state.Metadata = valueOfJSON(ctx, object.Metadata, gen.MetadataValue{})
 	state.Spec = valueOfJSON(ctx, object.Spec, gen.SpecValue{})
 	state.Status = valueOfJSON(ctx, object.Status, gen.StatusValue{})
+
 	response.Diagnostics.Append(response.State.Set(ctx, &state)...)
 }

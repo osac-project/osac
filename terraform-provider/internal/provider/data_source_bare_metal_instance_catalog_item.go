@@ -19,6 +19,7 @@ import (
 
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
+
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	gen "github.com/osac-project/osac/terraform-provider/internal/gen/datasource_bare_metal_instance_catalog_item"
@@ -35,13 +36,8 @@ type bareMetalInstanceCatalogItemDataSource struct {
 
 // bareMetalInstanceCatalogItemModel is the generated model plus the `name` lookup attribute.
 type bareMetalInstanceCatalogItemModel struct {
-	Name        types.String      `tfsdk:"name"`
-	Id          types.String      `tfsdk:"id"`
-	Metadata    gen.MetadataValue `tfsdk:"metadata"`
-	Description types.String      `tfsdk:"description"`
-	Published   types.Bool        `tfsdk:"published"`
-	Template    gen.TemplateValue `tfsdk:"template"`
-	Title       types.String      `tfsdk:"title"`
+	Name types.String `tfsdk:"name"`
+	gen.BareMetalInstanceCatalogItemModel
 }
 
 // NewBareMetalInstanceCatalogItemDataSource creates a new data source.
@@ -80,19 +76,8 @@ func (d *bareMetalInstanceCatalogItemDataSource) Read(ctx context.Context,
 	}
 
 	// Resolve the identifier, by name when necessary:
-	id, err := lookupIdentifier(ctx, "bare metal instance catalog item",
-		state.Name.ValueString(), state.Id.ValueString(),
-		func(ctx context.Context) ([]string, error) {
-			items, err := d.client.list(ctx, bareMetalInstanceCatalogsPath, nameFilter(state.Name.ValueString()))
-			if err != nil {
-				return nil, err
-			}
-			ids := make([]string, 0, len(items))
-			for _, item := range items {
-				ids = append(ids, item.Id)
-			}
-			return ids, nil
-		})
+	id, err := d.client.lookupID(ctx, bareMetalInstanceCatalogsPath, "bare metal instance catalog item",
+		state.Name.ValueString(), state.Id.ValueString())
 	if err != nil {
 		response.Diagnostics.AddError("Failed to find bare metal instance catalog item", err.Error())
 		return
@@ -122,5 +107,6 @@ func (d *bareMetalInstanceCatalogItemDataSource) Read(ctx context.Context,
 	state.Published = types.BoolValue(object.Published)
 	state.Template = valueOfJSON(ctx, object.Template, gen.TemplateValue{})
 	state.Title = types.StringValue(object.Title)
+
 	response.Diagnostics.Append(response.State.Set(ctx, &state)...)
 }

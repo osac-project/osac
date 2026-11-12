@@ -52,6 +52,7 @@ Create these custom fields on NetBox `dcim.device` records. The operator reads t
 | `osac_bmc_address` | Text. Required. Must be a BMC URL with a scheme accepted by Metal3/BMO. Supported schemes include `https`, `ipmi`, `redfish-virtualmedia+https`, `idrac-virtualmedia+https`, `ilo5-virtualmedia+https`, and their `*-virtualmedia+http` variants. Plain `http` is rejected. |
 | `osac_boot_mac` | Text. Required. Must parse as a six-byte MAC address. |
 | `osac_interface_macs` | Optional JSON object mapping logical port names to MAC addresses. Values override native NetBox interface primary MACs with the same name. |
+| `osac_bmc_disable_cert_verification` | Boolean. Optional. Overrides `bmf.netbox.disableBMCVerification` for this device. Create the field with no default, and set it `true` only for BMCs with untrusted certificates. |
 
 A free device must have NetBox status `staged`, `osac_managed=true`, and an empty `osac_instance_id`. Each `BareMetalInstance.spec.selector.hostSelector` entry becomes an exact custom-field filter (`cf_<key>=<value>`); all selectors are combined with the pool filters. Use custom-field names without `cf_`, and do not use the reserved pool fields as capability selectors. NetBox tags and device roles are not part of this match.
 
@@ -65,9 +66,20 @@ BMC usernames and passwords come from the OSAC Secret API, not from NetBox and n
 - The label key `osac.openshift.io/netbox-device-<device-id>`; the label value is ignored.
 - Non-empty `data.username` and `data.password` values.
 
-Use the platform-approved process for creating system-scoped OSAC Secrets; the general tenant Secret workflow does not grant system scope. See [Managing Secrets](../secrets-guide.md). A missing or ambiguous Secret, empty credential data, or invalid BMC address/boot MAC causes the device to be quarantined as `failed` before it is claimed. BMF does not authenticate to the BMC before claiming; a wrong but non-empty password can fail later during Metal3/BMO reconciliation.
+Use the platform-approved process for creating system-scoped OSAC Secrets; the general tenant Secret workflow does not grant system scope. See [Managing Secrets](../secrets-guide.md). A missing or ambiguous Secret, empty credential data, an invalid BMC address or boot MAC, or a non-boolean certificate-verification value quarantines the device as `failed` before it is claimed. BMF does not authenticate to the BMC before claiming; a wrong but non-empty password can fail later during Metal3/BMO reconciliation.
 
 After resolving credentials, BMF copies them into the namespaced `netbox-<device-id>-bmc-secret` Kubernetes Secret and labels it `osac.openshift.io/managed-by=baremetal`. BMF refuses to adopt an existing same-name Secret without that ownership label, and only removes Secrets carrying its label during release. Do not put BMC credentials in NetBox custom fields.
+
+## BMC certificate verification
+
+BMO verifies the BMC's TLS certificate during registration, so a self-signed BMC leaves its BMH in `registering` with `online: false`. Two settings control `spec.bmc.disableCertificateVerification` on the BMH that BMF creates:
+
+1. `bmf.netbox.disableBMCVerification` — installer-wide default, `false` (verify).
+2. `osac_bmc_disable_cert_verification` — per-device NetBox override; wins when set. Create the field with **no default**: NetBox backfills a configured default into every device, which makes setting 1 inert (default `false`) or disables verification fleet-wide (default `true`).
+
+Keep both at their defaults outside lab hardware. Disabling the check lets anyone on the BMC management network impersonate the BMC and control what the host boots; it has no effect on `ipmi` addresses. The claim log records which layer decided each host (`source=netbox-device` or `source=inventory-default`).
+
+BMF applies the setting only at BMH creation. BMO writes `redfish_verify_ca` into Ironic when it enrolls the node and does not resend driver info when this flag changes, so a host whose BMH predates the setting keeps failing after an upgrade. Delete and re-create its BareMetalInstance; the manual BMH and Ironic `driver_info` patches in [OSAC-7116](https://redhat.atlassian.net/browse/OSAC-7116) remain the fallback when the host must not be re-created. The reverse applies too: a host created with verification disabled keeps skipping BMC certificate checks after the device field and `bmf.netbox.disableBMCVerification` return to verifying, until its BareMetalInstance is re-created.
 
 ## Configuring the installer
 
@@ -83,6 +95,7 @@ bmf:
     tokenValue: ""
     caCert: "" # Optional NetBox CA PEM
     allowInsecureHTTP: false
+    disableBMCVerification: false
   secrets:
     netboxToken: "osac-netbox-token"
     netboxCA: "osac-netbox-ca"

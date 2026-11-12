@@ -2276,6 +2276,11 @@
               "type": "boolean",
               "description": "Allow NetBox endpoint URLs using HTTP.",
               "default": false
+            },
+            "disableBMCVerification": {
+              "type": "boolean",
+              "description": "Default for spec.bmc.disableCertificateVerification on BareMetalHosts the NetBox inventory backend creates. The NetBox device custom field osac_bmc_disable_cert_verification overrides it per device. Leave false so BMC certificates are verified.",
+              "default": false
             }
           },
           "additionalProperties": false

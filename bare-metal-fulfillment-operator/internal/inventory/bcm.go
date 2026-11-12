@@ -27,7 +27,6 @@ import (
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
-	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
@@ -498,33 +497,17 @@ func (c *BCMClient) ensureBMHExists(ctx context.Context, device *bcmclient.Devic
 		return fmt.Errorf("failed to create BMC credentials Secret for host %q: %w", device.Hostname, err)
 	}
 
-	params := bmhCreateParams(bmhName, bmcAddress, device.MAC, bareMetalInstanceID)
+	// BCM has no per-host BMC certificate-verification setting yet, so BCM-created
+	// hosts always verify the BMC certificate. Tracked as a follow-up to
+	// OSAC-7116.
+	params := baremetalhost.NewCreateParams(bmhName, bmcAddress, device.MAC, bareMetalInstanceID,
+		baremetalhost.CreateOptions{})
 	if err := c.bmhManager.CreateBMH(ctx, params); err != nil {
 		return fmt.Errorf("failed to create BareMetalHost for %s: %w", device.Hostname, err)
 	}
 
 	log.V(1).Info("BareMetalHost ensured", "hostname", device.Hostname, "bmcAddress", bmcAddress)
 	return nil
-}
-
-// bmhCreateParams builds the BareMetalHost creation parameters. Namespace is
-// intentionally omitted from ConsumerRef: the consumer is identified by an
-// opaque ID, not a resolvable namespace/name — matching the Metal3 adapter's
-// documented convention, which is sufficient for BMO's claim mechanism.
-func bmhCreateParams(bmhName, bmcAddress, bootMAC, bareMetalInstanceID string) baremetalhost.CreateParams {
-	return baremetalhost.CreateParams{
-		Name:           bmhName,
-		BMCAddress:     bmcAddress,
-		BootMACAddress: bootMAC,
-		ConsumerRef: &corev1.ObjectReference{
-			APIVersion: "osac.openshift.io/v1alpha1",
-			Kind:       "BareMetalInstance",
-			Name:       bareMetalInstanceID,
-		},
-		Labels: map[string]string{
-			Metal3ManagedByLabel: shared.OsacDefaultManagedByValue,
-		},
-	}
 }
 
 // resolveBMCCredentials resolves the per-host BMC username/password from BCM,

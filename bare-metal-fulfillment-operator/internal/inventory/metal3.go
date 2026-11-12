@@ -48,7 +48,7 @@ const (
 	metal3LabelPrefix = shared.OsacPrefix + "/"
 
 	Metal3HostTypeLabel  = metal3LabelPrefix + "host-type"
-	Metal3ManagedByLabel = metal3LabelPrefix + "managed-by"
+	Metal3ManagedByLabel = shared.OsacManagedByLabel
 	Metal3PoolIDLabel    = metal3LabelPrefix + "pool-id"
 
 	// HostInterfaceMACsAnnotation stores an administrator-supplied JSON map of

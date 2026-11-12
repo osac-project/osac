@@ -60,4 +60,5 @@ stringData:
         caFile: "/etc/osac/secrets/netbox-ca/ca.crt"
         {{- end }}
         allowInsecureHTTP: {{ .Values.netbox.allowInsecureHTTP }}
+        disableBMCVerification: {{ .Values.netbox.disableBMCVerification }}
 {{- end }}

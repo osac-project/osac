@@ -61,6 +61,11 @@ netbox:
   tokenValue: ""
   caCert: ""
   allowInsecureHTTP: false
+  # Default for spec.bmc.disableCertificateVerification on BareMetalHosts this
+  # backend creates. Leave false (verify) unless every BMC has an untrusted
+  # certificate; a single device can override it with the NetBox custom field
+  # osac_bmc_disable_cert_verification.
+  disableBMCVerification: false
 
 bcm:
   enabled: false

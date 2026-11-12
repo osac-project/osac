@@ -103,7 +103,9 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 
 // MarkBillingAccountsUnobserved marks UNKNOWN every row for providerKey whose reference is not in
 // seenReferences, retaining the row. Only rows not newer than observedAt are marked, so a newer walk's discovery
-// is not demoted. A nil seenReferences is treated as empty: pgx encodes nil as SQL NULL, and the sweep would
+// is not demoted. A row that is already UNKNOWN still takes the newer observedAt: without that, a walk that read
+// the account before this sweep could commit later and restore it, because UpsertBillingAccount only compares
+// observation times. A nil seenReferences is treated as empty: pgx encodes nil as SQL NULL, and the sweep would
 // otherwise match nothing.
 func MarkBillingAccountsUnobserved(
 	ctx context.Context, tx Tx, providerKey string, seenReferences []string, observedAt time.Time,
@@ -116,8 +118,7 @@ func MarkBillingAccountsUnobserved(
 		set state = 'UNKNOWN', status_observed_at = $1
 		where provider_key = $2
 		  and not (provider_account_reference = any($3::text[]))
-		  and status_observed_at <= $1
-		  and state <> 'UNKNOWN'`,
+		  and status_observed_at <= $1`,
 		observedAt, providerKey, seenReferences)
 	if err != nil {
 		return fmt.Errorf("mark unobserved billing accounts: %w", err)

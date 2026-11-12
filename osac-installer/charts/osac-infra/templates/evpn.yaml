@@ -239,30 +239,54 @@ data:
         priority: 5
         rawConfig: |
 {{ if $.Values.evpn.bgp.activeBackup }}
-{{ range $uplinkIndex, $uplink := $node.uplinks }}
-          route-map OSAC-EVPN-ACTIVE-BACKUP-IN-{{ $uplinkIndex }} permit 10
-            set local-preference {{ if eq $uplink.role "active" }}200{{ else }}100{{ end }}
-{{ if eq $uplink.role "backup" }}
-          route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-{{ $uplinkIndex }} permit 10
+{{ range $prefixIndex, $prefix := $.Values.evpn.bgp.acceptPrefixes }}
+          ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS seq {{ add1 $prefixIndex }} permit {{ $prefix }} ge 32 le 32
+{{ end }}
+          ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP seq 10 permit {{ printf "%s/32" $node.vtepIP }}
+          route-map OSAC-EVPN-ACTIVE-BACKUP-ACTIVE-IN permit 10
+            set local-preference 200
+          route-map OSAC-EVPN-ACTIVE-BACKUP-BACKUP-IN permit 10
+            set local-preference 100
+          route-map OSAC-EVPN-ACTIVE-BACKUP-BACKUP-OUT permit 10
             set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
-{{ end }}
-{{ end }}
+          route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-ACTIVE-IN permit 10
+            match ip address prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS
+            set local-preference 200
+          route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-ACTIVE-IN permit 100
+          route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-IN permit 10
+            match ip address prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS
+            set local-preference 100
+          route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-IN permit 100
+          route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-OUT permit 10
+            match ip address prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP
+            set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
+          route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-OUT permit 100
 {{ end }}
           router bgp {{ int64 $nodeASN }}
 {{ if $.Values.evpn.bgp.activeActive }}
             bgp bestpath as-path multipath-relax
 {{ end }}
-{{ if $.Values.evpn.bgp.activeActive }}
+{{ if or $.Values.evpn.bgp.activeActive $.Values.evpn.bgp.activeBackup }}
             address-family ipv4 unicast
+{{ if $.Values.evpn.bgp.activeActive }}
               maximum-paths 16
+{{ end }}
+    {{- range $uplinkIndex, $uplink := $node.uplinks }}
+{{- if $.Values.evpn.bgp.activeBackup }}
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-{{ if eq $uplink.role "active" }}ACTIVE{{ else }}BACKUP{{ end }}-IN in
+{{- if eq $uplink.role "backup" }}
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-OUT out
+{{- end }}
+{{- end }}
+    {{- end }}
             exit-address-family
 {{ end }}
             address-family l2vpn evpn
     {{- range $uplinkIndex, $uplink := $node.uplinks }}
 {{- if $.Values.evpn.bgp.activeBackup }}
-              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-IN-{{ $uplinkIndex }} in
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-{{ if eq $uplink.role "active" }}ACTIVE{{ else }}BACKUP{{ end }}-IN in
 {{- if eq $uplink.role "backup" }}
-              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-OUT-{{ $uplinkIndex }} out
+              neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} route-map OSAC-EVPN-ACTIVE-BACKUP-BACKUP-OUT out
 {{- end }}
 {{- end }}
               neighbor {{ if ($uplink.unnumbered | default false) }}{{ $uplink.interface }}{{ else }}{{ $uplink.peerAddress }}{{ end }} activate

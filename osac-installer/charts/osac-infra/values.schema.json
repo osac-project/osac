@@ -252,7 +252,7 @@
             },
             "activeBackup": {
               "type": "boolean",
-              "description": "Use each uplink's role to prefer active neighbors and prepend the node ASN on backup neighbors. Requires one active and at least one backup uplink per node.",
+              "description": "Use each uplink's role to prefer active neighbors and prepend the node ASN on backup neighbors in the IPv4 unicast and L2VPN EVPN address families. Requires one active and at least one backup uplink per node.",
               "default": false
             },
             "waitForEstablished": {

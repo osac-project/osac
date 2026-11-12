@@ -708,7 +708,7 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 | `evpn.bgp.asn` | Required default node ASN, assigned with the fabric admin. |
 | `evpn.bgp.acceptPrefixes` | Required fabric loopback IPv4 ranges supplied by the fabric admin. Only /32 routes are accepted. |
 | `evpn.bgp.activeActive` | Optional; defaults to `false`. Set `true` to allow up to 16 eligible IPv4 paths (`as-path multipath-relax`). |
-| `evpn.bgp.activeBackup` | Optional; defaults to `false` and is mutually exclusive with `activeActive`. Requires each node to have exactly one uplink with `role: active` and at least one with `role: backup`. When EVPN is enabled, L2VPN EVPN inbound route-maps set local preference to 200/100 without prefix matching; the backup outbound route-map prepends the node ASN three times to EVPN routes sent to that neighbor. |
+| `evpn.bgp.activeBackup` | Optional; defaults to `false` and is mutually exclusive with `activeActive`. Requires each node to have exactly one uplink with `role: active` and at least one with `role: backup`. When EVPN is enabled, IPv4 unicast route-maps match remote VTEP `/32` routes inbound and the local VTEP `/32` outbound, setting local preference to 200/100 and prepending the node ASN three times on backup outbound advertisements. L2VPN EVPN route-maps apply the same preferences without prefix matching. |
 | `evpn.bgp.waitForEstablished` | Fails installation if a configured BGP session does not become Established. |
 | `evpn.bgp.timeoutSeconds` | Maximum wait per BGP session. |
 | `evpn.bgp.bfdProfile` | Optional FRR-K8s BFD profile applied to every EVPN uplink; empty disables BFD. |

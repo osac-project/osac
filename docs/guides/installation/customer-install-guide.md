@@ -693,10 +693,10 @@ OSAC ([Section 4.4.1](#441-choosing-the-networking-settings)).
 
 Agree on the BGP mode as well. In the Helm example,
 `evpn.bgp.activeActive: true` enables up to 16 eligible IPv4-unicast paths.
-Alternatively, `evpn.bgp.activeBackup: true` applies L2VPN EVPN route
-preferences using exactly one uplink with `role: active` and at least one
-with `role: backup` per node. Both settings default to `false` and cannot
-be enabled together. They configure the OpenShift FRR side; the fabric
+Alternatively, `evpn.bgp.activeBackup: true` applies VTEP-route and L2VPN EVPN
+route preferences using exactly one uplink with `role: active` and at least one
+with `role: backup` per node. Both settings default to `false` and cannot be
+enabled together. They configure the OpenShift FRR side; the fabric
 administrator configures the corresponding leaf behavior. The
 [Helm Deployment Guide](helm-deployment-guide.md#evpn-host-networking-vmaas)
 contains the values and active-backup example.

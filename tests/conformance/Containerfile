@@ -6,6 +6,6 @@ WORKDIR /opt/osac
 
 COPY pyproject.toml uv.lock ./
 COPY tests ./tests
-RUN python3 -m pip install --no-cache-dir --no-build-isolation .
+RUN python3 -m pip install --no-cache-dir .
 
 ENTRYPOINT ["osac-conformance"]

@@ -677,10 +677,15 @@ fi
 # real kubeconfig so helm never silently uses localhost:8080. The default is
 # the kind file on PLATFORM=kind and ~/.kube/config on OpenShift. The frozen
 # value has origin "override", so the fallback assignments must be overrides
-# too; a plain assignment would leave the value empty.
+# too; a plain assignment would leave the value empty. The probe rule is a
+# second makefile rather than --eval, which needs GNU Make 3.82: Apple's
+# /usr/bin/make is 3.81, and these recipes call the literal make, so a
+# gmake on PATH would not help.
 echo "checking kubeconfig-empty-fallback (an empty KUBECONFIG uses the kind file)"
+probe_makefile="${TMP_DIR}/print-kubeconfig.mk"
+printf 'print-kubeconfig:\n\t@echo $(KUBECONFIG)\n' >"${probe_makefile}"
 if ! KUBECONFIG= make -C "${SANDBOX}" --no-print-directory \
-    --eval='print-kubeconfig: ; @echo $(KUBECONFIG)' \
+    -f Makefile -f "${probe_makefile}" \
     print-kubeconfig PLATFORM=kind PROFILE=dev NS=osac \
     >"${TMP_DIR}/kubeconfig-empty.out" 2>"${TMP_DIR}/kubeconfig-empty.err"; then
   fail "kubeconfig-empty-fallback: make rejected an empty KUBECONFIG"
@@ -692,7 +697,7 @@ grep -q -- '-kind\.kubeconfig$' "${TMP_DIR}/kubeconfig-empty.out" \
 # caller who exported an empty KUBECONFIG still reaches the cluster oc and
 # helm would use on their own.
 if ! KUBECONFIG= make -C "${SANDBOX}" --no-print-directory \
-    --eval='print-kubeconfig: ; @echo $(KUBECONFIG)' \
+    -f Makefile -f "${probe_makefile}" \
     print-kubeconfig PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
     >"${TMP_DIR}/kubeconfig-empty-openshift.out" \
     2>"${TMP_DIR}/kubeconfig-empty-openshift.err"; then

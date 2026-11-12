@@ -318,15 +318,34 @@ done <<<"${infra_arg_cmds}"
 # Gate/install parity for OIDC_IDP_CA_HELM_ARGS: every helm command
 # touching osac-infra in the install plan -- the gate's render, the
 # seed-check render, the EVPN deadline render, and the upgrade -- must
-# apply the same CA input, so a CA file (or a values-file caPem it
-# overrides) is validated identically everywhere and an unreadable or
-# schema-breaking input fails before any cluster change.
+# apply the same CA input in the same order, so a CA file (or a
+# values-file caPem it overrides) is validated identically everywhere and
+# an unreadable or schema-breaking input fails before any cluster change.
+# Helm applies repeated --set-file values in argument order and the last
+# one wins, so the order relative to INFRA_HELM_ARGS decides which caPem
+# is installed: OpenShift passes the CA input first and INFRA_HELM_ARGS
+# last, Kind the other way round.
+assert_ca_order() { # platform command label
+  local platform="$1" cmd="$2" label="$3"
+  local ca_before="${cmd%%--set-file keycloak.oidcIdpTrust.caPem*}"
+  local infra_before="${cmd%%--set topolvm.enabled=true*}"
+  [ "${ca_before}" != "${cmd}" ] && [ "${infra_before}" != "${cmd}" ] \
+    || fail "${label}: the CA input or INFRA_HELM_ARGS is missing from: ${cmd}"
+  if [ "${platform}" = openshift ]; then
+    [ "${#ca_before}" -lt "${#infra_before}" ] \
+      || fail "${label}: the CA input is applied after INFRA_HELM_ARGS: ${cmd}"
+  else
+    [ "${#ca_before}" -gt "${#infra_before}" ] \
+      || fail "${label}: the CA input is applied before INFRA_HELM_ARGS: ${cmd}"
+  fi
+}
 for ca_platform in kind openshift; do
   ca_plan="${TMP_DIR}/oidc-ca-${ca_platform}.plan"
   MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
     make -C "${SANDBOX}" --no-print-directory -n install-infra \
     PLATFORM="${ca_platform}" PROFILE=dev NS=osac \
     OIDC_IDP_CA_FILE=/nonexistent-ca.pem \
+    INFRA_HELM_ARGS='--set topolvm.enabled=true' \
     >"${ca_plan}" 2>/dev/null || fail "make -n install-infra (${ca_platform}) failed"
   ca_cmds=$(join_continuations <"${ca_plan}" \
     | sed -E 's/(helm (template|upgrade)|render_chart_offline)/\n\1/g' \
@@ -339,10 +358,14 @@ for ca_platform in kind openshift; do
       *--set-file\ keycloak.oidcIdpTrust.caPem*) ;;
       *) fail "install-infra (${ca_platform}): OIDC IdP CA input missing from: ${ca_cmd}" ;;
     esac
+    assert_ca_order "${ca_platform}" "${ca_cmd}" "install-infra (${ca_platform})"
   done <<<"${ca_cmds}"
-  join_continuations <"${ca_plan}" | grep 'netbox_seed_check osac-infra' \
-    | grep -q -- '--set-file keycloak.oidcIdpTrust.caPem' \
-    || fail "install-infra (${ca_platform}): the seed-check render omits the OIDC IdP CA input"
+  ca_seed_line=$(join_continuations <"${ca_plan}" \
+    | grep 'netbox_seed_check osac-infra' | head -1)
+  [ -n "${ca_seed_line}" ] \
+    || fail "install-infra (${ca_platform}): the plan lacks the seed-check render"
+  assert_ca_order "${ca_platform}" "${ca_seed_line}" \
+    "install-infra (${ca_platform}) seed check"
 done
 
 # OIDC_IDP_CA_FILE must be a reusable source. Helm reads "--set-file name=-"
@@ -386,6 +409,25 @@ grep -q 'no cluster changes were made' "${ca_fifo_err}" \
 if grep -q 'helm template' "${LOG}"; then
   fail "validate-inputs rendered a chart before rejecting a FIFO OIDC IdP CA input"
 fi
+
+# OIDC_IDP_CA_FILE is frozen verbatim like EXTRA_HELM_ARGS: a Make expression
+# in a caller value must not run at export or recipe-expansion time. The
+# literal path exists and carries no slash inside the expression, so the
+# render reads it; an expansion would run its touch in the sandbox instead.
+oidc_literal_sentinel="oidc-ca-make-sentinel"
+oidc_ca_literal="${TMP_DIR}/ca-$(date +%s)-\$(shell touch ${oidc_literal_sentinel})"
+printf 'pem\n' >"${oidc_ca_literal}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    "OIDC_IDP_CA_FILE=${oidc_ca_literal}" \
+    >"${TMP_DIR}/oidc-ca-make.out" 2>"${TMP_DIR}/oidc-ca-make.err"; then
+  :
+else
+  fail "oidc-ca-file-injection-make: the gate rejected a valid CA file path"
+fi
+[ ! -e "${SANDBOX}/${oidc_literal_sentinel}" ] \
+  || fail "oidc-ca-file-injection-make: a Make expression in OIDC_IDP_CA_FILE executed"
 
 # Cluster-lookup output must reach Make only through a validating filter:
 # the lookups feed $(eval), so a compromised or misbehaving API response
@@ -540,14 +582,20 @@ fi
 # REMOTE_CLUSTER_HELM_ARGS expand, and KUBECONFIG is frozen under an origin
 # guard before the kind-file default expands it. Both reach recipes through
 # the exported environment. The sentinel files prove no $(shell ...) side
-# effect ran at parse or export time; the values stay valid inputs.
+# effect ran at parse or export time; the values stay valid inputs. The gate
+# rejects an unreadable REMOTE_KUBECONFIG, so its literal path is created
+# first; the expression carries no slash so the whole value is one filename,
+# and an expansion would run its touch in the sandbox instead.
 echo "checking kubeconfig-injection-make (Make expressions in kubeconfigs stay data)"
+remote_literal_sentinel="remote-kubeconfig-make-sentinel"
+remote_kubeconfig_literal="${TMP_DIR}/remote-$(date +%s)-\$(shell touch ${remote_literal_sentinel})"
+: >"${remote_kubeconfig_literal}"
 : >"${LOG}"
 if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
   make -C "${SANDBOX}" --no-print-directory validate-inputs \
   PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
   "KUBECONFIG=/tmp/hub-$(date +%s)-$$\$(shell touch ${ns_sentinel}-kubeconfig)" \
-  "REMOTE_KUBECONFIG=/tmp/remote-$(date +%s)-$$\$(shell touch ${ns_sentinel}-remote-kubeconfig)" \
+  "REMOTE_KUBECONFIG=${remote_kubeconfig_literal}" \
   >"${TMP_DIR}/kubeconfig.out" 2>"${TMP_DIR}/kubeconfig.err"; then
   :
 else
@@ -555,11 +603,31 @@ else
 fi
 [ ! -e "${ns_sentinel}-kubeconfig" ] \
   || fail "kubeconfig-injection-make: a Make expression in KUBECONFIG executed"
-[ ! -e "${ns_sentinel}-remote-kubeconfig" ] \
+[ ! -e "${SANDBOX}/${remote_literal_sentinel}" ] \
   || fail "kubeconfig-injection-make: a Make expression in REMOTE_KUBECONFIG executed"
 grep -q 'Installer input validation passed' "${TMP_DIR}/kubeconfig.out" \
   || fail "kubeconfig-injection-make: the gate did not complete"
 assert_prevalidation_commands kubeconfig-injection-make
+
+# A missing path is not a valid remote-cluster input: install-osac would
+# create the namespace before its own readability check, so the gate must
+# reject it before any render or cluster change.
+echo "checking remote-kubeconfig-missing (the gate rejects an unreadable file)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  REMOTE_KUBECONFIG="${TMP_DIR}/absent-kubeconfig" \
+  >"${TMP_DIR}/kubeconfig-missing.out" 2>"${TMP_DIR}/kubeconfig-missing.err"; then
+  fail "validate-inputs accepted an unreadable REMOTE_KUBECONFIG"
+fi
+grep -q 'REMOTE_KUBECONFIG is not readable' "${TMP_DIR}/kubeconfig-missing.err" \
+  || fail "validate-inputs did not name the REMOTE_KUBECONFIG readability requirement"
+grep -q 'no cluster changes were made' "${TMP_DIR}/kubeconfig-missing.err" \
+  || fail "the REMOTE_KUBECONFIG failure did not state that no cluster changes were made"
+if grep -q 'helm template' "${LOG}"; then
+  fail "validate-inputs rendered a chart before rejecting an unreadable REMOTE_KUBECONFIG"
+fi
 
 # An empty caller KUBECONFIG is not a path: the Makefile must fall back to a
 # real kubeconfig so helm never silently uses localhost:8080. The default is

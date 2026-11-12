@@ -43,7 +43,12 @@ EXTRA_HELM_ARGS ?=
 override EXTRA_HELM_ARGS := $(value EXTRA_HELM_ARGS)
 export EXTRA_HELM_ARGS
 # Optional PEM CA bundle file for Keycloak's external OIDC identity providers.
+# Freeze the caller value verbatim before exporting it, like EXTRA_HELM_ARGS:
+# exporting a recursive variable makes Make expand a value such as
+# 'ca$(shell ...).pem', while the validator and Helm must receive the caller's
+# literal path.
 OIDC_IDP_CA_FILE ?=
+override OIDC_IDP_CA_FILE := $(value OIDC_IDP_CA_FILE)
 export OIDC_IDP_CA_FILE
 OIDC_IDP_CA_HELM_ARGS = $(if $(strip $(OIDC_IDP_CA_FILE)),--set-file keycloak.oidcIdpTrust.caPem="$${OIDC_IDP_CA_FILE}")
 FULFILLMENT_GINKGO_ARGS ?=
@@ -605,8 +610,8 @@ else
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.route.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
-		$(INFRA_HELM_ARGS) \
 		$(OIDC_IDP_CA_HELM_ARGS) \
+		$(INFRA_HELM_ARGS) \
 		2>/dev/null \
 		| awk \
 			-e '/^kind: Job$$/ { job=1 }' \
@@ -769,16 +774,18 @@ validate-inputs: validate-ns
 # expansion into the quoted bash -c string.
 	@bash -c 'source scripts/lib.sh && validate_oidc_idp_ca_file "$${OIDC_IDP_CA_FILE:-}"' \
 	|| { echo "ERROR: invalid OIDC IdP CA input; no cluster changes were made." >&2; exit 1; }
-# Remote-cluster identifiers are static inputs: the gate rejects an invalid
-# REMOTE_KUBECONFIG_SECRET_NAME/KEY before any cluster mutation. install-osac
-# re-checks them, but only after install-infra and namespace creation have
-# already changed the cluster. The identifiers reach the validator through
-# the exported environment, never through Make expansion into the quoted
-# bash -c string, so a value cannot break out of the quoting.
+# Remote-cluster inputs are static: the gate rejects an invalid
+# REMOTE_KUBECONFIG_SECRET_NAME/KEY and an unreadable REMOTE_KUBECONFIG
+# before any cluster mutation. install-osac re-checks both, but only after
+# install-infra and namespace creation have already changed the cluster.
+# The values reach the validators through the exported environment, never
+# through Make expansion into the quoted bash -c string, so a value cannot
+# break out of the quoting.
 ifneq ($(strip $(REMOTE_KUBECONFIG)),)
 	@bash -c 'source scripts/lib.sh && \
 		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"' \
 	|| { echo "ERROR: invalid remote-cluster inputs; no cluster changes were made. Fix REMOTE_KUBECONFIG_SECRET_NAME/KEY and retry." >&2; exit 1; }
+	@[ -r "$${REMOTE_KUBECONFIG}" ] || { echo "ERROR: REMOTE_KUBECONFIG is not readable; no cluster changes were made. Fix the path or its permissions and retry." >&2; exit 1; }
 endif
 ifeq ($(PLATFORM),kind)
 	@source scripts/lib.sh && render_chart_offline osac-infra $(INFRA_CHART) \
@@ -824,6 +831,10 @@ else
 		--set lvms.channel=stable-$(OCP_VERSION) \
 		$(INFRA_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for osac-deps; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+# Helm applies repeated --set-file values in argument order, so the last one
+# wins. install-infra's OpenShift upgrade passes OIDC_IDP_CA_HELM_ARGS first
+# and INFRA_HELM_ARGS last; these gate renders keep that order so validation
+# checks the CA bundle the upgrade installs.
 	@source scripts/lib.sh && render_chart_offline osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
 		--values $(INFRA_VALUES) $${INFRA_VALUES_EXTRA} \
@@ -833,8 +844,8 @@ else
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
-		$(INFRA_HELM_ARGS) \
 		$(OIDC_IDP_CA_HELM_ARGS) \
+		$(INFRA_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 	@export NETBOX_SEED_WILL_RUN=$(NETBOX_SEED_WILL_RUN); source scripts/lib.sh && split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}" && \
 	netbox_seed_check osac-infra $(INFRA_CHART) \
@@ -846,7 +857,7 @@ else
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
-		$(INFRA_HELM_ARGS) $(OIDC_IDP_CA_HELM_ARGS) && \
+		$(OIDC_IDP_CA_HELM_ARGS) $(INFRA_HELM_ARGS) && \
 	render_osac_chart_offline "$(NETBOX_OFFLINE_PLACEHOLDER)" \
 		osac "$${OSAC_CHART_OCI_REF:-$(OSAC_CHART)}" $${OSAC_CHART_OCI_VERSION:+--version "$${OSAC_CHART_OCI_VERSION}"} \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
@@ -870,14 +881,16 @@ endif
 # first, whose namespace creation and readiness waits must not happen
 # before a missing license or a non-https remote address is rejected.
 # They are checked here, after the shared gate and before any cluster
-# change, so install-infra alone still requires no license. The
-# REMOTE_KUBECONFIG readability check stays at install time (and in the
-# gate) because the file's permissions can change between validation and
-# install.
+# change, so install-infra alone still requires no license. The license is
+# checked for readability as well as existence: an unreadable file would
+# otherwise pass here and fail only while reading it for the Secret, after
+# the namespace exists. install-osac re-checks REMOTE_KUBECONFIG because
+# the file's permissions can change between validation and install.
 validate-osac-inputs: validate-inputs
 ifneq ($(PLATFORM),kind)
 	@[ -n "$${AAP_LICENSE_FILE}" ] || { echo "ERROR: AAP_LICENSE_FILE is required for PLATFORM=openshift" >&2; exit 1; }
 	@[ -f "$${AAP_LICENSE_FILE}" ] || { echo "ERROR: AAP_LICENSE_FILE not found; check the path you supplied" >&2; exit 1; }
+	@[ -r "$${AAP_LICENSE_FILE}" ] || { echo "ERROR: AAP_LICENSE_FILE is not readable; check the permissions on the path you supplied" >&2; exit 1; }
 	@if [ -n "$${REMOTE_API_ADDRESS}" ]; then case "$${REMOTE_API_ADDRESS}" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; fi
 endif
 
@@ -1060,7 +1073,8 @@ endif
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(filter openshift,$(PLATFORM)),--set service.externalHostname=fulfillment-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set global.clusterDomain=$(DRY_RUN_CLUSTER_DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac --set ui.externalHostname=osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN)) \
 		$(INSTANCE_HELM_ARGS) \
-		$${ARGV[@]+"$${ARGV[@]}"}
+		$${ARGV[@]+"$${ARGV[@]}"} \
+		$(REMOTE_CLUSTER_HELM_ARGS)
 ifeq ($(PROFILE),dev-full)
 	helm dependency build charts/osac-devstack
 	helm template osac-devstack charts/osac-devstack \

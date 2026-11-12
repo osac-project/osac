@@ -188,14 +188,32 @@ describe('ClusterConfigurationCard', () => {
         state: ClusterUpgradeState.FAILED,
         message: 'The attempted upgrade failed',
       }),
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'nodeSetId', value: 'workers' } },
+        targetVersion: '4.19.0',
+        state: ClusterUpgradeState.FAILED,
+      }),
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        sourceVersion: '4.17.0',
+        targetVersion: '4.17.1',
+        state: ClusterUpgradeState.FAILED,
+      }),
     ];
-    const alternateVersion = create(ClusterVersionSchema, {
+    const previouslyFailedVersion = create(ClusterVersionSchema, {
       id: 'version-4-17-1',
       metadata: { name: 'ocp-4-17-1', tenant: 'shared', project: 'project-a' },
       spec: { version: '4.17.1', state: ClusterVersionState.ACTIVE, enabled: true },
     });
+    const alternateVersion = create(ClusterVersionSchema, {
+      id: 'version-4-19',
+      metadata: { name: 'ocp-4-19', tenant: 'shared', project: 'project-a' },
+      spec: { version: '4.19.0', state: ClusterVersionState.ACTIVE, enabled: true },
+    });
     const { user } = renderWithProviders(<ClusterConfigurationCard cluster={failed} />, {
-      apiFixtures: { clusterVersions: [currentVersion, targetVersion, alternateVersion] },
+      apiFixtures: {
+        clusterVersions: [currentVersion, targetVersion, previouslyFailedVersion, alternateVersion],
+      },
     });
 
     await waitFor(() =>
@@ -205,7 +223,8 @@ describe('ClusterConfigurationCard', () => {
     expect(screen.getByText('The attempted upgrade failed')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Upgrade cluster' }));
     await user.click(screen.getByLabelText(/^Target version/));
-    expect(screen.getByRole('option', { name: '4.17.1' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '4.19.0' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '4.17.1' })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: '4.18.0' })).not.toBeInTheDocument();
   });
 

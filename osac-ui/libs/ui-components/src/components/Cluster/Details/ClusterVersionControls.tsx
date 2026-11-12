@@ -49,7 +49,8 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
     cluster.status?.state === ClusterState.DELETING ||
     cluster.status?.state === ClusterState.DELETE_FAILED;
   const latestUpgrade = cluster.status?.upgradeHistory[0];
-  const latestControlPlaneUpgrade = getControlPlaneUpgradeHistory(cluster)[0];
+  const controlPlaneUpgradeHistory = getControlPlaneUpgradeHistory(cluster);
+  const latestControlPlaneUpgrade = controlPlaneUpgradeHistory[0];
   const observedVersion = cluster.status?.observedVersion;
   const activeTarget = getActiveControlPlaneUpgradeTarget(cluster);
   const upgradePending = latestControlPlaneUpgrade?.state === ClusterUpgradeState.PENDING;
@@ -95,9 +96,17 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   } else if (configuredVersionQuery.isError || catalogQuery.isError) {
     action = { kind: 'blocked', reason: t('Could not load upgrade options.') };
   } else {
+    const failedVersions = new Set(
+      controlPlaneUpgradeHistory
+        .filter((entry) => entry.state === ClusterUpgradeState.FAILED)
+        .map((entry) => entry.targetVersion),
+    );
+    const candidates = (catalogQuery.data?.items ?? []).filter(
+      (version) => !failedVersions.has(version.spec?.version ?? ''),
+    );
     choices = resolveClusterUpgradeChoices(
       configuredVersion,
-      catalogQuery.data?.items ?? [],
+      candidates,
       t,
       upgradeFailed ? observedVersion : undefined,
     );

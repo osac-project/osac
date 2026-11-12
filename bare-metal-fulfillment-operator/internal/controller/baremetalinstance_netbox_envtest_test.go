@@ -401,8 +401,6 @@ func netboxDeviceFields(cpuCores int) map[string]any {
 	}
 }
 
-// Cases TC-INT-001 to TC-INT-003 from the NetBox testplan:
-// enhancement-proposals/enhancements/OSAC-1610-netbox-inventory/testplan.md.
 var _ = Describe("BareMetalInstance NetBox Integration", func() {
 	var mock *mockNetBox
 

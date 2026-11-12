@@ -39,10 +39,7 @@ const (
 	bareMetalInstanceTemplatesPath = "/api/fulfillment/v1/baremetal_instance_templates"
 	bareMetalInstanceCatalogsPath  = "/api/fulfillment/v1/baremetal_instance_catalog_items"
 	diskImagesPath                 = "/api/fulfillment/v1/disk_images"
-
-	// The public Secrets service isn't registered in the REST gateway, so its /api/fulfillment/v1/secrets paths
-	// return 404; only the private service is served. Use the private paths until that is fixed. See OSAC-7381.
-	secretsPath = "/api/private/v1/secrets"
+	secretsPath                    = "/api/fulfillment/v1/secrets"
 )
 
 // requestTimeout bounds each individual HTTP request. The creation of a bare metal instance polls with repeated

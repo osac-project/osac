@@ -60,8 +60,13 @@ const clusterVersions = [
   }),
 ];
 
-const createTransport = (clusters: Cluster[], versions = clusterVersions) => {
+const createTransport = (
+  clusters: Cluster[],
+  versions = clusterVersions,
+  versionListGate?: Promise<void>,
+) => {
   let clusterListFilter: string | undefined;
+  let clusterListRequests = 0;
   const capturedVersionFilters: string[] = [];
 
   const transport = wrapWithAuthInterceptor(
@@ -71,6 +76,7 @@ const createTransport = (clusters: Cluster[], versions = clusterVersions) => {
       });
       router.service(Clusters, {
         list: (req) => {
+          clusterListRequests += 1;
           if (req.limit === 0) {
             return { items: [], total: clusters.length };
           }
@@ -81,7 +87,8 @@ const createTransport = (clusters: Cluster[], versions = clusterVersions) => {
         create: (req) => ({ object: { id: 'cluster-new', ...req.object } }),
       });
       router.service(ClusterVersions, {
-        list: (req) => {
+        list: async (req) => {
+          await versionListGate;
           capturedVersionFilters.push(req.filter ?? '');
           if (
             req.filter?.includes('this.metadata.name in') ||
@@ -117,6 +124,7 @@ const createTransport = (clusters: Cluster[], versions = clusterVersions) => {
   return {
     transport,
     getClusterListFilter: () => clusterListFilter,
+    getClusterListRequests: () => clusterListRequests,
     getCapturedVersionFilters: () => capturedVersionFilters,
   };
 };
@@ -150,6 +158,26 @@ describe('ClustersPage', () => {
     await waitFor(() => {
       expect(getClusterListFilter()).toBe(expected);
     });
+  });
+
+  it('loads clusters while selected version metadata is pending', async () => {
+    let releaseVersions = () => {};
+    const versionListGate = new Promise<void>((resolve) => {
+      releaseVersions = resolve;
+    });
+    const { transport, getClusterListRequests, getClusterListFilter } = createTransport(
+      [makeCluster('c-active', 'v4.17')],
+      clusterVersions,
+      versionListGate,
+    );
+
+    renderClustersPage(transport, ['/?clusterVersion=v4.17']);
+
+    await waitFor(() => expect(getClusterListRequests()).toBeGreaterThan(0));
+    releaseVersions();
+    await waitFor(() =>
+      expect(getClusterListFilter()).toBe(buildClusterListFilter({ observedVersions: ['4.17.0'] })),
+    );
   });
 
   it('resolves a selected version beyond the first catalog page', async () => {
@@ -231,7 +259,8 @@ describe('ClustersPage', () => {
     const { transport, getClusterListFilter } = createTransport([upgrading]);
     renderClustersPage(transport, ['/?clusterVersion=v4.15']);
 
-    expect(await screen.findByText('OpenShift 4.15.0')).toBeInTheDocument();
+    await screen.findByText('c-upgrading');
+    expect(screen.getAllByText('OpenShift 4.15.0')).toHaveLength(2);
     await waitFor(() => {
       expect(getClusterListFilter()).toBe('this.status.observed_version in ["4.15.0"]');
     });

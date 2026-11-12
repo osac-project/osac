@@ -8,6 +8,8 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  Flex,
+  FlexItem,
 } from '@patternfly/react-core';
 
 import type { Cluster } from '@osac/types';
@@ -25,7 +27,7 @@ interface ClusterConfigurationCardProps {
 
 export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardProps) => {
   const { t } = useTranslation();
-  const [historyClusterId, setHistoryClusterId] = useState<string>();
+  const [clusterHistoryOpen, setClusterHistoryOpen] = useState(false);
   const catalogItem = cluster.spec?.catalogItem;
   const upgradeHistory = getControlPlaneUpgradeHistory(cluster);
 
@@ -36,17 +38,16 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
         <DescriptionList isCompact>
           <DescriptionListGroup>
             <DescriptionListTerm>
-              {t('Current version')}
-              {upgradeHistory.length > 0 && (
-                <Button
-                  variant="link"
-                  isInline
-                  className="pf-v6-u-ml-sm"
-                  onClick={() => setHistoryClusterId(cluster.id)}
-                >
-                  {t('Upgrade history')}
-                </Button>
-              )}
+              <Flex spaceItems={{ default: 'spaceItemsXs' }}>
+                <FlexItem>{t('Current version')}</FlexItem>
+                {upgradeHistory.length > 0 && (
+                  <FlexItem>
+                    <Button variant="link" isInline onClick={() => setClusterHistoryOpen(true)}>
+                      {t('Upgrade history')}
+                    </Button>
+                  </FlexItem>
+                )}
+              </Flex>
             </DescriptionListTerm>
             <DescriptionListDescription>
               <ClusterVersionControls cluster={cluster} />
@@ -72,10 +73,10 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
           </DescriptionListGroup>
         </DescriptionList>
       </CardBody>
-      {historyClusterId === cluster.id && upgradeHistory.length > 0 && (
+      {clusterHistoryOpen && upgradeHistory.length > 0 && (
         <ClusterUpgradeHistoryModal
           attempts={upgradeHistory}
-          onClose={() => setHistoryClusterId(undefined)}
+          onClose={() => setClusterHistoryOpen(false)}
         />
       )}
     </Card>

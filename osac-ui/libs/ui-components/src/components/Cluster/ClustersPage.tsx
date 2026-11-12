@@ -62,10 +62,11 @@ export const ClustersPage = () => {
   const [searchResetKey, setSearchResetKey] = useState(0);
   const hasVersionFilter = versionFilterParams.length > 0;
 
-  const { data: clusterVersionReply, error: versionLoadError } = useListAllResources(
-    ClusterVersions,
-    CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
-  );
+  const {
+    data: clusterVersionReply,
+    error: versionLoadError,
+    isLoading: versionsLoading,
+  } = useListAllResources(ClusterVersions, CLUSTER_VERSION_ALL_STATES_LIST_FILTER);
   const clusterVersions = useMemo(() => clusterVersionReply?.items ?? [], [clusterVersionReply]);
   const observedVersions = useMemo(() => {
     if (!hasVersionFilter) {
@@ -91,19 +92,14 @@ export const ClustersPage = () => {
     [observedVersions, search, statusFilter],
   );
 
-  const canLoadClusters = !hasVersionFilter || Boolean(clusterVersionReply);
-  const waitingForVersions = hasVersionFilter && !clusterVersionReply && !versionLoadError;
   const {
     clusters,
     totalItems,
     isLoading: clustersLoading,
     error: clusterError,
-  } = useClusters(listFilter, canLoadClusters);
-  let pageError = clusterError;
-  if (hasVersionFilter) {
-    pageError ??= versionLoadError;
-  }
-  const pageLoading = clustersLoading || waitingForVersions;
+  } = useClusters(listFilter);
+  const pageError = clusterError || (hasVersionFilter ? versionLoadError : undefined);
+  const pageLoading = clustersLoading || (hasVersionFilter && versionsLoading);
 
   const clusterVersionBySemver = useMemo(() => {
     const versionsBySemver = new Map<string, ClusterVersion>();

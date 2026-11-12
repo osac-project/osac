@@ -9,7 +9,6 @@ import {
 } from '@patternfly/react-core';
 
 import { type Cluster, type ClusterVersion } from '@osac/types';
-import { formatClusterCatalogVersionLabel } from '@osac/ui-components/components/catalog/clusterCatalogItemResourceDisplay';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import { GuestOsIcon } from '../../shared/GuestOsIcon';
@@ -24,11 +23,7 @@ interface ClusterResourcesProps {
 const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) => {
   const { t } = useTranslation();
   const observedVersion = cluster.status?.observedVersion;
-  const versionLabel = formatClusterCatalogVersionLabel(observedVersion) || '—';
-  const observedCatalogVersion =
-    observedVersion && clusterVersion?.spec?.version === observedVersion
-      ? clusterVersion
-      : undefined;
+  const versionLabel = observedVersion ? `OpenShift ${observedVersion}` : '—';
   const activeTarget = getActiveControlPlaneUpgradeTarget(cluster);
 
   const specNodeSets = cluster.spec?.nodeSets;
@@ -73,9 +68,9 @@ const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) =>
               <FlexItem>
                 <Label color="blue">{t('Upgrade in progress')}</Label>
               </FlexItem>
-            ) : observedCatalogVersion ? (
+            ) : clusterVersion ? (
               <FlexItem>
-                <ClusterVersionLifecycleLabel clusterVersion={observedCatalogVersion} />
+                <ClusterVersionLifecycleLabel clusterVersion={clusterVersion} />
               </FlexItem>
             ) : null}
           </Flex>

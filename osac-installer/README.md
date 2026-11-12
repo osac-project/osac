@@ -790,7 +790,10 @@ Separate external releases installed on Kind (`cert-manager`, `trust-manager`,
 `envoy-gateway`, and `strimzi-cluster-operator`) are not rendered by this gate.
 (With `DRY_RUN=1`, `install` renders offline via
 `install-dry-run` and skips the gate — the dry run is itself an offline
-render.) Invalid values — wrong types, negative numbers where only
+render. Because `install-dry-run` calls `helm template` directly rather
+than through the gate, it does not suppress Helm's message: a failing dry
+run prints Helm's raw error, which can echo the rejected value, to the
+terminal or CI log.) Invalid values — wrong types, negative numbers where only
 zero-or-positive is allowed, unknown keys in schema-closed sections —
 fail the install before any namespace, secret, or release is created,
 and before any readiness wait. Unknown-key rejection depends on the

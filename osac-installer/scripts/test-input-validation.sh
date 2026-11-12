@@ -345,6 +345,26 @@ for ca_platform in kind openshift; do
     || fail "install-infra (${ca_platform}): the seed-check render omits the OIDC IdP CA input"
 done
 
+# OIDC_IDP_CA_FILE must be a reusable file path. Helm reads
+# "--set-file name=-" from stdin, which the gate renders more than once, so
+# later renders would see an empty caPem. The gate must reject the spelling
+# before the first render, and the diagnostic must not echo the value.
+: >"${LOG}"
+ca_stdin_err="${TMP_DIR}/oidc-ca-stdin.err"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac OIDC_IDP_CA_FILE=- \
+    >"${TMP_DIR}/oidc-ca-stdin.out" 2>"${ca_stdin_err}"; then
+  fail "validate-inputs accepted OIDC_IDP_CA_FILE=- (stdin)"
+fi
+grep -q 'OIDC_IDP_CA_FILE must be a file path' "${ca_stdin_err}" \
+  || fail "validate-inputs did not name the OIDC IdP CA input requirement"
+grep -q 'no cluster changes were made' "${ca_stdin_err}" \
+  || fail "the OIDC IdP CA failure did not state that no cluster changes were made"
+if grep -q 'helm template' "${LOG}"; then
+  fail "validate-inputs rendered a chart before rejecting a stdin OIDC IdP CA input"
+fi
+
 # Cluster-lookup output must reach Make only through a validating filter:
 # the lookups feed $(eval), so a compromised or misbehaving API response
 # carrying Make syntax must fail the gate instead of executing. The

@@ -757,6 +757,14 @@ validate-ns:
 	@bash -c 'source scripts/lib.sh && validate_namespace "$${NS:?NS is required}"' \
 	|| { echo "ERROR: invalid NS; no cluster changes were made. NS must be a lowercase DNS label (a-z, 0-9, '-', at most 63 characters)." >&2; exit 1; }
 validate-inputs: validate-ns
+# Helm reads "--set-file name=-" from stdin, but the gate and install-infra
+# render the same argument more than once: the first render consumes the
+# stream and later ones would see an empty caPem. Reject that spelling before
+# any render or cluster change. The value reaches the validator through the
+# exported environment, never through Make expansion into the quoted bash -c
+# string.
+	@bash -c 'source scripts/lib.sh && validate_oidc_idp_ca_file "$${OIDC_IDP_CA_FILE:-}"' \
+	|| { echo "ERROR: invalid OIDC IdP CA input; no cluster changes were made." >&2; exit 1; }
 # Remote-cluster identifiers are static inputs: the gate rejects an invalid
 # REMOTE_KUBECONFIG_SECRET_NAME/KEY before any cluster mutation. install-osac
 # re-checks them, but only after install-infra and namespace creation have

@@ -259,6 +259,24 @@ validate_namespace() {
     return 0
 }
 
+# Helm treats "--set-file name=-" as stdin, and the gate and install-infra
+# render the same argument more than once. A single stdin stream is consumed
+# by the first render, so every later render would see an empty caPem and
+# could drop the OIDC IdP trust Secret. Reject that spelling before the first
+# render; a file path stays reusable, and the render itself validates that it
+# can be read. The value is not echoed, so a rejected input cannot reach the
+# log.
+validate_oidc_idp_ca_file() {
+    local ca_file="$1"
+
+    if [ "${ca_file}" = '-' ]; then
+        echo "ERROR: OIDC_IDP_CA_FILE must be a file path, not '-' (stdin): every render applies the same --set-file argument, so the first render would consume stdin and later ones would see an empty caPem." >&2
+        return 1
+    fi
+
+    return 0
+}
+
 # Split a caller-supplied argument string into argv words the way a POSIX
 # shell would, without evaluating it. Whitespace separates words; single
 # quotes, double quotes, and backslashes group and escape characters; word

@@ -271,7 +271,7 @@ helm-osac-csi-driver:
 helm-osac-metering:
   - '{osac-metering/charts/**,.github/workflows/helm-lint.yaml}'
 helm-osac-installer:
-  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/test-mce-render.py,osac-installer/scripts/test-billing-render.py,osac-installer/scripts/test-chart-name-independence-render.py,osac-installer/scripts/lib.sh,osac-installer/scripts/test-infra-ready-wait.sh,osac-installer/scripts/test-input-validation.sh,osac-installer/scripts/test-validation-diagnostics.py,.github/workflows/helm-lint.yaml}'
+  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/test-mce-render.py,osac-installer/scripts/test-billing-render.py,osac-installer/scripts/test-chart-name-independence-render.py,osac-installer/scripts/test-networking-values.py,osac-installer/scripts/test-network-class-step.py,osac-installer/scripts/test-netris-ca-lifecycle.py,osac-installer/scripts/test-bmf-netbox-render.py,osac-installer/scripts/lib.sh,osac-installer/scripts/test-infra-ready-wait.sh,osac-installer/scripts/test-input-validation.sh,osac-installer/scripts/test-validation-diagnostics.py,.github/workflows/helm-lint.yaml}'
 
 # Gates check-generated-code.yaml.
 proto-check:

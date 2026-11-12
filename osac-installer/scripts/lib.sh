@@ -549,6 +549,18 @@ offline_render_error() {
             echo "metering.readers[].name: must not use the reserved osac- or osac. name prefix" >&2 ;;
         *"NETRIS_CONTROLLER_URL must be an https:// URL"*)
             echo "instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL must be an https:// URL" >&2 ;;
+        # The EVPN duplicate checks name the rejected entry by its index
+        # and never by its node name or addresses, so their fail text is
+        # chart-authored and value-free. Echo only the matched phrase, so
+        # caller text on the same error line cannot reach the output.
+        *"evpn.nodes: duplicate"*)
+            printf '%s\n' "$1" | LC_ALL=C awk '
+                !seen && /^Error: / {
+                    seen = 1
+                    if (match($0, /evpn\.nodes: duplicate [A-Za-z ]+index [0-9]+/))
+                        print substr($0, RSTART, RLENGTH)
+                    next
+                }' >&2 ;;
         *)
             # Any other failure keeps the generic line above. Only the
             # diagnostics Helm itself writes are echoed back: the

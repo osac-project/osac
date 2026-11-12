@@ -179,6 +179,52 @@ class ValidationDiagnosticsTests(unittest.TestCase):
             result.stderr,
         )
 
+    def test_offline_render_error_reports_evpn_duplicate_index(self):
+        """Check an EVPN duplicate failure names the entry by its index."""
+        for text in (
+            "evpn.nodes: duplicate node name at index 3",
+            "evpn.nodes: duplicate vtepIP at index 4",
+            "evpn.nodes: duplicate peerAddress in uplinks of node index 5",
+        ):
+            with self.subTest(text=text):
+                message = (
+                    "Error: execution error at "
+                    f"(osac-infra/templates/evpn.yaml:6:8): {text}\n"
+                    "\nUse --debug flag to render out invalid YAML\n"
+                )
+                result = subprocess.run(
+                    ["bash", "-c",
+                     'source "$1"; offline_render_error "$2"',
+                     "bash", str(INSTALLER / "scripts/lib.sh"), message],
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assert_private(result.stdout + result.stderr)
+                self.assertIn(text, result.stderr)
+                self.assertNotIn(
+                    "template check failed in", result.stderr)
+
+    def test_offline_render_error_hides_evpn_entry_text(self):
+        """Check only the chart's value-free duplicate phrase is printed."""
+        message = (
+            "Error: execution error at "
+            "(osac-infra/templates/evpn.yaml:6:8): evpn.nodes: "
+            f"duplicate node name at index 2 {self.hostname}\n"
+            "Error: execution error at "
+            "(osac-infra/templates/evpn.yaml:9:3): "
+            "evpn.nodes: duplicate vtepIP at index 9\n"
+        )
+        result = subprocess.run(
+            ["bash", "-c", 'source "$1"; offline_render_error "$2"',
+             "bash", str(INSTALLER / "scripts/lib.sh"), message],
+            text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assert_private(result.stdout + result.stderr)
+        self.assertIn(
+            "evpn.nodes: duplicate node name at index 2", result.stderr)
+        self.assertNotIn("index 9", result.stderr)
+
     def test_offline_render_error_ignores_embedded_location(self):
         """Check a path-shaped token in the message is never printed."""
         message = (

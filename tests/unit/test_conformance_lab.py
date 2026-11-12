@@ -123,6 +123,27 @@ def test_kubectl_client_parses_registrations_and_release(monkeypatch: pytest.Mon
     assert commands
 
 
+def test_kubectl_client_uses_the_osac_namespace_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(*args: str, timeout: int = 300) -> str:
+        commands.append(args)
+        if "configmaps" in args:
+            return json.dumps({"items": []})
+        return json.dumps({"items": [{"metadata": {"labels": {"name": "osac", "version": "7"}}}]})
+
+    monkeypatch.setattr("tests.conformance.lab.run", fake_run)
+    monkeypatch.setenv("OSAC_NAMESPACE", "osac-devel")
+
+    client = KubectlLabClient()
+    client.registrations(kubeconfig=tmp_path / "hub")
+    client.installed_release(kubeconfig=tmp_path / "hub")
+
+    assert commands
+    for command in commands:
+        assert command[command.index("-n") + 1] == "osac-devel"
+
+
 def test_read_lab_filters_registrations_by_area_source(tmp_path: Path) -> None:
     area = AreaDeclaration(
         name="networking",

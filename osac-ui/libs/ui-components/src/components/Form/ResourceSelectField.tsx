@@ -5,7 +5,7 @@ import { TypeaheadSelect, type TypeaheadSelectOption } from '@patternfly/react-t
 import { useField } from 'formik';
 
 import type { ListParams } from '@osac/ui-components/api/types';
-import { useListAllResources, useListResource } from '@osac/ui-components/api/use-resource';
+import { useListResource } from '@osac/ui-components/api/use-resource';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 import { getVisibleFieldError } from './fieldError';
@@ -14,7 +14,6 @@ import { FormFieldHelper } from './FormFieldHelper';
 import { type ResourceSelectValue } from './resourceSelectValue';
 
 type ListService = Parameters<typeof useListResource>[0];
-type ListAllService = Parameters<typeof useListAllResources>[0];
 
 export type { ResourceSelectValue } from './resourceSelectValue';
 export { emptyResourceSelectValue } from './resourceSelectValue';
@@ -44,11 +43,7 @@ export interface ResourceSelectFieldProps<TResource extends ResourceListItem = R
   createOption?: { label: string; onSelect: () => void };
   /** Called after a new resource is selected. Use to trigger cascade resets. */
   onSelectResource?: (value: ResourceSelectValue, resource?: TResource) => void;
-  /**
-   * Client-side filter applied after the list response (e.g. GPU compatibility).
-   * When set, every matching page is fetched before filtering so later-page
-   * targets are not dropped by the default list page size.
-   */
+  /** Client-side filter applied after the list response (e.g. GPU-class). */
   filterItems?: (item: TResource) => boolean;
   /** Label for options and the closed toggle. Defaults to metadata.name. */
   formatOptionLabel?: (item: TResource) => string;
@@ -89,18 +84,7 @@ export const ResourceSelectField = <TResource extends ResourceListItem = Resourc
   const [typeaheadKey, setTypeaheadKey] = useState(0);
   const showValidationErrors = useShowFieldValidationErrors();
   const error = getVisibleFieldError(meta, showValidationErrors);
-  // Client-side filters must see the full catalog, not only the first page.
-  const fetchAllPages = Boolean(filterItems);
-  const singlePageQuery = useListResource(service, request, { enabled: !fetchAllPages });
-  const allPagesQuery = useListAllResources(service as ListAllService, request?.filter, {
-    enabled: fetchAllPages,
-  });
-  const {
-    data,
-    isLoading,
-    isFetching,
-    error: loadError,
-  } = fetchAllPages ? allPagesQuery : singlePageQuery;
+  const { data, isLoading, isFetching, error: loadError } = useListResource(service, request);
   const items = useMemo(() => {
     const listed = ((data as { items?: TResource[] } | undefined)?.items ?? []).filter(
       (item) => item.id,

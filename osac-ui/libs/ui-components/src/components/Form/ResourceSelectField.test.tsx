@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { Formik, type FormikErrors } from 'formik';
 import { describe, expect, it, vi } from 'vitest';
@@ -32,7 +32,6 @@ const renderSelect = ({
   initialValue = emptyResourceSelectValue(),
   labelHelp,
   tenants = [makeTenant('only-1', 'Only tenant')],
-  transport,
   transportOverrides,
   createOption,
 }: {
@@ -43,7 +42,6 @@ const renderSelect = ({
   initialValue?: ResourceSelectValue;
   labelHelp?: ReactElement;
   tenants?: Tenant[];
-  transport?: ReturnType<typeof createRouterTransport>;
   transportOverrides?: MockTransportOverrides;
   createOption?: { label: string; onSelect: () => void };
 } = {}) => {
@@ -92,7 +90,7 @@ const renderSelect = ({
         </>
       )}
     </Formik>,
-    { apiFixtures: { tenants }, transport, transportOverrides },
+    { apiFixtures: { tenants }, transportOverrides },
   );
 
   return {
@@ -248,41 +246,6 @@ describe('ResourceSelectField', () => {
 
     expect(screen.getByRole('option', { name: 'globex' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'acme' })).not.toBeInTheDocument();
-  });
-
-  it('loads every list page before applying filterItems', async () => {
-    const tenants = Array.from({ length: 101 }, (_, index) =>
-      makeTenant(`t-${index}`, index === 100 ? 'page-two-match' : `tenant-${index}`),
-    );
-    const listCalls: { offset?: number; limit?: number }[] = [];
-    const transport = createRouterTransport((router) => {
-      router.service(Tenants, {
-        list: (request) => {
-          const offset = request.offset ?? 0;
-          const limit = request.limit && request.limit > 0 ? request.limit : 100;
-          listCalls.push({ offset, limit });
-          const items = tenants.slice(offset, offset + limit);
-          return { items, size: items.length, total: tenants.length };
-        },
-      });
-    });
-
-    const { user } = renderSelect({
-      transport,
-      filterItems: (item) => item.id === 't-100',
-    });
-
-    await waitFor(() => {
-      expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled();
-    });
-    expect(listCalls.filter((call) => call.limit === 100)).toEqual([
-      { offset: 0, limit: 100 },
-      { offset: 100, limit: 100 },
-    ]);
-
-    await user.click(screen.getByLabelText(/^Tenant/));
-    expect(await screen.findByRole('option', { name: 'page-two-match' })).toBeInTheDocument();
-    expect(screen.getAllByRole('option')).toHaveLength(1);
   });
 
   it('renders formatOptionLabel for options and the toggle', async () => {

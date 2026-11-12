@@ -88,7 +88,7 @@ describe('isGpuCompatibleInstanceType', () => {
 });
 
 describe('formatInstanceTypeOptionLabel', () => {
-  it('includes GPU count, resource name, and PCI selector when present', () => {
+  it('groups GPU count and resource name under the GPU clause', () => {
     const instanceType = makeInstanceType({
       id: 'u1-gpu-small',
       metadata: { name: 'u1-gpu-small' },
@@ -101,11 +101,11 @@ describe('formatInstanceTypeOptionLabel', () => {
     });
 
     expect(formatInstanceTypeOptionLabel(instanceType)).toBe(
-      'u1-gpu-small — 2 vCPUs, 4 GiB, 1 GPU, nvidia.com/A100, 10DE:20B0',
+      'u1-gpu-small — 2 vCPUs, 4 GiB · 1 GPU · nvidia.com/A100',
     );
   });
 
-  it('omits empty PCI selector from the option label', () => {
+  it('omits PCI selector from the option label', () => {
     const instanceType = makeInstanceType({
       id: 'gpu-no-selector',
       metadata: { name: 'gpu-no-selector' },
@@ -113,12 +113,12 @@ describe('formatInstanceTypeOptionLabel', () => {
         vcpus: 4,
         memoryGib: 16,
         state: InstanceTypeState.ACTIVE,
-        gpu: { count: 1, resourceName: 'nvidia.com/gpu', pciDeviceSelector: '' },
+        gpu: { count: 1, resourceName: 'nvidia.com/gpu', pciDeviceSelector: '10DE:20B0' },
       },
     });
 
     expect(formatInstanceTypeOptionLabel(instanceType)).toBe(
-      'gpu-no-selector — 4 vCPUs, 16 GiB, 1 GPU, nvidia.com/gpu',
+      'gpu-no-selector — 4 vCPUs, 16 GiB · 1 GPU · nvidia.com/gpu',
     );
   });
 });

@@ -42,14 +42,10 @@ export const isGpuCompatibleInstanceType = (
 const formatGpuSizing = (gpu: GpuSpecFields): string => {
   const count = gpu.count ?? 0;
   const gpuLabel = count === 1 ? '1 GPU' : `${count} GPUs`;
-  const parts = [gpuLabel];
-  if (gpu.resourceName) {
-    parts.push(gpu.resourceName);
+  if (!gpu.resourceName) {
+    return gpuLabel;
   }
-  if (gpu.pciDeviceSelector) {
-    parts.push(gpu.pciDeviceSelector);
-  }
-  return parts.join(', ');
+  return `${gpuLabel} · ${gpu.resourceName}`;
 };
 
 export const formatInstanceTypeSizing = (instanceType: InstanceType): string => {
@@ -63,7 +59,7 @@ export const formatInstanceTypeSizing = (instanceType: InstanceType): string => 
   if (!gpu) {
     return sizing;
   }
-  return `${sizing}, ${formatGpuSizing(gpu)}`;
+  return `${sizing} · ${formatGpuSizing(gpu)}`;
 };
 
 export const formatInstanceTypeOptionLabel = (

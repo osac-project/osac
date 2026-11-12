@@ -71,11 +71,14 @@
 
         - name: Clear generated root device hint
           vars:
-            generated_root_disk: >-
+            generated_root_hints_json: >-
               {{ bmh_deprovision_status.resources[0].metadata.annotations['osac.openshift.io/fallback-root-device'] | default('') }}
           when:
-            - generated_root_disk | length > 0
-            - "bmh_deprovision_status.resources[0].spec.rootDeviceHints | default({}) == {'deviceName': generated_root_disk}"
+            - generated_root_hints_json | length > 0
+            # Both sides go through to_json: the annotation var is
+            # native-converted to a dict when it parses as JSON, while the
+            # spec side renders as text, so a raw == would compare types.
+            - "bmh_deprovision_status.resources[0].spec.rootDeviceHints | default({}) | to_json == generated_root_hints_json | to_json"
           kubernetes.core.k8s_json_patch:
             api_version: metal3.io/v1alpha1
             kind: BareMetalHost
@@ -84,11 +87,10 @@
             patch:
               - op: test
                 path: /metadata/annotations/osac.openshift.io~1fallback-root-device
-                value: "{{ generated_root_disk }}"
+                value: "{{ generated_root_hints_json | to_json }}"
               - op: test
                 path: /spec/rootDeviceHints
-                value:
-                  deviceName: "{{ generated_root_disk }}"
+                value: "{{ generated_root_hints_json | to_json | from_json }}"
               - op: remove
                 path: /spec/rootDeviceHints
               - op: remove

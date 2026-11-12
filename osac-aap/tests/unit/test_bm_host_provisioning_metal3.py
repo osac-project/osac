@@ -228,7 +228,7 @@ def test_delete_skips_deprovisioning_when_baremetalhost_has_no_image(tmp_path):
 def test_delete_clears_generated_root_device_hint(tmp_path):
     bmh = bmh_resource(state="provisioned", image_url=IMAGE_URL)
     bmh["metadata"]["annotations"] = {
-        "osac.openshift.io/fallback-root-device": "/dev/vda"
+        "osac.openshift.io/fallback-root-device": '{"deviceName": "/dev/vda"}'
     }
     bmh["spec"]["rootDeviceHints"] = {"deviceName": "/dev/vda"}
 

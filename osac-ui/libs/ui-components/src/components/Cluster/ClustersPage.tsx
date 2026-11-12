@@ -16,7 +16,7 @@ import {
 
 import { type Cluster, type ClusterVersion, ClusterVersions, Clusters } from '@osac/types';
 import { type CelFilter } from '@osac/ui-components/api/cel';
-import { useListResource } from '@osac/ui-components/api/use-resource';
+import { useListAllResources } from '@osac/ui-components/api/use-resource';
 import { useClusters } from '@osac/ui-components/api/v1/cluster';
 import { CLUSTER_VERSION_ALL_STATES_LIST_FILTER } from '@osac/ui-components/api/v1/cluster-versions';
 import { buildClusterListFilter } from '@osac/ui-components/components/Cluster/ListPage/cluster-list-filter';
@@ -60,51 +60,71 @@ export const ClustersPage = () => {
   );
   const [viewType] = useViewType(CLUSTERS_LIST_VIEW_KEY);
   const [searchResetKey, setSearchResetKey] = useState(0);
+  const hasVersionFilter = versionFilterParams.length > 0;
+
+  const {
+    data: clusterVersionReply,
+    error: versionLoadError,
+    isLoading: versionsLoading,
+  } = useListAllResources(ClusterVersions, CLUSTER_VERSION_ALL_STATES_LIST_FILTER);
+  const clusterVersions = useMemo(() => clusterVersionReply?.items ?? [], [clusterVersionReply]);
+  const observedVersions = useMemo(() => {
+    if (!hasVersionFilter) {
+      return undefined;
+    }
+    const versions: string[] = [];
+    for (const name of versionFilterParams) {
+      const version = clusterVersions.find((item) => item.metadata?.name === name)?.spec?.version;
+      if (version) {
+        versions.push(version);
+      }
+    }
+    return versions;
+  }, [clusterVersions, hasVersionFilter, versionFilterParams]);
 
   const listFilter = useMemo(
     (): CelFilter<Cluster> | undefined =>
       buildClusterListFilter({
         search,
         status: statusFilter,
-        versionNames: versionFilterParams,
+        observedVersions,
       }),
-    [versionFilterParams, search, statusFilter],
+    [observedVersions, search, statusFilter],
   );
 
-  const { clusters, totalItems, isLoading: clustersLoading, error } = useClusters(listFilter);
+  const {
+    clusters,
+    totalItems,
+    isLoading: clustersLoading,
+    error: clusterError,
+  } = useClusters(listFilter);
+  const pageError = clusterError || (hasVersionFilter ? versionLoadError : undefined);
+  const pageLoading = clustersLoading || (hasVersionFilter && versionsLoading);
 
-  const { data: clusterVersionReply, error: versionLoadError } = useListResource(ClusterVersions, {
-    filter: CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
-    limit: 1000,
-  });
-  const clusterVersions = useMemo(() => clusterVersionReply?.items ?? [], [clusterVersionReply]);
-
-  const clusterVersionById = useMemo(() => {
-    const versionsById = new Map<string, ClusterVersion>();
+  const clusterVersionBySemver = useMemo(() => {
+    const versionsBySemver = new Map<string, ClusterVersion>();
     for (const clusterVersion of clusterVersions) {
-      const id = clusterVersion.id;
-      if (id) {
-        versionsById.set(id, clusterVersion);
+      const semver = clusterVersion.spec?.version;
+      if (semver) {
+        versionsBySemver.set(semver, clusterVersion);
       }
     }
-    return versionsById;
+    return versionsBySemver;
   }, [clusterVersions]);
 
   const resolveClusterVersion = useCallback(
     (cluster: Cluster): ClusterVersion | undefined => {
-      const versionRef = cluster.spec?.version;
-      if (!versionRef?.id) {
+      const observedVersion = cluster.status?.observedVersion;
+      if (!observedVersion) {
         return undefined;
       }
-      return clusterVersionById.get(versionRef.id);
+      return clusterVersionBySemver.get(observedVersion);
     },
-    [clusterVersionById],
+    [clusterVersionBySemver],
   );
 
-  const isFiltered = Boolean(
-    search || projects.length || statusFilter || versionFilterParams.length > 0,
-  );
-  const showEmptyState = !clustersLoading && !error && clusters.length === 0;
+  const isFiltered = Boolean(search || projects.length || statusFilter || hasVersionFilter);
+  const showEmptyState = !pageLoading && !pageError && clusters.length === 0;
 
   const clearAllFilters = () => {
     setProjects([]);
@@ -153,7 +173,7 @@ export const ClustersPage = () => {
     <ListPage
       title={t('Clusters')}
       description={t('OpenShift clusters provisioned for your organization.')}
-      error={error}
+      error={pageError}
       actions={
         <CreateButton service={Clusters} to="/clusters/create">
           {t('Create cluster')}
@@ -164,7 +184,7 @@ export const ClustersPage = () => {
         <StackItem>
           <ListPageToolbar
             filteredText={
-              !clustersLoading && !error && clusters.length > 0 ? filteredText : undefined
+              !pageLoading && !pageError && clusters.length > 0 ? filteredText : undefined
             }
             isFiltered={isFiltered}
             onClearAllFilters={clearAllFilters}
@@ -208,7 +228,7 @@ export const ClustersPage = () => {
           </ListPageToolbar>
         </StackItem>
         <StackItem>
-          <ListPageBody isLoading={clustersLoading} error={error}>
+          <ListPageBody isLoading={pageLoading} error={pageError}>
             {showEmptyState ? (
               emptyState
             ) : viewType === 'cards' ? (

@@ -30,6 +30,7 @@ export const resolveClusterUpgradeChoices = (
   configuredVersion: ClusterVersion | undefined,
   candidateCatalog: readonly ClusterVersion[],
   t: TFunction,
+  sourceVersion = configuredVersion?.spec?.version,
 ): ClusterUpgradeChoiceResult => {
   if (!configuredVersion) {
     return blocked(t('The configured cluster version could not be found.'));
@@ -37,6 +38,10 @@ export const resolveClusterUpgradeChoices = (
   const configured = parseStrictSemVer(configuredVersion.spec?.version);
   if (!configured) {
     return blocked(t('The configured cluster version is invalid.'));
+  }
+  const source = parseStrictSemVer(sourceVersion);
+  if (!source) {
+    return blocked(t('Upgrade eligibility is unavailable.'));
   }
 
   const eligible: { target: ClusterVersion; version: SemVer }[] = [];
@@ -50,12 +55,12 @@ export const resolveClusterUpgradeChoices = (
       continue;
     }
     const targetVersion = parseStrictSemVer(spec.version);
-    if (!targetVersion || !gt(targetVersion, configured)) {
+    if (!targetVersion || !gt(targetVersion, source) || compare(targetVersion, configured) === 0) {
       continue;
     }
     if (
-      targetVersion.major !== configured.major ||
-      targetVersion.minor - configured.minor > MAX_MINOR_VERSION_SKEW
+      targetVersion.major !== source.major ||
+      targetVersion.minor - source.minor > MAX_MINOR_VERSION_SKEW
     ) {
       skewRejected = true;
       continue;

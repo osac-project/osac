@@ -10,6 +10,7 @@ import {
   ClusterState,
   ClusterUpgradeHistoryEntrySchema,
   ClusterUpgradeState,
+  ClusterVersionReferenceSchema,
   ClusterVersionSchema,
   ClusterVersionState,
   ClusterVersions,
@@ -101,17 +102,17 @@ describe('ClusterConfigurationCard', () => {
       ];
       renderWithProviders(<ClusterConfigurationCard cluster={upgrading} />);
 
-      const progress = screen.getByText('Upgrade in progress');
-      expect(screen.getByText('4.17.0 → 4.18.0').closest('dd')).toContainElement(progress);
-      expect(progress.closest('.pf-v6-c-label')).toHaveClass('pf-m-blue');
-      const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
-      expect(upgradeButton).toBeDisabled();
+      const label = screen.getByText(
+        state === ClusterUpgradeState.PENDING ? 'Upgrade pending' : 'Upgrade in progress',
+      );
+      expect(screen.getByText('4.17.0 → 4.18.0').closest('dd')).toContainElement(label);
+      expect(label.closest('.pf-v6-c-label')).toHaveClass('pf-m-info');
+      expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
       expect(screen.getByText('Updating the control plane')).toBeInTheDocument();
-      expect(upgradeButton).toHaveAccessibleDescription('Updating the control plane');
     },
   );
 
-  it('uses only the latest upgrade history entry', async () => {
+  it('uses only the latest upgrade history entry', () => {
     const upgraded = clone(ClusterSchema, cluster);
     if (!upgraded.status) {
       throw new Error('The cluster fixture needs status');
@@ -129,13 +130,21 @@ describe('ClusterConfigurationCard', () => {
         message: 'An older upgrade is still running',
       }),
     ];
+    upgraded.status.observedVersion = '4.18.0';
+    if (!upgraded.spec) {
+      throw new Error('The cluster fixture needs spec');
+    }
+    upgraded.spec.version = create(ClusterVersionReferenceSchema, {
+      id: targetVersion.id,
+      name: 'ocp-4-18',
+      project: 'project-a',
+    });
     renderWithProviders(<ClusterConfigurationCard cluster={upgraded} />, {
       apiFixtures: { clusterVersions: [currentVersion, targetVersion] },
     });
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
-    );
+    expect(screen.getByText('4.18.0')).toBeInTheDocument();
+    expect(screen.queryByText('Upgrade succeeded')).not.toBeInTheDocument();
     expect(screen.queryByText('An older upgrade is still running')).not.toBeInTheDocument();
     expect(screen.queryByText(/→/)).not.toBeInTheDocument();
   });
@@ -155,6 +164,8 @@ describe('ClusterConfigurationCard', () => {
     ];
     renderWithProviders(<ClusterConfigurationCard cluster={timedOut} />);
 
+    const label = screen.getByText('Upgrade timed out');
+    expect(label.closest('.pf-v6-c-label')).toHaveClass('pf-m-warning');
     expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
       'Control plane upgrade timed out',
@@ -192,7 +203,10 @@ describe('ClusterConfigurationCard', () => {
     ];
     const { user } = renderWithProviders(<ClusterConfigurationCard cluster={upgrading} />);
 
-    await user.click(screen.getByRole('button', { name: 'Upgrade history' }));
+    const historyButton = screen.getByRole('button', { name: 'Upgrade history' });
+    expect(screen.getByText('Current version').closest('dt')).toContainElement(historyButton);
+    expect(screen.getByText('4.17.0 → 4.18.0').closest('dd')).not.toContainElement(historyButton);
+    await user.click(historyButton);
     const history = screen.getByRole('dialog', { name: 'Upgrade history' });
     expect(within(history).getAllByRole('row')).toHaveLength(3);
     expect(within(history).getByText('4.17.0 → 4.18.0')).toBeInTheDocument();
@@ -219,7 +233,10 @@ describe('ClusterConfigurationCard', () => {
     ];
     renderWithProviders(<ClusterConfigurationCard cluster={failed} />);
 
-    expect(screen.getByRole('button', { name: 'Upgrade history' })).toBeInTheDocument();
+    expect(screen.getByText('Current version').closest('dt')).toContainElement(
+      screen.getByRole('button', { name: 'Upgrade history' }),
+    );
+    expect(screen.getByText('Upgrade failed')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
   });
 

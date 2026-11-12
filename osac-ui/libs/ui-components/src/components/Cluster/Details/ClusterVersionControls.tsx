@@ -7,7 +7,6 @@ import {
   type ClusterUpgradeChoiceResult,
   resolveClusterUpgradeChoices,
 } from './clusterUpgradeChoices';
-import ClusterUpgradeHistoryModal from './ClusterUpgradeHistoryModal';
 import UpgradeClusterDialog from './UpgradeClusterDialog';
 import { useGetResource, useListAllResources } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
@@ -21,6 +20,7 @@ interface ClusterVersionControlsProps {
 }
 
 type UpgradeActionState =
+  | { kind: 'hidden' }
   | { kind: 'loading' }
   | { kind: 'available' }
   | { kind: 'in-progress' }
@@ -41,22 +41,21 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   const { t } = useTranslation();
   const reasonId = useId();
   const [openClusterId, setOpenClusterId] = useState<string>();
-  const [historyClusterId, setHistoryClusterId] = useState<string>();
   const dialogOpen = openClusterId === cluster.id;
-  const historyOpen = historyClusterId === cluster.id;
   const configuredVersionId = cluster.spec?.version?.id;
   const hideUpgradeControls =
     cluster.status?.state === ClusterState.FAILED ||
     cluster.status?.state === ClusterState.DELETING ||
     cluster.status?.state === ClusterState.DELETE_FAILED;
-  const upgradeHistory = getControlPlaneUpgradeHistory(cluster);
   const latestUpgrade = cluster.status?.upgradeHistory[0];
-  const latestControlPlaneUpgrade = upgradeHistory[0];
+  const latestControlPlaneUpgrade = getControlPlaneUpgradeHistory(cluster)[0];
   const observedVersion = cluster.status?.observedVersion;
   const activeTarget = getActiveControlPlaneUpgradeTarget(cluster);
-  const upgradeInProgress =
-    latestControlPlaneUpgrade?.state === ClusterUpgradeState.PENDING ||
-    latestControlPlaneUpgrade?.state === ClusterUpgradeState.PROGRESSING;
+  const upgradePending = latestControlPlaneUpgrade?.state === ClusterUpgradeState.PENDING;
+  const upgradeProgressing = latestControlPlaneUpgrade?.state === ClusterUpgradeState.PROGRESSING;
+  const upgradeFailed = latestControlPlaneUpgrade?.state === ClusterUpgradeState.FAILED;
+  const upgradeTimedOut = latestControlPlaneUpgrade?.state === ClusterUpgradeState.TIMED_OUT;
+  const upgradeInProgress = upgradePending || upgradeProgressing;
   const latestAttemptInProgress =
     latestUpgrade?.state === ClusterUpgradeState.PENDING ||
     latestUpgrade?.state === ClusterUpgradeState.PROGRESSING;
@@ -73,32 +72,13 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   });
   const configuredVersion = configuredVersionQuery.data?.object;
 
-  const historyButton = upgradeHistory.length > 0 && (
-    <Button variant="link" isInline onClick={() => setHistoryClusterId(cluster.id)}>
-      {t('Upgrade history')}
-    </Button>
-  );
-  const historyModal = historyOpen && upgradeHistory.length > 0 && (
-    <ClusterUpgradeHistoryModal
-      attempts={upgradeHistory}
-      onClose={() => setHistoryClusterId(undefined)}
-    />
-  );
-
-  if (hideUpgradeControls) {
-    return (
-      <>
-        {cluster.status?.observedVersion || '—'} {historyButton}
-        {historyModal}
-      </>
-    );
-  }
-
   let choices: ClusterUpgradeChoiceResult = { eligibleTargets: [] };
   let action: UpgradeActionState;
-  if (upgradeInProgress || latestAttemptInProgress) {
+  if (hideUpgradeControls) {
+    action = { kind: 'hidden' };
+  } else if (upgradeInProgress || latestAttemptInProgress) {
     action = { kind: 'in-progress' };
-  } else if (upgradeDidNotComplete) {
+  } else if (upgradeFailed || upgradeTimedOut || upgradeDidNotComplete) {
     action = {
       kind: 'blocked',
       reason: latestUpgrade?.message || t('The latest upgrade did not complete.'),
@@ -120,16 +100,39 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
       : { kind: 'available' };
   }
 
-  const unavailableReason =
-    action.kind === 'blocked'
-      ? action.reason
-      : action.kind === 'loading'
-        ? t('Checking upgrade options')
-        : action.kind === 'in-progress'
-          ? upgradeInProgress
-            ? latestControlPlaneUpgrade?.message
-            : latestUpgrade?.message
-          : undefined;
+  let upgradeLabel;
+  if (upgradePending) {
+    upgradeLabel = <Label status="info">{t('Upgrade pending')}</Label>;
+  } else if (upgradeProgressing) {
+    upgradeLabel = <Label status="info">{t('Upgrade in progress')}</Label>;
+  } else if (upgradeFailed) {
+    upgradeLabel = <Label status="danger">{t('Upgrade failed')}</Label>;
+  } else if (upgradeTimedOut) {
+    upgradeLabel = <Label status="warning">{t('Upgrade timed out')}</Label>;
+  } else if (action.kind === 'in-progress') {
+    upgradeLabel = <Label status="info">{t('Upgrade in progress')}</Label>;
+  } else if (action.kind === 'available') {
+    upgradeLabel = <Label color="orange">{t('Upgrade available')}</Label>;
+  } else if (action.kind === 'blocked') {
+    upgradeLabel = <Label color="grey">{t('No upgrade available')}</Label>;
+  }
+
+  let explanation: string | undefined;
+  if (upgradeFailed) {
+    explanation =
+      latestControlPlaneUpgrade?.message || t('HyperShift reported a terminal error and stopped.');
+  } else if (upgradeTimedOut) {
+    explanation =
+      latestControlPlaneUpgrade?.message || t('No definitive result within the timeout.');
+  } else if (upgradeInProgress) {
+    explanation = latestControlPlaneUpgrade?.message || undefined;
+  } else if (action.kind === 'blocked') {
+    explanation = action.reason;
+  } else if (action.kind === 'loading') {
+    explanation = t('Checking upgrade options');
+  } else if (action.kind === 'in-progress') {
+    explanation = latestUpgrade?.message || undefined;
+  }
 
   return (
     <>
@@ -142,40 +145,25 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
           {observedVersion || '—'}
           {upgradeInProgress && observedVersion && activeTarget ? ` → ${activeTarget}` : null}
         </FlexItem>
-        {action.kind === 'available' ? (
+        {upgradeLabel && <FlexItem>{upgradeLabel}</FlexItem>}
+        {action.kind !== 'hidden' && action.kind !== 'in-progress' && (
           <FlexItem>
-            <Label color="orange">{t('Upgrade available')}</Label>
+            <Button
+              variant="link"
+              isInline
+              onClick={() => setOpenClusterId(cluster.id)}
+              isDisabled={action.kind !== 'available'}
+              aria-describedby={explanation ? reasonId : undefined}
+              aria-busy={action.kind === 'loading' || undefined}
+            >
+              {t('Upgrade cluster')}
+            </Button>
           </FlexItem>
-        ) : action.kind === 'in-progress' ? (
-          <FlexItem>
-            <Label color="blue" id={unavailableReason ? undefined : reasonId}>
-              {t('Upgrade in progress')}
-            </Label>
-          </FlexItem>
-        ) : action.kind === 'blocked' ? (
-          <FlexItem>
-            <Label color="grey">{t('No upgrade available')}</Label>
-          </FlexItem>
-        ) : null}
-        <FlexItem>
-          <Button
-            variant="link"
-            isInline
-            onClick={() => setOpenClusterId(cluster.id)}
-            isDisabled={action.kind !== 'available'}
-            aria-describedby={
-              unavailableReason || action.kind === 'in-progress' ? reasonId : undefined
-            }
-            aria-busy={action.kind === 'loading' || undefined}
-          >
-            {t('Upgrade cluster')}
-          </Button>
-        </FlexItem>
-        {historyButton && <FlexItem>{historyButton}</FlexItem>}
+        )}
       </Flex>
-      {unavailableReason && (
+      {explanation && (
         <Content component="p" id={reasonId}>
-          {unavailableReason}
+          {explanation}
         </Content>
       )}
       {dialogOpen && (
@@ -187,7 +175,6 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
           onClose={() => setOpenClusterId(undefined)}
         />
       )}
-      {historyModal}
     </>
   );
 };

@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import {
+  Button,
   Card,
   CardBody,
   CardTitle,
@@ -10,10 +12,12 @@ import {
 
 import type { Cluster } from '@osac/types';
 
+import ClusterUpgradeHistoryModal from './ClusterUpgradeHistoryModal';
 import ClusterVersionControls from './ClusterVersionControls';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { Timestamp } from '../../Primitives/Timestamp';
+import { getControlPlaneUpgradeHistory } from '../ListPage/clusterDisplay';
 
 interface ClusterConfigurationCardProps {
   cluster: Cluster;
@@ -21,7 +25,9 @@ interface ClusterConfigurationCardProps {
 
 export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardProps) => {
   const { t } = useTranslation();
+  const [historyClusterId, setHistoryClusterId] = useState<string>();
   const catalogItem = cluster.spec?.catalogItem;
+  const upgradeHistory = getControlPlaneUpgradeHistory(cluster);
 
   return (
     <Card isFullHeight>
@@ -29,7 +35,14 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
       <CardBody>
         <DescriptionList isCompact>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Current version')}</DescriptionListTerm>
+            <DescriptionListTerm>
+              {t('Current version')}{' '}
+              {upgradeHistory.length > 0 && (
+                <Button variant="link" isInline onClick={() => setHistoryClusterId(cluster.id)}>
+                  {t('Upgrade history')}
+                </Button>
+              )}
+            </DescriptionListTerm>
             <DescriptionListDescription>
               <ClusterVersionControls cluster={cluster} />
             </DescriptionListDescription>
@@ -54,6 +67,12 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
           </DescriptionListGroup>
         </DescriptionList>
       </CardBody>
+      {historyClusterId === cluster.id && upgradeHistory.length > 0 && (
+        <ClusterUpgradeHistoryModal
+          attempts={upgradeHistory}
+          onClose={() => setHistoryClusterId(undefined)}
+        />
+      )}
     </Card>
   );
 };

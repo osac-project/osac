@@ -137,8 +137,10 @@ describe('ClustersTable observed versions', () => {
       ]);
 
       expect(clusterRow('c-upgrading').getByText('OpenShift 4.17.0 → 4.18.0')).toBeInTheDocument();
-      const progress = clusterRow('c-upgrading').getByText('Upgrade in progress');
-      expect(progress.closest('.pf-v6-c-label')).toHaveClass('pf-m-blue');
+      const status = clusterRow('c-upgrading').getByText(
+        state === ClusterUpgradeState.PENDING ? 'Upgrade pending' : 'Upgrade in progress',
+      );
+      expect(status.closest('.pf-v6-c-label')).toHaveClass('pf-m-info');
       expect(clusterRow('c-upgrading').queryByText('Active')).not.toBeInTheDocument();
     },
   );
@@ -161,14 +163,31 @@ describe('ClustersTable observed versions', () => {
     ClusterUpgradeState.FAILED,
   ])('uses the latest control-plane state and hides the transition in state %s', (state) => {
     renderTable([
-      makeCluster('c-done', 'desired-4.18', '4.17.0', [
-        makeAttempt('controlPlane', state),
-        makeAttempt('controlPlane', ClusterUpgradeState.PROGRESSING, '4.16.0'),
-      ]),
+      makeCluster(
+        'c-done',
+        'desired-4.18',
+        state === ClusterUpgradeState.SUCCEEDED ? '4.18.0' : '4.17.0',
+        [
+          makeAttempt('controlPlane', state),
+          makeAttempt('controlPlane', ClusterUpgradeState.PROGRESSING, '4.16.0'),
+        ],
+      ),
     ]);
 
-    expect(clusterRow('c-done').getByText('OpenShift 4.17.0')).toBeInTheDocument();
+    expect(
+      clusterRow('c-done').getByText(
+        state === ClusterUpgradeState.SUCCEEDED ? 'OpenShift 4.18.0' : 'OpenShift 4.17.0',
+      ),
+    ).toBeInTheDocument();
     expect(clusterRow('c-done').queryByText(/→/)).not.toBeInTheDocument();
     expect(clusterRow('c-done').queryByText('Upgrade in progress')).not.toBeInTheDocument();
+    if (state === ClusterUpgradeState.FAILED) {
+      expect(clusterRow('c-done').getByText('Upgrade failed')).toBeInTheDocument();
+    } else if (state === ClusterUpgradeState.TIMED_OUT) {
+      expect(clusterRow('c-done').getByText('Upgrade timed out')).toBeInTheDocument();
+    } else {
+      expect(clusterRow('c-done').queryByText('Upgrade failed')).not.toBeInTheDocument();
+      expect(clusterRow('c-done').queryByText('Upgrade timed out')).not.toBeInTheDocument();
+    }
   });
 });

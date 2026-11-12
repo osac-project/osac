@@ -8,13 +8,16 @@ import {
   Label,
 } from '@patternfly/react-core';
 
-import { type Cluster, type ClusterVersion } from '@osac/types';
+import { type Cluster, ClusterUpgradeState, type ClusterVersion } from '@osac/types';
 import { formatClusterCatalogVersionLabel } from '@osac/ui-components/components/catalog/clusterCatalogItemResourceDisplay';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import { GuestOsIcon } from '../../shared/GuestOsIcon';
 import ClusterVersionLifecycleLabel from '../ClusterVersionLifecycleLabel';
-import { getActiveControlPlaneUpgradeTarget } from './clusterDisplay';
+import {
+  getActiveControlPlaneUpgradeTarget,
+  getControlPlaneUpgradeHistory,
+} from './clusterDisplay';
 
 interface ClusterResourcesProps {
   cluster: Cluster;
@@ -30,6 +33,21 @@ const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) =>
       ? clusterVersion
       : undefined;
   const activeTarget = getActiveControlPlaneUpgradeTarget(cluster);
+  const upgradeState = getControlPlaneUpgradeHistory(cluster)[0]?.state;
+  const upgradePending = upgradeState === ClusterUpgradeState.PENDING;
+  const upgradeProgressing = upgradeState === ClusterUpgradeState.PROGRESSING;
+  const upgradeFailed = upgradeState === ClusterUpgradeState.FAILED;
+  const upgradeTimedOut = upgradeState === ClusterUpgradeState.TIMED_OUT;
+  let upgradeLabel;
+  if (upgradePending) {
+    upgradeLabel = <Label status="info">{t('Upgrade pending')}</Label>;
+  } else if (upgradeProgressing) {
+    upgradeLabel = <Label status="info">{t('Upgrade in progress')}</Label>;
+  } else if (upgradeFailed) {
+    upgradeLabel = <Label status="danger">{t('Upgrade failed')}</Label>;
+  } else if (upgradeTimedOut) {
+    upgradeLabel = <Label status="warning">{t('Upgrade timed out')}</Label>;
+  }
 
   const specNodeSets = cluster.spec?.nodeSets;
   const statusNodeSets = cluster.status?.nodeSets ?? {};
@@ -69,10 +87,8 @@ const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) =>
               {versionLabel}
               {observedVersion && activeTarget ? ` → ${activeTarget}` : null}
             </FlexItem>
-            {observedVersion && activeTarget ? (
-              <FlexItem>
-                <Label color="blue">{t('Upgrade in progress')}</Label>
-              </FlexItem>
+            {upgradeLabel ? (
+              <FlexItem>{upgradeLabel}</FlexItem>
             ) : observedCatalogVersion ? (
               <FlexItem>
                 <ClusterVersionLifecycleLabel clusterVersion={observedCatalogVersion} />

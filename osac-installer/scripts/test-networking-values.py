@@ -21,6 +21,7 @@ import yaml
 
 INSTALLER = pathlib.Path(__file__).resolve().parents[1]
 CHART = INSTALLER / "charts/osac"
+AAP_CHART = INSTALLER.parent / "osac-aap/charts/aap"
 DEFAULT_VALUES = CHART / "ci/default-values.yaml"
 HELM = os.environ.get("HELM_BIN", "helm")
 
@@ -87,6 +88,34 @@ def render(*overrides: dict, args: tuple[str, ...] = ()) -> list[dict[str, Any]]
     result = helm(*overrides, args=args)
     if result.returncode != 0:
         raise AssertionError(f"render failed: {result.stderr}")
+    return [doc for doc in yaml.safe_load_all(result.stdout) if doc]
+
+
+def aap_helm(*overrides: dict) -> subprocess.CompletedProcess:
+    """Render the source AAP chart directly, bypassing umbrella schema checks."""
+    with tempfile.NamedTemporaryFile("w", suffix=".json") as extra:
+        json.dump(merge(*overrides), extra)
+        extra.flush()
+        return subprocess.run(
+            [
+                HELM,
+                "template",
+                "osac-aap",
+                str(AAP_CHART),
+                "--namespace",
+                "osac-aap",
+                "--values",
+                extra.name,
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+
+def render_aap(*overrides: dict) -> list[dict[str, Any]]:
+    result = aap_helm(*overrides)
+    if result.returncode != 0:
+        raise AssertionError(f"AAP chart render failed: {result.stderr}")
     return [doc for doc in yaml.safe_load_all(result.stdout) if doc]
 
 
@@ -560,6 +589,86 @@ class ManifestsTest(unittest.TestCase):
 
 
 class AapSettingsTest(unittest.TestCase):
+    def test_storage_certificate_validation_defaults_to_enabled(self):
+        osac_values = yaml.safe_load((CHART / "values.yaml").read_text())
+        aap_values = yaml.safe_load((AAP_CHART / "values.yaml").read_text())
+        self.assertIs(
+            osac_values["aap"]["instanceGroups"]["storageFulfillment"][
+                "enable_certificate_validation"
+            ],
+            True,
+        )
+        self.assertIs(
+            aap_values["instanceGroups"]["storageFulfillment"][
+                "enable_certificate_validation"
+            ],
+            True,
+        )
+
+        schema = json.loads((CHART / "values.schema.json").read_text())
+        setting = (
+            schema["properties"]["aap"]["properties"]["instanceGroups"][
+                "properties"
+            ]["storageFulfillment"]["properties"]["enable_certificate_validation"]
+        )
+        self.assertEqual(setting["type"], "boolean")
+        self.assertIs(setting["default"], True)
+
+        docs = render({"aap": {"instanceGroups": {"storageFulfillment": {"enabled": True}}}})
+        matches = [
+            doc
+            for doc in docs
+            if doc.get("kind") == "ConfigMap"
+            and doc.get("metadata", {}).get("name") == "storage-operations-ig"
+        ]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["data"].get("VAST_VALIDATE_CERTS"), "true")
+        self.assertNotIn("ENABLE_CERTIFICATE_VALIDATION", matches[0]["data"])
+
+    def test_storage_certificate_validation_is_disabled_in_development_profiles(self):
+        profile_paths = {
+            "dev": [INSTALLER / "values/dev/instance.yaml"],
+            "kind": [INSTALLER / "values/dev/kind-instance.yaml"],
+            "dev-full": [
+                INSTALLER / "values/dev/kind-instance.yaml",
+                INSTALLER / "values/dev/kind-instance-devfull.yaml",
+            ],
+            "vmaas-ci": [INSTALLER / "values/vmaas-ci/instance.yaml"],
+        }
+        enabled = {"instanceGroups": {"storageFulfillment": {"enabled": True}}}
+        for profile_name, paths in profile_paths.items():
+            with self.subTest(profile=profile_name):
+                profile_values = [yaml.safe_load(path.read_text()) or {} for path in paths]
+                aap_values = merge(
+                    *(profile.get("aap", {}) for profile in profile_values),
+                    enabled,
+                )
+                docs = render_aap(aap_values)
+                storage_group = find(docs, "ConfigMap", "storage-operations-ig")
+                self.assertEqual(storage_group["data"].get("VAST_VALIDATE_CERTS"), "false")
+
+    def test_storage_certificate_validation_setting_is_managed(self):
+        for source in ("config", "secret"):
+            message = (
+                f"instanceGroups.storageFulfillment.{source}.VAST_VALIDATE_CERTS is managed by "
+                "instanceGroups.storageFulfillment.enable_certificate_validation"
+            )
+            for value in ("true", ""):
+                with self.subTest(source=source, value=value):
+                    result = aap_helm(
+                        {
+                            "instanceGroups": {
+                                "storageFulfillment": {
+                                    "enabled": True,
+                                    "enable_certificate_validation": False,
+                                    source: {"VAST_VALIDATE_CERTS": value},
+                                }
+                            }
+                        }
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stderr)
+
     def test_network_fulfillment_settings_written_verbatim(self):
         ca = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
         docs = render(

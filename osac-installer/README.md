@@ -837,8 +837,9 @@ Remote-cluster inputs are part of the gate: with `REMOTE_KUBECONFIG` set,
 `REMOTE_KUBECONFIG_SECRET_NAME` and `REMOTE_KUBECONFIG_SECRET_KEY` are
 checked against the Kubernetes Secret name/key grammars before any cluster
 mutation, and the osac-chart render carries the same remote kubeconfig
-`--set-string` arguments the installation applies. The kubeconfig file
-itself is only read (and staged into its Secret) at install time.
+`--set-string` arguments the installation applies. The gate also rejects an
+unreadable kubeconfig file; the file is parsed and staged into its Secret
+only at install time.
 
 ### Monitor Progress
 

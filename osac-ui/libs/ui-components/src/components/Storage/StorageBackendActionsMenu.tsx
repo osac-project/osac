@@ -7,6 +7,7 @@ import type { StorageBackend } from '@osac/types/private';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import StorageBackendDeleteConfirmModal from './StorageBackendDeleteConfirmModal';
+import { storageBackendDetailsPath } from './utils';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface StorageBackendActionsMenuProps {
@@ -47,9 +48,10 @@ const StorageBackendActionsMenu = ({ backend }: StorageBackendActionsMenuProps) 
         popperProps={{ position: 'right' }}
       >
         <DropdownList>
-          <DropdownItem
-            onClick={() => navigate(`/admin/infrastructure/storage/backends/${backend.id}/edit`)}
-          >
+          <DropdownItem onClick={() => navigate(storageBackendDetailsPath(backend.id))}>
+            {t('View details')}
+          </DropdownItem>
+          <DropdownItem onClick={() => navigate(`${storageBackendDetailsPath(backend.id)}/edit`)}>
             {t('Edit')}
           </DropdownItem>
           <DeleteResourceButton

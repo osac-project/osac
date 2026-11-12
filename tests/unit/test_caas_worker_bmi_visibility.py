@@ -205,6 +205,7 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
             ssh_key_secret="test-ssh-key-secret",
             ssh_public_key_path=str(key_file),
             metering=metering,
+            networking_provisioning_enabled=True,
         )
 
     loggers = {scenario.logger.name, helpers.logger.name}

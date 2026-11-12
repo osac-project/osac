@@ -166,9 +166,7 @@ def test_create_baremetal_instance_type_uses_explicit_host_selector(monkeypatch:
     selector = {"osac.openshift.io/host-type": "ci-worker"}
 
     assert (
-        client.create_baremetal_instance_type(
-            name="ci-worker-bm", fabric_port="data-0", host_label_selector=selector
-        )
+        client.create_baremetal_instance_type(name="ci-worker-bm", fabric_port="data-0", host_label_selector=selector)
         == "bmit-custom-shared"
     )
     assert captured["data"]["object"]["spec"]["host_label_selector"] == {"match_labels": selector}
@@ -267,3 +265,56 @@ def test_get_tenant_by_name_returns_none_when_list_has_no_exact_match(monkeypatc
 
     assert client.get_tenant_by_name(name="tenant1") is None
     assert calls == ["osac.private.v1.Tenants/List"]
+
+
+def test_call_with_emit_defaults_retains_default_boolean_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.e2e.core import grpc_client as grpc_client_module
+
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    commands: list[tuple[object, ...]] = []
+
+    def capture_run(*args: object, **_kwargs: object) -> str:
+        commands.append(args)
+        return '{"networkingProvisioningEnabled": false}'
+
+    monkeypatch.setattr(grpc_client_module, "run", capture_run)
+
+    response = client.call(service="osac.private.v1.InstallationSettings/Get", data={}, emit_defaults=True)
+
+    assert response == {"networkingProvisioningEnabled": False}
+    assert commands == [
+        (
+            "grpcurl",
+            "-insecure",
+            "-H",
+            "Authorization: Bearer test-token",
+            "-emit-defaults",
+            "-d",
+            "{}",
+            "fulfillment-api.example.test:443",
+            "osac.private.v1.InstallationSettings/Get",
+        )
+    ]
+
+
+def test_call_omits_emit_defaults_unless_requested(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.e2e.core import grpc_client as grpc_client_module
+
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    commands: list[tuple[object, ...]] = []
+
+    def capture_run(*args: object, **_kwargs: object) -> str:
+        commands.append(args)
+        return "{}"
+
+    monkeypatch.setattr(grpc_client_module, "run", capture_run)
+
+    client.call(service="osac.public.v1.Capabilities/Get")
+
+    assert commands[0][1:] == (
+        "-insecure",
+        "-H",
+        "Authorization: Bearer test-token",
+        "fulfillment-api.example.test:443",
+        "osac.public.v1.Capabilities/Get",
+    )

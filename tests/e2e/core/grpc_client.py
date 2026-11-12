@@ -43,16 +43,25 @@ class GRPCClient:
             return self._cached_token
         return self._static_token
 
-    def _build_args(self, *, service: str, data: dict[str, Any] | None = None) -> list[str]:
+    def _build_args(
+        self, *, service: str, data: dict[str, Any] | None = None, emit_defaults: bool = False
+    ) -> list[str]:
+        """Build grpcurl arguments, optionally retaining proto3 defaults in JSON responses."""
         args: list[str] = ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {self.token}"]
+        if emit_defaults:
+            args.append("-emit-defaults")
         if data is not None:
             args.extend(["-d", json.dumps(data)])
         args.extend([self.address, service])
         return args
 
-    def call(self, *, service: str, data: dict[str, Any] | None = None, timeout: int = 300) -> dict[str, Any]:
+    def call(
+        self, *, service: str, data: dict[str, Any] | None = None, timeout: int = 300, emit_defaults: bool = False
+    ) -> dict[str, Any]:
+        """Call an RPC without changing default JSON encoding for existing callers."""
         __tracebackhide__ = True  # the frame's data is the request payload
-        return json.loads(run(*self._build_args(service=service, data=data), timeout=timeout))
+        args = self._build_args(service=service, data=data, emit_defaults=emit_defaults)
+        return json.loads(run(*args, timeout=timeout))
 
     def create_compute_instance(
         self,

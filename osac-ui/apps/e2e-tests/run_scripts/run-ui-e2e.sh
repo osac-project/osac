@@ -55,13 +55,17 @@ while (($# > 0)); do
       OSAC_ADMIN_USERNAME="$1"
       shift
       ;;
-    --admin-password=*) OSAC_ADMIN_PASSWORD="${arg#*=}" ;;
+    --admin-password=*)
+      OSAC_ADMIN_PASSWORD="${arg#*=}"
+      ADMIN_PASSWORD_SET=true
+      ;;
     --admin-password)
       if (($# == 0)); then
         echo "--admin-password requires a value." >&2
         exit 1
       fi
       OSAC_ADMIN_PASSWORD="$1"
+      ADMIN_PASSWORD_SET=true
       shift
       ;;
     --instance=*)      OSAC_E2E_INSTANCE="${arg#*=}" ;;
@@ -122,7 +126,7 @@ Options:
   --mode=MODE            set OSAC_VM_FLOW_MODE to create, delete, or full
   --extravars=PATH       temporarily use a VMaaS extravars.yaml
   --admin-user=USER      Keycloak admin user (default: admin)
-  --admin-password=PASS  admin password
+  --admin-password=PASS  admin password (required for credentialed flows)
   --instance=INDEX        resource-name index (default: 1)
   --headed               run with a headed browser using the prepared Xvfb
   --run-smoke            run the setup and smoke projects
@@ -151,8 +155,6 @@ info()    { printf '  → %s\n' "$1"; }
 
 [[ "$OSAC_E2E_INSTANCE" =~ ^[0-9]+$ ]] ||
   fail "--instance must be a non-negative integer."
-
-[[ -n "$OSAC_ADMIN_PASSWORD" ]] && ADMIN_PASSWORD_SET=true
 
 cleanup() {
   if [[ -n ${xvfb_pid:-} ]]; then

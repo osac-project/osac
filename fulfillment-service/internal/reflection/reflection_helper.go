@@ -864,15 +864,27 @@ func (h *objectHelper) UpdateWithMask(ctx context.Context, original, edited prot
 		return
 	}
 
-	// Compute the diff and build the update mask
-	mask, err := computeUpdateMask(original, edited)
+	request := proto.Clone(h.update.request)
+	editedForUpdate := proto.Clone(edited)
+	lockField := request.ProtoReflect().Descriptor().Fields().ByName("lock")
+	if lockField != nil && lockField.Kind() == protoreflect.BoolKind {
+		request.ProtoReflect().Set(lockField, protoreflect.ValueOfBool(true))
+		versionField := h.metadataField.Message().Fields().ByName("version")
+		if versionField != nil {
+			editedForUpdate.ProtoReflect().Mutable(h.metadataField).Message().Set(
+				versionField,
+				original.ProtoReflect().Get(h.metadataField).Message().Get(versionField),
+			)
+		}
+	}
+
+	mask, err := computeUpdateMask(original, editedForUpdate)
 	if err != nil {
 		err = fmt.Errorf("failed to compute update mask: %w", err)
 		return
 	}
 
-	request := proto.Clone(h.update.request)
-	h.setObject(request, h.update.in, edited)
+	h.setObject(request, h.update.in, editedForUpdate)
 
 	// Set the update_mask field
 	maskField := request.ProtoReflect().Descriptor().Fields().ByName("update_mask")

@@ -622,6 +622,40 @@ var _ = Describe("Reflection helper", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		It("Enables optimistic locking with the original metadata version", func() {
+			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{
+				UpdateFunc: func(ctx context.Context, request *publicv1.ClustersUpdateRequest,
+				) (response *publicv1.ClustersUpdateResponse, err error) {
+					defer GinkgoRecover()
+					Expect(request.GetLock()).To(BeTrue())
+					Expect(request.GetObject().GetMetadata().GetVersion()).To(Equal(int32(7)))
+					Expect(request.GetUpdateMask().GetPaths()).To(ConsistOf("metadata.labels"))
+					return publicv1.ClustersUpdateResponse_builder{
+						Object: request.GetObject(),
+					}.Build(), nil
+				},
+			})
+
+			server.Start()
+
+			objectHelper := helper.Lookup("cluster")
+			Expect(objectHelper).ToNot(BeNil())
+			original := publicv1.Cluster_builder{
+				Id: "123",
+				Metadata: publicv1.Metadata_builder{
+					Version: 7,
+					Labels:  map[string]string{"team": "x"},
+				}.Build(),
+			}.Build()
+			edited := proto.Clone(original).(*publicv1.Cluster)
+			edited.GetMetadata().SetVersion(99)
+			edited.GetMetadata().SetLabels(map[string]string{"team": "y"})
+
+			_, err := objectHelper.UpdateWithMask(ctx, original, edited)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(edited.GetMetadata().GetVersion()).To(Equal(int32(99)))
+		})
+
 		It("Computes an explicit map mask for a removed final annotation", func() {
 			// Register a clusters server that responds to the update request:
 			publicv1.RegisterClustersServer(server.Registrar(), &testing.ClustersServerFuncs{

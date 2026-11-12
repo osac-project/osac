@@ -598,6 +598,8 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 		}
 	}
 
+	// The request interceptor validates before Catalog Item policies fill omitted fields.
+	// Check the effective spec here so a locked or defaulted catalog key is accepted.
 	if spec.GetSshKey() == nil {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "spec.ssh_key is required")
 	}

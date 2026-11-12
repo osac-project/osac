@@ -127,7 +127,9 @@ osac create baremetalinstance \
 ```
 
 Omit `--ssh-key` when the CatalogItem locks `fields.ssh_key`; the locked
-policy supplies the key and rejects a caller-supplied value.
+policy supplies the key and rejects a caller-supplied value. An editable
+`fields.ssh_key` default also supplies the key when omitted, while an explicit
+`--ssh-key` takes precedence. Create requires a key after these policies apply.
 
 ## Validation, lifecycle, and deletion
 

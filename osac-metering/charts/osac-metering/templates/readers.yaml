@@ -23,6 +23,9 @@ render errors in its logs.
 */}}
 {{- $reserved := list "osac-metering" "osac-metering-echo-adapter" "osac-metering-m360-adapter" -}}
 {{- $seen := dict -}}
+{{- if not (or (kindIs "invalid" .Values.readers) (kindIs "slice" .Values.readers)) }}
+{{- fail "readers must be a list of objects" }}
+{{- end }}
 {{- range $index, $reader := .Values.readers }}
 {{- $name := required "readers[].name is required" $reader.name -}}
 {{- if hasKey $seen $name }}

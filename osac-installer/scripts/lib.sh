@@ -570,9 +570,13 @@ offline_render_error() {
             # gets that rule's value-free constraint text.
             local maps="${_LIB_OPEN_SCHEMA_MAPS[*]}" constraints=''
             printf -v constraints '%s\n' "${_LIB_SCHEMA_CONSTRAINTS[@]}"
-            printf '%s\n' "$1" | LC_ALL=C awk -v q="'" -v maps="${maps}" \
-                -v constraints="${constraints}" '
+            # The rule table spans lines, and an awk -v value is escape
+            # processed and interpreted by the host's awk: pass it through
+            # the environment so every awk reads it verbatim.
+            printf '%s\n' "$1" | LC_ALL=C OSAC_SCHEMA_CONSTRAINTS="${constraints}" \
+                awk -v q="'" -v maps="${maps}" '
                 BEGIN {
+                    constraints = ENVIRON["OSAC_SCHEMA_CONSTRAINTS"]
                     n_maps = split(maps, map_path, " ")
                     n_rules = split(constraints, rule, "\n")
                     for (i = 1; i <= n_rules; i++) {
@@ -723,7 +727,9 @@ netbox_existing_secret_matches() {
     esac
     for cli in kubectl oc; do
         command -v "${cli}" >/dev/null 2>&1 || continue
-        if out=$("${cli}" get secret "${name}" -n "${ns}" \
+        # The gate runs before any cluster change, so a kubeconfig that
+        # names an unreachable cluster must not hold it open indefinitely.
+        if out=$("${cli}" get secret "${name}" -n "${ns}" --request-timeout=15s \
             -o go-template="{{if index .data \"${key}\"}}present{{end}}" \
             2>/dev/null); then
             [ "${out}" = "present" ]

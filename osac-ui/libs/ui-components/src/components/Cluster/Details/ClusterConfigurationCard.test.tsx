@@ -167,10 +167,13 @@ describe('ClusterConfigurationCard', () => {
     const label = screen.getByText('Upgrade timed out');
     expect(label.closest('.pf-v6-c-label')).toHaveClass('pf-m-compact');
     expect(label.closest('.pf-v6-c-label')).not.toHaveClass('pf-m-warning', 'pf-m-danger');
-    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-      'Control plane upgrade timed out',
-    );
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+    expect(screen.getByText('Control plane upgrade timed out')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'HyperShift may still complete the upgrade. OSAC continues to monitor its status.',
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/→/)).not.toBeInTheDocument();
   });
 

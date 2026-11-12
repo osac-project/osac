@@ -62,6 +62,7 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
     latestUpgrade?.state === ClusterUpgradeState.PENDING ||
     latestUpgrade?.state === ClusterUpgradeState.PROGRESSING;
   const latestAttemptTimedOut = latestUpgrade?.state === ClusterUpgradeState.TIMED_OUT;
+  const timedOut = upgradeTimedOut || latestAttemptTimedOut;
   const configuredVersionQuery = useGetResource(
     ClusterVersions,
     { id: configuredVersionId ?? '' },
@@ -78,7 +79,7 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
     action = { kind: 'hidden' };
   } else if (upgradeInProgress || latestAttemptInProgress) {
     action = { kind: 'in-progress' };
-  } else if (upgradeTimedOut || latestAttemptTimedOut) {
+  } else if (timedOut) {
     action = {
       kind: 'blocked',
       reason:
@@ -161,7 +162,7 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
           {upgradeInProgress && observedVersion && activeTarget ? ` → ${activeTarget}` : null}
         </FlexItem>
         {upgradeLabel && <FlexItem>{upgradeLabel}</FlexItem>}
-        {action.kind !== 'hidden' && action.kind !== 'in-progress' && (
+        {action.kind !== 'hidden' && action.kind !== 'in-progress' && !timedOut && (
           <FlexItem>
             <Button
               variant="link"
@@ -179,6 +180,11 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
       {explanation && (
         <Content component="p" id={reasonId}>
           {explanation}
+        </Content>
+      )}
+      {timedOut && (
+        <Content component="p">
+          {t('HyperShift may still complete the upgrade. OSAC continues to monitor its status.')}
         </Content>
       )}
       {dialogOpen && (

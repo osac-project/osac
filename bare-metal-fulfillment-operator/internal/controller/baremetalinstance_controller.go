@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/recorder"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
@@ -49,6 +51,7 @@ type BareMetalInstanceReconciler struct {
 	// duplicate-job guard so it does not read the same lagging informer cache it
 	// is meant to bypass. Set in SetupWithManager.
 	APIReader            client.Reader
+	EventRecorder        recorder.EventRecorder
 	Scheme               *runtime.Scheme
 	InventoryClient      inventory.Client
 	ManagementClient     management.Client
@@ -159,6 +162,7 @@ func (r *BareMetalInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // SetupWithManager sets up the controller with the Manager.
 func (r *BareMetalInstanceReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrentReconciles int) error {
 	r.APIReader = mgr.GetAPIReader()
+	r.EventRecorder = mgr.GetEventRecorder("baremetalinstance-controller")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.BareMetalInstance{}).
 		WithOptions(controller.Options{
@@ -206,6 +210,14 @@ func (r *BareMetalInstanceReconciler) handleUpdate(ctx context.Context, bareMeta
 	log := logf.FromContext(ctx)
 	log.Info("Updating BareMetalInstance")
 
+	allocated := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionAllocated)
+	if allocated != nil && allocated.Reason == v1alpha1.HostConditionReasonSelectedPortMACUnavailable {
+		if bareMetalInstance.Spec.ExternalHostID == "" {
+			return ctrl.Result{}, nil
+		}
+		return r.releaseHostWithoutSelectedPortMAC(ctx, bareMetalInstance, allocated.Message)
+	}
+
 	if bareMetalInstance.Spec.TemplateID != "" && bareMetalInstance.Spec.TemplateID != shared.OsacNoopTemplate && r.ProvisioningProvider == nil {
 		log.Error(nil, "Provisioning provider not configured", "templateID", bareMetalInstance.Spec.TemplateID)
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
@@ -237,6 +249,11 @@ func (r *BareMetalInstanceReconciler) handleUpdate(ctx context.Context, bareMeta
 func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Info("Reconciling inventory")
+
+	allocated := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionAllocated)
+	if allocated != nil && allocated.Reason == v1alpha1.HostConditionReasonSelectedPortMACUnavailable {
+		return r.releaseHostWithoutSelectedPortMAC(ctx, bareMetalInstance, allocated.Message)
+	}
 
 	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseAllocating
 	bareMetalInstance.SetStatusCondition(
@@ -357,6 +374,40 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 		return ctrl.Result{}, nil
 	}
 
+	if r.NetworkingEnabled && len(bareMetalInstance.Spec.NetworkAttachments) > 0 {
+		attachment := primaryNetworkAttachment(bareMetalInstance)
+		if attachment == nil {
+			return ctrl.Result{}, fmt.Errorf("BareMetalInstance %s has no primary network attachment", bareMetalInstance.Name)
+		}
+		r.initNetworkAttachmentStatuses(bareMetalInstance)
+		status := networkAttachmentStatusFor(bareMetalInstance, attachment.SubnetRef)
+		if status == nil {
+			return ctrl.Result{}, fmt.Errorf("network attachment status for subnet %s was not initialized", attachment.SubnetRef)
+		}
+		if status.MACAddress == "" {
+			mac, macErr := r.selectedPortMAC(ctx, bareMetalInstance, attachment.Interface)
+			if errors.Is(macErr, errSelectedPortMACUnavailable) {
+				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionAllocated,
+					metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonSelectedPortMACUnavailable,
+					macErr.Error(),
+				)
+				r.recordBMIEvent(bareMetalInstance, corev1.EventTypeWarning,
+					v1alpha1.HostConditionReasonSelectedPortMACUnavailable, macErr.Error())
+				return r.releaseHostWithoutSelectedPortMACLocked(ctx, bareMetalInstance, macErr.Error())
+			}
+			if macErr != nil {
+				return ctrl.Result{}, macErr
+			}
+			status.MACAddress = mac
+		}
+		if inventoryHost.Name != "" {
+			bareMetalInstance.Spec.ExternalHostName = inventoryHost.Name
+		}
+	}
+
 	// The host is reserved but the inventory backend may report it as not yet
 	// available for provisioning (e.g. underlying hardware still completing
 	// registration/inspection). Keep the instance in Allocating (don't set
@@ -384,6 +435,84 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 
 	log.Info("Successfully fulfilled BareMetalInstance", "InventoryHostID", bareMetalInstance.Spec.ExternalHostID)
 	return ctrl.Result{}, nil
+}
+
+// releaseHostWithoutSelectedPortMAC returns an assigned host to inventory
+// after the selected physical port cannot be used for tenant networking.
+func (r *BareMetalInstanceReconciler) releaseHostWithoutSelectedPortMAC(
+	ctx context.Context, bmi *v1alpha1.BareMetalInstance, diagnostic string,
+) (ctrl.Result, error) {
+	hostID := bmi.Spec.ExternalHostID
+	if hostID == "" {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		bmi.SetStatusCondition(v1alpha1.HostConditionAllocated, metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
+		return ctrl.Result{}, nil
+	}
+	if !inventory.TryLock(hostID) {
+		return ctrl.Result{RequeueAfter: r.TryLockFailPollIntervalDuration}, nil
+	}
+	defer inventory.Unlock(hostID)
+	return r.releaseHostWithoutSelectedPortMACLocked(ctx, bmi, diagnostic)
+}
+
+// releaseHostWithoutSelectedPortMACLocked releases the host when the caller
+// already holds its inventory lock.
+func (r *BareMetalInstanceReconciler) releaseHostWithoutSelectedPortMACLocked(
+	ctx context.Context, bmi *v1alpha1.BareMetalInstance, diagnostic string,
+) (ctrl.Result, error) {
+	hostID := bmi.Spec.ExternalHostID
+	if hostID == "" {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		bmi.SetStatusCondition(v1alpha1.HostConditionAllocated, metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
+		return ctrl.Result{}, nil
+	}
+
+	if r.InventoryClient == nil {
+		return ctrl.Result{}, errors.New("inventory client not configured while releasing host")
+	}
+	if err := r.InventoryClient.UnassignHost(ctx, hostID, string(bmi.UID), inventoryLabelsToRemove(bmi)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("release host %s after selected-port MAC failure: %w", hostID, err)
+	}
+
+	updated := bmi.DeepCopy()
+	updated.Spec.ExternalHostID = ""
+	updated.Spec.ExternalHostName = ""
+	updated.Spec.HostClass = ""
+	if err := r.Update(ctx, updated); err != nil {
+		return ctrl.Result{}, fmt.Errorf("clear host assignment after selected-port MAC failure: %w", err)
+	}
+	bmi.Spec = updated.Spec
+	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+	bmi.SetStatusCondition(v1alpha1.HostConditionAllocated, metav1.ConditionFalse,
+		v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
+	return ctrl.Result{}, nil
+}
+
+func networkAttachmentStatusFor(
+	bmi *v1alpha1.BareMetalInstance, subnetRef string,
+) *v1alpha1.BareMetalNetworkAttachmentStatus {
+	for i := range bmi.Status.NetworkAttachmentStatuses {
+		if bmi.Status.NetworkAttachmentStatuses[i].SubnetRef == subnetRef {
+			return &bmi.Status.NetworkAttachmentStatuses[i]
+		}
+	}
+	return nil
+}
+
+func inventoryLabelsToRemove(bmi *v1alpha1.BareMetalInstance) []string {
+	var labels []string
+	if bmi.Spec.InventoryLabels != nil {
+		labels = make([]string, 0, len(bmi.Spec.InventoryLabels)+1)
+		for key := range bmi.Spec.InventoryLabels {
+			labels = append(labels, key)
+		}
+	}
+	if _, ok := bmi.GetPoolID(); ok {
+		labels = append(labels, shared.OsacBareMetalPoolIDLabel)
+	}
+	return labels
 }
 
 func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
@@ -615,9 +744,12 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return result, nil
 	}
+	if bareMetalInstance.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
+		return ctrl.Result{}, nil
+	}
 	netCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 	if netCond == nil || netCond.Status != metav1.ConditionTrue {
-		if netCond != nil && netCond.Reason == v1alpha1.HostConditionReasonTemplateFailed {
+		if netCond != nil && isFinalNetworkAttachmentFailure(netCond.Reason) {
 			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 			return ctrl.Result{}, nil
 		}
@@ -657,6 +789,19 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 	}
 	log.Info("Network handoff and IP discovery complete", "bmi", bareMetalInstance.Name)
 	return ctrl.Result{}, nil
+}
+
+func isFinalNetworkAttachmentFailure(reason string) bool {
+	return reason == v1alpha1.HostConditionReasonTemplateFailed ||
+		reason == v1alpha1.HostConditionReasonNetworkAttachmentFailed
+}
+
+func (r *BareMetalInstanceReconciler) recordBMIEvent(
+	bmi *v1alpha1.BareMetalInstance, eventType, reason, message string,
+) {
+	if r.EventRecorder != nil {
+		r.EventRecorder.Eventf(bmi, nil, eventType, reason, "Reconcile", "%s", message)
+	}
 }
 
 func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {

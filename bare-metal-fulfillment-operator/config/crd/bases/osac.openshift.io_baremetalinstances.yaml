@@ -361,7 +361,8 @@ spec:
                   NetworkAttachmentStatuses captures runtime networking state for each NIC.
                   Populated by the operator after DHCP lease discovery.
                 items:
-                  description: BareMetalNetworkAttachmentStatus captures the runtime
+                  description: |-
+                    BareMetalNetworkAttachmentStatus captures the selected port and runtime
                     networking state for a single NIC.
                   properties:
                     interface:
@@ -370,6 +371,12 @@ spec:
                       type: string
                     ipAddress:
                       description: IPAddress is the IP discovered after DHCP assignment.
+                      type: string
+                    macAddress:
+                      description: |-
+                        MACAddress is the selected physical interface MAC in lowercase,
+                        colon-separated form.
+                      pattern: ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$
                       type: string
                     primary:
                       description: Primary indicates whether this attachment is the

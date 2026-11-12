@@ -218,9 +218,13 @@ as follows:
   manager names remain part of the NetworkClass spec but are not resolved;
   VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool and FabricDomain
   become Ready with reason `ProvisioningDisabled`; workloads create no
-  NetworkAttachment, and ExternalIP, ExternalIPAttachment and NATGateway are
-  not offered. The fulfillment service refuses to start when the stored value
-  changes.
+  NetworkAttachment. The networking APIs remain registered; registration does
+  not mean that every create operation is available. ExternalIP create fails
+  with `FailedPrecondition`, exact message `provider networking is disabled`,
+  before persistence or pool accounting changes. ExternalIPAttachment and
+  NATGateway need an ALLOCATED ExternalIP, so disabled provisioning cannot
+  establish their provider-backed paths. The fulfillment service refuses to
+  start when the stored value changes.
 - **CaaS endpoint lifecycle:** CaaS ClusterOrders using this shared lifecycle
   discover the management API and guest ingress endpoints, request automatic
   ExternalIPAttachments after each target is ready and its ExternalIP is
@@ -251,6 +255,46 @@ as follows:
   record their Cluster in status. The agent registration timeout (30 minutes)
   starts at the latest of the attempt start, the BMI network-ready time and
   the management publication, so network setup time does not count against it.
+
+## Networking reference coverage boundaries
+
+The [provider-networking control design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-unified-networking/design.md#provider-networking-control)
+distinguishes disabled registration/readiness from real provider operations.
+The BMaaS CI values no longer contain `externalIPContractVersion: ""`
+([removal in #2051](https://github.com/osac-project/osac/pull/2051)); do not
+restore it to make allocation-dependent tests run in a disabled profile.
+
+- **Disabled [QE] E2E:** `tests/e2e/references/test_networking_references.py`
+  selects shared pool ID/name rejection cases with `reference_networking`.
+  Each requires the exact error, no object under the unique name, unchanged
+  observed private ExternalIP ID set, and unchanged pool allocated/available
+  counters. It uses real APIs, database and operator readiness, not synthetic
+  ALLOCATED feedback. The fixture creates and deletes its own shared pool;
+  private API pool creation/read/deletion and ExternalIP observation/cleanup
+  permissions are required, not an existing ready pool. Run without concurrent
+  allocators; a read failure fails
+  the case rather than supplying a default snapshot.
+- **Enabled [QE] E2E:** the complete ordered
+  `tests/e2e/networking/vmaas/test_vmaas_networking.py` module tests eight
+  pool/VirtualNetwork/ExternalIP ID/name NAT combinations and eight
+  pool/ExternalIP/ComputeInstance ID/name attachment combinations. Every row
+  requires real API and CR allocation, canonical stored IDs, consumer readiness
+  and actual egress or SSH ingress with the intended guest's host key. Natural
+  release separates rows; the final row stays for subsequent lifecycle tests.
+  Netris, `cudn_evpn`, AAP, a routed pool and real KubeVirt guests are required.
+- **[DEV] helper units and Helm contracts:** exact-error parsing, request
+  selection and cleanup sequencing use fakes; default rendering and manager
+  registration checks do not prove provider allocation, routing or traffic.
+
+These are test contracts, not a claim of a successful deployed run. Keep
+exact-head BMaaS Full Install and enabled Netris execution evidence separate
+from collection/unit evidence. Service-specific BMaaS/CaaS attachment target
+permutations and attaching immediately after a VM becomes Ready are not
+established by the ComputeInstance reference rows. No new follow-up ticket or
+individual owner is assigned here; runner authorization and evidence remain
+with the responsible QE/CI operators. See
+[E2E suite boundaries](../testing/e2e.md#suite-boundaries)
+for selections and execution prerequisites.
 
 ## AgentlessNet NATGateway implementation status
 

@@ -22,7 +22,20 @@ readiness only.
 | Netris BMaaS (`networking/bmaas`) | BMI networking on the deployed fabric | Needs BMH SSH and the BMI network interface. PR job omits slow cross-tenant cases; Netris `full` excludes the directory (`cudn_evpn` rejects its ICMP rules) |
 | Stretched (`networking/stretched`) | BMI/VM connectivity on one Subnet | Needs the stretched deploy suite, BMaaS SSH, VM template/helper, EVPN underlay; not in standard runs |
 
+- Networking references ([OSAC-6744](https://github.com/osac-project/osac/pull/2323)) distinguish disabled-mode rejection without storage/allocation/accounting changes from enabled-provider allocation and traffic. The disabled fixture requires private pool management and Kubernetes observation; enabled ID/name selectors run serially in the full ordered VMaaS module, retaining the final allocation for detach, automatic allocation, billing and teardown. Registration/default rendering and disabled component tests do not establish live Netris allocation, connectivity or release; missing deployed evidence remains unresolved.
+
 ## Coverage gaps
+
+The disabled reference fixture owns its shared pool; private API auth must allow
+pool create/read/delete and child ExternalIP List/delete, with Kubernetes
+observation for readiness and natural cleanup. No pre-existing pool is needed.
+Read failures remain failures; tenant-only credentials are insufficient.
+Its admin identity must also read private `InstallationSettings/Get`: the guard
+reads the stored mode with explicit JSON defaults before pool creation, skips
+only boolean enabled mode, and fails setup for missing/nonboolean mode or RPC
+errors. Disabled mode retains the full rejection contract; this guard does not
+apply to enabled-provider suites. Hermetic diagnostic tests use synthetic
+subprocess failures, not live provider execution or evidence of real exposure.
 
 - Inter-subnet VM-to-VM routing across CUDNs is Phase 2, tracked by
   [OSAC-3667](https://redhat.atlassian.net/browse/OSAC-3667).

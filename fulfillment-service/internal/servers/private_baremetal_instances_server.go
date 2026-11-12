@@ -598,11 +598,10 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 		}
 	}
 
-	// If none of the authentication inputs are set, the server cannot be accessed after deployment.
-	if spec.GetSshKey() == nil &&
-		spec.GetUserDataSource().GetInline() == "" && spec.GetUserDataSource().GetSecret() == nil {
-		return grpcstatus.Error(grpccodes.InvalidArgument,
-			"at least one authentication method must be provided: spec.ssh_key, spec.user_data_source.inline or spec.user_data_source.secret")
+	// The request interceptor validates before Catalog Item policies fill omitted fields.
+	// Check the effective spec here so a locked or defaulted catalog key is accepted.
+	if spec.GetSshKey() == nil {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "spec.ssh_key is required")
 	}
 
 	return nil

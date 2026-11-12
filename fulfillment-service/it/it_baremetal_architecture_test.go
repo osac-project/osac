@@ -44,6 +44,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 		image           *privatev1.DiskImage
 		instanceType    *privatev1.BareMetalInstanceType
 		template        string
+		sshKeyID        string
 		toPublic        *servers.GenericMapper[*privatev1.BareMetalInstance, *publicv1.BareMetalInstance]
 		toPrivate       *servers.GenericMapper[*publicv1.BareMetalInstance, *privatev1.BareMetalInstance]
 	)
@@ -56,6 +57,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 	})
 	BeforeEach(func(ctx context.Context) {
+		sshKeyID = createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 		instances = privatev1.NewBareMetalInstancesClient(tool.InternalView().AdminConn())
 		publicInstances = publicv1.NewBareMetalInstancesClient(tool.ExternalView().UserConn())
 		images = privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
@@ -82,6 +84,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			Spec: privatev1.BareMetalInstanceSpec_builder{
 				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Shared: true}.Build(),
 				DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId(), Shared: true}.Build(),
+				SshKey:    privatev1.SecretReference_builder{Id: sshKeyID}.Build(),
 				UserDataSource: privatev1.UserDataSource_builder{
 					Inline: new("#cloud-config\n"),
 				}.Build(),

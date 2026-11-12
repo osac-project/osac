@@ -47,6 +47,7 @@ var _ = Describe("Bare metal architecture admission", func() {
 		toPublic         *GenericMapper[*privatev1.BareMetalInstance, *publicv1.BareMetalInstance]
 		toPrivate        *GenericMapper[*publicv1.BareMetalInstance, *privatev1.BareMetalInstance]
 		parameterDefault *anypb.Any
+		sshKeyID         string
 	)
 	BeforeEach(func() {
 		var err error
@@ -66,6 +67,7 @@ var _ = Describe("Bare metal architecture admission", func() {
 		Expect(err).NotTo(HaveOccurred())
 		types, err := dao.NewGenericDAO[*privatev1.BareMetalInstanceType]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 		Expect(err).NotTo(HaveOccurred())
+		sshKeyID = createTestBareMetalSSHKey(ctx)
 		for i, cpu := range []string{"amd64", "arm64", "s390x"} {
 			instanceType := bareMetalInstanceTypeFixture("type-"+cpu, bareMetalNetworkPort("data-0", "fabric"))
 			instanceType.GetSpec().GetHardware().GetCpu().SetArchitecture(cpu)
@@ -110,6 +112,7 @@ var _ = Describe("Bare metal architecture admission", func() {
 			Spec: privatev1.BareMetalInstanceSpec_builder{
 				Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "architecture-template"}.Build(),
 				InstanceType: typeRef, DiskImage: imageRef,
+				SshKey:         privatev1.SecretReference_builder{Id: sshKeyID}.Build(),
 				UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config\n")}.Build(),
 			}.Build(),
 		}.Build()

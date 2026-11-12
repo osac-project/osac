@@ -324,6 +324,10 @@ var _ = Describe("Shared typed-policy helper", func() {
 		Expect(spec.GetSshKey()).To(Equal(defaultReference))
 		Expect(spec.GetSshKey().GetProject()).To(BeEmpty())
 		Expect(spec.GetSshKey().GetShared()).To(BeTrue())
+		callerReference := privatev1.SecretReference_builder{Name: "caller-key"}.Build()
+		callerSpec := privatev1.BareMetalInstanceSpec_builder{SshKey: callerReference}.Build()
+		Expect(applyBareMetalInstanceCatalogItemPolicies(callerSpec, fields)).To(Succeed())
+		Expect(callerSpec.GetSshKey()).To(BeIdenticalTo(callerReference))
 
 		namedReference := privatev1.SecretReference_builder{Name: "project-key", Project: "project-a"}.Build()
 		lockedFields := privatev1.BareMetalInstanceCatalogItemFields_builder{
@@ -332,6 +336,9 @@ var _ = Describe("Shared typed-policy helper", func() {
 		lockedSpec := &privatev1.BareMetalInstanceSpec{}
 		Expect(applyBareMetalInstanceCatalogItemPolicies(lockedSpec, lockedFields)).To(Succeed())
 		Expect(lockedSpec.GetSshKey()).To(Equal(namedReference))
+		lockedCallerSpec := privatev1.BareMetalInstanceSpec_builder{SshKey: callerReference}.Build()
+		Expect(applyBareMetalInstanceCatalogItemPolicies(lockedCallerSpec, lockedFields)).
+			To(MatchError(ContainSubstring("ssh_key: field is not editable")))
 	})
 
 	It("rejects nil message payloads without mutating the target", func() {

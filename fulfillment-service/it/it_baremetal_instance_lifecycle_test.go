@@ -22,6 +22,7 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -38,9 +39,8 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// bmiTestSSHPublicKey is a valid OpenSSH public key used to satisfy the
-// requirement that a BareMetalInstance provide at least one authentication
-// method (ssh_key or user_data) at create time.
+// bmiTestSSHPublicKey is a valid OpenSSH public key for the required managed
+// SSH-key Secret reference on BareMetalInstance creation.
 const bmiTestSSHPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
 
 var _ = Describe("BareMetalInstance lifecycle", func() {
@@ -56,6 +56,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		instanceTypeId                      string
 		defaultDiskImageId                  string
 		defaultDiskImageName                string
+		defaultSSHKeyID                     string
 		defaultNetworkingFixture            catalogItemNetworkFixture
 		tenantName                          string
 		tenantUsername                      string
@@ -172,6 +173,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
+		defaultSSHKeyID = createCatalogItemSSHKeySecretFixture(ctx, tenantName)
 
 		// Create a published Catalog Item for provisioning; drafts remain readable.
 		catalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
@@ -195,6 +197,40 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 
 	})
 
+	DescribeTable("requires an SSH key on public Create", func(ctx context.Context, userData *publicv1.UserDataSource) {
+		catalogResp, err := bareMetalInstanceCatalogItemsClient.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceCatalogItem_builder{
+				Metadata:  privatev1.Metadata_builder{Name: fmt.Sprintf("no-key-catalog-%s", uuid.New()[24:32])}.Build(),
+				Title:     "Catalog without an SSH key default",
+				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: templateId}.Build(),
+				Published: true,
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		catalogID := catalogResp.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, err := bareMetalInstanceCatalogItemsClient.Delete(ctx, privatev1.BareMetalInstanceCatalogItemsDeleteRequest_builder{Id: catalogID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		_, err = bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("no-key-bmi-%s", uuid.New()[24:32])}.Build(),
+				Spec: publicv1.BareMetalInstanceSpec_builder{
+					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogID}.Build(),
+					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					DiskImage:      publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+					UserDataSource: userData,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("spec.ssh_key is required"))
+	},
+		Entry("with no user data", nil),
+		Entry("with inline user data only", publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build()),
+	)
+
 	It("Creates a BareMetalInstance with omitted networking and verifies fields", func(ctx context.Context) {
 		// Omitted network_attachments request the tenant default Subnet and
 		// SecurityGroup; the BeforeEach ensured a ready default fixture.
@@ -207,6 +243,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
+					SshKey:         publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
@@ -333,6 +370,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-auto-eip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
+					SshKey:                   publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 					CatalogItem:              publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType:             publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					UserDataSource:           publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
@@ -459,6 +497,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
+					SshKey:         publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: "non-existent-catalog-item"}.Build(),
 					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
@@ -481,6 +520,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
+					SshKey:             publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 					CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					UserDataSource:     publicv1.UserDataSource_builder{Inline: new("#cloud-config\nssh_pwauth: true")}.Build(),
@@ -559,6 +599,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
+					SshKey:         publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
@@ -643,6 +684,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
+					SshKey:         publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
@@ -660,6 +702,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
+					SshKey:         publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
@@ -757,6 +800,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
+					SshKey:      publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					Template:    publicv1.BareMetalInstanceTemplateReference_builder{Id: templateId}.Build(),
 				}.Build(),
@@ -776,6 +820,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 					Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
+					SshKey:         publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
 					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					DiskImage:      publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
@@ -982,6 +1027,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 						Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
+						SshKey:         publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 						Template:       publicv1.BareMetalInstanceTemplateReference_builder{Id: directTemplateId}.Build(),
 						InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
 						UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
@@ -1062,6 +1108,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 						Name: fmt.Sprintf("test-bmi-%s", uuid.New()[24:32]),
 					}.Build(),
 					Spec: publicv1.BareMetalInstanceSpec_builder{
+						SshKey:   publicv1.SecretReference_builder{Id: defaultSSHKeyID}.Build(),
 						Template: publicv1.BareMetalInstanceTemplateReference_builder{Id: "nonexistent_template"}.Build(),
 					}.Build(),
 				}.Build(),

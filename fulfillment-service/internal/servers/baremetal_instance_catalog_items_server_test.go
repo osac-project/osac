@@ -414,6 +414,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
 			seedTenantDefaultNetworking(testTenant, "", new("netris"))
+			sshKeyID := createTestBareMetalSSHKey(ctx)
 			_, err = instancesServer.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -423,6 +424,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						InstanceType:   bareMetalInstanceTypeReference("referenced-type"),
+						SshKey:         privatev1.SecretReference_builder{Id: sshKeyID}.Build(),
 						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					}.Build(),
 				}.Build(),

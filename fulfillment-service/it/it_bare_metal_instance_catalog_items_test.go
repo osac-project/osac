@@ -432,6 +432,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 						CatalogItem:        publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 						DiskImage:          publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
 						UserDataSource:     publicv1.UserDataSource_builder{Secret: publicv1.SecretLocalReference_builder{Id: secret}.Build()}.Build(),
+						SshKey:             publicv1.SecretReference_builder{Id: createCatalogItemSSHKeySecretFixture(ctx, usersGroup)}.Build(),
 						InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup), Shared: true}.Build(),
 						NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
 					}.Build(),
@@ -607,6 +608,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				UserDataSource:     publicv1.UserDataSource_builder{Inline: new("#cloud-config\n# member")}.Build(),
 				NetworkAttachments: []*publicv1.BareMetalNetworkAttachment{network.bareMetalInstanceAttachment()},
 				InstanceType:       publicv1.BareMetalInstanceTypeReference_builder{Id: createCatalogItemBareMetalInstanceTypeFixture(ctx, tenant), Shared: true}.Build(),
+				SshKey:             publicv1.SecretReference_builder{Id: createCatalogItemSSHKeySecretFixture(ctx, tenant)}.Build(),
 			}.Build()
 			created, err := createBareMetalInstanceFixture(ctx, memberConn, spec)
 			Expect(err).NotTo(HaveOccurred())
@@ -858,6 +860,7 @@ var _ = Describe("Bare Metal Instance Catalog Items", Label("catalog-items"), fu
 				CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
 				DiskImage:    publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
 				InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceType, Shared: true}.Build(),
+				SshKey:       publicv1.SecretReference_builder{Id: createCatalogItemSSHKeySecretFixture(ctx, usersGroup)}.Build(),
 			}.Build()
 			first, e := createBareMetalInstanceFixture(ctx, tool.ExternalView().UserConn(), request)
 			Expect(e).NotTo(HaveOccurred())

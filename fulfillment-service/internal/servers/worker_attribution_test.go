@@ -88,6 +88,7 @@ var _ = Describe("Worker attribution", func() {
 		Expect(createTestBareMetalInstanceType(ctx, "worker-type", bareMetalNetworkPort("data-0", "fabric"))).To(Succeed())
 		Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", "worker-template",
 			bareMetalInstanceTypeReference("worker-type"))).To(Succeed())
+		sshKeyID := createTestBareMetalSSHKey(ctx)
 
 		catalogServer, err := NewPrivateBareMetalInstanceCatalogItemsServer().
 			SetLogger(logger).
@@ -103,6 +104,13 @@ var _ = Describe("Worker attribution", func() {
 				Title:     "Test catalog item",
 				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "worker-template"}.Build(),
 				Published: true,
+				Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+					SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{
+						Editable: privatev1.EditableFullSecretReferenceField_builder{
+							DefaultValue: privatev1.SecretReference_builder{Id: sshKeyID}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

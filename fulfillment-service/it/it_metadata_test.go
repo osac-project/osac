@@ -416,6 +416,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 			CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: haltedBareMetalItem.GetId()}.Build(),
 			DiskImage:    publicv1.DiskImageReference_builder{Id: bareMetalImage.GetId()}.Build(),
 			InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bareMetalInstanceTypeID, Shared: true}.Build(),
+			SshKey:       publicv1.SecretReference_builder{Id: createCatalogItemSSHKeySecretFixture(ctx, usersGroup)}.Build(),
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		fixtures = append(fixtures, struct {

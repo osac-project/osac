@@ -242,6 +242,10 @@ const shortHelp = `Create a bare metal instance`
 
 const longHelp = `
 Create a bare metal instance.
+
+A registered SSH public-key Secret is required for access. Supply
+{{ bt }}--ssh-key{{ bt }} unless the catalog item provides a locked key or an
+editable default. User data is optional first-boot customization.
 `
 
 const nameFlagHelp = `
@@ -256,11 +260,13 @@ one visible item, use its identifier. Required.
 const sshKeyFlagHelp = `
 _NAME_ or {{ bt }}name=<name>[,project=<project>]{{ bt }} - Name of a registered
 SSH public-key Secret. A bare name selects the tenant's default project.
+Required unless the catalog item supplies a locked key or editable default.
 Immutable after creation.
 `
 
 const userDataFlagHelp = `
 _DATA_ - User data passed to the OS at first boot (e.g. cloud-init).
+Optional; requires an SSH key supplied by the caller or catalog item.
 Maximum 64 KB. Immutable after creation.
 `
 
@@ -268,7 +274,8 @@ const userDataSecretFlagHelp = `
 _NAME_ - Name of a Secret resource containing user data passed to the OS at
 first boot. The secret must exist in the same tenant. See also
 {{ bt }}osac create secret{{ bt }}. Mutually exclusive with
-{{ bt }}--user-data{{ bt }}.
+{{ bt }}--user-data{{ bt }}. Optional; requires an SSH key supplied by the
+caller or catalog item.
 `
 
 const runStrategyFlagHelp = `

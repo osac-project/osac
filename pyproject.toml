@@ -20,6 +20,9 @@ osac-conformance = "tests.conformance.cli:main"
 [tool.setuptools.packages.find]
 include = ["tests*"]
 
+[tool.setuptools.package-data]
+"tests.conformance" = ["*.yaml", "areas/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

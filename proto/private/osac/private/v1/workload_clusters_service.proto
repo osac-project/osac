@@ -54,6 +54,8 @@ message WorkloadClustersDeleteResponse {}
 message WorkloadClustersSignalRequest {
   option (cleanapi.message).private = true;
   string id = 1;
+  string reason = 2;
+  string severity = 3;
 }
 
 message WorkloadClustersSignalResponse { option (cleanapi.message).private = true; }

@@ -2,6 +2,7 @@ package workloadcluster
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"time"
@@ -30,13 +31,15 @@ func (r *function) ensureWatcher(parent context.Context, hubID string) {
 		r.watchersLock.Unlock()
 		return
 	}
-	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
+	ctx, cancel := context.WithCancel(parent)
 	r.watchers[hubID] = cancel
+	r.readyHubs[hubID] = false
 	r.watchersLock.Unlock()
 
 	go func() {
 		defer func() {
 			r.watchersLock.Lock()
+			r.readyHubs[hubID] = false
 			if cancel := r.watchers[hubID]; cancel != nil {
 				cancel()
 			}
@@ -44,6 +47,9 @@ func (r *function) ensureWatcher(parent context.Context, hubID string) {
 			r.watchersLock.Unlock()
 		}()
 		if err := r.startWatcher(ctx, hubID); err != nil && ctx.Err() == nil {
+			if r.metrics != nil {
+				r.metrics.HubWatchErrors.WithLabelValues(hubID).Inc()
+			}
 			r.logger.Warn("workload cluster Hub watcher stopped", slog.String("component", "workload-cluster-controller"), slog.String("operation", "watch"), slog.String("reason", "HubUnreachable"))
 		}
 	}()
@@ -80,8 +86,22 @@ func (r *function) startWatcher(ctx context.Context, hubID string) error {
 		UpdateFunc: func(_, object interface{}) { r.signalForEvent(hubID, object) },
 		DeleteFunc: func(object interface{}) { r.signalForEvent(hubID, object) },
 	})
-	informer.Run(ctx.Done())
+	factory.Start(ctx.Done())
+	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+		return errors.New("hub ManagedCluster informer did not sync")
+	}
+	r.watchersLock.Lock()
+	r.readyHubs[hubID] = true
+	r.watchersLock.Unlock()
+	r.signalForHub(ctx, hubID, "HubReconnected", "Normal")
+	<-ctx.Done()
 	return nil
+}
+
+func (r *function) isHubReady(hubID string) bool {
+	r.watchersLock.Lock()
+	defer r.watchersLock.Unlock()
+	return r.readyHubs[hubID]
 }
 
 func (r *function) signalForEvent(hubID string, object interface{}) {
@@ -99,21 +119,38 @@ func (r *function) signalForEvent(hubID string, object interface{}) {
 	filter := "this.spec.source_hub_id == " + strconv.Quote(hubID) + " && this.spec.managed_cluster_name == " + strconv.Quote(meta.GetName())
 	response, err := r.workloadClusters.List(ctx, privatev1.WorkloadClustersListRequest_builder{Filter: &filter}.Build())
 	if err != nil {
-		r.logger.Warn("Failed to find workload clusters for Hub event", slog.String("hub_id", hubID), slog.Any("error", err))
+		r.logger.Warn("Failed to find workload clusters for Hub event", slog.String("component", "workload-cluster-controller"), slog.String("operation", "signal"), slog.String("reason", "ListFailed"))
 		return
 	}
 	for _, item := range response.GetItems() {
-		var signalErr error
-		for attempt := 0; attempt < 3; attempt++ {
-			_, signalErr = r.workloadClusters.Signal(ctx, privatev1.WorkloadClustersSignalRequest_builder{Id: item.GetId()}.Build())
-			if signalErr == nil || ctx.Err() != nil {
-				break
-			}
-			time.Sleep(250 * time.Millisecond)
+		r.signalWorkloadCluster(ctx, item.GetId(), "", "")
+	}
+}
+
+func (r *function) signalForHub(ctx context.Context, hubID, reason, severity string) {
+	filter := "this.spec.source_hub_id == " + strconv.Quote(hubID)
+	response, err := r.workloadClusters.List(ctx, privatev1.WorkloadClustersListRequest_builder{Filter: &filter}.Build())
+	if err != nil {
+		return
+	}
+	for _, item := range response.GetItems() {
+		r.signalWorkloadCluster(ctx, item.GetId(), reason, severity)
+	}
+}
+
+func (r *function) signalWorkloadCluster(ctx context.Context, id, reason, severity string) {
+	var signalErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		_, signalErr = r.workloadClusters.Signal(ctx, privatev1.WorkloadClustersSignalRequest_builder{
+			Id: id, Reason: reason, Severity: severity,
+		}.Build())
+		if signalErr == nil || ctx.Err() != nil {
+			break
 		}
-		if signalErr != nil {
-			r.logger.Warn("Failed to signal workload cluster after Hub event", slog.String("workload_cluster_id", item.GetId()), slog.Any("error", signalErr))
-		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if signalErr != nil {
+		r.logger.Warn("Failed to signal workload cluster", slog.String("component", "workload-cluster-controller"), slog.String("operation", "signal"), slog.String("reason", "SignalFailed"))
 	}
 }
 

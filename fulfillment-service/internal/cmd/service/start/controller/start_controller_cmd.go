@@ -522,6 +522,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			SetLogger(r.logger).
 			SetConnection(r.client).
 			SetHubCache(hubCache).
+			SetMetricsRegisterer(metricsRegisterer).
 			Build()
 		if err != nil {
 			return fmt.Errorf("failed to create workload cluster reconciler function: %w", err)
@@ -532,7 +533,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			SetName("workload-cluster").
 			SetClient(r.client).
 			SetFunction(workloadClusterReconcilerFunction).
-			SetSyncInterval(10 * time.Second).
+			SetSyncInterval(5 * time.Minute).
 			SetEventFilter("has(event.workload_cluster) && event.type != EVENT_TYPE_OBJECT_UPDATED").
 			SetHealthReporter(healthAggregator).
 			Build()

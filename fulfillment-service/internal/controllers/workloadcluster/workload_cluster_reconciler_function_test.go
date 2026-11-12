@@ -3,8 +3,10 @@ package workloadcluster
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -64,6 +66,34 @@ func TestObserveMissingManagedCluster(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, reasonManagedClusterNotFound, condition(status, availableCondition).GetReason())
+}
+
+func TestSetUnavailableReportsUnreachableHub(t *testing.T) {
+	status := &privatev1.WorkloadClusterStatus{}
+
+	setUnavailable(status, reasonManagedClusterUnavailable, "observation failed", false)
+
+	hubCondition := condition(status, hubReachable)
+	require.Equal(t, "False", hubCondition.GetStatus())
+	require.Equal(t, reasonHubUnreachable, hubCondition.GetReason())
+	require.Equal(t, "Hub cannot be reached", hubCondition.GetMessage())
+}
+
+func TestSetConditionDoesNotRefreshRecentObservation(t *testing.T) {
+	observedAt := timestamppb.New(time.Now().Add(-time.Second))
+	status := &privatev1.WorkloadClusterStatus{Conditions: []*privatev1.WorkloadClusterCondition{
+		privatev1.WorkloadClusterCondition_builder{
+			Type:               availableCondition,
+			Status:             "True",
+			Reason:             "ManagedClusterAvailable",
+			LastObservedTime:   observedAt,
+			LastTransitionTime: observedAt,
+		}.Build(),
+	}}
+
+	setCondition(status, availableCondition, "True", "ManagedClusterAvailable", "unchanged", true)
+
+	require.Same(t, observedAt, condition(status, availableCondition).GetLastObservedTime())
 }
 
 func managedCluster(name, uid string, accepted, available bool) *unstructured.Unstructured {

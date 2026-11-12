@@ -64,6 +64,12 @@ message Event {
   // Type of event.
   EventType type = 2;
 
+  // Stable reason identifying the state transition that generated the event.
+  string reason = 42;
+
+  // Event severity, such as Normal or Warning.
+  string severity = 43;
+
   // Time at which the event was generated.
   //
   // For EVENT_TYPE_OBJECT_DELETED, this is the authoritative deletion boundary: the time at which the object had no

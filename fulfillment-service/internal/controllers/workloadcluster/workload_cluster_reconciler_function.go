@@ -15,7 +15,9 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -26,6 +28,7 @@ import (
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	osacmetrics "github.com/osac-project/osac/fulfillment-service/internal/metrics"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -49,9 +52,10 @@ var managedClusterGVK = schema.GroupVersionKind{Group: managedClusterGroup, Vers
 
 // FunctionBuilder contains the dependencies needed to observe a registered ManagedCluster.
 type FunctionBuilder struct {
-	logger     *slog.Logger
-	connection *grpc.ClientConn
-	hubCache   controllers.HubCache
+	logger            *slog.Logger
+	connection        *grpc.ClientConn
+	hubCache          controllers.HubCache
+	metricsRegisterer prometheus.Registerer
 }
 
 type function struct {
@@ -61,6 +65,10 @@ type function struct {
 	workloadClusters privatev1.WorkloadClustersClient
 	watchers         map[string]context.CancelFunc
 	watchersLock     sync.Mutex
+	readyHubs        map[string]bool
+	metrics          *osacmetrics.WorkloadClusterMetrics
+	availabilityLock sync.Mutex
+	availability     map[string]string
 }
 
 // NewFunction creates a WorkloadCluster observation function.
@@ -81,6 +89,11 @@ func (b *FunctionBuilder) SetHubCache(value controllers.HubCache) *FunctionBuild
 	return b
 }
 
+func (b *FunctionBuilder) SetMetricsRegisterer(value prometheus.Registerer) *FunctionBuilder {
+	b.metricsRegisterer = value
+	return b
+}
+
 // Build creates a reconciler that observes the Hub's ManagedCluster API.
 func (b *FunctionBuilder) Build() (controllers.ReconcilerFunction[*privatev1.WorkloadCluster], error) {
 	if b.logger == nil {
@@ -98,12 +111,22 @@ func (b *FunctionBuilder) Build() (controllers.ReconcilerFunction[*privatev1.Wor
 		hubCache:         b.hubCache,
 		workloadClusters: privatev1.NewWorkloadClustersClient(b.connection),
 		watchers:         map[string]context.CancelFunc{},
+		readyHubs:        map[string]bool{},
+		availability:     map[string]string{},
+	}
+	if b.metricsRegisterer != nil {
+		var metricErr error
+		r.metrics, metricErr = osacmetrics.NewWorkloadClusterMetrics(b.metricsRegisterer)
+		if metricErr != nil {
+			return nil, metricErr
+		}
 	}
 	return r.run, nil
 }
 
 func (r *function) run(ctx context.Context, object *privatev1.WorkloadCluster) error {
 	if object.GetMetadata().HasDeletionTimestamp() {
+		r.updateAvailabilityMetrics(object.GetId(), "")
 		return nil
 	}
 	old := proto.Clone(object).(*privatev1.WorkloadCluster)
@@ -113,13 +136,18 @@ func (r *function) run(ctx context.Context, object *privatev1.WorkloadCluster) e
 		status = &privatev1.WorkloadClusterStatus{}
 	}
 	entry, err := r.hubCache.Get(ctx, object.GetSpec().GetSourceHubId())
-	if err != nil {
+	if err != nil || !r.isHubReady(object.GetSpec().GetSourceHubId()) {
 		setUnavailable(status, reasonHubUnreachable, "Cannot reach hub to validate cluster registration", false)
+		if err == nil {
+			err = errors.New("hub watcher is not ready")
+		}
 	} else {
 		setCondition(status, hubReachable, "True", "HubReachable", "Hub is reachable and ready", true)
 		err = r.observe(ctx, entry.Client, object, status)
 	}
 	object.SetStatus(status)
+	r.recordConditionTransitions(old.GetStatus(), object.GetStatus())
+	r.updateAvailabilityMetrics(object.GetId(), availableStatus(object.GetStatus()))
 	if !proto.Equal(old.GetStatus(), object.GetStatus()) {
 		_, updateErr := r.workloadClusters.Update(ctx, privatev1.WorkloadClustersUpdateRequest_builder{
 			Object:     object,
@@ -130,6 +158,59 @@ func (r *function) run(ctx context.Context, object *privatev1.WorkloadCluster) e
 		}
 	}
 	return err
+}
+
+func (r *function) recordConditionTransitions(old, current *privatev1.WorkloadClusterStatus) {
+	if r.metrics == nil {
+		return
+	}
+	oldByType := map[string]string{}
+	for _, condition := range old.GetConditions() {
+		oldByType[condition.GetType()] = condition.GetStatus()
+	}
+	for _, condition := range current.GetConditions() {
+		from := oldByType[condition.GetType()]
+		to := condition.GetStatus()
+		if from != to {
+			r.metrics.ConditionTransitions.WithLabelValues(condition.GetType(), from, to).Inc()
+		}
+	}
+}
+
+func availableStatus(status *privatev1.WorkloadClusterStatus) string {
+	for _, condition := range status.GetConditions() {
+		if condition.GetType() == availableCondition {
+			return condition.GetStatus()
+		}
+	}
+	return ""
+}
+
+func (r *function) updateAvailabilityMetrics(id, status string) {
+	if r.metrics == nil || id == "" {
+		return
+	}
+	r.availabilityLock.Lock()
+	defer r.availabilityLock.Unlock()
+	previous := r.availability[id]
+	if previous == status {
+		return
+	}
+	if previous == "True" {
+		r.metrics.Available.Dec()
+	} else if previous == "False" {
+		r.metrics.Unavailable.Dec()
+	}
+	if status == "True" {
+		r.metrics.Available.Inc()
+	} else if status == "False" {
+		r.metrics.Unavailable.Inc()
+	}
+	if status == "" {
+		delete(r.availability, id)
+	} else {
+		r.availability[id] = status
+	}
 }
 
 func (r *function) observe(ctx context.Context, hubClient clnt.Client, object *privatev1.WorkloadCluster, status *privatev1.WorkloadClusterStatus) error {
@@ -197,7 +278,11 @@ func conditionTrue(object *unstructured.Unstructured, conditionType string) bool
 }
 
 func setUnavailable(status *privatev1.WorkloadClusterStatus, reason, message string, reachable bool) {
-	setCondition(status, hubReachable, boolStatus(reachable), "HubReachable", "Hub is reachable and ready", reachable)
+	if reachable {
+		setCondition(status, hubReachable, "True", "HubReachable", "Hub is reachable and ready", true)
+	} else {
+		setCondition(status, hubReachable, "False", reasonHubUnreachable, "Hub cannot be reached", false)
+	}
 	setCondition(status, availableCondition, "False", reason, message, reachable)
 }
 
@@ -221,13 +306,15 @@ func setCondition(status *privatev1.WorkloadClusterStatus, conditionType, value,
 		condition = &privatev1.WorkloadClusterCondition{Type: conditionType}
 		status.SetConditions(append(status.GetConditions(), condition))
 	}
-	if condition.GetStatus() != value || condition.GetReason() != reason {
+	transitioned := condition.GetStatus() != value || condition.GetReason() != reason
+	if transitioned {
 		condition.SetLastTransitionTime(now)
 	}
 	condition.SetStatus(value)
 	condition.SetReason(reason)
 	condition.SetMessage(message)
-	if observed {
+	lastObserved := condition.GetLastObservedTime()
+	if observed && (transitioned || lastObserved == nil || now.AsTime().Sub(lastObserved.AsTime()) >= time.Minute) {
 		condition.SetLastObservedTime(now)
 	}
 }

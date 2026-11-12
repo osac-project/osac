@@ -715,10 +715,15 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assert_private(result.stdout + result.stderr)
         self.assertIn("offline chart rendering failed", result.stderr)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        # The gate renders osac-infra before the osac chart, so an unrelated
+        # infra failure would also exit nonzero with the generic line. Require
+        # the OSAC-stage failure itself, whose fixed message names the field
+        # and still withholds the value.
+        self.assertIn(
+            "instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL"
+            " must be an https:// URL",
+            result.stderr,
+        )
 
 
 if __name__ == "__main__":

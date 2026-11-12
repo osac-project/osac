@@ -1029,7 +1029,7 @@ endif
 MULTICLUSTER_SKIP_GATE := -o validate-inputs -o validate-osac-inputs
 
 .PHONY: install-multicluster
-install-multicluster: validate-inputs ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
+install-multicluster: validate-inputs validate-remote-cluster-render ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
 	# Paths stay out of these errors: a local path can carry user or
 	# customer names, and this output reaches terminals and CI logs.
 	@test -r "$${KUBECONFIG}" || { echo "ERROR: KUBECONFIG is not readable; check the path you supplied" >&2; exit 1; }
@@ -1061,6 +1061,23 @@ install-multicluster: validate-inputs ## Prepare a VMaaS workload cluster, then 
 		REMOTE_KUBECONFIG="$${REMOTE_KUBECONFIG}" \
 		REMOTE_API_ADDRESS="$${REMOTE_API_ADDRESS}" \
 		EXTRA_HELM_ARGS="$${EXTRA_HELM_ARGS}"
+
+# prepare-remote-cluster renders the workload-cluster charts from the raw
+# infra values only: setup-remote-cluster.sh passes -f $(INFRA_VALUES) and
+# --set osacNamespace, without INFRA_VALUES_EXTRA or INFRA_HELM_ARGS, and it
+# does so after provisioning LVMS/CNV and waiting for readiness. Render the
+# same releases with the same inputs first, so a values failure the parent
+# gate masks (an override that corrects a base value) still stops the flow
+# before any cluster change.
+.PHONY: validate-remote-cluster-render
+validate-remote-cluster-render: helm-infra-deps ## Render the workload-cluster charts as prepare-remote-cluster will
+	@source scripts/lib.sh && render_chart_offline osac-deps $(DEPS_CHART) \
+		-f $(INFRA_VALUES) \
+	|| { echo "ERROR: invalid installer inputs for the workload-cluster osac-deps render; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
+	@source scripts/lib.sh && render_chart_offline osac-infra $(INFRA_CHART) \
+		-f $(INFRA_VALUES) \
+		--set osacNamespace=$(NS) \
+	|| { echo "ERROR: invalid installer inputs for the workload-cluster osac-infra render; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 
 .PHONY: prepare-remote-cluster
 prepare-remote-cluster: validate-ns helm-infra-deps ## Prepare the remote VMaaS workload cluster without changing management

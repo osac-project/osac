@@ -75,6 +75,11 @@ STUB
 # major/minor detection.
 write_stub helm <<'STUB'
 mock-log helm "$@"
+# Record one line per argument for the osac-chart render, so a test can
+# assert the order Helm actually receives the flag groups in.
+if [ -n "${MOCK_OSAC_ARGV_LOG:-}" ] && [ "$1" = template ] && [ "$2" = osac ]; then
+  printf '%s\n' "$@" >>"${MOCK_OSAC_ARGV_LOG}"
+fi
 case "$1" in
   version) echo "v3.18.0+gstub" ;;
   template)
@@ -254,6 +259,35 @@ MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
     >"${mc_db}" 2>/dev/null || fail "make -p -n install-multicluster failed"
 grep -q '^INFRA_VALUES_EXTRA := .*multicluster-infra.yaml' "${mc_db}" \
   || fail "install-multicluster: the exported values list lacks the overlay"
+
+# The workload-cluster render (setup-remote-cluster.sh) uses the raw infra
+# values only, without INFRA_VALUES_EXTRA or INFRA_HELM_ARGS, and it runs
+# after LVMS/CNV are provisioned and ready. The parent gate applies those
+# inputs, so an override that corrects a base value passes it and would fail
+# only after the remote cluster changed. The separate render must therefore
+# use exactly the raw inputs and run before preparation starts.
+mc_joined="${TMP_DIR}/multicluster.joined"
+join_continuations <"${mc_plan}" >"${mc_joined}"
+for render_cmd in 'render_chart_offline osac-deps charts/osac-deps' \
+  'render_chart_offline osac-infra charts/osac-infra'; do
+  render_line=$(grep -F "${render_cmd}" "${mc_joined}" \
+    | grep -F -- '-f values/vmaas-ci/infra.yaml' | head -1)
+  [ -n "${render_line}" ] \
+    || fail "install-multicluster: no raw-infra-values render for ${render_cmd}"
+  case "${render_line}" in
+    *'${INFRA_VALUES_EXTRA}'*|*'INFRA_HELM_ARGS'*)
+      fail "install-multicluster: ${render_cmd} applies inputs setup-remote-cluster.sh does not"
+      ;;
+  esac
+done
+render_pos=$(grep -nF 'workload-cluster osac-infra render' "${mc_joined}" \
+  | head -1 | cut -d: -f1)
+prepare_pos=$(grep -nF 'setup-remote-cluster.sh prepare' "${mc_joined}" \
+  | head -1 | cut -d: -f1)
+[ -n "${render_pos}" ] && [ -n "${prepare_pos}" ] \
+  || fail "install-multicluster: the plan lacks the workload-cluster render or the preparation step"
+[ "${render_pos}" -lt "${prepare_pos}" ] \
+  || fail "install-multicluster: the workload-cluster render follows preparation"
 
 # Gate/install parity for INFRA_HELM_ARGS: every helm command touching
 # osac-infra or osac-deps in the OpenShift install plan -- the gate's
@@ -704,7 +738,9 @@ join_continuations <"${remote_plan}" | grep 'helm upgrade --install osac ' \
 # the gate's render applies them after EXTRA_HELM_ARGS like install-osac's
 # upgrade does, so a caller overriding a remote-cluster flag through
 # EXTRA_HELM_ARGS sees the gate validate exactly what the install applies
-# (Helm's last --set-string for a key wins).
+# (Helm's last --set-string for a key wins). Match the expansion token, not
+# the split_argv parser input: that call carries the same text earlier on
+# the joined line but never reaches Helm.
 remote_order_plan="${TMP_DIR}/remote-order.plan"
 MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
   REMOTE_KUBECONFIG="${LOG}" \
@@ -714,14 +750,16 @@ MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
     >"${remote_order_plan}" 2>/dev/null || fail "make -n install-osac (remote order) failed"
 for remote_cmd in 'render_osac_chart_offline' 'helm upgrade --install osac '; do
   join_continuations <"${remote_order_plan}" | grep "${remote_cmd}" \
-    | grep -Eq '\$\{EXTRA_HELM_ARGS\}.*operator\.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
-    || fail "remote-flag order: ${remote_cmd} does not apply EXTRA_HELM_ARGS before the remote-cluster flags"
+    | grep -Eq '\$\{ARGV\[@\]\+"\$\{ARGV\[@\]\}"\}.*operator\.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
+    || fail "remote-flag order: ${remote_cmd} does not expand EXTRA_HELM_ARGS before the remote-cluster flags"
 done
-# The caller-supplied override itself must flow to Helm at runtime: with
-# stubbed Helm the gate succeeds and the render runs with the args in the
-# environment (the wiring above pins where the token is applied).
-: >"${LOG}"
-MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+# At runtime the override must reach Helm before the remote-cluster flags:
+# the stub records the osac render's argv, and the first occurrence of each
+# token is its position in the Helm invocation. Reversing the two groups in
+# the recipe fails this check even though the plan text still has both.
+osac_argv="${TMP_DIR}/osac-argv.log"
+: >"${LOG}"; : >"${osac_argv}"
+MOCK_LOG="${LOG}" MOCK_OSAC_ARGV_LOG="${osac_argv}" PATH="${STUB_BIN}:${PATH}" \
   REMOTE_KUBECONFIG="${LOG}" \
   make -C "${SANDBOX}" --no-print-directory validate-inputs \
     PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
@@ -730,6 +768,14 @@ MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
     || fail "remote-flag order: the gate rejected a valid EXTRA_HELM_ARGS override"
 grep -q 'helm template osac ' "${LOG}" \
   || fail "remote-flag order: the gate render never ran with the override"
+caller_pos=$(grep -n 'operator.remoteClusterKubeconfigSecretName=caller-override' \
+  "${osac_argv}" | head -1 | cut -d: -f1)
+remote_pos=$(grep -n 'operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
+  "${osac_argv}" | head -1 | cut -d: -f1)
+[ -n "${caller_pos}" ] && [ -n "${remote_pos}" ] \
+  || fail "remote-flag order: the osac render argv omits the caller override or the remote-cluster flag"
+[ "${caller_pos}" -lt "${remote_pos}" ] \
+  || fail "remote-flag order: the gate render applies the remote-cluster flags before EXTRA_HELM_ARGS"
 
 # The gate's osac-chart render goes through render_osac_chart_offline with
 # the render-only placeholder token: the function applies the placeholder

@@ -15,8 +15,8 @@ It uses the OSAC CLI for all OSAC operations.
 - An existing whole-disk QCOW2 image is available locally. OSAC bare metal
   provisioning requires an image with a complete partition table, all required
   partitions, and a bootloader; root-partition-only images are not supported.
-- A registered SSH public-key Secret is available, or user data supplies the
-  instance's access credentials.
+- A registered SSH public-key Secret is available for the caller or provided
+  by the CatalogItem's locked or editable default `fields.ssh_key` policy.
 
 ## 1. Publish the disk artifact
 
@@ -98,6 +98,11 @@ images. If the image is locked, omit `--disk-image`, even for the same image.
 
 Register an SSH public key as a Secret before using it. The required data key is
 `public_key`; Secret data remains immutable after creation.
+Every new BareMetalInstance needs an effective `spec.ssh_key`. User data is
+optional first-boot customization and cannot replace the SSH key. A CatalogItem
+can supply the key through a locked policy or an editable default; otherwise
+pass `--ssh-key` when creating the instance. Existing clients that send user
+data alone must add a registered key reference.
 
 ```bash
 osac create secret \

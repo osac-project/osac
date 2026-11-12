@@ -88,6 +88,7 @@ var _ = Describe("Bare metal instances server", func() {
 			var err error
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
+			sshKeyID := createTestBareMetalSSHKey(ctx)
 
 			// Seed a published catalog item.
 			catalogServer, err := NewPrivateBareMetalInstanceCatalogItemsServer().
@@ -105,6 +106,13 @@ var _ = Describe("Bare metal instances server", func() {
 					Title:     "Test catalog item",
 					Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: "test-template"}.Build(),
 					Published: true,
+					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
+						SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{
+							Editable: privatev1.EditableFullSecretReferenceField_builder{
+								DefaultValue: privatev1.SecretReference_builder{Id: sshKeyID}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())

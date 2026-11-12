@@ -61,6 +61,21 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   ([OSAC-6480](https://redhat.atlassian.net/browse/OSAC-6480), DEV) is
   covered by deployed public-API cases and unit coverage in the servers
   suites; provider provisioning remains E2E coverage.
+- BareMetalInstance SSH-key Create contract
+  ([OSAC-7579](https://redhat.atlassian.net/browse/OSAC-7579), DEV):
+  `internal/servers/private_baremetal_instances_server_test.go` checks
+  rejection without an effective SSH key, including inline and Secret-backed
+  user data alone, and accepts an explicit registered key without user data
+  and a catalog editable key default with and without user data.
+  `it/it_baremetal_instance_lifecycle_test.go` checks public Create rejection
+  without a key and with inline user data alone; successful creates use an
+  explicit registered key. `it/it_bare_metal_instance_catalog_items_test.go`
+  covers a locked catalog key without caller input or user data. Run
+  `ginkgo run --timeout 10m internal/servers` and
+  `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment`
+  from `fulfillment-service/`. The first suite needs PostgreSQL in a test
+  container; the second needs deployed Fulfillment, PostgreSQL, and
+  authenticated clients. Neither covers bare-metal provider provisioning.
 - Default networking rejection
   ([OSAC-6601](https://redhat.atlassian.net/browse/OSAC-6601),
   [OSAC-7044](https://redhat.atlassian.net/browse/OSAC-7044), DEV): creates

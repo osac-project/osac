@@ -53,26 +53,22 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
 
 (
   set -o pipefail
-  printf 'Enter admin password: '
-  read -rs E2E_PASSWORD
-  printf '\n'
   bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
     --osac-ui-dir="$PWD" \
     --tag=vmaas_all \
     --instance=1 \
     --admin-user=admin \
-    --admin-password="$E2E_PASSWORD" \
+    --admin-password='YOUR_ADMIN_PASSWORD' \
     --allow-root-e2e \
     --ignore-tls \
     --reporter=line 2>&1 | tee vmaas-flow-1.log
   status=${PIPESTATUS[0]}
-  unset E2E_PASSWORD
   exit "$status"
 )
 ```
 
-Enter the admin password when prompted; the live output is saved to
-`vmaas-flow-1.log`.
+Replace `YOUR_ADMIN_PASSWORD` before running; the command does not prompt for
+input. The live output is saved to `vmaas-flow-1.log`.
 
 The default HTML reporter does not show the full live test log in the terminal.
 Add `--reporter=line` to the runner command for live progress and test output.
@@ -87,9 +83,11 @@ script never changes cluster sizing automatically. The runner accepts the flow
 tags listed below, validates the deployment and VMaaS prerequisites, and keeps
 run-time credentials outside the setup step. Pass the admin credentials with
 `--admin-user=USER` and `--admin-password=PASSWORD`; the username defaults to
-`admin`. A missing password stops the run with a fix instruction. For VMaaS
-flows, the runner also authenticates the OSAC CLI for the duration of the run
-using the same credentials; temporary CLI files are removed on exit.
+`admin`. The runner requires the password command-line option even when
+`OSAC_ADMIN_PASSWORD` is set in the environment, and never prompts for input.
+A missing password stops the run with a fix instruction. For VMaaS flows, the
+runner also authenticates the OSAC CLI for the duration of the run using the
+same credentials; temporary CLI files are removed on exit.
 `--instance=INDEX` defaults to `1` and appends the index
 to every VMaaS resource name, allowing isolated runs such as
 `tenant-item-e2e-1` and `tenant-item-e2e-2`.

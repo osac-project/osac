@@ -61,7 +61,11 @@ must be extended when generating more services.
   stay hand-written. Note that the framework generator itself could emit
   plan modifiers and custom validators — the intermediate specification
   supports them, with imports and Go code snippets — but the OpenAPI step
-  can't derive them from the spec, so they never reach it.
+  can't derive them from the spec, so they never reach it. They could be
+  injected by post-processing the specification, but the glue is
+  deliberately kept in the resource and data source files instead: it is
+  smaller than such a tool would be, it sits next to the CRUD logic that
+  depends on it, it is type-checked, and regeneration never touches it.
 - `protoc-gen-openapiv2` doesn't know about `google.api.field_behavior`, so
   output-only fields such as `status` are generated as plain optional
   attributes instead of computed ones.

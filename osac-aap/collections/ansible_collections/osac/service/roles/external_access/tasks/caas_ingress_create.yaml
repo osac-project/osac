@@ -2,13 +2,18 @@
 # Configure the guest router to serve the cluster's reserved ingress VIP.
 #
 # The provider-reserved VIP remains stable as workers and router pods move.
-# Wildcard DNS and endpoint annotations are published after the guest Service
-# reports the claimed address and has a ready router backend.
-- name: Set DNS names for the ingress endpoint
-  ansible.builtin.include_tasks: caas_dns_names.yaml
-
+# Wildcard DNS bootstraps worker installation; endpoint annotations follow
+# confirmation of the guest Service address and a ready router backend.
 - name: Reserve the guest ingress VIP
   ansible.builtin.include_tasks: caas_vip_reserve.yaml
+
+- name: Publish the wildcard ingress DNS record
+  ansible.builtin.include_tasks: caas_dns_publish.yaml
+  vars:
+    external_access_dns_records:
+      - name: "*.{{ external_access_ingress_domain }}"
+        wait_name: "default-router.{{ external_access_ingress_domain }}"
+        addr: "{{ external_access_metallb_ingress_ip }}"
 
 - name: Get managed cluster admin kubeconfig secret
   ansible.builtin.include_role:
@@ -73,11 +78,3 @@
   retries: "{{ external_access_resource_wait_retries }}"
   delay: "{{ external_access_resource_wait_delay }}"
   no_log: true
-
-- name: Publish the wildcard ingress DNS record
-  ansible.builtin.include_tasks: caas_dns_publish.yaml
-  vars:
-    external_access_dns_records:
-      - name: "*.{{ external_access_ingress_domain }}"
-        wait_name: "default-router.{{ external_access_ingress_domain }}"
-        addr: "{{ external_access_metallb_ingress_ip }}"

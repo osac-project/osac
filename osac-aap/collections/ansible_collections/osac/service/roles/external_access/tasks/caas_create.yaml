@@ -6,6 +6,13 @@
       The CaaS DNS base domain must be listed in
       external_access_supported_base_domains.
 
+- name: Set DNS names
+  ansible.builtin.set_fact:
+    external_access_api_domain: "api.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_api_int_domain: "api-int.{{ external_access_name }}.{{ external_access_base_domain }}"
+    external_access_ingress_domain: "apps.{{ external_access_name }}.{{ external_access_base_domain }}"
+  no_log: true
+
 - name: Publish the API bootstrap DNS records
   ansible.builtin.include_tasks: caas_api_dns_create.yaml
 

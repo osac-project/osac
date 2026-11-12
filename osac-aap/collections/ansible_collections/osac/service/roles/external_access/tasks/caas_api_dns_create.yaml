@@ -6,9 +6,6 @@
 # name, so a guest readiness wait placed first would wait on a name that cannot
 # resolve yet. The ingress record is published by caas_ingress_create.yaml,
 # after the guest router owns its address.
-- name: Set DNS names for the API endpoints
-  ansible.builtin.include_tasks: caas_dns_names.yaml
-
 - name: Get kube-apiserver service
   kubernetes.core.k8s_info:
     api_version: v1

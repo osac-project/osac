@@ -1,9 +1,9 @@
 """Verify the CaaS guest MetalLB ingress contract.
 
-The CaaS external-access flow must publish API bootstrap DNS before waiting for
-guest readiness, reserve one provider address per ClusterOrder, configure the
-guest router through the production-shared MetalLB role, and only then publish
-wildcard apps DNS and endpoint feedback from the confirmed Service address.
+The CaaS external-access flow must publish API bootstrap DNS, reserve one provider
+address per ClusterOrder, and publish wildcard apps DNS before worker readiness.
+The guest router uses the production-shared MetalLB role, with endpoint feedback
+following confirmation of the Service address and a ready router backend.
 """
 
 from pathlib import Path
@@ -55,6 +55,8 @@ def test_caas_create_sequences_api_dns_ingress_then_feedback() -> None:
         "caas_ingress_create.yaml",
         "publish.yaml",
     ]
+    ingress = load_tasks(TASKS / "caas_ingress_create.yaml")
+    assert index_of(ingress, "kind: EndpointSlice") == len(ingress) - 1
 
 
 @pytest.mark.parametrize(
@@ -121,7 +123,7 @@ def test_ingress_uses_the_reserved_address_and_the_shared_metallb_role() -> None
     tasks = load_tasks(TASKS / "caas_ingress_create.yaml")
     text = yaml.safe_dump(tasks)
 
-    assert index_of(tasks, "caas_vip_reserve.yaml") < index_of(tasks, "metallb_ingress")
+    assert index_of(tasks, "caas_vip_reserve.yaml") < index_of(tasks, "osac.service.metallb_ingress")
     metallb = next(
         task
         for task in tasks
@@ -150,25 +152,32 @@ def test_guest_service_address_must_equal_the_reserved_address() -> None:
     until = str(service_wait["until"])
     assert "status.loadBalancer.ingress" in until
     assert "external_access_metallb_ingress_ip" in until
-    assert index_of(tasks, "metallb_ingress") < index_of(tasks, "kind: Service")
-    assert index_of(tasks, "kind: Service") < index_of(tasks, "caas_dns_publish.yaml")
+    assert index_of(tasks, "osac.service.metallb_ingress") < index_of(tasks, "kind: Service")
+    assert index_of(tasks, "kind: Service") < index_of(tasks, "kind: EndpointSlice")
 
 
-def test_wildcard_apps_dns_is_published_from_the_confirmed_service_address() -> None:
+def test_wildcard_apps_dns_uses_the_reserved_address_before_worker_readiness() -> None:
     tasks = load_tasks(TASKS / "caas_ingress_create.yaml")
+    assert included_tasks(tasks) == ["caas_vip_reserve.yaml", "caas_dns_publish.yaml"]
     publish = next(task for task in tasks if "caas_dns_publish.yaml" in yaml.safe_dump(task))
 
     records = publish["vars"]["external_access_dns_records"]
     assert len(records) == 1
     assert records[0]["name"] == "*.{{ external_access_ingress_domain }}"
+    assert records[0]["wait_name"] == "default-router.{{ external_access_ingress_domain }}"
     assert records[0]["addr"] == "{{ external_access_metallb_ingress_ip }}"
-    assert index_of(tasks, "kind: EndpointSlice") < index_of(tasks, "caas_dns_publish.yaml")
+    assert (
+        index_of(tasks, "caas_vip_reserve.yaml")
+        < index_of(tasks, "caas_dns_publish.yaml")
+        < index_of(tasks, "retrieve_kubeconfig")
+        < index_of(tasks, "wait_for_nodes.yaml")
+    )
 
 
 def test_guest_ingress_waits_for_node_capacity_before_metallb() -> None:
     tasks = load_tasks(TASKS / "caas_ingress_create.yaml")
 
-    assert index_of(tasks, "retrieve_kubeconfig") < index_of(tasks, "metallb_ingress")
+    assert index_of(tasks, "retrieve_kubeconfig") < index_of(tasks, "osac.service.metallb_ingress")
     node_wait = next(
         task for task in tasks
         if task.get("ansible.builtin.include_role", {}).get("name") == "osac.service.wait_for"
@@ -176,7 +185,7 @@ def test_guest_ingress_waits_for_node_capacity_before_metallb() -> None:
     )
     assert node_wait["vars"]["wait_for_kubeconfig"] == "{{ admin_kubeconfig }}"
     assert "nodeRequests" in str(node_wait["vars"]["wait_for_nodes_expected_count"])
-    assert index_of(tasks, "wait_for_nodes.yaml") < index_of(tasks, "metallb_ingress")
+    assert index_of(tasks, "wait_for_nodes.yaml") < index_of(tasks, "osac.service.metallb_ingress")
 
 
 def test_vip_reservation_requires_a_provider_supplied_range() -> None:
@@ -244,19 +253,31 @@ def test_dns_publication_helper_waits_for_the_expected_answer() -> None:
     assert "stdout | length > 0" in wait_text
 
 
-def test_dns_name_variables_are_defined_in_one_place() -> None:
-    names = load_tasks(TASKS / "caas_dns_names.yaml")
-    text = yaml.safe_dump(names)
+def test_dns_name_variables_are_initialized_once_in_create_entry_point() -> None:
+    tasks = load_tasks(TASKS / "caas_create.yaml")
+    expected = {
+        "external_access_api_domain": "api.{{ external_access_name }}.{{ external_access_base_domain }}",
+        "external_access_api_int_domain": "api-int.{{ external_access_name }}.{{ external_access_base_domain }}",
+        "external_access_ingress_domain": "apps.{{ external_access_name }}.{{ external_access_base_domain }}",
+    }
+    names = [
+        task for task in tasks
+        if any(variable in task.get("ansible.builtin.set_fact", {}) for variable in expected)
+    ]
 
-    for variable in (
-        "external_access_api_domain",
-        "external_access_api_int_domain",
-        "external_access_ingress_domain",
-    ):
-        assert variable in text
+    assert len(names) == 1
+    assert names[0]["ansible.builtin.set_fact"] == expected
+    assert names[0]["no_log"] is True
+    assert index_of(tasks, "ansible.builtin.assert") < tasks.index(names[0])
+    assert tasks.index(names[0]) < index_of(tasks, "caas_api_dns_create.yaml")
 
     for name in ("caas_api_dns_create.yaml", "caas_ingress_create.yaml"):
-        assert included_tasks(load_tasks(TASKS / name))[0] == "caas_dns_names.yaml"
+        child_tasks = load_tasks(TASKS / name)
+        assert "caas_dns_names.yaml" not in included_tasks(child_tasks)
+        assert not any(
+            variable in task.get("ansible.builtin.set_fact", {})
+            for task in child_tasks for variable in expected
+        )
 
 
 def test_legacy_ci_wrapper_runs_the_whole_flow() -> None:
@@ -301,7 +322,7 @@ def test_worker_wait_counts_every_requested_node_set(counts, expected) -> None:
         ([{"endpoints": [{"conditions": {"ready": True}}]}], True),
     ],
 )
-def test_dns_publication_waits_for_a_ready_backend(slices, ready) -> None:
+def test_endpoint_feedback_waits_for_a_ready_backend(slices, ready) -> None:
     tasks = load_tasks(TASKS / "caas_ingress_create.yaml")
     wait = next(
         task for task in tasks

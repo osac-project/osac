@@ -213,7 +213,8 @@ describe('ClusterDetailsPage upgrade availability', () => {
     });
 
     await waitFor(() => expect(screen.getByText('Upgrade timed out')).toBeInTheDocument());
-    expect(screen.getByText('Still observing the control plane')).toBeInTheDocument();
+    expect(screen.getByText('HyperShift may still complete the upgrade.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
     const timeoutLabel = screen.getByText('Upgrade timed out').closest('.pf-v6-c-label');
     expect(timeoutLabel).toHaveClass('pf-m-compact');
     expect(timeoutLabel).not.toHaveClass('pf-m-warning', 'pf-m-danger');
@@ -222,6 +223,11 @@ describe('ClusterDetailsPage upgrade availability', () => {
     await user.click(screen.getByRole('button', { name: 'Upgrade history' }));
     expect(
       within(screen.getByRole('dialog', { name: 'Upgrade history' })).getByText('Timed out'),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('dialog', { name: 'Upgrade history' })).getByText(
+        'Still observing the control plane',
+      ),
     ).toBeInTheDocument();
     expect(
       within(screen.getByRole('dialog', { name: 'Upgrade history' })).getAllByRole('time'),
@@ -246,6 +252,9 @@ describe('ClusterDetailsPage upgrade availability', () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByText('Upgrade timed out')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('HyperShift may still complete the upgrade.'),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText('Still observing the control plane')).not.toBeInTheDocument();
     expect(screen.getByText('4.18.0')).toBeInTheDocument();
     expect(

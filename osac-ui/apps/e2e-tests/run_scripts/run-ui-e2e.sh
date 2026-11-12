@@ -265,13 +265,24 @@ if command -v oc >/dev/null 2>&1; then
   [[ -n "${HOME:-}" ]] && kubeconfig_candidates+=("${HOME}/.kube/config")
   KUBECONFIG_PATH=""
   route_host=""
+  api_route_host=""
+  fallback_route_host=""
+  fallback_api_route_host=""
+  fallback_kubeconfig_path=""
   for candidate in "${kubeconfig_candidates[@]}"; do
     [[ -f "$candidate" ]] || continue
-    route_host=$(KUBECONFIG="$candidate" oc "${oc_route_flags[@]}" \
+    candidate_route_host=$(KUBECONFIG="$candidate" oc "${oc_route_flags[@]}" \
       -n osac get route osac-ui -o jsonpath='{.spec.host}' 2>/dev/null || true)
-    api_route_host=$(KUBECONFIG="$candidate" oc "${oc_route_flags[@]}" \
+    candidate_api_route_host=$(KUBECONFIG="$candidate" oc "${oc_route_flags[@]}" \
       -n osac get route fulfillment-api -o jsonpath='{.spec.host}' 2>/dev/null || true)
-    if [[ -z "$route_host" ]]; then
+    if [[ -n "$candidate_route_host" ]]; then
+      route_host="$candidate_route_host"
+      api_route_host="$candidate_api_route_host"
+      KUBECONFIG_PATH="$candidate"
+      info "Using a reachable KUBECONFIG with an OSAC UI route."
+      break
+    fi
+    if [[ -z "$fallback_route_host" ]]; then
       api_server=$(KUBECONFIG="$candidate" oc config view --minify \
         -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)
       case "$api_server" in
@@ -280,20 +291,23 @@ if command -v oc >/dev/null 2>&1; then
           cluster_domain="${cluster_domain%%/*}"
           cluster_domain="${cluster_domain%:6443}"
           if [[ "$cluster_domain" == *.* ]]; then
-            route_host="osac-ui-osac.apps.${cluster_domain}"
-            [[ -n "$api_route_host" ]] ||
-              api_route_host="fulfillment-api-osac.apps.${cluster_domain}"
-            info "Derived OSAC routes from the kubeconfig API server."
+            fallback_route_host="osac-ui-osac.apps.${cluster_domain}"
+            fallback_api_route_host="$candidate_api_route_host"
+            [[ -n "$fallback_api_route_host" ]] ||
+              fallback_api_route_host="fulfillment-api-osac.apps.${cluster_domain}"
+            fallback_kubeconfig_path="$candidate"
           fi
           ;;
       esac
     fi
-    if [[ -n "$route_host" ]]; then
-      KUBECONFIG_PATH="$candidate"
-      info "Using a reachable KUBECONFIG with an OSAC UI route."
-      break
-    fi
   done
+  if [[ -z "$route_host" && -n "$fallback_route_host" ]]; then
+    route_host="$fallback_route_host"
+    api_route_host="$fallback_api_route_host"
+    KUBECONFIG_PATH="$fallback_kubeconfig_path"
+    info "Derived OSAC routes from the kubeconfig API server."
+    info "Using a KUBECONFIG with a derived OSAC UI route."
+  fi
 fi
 
 if { [[ -z "$OSAC_UI_BASE_URL" ]] || placeholder_url "$OSAC_UI_BASE_URL"; } &&

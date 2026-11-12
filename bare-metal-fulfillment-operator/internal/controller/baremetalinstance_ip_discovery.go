@@ -120,7 +120,7 @@ func queryDHCPLeaseJob(na *opv1alpha1.NetworkAttachment) *opv1alpha1.NetworkJobS
 
 // initNetworkAttachmentStatuses ensures a status entry exists for every
 // attachment, matched by the immutable subnetRef, and syncs Interface and
-// Primary from spec to status without overwriting a discovered IP address.
+// Primary from spec without overwriting its recorded MAC or discovered IP.
 func (r *BareMetalInstanceReconciler) initNetworkAttachmentStatuses(
 	bareMetalInstance *v1alpha1.BareMetalInstance,
 ) {

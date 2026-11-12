@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -40,12 +41,13 @@ import (
 
 // mockInventoryClient implements inventory.Client for testing
 type mockInventoryClient struct {
-	findFreeHostFunc           func(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error)
-	assignHostFunc             func(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*inventory.Host, error)
-	unassignHostFunc           func(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error
-	getHostNICsFunc            func(ctx context.Context, inventoryHostID string) ([]inventory.HostNIC, error)
-	getHostNICsCalled          int
-	getHostLogicalPortMACsFunc func(ctx context.Context, inventoryHostID string) (map[string]string, error)
+	findFreeHostFunc             func(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error)
+	assignHostFunc               func(ctx context.Context, inventoryHostID string, bareMetalInstanceID string, labels map[string]string) (*inventory.Host, error)
+	unassignHostFunc             func(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error
+	getHostNICsFunc              func(ctx context.Context, inventoryHostID string) ([]inventory.HostNIC, error)
+	getHostNICsCalled            int
+	getHostLogicalPortMACsFunc   func(ctx context.Context, inventoryHostID string) (map[string]string, error)
+	getHostLogicalPortMACsCalled int
 }
 
 func (m *mockInventoryClient) FindFreeHost(ctx context.Context, matchExpressions map[string]string) (*inventory.Host, error) {
@@ -78,6 +80,7 @@ func (m *mockInventoryClient) GetHostNICs(ctx context.Context, inventoryHostID s
 }
 
 func (m *mockInventoryClient) GetHostLogicalPortMACs(ctx context.Context, inventoryHostID string) (map[string]string, error) {
+	m.getHostLogicalPortMACsCalled++
 	if m.getHostLogicalPortMACsFunc != nil {
 		return m.getHostLogicalPortMACsFunc(ctx, inventoryHostID)
 	}
@@ -409,6 +412,34 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(result).To(Equal(ctrl.Result{}))
 				Expect(updateCalled).To(BeTrue())
 			})
+
+			It("selects by the type selector, then reads the selected port MAC after assignment", func() {
+				reconciler.NetworkingEnabled = true
+				bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
+					SubnetRef: "subnet-1", Interface: "data-0", Primary: true,
+				}}
+				mockInvClient.findFreeHostFunc = func(_ context.Context, selector map[string]string) (*inventory.Host, error) {
+					Expect(selector).To(Equal(map[string]string{"type": hostType}))
+					return &inventory.Host{InventoryHostID: "host-from-selector", Name: "host-a"}, nil
+				}
+				mockInvClient.getHostLogicalPortMACsFunc = func(_ context.Context, hostID string) (map[string]string, error) {
+					Expect(hostID).To(Equal("host-from-selector"))
+					return map[string]string{"data-0": "AA-BB-CC-DD-EE-FF"}, nil
+				}
+				mockInvClient.assignHostFunc = func(_ context.Context, hostID, _ string, _ map[string]string) (*inventory.Host, error) {
+					return &inventory.Host{InventoryHostID: hostID, Name: "host-a", HostClass: hostClass, Available: true}, nil
+				}
+				mockK8sClient.updateFunc = func(_ context.Context, _ client.Object, _ ...client.UpdateOption) error { return nil }
+
+				_, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(mockInvClient.getHostLogicalPortMACsCalled).To(BeZero(), "candidate selection does not inspect MACs")
+
+				_, err = reconciler.reconcileInventory(ctx, bareMetalInstance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(mockInvClient.getHostLogicalPortMACsCalled).To(Equal(1), "the selected host MAC is read after assignment")
+				Expect(networkAttachmentStatusFor(bareMetalInstance, "subnet-1").MACAddress).To(Equal("aa:bb:cc:dd:ee:ff"))
+			})
 		})
 
 		Context("when selector overrides default managedBy and provisionState", func() {
@@ -487,6 +518,72 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(result).To(Equal(ctrl.Result{}))
 				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+			})
+
+			It("records the selected interface MAC after assignment without filtering candidates", func() {
+				reconciler.NetworkingEnabled = true
+				bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
+					SubnetRef: "subnet-1", Interface: "data-0", Primary: true,
+				}}
+				mockInvClient.getHostLogicalPortMACsFunc = func(_ context.Context, hostID string) (map[string]string, error) {
+					Expect(hostID).To(Equal("host-xyz-456"))
+					return map[string]string{"data-0": "AA-BB-CC-DD-EE-FF", "data-1": "00:11:22:33:44:55"}, nil
+				}
+				mockInvClient.assignHostFunc = func(_ context.Context, _, _ string, _ map[string]string) (*inventory.Host, error) {
+					return &inventory.Host{InventoryHostID: "host-xyz-456", Name: "host-a", HostClass: hostClass, Available: true}, nil
+				}
+				mockK8sClient.updateFunc = func(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+					updated := obj.(*v1alpha1.BareMetalInstance)
+					Expect(updated.Spec.HostClass).To(Equal(hostClass))
+					Expect(updated.Spec.ExternalHostName).To(Equal("host-a"))
+					return nil
+				}
+
+				_, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(bareMetalInstance.Spec.ExternalHostName).To(Equal("host-a"))
+				Expect(bareMetalInstance.Status.NetworkAttachmentStatuses).To(ConsistOf(v1alpha1.BareMetalNetworkAttachmentStatus{
+					SubnetRef: "subnet-1", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff", Primary: true,
+				}))
+			})
+
+			It("releases the selected host and fails when the selected port has no valid MAC", func() {
+				reconciler.NetworkingEnabled = true
+				bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
+					SubnetRef: "subnet-1", Interface: "data-0", Primary: true,
+				}}
+				mockInvClient.getHostLogicalPortMACsFunc = func(_ context.Context, _ string) (map[string]string, error) {
+					return map[string]string{"data-0": "not-a-mac"}, nil
+				}
+				unassigned := false
+				mockInvClient.unassignHostFunc = func(_ context.Context, hostID, owner string, labels []string) error {
+					unassigned = true
+					Expect(hostID).To(Equal("host-xyz-456"))
+					Expect(owner).To(Equal("test-uid-123"))
+					return nil
+				}
+				mockInvClient.assignHostFunc = func(_ context.Context, _, _ string, _ map[string]string) (*inventory.Host, error) {
+					return &inventory.Host{InventoryHostID: "host-xyz-456", Name: "host-a", HostClass: hostClass, Available: true}, nil
+				}
+				recorder := events.NewFakeRecorder(1)
+				reconciler.EventRecorder = recorder
+				mockK8sClient.updateFunc = func(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+					updated := obj.(*v1alpha1.BareMetalInstance)
+					Expect(updated.Spec.ExternalHostID).To(BeEmpty())
+					return nil
+				}
+
+				_, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(unassigned).To(BeTrue())
+				Expect(bareMetalInstance.Spec.ExternalHostID).To(BeEmpty())
+				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+				cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionAllocated)
+				Expect(cond).NotTo(BeNil())
+				Expect(cond.Reason).To(Equal("SelectedPortMACUnavailable"))
+				Expect(<-recorder.Events).To(ContainSubstring("Warning SelectedPortMACUnavailable"))
 			})
 
 			It("should requeue without setting HostClass when the host is not ready", func() {

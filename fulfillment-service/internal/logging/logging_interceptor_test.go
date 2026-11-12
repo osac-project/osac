@@ -23,6 +23,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -139,6 +140,74 @@ var _ = Describe("Interceptor", func() {
 			Expect(responseMessage).To(HaveKeyWithValue("target", listener.Addr().String()))
 			Expect(responseMessage).To(HaveKeyWithValue("code", "OK"))
 			Expect(responseMessage).To(HaveKeyWithValue("response", HaveKey("myString")))
+		})
+
+		It("Suppresses bodies for customer network methods", func() {
+			methods := []string{
+				"/osac.public.v1.VirtualNetworks/Get",
+				"/osac.public.v1.VirtualNetworks/List",
+				"/osac.public.v1.Subnets/Get",
+				"/osac.public.v1.Subnets/List",
+				"/osac.public.v1.SecurityGroups/Get",
+				"/osac.public.v1.SecurityGroups/List",
+				"/osac.public.v1.ExternalIPs/Get",
+				"/osac.public.v1.ExternalIPs/List",
+				"/osac.public.v1.ExternalIPPools/Get",
+				"/osac.public.v1.ExternalIPPools/List",
+				"/osac.public.v1.ExternalIPAttachments/Get",
+				"/osac.public.v1.ExternalIPAttachments/List",
+				"/osac.public.v1.NATGateways/Get",
+				"/osac.public.v1.NATGateways/List",
+			}
+			invoker := func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
+				return nil
+			}
+
+			for _, method := range methods {
+				buffer.Reset()
+				request := testsv1.Object_builder{Id: "customer-network-resource-id"}.Build()
+				response := testsv1.Object_builder{Id: "customer-network-resource-id"}.Build()
+
+				err := interceptor.UnaryClient(ctx, method, request, response, conn, invoker)
+				Expect(err).ToNot(HaveOccurred())
+
+				messages := Parse(buffer)
+				Expect(messages).To(HaveLen(2))
+				Expect(messages[0]).ToNot(HaveKey("request"))
+				Expect(messages[1]).ToNot(HaveKey("response"))
+				Expect(messages[1]).To(HaveKeyWithValue("method", method))
+				Expect(buffer.String()).ToNot(ContainSubstring("customer-network-resource-id"))
+			}
+		})
+
+		It("Omits customer network status messages and details on failed Create", func() {
+			const resourceID = "customer-network-resource-id"
+			method := "/osac.public.v1.ExternalIPAttachments/Create"
+			rpcStatus, err := grpcstatus.New(grpccodes.FailedPrecondition,
+				"ExternalIP "+resourceID+" is not ready").WithDetails(&errdetails.ErrorInfo{
+				Reason:   "DEPENDENCY_NOT_READY",
+				Domain:   "network",
+				Metadata: map[string]string{"resource_id": resourceID},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			rpcError := rpcStatus.Err()
+			invoker := func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
+				return rpcError
+			}
+
+			err = interceptor.UnaryClient(ctx, method, testsv1.Object_builder{Id: resourceID}.Build(), nil,
+				conn, invoker)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(resourceID))
+
+			messages := Parse(buffer)
+			Expect(messages).To(HaveLen(2))
+			responseMessage := messages[1]
+			Expect(responseMessage).To(HaveKeyWithValue("code", "FailedPrecondition"))
+			Expect(responseMessage).ToNot(HaveKey("message"))
+			Expect(responseMessage).ToNot(HaveKey("details"))
+			Expect(responseMessage).ToNot(HaveKey("error"))
+			Expect(buffer.String()).ToNot(ContainSubstring(resourceID))
 		})
 
 		It("Logs gRPC errors in unary client calls", func() {
@@ -263,6 +332,77 @@ var _ = Describe("Interceptor", func() {
 			// Parse the log messages - should be empty:
 			messages := Parse(buffer)
 			Expect(messages).To(BeEmpty())
+		})
+	})
+
+	Describe("Unary server", func() {
+		It("Suppresses customer network bodies for Get and List methods", func() {
+			methods := []string{
+				"/osac.public.v1.VirtualNetworks/Get",
+				"/osac.public.v1.VirtualNetworks/List",
+				"/osac.public.v1.Subnets/Get",
+				"/osac.public.v1.Subnets/List",
+				"/osac.public.v1.SecurityGroups/Get",
+				"/osac.public.v1.SecurityGroups/List",
+				"/osac.public.v1.ExternalIPs/Get",
+				"/osac.public.v1.ExternalIPs/List",
+				"/osac.public.v1.ExternalIPPools/Get",
+				"/osac.public.v1.ExternalIPPools/List",
+				"/osac.public.v1.ExternalIPAttachments/Get",
+				"/osac.public.v1.ExternalIPAttachments/List",
+				"/osac.public.v1.NATGateways/Get",
+				"/osac.public.v1.NATGateways/List",
+			}
+
+			for _, method := range methods {
+				buffer.Reset()
+				request := testsv1.Object_builder{Id: "customer-network-resource-id"}.Build()
+				response := testsv1.Object_builder{Id: "customer-network-resource-id"}.Build()
+				info := &grpc.UnaryServerInfo{FullMethod: method}
+
+				result, err := interceptor.UnaryServer(ctx, request, info, func(context.Context, any) (any, error) {
+					return response, nil
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(result).To(BeIdenticalTo(response))
+
+				messages := Parse(buffer)
+				Expect(messages).To(HaveLen(2))
+				Expect(messages[0]).ToNot(HaveKey("request"))
+				Expect(messages[1]).ToNot(HaveKey("response"))
+				Expect(messages[1]).To(HaveKeyWithValue("method", method))
+				Expect(buffer.String()).ToNot(ContainSubstring("customer-network-resource-id"))
+			}
+		})
+
+		It("Omits customer network errors on failed Create", func() {
+			const resourceID = "customer-network-resource-id"
+			method := "/osac.public.v1.ExternalIPAttachments/Create"
+			rpcStatus, err := grpcstatus.New(grpccodes.FailedPrecondition,
+				"ExternalIP "+resourceID+" is not ready").WithDetails(&errdetails.ErrorInfo{
+				Reason:   "DEPENDENCY_NOT_READY",
+				Domain:   "network",
+				Metadata: map[string]string{"resource_id": resourceID},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			rpcError := rpcStatus.Err()
+			info := &grpc.UnaryServerInfo{FullMethod: method}
+
+			response, err := interceptor.UnaryServer(ctx,
+				testsv1.Object_builder{Id: resourceID}.Build(), info,
+				func(context.Context, any) (any, error) {
+					return nil, rpcError
+				})
+			Expect(response).To(BeNil())
+			Expect(err).To(BeIdenticalTo(rpcError))
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+
+			messages := Parse(buffer)
+			Expect(messages).To(HaveLen(2))
+			responseMessage := messages[1]
+			Expect(responseMessage).To(HaveKeyWithValue("code", "FailedPrecondition"))
+			Expect(responseMessage).ToNot(HaveKey("error"))
+			Expect(buffer.String()).ToNot(ContainSubstring(resourceID))
 		})
 	})
 

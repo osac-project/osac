@@ -36,6 +36,10 @@ const (
 	ResourceTypeVirtualNetwork             ResourceType = "virtual_network"
 	ResourceTypeSubnet                     ResourceType = "subnet"
 	ResourceTypeSecurityGroup              ResourceType = "security_group"
+	ResourceTypeExternalIP                 ResourceType = "external_ip"
+	ResourceTypeExternalIPPool             ResourceType = "external_ip_pool"
+	ResourceTypeExternalIPAttachment       ResourceType = "external_ip_attachment"
+	ResourceTypeNATGateway                 ResourceType = "nat_gateway"
 	ResourceTypeComputeInstance            ResourceType = "compute_instance"
 	ResourceTypeSecretReference            ResourceType = "secret_reference"
 )

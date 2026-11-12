@@ -23,7 +23,6 @@
 #
 # Helm chart management (no parameters required):
 #   make helm-lint
-#   make mce-render-test
 #   make helm-validate
 
 SHELL := /usr/bin/env bash -o pipefail
@@ -891,131 +890,6 @@ helm-template: helm-infra-deps ## Dry-run render all templates
 	helm template osac-infra $(INFRA_CHART)
 	helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
-# Schema-error patterns accept Helm 3 dotted paths and Helm 4 JSON pointers.
-.PHONY: csi-render-test
-csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider chart rendering
-	@set -euo pipefail; \
-		caas_render="$$(mktemp)"; \
-		vmaas_render="$$(mktemp)"; \
-		default_operator_render="$$(mktemp)"; \
-		full_render="$$(mktemp)"; \
-		custom_render="$$(mktemp)"; \
-		node_render="$$(mktemp)"; \
-		infra_render="$$(mktemp)"; \
-		error_render="$$(mktemp)"; \
-		trap 'rm -f "$$caas_render" "$$vmaas_render" "$$default_operator_render" "$$full_render" "$$custom_render" "$$node_render" "$$infra_render" "$$error_render"' EXIT; \
-		assert_helm_failure() { \
-			expected="$$1"; shift; \
-			if "$$@" >/dev/null 2>"$$error_render"; then \
-				printf 'Helm unexpectedly accepted invalid values; expected error pattern: %s\n' "$$expected" >&2; \
-				exit 1; \
-			fi; \
-			if ! rg -q -- "$$expected" "$$error_render"; then \
-				printf 'Helm failed without the expected error pattern: %s\n' "$$expected" >&2; \
-				cat "$$error_render" >&2; \
-				exit 1; \
-			fi; \
-		}; \
-		helm template osac $(OSAC_CHART) \
-			--values values/caas-ci/instance.yaml \
-			--set service.externalHostname=fulfillment-api.example.com \
-			--set service.internalHostname=fulfillment-internal-api.example.com \
-			--set global.clusterDomain=example.com \
-			--set-string global.osacDeploymentId=ci/osac \
-			--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac > "$$caas_render"; \
-		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$caas_render")" -eq 1; \
-		helm template osac $(OSAC_CHART) \
-			--values values/vmaas-ci/instance.yaml \
-			--set service.externalHostname=fulfillment-api.example.com \
-			--set service.internalHostname=fulfillment-internal-api.example.com \
-			--set global.clusterDomain=example.com \
-			--set-string global.osacDeploymentId=ci/osac \
-			--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.example.com/realms/osac > "$$vmaas_render"; \
-		rg -Uq 'name: OSAC_VENDOR_CONTROLLERS\n[[:blank:]]+value: "lvms=none"' "$$vmaas_render"; \
-		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$vmaas_render")" -eq 1; \
-		helm template osac $(OSAC_CHART) \
-			--values $(OSAC_CHART)/ci/default-values.yaml > "$$default_operator_render"; \
-		! rg -q 'name: OSAC_VENDOR_CONTROLLERS' "$$default_operator_render"; \
-		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$default_operator_render")" -eq 1; \
-		assert_helm_failure 'operator[./]vendorControllers[./]lvms' \
-			helm template osac $(OSAC_CHART) \
-			--values $(OSAC_CHART)/ci/default-values.yaml \
-			--set-string operator.vendorControllers.lvms=; \
-		assert_helm_failure 'operator[./]vendorControllers[./]lvms' \
-			helm template osac $(OSAC_CHART) \
-			--values $(OSAC_CHART)/ci/default-values.yaml \
-			--set operator.vendorControllers.lvms=42; \
-		helm template osac $(OSAC_CHART) \
-			--values charts/osac/ci/full-values.yaml > "$$full_render"; \
-		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$full_render")" -eq 1; \
-		! rg -q '# Source: osac/charts/(csiDriver|csiBackends)/' "$$full_render"; \
-		helm template osac $(OSAC_CHART) \
-			--values charts/osac/ci/full-values.yaml \
-			--set operator.fulfillment.configMap.name=osac-custom-fulfillment-config > "$$custom_render"; \
-		rg -q '^  name: "?osac-custom-fulfillment-config"?$$' "$$custom_render"; \
-		helm template csi-driver ../osac-csi-driver/charts/csi-driver \
-			--show-only templates/node-daemonset.yaml \
-			--set namespace=osac-csi \
-			--set controller.fulfillment.configMap.name=osac-csi-fulfillment-config \
-			--set controller.fulfillment.credentials.secretName=osac-csi-driver-credentials \
-			--set controller.fulfillment.allowStub=false > "$$node_render"; \
-		rg -Fq -- '--fulfillment-endpoint=$$(OSAC_FULFILLMENT_ENDPOINT)' "$$node_render"; \
-		rg -Fq -- '--fulfillment-issuer-url=$$(OSAC_FULFILLMENT_ISSUER_URL)' "$$node_render"; \
-		rg -Fq -- '--fulfillment-client-id=$$(FULFILLMENT_CLIENT_ID)' "$$node_render"; \
-		rg -q 'name: osac-csi-fulfillment-config' "$$node_render"; \
-		rg -q 'secretName: osac-csi-driver-credentials' "$$node_render"; \
-		helm template osac-infra $(INFRA_CHART) \
-			--values values/caas-ci/infra.yaml > "$$infra_render"; \
-		! rg -q 'osac-infra-create-csi-creds|osac-csi-driver-credentials' "$$infra_render"; \
-		assert_helm_failure 'namespace.*must be one of' \
-			helm template csi-driver ../osac-csi-driver/charts/csi-driver \
-			--set namespace=not-osac-csi; \
-		echo 'CSI render checks passed.'
-
-.PHONY: fulfillment-trust-render-test
-fulfillment-trust-render-test: helm-deps ## Check verified fulfillment transport renders
-	python3 scripts/test-fulfillment-trust-render.py
-
-.PHONY: service-account-idp-render-test
-service-account-idp-render-test: helm-infra-deps ## Check service-account management credentials and realm permissions
-	python3 scripts/test-service-account-idp-render.py
-
-.PHONY: metering-auth-render-test
-metering-auth-render-test: helm-deps ## Check metering service-account auth renders in supported profiles
-	python3 scripts/test-metering-auth-render.py
-
-.PHONY: event-publisher-render-test
-event-publisher-render-test: helm-deps ## Check the event publisher and metering topic wiring renders
-	python3 scripts/test-event-publisher-render.py
-
-.PHONY: billing-render-test
-billing-render-test: helm-osac-deps ## Check billing provider config renders and validates
-	uv run --project .. python scripts/test-billing-render.py
-
-.PHONY: mce-render-test
-mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
-	uv run --project .. python scripts/test-mce-render.py
-
-.PHONY: lvms-optional-path-render-test
-lvms-optional-path-render-test: ## Check the OSAC-managed LVMS worker allowlist renders
-	uv run --project .. python scripts/test-lvms-optional-path-render.py
-
-.PHONY: evpn-render-test
-evpn-render-test: helm-infra-deps ## Check EVPN host networking renders
-	uv run --project .. python scripts/test-evpn-render.py
-
-.PHONY: fulfillment-auth-test
-fulfillment-auth-test: ## Check Fulfillment service-account token exchange behavior
-	./scripts/test-fulfillment-auth.sh
-
-.PHONY: dev-full-render-test
-dev-full-render-test: helm-deps helm-infra-deps ## Check dev-full TLS and Helm post-rendering
-	./scripts/test-dev-full-render.sh
-
-.PHONY: openbao-security-context-test
-openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext renders numeric UID on Kind, omits on OpenShift
-	./scripts/test-openbao-security-context.sh
-
 .PHONY: ensure-inotify
 ensure-inotify: override export _INOTIFY_PROVIDER := $(KIND_RUNTIME_PROVIDER)
 ensure-inotify: ## Opt in to native Linux host inotify preparation (floor 512)
@@ -1025,24 +899,13 @@ ensure-inotify: ## Opt in to native Linux host inotify preparation (floor 512)
 infra-ready-wait-test: ## Check install-infra waits for the issuer, PostgreSQL and Kafka when the profile creates them (stub kubectl)
 	bash scripts/test-infra-ready-wait.sh
 
-.PHONY: kind-runtime-test
-kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster cleanup with command stubs
-	python3 scripts/test-kind-runtime.py
-
-.PHONY: bmf-netbox-render-test
-bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret API Helm wiring
-	uv run --project .. python scripts/test-bmf-netbox-render.py
-
-.PHONY: netris-ca-lifecycle-test
-netris-ca-lifecycle-test: helm-deps ## Check Netris CA validation and protection
-	uv run --project .. python scripts/test-netris-ca-lifecycle.py
-
-.PHONY: chart-name-independence-render-test
-chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/cert names survive repackaging under a different Chart.yaml name
-	uv run --project .. python scripts/test-chart-name-independence-render.py
+PYTEST_TARGETS ?= scripts/helm-validate/tests
+PYTEST_ARGS ?=
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint
+	# helm validation tests
+	uv run pytest $(PYTEST_ARGS) $(PYTEST_TARGETS)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \
@@ -1057,16 +920,4 @@ helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-ne
 	done
 	@echo "Validating values/dev/kind-infra.yaml..."
 	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
-	./scripts/validate-keycloak-credentials.sh
-	./scripts/validate-hub-access-rbac.sh
-	./scripts/validate-keycloak-ui-redirect-uris.py
 	@echo "Validation passed."
-
-.PHONY: helm-networking-test
-helm-networking-test: helm-deps ## Test global.networking values, validation, and networking manifests
-	python3 scripts/test-networking-values.py
-	python3 scripts/test_it_networking_checks.py
-
-.PHONY: network-class-step-test
-network-class-step-test: ## Test the installer NetworkClass step against a fake fulfillment API
-	python3 scripts/test-network-class-step.py

@@ -17,7 +17,7 @@ It changes cluster-scoped state (CRDs, the default StorageClass annotation,
 node cordon) and restores it afterwards. It therefore refuses to run on any
 context that is not a Kind cluster.
 
-Run: uv run --script scripts/test-preflight-kind.py [--context kind-<name>]
+Run: uv run --script scripts/helm-validate/preflight-kind.py [--context kind-<name>]
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ import uuid
 import jsonschema
 import yaml
 
-INSTALLER = pathlib.Path(__file__).resolve().parents[1]
+INSTALLER = pathlib.Path(__file__).resolve().parents[2]
 CHART = INSTALLER / "charts/osac"
 SCHEMA = json.loads((CHART / "files/preflight/report.schema.json").read_text(encoding="utf-8"))
 VALIDATOR = jsonschema.Draft202012Validator(SCHEMA, format_checker=jsonschema.FormatChecker())
@@ -689,22 +689,18 @@ CASES = [
 ]
 
 
-def main() -> int:
+def main(context: str = "", only: tuple[str, ...] = ()) -> None:
     """Prepare a disposable Kind fixture, run selected cases and always attempt final cleanup."""
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--context", help="kubeconfig context of a Kind cluster (default: the current context)")
-    parser.add_argument("--only", action="append", default=[], help="run only the cases whose name contains this text (repeatable)")
-    args = parser.parse_args()
-    context = args.context or subprocess.run(
+    context = context or subprocess.run(
         ["kubectl", "config", "current-context"], capture_output=True, text=True, check=True
     ).stdout.strip()
     if not context.startswith("kind-"):
         print(f"refusing to run on context {context!r}: this test changes cluster-scoped state and needs a Kind cluster")
-        return 2
+        raise SystemExit(2)
     c = Cluster(context)
     helm_version = c.run("helm", "version", "--short").stdout.strip()
     print(f"preflight kind test: context={context} namespace={c.ns} helm={helm_version}")
-    selected = [k for k in CASES if not args.only or any(o in k.__name__ for o in args.only)]
+    selected = [k for k in CASES if not only or any(o in k.__name__ for o in only)]
     failures = 0
     try:
         c.build_chart()
@@ -720,8 +716,15 @@ def main() -> int:
     finally:
         cleanup(c)
     print(f"{len(selected) - failures}/{len(selected)} cases passed")
-    return 1 if failures else 0
+    assert failures == 0, f"{failures} of {len(selected)} preflight cases failed"
 
 
+# CI runs this harness (uv run --script) against a live, disposable Kind
+# cluster. It is deliberately outside tests/ and has no test_ prefix so pytest
+# can never collect it: it deletes namespaces and cluster-scoped resources.
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--context", help="kubeconfig context of a Kind cluster (default: the current context)")
+    parser.add_argument("--only", action="append", default=[], help="run only the cases whose name contains this text (repeatable)")
+    args = parser.parse_args()
+    sys.exit(main(args.context or "", tuple(args.only)))

@@ -170,19 +170,19 @@ jobs:
 
     - name: Test networking values
       working-directory: osac-installer
-      run: uv run --project .. python scripts/test-networking-values.py
+      run: uv run --project .. pytest scripts/helm-validate/tests/network/test_networking-values.py
 
     - name: Test the NetworkClass step
       working-directory: osac-installer
-      run: python3 scripts/test-network-class-step.py
+      run: uv run --project .. pytest scripts/helm-validate/tests/network/test_network-class-step.py
 
     - name: Test Netris CA lifecycle contracts
       working-directory: osac-installer
-      run: uv run --project .. python scripts/test-netris-ca-lifecycle.py
+      run: uv run --project .. pytest scripts/helm-validate/tests/test_netris-ca-lifecycle.py
 
     - name: Test MCE rendering
       working-directory: osac-installer
-      run: uv run --project .. make mce-render-test
+      run: uv run --project .. pytest scripts/helm-validate/tests/test_mce-render.py
 
     - name: Test infra readiness waits
       working-directory: osac-installer
@@ -190,20 +190,20 @@ jobs:
 
     - name: Test billing provider rendering
       working-directory: osac-installer
-      run: uv run --project .. make billing-render-test
+      run: uv run --project .. pytest scripts/helm-validate/tests/test_billing-render.py
 
     - name: Test LVMS optional-path rendering
       working-directory: osac-installer
-      run: uv run --project .. make lvms-optional-path-render-test
+      run: uv run --project .. pytest scripts/helm-validate/tests/test_lvms-optional-path-render.py
 
     - name: Test BMF NetBox rendering
       if: steps.should-run.outputs.run
       working-directory: osac-installer
-      run: uv run --project .. make bmf-netbox-render-test
+      run: uv run --project .. pytest scripts/helm-validate/tests/test_bmf-netbox-render.py
 
     - name: Test chart name independence
       working-directory: osac-installer
-      run: make chart-name-independence-render-test
+      run: uv run --project .. pytest scripts/helm-validate/tests/test_chart-name-independence-render.py
 
     - name: Run chart-testing lint
       working-directory: osac-installer

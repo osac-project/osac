@@ -9,7 +9,7 @@ Everything here runs `helm template` with no cluster. Checks that need a live
 API server live in test-preflight-kind.py; checks that mock the cluster live in
 the helm-unittest suites under charts/osac/tests/.
 
-Run: uv run --script scripts/test-preflight-render.py
+Run: uv run pytest scripts/helm-validate/tests/test_preflight-render.py
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import tempfile
 import jsonschema
 import yaml
 
-INSTALLER = pathlib.Path(__file__).resolve().parents[1]
+INSTALLER = pathlib.Path(__file__).resolve().parents[3]
 CHART = INSTALLER / "charts/osac"
 CSI_CHART = INSTALLER.parent / "osac-csi-driver/charts/csi-driver"
 
@@ -240,7 +240,7 @@ def check_chart_archive_carries_the_preflight() -> None:
         assert "render.json" in manifest, "the archive renders no preflight report"
 
 
-if __name__ == "__main__":
+def test_main() -> None:
     check_hook_log_policy()
     check_csi_hook_deadlines()
     check_report_schema()

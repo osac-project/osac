@@ -11,7 +11,7 @@ import pathlib
 import subprocess
 from collections.abc import Callable
 
-INSTALLER = pathlib.Path(__file__).resolve().parents[1]
+INSTALLER = pathlib.Path(__file__).resolve().parents[3]
 CHART = INSTALLER / "charts/osac"
 PROFILES = ("vmaas-ci", "bmaas-ci", "caas-ci", "full-ci")
 

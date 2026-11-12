@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-INSTALLER = Path(__file__).resolve().parents[1]
+INSTALLER = Path(__file__).resolve().parents[3]
 CHART = INSTALLER / "charts/osac"
 SCRIPT = CHART / "files/validate-netris-ca.sh"
 
@@ -433,7 +433,3 @@ class ValidationScriptTests(unittest.TestCase):
     def test_identity_is_not_checked_when_disabled(self) -> None:
         result = self.run_script("denied", check_identity=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-
-
-if __name__ == "__main__":
-    unittest.main()

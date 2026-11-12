@@ -366,8 +366,10 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	if err != nil {
 		return
 	}
+	var workerNetworkAttachment *privatev1.BareMetalNetworkAttachment
 	if isWorker {
-		if err = s.validateClusterWorkerType(candidate, cluster, instanceType); err != nil {
+		workerNetworkAttachment, err = s.validateClusterWorkerType(candidate, cluster, instanceType)
+		if err != nil {
 			return nil, err
 		}
 	} else {
@@ -381,7 +383,7 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	normalizeSoleBareMetalAttachmentPrimary(candidate.GetSpec().GetNetworkAttachments())
 	var hubReferences []networkingHubReference
 	if isWorker && s.settings.ProvisioningEnabled {
-		hubReferences, err = s.authorizeClusterWorkerNetwork(ctx, candidate, cluster)
+		hubReferences, err = s.authorizeClusterWorkerNetwork(ctx, workerNetworkAttachment, cluster)
 		if err != nil {
 			return nil, err
 		}
@@ -467,58 +469,53 @@ func (s *PrivateBareMetalInstancesServer) resolveClusterWorker(
 
 func (s *PrivateBareMetalInstancesServer) validateClusterWorkerType(
 	bmi *privatev1.BareMetalInstance, cluster *privatev1.Cluster, instanceType *privatev1.BareMetalInstanceType,
-) error {
+) (*privatev1.BareMetalNetworkAttachment, error) {
 	nodeSetName := bmi.GetStatus().GetNodeSet()
 	if nodeSetName == "" {
-		return grpcstatus.Error(grpccodes.InvalidArgument, "CaaS worker status.node_set is required")
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "CaaS worker status.node_set is required")
 	}
 	nodeSet, ok := cluster.GetSpec().GetNodeSets()[nodeSetName]
 	if !ok || nodeSet == nil {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"CaaS worker node set '%s' does not exist in its Cluster", nodeSetName)
 	}
 	if refKey(nodeSet.GetBaremetalInstanceType()) != instanceType.GetId() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"CaaS worker instance type does not match Cluster node set '%s'", nodeSetName)
 	}
 	if s.settings.ProvisioningEnabled {
 		if nodeSet.GetFabricInterface() == "" {
-			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 				"Cluster node set '%s' has no authorized fabric interface", nodeSetName)
 		}
 		attachments := bmi.GetSpec().GetNetworkAttachments()
 		if len(attachments) != 1 || attachments[0] == nil {
-			return grpcstatus.Error(grpccodes.InvalidArgument,
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
 				"CaaS worker requires the Cluster network attachment")
 		}
-		if attachments[0].GetInterface() != nodeSet.GetFabricInterface() {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		attachment := attachments[0]
+		if attachment.GetInterface() != nodeSet.GetFabricInterface() {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"CaaS worker interface must match Cluster node set '%s'", nodeSetName)
 		}
-		clusterAttachment := cluster.GetSpec().GetNetworkAttachment()
-		if clusterAttachment == nil {
-			return grpcstatus.Error(grpccodes.FailedPrecondition,
-				"Cluster has no authorized network attachment")
-		}
+		return attachment, nil
 	} else if len(bmi.GetSpec().GetNetworkAttachments()) != 0 {
-		return grpcstatus.Error(grpccodes.InvalidArgument,
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
 			"CaaS worker must not specify a network attachment when provider networking is disabled")
 	}
-	return nil
+	return nil, nil
 }
 
 func (s *PrivateBareMetalInstancesServer) authorizeClusterWorkerNetwork(
-	ctx context.Context, bmi *privatev1.BareMetalInstance, cluster *privatev1.Cluster,
+	ctx context.Context, attachment *privatev1.BareMetalNetworkAttachment, cluster *privatev1.Cluster,
 ) ([]networkingHubReference, error) {
-	attachments := bmi.GetSpec().GetNetworkAttachments()
-	if len(attachments) != 1 || attachments[0] == nil {
+	if attachment == nil {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "CaaS worker network attachment is required")
 	}
 	clusterAttachment := cluster.GetSpec().GetNetworkAttachment()
 	if clusterAttachment == nil {
 		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "Cluster has no authorized network attachment")
 	}
-	attachment := attachments[0]
 	if refKey(attachment.GetSubnet()) == "" || len(attachment.GetSecurityGroups()) == 0 {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
 			"CaaS worker must specify the Cluster Subnet and SecurityGroups")

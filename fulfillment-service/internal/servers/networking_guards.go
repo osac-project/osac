@@ -185,28 +185,15 @@ func (g *networkingGuards) rejectBareMetalInstanceDeleteIfFabricDomainReferences
 	if host == "" {
 		return nil
 	}
-	var referencedBy string
-	err := forEachRecord(ctx, g.fabricDomains, func(domain *privatev1.FabricDomain) {
-		if referencedBy != "" {
-			return
-		}
-		for _, server := range domain.GetSpec().GetServers() {
-			if server == host {
-				referencedBy = domain.GetId()
-				return
+	return rejectGuardedDelete(ctx, g, g.fabricDomains, "FabricDomain", "BareMetalInstance", instance,
+		func(domain *privatev1.FabricDomain) bool {
+			for _, server := range domain.GetSpec().GetServers() {
+				if server == host {
+					return true
+				}
 			}
-		}
-	})
-	if err != nil {
-		g.logger.ErrorContext(ctx, "Failed to check FabricDomain host references", slog.Any("error", err))
-		return grpcstatus.Error(grpccodes.Internal, "failed to check FabricDomain references")
-	}
-	if referencedBy != "" {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"cannot delete BareMetalInstance '%s': FabricDomain '%s' still references host '%s'",
-			instance.GetId(), referencedBy, host)
-	}
-	return nil
+			return false
+		})
 }
 
 // forEachRecord calls the function for every record of the DAO, page by page.

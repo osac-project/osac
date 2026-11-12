@@ -144,7 +144,8 @@ var _ = Describe("Private fabric domains server", func() {
 			Id: "fabric-domain-server-a",
 		}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-		Expect(err).To(MatchError(ContainSubstring("still references host 'server-a'")))
+		Expect(err).To(MatchError(ContainSubstring("FabricDomain resource(s) still reference it")))
+		Expect(err).To(MatchError(ContainSubstring("test-domain")))
 	})
 
 	DescribeTable("serializes FabricDomain create with BMI delete", func(createFirst bool) {

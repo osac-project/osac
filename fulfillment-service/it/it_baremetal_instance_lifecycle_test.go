@@ -359,7 +359,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			"Network handoff did not complete.",
 			"IP address discovery did not complete.",
 			"Network setup is complete.",
-			"Provider networking is disabled; network setup was skipped.",
+			"Provider networking is disabled; this operation was skipped.",
 			"Network setup did not complete.",
 		}
 		Eventually(func(g Gomega) {

@@ -4,15 +4,24 @@ import * as Yup from 'yup';
 import { intSchema } from '@osac/ui-components/validation/number';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 
+import type { InstanceTypeCreateFormValues } from './values';
+
 const requiredForGpu = (t: TFunction) => t('Required when configuring a GPU');
+
+type GpuFormValues = InstanceTypeCreateFormValues['spec']['gpu'];
+
+export const isGpuConfigured = (gpu: GpuFormValues | undefined) =>
+  Boolean(gpu?.pciDeviceSelector || gpu?.resourceName || gpu?.count);
 
 const gpuValidationSchema = (t: TFunction) =>
   Yup.object({
     pciDeviceSelector: Yup.string(),
     resourceName: Yup.string(),
     count: intSchema(t, 1, 16),
-  }).test('gpu-fields-complete', requiredForGpu(t), function (values) {
-    if (!values || !(values.pciDeviceSelector || values.resourceName || values.count)) {
+  }).test('gpu-fields-complete', requiredForGpu(t), function () {
+    const values = this.originalValue as GpuFormValues | undefined;
+
+    if (!values || !isGpuConfigured(values)) {
       return true;
     }
 
@@ -50,6 +59,8 @@ export const getInstanceTypeCreateSchema = (t: TFunction) =>
       description: Yup.string(),
       vcpus: intSchema(t).required(t('vCPUs are required')),
       memoryGib: intSchema(t).required(t('Memory is required')),
-      gpu: gpuValidationSchema(t),
+      gpu: Yup.lazy((gpu: GpuFormValues | undefined) =>
+        isGpuConfigured(gpu) ? gpuValidationSchema(t) : Yup.mixed(),
+      ),
     }),
   });

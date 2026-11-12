@@ -236,6 +236,30 @@ describe('InstanceTypeCreateForm', () => {
       expect(spec?.spec?.gpu).toBeUndefined();
     });
 
+    it('omits gpu from the request when the GPU count is zero and metadata is blank', async () => {
+      let captured: Record<string, unknown> | undefined;
+      const { user } = renderForm({
+        onInstanceTypeCreate: (req) => {
+          captured = req as unknown as Record<string, unknown>;
+          return create(InstanceTypesCreateResponseSchema, {
+            object: { ...req.object, id: CREATED_ID },
+          });
+        },
+      });
+
+      await fillValidForm(user);
+      fireEvent.change(getNumericInput('GPU count'), {
+        target: { value: '0' },
+      });
+      await user.click(screen.getByRole('button', { name: 'Create' }));
+
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith(`${LIST_ROUTE}/${CREATED_ID}`);
+      });
+      const spec = captured?.object as { spec?: { gpu?: unknown } };
+      expect(spec?.spec?.gpu).toBeUndefined();
+    });
+
     it('includes gpu in the request when all three GPU fields are filled in', async () => {
       let captured: Record<string, unknown> | undefined;
       const { user } = renderForm({

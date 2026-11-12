@@ -14,7 +14,7 @@ import { Formik } from 'formik';
 import { InstanceTypes } from '@osac/types/private';
 import { useCreateResource } from '@osac/ui-components/api/use-resource';
 
-import { getInstanceTypeCreateSchema } from './validation';
+import { getInstanceTypeCreateSchema, isGpuConfigured } from './validation';
 import { instanceTypeFieldIds } from '../fieldIds';
 import { InstanceTypeCreateFormValues, instanceTypeCreateValues } from './values';
 import { useTranslation } from '../../../hooks/useTranslation';
@@ -35,7 +35,7 @@ const InstanceTypeCreateForm = () => {
 
   const onSubmit = async (values: InstanceTypeCreateFormValues) => {
     const { gpu } = values.spec;
-    const hasGpu = Boolean(gpu.pciDeviceSelector || gpu.resourceName || gpu.count);
+    const hasGpu = isGpuConfigured(gpu);
 
     try {
       const created = await create({

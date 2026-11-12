@@ -679,17 +679,34 @@ func (t *Tool) addOIDCUserToOrg(ctx context.Context, userID, username, tenantNam
 // username and password are credentials for a user in the ext realm.
 // Pass empty strings if login is expected to fail before reaching the login form.
 func (t *Tool) SimulateOIDCLogin(ctx context.Context, idpAlias, username, password string) (string, error) {
-	return t.simulateOIDCLogin(ctx, "osac-cli", "http://localhost", "", idpAlias, username, password)
+	return t.simulateOIDCLoginWithRequestParams(ctx, "osac-cli", "http://localhost", "", idpAlias, username, password, nil, nil)
+}
+
+func (t *Tool) simulateOIDCLoginWithAuthorizationParams(
+	ctx context.Context, idpAlias, username, password string, requestedAuthorizationParams url.Values,
+) (string, url.Values, error) {
+	var upstreamAuthorizationQuery url.Values
+	token, err := t.simulateOIDCLoginWithRequestParams(
+		ctx, "osac-cli", "http://localhost", "", idpAlias, username, password,
+		requestedAuthorizationParams, &upstreamAuthorizationQuery,
+	)
+	return token, upstreamAuthorizationQuery, err
 }
 
 // SimulateMCPLogin obtains a user token for the deployed MCP resource using
 // the public development client and the same PKCE flow used by an MCP client.
 func (t *Tool) SimulateMCPLogin(ctx context.Context, resourceURL, username, password string) (string, error) {
-	return t.simulateOIDCLogin(ctx, "osac-mcp-client", "http://localhost:8091/callback", resourceURL, "", username, password)
+	return t.simulateOIDCLoginWithRequestParams(ctx, "osac-mcp-client", "http://localhost:8091/callback", resourceURL, "", username, password, nil, nil)
 }
 
 func (t *Tool) simulateOIDCLogin(ctx context.Context, clientID, callbackBase, resourceURL, idpAlias, username, password string) (string, error) {
+	return t.simulateOIDCLoginWithRequestParams(ctx, clientID, callbackBase, resourceURL, idpAlias, username, password, nil, nil)
+}
 
+func (t *Tool) simulateOIDCLoginWithRequestParams(
+	ctx context.Context, clientID, callbackBase, resourceURL, idpAlias, username, password string,
+	requestedAuthorizationParams url.Values, upstreamAuthorizationQuery *url.Values,
+) (string, error) {
 	codeVerifier, codeChallenge, err := generatePKCE()
 	if err != nil {
 		return "", fmt.Errorf("failed to generate PKCE challenge: %w", err)
@@ -736,6 +753,11 @@ func (t *Tool) simulateOIDCLogin(ctx context.Context, clientID, callbackBase, re
 	if resourceURL != "" {
 		params.Set("resource", resourceURL)
 	}
+	for name, values := range requestedAuthorizationParams {
+		for _, value := range values {
+			params.Add(name, value)
+		}
+	}
 	authURL := fmt.Sprintf("https://%s/realms/osac/protocol/openid-connect/auth?%s", keycloakAddr, params.Encode())
 
 	next := hop{method: http.MethodGet, rawURL: authURL}
@@ -781,6 +803,11 @@ func (t *Tool) simulateOIDCLogin(ctx context.Context, clientID, callbackBase, re
 					i, sanitizeURL(location), resolveErr)
 			}
 			location = locURL.String()
+			if upstreamAuthorizationQuery != nil && *upstreamAuthorizationQuery == nil && idpAlias != "" &&
+				strings.Contains(locURL.Path, "/protocol/openid-connect/auth") &&
+				!strings.Contains(locURL.Path, "/realms/osac/") {
+				*upstreamAuthorizationQuery = locURL.Query()
+			}
 
 			if strings.HasPrefix(location, callbackBase) {
 				// KC redirected to the callback — extract the authorization code.

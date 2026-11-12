@@ -324,10 +324,28 @@ var _ = Describe("Config Building", func() {
 
 		config := task.buildConfigFromIdp(identityProvider, "secret-456")
 		Expect(config).To(HaveKeyWithValue("authorizationUrl", "https://example.com/auth"))
+		Expect(config).To(HaveKeyWithValue("forwardParameters", ","))
 		Expect(config).To(HaveKeyWithValue("tokenUrl", "https://example.com/token"))
 		Expect(config).To(HaveKeyWithValue("clientId", "client-123"))
 		Expect(config).To(HaveKeyWithValue("clientSecret", "secret-456"))
 		Expect(config).To(HaveKeyWithValue("issuer", "https://example.com"))
+	})
+
+	It("disables request parameter forwarding when building OIDC config", func() {
+		identityProvider := privatev1.IdentityProvider_builder{
+			Spec: privatev1.IdentityProviderSpec_builder{
+				Oidc: privatev1.OidcConfig_builder{
+					AuthorizationUrl: "https://example.com/auth?acr_values=urn%3Aexample%3Amfa",
+					TokenUrl:         "https://example.com/token",
+					ClientId:         "client-123",
+					Issuer:           "https://example.com",
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		config := (&task{identityProvider: identityProvider}).buildConfigFromIdp(identityProvider, "secret-456")
+		Expect(config).To(HaveKeyWithValue("authorizationUrl", "https://example.com/auth?acr_values=urn%3Aexample%3Amfa"))
+		Expect(config).To(HaveKeyWithValue("forwardParameters", ","))
 	})
 
 	It("should return empty config when no provider is configured", func() {
@@ -407,6 +425,51 @@ var _ = Describe("IDP Sync", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(identityProvider.GetStatus().GetPhase()).To(Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
+	})
+
+	It("re-syncs READY providers with the upgrade marker and clears it on success", func() {
+		identityProvider := privatev1.IdentityProvider_builder{
+			Id: "idp-upgrade-resync",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "provider",
+				Tenant:     "tenant-1",
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+			Spec: privatev1.IdentityProviderSpec_builder{
+				Title:   "Provider",
+				Enabled: true,
+				Oidc: privatev1.OidcConfig_builder{
+					AuthorizationUrl: "https://issuer.example.com/auth?acr_values=urn%3Aexample%3Amfa",
+					TokenUrl:         "https://issuer.example.com/token",
+					ClientId:         "client-123",
+					Issuer:           "https://issuer.example.com",
+				}.Build(),
+			}.Build(),
+			Status: privatev1.IdentityProviderStatus_builder{
+				Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY,
+				Conditions: []*privatev1.IdentityProviderCondition{
+					privatev1.IdentityProviderCondition_builder{
+						Type:    oidcAuthorizationParameterResyncConditionType,
+						Status:  privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED,
+						Reason:  "ResyncRequired",
+						Message: "Reconciliation required after OIDC authorization parameter forwarding update",
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+
+		mockClient.EXPECT().
+			CreateIdentityProvider(gomock.Any(), "tenant-1", gomock.Any()).
+			DoAndReturn(func(_ context.Context, _ string, provider *idp.IdentityProvider) (*idp.IdentityProvider, error) {
+				Expect(provider.Config).To(HaveKeyWithValue("forwardParameters", ","))
+				return provider, nil
+			})
+
+		task := &task{r: reconciler, identityProvider: identityProvider}
+		Expect(task.update(context.Background())).To(Succeed())
+		Expect(identityProvider.GetStatus().GetPhase()).To(
+			Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
+		Expect(identityProvider.GetStatus().GetConditions()).To(BeEmpty())
 	})
 
 	It("should fetch the full object via identityProvidersClient", func() {

@@ -32,6 +32,9 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+// This migration marker survives updates from older controller replicas during rolling upgrades.
+const oidcAuthorizationParameterResyncConditionType = "OIDCForwardParametersResync"
+
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
 	logger     *slog.Logger
@@ -146,20 +149,44 @@ func (t *task) update(ctx context.Context) error {
 	t.setDefaults()
 
 	state := t.identityProvider.GetStatus().GetPhase()
+	resyncRequired := t.oidcAuthorizationParameterResyncRequired()
 
 	// Skip reconciliation for terminal error state
-	if state == privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_ERROR {
+	if state == privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_ERROR && !resyncRequired {
 		return nil
 	}
 
 	// Fast-path: READY IDPs are in sync unless the spec was changed.
-	// Phase is reset to UNKNOWN by the private server when a spec update is received.
-	if state == privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY {
+	// Phase is reset to UNKNOWN by the private server when a spec update is received. The
+	// migration condition also forces a sync if an older controller consumed its event first.
+	if state == privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY && !resyncRequired {
 		return nil
 	}
 
 	// Identity provider is UNSPECIFIED or UNKNOWN, perform initial sync (or re-sync after spec change) to IDP
-	return t.syncToIDP(ctx)
+	if err := t.syncToIDP(ctx); err != nil {
+		return err
+	}
+	if t.identityProvider.GetStatus().GetPhase() == privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY {
+		t.clearOidcAuthorizationParameterResyncCondition()
+	}
+	return nil
+}
+
+func (t *task) oidcAuthorizationParameterResyncRequired() bool {
+	for _, condition := range t.identityProvider.GetStatus().GetConditions() {
+		if condition.GetType() == oidcAuthorizationParameterResyncConditionType {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *task) clearOidcAuthorizationParameterResyncCondition() {
+	conditions := slices.DeleteFunc(t.identityProvider.GetStatus().GetConditions(), func(condition *privatev1.IdentityProviderCondition) bool {
+		return condition.GetType() == oidcAuthorizationParameterResyncConditionType
+	})
+	t.identityProvider.GetStatus().SetConditions(conditions)
 }
 
 // syncToIDP synchronizes the identity provider to the IDP backend (Keycloak).
@@ -293,6 +320,10 @@ func (t *task) buildConfigFromIdp(idp *privatev1.IdentityProvider, clientSecret 
 
 	if oidc := spec.GetOidc(); oidc != nil {
 		config["authorizationUrl"] = oidc.GetAuthorizationUrl()
+		// Keycloak defaults an unset forwardParameters to forwarding acr_values.
+		// A comma produces an empty parameter list while remaining non-empty in
+		// the provider config, so configured URL parameters are the only values sent.
+		config["forwardParameters"] = ","
 		config["tokenUrl"] = oidc.GetTokenUrl()
 		config["clientId"] = oidc.GetClientId()
 		config["clientSecret"] = clientSecret

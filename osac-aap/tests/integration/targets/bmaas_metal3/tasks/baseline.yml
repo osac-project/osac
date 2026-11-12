@@ -72,7 +72,7 @@
             resourceVersion: "123"
           spec: {}
         fallback_root_device_hints: >-
-          {{ [] | osac.templates.root_device_hints(
+          {{ [] | osac.templates.root_device_hints('smallest',
             bmh={'status': {'hardware': {'storage': [
               {'name': '/dev/vda', 'sizeBytes': 17179869184,
                'serial': 'SER-42', 'wwn': '0x5000c50015ea71ad'}

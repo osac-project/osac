@@ -598,7 +598,6 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 		}
 	}
 
-	// User data customizes first boot but does not provide the managed access path.
 	if spec.GetSshKey() == nil {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "spec.ssh_key is required")
 	}

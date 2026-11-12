@@ -126,6 +126,9 @@ osac create baremetalinstance \
   --ssh-key worker-login-key
 ```
 
+Omit `--ssh-key` when the CatalogItem locks `fields.ssh_key`; the locked
+policy supplies the key and rejects a caller-supplied value.
+
 ## Validation, lifecycle, and deletion
 
 OSAC resolves the DiskImage reference before creating the instance. The

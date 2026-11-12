@@ -1,0 +1,219 @@
+---
+- name: Exercise the bootstrap's production rendering tasks
+  ansible.builtin.import_playbook: ../files/configure-awx.yml
+
+- name: Verify the shared execution groups
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [bootstrap-render]
+  vars:
+    expected_job_limits:
+      osac-bare-metal-fulfillment-ig: 4
+      osac-cluster-fulfillment-ig: 2
+  tasks:
+    - name: Verify selected production execution groups
+      ansible.builtin.assert:
+        that:
+          - >-
+            controller_instance_groups | map(attribute='name') | list | sort ==
+            ['osac-bare-metal-fulfillment-ig', 'osac-cluster-fulfillment-ig']
+        quiet: true
+
+    - name: Verify CaaS execution-group job limits
+      ansible.builtin.assert:
+        that:
+          - item.max_concurrent_jobs is integer
+          - item.max_concurrent_jobs == expected_job_limits[item.name]
+        quiet: true
+      loop: "{{ controller_instance_groups }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Verify shared fulfillment Pod
+      ansible.builtin.assert:
+        that:
+          - runner_pod.spec.serviceAccountName == 'osac-sa'
+          - runner_pod.spec.containers | selectattr('name', 'equalto', 'worker') | list | length == 1
+          - worker.imagePullPolicy is not defined
+          - worker.volumeMounts | selectattr('name', 'equalto', 'kube-api-access') | list | length == 1
+          - token_sources | selectattr('serviceAccountToken', 'defined') | list | length == 1
+          - token_sources | selectattr('downwardAPI', 'defined') | list | length == 1
+          - >-
+            token_sources | selectattr('configMap', 'defined') | map(attribute='configMap.name') | list ==
+            ['kube-root-ca.crt', 'openshift-service-ca.crt']
+          - >-
+            (token_sources | selectattr('configMap', 'defined') | map(attribute='configMap')
+             | selectattr('name', 'equalto', 'openshift-service-ca.crt') | first)['items'] ==
+            [{'key': 'service-ca.crt', 'path': 'service-ca.crt'}]
+        quiet: true
+      vars:
+        runner_pod: "{{ item.pod_spec_override | from_yaml }}"
+        worker: "{{ runner_pod.spec.containers | selectattr('name', 'equalto', 'worker') | first }}"
+        token_volume: "{{ runner_pod.spec.volumes | selectattr('name', 'equalto', 'kube-api-access') | first }}"
+        token_sources: "{{ token_volume.projected.sources }}"
+      loop: "{{ controller_instance_groups }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+- name: Verify the selected controller completion policy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [bootstrap-render]
+  vars:
+    external_access_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+  tasks:
+    - name: Load shared controller definitions for template comparison
+      ansible.builtin.include_vars:
+        file: "{{ project_directory }}/osac-aap/collections/ansible_collections/osac/config_as_code/roles/aap/vars/controller.yml"
+        name: shared_controller
+
+    - name: Verify shared inventory paths
+      ansible.builtin.assert:
+        that:
+          - item.source_path == 'osac-aap/inventory/localhost.yml'
+          - lookup('ansible.builtin.file', project_directory + '/' + item.source_path) | from_yaml is mapping
+        fail_msg: Shared inventory paths must resolve in the selected checkout.
+        quiet: true
+      loop: "{{ controller_inventory_sources }}"
+
+    - name: Verify Kind publishing variables on the create template
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.playbook != 'osac-aap/playbook_osac_create_hosted_cluster.yml' or
+            item.extra_vars.hosted_cluster_modify_definition_hook ==
+            {'name': 'osac.test_overrides.cluster_hooks', 'tasks_from': 'kind_publishing'}
+          - >-
+            item.playbook != 'osac-aap/playbook_osac_create_hosted_cluster.yml' or
+            item.extra_vars.cluster_hooks_nodeport_address == lookup('env', 'CAAS_NODEPORT_ADDRESS')
+          - >-
+            item.playbook == 'osac-aap/playbook_osac_create_hosted_cluster.yml' or
+            'hosted_cluster_modify_definition_hook' not in (item.extra_vars | default({}))
+          - >-
+            item.playbook == 'osac-aap/playbook_osac_create_hosted_cluster.yml' or
+            'cluster_hooks_nodeport_address' not in (item.extra_vars | default({}))
+        quiet: true
+      loop: "{{ controller_templates }}"
+      loop_control:
+        label: "{{ item.playbook }}"
+
+    - name: Verify external access is excluded only from the guestless cluster templates
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.extra_vars.install_step_external_access_override | default({}) ==
+            (external_access_override if item.playbook == 'osac-aap/playbook_osac_create_hosted_cluster.yml' else {})
+          - >-
+            item.extra_vars.delete_step_external_access_override | default({}) ==
+            (external_access_override if item.playbook == 'osac-aap/playbook_osac_delete_hosted_cluster.yml' else {})
+        quiet: true
+      loop: "{{ controller_templates }}"
+      loop_control:
+        label: "{{ item.playbook }}"
+
+    - name: Run the configured external-access overrides
+      ansible.builtin.include_role:
+        name: "{{ project_directory }}/osac-aap/collections/ansible_collections/osac/workflows/roles/workflow_helpers"
+        tasks_from: "{{ step.tasks_from }}"
+      vars:
+        step: "{{ item.extra_vars.install_step_external_access_override | default(item.extra_vars.delete_step_external_access_override) }}"
+      loop: >-
+        {{ controller_templates | selectattr('playbook', 'in', [
+           'osac-aap/playbook_osac_create_hosted_cluster.yml',
+           'osac-aap/playbook_osac_delete_hosted_cluster.yml']) | list }}
+      loop_control:
+        label: "{{ item.playbook }}"
+
+    - name: Verify CaaS templates preserve shared execution-group bindings
+      ansible.builtin.assert:
+        that:
+          - item.instance_groups == shared_template.instance_groups
+          - >-
+            item.prevent_instance_group_fallback | default(false) ==
+            shared_template.prevent_instance_group_fallback | default(false)
+          - item.allow_simultaneous == shared_template.allow_simultaneous
+        quiet: true
+      vars:
+        shared_template: "{{ shared_controller.controller_templates | selectattr('playbook', 'equalto', item.playbook) | first }}"
+      loop: "{{ controller_templates }}"
+      loop_control:
+        label: "{{ item.playbook }}"
+
+    - name: Verify completion policy
+      ansible.builtin.assert:
+        that:
+          - controller_templates | length == 4
+          - controller_execution_environments[0].pull == 'never'
+          - controller_projects | length == 1
+          - controller_projects[0].wait
+          - controller_projects[0].scm_clean
+          - controller_projects[0].scm_delete_on_update
+          - controller_projects[0].scm_branch == lookup('env', 'AAP_PROJECT_GIT_BRANCH')
+          - controller_projects[0].timeout == 300
+          - controller_inventory_sources | length == 2
+          - controller_inventory_sources | rejectattr('wait') | list | length == 0
+          - controller_inventory_sources | rejectattr('timeout', 'equalto', 180) | list | length == 0
+        quiet: true
+
+- name: Exercise the configured Kind publishing hook
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [bootstrap-render]
+  vars:
+    create_template: >-
+      {{ controller_templates | selectattr('playbook', 'equalto',
+         'osac-aap/playbook_osac_create_hosted_cluster.yml') | first }}
+    original_definition:
+      apiVersion: hypershift.openshift.io/v1beta1
+      kind: HostedCluster
+      metadata:
+        name: example
+        namespace: tenant-namespace
+        annotations:
+          osac.openshift.io/tenant: tenant
+      spec:
+        dns:
+          baseDomain: caas-it.test
+        services:
+          - {service: APIServer, servicePublishingStrategy: {type: LoadBalancer}}
+          - {service: OAuthServer, servicePublishingStrategy: {type: Route}}
+          - {service: OIDC, servicePublishingStrategy: {type: Route}}
+          - {service: Konnectivity, servicePublishingStrategy: {type: Route}}
+          - {service: Ignition, servicePublishingStrategy: {type: Route}}
+    nodeport_strategy:
+      type: NodePort
+      nodePort:
+        address: "{{ lookup('env', 'CAAS_NODEPORT_ADDRESS') }}"
+    expected_services:
+      - {service: APIServer, servicePublishingStrategy: {type: LoadBalancer}}
+      - {service: OAuthServer, servicePublishingStrategy: "{{ nodeport_strategy }}"}
+      - {service: OIDC, servicePublishingStrategy: {type: None}}
+      - {service: Konnectivity, servicePublishingStrategy: "{{ nodeport_strategy }}"}
+      - {service: Ignition, servicePublishingStrategy: "{{ nodeport_strategy }}"}
+  tasks:
+    - name: Supply the HostedCluster definition
+      ansible.builtin.set_fact:
+        hosted_cluster_definition: "{{ original_definition }}"
+
+    - name: Run the publishing hook from the selected checkout twice
+      ansible.builtin.include_role:
+        name: "{{ project_directory }}/osac-aap/collections/ansible_collections/osac/test_overrides/roles/cluster_hooks"
+        tasks_from: "{{ create_template.extra_vars.hosted_cluster_modify_definition_hook.tasks_from }}"
+      vars:
+        cluster_hooks_nodeport_address: "{{ create_template.extra_vars.cluster_hooks_nodeport_address }}"
+      loop: [1, 2]
+      loop_control:
+        loop_var: attempt
+
+    - name: Verify publishing preserves the remaining definition and uses allocated ports
+      ansible.builtin.assert:
+        that:
+          - >-
+            hosted_cluster_definition ==
+            original_definition | combine({'spec': {'services': expected_services}}, recursive=true)
+        quiet: true

@@ -1875,9 +1875,9 @@ if render_osac_chart_offline "${offline_token}" \
     >/dev/null 2>"${metering_reader_gate_err}"; then
   fail "metering-reader-reserved: the gate accepted a reserved reader name"
 fi
-grep -Fq 'metering.readers[].name: must not use the reserved osac- or osac. name prefix' \
+grep -Fq 'metering reader at index 0 uses the reserved osac- or osac. name prefix' \
   "${metering_reader_gate_err}" \
-  || fail "metering-reader-reserved: the failure did not name the field and rule"
+  || fail "metering-reader-reserved: the failure did not name the entry and rule"
 grep -Fq 'osac-reserved.example.com' "${metering_reader_gate_err}" \
   && fail "metering-reader-reserved: the failure echoed the reader name"
 

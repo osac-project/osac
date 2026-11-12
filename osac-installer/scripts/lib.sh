@@ -540,13 +540,20 @@ offline_render_error() {
         *bmf.netbox.tokenValue*"Invalid type"*|*/bmf/netbox/tokenValue*"got number, want string"*)
             echo "bmf.netbox.tokenValue: Invalid type; expected string" >&2 ;;
         # The reader template identifies a rejected entry by its index and
-        # never by its name, so these texts stay value-free too.
+        # never by its name, so these texts stay value-free too. Keep the
+        # integer index: with several readers, the rule alone does not say
+        # which entry failed. As with EVPN below, echo only the fixed
+        # phrase, so caller text on the same error line cannot reach the
+        # output.
         *"duplicate metering reader"*)
             echo "duplicate metering reader: each reader name must be unique" >&2 ;;
-        *"is a KafkaUser OSAC owns"*)
-            echo "metering.readers[].name: must not name a KafkaUser OSAC owns" >&2 ;;
-        *"uses the reserved osac- or osac. name prefix"*)
-            echo "metering.readers[].name: must not use the reserved osac- or osac. name prefix" >&2 ;;
+        *"is a KafkaUser OSAC owns"*|*"uses the reserved osac- or osac. name prefix"*)
+            printf '%s\n' "$1" | LC_ALL=C awk '
+                !seen && /^Error: / {
+                    seen = 1
+                    if (match($0, /metering reader at index [0-9]+ (is a KafkaUser OSAC owns|uses the reserved osac- or osac\. name prefix)/))
+                        print substr($0, RSTART, RLENGTH)
+                }' >&2 ;;
         *"NETRIS_CONTROLLER_URL must be an https:// URL"*)
             echo "instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL must be an https:// URL" >&2 ;;
         # The EVPN duplicate checks name the rejected entry by its index

@@ -15,6 +15,9 @@ import unittest
 
 INSTALLER = Path(__file__).resolve().parents[1]
 HELM = shutil.which(os.environ.get("HELM_BIN", "helm"))
+# A relative HELM_BIN would stay relative here, and the wrappers below hand
+# it to make, which changes directory to the installer before executing it.
+HELM = os.path.abspath(HELM) if HELM else None
 HELM4 = shutil.which(os.environ.get("HELM4_BIN", "helm4"))
 
 
@@ -248,6 +251,34 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         # the chart's three fixed phrases, so nothing may be printed for it.
         self.assertNotIn(caller, result.stdout + result.stderr)
         self.assertNotIn("evpn.nodes: duplicate", result.stderr)
+
+    def test_offline_render_error_keeps_metering_reader_index(self):
+        """Check a rejected reader keeps its index and drops its name."""
+        cases = (
+            "is a KafkaUser OSAC owns; pick another name",
+            "uses the reserved osac- or osac. name prefix",
+        )
+        for reason in cases:
+            with self.subTest(reason=reason):
+                message = (
+                    "Error: execution error at "
+                    "(osac/templates/validate-metering-readers.yaml:17:8): "
+                    f"metering reader at index 3 {reason} "
+                    f"{self.hostname}\n"
+                )
+                result = subprocess.run(
+                    ["bash", "-c", 'source "$1"; offline_render_error "$2"',
+                     "bash", str(INSTALLER / "scripts/lib.sh"), message],
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assert_private(result.stdout + result.stderr)
+                # The index identifies the entry; the rule identifies the
+                # failure. Nothing after the rule is chart text.
+                self.assertIn(
+                    "metering reader at index 3 " + reason.split(";")[0],
+                    result.stderr,
+                )
 
     def test_offline_render_error_ignores_embedded_location(self):
         """Check a path-shaped token in the message is never printed."""

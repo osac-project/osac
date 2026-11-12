@@ -102,15 +102,15 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
 
   let upgradeLabel;
   if (upgradePending) {
-    upgradeLabel = <Label status="info">{t('Upgrade pending')}</Label>;
+    upgradeLabel = <Label color="blue">{t('Upgrade pending')}</Label>;
   } else if (upgradeProgressing) {
-    upgradeLabel = <Label status="info">{t('Upgrade in progress')}</Label>;
+    upgradeLabel = <Label color="blue">{t('Upgrade in progress')}</Label>;
   } else if (upgradeFailed) {
     upgradeLabel = <Label status="danger">{t('Upgrade failed')}</Label>;
   } else if (upgradeTimedOut) {
     upgradeLabel = <Label status="warning">{t('Upgrade timed out')}</Label>;
   } else if (action.kind === 'in-progress') {
-    upgradeLabel = <Label status="info">{t('Upgrade in progress')}</Label>;
+    upgradeLabel = <Label color="blue">{t('Upgrade in progress')}</Label>;
   } else if (action.kind === 'available') {
     upgradeLabel = <Label color="orange">{t('Upgrade available')}</Label>;
   } else if (action.kind === 'blocked') {

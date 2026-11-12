@@ -106,7 +106,7 @@ describe('ClusterConfigurationCard', () => {
         state === ClusterUpgradeState.PENDING ? 'Upgrade pending' : 'Upgrade in progress',
       );
       expect(screen.getByText('4.17.0 → 4.18.0').closest('dd')).toContainElement(label);
-      expect(label.closest('.pf-v6-c-label')).toHaveClass('pf-m-info');
+      expect(label.closest('.pf-v6-c-label')).toHaveClass('pf-m-blue');
       expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
       expect(screen.getByText('Updating the control plane')).toBeInTheDocument();
     },

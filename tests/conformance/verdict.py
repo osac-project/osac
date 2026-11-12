@@ -27,6 +27,18 @@ def _outcome_for(plan: Plan, by_id: dict[str, TestOutcome], test_id: str) -> Tes
     return TestOutcome(identity, Result.SKIP, 0.0, "did not run", Path())
 
 
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    return singular if count == 1 else (plural or singular + "s")
+
+
+def _summary(items: Sequence[str], limit: int = 5, separator: str = ", ") -> str:
+    shown = list(items[:limit])
+    text = separator.join(shown)
+    if len(items) > limit:
+        text += f"{separator}and {len(items) - limit} more"
+    return text
+
+
 def evaluate(
     plan: Plan,
     outcomes: Sequence[TestOutcome],
@@ -41,9 +53,45 @@ def evaluate(
 ) -> Report:
     by_id = {outcome.identity.id: outcome for outcome in outcomes}
     tests = tuple(_outcome_for(plan, by_id, test.id) for test in plan.tests)
-    blocking_pass = all(
-        outcome.result is Result.PASS for outcome in tests if outcome.identity.classification is Classification.BLOCKING
+    blocking = [outcome for outcome in tests if outcome.identity.classification is Classification.BLOCKING]
+    failed_blocking = [outcome.identity.id for outcome in blocking if outcome.result is not Result.PASS]
+    blocking_pass = not failed_blocking
+    if not blocking:
+        blocking_message = "no blocking tests in the plan"
+    elif failed_blocking:
+        blocking_message = (
+            f"{len(failed_blocking)} blocking {_plural(len(failed_blocking), 'test')} "
+            f"failed: {_summary(failed_blocking)}"
+        )
+    else:
+        blocking_message = f"{len(blocking)} blocking {_plural(len(blocking), 'test')} passed"
+
+    in_progress_components = [component for component in components if component.result is not Verdict.CONFORMANT]
+    components_pass = bool(components) and not in_progress_components
+    if not components:
+        components_message = "no components registered"
+    elif in_progress_components:
+        details = [f"{component.domain}: {component.reason}" for component in in_progress_components]
+        components_message = (
+            f"{len(in_progress_components)} of {len(components)} components in progress: "
+            f"{_summary(details, separator='; ')}"
+        )
+    else:
+        components_message = f"{len(components)} {_plural(len(components), 'component')} conformant"
+
+    if leftovers:
+        leftovers_message = (
+            f"{len(leftovers)} {_plural(len(leftovers), 'leftover')}: {_summary(list(leftovers))}"
+        )
+    else:
+        leftovers_message = "no leftovers"
+
+    complete_message = (
+        f"plan contained all {len(plan.tests)} selected {_plural(len(plan.tests), 'test')}"
+        if plan.complete
+        else "the plan is a focused subset and is not a conformance verdict"
     )
+
     checks = [
         Check(
             id="all-blocking-tests-pass",
@@ -51,15 +99,15 @@ def evaluate(
             rule="every blocking test in the plan has result pass",
             remedy="see the failed tests and their evidence",
             result=CheckResult.PASS if blocking_pass else CheckResult.FAIL,
+            message=blocking_message,
         ),
         Check(
             id="all-components-conformant",
             name="every component is conformant",
             rule="at least one component is registered and every component has result conformant",
             remedy="see the component's failed tests",
-            result=CheckResult.PASS
-            if components and all(component.result is Verdict.CONFORMANT for component in components)
-            else CheckResult.FAIL,
+            result=CheckResult.PASS if components_pass else CheckResult.FAIL,
+            message=components_message,
         ),
         Check(
             id="no-leftovers",
@@ -67,6 +115,7 @@ def evaluate(
             rule="leftovers is empty",
             remedy="delete each leftover",
             result=CheckResult.PASS if not leftovers else CheckResult.FAIL,
+            message=leftovers_message,
         ),
         Check(
             id="complete-plan",
@@ -74,6 +123,7 @@ def evaluate(
             rule="complete is true",
             remedy="run the plan a full list computes",
             result=CheckResult.PASS if plan.complete else CheckResult.FAIL,
+            message=complete_message,
         ),
         *domain_checks,
     ]

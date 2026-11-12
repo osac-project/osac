@@ -22,8 +22,8 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/output"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/rendering"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -40,7 +40,7 @@ func Cmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE:    runner.run,
 	}
-	result.Flags().StringVarP(&runner.format, "output", "o", output.Table, outputFlagHelp)
+	result.Flags().StringVarP(&runner.format, "output", "o", rendering.Table, outputFlagHelp)
 	result.Flags().StringVar(&runner.filter, "filter", "", filterFlagHelp)
 	result.Flags().StringVar(&runner.order, "order", "", orderFlagHelp)
 	result.Flags().Int32Var(&runner.offset, "offset", 0, offsetFlagHelp)
@@ -59,7 +59,7 @@ type runnerContext struct {
 // run fetches the inventory over gRPC and renders it in the requested format.
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	if err := output.Validate(c.format); err != nil {
+	if err := rendering.ValidateFormat(c.format); err != nil {
 		return err
 	}
 	cfg := config.SettingsFromContext(ctx)
@@ -118,17 +118,21 @@ func (c *runnerContext) list(ctx context.Context, client publicv1.CatalogPricing
 	}
 }
 
-// render writes the inventory as a table, JSON or YAML; the JSON and YAML encoding is shared in the output package.
+// render writes the inventory as a table, JSON or YAML; the JSON and YAML encoding is shared in the rendering package.
 func render(ctx context.Context, console *terminal.Console, format string,
 	items []*publicv1.CatalogPricingInput) error {
-	if format == output.Table {
+	if format == rendering.Table {
 		return renderTable(console, items)
 	}
-	values, err := output.Messages(items)
+	values, err := rendering.EncodeList(items)
 	if err != nil {
 		return fmt.Errorf("failed to encode catalog pricing inputs: %w", err)
 	}
-	output.Render(ctx, console, format, values)
+	if format == rendering.JSON {
+		console.RenderJson(ctx, values)
+	} else {
+		console.RenderYaml(ctx, values)
+	}
 	return nil
 }
 

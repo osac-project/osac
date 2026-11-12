@@ -25,9 +25,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	"github.com/osac-project/osac/fulfillment-service/internal/rendering"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 var _ = Describe("Get command", func() {
@@ -58,7 +58,7 @@ var _ = Describe("Get command", func() {
 			runner := &runnerContext{
 				objectHelper: mockHelper,
 			}
-			runner.args.format = outputFormatYaml
+			runner.args.format = rendering.YAML
 
 			results, err := runner.fetchObjects(ctx, []string{"my-cluster"})
 			Expect(err).ToNot(HaveOccurred())
@@ -76,7 +76,7 @@ var _ = Describe("Get command", func() {
 			runner := &runnerContext{
 				objectHelper: mockHelper,
 			}
-			runner.args.format = outputFormatYaml
+			runner.args.format = rendering.YAML
 
 			results, err := runner.fetchObjects(ctx, []string{"my-cluster"})
 			Expect(err).ToNot(HaveOccurred())
@@ -93,7 +93,7 @@ var _ = Describe("Get command", func() {
 			runner := &runnerContext{
 				objectHelper: mockHelper,
 			}
-			runner.args.format = outputFormatTable
+			runner.args.format = rendering.Table
 
 			results, err := runner.fetchObjects(ctx, []string{"my-cluster"})
 			Expect(err).ToNot(HaveOccurred())
@@ -112,7 +112,7 @@ var _ = Describe("Get command", func() {
 			runner := &runnerContext{
 				objectHelper: mockHelper,
 			}
-			runner.args.format = outputFormatJson
+			runner.args.format = rendering.JSON
 
 			_, err := runner.fetchObjects(ctx, []string{"my-cluster"})
 			Expect(err).To(HaveOccurred())
@@ -132,7 +132,7 @@ var _ = Describe("Get command", func() {
 		))
 	})
 
-	for _, format := range []string{outputFormatJson, outputFormatYaml} {
+	for _, format := range []string{rendering.JSON, rendering.YAML} {
 		It("renders public ComputeInstance disk progress in "+format, func() {
 			var stdout bytes.Buffer
 			console, err := terminal.NewConsole().SetLogger(logger).
@@ -154,10 +154,9 @@ var _ = Describe("Get command", func() {
 				}.Build(),
 			}.Build()
 			runner := &runnerContext{
-				console:        console,
-				marshalOptions: protojson.MarshalOptions{UseProtoNames: true},
+				console: console,
 			}
-			if format == outputFormatJson {
+			if format == rendering.JSON {
 				Expect(runner.renderJson(ctx, []proto.Message{instance})).To(Succeed())
 			} else {
 				Expect(runner.renderYaml(ctx, []proto.Message{instance})).To(Succeed())

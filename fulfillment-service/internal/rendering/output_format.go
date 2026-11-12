@@ -11,17 +11,24 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-package output
+package rendering
 
 import (
-	"testing"
-
-	. "github.com/onsi/ginkgo/v2/dsl/core"
-	. "github.com/onsi/gomega"
+	"fmt"
 )
 
-// TestOutput runs the CLI output suite.
-func TestOutput(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "CLI Output Suite")
+// The output formats every read command accepts on its --output flag.
+const (
+	Table = "table"
+	JSON  = "json"
+	YAML  = "yaml"
+)
+
+// ValidateFormat rejects an unknown output format. Commands call it before doing any work.
+func ValidateFormat(format string) error {
+	if format != Table && format != JSON && format != YAML {
+		return fmt.Errorf("unknown output format '%s', should be '%s', '%s' or '%s'",
+			format, Table, JSON, YAML)
+	}
+	return nil
 }

@@ -54,7 +54,7 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
 bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
   --osac-ui-dir="$PWD" --tag=vmaas_all \
   --instance=1 --admin-user=<keycloak-user> \
-  --admin-password-file=/path/to/password
+  --admin-password=<password>
 ```
 
 The default HTML reporter does not show the full live test log in the terminal.
@@ -70,11 +70,10 @@ script never changes cluster sizing automatically. The runner accepts the flow
 tags listed below, validates the deployment and VMaaS prerequisites, and keeps
 run-time credentials outside the setup step. Pass the admin credentials with
 `--admin-user=USER` and `--admin-password=PASSWORD`; the username defaults to
-`admin`. For safer handling, use `--admin-password-file=PATH` instead of
-putting the password in shell history. A missing password stops the run with a
-fix instruction. For VMaaS flows, the runner also authenticates the OSAC CLI
-for the duration of the run using the same credentials; temporary CLI files
-are removed on exit. `--instance=INDEX` defaults to `1` and appends the index
+`admin`. A missing password stops the run with a fix instruction. For VMaaS
+flows, the runner also authenticates the OSAC CLI for the duration of the run
+using the same credentials; temporary CLI files are removed on exit.
+`--instance=INDEX` defaults to `1` and appends the index
 to every VMaaS resource name, allowing isolated runs such as
 `tenant-item-e2e-1` and `tenant-item-e2e-2`.
 

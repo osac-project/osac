@@ -295,6 +295,11 @@ def check_network_class(c: Checks, ns: str, release: str, values: dict) -> None:
         normalize_plan(spec.get("address_plan")) == expected_plan,
         f"{spec.get('address_plan')}, expected {expected_plan}",
     )
+    c.check(
+        f"NetworkClass {nc_id} spec.provisioning_enabled",
+        spec.get("provisioning_enabled") == inp["provisioning_enabled"],
+        f"{spec.get('provisioning_enabled')!r}, expected {inp['provisioning_enabled']!r}",
+    )
     stored_ew = bool((spec.get("east_west_capabilities") or {}).get("supports_east_west_ethernet"))
     wanted_ew = bool((inp.get("east_west_capabilities") or {}).get("supports_east_west_ethernet"))
     c.check(
@@ -349,6 +354,11 @@ def check_network_class(c: Checks, ns: str, release: str, values: dict) -> None:
         f"NetworkClass CR {cr_name} spec.addressPlan in sixteenths",
         {k: int(v) for k, v in (cr_spec.get("addressPlan") or {}).items()} == expected_cr_plan,
         f"{cr_spec.get('addressPlan')}, expected {expected_cr_plan}",
+    )
+    c.check(
+        f"NetworkClass CR {cr_name} spec.provisioningEnabled",
+        cr_spec.get("provisioningEnabled") == inp["provisioning_enabled"],
+        f"{cr_spec.get('provisioningEnabled')!r}, expected {inp['provisioning_enabled']!r}",
     )
     c.check(
         f"NetworkClass CR {cr_name} spec.defaults CIDRs",

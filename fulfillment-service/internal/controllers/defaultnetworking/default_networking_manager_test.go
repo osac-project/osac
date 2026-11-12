@@ -215,11 +215,22 @@ func readyPool(id string, available int64) *privatev1.ExternalIPPool {
 	}.Build()
 }
 
+func boolPointer(value bool) *bool {
+	return &value
+}
+
 func readyNetworkClass(defaults *privatev1.NetworkDefaults) *fakeNetworkClasses {
+	return readyNetworkClassWithMode(defaults, true)
+}
+
+func readyNetworkClassWithMode(defaults *privatev1.NetworkDefaults, enabled bool) *fakeNetworkClasses {
 	return &fakeNetworkClasses{items: []*privatev1.NetworkClass{
 		privatev1.NetworkClass_builder{
-			Id:   "nc-1",
-			Spec: privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+			Id: "nc-1",
+			Spec: privatev1.NetworkClassSpec_builder{
+				Defaults:            defaults,
+				ProvisioningEnabled: boolPointer(enabled),
+			}.Build(),
 			Status: privatev1.NetworkClassStatus_builder{
 				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
 				Hub:   "hub-a",
@@ -237,15 +248,14 @@ var _ = Describe("default networking manager", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		m = &manager{
-			provisioningEnabled: true,
-			logger:              slog.Default(),
-			networkClasses:      &fakeNetworkClasses{},
-			virtualNetworks:     &fakeVirtualNetworks{},
-			subnets:             &fakeSubnets{},
-			securityGroups:      &fakeSecurityGroups{},
-			natGateways:         &fakeNATGateways{},
-			externalIPs:         &fakeExternalIPs{},
-			externalIPPools:     &fakeExternalIPPools{items: []*privatev1.ExternalIPPool{readyPool("pool-a", 10)}},
+			logger:          slog.Default(),
+			networkClasses:  &fakeNetworkClasses{},
+			virtualNetworks: &fakeVirtualNetworks{},
+			subnets:         &fakeSubnets{},
+			securityGroups:  &fakeSecurityGroups{},
+			natGateways:     &fakeNATGateways{},
+			externalIPs:     &fakeExternalIPs{},
+			externalIPPools: &fakeExternalIPPools{items: []*privatev1.ExternalIPPool{readyPool("pool-a", 10)}},
 		}
 	})
 
@@ -255,8 +265,11 @@ var _ = Describe("default networking manager", func() {
 		}.Build()
 		m.networkClasses = &fakeNetworkClasses{items: []*privatev1.NetworkClass{
 			privatev1.NetworkClass_builder{
-				Id:   "nc-1",
-				Spec: privatev1.NetworkClassSpec_builder{Defaults: defaults}.Build(),
+				Id: "nc-1",
+				Spec: privatev1.NetworkClassSpec_builder{
+					Defaults:            defaults,
+					ProvisioningEnabled: boolPointer(true),
+				}.Build(),
 			}.Build(),
 		}}
 
@@ -273,6 +286,7 @@ var _ = Describe("default networking manager", func() {
 					Defaults: privatev1.NetworkDefaults_builder{
 						VirtualNetworkIpv4Cidr: "10.0.0.0/16",
 					}.Build(),
+					ProvisioningEnabled: boolPointer(true),
 				}.Build(),
 				Status: privatev1.NetworkClassStatus_builder{
 					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
@@ -431,8 +445,7 @@ var _ = Describe("default networking manager", func() {
 	})
 
 	It("creates no ExternalIP and no NATGateway when provider networking is disabled", func() {
-		m.provisioningEnabled = false
-		m.networkClasses = readyNetworkClass(privatev1.NetworkDefaults_builder{}.Build())
+		m.networkClasses = readyNetworkClassWithMode(privatev1.NetworkDefaults_builder{}.Build(), false)
 		Expect(ensureManager(m, ctx, "tenant-a")).To(Succeed())
 		vns := m.virtualNetworks.(*fakeVirtualNetworks)
 		vns.items[0].SetStatus(privatev1.VirtualNetworkStatus_builder{

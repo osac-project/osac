@@ -64,7 +64,14 @@ func msgWaitingForAllocation(id string) string {
 }
 
 func (r *NATGatewayReconciler) create(ctx context.Context, natgw *v1alpha1.NATGateway) (ctrl.Result, error) {
-	if !r.Engine.ProvisioningEnabled() {
+	enabled, requeue, modeErr := networkingMode(ctx, r.Engine)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if !enabled {
 		networktask.SetFailed(natgw, networktask.MessageNetworkingDisabled)
 		return ctrl.Result{}, nil
 	}

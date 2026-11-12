@@ -145,7 +145,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 					return macs, macsErr
 				},
 			},
-			NetworkingEnabled:             true,
+			ProvisioningMode:              StaticProvisioningMode(true),
 			ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 		}
 	})
@@ -173,7 +173,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 		It("skips when networking provisioning is disabled", func() {
 			bmi = newBMI(attachments)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			reconciler.NetworkingEnabled = false
+			reconciler.ProvisioningMode = StaticProvisioningMode(false)
 
 			result, err := reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
@@ -182,7 +182,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(cond.Reason).To(Equal("Skipped"))
+			Expect(cond.Reason).To(Equal("ProvisioningDisabled"))
 			_, err = getAttachment()
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})

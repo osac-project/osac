@@ -343,7 +343,8 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 				networkClasses.EXPECT().List(gomock.Any(), gomock.Any()).Return(
 					privatev1.NetworkClassesListResponse_builder{Items: []*privatev1.NetworkClass{
 						privatev1.NetworkClass_builder{
-							Id: "nc-1",
+							Id:   "nc-1",
+							Spec: privatev1.NetworkClassSpec_builder{ProvisioningEnabled: new(true)}.Build(),
 							Status: privatev1.NetworkClassStatus_builder{
 								State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
 							}.Build(),

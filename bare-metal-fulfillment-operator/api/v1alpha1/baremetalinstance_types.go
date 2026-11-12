@@ -203,6 +203,10 @@ const (
 	// HostConditionReasonTemplateFailed indicates the template workflow failed.
 	HostConditionReasonTemplateFailed = "TemplateFailed"
 
+	// HostConditionReasonProvisioningDisabled indicates a networking step was
+	// skipped because installation-wide provider networking is disabled.
+	HostConditionReasonProvisioningDisabled = "ProvisioningDisabled"
+
 	// HostConditionReasonPowerOn indicates the host is powered on successfully.
 	HostConditionReasonPowerOn = "PowerOn"
 

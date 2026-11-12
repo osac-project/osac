@@ -63,9 +63,17 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 
-	if !r.NetworkingEnabled {
+	networkingEnabled, modeRequeue, modeErr := r.networkingEnabledForReconcile(ctx)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if modeRequeue {
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
+	if !networkingEnabled {
 		log.Info("Networking provisioning disabled, skipping IP discovery")
-		setIPDiscoveryComplete(bareMetalInstance, metav1.ConditionTrue, "Skipped", "Networking provisioning disabled")
+		setIPDiscoveryComplete(bareMetalInstance, metav1.ConditionTrue,
+			v1alpha1.HostConditionReasonProvisioningDisabled, "Networking provisioning disabled")
 		return ctrl.Result{}, nil
 	}
 

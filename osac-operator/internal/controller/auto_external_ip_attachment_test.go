@@ -84,7 +84,11 @@ type countingAutomaticExternalIPClient struct {
 }
 
 func (c *countingAutomaticExternalIPClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	c.listCalls++
+	// Resolving the installation networking mode reads the NetworkClass; the counter proves that the attachment
+	// lookup ran no other list.
+	if _, modeLookup := list.(*v1alpha1.NetworkClassList); !modeLookup {
+		c.listCalls++
+	}
 	return c.Client.List(ctx, list, opts...)
 }
 
@@ -117,13 +121,12 @@ func TestReconcileAutomaticExternalIPAttachmentsReusesClusterLookup(t *testing.T
 	k8sClient := testAutomaticExternalIPClient(t)
 	attachmentsClient := &testExternalIPAttachmentsClient{}
 	reconciler := &ClusterOrderReconciler{
-		Client:                        k8sClient,
-		Engine:                        networktask.New(k8sClient, k8sClient, nil, networktask.Config{ProvisioningEnabled: true}),
-		NetworkingProvisioningEnabled: true,
-		ClustersClient:                clustersClient,
-		ExternalIPAttachmentsClient:   attachmentsClient,
-		NetworkingNamespace:           "networking",
-		StatusPollInterval:            time.Second,
+		Client:                      k8sClient,
+		Engine:                      networktask.New(k8sClient, k8sClient, nil, networktask.Config{ProvisioningMode: networktask.StaticMode(true)}),
+		ClustersClient:              clustersClient,
+		ExternalIPAttachmentsClient: attachmentsClient,
+		NetworkingNamespace:         "networking",
+		StatusPollInterval:          time.Second,
 	}
 	instance := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
 		Labels: map[string]string{osacClusterOrderIDLabel: "cluster-1"},
@@ -332,7 +335,8 @@ func TestBareMetalCleanupAutomaticExternalIPAttachmentRequiresReadyAlways(t *tes
 			}
 			attachmentsClient := &testExternalIPAttachmentsClient{}
 			reconciler := NewBareMetalInstanceCleanupReconciler(
-				testAutomaticExternalIPClient(t, testAutomaticExternalIP("eip-1", target, "", "192.0.2.10")),
+				testAutomaticExternalIPClient(t, testNetworkClass(true),
+					testAutomaticExternalIP("eip-1", target, "", "192.0.2.10")),
 				"bmi", "networking")
 			reconciler.BareMetalInstancesClient = instancesClient
 			reconciler.ExternalIPAttachmentsClient = attachmentsClient
@@ -400,7 +404,7 @@ func TestBareMetalCleanupAutomaticExternalIPAttachmentWaitsForExternalIP(t *test
 		response: privatev1.BareMetalInstancesGetResponse_builder{Object: instance}.Build(),
 	}
 	attachmentsClient := &testExternalIPAttachmentsClient{}
-	reconciler := NewBareMetalInstanceCleanupReconciler(testAutomaticExternalIPClient(t), "bmi", "networking")
+	reconciler := NewBareMetalInstanceCleanupReconciler(testAutomaticExternalIPClient(t, testNetworkClass(true)), "bmi", "networking")
 	reconciler.BareMetalInstancesClient = instancesClient
 	reconciler.ExternalIPAttachmentsClient = attachmentsClient
 	bmi := &bmfov1alpha1.BareMetalInstance{Status: bmfov1alpha1.BareMetalInstanceStatus{
@@ -443,7 +447,8 @@ func TestBareMetalCleanupAutomaticExternalIPAttachmentReadinessRaceUsesThirtySec
 				createErr: status.Error(code, "target is not ready yet"),
 			}
 			reconciler := NewBareMetalInstanceCleanupReconciler(
-				testAutomaticExternalIPClient(t, testAutomaticExternalIP("eip-1", target, "", "192.0.2.10")),
+				testAutomaticExternalIPClient(t, testNetworkClass(true),
+					testAutomaticExternalIP("eip-1", target, "", "192.0.2.10")),
 				"bmi", "networking")
 			reconciler.BareMetalInstancesClient = instancesClient
 			reconciler.ExternalIPAttachmentsClient = attachmentsClient
@@ -500,11 +505,10 @@ func TestDisabledProvisioningSkipsAutomaticExternalIPAttachmentLookups(t *testin
 		attachmentsClient := &testExternalIPAttachmentsClient{}
 		k8sClient := &countingAutomaticExternalIPClient{Client: testAutomaticExternalIPClient(t)}
 		reconciler := &ClusterOrderReconciler{
-			Client:                        k8sClient,
-			NetworkingNamespace:           "networking",
-			NetworkingProvisioningEnabled: false,
-			ClustersClient:                clustersClient,
-			ExternalIPAttachmentsClient:   attachmentsClient,
+			Client:                      k8sClient,
+			NetworkingNamespace:         "networking",
+			ClustersClient:              clustersClient,
+			ExternalIPAttachmentsClient: attachmentsClient,
 		}
 		order := &v1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{osacClusterOrderIDLabel: "cluster-1"}},
@@ -539,13 +543,17 @@ func TestDisabledProvisioningSkipsAutomaticExternalIPAttachmentLookups(t *testin
 	t.Run("BareMetalInstance", func(t *testing.T) {
 		instancesClient := &mockBareMetalInstancesClient{}
 		attachmentsClient := &testExternalIPAttachmentsClient{}
-		k8sClient := &countingAutomaticExternalIPClient{Client: testAutomaticExternalIPClient(t)}
+		disabled := false
+		class := &v1alpha1.NetworkClass{
+			ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "networking"},
+			Spec:       v1alpha1.NetworkClassSpec{ProvisioningEnabled: &disabled},
+		}
+		k8sClient := &countingAutomaticExternalIPClient{Client: testAutomaticExternalIPClient(t, class)}
 		reconciler := &BareMetalInstanceCleanupReconciler{
-			Client:                        k8sClient,
-			networkingNamespace:           "networking",
-			NetworkingProvisioningEnabled: false,
-			BareMetalInstancesClient:      instancesClient,
-			ExternalIPAttachmentsClient:   attachmentsClient,
+			Client:                      k8sClient,
+			networkingNamespace:         "networking",
+			BareMetalInstancesClient:    instancesClient,
+			ExternalIPAttachmentsClient: attachmentsClient,
 		}
 		instance := &bmfov1alpha1.BareMetalInstance{
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
@@ -656,6 +664,13 @@ func testExpectedAutomaticAttachment(ipID string, target automaticExternalIPAtta
 		}.Build(),
 		Spec: spec.Build(),
 	}.Build()
+}
+
+func testNetworkClass(enabled bool) *v1alpha1.NetworkClass {
+	return &v1alpha1.NetworkClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "networking"},
+		Spec:       v1alpha1.NetworkClassSpec{ProvisioningEnabled: &enabled},
+	}
 }
 
 func testAutomaticExternalIPClient(t *testing.T, objects ...client.Object) client.Client {

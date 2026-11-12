@@ -184,15 +184,37 @@ func (r *function) ensureCR(ctx context.Context, networkClass *privatev1.Network
 		}
 		return nil
 	}
-	if object.Spec.AddressPlan == spec.AddressPlan {
+	// The address plan can be updated; the provisioning mode is written once, when a CR that predates the field is
+	// backfilled from the record, and never otherwise. A CR that carries a different mode contradicts the record and
+	// is not overwritten.
+	addressPlanChanged := object.Spec.AddressPlan != spec.AddressPlan
+	modeMissing := object.Spec.ProvisioningEnabled == nil && spec.ProvisioningEnabled != nil
+	if !modeMissing && !provisioningModeEqual(object.Spec.ProvisioningEnabled, spec.ProvisioningEnabled) {
+		return fmt.Errorf("the NetworkClass CR records a provisioning mode that differs from the record; "+
+			"delete the CR and let the controller recreate it (record %t, CR %t)",
+			*networkClass.GetSpec().ProvisioningEnabled, *object.Spec.ProvisioningEnabled)
+	}
+	if !addressPlanChanged && !modeMissing {
 		return nil
 	}
 	update := object.DeepCopy()
 	update.Spec.AddressPlan = spec.AddressPlan
+	if modeMissing {
+		update.Spec.ProvisioningEnabled = spec.ProvisioningEnabled
+	}
 	if err := client.Patch(ctx, update, clnt.MergeFrom(object)); err != nil {
-		return fmt.Errorf("failed to update the NetworkClass CR address plan: %w", err)
+		return fmt.Errorf("failed to update the NetworkClass CR: %w", err)
 	}
 	return nil
+}
+
+// provisioningModeEqual reports whether two optional provisioning modes carry the same value. Two unset values are
+// equal; an unset value never equals a set one.
+func provisioningModeEqual(left, right *bool) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 // delete deletes the NetworkClass CR and removes the finalizer once the CR is gone.
@@ -256,6 +278,11 @@ func getCR(ctx context.Context, client clnt.Client, namespace, id string) (*osac
 
 // buildSpec builds the NetworkClass CR spec from the record. The address plan shares become sixteenths.
 func buildSpec(networkClass *privatev1.NetworkClass) (osacv1alpha1.NetworkClassSpec, error) {
+	if !networkClass.GetSpec().HasProvisioningEnabled() {
+		return osacv1alpha1.NetworkClassSpec{}, errors.New(
+			"the NetworkClass record has no provisioning mode; the fulfillment service backfills it from the " +
+				"installation setting at startup")
+	}
 	defaults := networkClass.GetSpec().GetDefaults()
 	ingress, err := controllers.ConvertSecurityRules(defaults.GetIngressRules(), true)
 	if err != nil {
@@ -265,6 +292,7 @@ func buildSpec(networkClass *privatev1.NetworkClass) (osacv1alpha1.NetworkClassS
 	if err != nil {
 		return osacv1alpha1.NetworkClassSpec{}, err
 	}
+	provisioningEnabled := networkClass.GetSpec().GetProvisioningEnabled()
 	spec := osacv1alpha1.NetworkClassSpec{
 		FabricManager: networkClass.GetFabricManager(),
 		K8sManager:    networkClass.GetK8SManager(),
@@ -274,7 +302,8 @@ func buildSpec(networkClass *privatev1.NetworkClass) (osacv1alpha1.NetworkClassS
 			IngressRules:           ingress,
 			EgressRules:            egress,
 		},
-		AddressPlan: controllers.AddressPlanSixteenths(networkClass.GetSpec().GetAddressPlan()),
+		AddressPlan:         controllers.AddressPlanSixteenths(networkClass.GetSpec().GetAddressPlan()),
+		ProvisioningEnabled: &provisioningEnabled,
 	}
 	if capabilities := networkClass.GetSpec().GetEastWestCapabilities(); capabilities != nil {
 		spec.EastWestCapabilities = &osacv1alpha1.NetworkClassEastWestCapabilities{

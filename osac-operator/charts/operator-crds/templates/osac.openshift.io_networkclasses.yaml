@@ -271,6 +271,14 @@ spec:
                   Manager; empty for none.
                 maxLength: 63
                 type: string
+              provisioningEnabled:
+                description: |-
+                  ProvisioningEnabled is the installation-wide provider networking mode. The
+                  fulfillment service sets it from global.networking.provisioningEnabled and it
+                  never changes afterwards. Unset on objects created before the field existed;
+                  an unset value means the mode is not resolved yet and must never be treated
+                  as disabled.
+                type: boolean
             required:
             - addressPlan
             - defaults
@@ -284,6 +292,9 @@ spec:
               rule: has(self.eastWestCapabilities) == has(oldSelf.eastWestCapabilities)
                 && (!has(self.eastWestCapabilities) || self.eastWestCapabilities ==
                 oldSelf.eastWestCapabilities)
+            - message: provisioningEnabled is immutable
+              rule: '!has(oldSelf.provisioningEnabled) || self.provisioningEnabled
+                == oldSelf.provisioningEnabled'
           status:
             description: status defines the observed state of NetworkClass
             properties:

@@ -166,6 +166,67 @@ var _ = Describe("Installation settings", func() {
 		}, "10.0.0.0/8", ""),
 	)
 
+	addNetworkClass := func(spec string) {
+		exec(`insert into network_classes (id, name, tenant, data) values ('nc-1', 'nc-1', 'shared', $1::jsonb)`, spec)
+	}
+	networkClassMode := func() string {
+		var mode *string
+		err := pool.QueryRow(ctx,
+			`select data->'spec'->>'provisioning_enabled' from network_classes where id = 'nc-1'`).Scan(&mode)
+		Expect(err).ToNot(HaveOccurred())
+		if mode == nil {
+			return ""
+		}
+		return *mode
+	}
+
+	It("backfills the NetworkClass provisioning mode on the first start", func() {
+		addNetworkClass(`{"spec":{"defaults":{"virtual_network_ipv4_cidr":"10.250.0.0/16"}}}`)
+		Expect(CheckInstallationSettings(ctx, logger, pool, settings(false, "0.2.0"))).To(Succeed())
+		Expect(networkClassMode()).To(Equal("false"))
+	})
+
+	It("backfills an existing NetworkClass from the stored setting", func() {
+		Expect(CheckInstallationSettings(ctx, logger, pool, settings(true, "0.2.0"))).To(Succeed())
+		addNetworkClass(`{"spec":{"defaults":{}}}`)
+		Expect(CheckInstallationSettings(ctx, logger, pool, settings(true, "0.2.0"))).To(Succeed())
+		Expect(networkClassMode()).To(Equal("true"))
+	})
+
+	It("does not overwrite an installed false mode", func() {
+		Expect(CheckInstallationSettings(ctx, logger, pool, settings(false, "0.2.0"))).To(Succeed())
+		addNetworkClass(`{"spec":{"provisioning_enabled":false}}`)
+		Expect(CheckInstallationSettings(ctx, logger, pool, settings(false, "0.2.0"))).To(Succeed())
+		Expect(networkClassMode()).To(Equal("false"))
+	})
+
+	It("refuses a NetworkClass whose mode differs from the stored setting", func() {
+		Expect(CheckInstallationSettings(ctx, logger, pool, settings(true, "0.2.0"))).To(Succeed())
+		addNetworkClass(`{"spec":{"provisioning_enabled":false}}`)
+		err := CheckInstallationSettings(ctx, logger, pool, settings(true, "0.2.0"))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(
+			"NetworkClass 'nc-1' records a provisioning mode that differs from the installation setting"))
+		Expect(networkClassMode()).To(Equal("false"))
+	})
+
+	It("refuses a NetworkClass record without a spec", func() {
+		Expect(CheckInstallationSettings(ctx, logger, pool, settings(true, "0.2.0"))).To(Succeed())
+		addNetworkClass(`{}`)
+		err := CheckInstallationSettings(ctx, logger, pool, settings(true, "0.2.0"))
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("have no spec"))
+	})
+
+	It("refuses a changed rollout value before touching the NetworkClass record", func() {
+		Expect(CheckInstallationSettings(ctx, logger, pool, settings(true, "0.2.0"))).To(Succeed())
+		addNetworkClass(`{"spec":{"defaults":{}}}`)
+		err := CheckInstallationSettings(ctx, logger, pool, settings(false, "0.2.0"))
+		Expect(err).To(MatchError(
+			"global.networking.provisioningEnabled cannot change after installation; reinstall to change it"))
+		Expect(networkClassMode()).To(BeEmpty())
+	})
+
 	It("serializes concurrent first starts", func() {
 		var wg sync.WaitGroup
 		errs := make([]error, 4)

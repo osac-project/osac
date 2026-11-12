@@ -112,7 +112,14 @@ func (r *SubnetReconciler) create(ctx context.Context, subnet *v1alpha1.Subnet) 
 		networktask.SetFailed(subnet, err.Error())
 		return ctrl.Result{}, nil
 	}
-	if !r.Engine.ProvisioningEnabled() {
+	enabled, requeue, modeErr := networkingMode(ctx, r.Engine)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if !enabled {
 		// VMs use the cluster default pod network in this installation mode.
 		supported := true
 		subnet.Status.ComputeInstanceSupported = &supported

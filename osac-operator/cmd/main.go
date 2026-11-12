@@ -550,7 +550,6 @@ func setupClusterControllers(
 				os.Getenv(envNetworkingNamespace),
 				provider, pollInterval, maxJobHistory,
 			)
-			reconciler.NetworkingProvisioningEnabled = networkingProvisioningEnabled()
 			reconciler.ManagementRootCAs = managementRoots
 			reconciler.Engine = engine
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
@@ -782,7 +781,8 @@ func setupControllers(
 	var engine *networktask.Engine
 	if flags.Cluster || flags.ComputeInstance || flags.Networking {
 		engine = newNetworkTaskEngine(mgr.GetLocalManager())
-		setupLog.Info("network task engine ready", "provisioningEnabled", engine.ProvisioningEnabled())
+		setupLog.Info("network task engine ready",
+			"provisioningEnabled", networkingProvisioningEnabled())
 	}
 	if flags.Cluster {
 		if err := setupClusterControllers(mgr, grpcConn, maxJobHistory, engine); err != nil {
@@ -977,10 +977,20 @@ func parseVendorControllers(s string) (map[string]string, error) {
 }
 
 // networkingProvisioningEnabled reads global.networking.provisioningEnabled
-// (OSAC_PROVISIONING_ENABLED, default true). When false no
-// networking job runs (Unified design, Provider networking control).
+// (OSAC_PROVISIONING_ENABLED, default true). The NetworkClass is the authority;
+// this value only asserts that the rendered rollout agrees with it.
 func networkingProvisioningEnabled() bool {
 	return helpers.GetEnvWithDefault(envNetworkingProvisioningEnabled, true)
+}
+
+// expectedNetworkingProvisioning returns the value rendered for this rollout, or
+// nil when the deployment doesn't set it. An unset value asserts nothing.
+func expectedNetworkingProvisioning() *bool {
+	if value, ok := os.LookupEnv(envNetworkingProvisioningEnabled); ok && value != "" {
+		enabled := networkingProvisioningEnabled()
+		return &enabled
+	}
+	return nil
 }
 
 // newNetworkTaskEngine creates the network task engine shared by the
@@ -993,10 +1003,11 @@ func newNetworkTaskEngine(localMgr ctrl.Manager) *networktask.Engine {
 		helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false),
 	)
 	return networktask.New(localMgr.GetClient(), localMgr.GetAPIReader(), aapClient, networktask.Config{
-		TemplatePrefix:      helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac"),
-		Organization:        helpers.GetEnvWithDefault(envAAPOrganization, "osac"),
-		ProvisioningEnabled: networkingProvisioningEnabled(),
-		PollInterval:        helpers.GetEnvWithDefault(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval),
+		TemplatePrefix:       helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac"),
+		Organization:         helpers.GetEnvWithDefault(envAAPOrganization, "osac"),
+		NetworkingNamespace:  os.Getenv(envNetworkingNamespace),
+		ExpectedProvisioning: expectedNetworkingProvisioning(),
+		PollInterval:         helpers.GetEnvWithDefault(envAAPStatusPollInterval, provisioning.DefaultStatusPollInterval),
 	})
 }
 
@@ -1016,7 +1027,6 @@ func setupNetworkingControllers(
 		APIReader:             localMgr.GetAPIReader(),
 		NetworkingNamespace:   networkingNamespace,
 		RegistrationNamespace: networkingNamespace,
-		ProvisioningEnabled:   networkingProvisioningEnabled(),
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("networkclass controller: %w", err)
 	}
@@ -1081,7 +1091,6 @@ func setupBareMetalInstanceControllers(
 	reconciler := controller.NewBareMetalInstanceCleanupReconciler(
 		localMgr.GetClient(), bareMetalInstanceNamespace, os.Getenv(envNetworkingNamespace),
 	)
-	reconciler.NetworkingProvisioningEnabled = networkingProvisioningEnabled()
 	if grpcConn != nil {
 		reconciler.BareMetalInstancesClient = privatev1.NewBareMetalInstancesClient(grpcConn)
 		reconciler.ExternalIPAttachmentsClient = privatev1.NewExternalIPAttachmentsClient(grpcConn)
@@ -1349,15 +1358,6 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 	} else {
 		setupLog.Info("gRPC connection to fulfillment service is disabled")
 	}
-	if grpcConn != nil {
-		if err := checkInstallationProvisioningAtStartup(
-			context.Background(), grpcConn, networkingProvisioningEnabled(),
-		); err != nil {
-			setupLog.Error(err, "unable to verify installation networking setting")
-			os.Exit(1)
-		}
-	}
-
 	maxJobHistory := helpers.GetEnvWithDefault(envMaxJobHistory, provisioning.DefaultMaxJobHistory, func(v int) bool {
 		return v >= 1
 	})

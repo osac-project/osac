@@ -55,7 +55,14 @@ func (r *ExternalIPReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 func (r *ExternalIPReconciler) create(ctx context.Context, eip *v1alpha1.ExternalIP) (ctrl.Result, error) {
-	if !r.Engine.ProvisioningEnabled() {
+	enabled, requeue, modeErr := networkingMode(ctx, r.Engine)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if !enabled {
 		// ExternalIPs never exist with provider networking disabled.
 		networktask.SetFailed(eip, networktask.MessageNetworkingDisabled)
 		return ctrl.Result{}, nil

@@ -121,7 +121,14 @@ func (r *SecurityGroupReconciler) create(ctx context.Context, sg *v1alpha1.Secur
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if !r.Engine.ProvisioningEnabled() {
+	enabled, requeue, modeErr := networkingMode(ctx, r.Engine)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if !enabled {
 		networktask.SetProvisioningDisabled(sg, networktask.CreateSecurityGroup)
 		return ctrl.Result{}, store()
 	}
@@ -189,7 +196,14 @@ func (r *SecurityGroupReconciler) update(ctx context.Context, sg *v1alpha1.Secur
 	if err := networktask.StoreInput(sg, input); err != nil {
 		return ctrl.Result{}, true, err
 	}
-	if !r.Engine.ProvisioningEnabled() {
+	enabled, requeue, modeErr := networkingMode(ctx, r.Engine)
+	if modeErr != nil {
+		return ctrl.Result{}, true, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, true, nil
+	}
+	if !enabled {
 		// The input is stored; the reason stays ProvisioningDisabled.
 		return ctrl.Result{}, false, nil
 	}

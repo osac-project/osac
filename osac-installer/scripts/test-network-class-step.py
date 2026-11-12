@@ -49,6 +49,7 @@ def stored_class(**changes) -> dict:
             },
             "east_west_capabilities": {},
             "address_plan": {"overlay": 0.5, "fabric": 0.25, "lb_vip": 0.25},
+            "provisioning_enabled": True,
         },
     }
     nc.update(changes)
@@ -149,6 +150,13 @@ class NetworkClassStepTest(unittest.TestCase):
         self.assertEqual(body["spec"]["defaults"], INPUT["defaults"])
         self.assertEqual(body["spec"]["east_west_capabilities"], {"supports_east_west_ethernet": False})
         self.assertEqual(body["spec"]["address_plan"], {"overlay": 0.5, "fabric": 0.25, "lb_vip": 0.25})
+        self.assertIs(body["spec"]["provisioning_enabled"], True)
+
+    def test_create_carries_a_disabled_provisioning_mode(self):
+        self.input["provisioning_enabled"] = False
+        self.assertEqual(self.run_step(), "created")
+        body = self.api.requests[-1][2]
+        self.assertIs(body["spec"]["provisioning_enabled"], False)
 
     def test_create_sends_plan_as_floats_and_omits_empty_k8s_manager(self):
         self.input.update(
@@ -190,6 +198,23 @@ class NetworkClassStepTest(unittest.TestCase):
         self.api.network_classes = [stored_class()]
         self.assertEqual(self.run_step(), "unchanged")
         self.assertEqual(self.api.methods(), ["GET"])
+
+    def test_changed_provisioning_mode_is_rejected(self):
+        nc = stored_class()
+        nc["spec"]["provisioning_enabled"] = False
+        self.api.network_classes = [nc]
+        self.assert_fails(
+            "NetworkClass spec.provisioning_enabled cannot change after installation; "
+            "see Replacing the NetworkClass"
+        )
+
+    def test_legacy_record_without_mode_is_left_alone(self):
+        # The fulfillment service backfills the field before the step runs; an old-shaped record served during a
+        # rolling upgrade is not a change.
+        nc = stored_class()
+        del nc["spec"]["provisioning_enabled"]
+        self.api.network_classes = [nc]
+        self.assertEqual(self.run_step(), "unchanged")
 
     def test_one_changed_field(self):
         self.api.network_classes = [stored_class(fabric_manager="agentless_net")]
@@ -259,6 +284,10 @@ class ValidationTest(unittest.TestCase):
 
     def test_valid_input(self):
         step.validate(self.input)
+
+    def test_provisioning_mode_must_be_a_boolean(self):
+        self.input["provisioning_enabled"] = "true"
+        self.assert_invalid("provisioning_enabled must be a boolean")
 
     def test_removed_resolver_input_is_ignored(self):
         self.input["cudn_evpn_dns_resolvers"] = "dns.example.com"  # removed input

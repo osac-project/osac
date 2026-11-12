@@ -207,6 +207,74 @@ var _ = Describe("NetworkClass reconciler", func() {
 		Expect(object.Spec.Defaults.IngressRules[0].SourceCIDR).To(Equal("10.0.0.0/16"))
 		Expect(object.Spec.EastWestCapabilities).ToNot(BeNil())
 		Expect(object.Spec.EastWestCapabilities.SupportsEastWestEthernet).To(BeTrue())
+		Expect(object.Spec.ProvisioningEnabled).ToNot(BeNil())
+		Expect(*object.Spec.ProvisioningEnabled).To(BeTrue())
+	})
+
+	It("backfills the provisioning mode of a CR created before the field existed", func() {
+		kube := newKubeClient()
+		Expect(kube.Create(context.Background(), &osacv1alpha1.NetworkClass{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "osac-networking",
+				Name:      "networkclass-a",
+				Labels:    map[string]string{labels.NetworkClassUuid: "nc-a"},
+			},
+			Spec: osacv1alpha1.NetworkClassSpec{
+				FabricManager: "netris",
+				K8sManager:    "cudn",
+				Defaults: osacv1alpha1.NetworkClassDefaults{
+					VirtualNetworkIPv4CIDR: "10.0.0.0/16",
+					SubnetIPv4CIDR:         "10.0.0.0/24",
+				},
+				AddressPlan: osacv1alpha1.SubnetAddressPlan{Overlay: 12, Fabric: 2, LBVIP: 2},
+			},
+		})).To(Succeed())
+		resolver := &fakeNetworkClassHubResolver{result: readyResolution(kube)}
+		reconcile, err := NewFunction().
+			SetLogger(logger).
+			SetResolver(resolver).
+			SetNetworkClassesClient(&fakeNetworkClassStatusClient{}).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		networkClass := fullNetworkClass()
+		networkClass.GetSpec().SetProvisioningEnabled(false)
+		Expect(reconcile(context.Background(), networkClass)).To(Succeed())
+
+		list := &osacv1alpha1.NetworkClassList{}
+		Expect(kube.List(context.Background(), list)).To(Succeed())
+		Expect(list.Items).To(HaveLen(1))
+		Expect(list.Items[0].Spec.ProvisioningEnabled).ToNot(BeNil())
+		Expect(*list.Items[0].Spec.ProvisioningEnabled).To(BeFalse())
+	})
+
+	It("refuses to overwrite a provisioning mode that contradicts the record", func() {
+		kube := newKubeClient()
+		Expect(kube.Create(context.Background(), &osacv1alpha1.NetworkClass{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "osac-networking",
+				Name:      "networkclass-a",
+				Labels:    map[string]string{labels.NetworkClassUuid: "nc-a"},
+			},
+			Spec: osacv1alpha1.NetworkClassSpec{
+				FabricManager:       "netris",
+				K8sManager:          "cudn",
+				Defaults:            osacv1alpha1.NetworkClassDefaults{VirtualNetworkIPv4CIDR: "10.0.0.0/16", SubnetIPv4CIDR: "10.0.0.0/24"},
+				AddressPlan:         osacv1alpha1.SubnetAddressPlan{Overlay: 12, Fabric: 2, LBVIP: 2},
+				ProvisioningEnabled: proto.Bool(false),
+			},
+		})).To(Succeed())
+		resolver := &fakeNetworkClassHubResolver{result: readyResolution(kube)}
+		reconcile, err := NewFunction().
+			SetLogger(logger).
+			SetResolver(resolver).
+			SetNetworkClassesClient(&fakeNetworkClassStatusClient{}).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		err = reconcile(context.Background(), fullNetworkClass())
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("differs from the record"))
 	})
 
 	It("updates only the address plan of an existing CR", func() {
@@ -416,7 +484,8 @@ func fullNetworkClass() *privatev1.NetworkClass {
 			EastWestCapabilities: privatev1.NetworkClassEastWestCapabilities_builder{
 				SupportsEastWestEthernet: true,
 			}.Build(),
-			AddressPlan: privatev1.AddressPlan_builder{Overlay: 0.75, Fabric: 0.125, LbVip: 0.125}.Build(),
+			AddressPlan:         privatev1.AddressPlan_builder{Overlay: 0.75, Fabric: 0.125, LbVip: 0.125}.Build(),
+			ProvisioningEnabled: new(true),
 		}.Build(),
 	}.Build()
 }

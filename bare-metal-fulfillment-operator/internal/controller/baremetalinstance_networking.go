@@ -140,6 +140,8 @@ func setNetworkAttachmentsReady(bmi *v1alpha1.BareMetalInstance, status metav1.C
 // reconcileNetworking creates the BareMetalInstance's NetworkAttachment and
 // mirrors its readiness. The osac-operator networking controller runs the
 // Fabric Manager task that moves the host's port to the tenant network.
+//
+//nolint:gocyclo // The reconcile keeps the attachment, skip and readiness paths together.
 func (r *BareMetalInstanceReconciler) reconcileNetworking(
 	ctx context.Context,
 	bareMetalInstance *v1alpha1.BareMetalInstance,
@@ -151,9 +153,17 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 		return ctrl.Result{}, nil
 	}
 
-	if !r.NetworkingEnabled {
+	networkingEnabled, modeRequeue, modeErr := r.networkingEnabledForReconcile(ctx)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if modeRequeue {
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
+	if !networkingEnabled {
 		log.Info("Networking provisioning disabled, skipping network attachment provisioning")
-		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionTrue, "Skipped", "Networking provisioning disabled")
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionTrue,
+			v1alpha1.HostConditionReasonProvisioningDisabled, "Networking provisioning disabled")
 		return ctrl.Result{}, nil
 	}
 
@@ -311,7 +321,14 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 		return ctrl.Result{}, true, nil
 	}
 
-	if attachment := primaryNetworkAttachment(bareMetalInstance); attachment != nil && r.NetworkingEnabled {
+	networkingEnabled, modeRequeue, modeErr := r.networkingEnabledForReconcile(ctx)
+	if modeErr != nil {
+		return ctrl.Result{}, false, modeErr
+	}
+	if modeRequeue {
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, false, nil
+	}
+	if attachment := primaryNetworkAttachment(bareMetalInstance); attachment != nil && networkingEnabled {
 		key, ok := networkAttachmentKey(bareMetalInstance, attachment)
 		if !ok {
 			return r.removeNetworkingFinalizer(ctx, bareMetalInstance)

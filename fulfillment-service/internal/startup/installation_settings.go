@@ -60,7 +60,8 @@ type Querier interface {
 // start on a change that isn't supported: a changed provisioningEnabled, BMaaS or CaaS newly enabled while a
 // VirtualNetwork exists, a different minor release while networking or workload records exist, or an excluded range
 // that overlaps an existing network. It runs in one transaction that holds an exclusive lock on the settings table, so
-// concurrent starts run one after the other.
+// concurrent starts run one after the other. It also backfills the deployment's NetworkClass provisioning mode from the
+// stored value, and refuses to start when a NetworkClass record contradicts that value.
 func CheckInstallationSettings(ctx context.Context, logger *slog.Logger, db Querier,
 	settings InstallationSettings) (err error) {
 	tx, err := db.Begin(ctx)
@@ -98,6 +99,9 @@ func CheckInstallationSettings(ctx context.Context, logger *slog.Logger, db Quer
 			slog.Bool("provisioning_enabled", settings.ProvisioningEnabled),
 			slog.Any("enabled_services", settings.EnabledServices),
 			slog.String("release", settings.Release))
+		if err = backfillNetworkClassProvisioning(ctx, logger, tx, settings.ProvisioningEnabled); err != nil {
+			return err
+		}
 		return checkExcludedRanges(ctx, tx, settings.ExcludedIPv4CIDRs)
 	}
 	if err != nil {
@@ -142,11 +146,59 @@ func CheckInstallationSettings(ctx context.Context, logger *slog.Logger, db Quer
 		return err
 	}
 
+	if err = backfillNetworkClassProvisioning(ctx, logger, tx, stored.provisioningEnabled); err != nil {
+		return err
+	}
+
 	_, err = tx.Exec(ctx,
 		`update installation_settings set enabled_services = $1, release = $2 where id = 1`,
 		nonNil(settings.EnabledServices), settings.Release)
 	if err != nil {
 		return fmt.Errorf("failed to update the installation settings: %w", err)
+	}
+	return nil
+}
+
+// backfillNetworkClassProvisioning records the accepted provisioning mode on the deployment's NetworkClass record when
+// the record predates that field, and refuses to start when the record carries a different mode. The installation
+// setting is the historical authority: the backfill never infers the mode from the environment of a later rollout, and
+// it runs only after every refusal check passed, in the installation settings transaction.
+func backfillNetworkClassProvisioning(ctx context.Context, logger *slog.Logger, tx pgx.Tx, enabled bool) error {
+	var withoutSpec int
+	err := tx.QueryRow(ctx, `select count(*) from network_classes where not (data ? 'spec')`).Scan(&withoutSpec)
+	if err != nil {
+		return fmt.Errorf("failed to check the NetworkClass records: %w", err)
+	}
+	if withoutSpec > 0 {
+		return fmt.Errorf("cannot start: %d NetworkClass record(s) have no spec; delete the NetworkClass record "+
+			"or reinstall", withoutSpec)
+	}
+
+	var mismatched string
+	err = tx.QueryRow(ctx, `
+		select id from network_classes
+		where data->'spec' ? 'provisioning_enabled'
+		  and (data->'spec'->'provisioning_enabled') <> to_jsonb($1::boolean)
+		limit 1`, enabled).Scan(&mismatched)
+	switch {
+	case err == nil:
+		return fmt.Errorf("cannot start: NetworkClass '%s' records a provisioning mode that differs from the "+
+			"installation setting; the installation setting is authoritative: recreate the NetworkClass with the "+
+			"stored mode or reinstall", mismatched)
+	case !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("failed to check the NetworkClass provisioning mode: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx, `
+		update network_classes
+		set data = jsonb_set(data, '{spec,provisioning_enabled}', to_jsonb($1::boolean), true)
+		where not (data->'spec' ? 'provisioning_enabled')`, enabled)
+	if err != nil {
+		return fmt.Errorf("failed to store the NetworkClass provisioning mode: %w", err)
+	}
+	if rows := tag.RowsAffected(); rows > 0 {
+		logger.InfoContext(ctx, "Stored the NetworkClass provisioning mode from the installation setting",
+			slog.Bool("provisioning_enabled", enabled), slog.Int64("network_classes", rows))
 	}
 	return nil
 }

@@ -72,7 +72,7 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 			Client:                        k8sClient,
 			APIReader:                     k8sClient,
 			Scheme:                        k8sClient.Scheme(),
-			NetworkingEnabled:             true,
+			ProvisioningMode:              StaticProvisioningMode(true),
 			ProvisionPollIntervalDuration: DefaultProvisionPollIntervalDuration,
 		}
 	})
@@ -111,12 +111,12 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 	It("skips when networking provisioning is disabled", func() {
 		bmi = newBMI(attachments)
 		handoffComplete(bmi)
-		reconciler.NetworkingEnabled = false
+		reconciler.ProvisioningMode = StaticProvisioningMode(false)
 		_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
 		Expect(err).NotTo(HaveOccurred())
 		cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
 		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-		Expect(cond.Reason).To(Equal("Skipped"))
+		Expect(cond.Reason).To(Equal("ProvisioningDisabled"))
 	})
 
 	It("mirrors the accepted DHCP lease of the NetworkAttachment", func() {

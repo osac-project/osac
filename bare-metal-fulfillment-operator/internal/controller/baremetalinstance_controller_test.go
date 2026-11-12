@@ -233,7 +233,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			mockInvClient,
 			mockMgmtClient,
 			mockProvProvider,
-			false,
+			StaticProvisioningMode(false),
 			0,
 			0,
 			0,
@@ -251,7 +251,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					mockInvClient,
 					mockMgmtClient,
 					mockProvProvider,
-					false,
+					StaticProvisioningMode(false),
 					-1*time.Second,
 					0,
 					-5*time.Second,
@@ -277,7 +277,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					mockInvClient,
 					mockMgmtClient,
 					mockProvProvider,
-					false,
+					StaticProvisioningMode(false),
 					45*time.Second,
 					2*time.Second,
 					15*time.Second,
@@ -432,7 +432,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 
 			It("selects by the type selector, then reads the selected port MAC after assignment", func() {
-				reconciler.NetworkingEnabled = true
+				reconciler.ProvisioningMode = StaticProvisioningMode(true)
 				bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
 					SubnetRef: "subnet-1", Interface: "data-0", Primary: true,
 				}}
@@ -539,7 +539,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 
 			It("records the selected interface MAC after assignment without filtering candidates", func() {
-				reconciler.NetworkingEnabled = true
+				reconciler.ProvisioningMode = StaticProvisioningMode(true)
 				bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
 					SubnetRef: "subnet-1", Interface: "data-0", Primary: true,
 				}}
@@ -567,7 +567,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 
 			It("keeps the host assigned after a terminal selected-port MAC failure", func() {
-				reconciler.NetworkingEnabled = true
+				reconciler.ProvisioningMode = StaticProvisioningMode(true)
 				bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
 					SubnetRef: "subnet-1", Interface: "data-0", Primary: true,
 				}}
@@ -2081,7 +2081,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				k8sClient.Scheme(),
 				invClient,
 				&mockManagementClient{},
-				nil, false,
+				nil, StaticProvisioningMode(false),
 				0, 0, 0, 0, 0,
 			)
 			bmi = &v1alpha1.BareMetalInstance{
@@ -2237,7 +2237,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			nil,
 			mockMgmtClient,
 			nil,
-			false,
+			StaticProvisioningMode(false),
 			0,
 			0,
 			5*time.Second,
@@ -2277,7 +2277,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 		bareMetalInstance.Spec.NetworkAttachments[0].SubnetRef = "subnet-1"
 		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceManagementFinalizer)
 		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)
-		reconciler.NetworkingEnabled = true
+		reconciler.ProvisioningMode = StaticProvisioningMode(true)
 		reconciler.InventoryClient = &mockInventoryClient{}
 
 		attachmentKey := client.ObjectKey{
@@ -2348,7 +2348,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 		})
 
 		It("persists the OFF step before issuing any power request", func() {
-			reconciler.NetworkingEnabled = true
+			reconciler.ProvisioningMode = StaticProvisioningMode(true)
 
 			result, err := reconciler.reconcileNetworkHandoffPowerCycle(ctx, bareMetalInstance)
 
@@ -2361,7 +2361,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 		})
 
 		It("observes OFF then ON before completing, without changing PowerSynced", func() {
-			reconciler.NetworkingEnabled = true
+			reconciler.ProvisioningMode = StaticProvisioningMode(true)
 			var setCalls []management.PowerState
 			mockMgmtClient.setPowerStateFunc = func(_ context.Context, _ string, target management.PowerState) error {
 				setCalls = append(setCalls, target)
@@ -2392,7 +2392,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 		})
 
 		It("keeps ErrTransitioning and observed transitions pending", func() {
-			reconciler.NetworkingEnabled = true
+			reconciler.ProvisioningMode = StaticProvisioningMode(true)
 			bareMetalInstance.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
 				metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOff, "retry OFF")
 			setCalls := 0
@@ -2430,7 +2430,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 		})
 
 		It("fails immediately for a non-transitioning SetPowerState error", func() {
-			reconciler.NetworkingEnabled = true
+			reconciler.ProvisioningMode = StaticProvisioningMode(true)
 			bareMetalInstance.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
 				metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOff, "retry OFF")
 			mockMgmtClient.setPowerStateFunc = func(_ context.Context, _ string, _ management.PowerState) error {
@@ -2451,7 +2451,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 		})
 
 		It("keeps GetPowerState errors pending before the persisted deadline", func() {
-			reconciler.NetworkingEnabled = true
+			reconciler.ProvisioningMode = StaticProvisioningMode(true)
 			bareMetalInstance.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
 				metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOff, "retry OFF")
 			setCalls := 0
@@ -2478,7 +2478,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 		})
 
 		It("fails wrong-state observations at the Ready-based deadline", func() {
-			reconciler.NetworkingEnabled = true
+			reconciler.ProvisioningMode = StaticProvisioningMode(true)
 			ready := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 			ready.LastTransitionTime = metav1.NewTime(time.Now().Add(-16 * time.Minute))
 			bareMetalInstance.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
@@ -2497,7 +2497,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 		})
 
 		It("accepts a confirmed ON observation even after the 15-minute deadline", func() {
-			reconciler.NetworkingEnabled = true
+			reconciler.ProvisioningMode = StaticProvisioningMode(true)
 			ready := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 			ready.LastTransitionTime = metav1.NewTime(time.Now().Add(-16 * time.Minute))
 			bareMetalInstance.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
@@ -2539,11 +2539,11 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			// IP discovery should run (will fail because no provider, but that's OK for this test)
 			_, err := reconciler.reconcileIPDiscovery(ctx, bareMetalInstance)
 			Expect(err).NotTo(HaveOccurred())
-			// It sets the condition to True/Skipped when no provider is configured
+			// It sets the condition to True/ProvisioningDisabled when provider networking is disabled.
 			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(cond.Reason).To(Equal("Skipped"))
+			Expect(cond.Reason).To(Equal("ProvisioningDisabled"))
 		})
 	})
 
@@ -2559,7 +2559,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 				_ = k8sClient.Delete(ctx, bareMetalInstance)
 			}()
 
-			reconciler.NetworkingEnabled = true
+			reconciler.ProvisioningMode = StaticProvisioningMode(true)
 			attachment := newTestNetworkAttachment(bareMetalInstance.Namespace, "ip-fail-bmi", "eth0")
 			Expect(k8sClient.Create(ctx, attachment)).To(Succeed())
 			defer func() { _ = k8sClient.Delete(ctx, attachment) }()
@@ -2618,7 +2618,7 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 			nil,
 			mockMgmtClient,
 			nil,
-			false,
+			StaticProvisioningMode(false),
 			0,
 			0,
 			5*time.Second,
@@ -2706,7 +2706,7 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 	})
 
 	It("runs before networking deletion in handleDeletion", func() {
-		reconciler.NetworkingEnabled = true
+		reconciler.ProvisioningMode = StaticProvisioningMode(true)
 		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceManagementFinalizer)
 		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)
 		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceInventoryFinalizer)
@@ -2734,7 +2734,7 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 	})
 
 	It("does not enter offboard shutdown when networking provisioning is disabled", func() {
-		Expect(reconciler.NetworkingEnabled).To(BeFalse(), "precondition: networking must be disabled")
+		Expect(reconciler.ProvisioningMode).To(Equal(StaticProvisioningMode(false)), "precondition: networking must be disabled")
 
 		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
 			return &management.PowerStatus{State: management.PowerOn, IsTransitioning: false}, nil
@@ -2749,9 +2749,11 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 			"precondition: management client must be set")
 
 		// Directly verify the guard condition that was changed
+		networkingEnabled, modeErr := reconciler.provisioningEnabled(ctx)
+		Expect(modeErr).ToNot(HaveOccurred())
 		shouldRunOffboard := len(bareMetalInstance.Spec.NetworkAttachments) > 0 &&
 			reconciler.ManagementClient != nil &&
-			reconciler.NetworkingEnabled
+			networkingEnabled
 		Expect(shouldRunOffboard).To(BeFalse(),
 			"offboard shutdown guard must be false when networking is disabled")
 		Expect(setPowerCallCount).To(Equal(0), "must not power off when networking is disabled")
@@ -2809,7 +2811,7 @@ var _ = Describe("BareMetalInstance networking feature gate (OSAC_ENABLE_NETWORK
 			reconciler = NewBareMetalInstanceReconciler(
 				k8sClient, k8sClient.Scheme(),
 				nil, mockMgmtClient,
-				nil, false,
+				nil, StaticProvisioningMode(false),
 				0, 0, 5*time.Second, 5*time.Second, 0,
 			)
 		})
@@ -2823,17 +2825,17 @@ var _ = Describe("BareMetalInstance networking feature gate (OSAC_ENABLE_NETWORK
 			netCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 			Expect(netCond).NotTo(BeNil())
 			Expect(netCond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(netCond.Reason).To(Equal("Skipped"))
+			Expect(netCond.Reason).To(Equal("ProvisioningDisabled"))
 
 			handoffCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
 			Expect(handoffCond).NotTo(BeNil())
 			Expect(handoffCond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(handoffCond.Reason).To(Equal("Skipped"))
+			Expect(handoffCond.Reason).To(Equal("ProvisioningDisabled"))
 
 			ipCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
 			Expect(ipCond).NotTo(BeNil())
 			Expect(ipCond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(ipCond.Reason).To(Equal("Skipped"))
+			Expect(ipCond.Reason).To(Equal("ProvisioningDisabled"))
 		})
 	})
 
@@ -2842,7 +2844,7 @@ var _ = Describe("BareMetalInstance networking feature gate (OSAC_ENABLE_NETWORK
 			reconciler = NewBareMetalInstanceReconciler(
 				k8sClient, k8sClient.Scheme(),
 				nil, mockMgmtClient,
-				nil, true,
+				nil, StaticProvisioningMode(true),
 				0, 0, 5*time.Second, 5*time.Second, 0,
 			)
 		})

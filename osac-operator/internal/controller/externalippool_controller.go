@@ -51,8 +51,15 @@ func (r *ExternalIPPoolReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 func (r *ExternalIPPoolReconciler) create(ctx context.Context, pool *v1alpha1.ExternalIPPool) (ctrl.Result, error) {
+	enabled, requeue, modeErr := networkingMode(ctx, r.Engine)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
 	if pool.Status.NetworkManagers == nil {
-		nc, err := readyNetworkClass(ctx, r.Client, pool.Namespace, r.Engine.ProvisioningEnabled())
+		nc, err := readyNetworkClass(ctx, r.Client, pool.Namespace)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -72,7 +79,7 @@ func (r *ExternalIPPoolReconciler) create(ctx context.Context, pool *v1alpha1.Ex
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if !r.Engine.ProvisioningEnabled() {
+	if !enabled {
 		networktask.SetProvisioningDisabled(pool, networktask.CreateExternalIPPool)
 		return ctrl.Result{}, store()
 	}

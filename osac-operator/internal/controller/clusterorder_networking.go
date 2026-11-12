@@ -41,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networkingmode"
 	"github.com/osac-project/osac/osac-operator/internal/networktask"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -213,6 +214,31 @@ func (r *ClusterOrderReconciler) getFulfillmentCluster(
 	return response.GetObject(), nil
 }
 
+// endpointNetworkingEnabled reports the installation-wide provider networking mode for the endpoint lifecycle. A nil
+// engine selects the disabled behavior, which is how unit tests run the controller without networking.
+func (r *ClusterOrderReconciler) endpointNetworkingEnabled(ctx context.Context) (bool, error) {
+	if r.Engine == nil {
+		return false, nil
+	}
+	enabled, requeue, err := networkingMode(ctx, r.Engine)
+	if err != nil {
+		return false, err
+	}
+	if requeue {
+		return false, networkingmode.ErrUnresolved
+	}
+	return enabled, nil
+}
+
+// endpointNetworkingMode reports the installation-wide provider networking mode and whether the caller must requeue
+// because it isn't resolved yet. A nil engine selects the disabled behavior.
+func endpointNetworkingMode(ctx context.Context, engine *networktask.Engine) (enabled, requeue bool, err error) {
+	if engine == nil {
+		return false, false, nil
+	}
+	return networkingMode(ctx, engine)
+}
+
 // reconcileClusterEndpointLifecycle owns endpoint discovery, ingress
 // reservation and the manager-free endpoint/DNS jobs for standard CaaS.
 func (r *ClusterOrderReconciler) reconcileClusterEndpointLifecycle(
@@ -224,7 +250,11 @@ func (r *ClusterOrderReconciler) reconcileClusterEndpointLifecycle(
 	if hc == nil {
 		instance.SetStatusCondition(string(v1alpha1.ClusterOrderConditionManagementPublicationReady),
 			metav1.ConditionFalse, "Waiting for the HostedCluster", managementPublicationPending)
-		if r.Engine == nil || !r.Engine.ProvisioningEnabled() {
+		networkingEnabled, err := r.endpointNetworkingEnabled(ctx)
+		if err != nil {
+			return err
+		}
+		if !networkingEnabled {
 			setClusterEndpointCondition(instance, metav1.ConditionTrue,
 				endpointReasonProvisioningDisabled, "Provider networking is disabled")
 		} else {
@@ -238,7 +268,11 @@ func (r *ClusterOrderReconciler) reconcileClusterEndpointLifecycle(
 	if err != nil {
 		return err
 	}
-	if r.Engine == nil || !r.Engine.ProvisioningEnabled() {
+	networkingEnabled, err := r.endpointNetworkingEnabled(ctx)
+	if err != nil {
+		return err
+	}
+	if !networkingEnabled {
 		setClusterEndpointCondition(instance, metav1.ConditionTrue,
 			endpointReasonProvisioningDisabled, "Provider networking is disabled")
 		return nil
@@ -1154,7 +1188,14 @@ func (r *ClusterOrderReconciler) removePublishedClusterDNS(
 func (r *ClusterOrderReconciler) removePublishedClusterDNSForEndpoints(
 	ctx context.Context, instance *v1alpha1.ClusterOrder, endpoints ...string,
 ) (bool, ctrl.Result, error) {
-	if r.Engine == nil || !r.Engine.ProvisioningEnabled() {
+	networkingEnabled, networkingRequeue, networkingErr := endpointNetworkingMode(ctx, r.Engine)
+	if networkingErr != nil {
+		return false, ctrl.Result{}, networkingErr
+	}
+	if networkingRequeue {
+		return false, ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if !networkingEnabled {
 		return true, ctrl.Result{}, nil
 	}
 	specs := clusterEndpointDNSJobSpecs(endpoints...)
@@ -1260,7 +1301,11 @@ func clusterEndpointDNSBaseDomainFromStatus(instance *v1alpha1.ClusterOrder) str
 func (r *ClusterOrderReconciler) releaseClusterIngressReservation(
 	ctx context.Context, instance *v1alpha1.ClusterOrder,
 ) (bool, ctrl.Result, error) {
-	if !r.clusterIngressReservationRecorded(instance) {
+	recorded, err := r.clusterIngressReservationRecorded(ctx, instance)
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
+	if !recorded {
 		return true, ctrl.Result{}, nil
 	}
 	input, err := networktask.LoadInput(instance)
@@ -1290,9 +1335,23 @@ func (r *ClusterOrderReconciler) releaseClusterIngressReservation(
 	return true, ctrl.Result{}, nil
 }
 
-func (r *ClusterOrderReconciler) clusterIngressReservationRecorded(instance *v1alpha1.ClusterOrder) bool {
-	return r.Engine != nil && r.Engine.ProvisioningEnabled() &&
-		networktask.Started(instance, networktask.ReserveClusterIngressIP, v1alpha1.NetworkJobManagerFabric)
+// clusterIngressReservationRecorded reports whether provider networking is enabled for this installation and the
+// ClusterOrder records an ingress reservation. A disabled installation runs no release or removal task, even if an
+// unsupported earlier rollout recorded one.
+func (r *ClusterOrderReconciler) clusterIngressReservationRecorded(
+	ctx context.Context, instance *v1alpha1.ClusterOrder,
+) (bool, error) {
+	networkingEnabled, requeue, err := endpointNetworkingMode(ctx, r.Engine)
+	if err != nil {
+		return false, err
+	}
+	if requeue {
+		return false, networkingmode.ErrUnresolved
+	}
+	if !networkingEnabled {
+		return false, nil
+	}
+	return networktask.Started(instance, networktask.ReserveClusterIngressIP, v1alpha1.NetworkJobManagerFabric), nil
 }
 
 // clusterIngressManagerVars removes operator-owned routing metadata from the

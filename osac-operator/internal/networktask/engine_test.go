@@ -175,7 +175,7 @@ func newHarness(t *testing.T, objs ...client.Object) *harness {
 		Build()
 	f := newFakeAAP()
 	clk := clocktesting.NewFakeClock(time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC))
-	e := New(c, c, f, Config{TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: true}).WithClock(clk)
+	e := New(c, c, f, Config{TemplatePrefix: "osac", Organization: "osac", ProvisioningMode: StaticMode(true)}).WithClock(clk)
 	return &harness{t: t, ctx: context.Background(), client: c, aap: f, clock: clk, engine: e}
 }
 
@@ -382,7 +382,7 @@ func TestRestartRestartsTheWait(t *testing.T) {
 	h.run("s1", fabricReq(CreateSubnet))
 	h.clock.Step(time.Minute)
 	// A new engine is a restarted operator.
-	h.engine = New(h.client, h.client, h.aap, Config{TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: true}).WithClock(h.clock)
+	h.engine = New(h.client, h.client, h.aap, Config{TemplatePrefix: "osac", Organization: "osac", ProvisioningMode: StaticMode(true)}).WithClock(h.clock)
 	out = h.run("s1", fabricReq(CreateSubnet))
 	if out.Entry.State != v1alpha1.NetworkJobStateRetrying || out.RequeueAfter != 2*time.Minute {
 		t.Fatalf("got %+v", out)
@@ -922,7 +922,7 @@ func TestSiblingAcceptanceSerializesThroughStatus(t *testing.T) {
 
 func TestProvisioningDisabledRefusesManagerTasks(t *testing.T) {
 	h := newHarness(t, subnetObj("s1", "s1", "vn1"))
-	h.engine.cfg.ProvisioningEnabled = false
+	h.engine.cfg.ProvisioningMode = StaticMode(false)
 	if _, err := h.engine.Run(h.ctx, h.get("s1"), fabricReq(CreateSubnet)); err == nil {
 		t.Fatal("expected refusal")
 	}
@@ -998,7 +998,7 @@ func TestNotStartedCancelSurvivesRestart(t *testing.T) {
 		t.Fatalf("the cancel is not recorded in status: %+v", got)
 	}
 	// A restart loses the in-memory state; AAP then reports canceled.
-	h.engine = New(h.client, h.client, h.aap, Config{TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: true}).WithClock(h.clock)
+	h.engine = New(h.client, h.client, h.aap, Config{TemplatePrefix: "osac", Organization: "osac", ProvisioningMode: StaticMode(true)}).WithClock(h.clock)
 	h.aap.finish(out.Entry.JobID, "canceled", "", "")
 	out = h.run("s1", fabricReq(CreateSubnet))
 	if out.Entry.State != v1alpha1.NetworkJobStateRetrying || !strings.Contains(out.Entry.Message, MessageNotStarted) ||

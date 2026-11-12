@@ -199,10 +199,10 @@ func newTestCIReconcilerWithFake(fake *wlFakeAAP, computeInstanceNamespace, tena
 func newTestCIReconcilerOn(fake *wlFakeAAP, enabled bool, computeInstanceNamespace, tenantNamespace, networkingNamespace string, poll time.Duration) *ComputeInstanceReconciler {
 	local := testMcManager.GetLocalManager()
 	engine := networktask.New(local.GetClient(), local.GetAPIReader(), fake, networktask.Config{
-		TemplatePrefix:      "osac",
-		Organization:        "osac",
-		ProvisioningEnabled: enabled,
-		PollInterval:        100 * time.Millisecond,
+		TemplatePrefix:   "osac",
+		Organization:     "osac",
+		ProvisioningMode: networktask.StaticMode(enabled),
+		PollInterval:     100 * time.Millisecond,
 	})
 	return NewComputeInstanceReconciler(testMcManager, computeInstanceNamespace, tenantNamespace, networkingNamespace,
 		engine, "osac-create-compute-instance", "osac-delete-compute-instance", poll, mcmanager.LocalCluster)

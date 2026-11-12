@@ -54,19 +54,25 @@ var _ = Describe("NetworkClass resolution", func() {
 		cm.Data["capabilities"] = "security_group_icmp"
 		return cm
 	}
-	newClassWithDefaults := func(k8sManager string, mutate func(*v1alpha1.NetworkClassDefaults)) *v1alpha1.NetworkClass {
+	newClassObject := func(k8sManager string, enabled bool,
+		mutate func(*v1alpha1.NetworkClassDefaults)) *v1alpha1.NetworkClass {
 		nc := &v1alpha1.NetworkClass{
 			ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: namespace,
 				Labels: map[string]string{osacNetworkClassIDLabel: "nc-1"}},
 			Spec: v1alpha1.NetworkClassSpec{
 				FabricManager: "acme_fabric", K8sManager: k8sManager,
-				Defaults:    v1alpha1.NetworkClassDefaults{VirtualNetworkIPv4CIDR: "10.0.0.0/16", SubnetIPv4CIDR: "10.0.1.0/24"},
-				AddressPlan: v1alpha1.SubnetAddressPlan{Overlay: 8, Fabric: 4, LBVIP: 4},
+				Defaults:            v1alpha1.NetworkClassDefaults{VirtualNetworkIPv4CIDR: "10.0.0.0/16", SubnetIPv4CIDR: "10.0.1.0/24"},
+				AddressPlan:         v1alpha1.SubnetAddressPlan{Overlay: 8, Fabric: 4, LBVIP: 4},
+				ProvisioningEnabled: ptr.To(enabled),
 			},
 		}
 		if mutate != nil {
 			mutate(&nc.Spec.Defaults)
 		}
+		return nc
+	}
+	newClassWithDefaults := func(k8sManager string, mutate func(*v1alpha1.NetworkClassDefaults)) *v1alpha1.NetworkClass {
+		nc := newClassObject(k8sManager, true, mutate)
 		Expect(k8sClient.Create(ctx, nc)).To(Succeed())
 		return nc
 	}
@@ -85,7 +91,7 @@ var _ = Describe("NetworkClass resolution", func() {
 		namespace = crdTestName("ncres")
 		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})).To(Succeed())
 		reconciler = &NetworkClassReconciler{Client: k8sClient, APIReader: k8sClient,
-			NetworkingNamespace: namespace, RegistrationNamespace: namespace, ProvisioningEnabled: true}
+			NetworkingNamespace: namespace, RegistrationNamespace: namespace}
 	})
 
 	It("resolves registrations created before the CR and records the managers and network type", func() {
@@ -109,8 +115,9 @@ var _ = Describe("NetworkClass resolution", func() {
 	})
 
 	It("marks the NetworkClass ready without resolving managers when provisioning is disabled", func() {
-		reconciler.ProvisioningEnabled = false
-		nc := resolve(newClass("example_k8s"))
+		nc := newClassObject("example_k8s", false, nil)
+		Expect(k8sClient.Create(ctx, nc)).To(Succeed())
+		nc = resolve(nc)
 
 		ready := meta.FindStatusCondition(nc.Status.Conditions, v1alpha1.NetworkConditionReady)
 		Expect(ready.Status).To(Equal(metav1.ConditionTrue))

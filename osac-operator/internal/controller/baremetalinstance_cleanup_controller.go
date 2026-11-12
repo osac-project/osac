@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,11 +26,13 @@ import (
 	"google.golang.org/grpc/status"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networkingmode"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 )
 
@@ -38,23 +41,20 @@ const bareMetalInstanceCleanupFinalizer = "osac.openshift.io/baremetalinstance-c
 // BareMetalInstanceCleanupReconciler removes automatically created networking resources before a BareMetalInstance is deleted.
 type BareMetalInstanceCleanupReconciler struct {
 	client.Client
-	bareMetalInstanceNamespace string
-	networkingNamespace        string
-	pollInterval               time.Duration
-	// NetworkingProvisioningEnabled is global.networking.provisioningEnabled.
-	NetworkingProvisioningEnabled bool
-	BareMetalInstancesClient      automaticBareMetalInstancesGetter
-	ExternalIPAttachmentsClient   automaticExternalIPAttachmentsClient
+	bareMetalInstanceNamespace  string
+	networkingNamespace         string
+	pollInterval                time.Duration
+	BareMetalInstancesClient    automaticBareMetalInstancesGetter
+	ExternalIPAttachmentsClient automaticExternalIPAttachmentsClient
 }
 
 // NewBareMetalInstanceCleanupReconciler creates the networking cleanup controller.
 func NewBareMetalInstanceCleanupReconciler(c client.Client, bareMetalInstanceNamespace, networkingNamespace string) *BareMetalInstanceCleanupReconciler {
 	return &BareMetalInstanceCleanupReconciler{
-		Client:                        c,
-		bareMetalInstanceNamespace:    bareMetalInstanceNamespace,
-		networkingNamespace:           networkingNamespace,
-		pollInterval:                  5 * time.Second,
-		NetworkingProvisioningEnabled: true,
+		Client:                     c,
+		bareMetalInstanceNamespace: bareMetalInstanceNamespace,
+		networkingNamespace:        networkingNamespace,
+		pollInterval:               5 * time.Second,
 	}
 }
 
@@ -118,8 +118,20 @@ func (r *BareMetalInstanceCleanupReconciler) reconcileAutomaticExternalIPAttachm
 	bmi *bmfov1alpha1.BareMetalInstance,
 	bmiID string,
 ) (ctrl.Result, error) {
-	if !r.NetworkingProvisioningEnabled || r.BareMetalInstancesClient == nil || r.ExternalIPAttachmentsClient == nil ||
+	if r.BareMetalInstancesClient == nil || r.ExternalIPAttachmentsClient == nil ||
 		bmi.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseFailed || !bmi.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+	networkingEnabled, err := networkingmode.Resolve(ctx, r.Client, r.networkingNamespace)
+	if errors.Is(err, networkingmode.ErrUnresolved) {
+		ctrllog.FromContext(ctx).Info("Networking provisioning mode is not resolved yet; requeueing",
+			"reason", err.Error())
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !networkingEnabled {
 		return ctrl.Result{}, nil
 	}
 	response, err := r.BareMetalInstancesClient.Get(ctx,

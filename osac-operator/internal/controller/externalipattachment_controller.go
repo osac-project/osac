@@ -70,7 +70,14 @@ type attachmentTarget struct {
 }
 
 func (r *ExternalIPAttachmentReconciler) create(ctx context.Context, eipa *v1alpha1.ExternalIPAttachment) (ctrl.Result, error) {
-	if !r.Engine.ProvisioningEnabled() {
+	enabled, requeue, modeErr := networkingMode(ctx, r.Engine)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if !enabled {
 		networktask.SetFailed(eipa, networktask.MessageNetworkingDisabled)
 		return ctrl.Result{}, nil
 	}

@@ -60,6 +60,13 @@ func (r *FabricDomainReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 func (r *FabricDomainReconciler) create(ctx context.Context, fd *v1alpha1.FabricDomain) (ctrl.Result, error) {
+	enabled, requeue, modeErr := networkingMode(ctx, r.Engine)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
 	var vn *v1alpha1.VirtualNetwork
 	if fd.Status.TaskInput == nil {
 		var err error
@@ -90,12 +97,12 @@ func (r *FabricDomainReconciler) create(ctx context.Context, fd *v1alpha1.Fabric
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if !r.Engine.ProvisioningEnabled() {
+	if !enabled {
 		networktask.SetProvisioningDisabled(fd, networktask.CreateFabricDomain)
 		return ctrl.Result{}, store()
 	}
 	if !networktask.Started(fd, networktask.CreateFabricDomain, v1alpha1.NetworkJobManagerFabric) {
-		nc, err := readyNetworkClass(ctx, r.Client, fd.Namespace, r.Engine.ProvisioningEnabled())
+		nc, err := readyNetworkClass(ctx, r.Client, fd.Namespace)
 		if err != nil {
 			return ctrl.Result{}, err
 		}

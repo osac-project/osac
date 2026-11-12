@@ -379,6 +379,9 @@ class DefaultsTest(RenderFailureCase):
         step_cm = find(docs, "ConfigMap", "network-class-step")
         self.assertIn("def run(", step_cm["data"]["network-class-step.py"])
 
+    def test_step_input_carries_a_disabled_provisioning_mode(self):
+        self.assertIs(step_input(render(networking(provisioningEnabled=False)))["provisioning_enabled"], False)
+
     def test_step_input_ignores_the_removed_resolver_setting(self):
         removed = "CUDN_EVPN_DNS_RESOLVERS"  # removed with the per-resource DNS
         config = {"aap": {"instanceGroups": {"networkFulfillment": {"config": {removed: "192.0.2.53"}}}}}

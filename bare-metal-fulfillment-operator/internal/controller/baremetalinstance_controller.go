@@ -56,10 +56,10 @@ type BareMetalInstanceReconciler struct {
 	InventoryClient      inventory.Client
 	ManagementClient     management.Client
 	ProvisioningProvider provisioning.ProvisioningProvider
-	// NetworkingEnabled reports whether BMF attaches hosts to tenant networks
-	// through NetworkAttachments, which it creates next to each
-	// BareMetalInstance.
-	NetworkingEnabled                    bool
+	// ProvisioningMode resolves the installation-wide provider networking mode.
+	// When enabled BMF attaches hosts to tenant networks through
+	// NetworkAttachments, which it creates next to each BareMetalInstance.
+	ProvisioningMode                     ProvisioningMode
 	NoFreeHostsPollIntervalDuration      time.Duration
 	TryLockFailPollIntervalDuration      time.Duration
 	ManagementRecheckIntervalDuration    time.Duration
@@ -77,7 +77,7 @@ func NewBareMetalInstanceReconciler(
 	inventoryClient inventory.Client,
 	managementClient management.Client,
 	provisioningProvider provisioning.ProvisioningProvider,
-	networkingEnabled bool,
+	provisioningMode ProvisioningMode,
 	noFreeHostsPollIntervalDuration time.Duration,
 	tryLockFailPollIntervalDuration time.Duration,
 	managementRecheckIntervalDuration time.Duration,
@@ -112,7 +112,7 @@ func NewBareMetalInstanceReconciler(
 		TryLockFailPollIntervalDuration:      tryLockFailPollIntervalDuration,
 		ManagementClient:                     managementClient,
 		ProvisioningProvider:                 provisioningProvider,
-		NetworkingEnabled:                    networkingEnabled,
+		ProvisioningMode:                     provisioningMode,
 		ManagementRecheckIntervalDuration:    managementRecheckIntervalDuration,
 		ProvisionPollIntervalDuration:        provisionPollIntervalDuration,
 		HostAvailabilityPollIntervalDuration: hostAvailabilityPollIntervalDuration,
@@ -170,6 +170,14 @@ func (r *BareMetalInstanceReconciler) SetupWithManager(mgr ctrl.Manager, maxConc
 		}).
 		Named("baremetalinstance").
 		Complete(r)
+}
+
+// provisioningEnabled resolves the installation-wide provider networking mode.
+func (r *BareMetalInstanceReconciler) provisioningEnabled(ctx context.Context) (bool, error) {
+	if r.ProvisioningMode == nil {
+		return false, errors.New("provisioning mode is mandatory")
+	}
+	return r.ProvisioningMode.Mode(ctx)
 }
 
 // apiReaderOrClient returns the uncached API reader used by the duplicate-job
@@ -369,7 +377,14 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 		return ctrl.Result{}, nil
 	}
 
-	if r.NetworkingEnabled && len(bareMetalInstance.Spec.NetworkAttachments) > 0 {
+	networkingEnabled, modeRequeue, modeErr := r.networkingEnabledForReconcile(ctx)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if modeRequeue {
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
+	if networkingEnabled && len(bareMetalInstance.Spec.NetworkAttachments) > 0 {
 		attachment := primaryNetworkAttachment(bareMetalInstance)
 		if attachment == nil {
 			return ctrl.Result{}, fmt.Errorf("BareMetalInstance %s has no primary network attachment", bareMetalInstance.Name)
@@ -891,10 +906,17 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if !r.NetworkingEnabled {
+	networkingEnabled, modeRequeue, modeErr := r.networkingEnabledForReconcile(ctx)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if modeRequeue {
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
+	if !networkingEnabled {
 		log.Info("Networking provisioning disabled, skipping network-handoff reboot")
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionTrue, "Skipped", "Networking provisioning disabled")
+			metav1.ConditionTrue, v1alpha1.HostConditionReasonProvisioningDisabled, "Networking provisioning disabled")
 		return ctrl.Result{}, nil
 	}
 
@@ -1231,10 +1253,18 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	var done bool
 	var err error
 
+	networkingEnabled, modeRequeue, modeErr := r.networkingEnabledForReconcile(ctx)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if modeRequeue {
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
+
 	// Power off BEFORE moving the port back to the provisioning network — ensures tenant
 	// workloads never run on the provisioning network. Only needed when networking
 	// provisioning is enabled (port was actually moved to the tenant network).
-	if len(bareMetalInstance.Spec.NetworkAttachments) > 0 && r.ManagementClient != nil && r.NetworkingEnabled {
+	if len(bareMetalInstance.Spec.NetworkAttachments) > 0 && r.ManagementClient != nil && networkingEnabled {
 		result, err = r.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
 		if err != nil {
 			return result, err

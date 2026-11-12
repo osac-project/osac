@@ -76,6 +76,12 @@ message NetworkClassSpec {
   // How each Subnet's addresses are split between the overlay, fabric and load balancer VIP ranges. Set by the
   // installer; required on create; immutable.
   AddressPlan address_plan = 6;
+
+  // Whether OSAC runs provider networking jobs for this deployment. The installer sets it from
+  // global.networking.provisioningEnabled, and it never changes afterwards: changing it requires reinstalling. It is
+  // the installation-wide mode every consumer reads. Unset on records created before this field existed; an unset
+  // value means the mode is not resolved yet and must never be treated as disabled.
+  optional bool provisioning_enabled = 7;
 }
 
 // Shares of each Subnet's address space. Each share is a multiple of 1/16 from 0 to 1, and the shares sum to 1.

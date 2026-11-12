@@ -56,6 +56,7 @@ type NetworkClassEastWestCapabilities struct {
 // after creation.
 // +kubebuilder:validation:XValidation:rule="has(self.k8sManager) == has(oldSelf.k8sManager) && (!has(self.k8sManager) || self.k8sManager == oldSelf.k8sManager)",message="k8sManager is immutable"
 // +kubebuilder:validation:XValidation:rule="has(self.eastWestCapabilities) == has(oldSelf.eastWestCapabilities) && (!has(self.eastWestCapabilities) || self.eastWestCapabilities == oldSelf.eastWestCapabilities)",message="eastWestCapabilities is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.provisioningEnabled) || self.provisioningEnabled == oldSelf.provisioningEnabled",message="provisioningEnabled is immutable"
 type NetworkClassSpec struct {
 	// FabricManager is the registration name of the Fabric Manager.
 	// +kubebuilder:validation:Required
@@ -82,6 +83,14 @@ type NetworkClassSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="addressPlan is immutable"
 	AddressPlan SubnetAddressPlan `json:"addressPlan"`
+
+	// ProvisioningEnabled is the installation-wide provider networking mode. The
+	// fulfillment service sets it from global.networking.provisioningEnabled and it
+	// never changes afterwards. Unset on objects created before the field existed;
+	// an unset value means the mode is not resolved yet and must never be treated
+	// as disabled.
+	// +kubebuilder:validation:Optional
+	ProvisioningEnabled *bool `json:"provisioningEnabled,omitempty"`
 }
 
 // NetworkClassStatus defines the observed state of NetworkClass.

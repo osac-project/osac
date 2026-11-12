@@ -27,78 +27,86 @@ import (
 	"strings"
 	"time"
 
-	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/oauth"
 	"google.golang.org/grpc/experimental/credentials"
-	"google.golang.org/grpc/status"
+
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/controller"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/networkingmode"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const (
-	installationChangedMessage = "global.networking.provisioningEnabled cannot change after installation; " +
-		"reinstall to change it"
 	installationCredentialsMessage = "installation API credentials unavailable; create the " +
 		"fulfillment-controller-credentials Secret with client-id and client-secret keys"
 	installationHTTPS = "https"
 )
 
-func verifyInstallationProvisioning(
-	ctx context.Context, client privatev1.InstallationSettingsClient, configured bool,
-) error {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	response, err := client.Get(ctx, &privatev1.InstallationSettingsGetRequest{})
-	if err != nil {
-		return fmt.Errorf("read installation networking setting: gRPC status %s", status.Code(err))
+// newProvisioningMode creates the resolver of the installation-wide provider networking mode. A deployment with an
+// installation API endpoint reads the mode from the deployment's NetworkClass. A standalone deployment, which has no
+// fulfillment service and no NetworkClass, uses its explicit OSAC_ENABLE_NETWORKING_PROVISIONING value.
+func newProvisioningMode(ctx context.Context) (controller.ProvisioningMode, error) {
+	configured := configuredNetworkingProvisioning()
+	if os.Getenv("OSAC_INSTALLATION_API_URL") == "" {
+		setupLog.Info("installation API not configured; using the standalone networking mode",
+			"enabled", loadNetworkingProvisioning())
+		return controller.StaticProvisioningMode(loadNetworkingProvisioning()), nil
 	}
-	if response.GetNetworkingProvisioningEnabled() != configured {
-		return errors.New(installationChangedMessage)
+	conn, err := newInstallationAPIConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return networkingmode.NewResolver(privatev1.NewNetworkClassesClient(conn), configured), nil
+}
+
+// configuredNetworkingProvisioning returns the value rendered for this rollout, or nil when the deployment doesn't set
+// it. An unset value asserts nothing; the NetworkClass is the authority.
+func configuredNetworkingProvisioning() *bool {
+	if value, ok := os.LookupEnv(envEnableNetworkingProvisioning); ok && value != "" {
+		enabled := loadNetworkingProvisioning()
+		return &enabled
 	}
 	return nil
 }
 
-func checkInstallationProvisioning(ctx context.Context, configured bool) error {
+// newInstallationAPIConnection opens the authenticated connection to the fulfillment private API.
+func newInstallationAPIConnection(ctx context.Context) (*grpc.ClientConn, error) {
 	rawURL := os.Getenv("OSAC_INSTALLATION_API_URL")
-	// Standalone controller tests run without a Fulfillment service. An empty
-	// endpoint explicitly selects that mode; installed charts set an endpoint.
-	if rawURL == "" {
-		return nil
-	}
 	endpoint, err := url.Parse(rawURL)
 	if err != nil || endpoint.Scheme != installationHTTPS || endpoint.Host == "" || endpoint.User != nil ||
 		(endpoint.Path != "" && endpoint.Path != "/") || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-		return errors.New("OSAC_INSTALLATION_API_URL must be an HTTPS URL")
+		return nil, errors.New("OSAC_INSTALLATION_API_URL must be an HTTPS URL")
 	}
 	issuer := strings.TrimRight(os.Getenv("OSAC_INSTALLATION_API_ISSUER_URL"), "/")
 	issuerURL, err := url.Parse(issuer)
 	if err != nil || issuerURL.Scheme != installationHTTPS || issuerURL.Host == "" || issuerURL.User != nil ||
 		issuerURL.RawQuery != "" || issuerURL.Fragment != "" {
-		return errors.New("OSAC_INSTALLATION_API_ISSUER_URL must be an HTTPS URL")
+		return nil, errors.New("OSAC_INSTALLATION_API_ISSUER_URL must be an HTTPS URL")
 	}
 	clientID, err := os.ReadFile(os.Getenv("OSAC_INSTALLATION_API_CLIENT_ID_FILE"))
 	if err != nil {
-		return errors.New(installationCredentialsMessage)
+		return nil, errors.New(installationCredentialsMessage)
 	}
 	clientSecret, err := os.ReadFile(os.Getenv("OSAC_INSTALLATION_API_CLIENT_SECRET_FILE"))
 	if err != nil {
-		return errors.New(installationCredentialsMessage)
+		return nil, errors.New(installationCredentialsMessage)
 	}
 	if strings.TrimSpace(string(clientID)) == "" || strings.TrimSpace(string(clientSecret)) == "" {
-		return errors.New("installation API client credentials are empty")
+		return nil, errors.New("installation API client credentials are empty")
 	}
 	pool, err := x509.SystemCertPool()
 	if err != nil {
-		return errors.New("load system CA certificates failed")
+		return nil, errors.New("load system CA certificates failed")
 	}
 	if caFile := os.Getenv("OSAC_INSTALLATION_API_CA_FILE"); caFile != "" {
 		bundle, readErr := os.ReadFile(caFile)
 		if readErr != nil {
-			return errors.New("read installation API CA bundle failed")
+			return nil, errors.New("read installation API CA bundle failed")
 		}
 		if !pool.AppendCertsFromPEM(bundle) {
-			return errors.New("installation API CA bundle has no certificates")
+			return nil, errors.New("installation API CA bundle has no certificates")
 		}
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -109,7 +117,7 @@ func checkInstallationProvisioning(ctx context.Context, configured bool) error {
 	}
 	tokenURL, err := discoverInstallationTokenURL(ctx, httpClient, issuerURL)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tokenContext := context.WithValue(ctx, oauth2.HTTPClient, httpClient)
 	config := &clientcredentials.Config{
@@ -123,10 +131,12 @@ func checkInstallationProvisioning(ctx context.Context, configured bool) error {
 		grpc.WithPerRPCCredentials(oauth.TokenSource{TokenSource: source}),
 	)
 	if err != nil {
-		return errors.New("connect to installation API failed")
+		return nil, errors.New("connect to installation API failed")
 	}
-	defer conn.Close() //nolint:errcheck
-	return verifyInstallationProvisioning(ctx, privatev1.NewInstallationSettingsClient(conn), configured)
+	context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
+	return conn, nil
 }
 
 func discoverInstallationTokenURL(ctx context.Context, httpClient *http.Client, issuer *url.URL) (string, error) {

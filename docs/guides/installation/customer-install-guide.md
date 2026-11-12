@@ -280,7 +280,6 @@ Platform 4.22.6 in September 2026 are listed in
 | [Red Hat Ansible Automation Platform Operator](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index) | `stable-2.6-cluster-scoped` | `ansible-aap` | All services |
 | [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | Provider-defined | Fulfillment events and metering; see [Kafka configuration](kafka-configuration.md) for external broker requirements. |
 | [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | VMaaS |
-| [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | VMaaS when using LVMS; another dynamic storage provider can satisfy the prerequisite. See [Section 6.1](#61-installing-osac-for-vmaas). |
 | [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | CaaS |
 | [multicluster engine for Kubernetes Operator](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview) | `stable-2.17` | `multicluster-engine` | CaaS |
 | Kubernetes NMState Operator | `stable` | `openshift-nmstate` | VMaaS with provider networking |
@@ -332,20 +331,11 @@ Notes on individual components:
   are ready with your Kafka administrators.
 - **OpenShift Virtualization** was formerly named Container-native
   Virtualization (CNV).
-- **LVM Storage** uses a channel that tracks the OpenShift Container Platform
-  minor version. Another dynamic storage class can satisfy the VMaaS storage
-  prerequisite.
-  Preserve LVMS settings and ownership in existing `osac-deps` and `osac-infra`
-  prerequisite releases. Disabling `lvms.enabled` in an existing `osac-deps`
-  release that owns LVMS removes its `openshift-storage` Namespace and
-  Subscription and can disrupt storage. Before changing that owning release's
-  flag, have administrators plan and complete any required preservation or
-  migration of LVMS resources and dependent workloads; see the
-  [prerequisite ownership and upgrade guidance](helm-deployment-guide.md#when-prerequisites-already-exist).
-  In production, keep `lvms.enabled: false` in the `osac` instance chart,
-  where it controls only the local-storage registration hook. Configure the
-  customer-managed LVMS operator and its `LVMCluster` selector; do not rely on
-  dynamic device discovery.
+- **Storage:** Your environment provides a dynamic storage class for VMaaS.
+  Complete the storage handoff in [Section 6.1](#61-installing-osac-for-vmaas)
+  before requesting VM workloads. In production, keep `lvms.enabled: false`
+  in the `osac` instance chart to disable only automatic local-storage
+  registration.
 - **MetalLB Operator** provides the CaaS API management VIPs on the hub. Ask
   your platform administrators for the reserved, free, routable address range
   and add a covering CIDR to `global.networking.excludedIpv4Cidrs` before
@@ -511,7 +501,7 @@ networking resources exist is not supported (see
 [Table 4.2](#table-42-settings-fixed-at-installation)).
 
 - **VMaaS** (`global.services.vmaas.enabled`) requires OpenShift Virtualization,
-  LVM Storage or another dynamic storage class, and OSAC's Kubernetes Manager
+  an environment-provided dynamic storage class, and OSAC's Kubernetes Manager
   `cudn_evpn`. With provider networking enabled, it also requires a Fabric
   Manager whose registration lists the `evpn` network type, EVPN host
   networking on the cluster that runs the VMs
@@ -735,7 +725,6 @@ that channel resolved to on OpenShift Container Platform 4.22.6 in September
 | `osac` umbrella chart | Selected in [Section 1.1](#11-what-is-released) | Release-specific |
 | cert-manager Operator for Red Hat OpenShift | `stable-v1` | `v1.20.0` |
 | Red Hat Ansible Automation Platform | `stable-2.6-cluster-scoped` | `v2.6.0` |
-| LVM Storage | `stable-<cluster_minor>` | `v4.22.0` |
 | MetalLB | `stable` | `v4.22.0` |
 | OpenShift Virtualization | `stable` | `v4.22.6` |
 | multicluster engine | `stable-2.17` | `v2.17.2` |
@@ -1951,7 +1940,7 @@ override; publish the required templates to Fulfillment separately.
 **Prerequisites**
 
 - OpenShift Virtualization is installed.
-- LVM Storage is installed, or another dynamic storage class exists.
+- Your environment provides a dynamic storage class.
   For storage prerequisites and tenant onboarding, see the
   [Storage documentation](../../storage/README.md) for your selected provider
   and ownership model.
@@ -2002,8 +1991,10 @@ override; publish the required templates to Fulfillment separately.
 
    For production, keep `lvms.enabled: false` in the `osac` instance values,
    including when the workload cluster uses LVMS. Before requesting VM
-   workloads, have your storage administrators register the StorageBackend and
-   StorageTiers in OSAC and complete
+   workloads, have your storage administrators register the
+   [StorageBackend](../../storage/concepts/storagebackend.md#managing-backends)
+   and [StorageTiers](../../storage/concepts/storagetier.md#managing-tiers)
+   in OSAC and complete
    [tenant storage onboarding](../../storage/guides/tenant-onboarding.md).
    A platform default StorageClass alone does not register these offerings.
    Follow the [storage documentation](../../storage/README.md) for your
@@ -2148,8 +2139,8 @@ configure endpoint routes and DNS outside OSAC.
 **Prerequisites**
 
 - multicluster engine is installed (standalone, or provided by RHACM).
-- MetalLB (or another `LoadBalancer`-class implementation) and LVM Storage
-  (or another dynamic storage class) are installed.
+- MetalLB (or another `LoadBalancer`-class implementation) is installed,
+  and your environment provides a dynamic storage class.
 - The BMaaS prerequisites of [Section 6.3](#63-installing-osac-for-bmaas)
   are met.
 - The hub cluster has a default storage class (see

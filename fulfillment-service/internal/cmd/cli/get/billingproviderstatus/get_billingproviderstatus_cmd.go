@@ -22,8 +22,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/output"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/rendering"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -40,7 +40,7 @@ func Cmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE:    runner.run,
 	}
-	result.Flags().StringVarP(&runner.format, "output", "o", output.Table, outputFlagHelp)
+	result.Flags().StringVarP(&runner.format, "output", "o", rendering.Table, outputFlagHelp)
 	return result
 }
 
@@ -51,7 +51,7 @@ type runnerContext struct {
 // run fetches the status over gRPC and renders it in the requested format.
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	if err := output.Validate(c.format); err != nil {
+	if err := rendering.ValidateFormat(c.format); err != nil {
 		return err
 	}
 	cfg := config.SettingsFromContext(ctx)
@@ -71,17 +71,21 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return render(ctx, terminal.ConsoleFromContext(ctx), c.format, response.GetObject())
 }
 
-// render writes the status as a table, JSON or YAML; the JSON and YAML encoding is shared in the output package.
+// render writes the status as a table, JSON or YAML; the JSON and YAML encoding is shared in the rendering package.
 func render(ctx context.Context, console *terminal.Console, format string,
 	status *publicv1.BillingProviderStatus) error {
-	if format == output.Table {
+	if format == rendering.Table {
 		return renderTable(console, status)
 	}
-	value, err := output.Message(status)
+	value, err := rendering.Encode(status)
 	if err != nil {
 		return fmt.Errorf("failed to encode billing provider status: %w", err)
 	}
-	output.Render(ctx, console, format, value)
+	if format == rendering.JSON {
+		console.RenderJson(ctx, value)
+	} else {
+		console.RenderYaml(ctx, value)
+	}
 	return nil
 }
 
@@ -103,9 +107,9 @@ func renderTable(console *terminal.Console, status *publicv1.BillingProviderStat
 		}
 	}
 	printf("State:\t%s\n", strings.TrimPrefix(status.GetState().String(), "BILLING_PROVIDER_STATE_"))
-	printf("Provider:\t%s\n", output.OrDash(status.GetProviderKey()))
-	printf("Message:\t%s\n", output.OrDash(status.GetMessage()))
-	printf("Capabilities:\t%s\n", output.OrDash(strings.Join(capabilities, ", ")))
+	printf("Provider:\t%s\n", rendering.Dash(status.GetProviderKey()))
+	printf("Message:\t%s\n", rendering.Dash(status.GetMessage()))
+	printf("Capabilities:\t%s\n", rendering.Dash(strings.Join(capabilities, ", ")))
 	printf("Last successful check:\t%s\n", lastCheck)
 	printf("Usage delivery:\t%s\n",
 		strings.TrimPrefix(status.GetUsageDeliveryState().String(), "BILLING_USAGE_DELIVERY_STATE_"))

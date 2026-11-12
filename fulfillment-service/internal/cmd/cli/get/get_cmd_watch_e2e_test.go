@@ -24,6 +24,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	"github.com/osac-project/osac/fulfillment-service/internal/rendering"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -136,7 +137,7 @@ var _ = Describe("Watch e2e", func() {
 				filter string
 				watch  bool
 			}{
-				format: outputFormatTable,
+				format: rendering.Table,
 				watch:  true,
 			},
 		}

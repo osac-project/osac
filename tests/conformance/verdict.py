@@ -46,14 +46,14 @@ def evaluate(
     )
     checks = [
         Check(
-            id="CHECK-1",
+            id="all-blocking-tests-pass",
             name="every selected blocking test passed",
             rule="every blocking test in the plan has result pass",
             remedy="see the failed tests and their evidence",
             result=CheckResult.PASS if blocking_pass else CheckResult.FAIL,
         ),
         Check(
-            id="CHECK-2",
+            id="all-components-conformant",
             name="every component is conformant",
             rule="at least one component is registered and every component has result conformant",
             remedy="see the component's failed tests",
@@ -62,14 +62,14 @@ def evaluate(
             else CheckResult.FAIL,
         ),
         Check(
-            id="CHECK-3",
+            id="no-leftovers",
             name="nothing was left behind",
             rule="leftovers is empty",
             remedy="delete each leftover",
             result=CheckResult.PASS if not leftovers else CheckResult.FAIL,
         ),
         Check(
-            id="CHECK-4",
+            id="complete-plan",
             name="the plan was complete",
             rule="complete is true",
             remedy="run the plan a full list computes",

@@ -543,6 +543,9 @@ var _ = Describe("Tenant billing assignments", func() {
 			tx1, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			endTx1 := endOnce(tx1)
+			// Registered here and again below: this one covers a failure before the ordered cleanup, which has to
+			// run before the racer's cancel and wait. endOnce makes the duplicate call a no-op.
+			DeferCleanup(endTx1)
 			var holderPID int32
 			Expect(tx1.QueryRow(ctx, `select pg_backend_pid()`).Scan(&holderPID)).To(Succeed())
 			winnerID, err := CloseAndInsertTenantBillingAssignment(ctx, tx1, "", winner)
@@ -552,6 +555,7 @@ var _ = Describe("Tenant billing assignments", func() {
 			tx2, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			endTx2 := endOnce(tx2)
+			DeferCleanup(endTx2)
 			var waiterPID int32
 			Expect(tx2.QueryRow(ctx, `select pg_backend_pid()`).Scan(&waiterPID)).To(Succeed())
 			Expect(waiterPID).ToNot(Equal(holderPID), "the racing inserts must run on distinct connections")

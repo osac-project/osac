@@ -40,7 +40,7 @@ def test_collect_reads_markers_into_identities(tmp_path: Path) -> None:
     tests = tree.collect()
 
     assert len(tests) == 2
-    assert all(test.area == "networking" for test in tests)
+    assert all(test.domain == "networking" for test in tests)
     assert all(test.classification is Classification.BLOCKING for test in tests)
     assert all(test.layer is Layer.COMPONENT for test in tests)
 

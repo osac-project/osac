@@ -1,4 +1,4 @@
-"""Contract tests for conformance area declarations."""
+"""Contract tests for conformance domain declarations."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.conformance.area import load_areas
+from tests.conformance.domain import load_domains
 from tests.conformance.errors import ConfigError
 
 
-def _area(name: str = "networking") -> dict[str, object]:
+def _domain(name: str = "networking") -> dict[str, object]:
     return {
         "name": name,
         "componentTests": ["TC-COMP-01"],
@@ -35,49 +35,49 @@ def _write(path: Path, data: object) -> Path:
     return path
 
 
-def test_loads_a_valid_area(tmp_path: Path) -> None:
-    _write(tmp_path / "networking.yaml", _area())
+def test_loads_a_valid_domain(tmp_path: Path) -> None:
+    _write(tmp_path / "networking.yaml", _domain())
 
-    areas = load_areas(tmp_path)
+    domains = load_domains(tmp_path)
 
-    assert set(areas) == {"networking"}
-    area = areas["networking"]
-    assert area.name == "networking"
-    assert area.component_tests == ("TC-COMP-01",)
-    assert area.selectors["vmaas"] == ("TC-PROFILE-01",)
+    assert set(domains) == {"networking"}
+    domain = domains["networking"]
+    assert domain.name == "networking"
+    assert domain.component_tests == ("TC-COMP-01",)
+    assert domain.selectors["vmaas"] == ("TC-PROFILE-01",)
 
 
-def test_missing_directory_returns_no_areas(tmp_path: Path) -> None:
-    assert load_areas(tmp_path / "missing") == {}
+def test_missing_directory_returns_no_domains(tmp_path: Path) -> None:
+    assert load_domains(tmp_path / "missing") == {}
 
 
 def test_missing_field_is_a_config_error(tmp_path: Path) -> None:
-    data = _area()
+    data = _domain()
     del data["componentTests"]
     _write(tmp_path / "networking.yaml", data)
 
     with pytest.raises(ConfigError) as exc:
-        load_areas(tmp_path)
+        load_domains(tmp_path)
 
     assert "componentTests" in "\n".join(exc.value.checks)
 
 
-def test_duplicate_area_name_is_a_config_error(tmp_path: Path) -> None:
-    _write(tmp_path / "one.yaml", _area("networking"))
-    _write(tmp_path / "two.yaml", _area("networking"))
+def test_duplicate_domain_name_is_a_config_error(tmp_path: Path) -> None:
+    _write(tmp_path / "one.yaml", _domain("networking"))
+    _write(tmp_path / "two.yaml", _domain("networking"))
 
     with pytest.raises(ConfigError) as exc:
-        load_areas(tmp_path)
+        load_domains(tmp_path)
 
     assert "networking" in "\n".join(exc.value.checks)
 
 
-def test_unknown_area_field_is_a_config_error(tmp_path: Path) -> None:
-    data = _area()
+def test_unknown_domain_field_is_a_config_error(tmp_path: Path) -> None:
+    data = _domain()
     data["profiles"] = {"vm": "vmaas"}
     _write(tmp_path / "networking.yaml", data)
 
     with pytest.raises(ConfigError) as exc:
-        load_areas(tmp_path)
+        load_domains(tmp_path)
 
     assert "profiles" in "\n".join(exc.value.checks)

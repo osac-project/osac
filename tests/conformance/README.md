@@ -31,7 +31,7 @@ The image builds from the repository root:
 podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
 ```
 
-Profiles are a suite-level catalog in `profiles.yaml`; areas define tests and
+Profiles are a suite-level catalog in `profiles.yaml`; domains define tests and
 the selectors those tests carry. The operator selects profiles, and `generic`
 always applies. Release publication of
 `ghcr.io/osac-project/osac-conformance:<release>` is owned by OSAC-7457. Component execution, profile setup and test Tenant cleanup

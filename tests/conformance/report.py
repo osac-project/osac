@@ -18,7 +18,7 @@ def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:
         "suiteImageDigest": report.suite_image_digest,
         "selectors": list(report.selectors),
         "components": [
-            {"area": component.area, **dict(component.identity), "result": component.result.value}
+            {"domain": component.domain, **dict(component.identity), "result": component.result.value}
             for component in report.components
         ],
         "enabledServices": list(report.enabled_services),
@@ -85,7 +85,7 @@ def write_junit(report: Report, results_dir: Path, redactor: Redactor) -> Path:
             "testcase",
             {
                 "name": redactor.text(test.identity.name),
-                "classname": f"{test.identity.area}.{test.identity.layer.value}",
+                "classname": f"{test.identity.domain}.{test.identity.layer.value}",
                 "time": str(test.duration_seconds),
             },
         )

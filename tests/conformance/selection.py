@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
-from tests.conformance.area import AreaDeclaration
+from tests.conformance.domain import DomainDeclaration
 from tests.conformance.errors import ConfigError
 from tests.conformance.model import Layer, Plan, TestIdentity
 from tests.conformance.profiles import ProfileDefinition
@@ -64,19 +64,19 @@ def plan_from_names(
 
 def enrich_identities(
     tests: Sequence[TestIdentity],
-    areas: Mapping[str, AreaDeclaration],
+    domains: Mapping[str, DomainDeclaration],
     catalog: Mapping[str, ProfileDefinition],
     selected_profiles: Sequence[str],
 ) -> tuple[TestIdentity, ...]:
     enriched: list[TestIdentity] = []
     selected = set(selected_profiles)
     for test in tests:
-        area_name = test.area
+        domain_name = test.domain
         for label in test.labels:
             if label.startswith("sig/"):
-                area_name = label.split("/", 1)[1]
+                domain_name = label.split("/", 1)[1]
             elif label.startswith("sig_"):
-                area_name = label.split("_", 1)[1]
+                domain_name = label.split("_", 1)[1]
         matched_profiles = tuple(
             name
             for name, profile in catalog.items()
@@ -86,8 +86,8 @@ def enrich_identities(
                 for selector in profile.selectors
             )
         )
-        area = areas.get(area_name)
-        component = area is not None and test.id in area.component_tests
+        domain = domains.get(domain_name)
+        component = domain is not None and test.id in domain.component_tests
         layer = Layer.COMPONENT if component or not matched_profiles else Layer.PROFILE
-        enriched.append(replace(test, area=area_name, layer=layer, profiles=matched_profiles))
+        enriched.append(replace(test, domain=domain_name, layer=layer, profiles=matched_profiles))
     return tuple(enriched)

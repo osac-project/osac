@@ -85,18 +85,56 @@ podman run --rm \
 - `--network=host` uses the host's DNS and `/etc/hosts`, so the routes resolve
   inside the container as they do on the host.
 - `--userns=keep-id` with `--user "$(id -u):0"` runs the flows as your user,
-  so a kubeconfig readable only by you can be read and the results are owned
-  by you. Group 0 gives write access to the checkout in the image.
-  `run-ui-e2e.sh` refuses credentialed runs as root.
+  so a kubeconfig readable only by you can be read. Group 0 gives write access
+  to the checkout in the image. `run-ui-e2e.sh` refuses credentialed runs as
+  root.
 - The kubeconfig is copied so that `:Z` relabels the copy, not the original.
 - `run-ui-e2e.sh` reads the `osac-ui` and `fulfillment-api` routes with the
-  kubeconfig. Without one, set `OSAC_UI_BASE_URL` and `OSAC_API_BASE_URL`
-  with `-e`.
+  kubeconfig. To run without one, see
+  [Without a kubeconfig](#without-a-kubeconfig).
 - `--ignore-tls` accepts the self-signed certificates of lab routes.
-- The admin user defaults to `admin`; change it with `--admin-user=USER`.
+- The admin user defaults to `admin`; change it with `--admin-user=USER`. The
+  runner also logs the bundled `osac` CLI in with these credentials, so no CLI
+  configuration needs to be mounted.
 - The Playwright HTML report and the test results are copied to
   `test-output/playwright-report/` and `test-output/test-results/` when the
-  run ends.
+  run ends. They are owned by your user; with rootless podman their group
+  shows as a subordinate group ID (for example `165536`), which is the
+  container's group 0. You can still read and delete them.
+
+### Without a kubeconfig
+
+When you cannot provide a kubeconfig, pass the two routes instead. The image
+then needs no `oc` access to the cluster:
+
+```bash
+podman run --rm \
+  --network=host \
+  --userns=keep-id \
+  --user "$(id -u):0" \
+  -v ./admin-password:/work/admin-password:ro,Z \
+  -v ./test-output:/tmp/test-output:Z \
+  -e OSAC_UI_BASE_URL=https://osac-ui-osac.apps.<cluster-domain> \
+  -e OSAC_API_BASE_URL=https://fulfillment-api-osac.apps.<cluster-domain> \
+  osac-ui-e2e \
+  --tag=vmaas_full_happy_basic \
+  --ignore-tls \
+  --admin-password-file=/work/admin-password
+```
+
+### Choosing a flow
+
+The flow is selected only by `--tag`; the image and the other options stay the
+same. For example, to run the VM Start, Stop and Restart test with the full
+flow, change the tag and use a separate output directory so the reports do not
+overwrite each other:
+
+```bash
+mkdir -p test-output-vm-power
+podman run ... \
+  -v ./test-output-vm-power:/tmp/test-output:Z \
+  osac-ui-e2e --tag=full_vm_power --ignore-tls --admin-password-file=/work/admin-password
+```
 
 The flows use the committed
 [`extravars.yaml`](../extravars.yaml). To use other values, mount a file and

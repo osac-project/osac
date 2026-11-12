@@ -431,6 +431,68 @@ grep -q 'NS must be a lowercase DNS label' "${TMP_DIR}/nsung.err" \
   || fail "ns-injection-ungated: the failure did not name the namespace rule"
 assert_prevalidation_commands ns-injection-ungated
 
+# validate-remote-cluster-render interpolates NS into the osac-infra render
+# (--set osacNamespace=$(NS)), so it must validate NS first, like every goal
+# the parse-time gate covers. The sentinel proves a metacharacter-bearing NS
+# never became recipe text and no render ran before the rejection.
+echo "checking ns-injection-remote-render (validate-ns covers the new goal)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-remote-cluster-render \
+  PLATFORM=openshift PROFILE=vmaas-ci \
+  "NS=osac;touch ${ns_sentinel}-remote-render" \
+  >"${TMP_DIR}/nsrr.out" 2>"${TMP_DIR}/nsrr.err"; then
+  fail "ns-injection-remote-render: the goal accepted a metacharacter-bearing NS"
+fi
+[ ! -e "${ns_sentinel}-remote-render" ] \
+  || fail "ns-injection-remote-render: NS executed as shell code"
+grep -q 'NS must be a lowercase DNS label' "${TMP_DIR}/nsrr.err" \
+  || fail "ns-injection-remote-render: the failure did not name the namespace rule"
+assert_prevalidation_commands ns-injection-remote-render
+
+# OSAC_CHART_OCI_REF/OSAC_CHART_OCI_VERSION are caller-supplied data that
+# reach Helm as separate arguments read from the exported environment. Shell
+# metacharacters in them must not become recipe text: the render still runs
+# (the validator checks only the ref/version pairing) and Helm receives the
+# values literally. The sentinels prove nothing executed.
+echo "checking oci-ref-injection (chart ref values stay data)"
+oci_sentinel="${TMP_DIR}/oci-injection-ran"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=kind PROFILE=dev NS=osac \
+  "OSAC_CHART_OCI_REF=oci://example.test/osac;touch ${oci_sentinel}" \
+  "OSAC_CHART_OCI_VERSION=1.2.3;touch ${oci_sentinel}-version" \
+  >"${TMP_DIR}/oci.out" 2>"${TMP_DIR}/oci.err"; then
+  :
+else
+  fail "oci-ref-injection: the gate rejected a well-formed ref/version pair"
+fi
+[ ! -e "${oci_sentinel}" ] \
+  || fail "oci-ref-injection: the chart ref executed as shell code"
+[ ! -e "${oci_sentinel}-version" ] \
+  || fail "oci-ref-injection: the chart version executed as shell code"
+grep -qF "oci://example.test/osac;touch ${oci_sentinel}" "${LOG}" \
+  || fail "oci-ref-injection: Helm did not receive the chart ref literally"
+assert_prevalidation_commands oci-ref-injection
+
+# Both values are frozen verbatim, so a Make expression in a caller value
+# must not expand at parse or export time -- before any recipe can reject
+# it. The sentinel proves no $(shell ...) side effect ran.
+echo "checking oci-ref-injection-make (Make expressions in chart refs stay data)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-osac-chart-oci-ref \
+  "OSAC_CHART_OCI_REF=oci://example.test/osac\$(shell touch ${oci_sentinel}-make)" \
+  OSAC_CHART_OCI_VERSION=1.2.3 \
+  >"${TMP_DIR}/ocimake.out" 2>"${TMP_DIR}/ocimake.err"; then
+  :
+else
+  fail "oci-ref-injection-make: the validator rejected a well-formed ref/version pair"
+fi
+[ ! -e "${oci_sentinel}-make" ] \
+  || fail "oci-ref-injection-make: a Make expression in the chart ref executed"
+
 # Kubeconfig paths are caller-supplied data too: REMOTE_KUBECONFIG is
 # frozen verbatim before the parse-time remote conditionals and
 # REMOTE_CLUSTER_HELM_ARGS expand, and KUBECONFIG is frozen under an origin

@@ -255,6 +255,14 @@ OSAC_CHART     := $(CHARTS)/osac
 # docs/guides/installation/helm-deployment-guide.md's Phase 2 section.
 OSAC_CHART_OCI_REF ?=
 OSAC_CHART_OCI_VERSION ?=
+# Both are caller-supplied: freeze them verbatim so a Make expression in a
+# value cannot execute at parse or export time, and export them so the
+# validation and every render/install recipe reads them from the shell
+# environment (quoted) rather than through Make expansion into command text.
+# The parse-time conditionals below still test their presence.
+override OSAC_CHART_OCI_REF := $(value OSAC_CHART_OCI_REF)
+override OSAC_CHART_OCI_VERSION := $(value OSAC_CHART_OCI_VERSION)
+export OSAC_CHART_OCI_REF OSAC_CHART_OCI_VERSION
 # Runtime supplies hostnames and credentials; use the minimal CI fixture for
 # local chart checks without loosening the required-values schema.
 HELM_VALIDATION_VALUES := $(OSAC_CHART)/ci/default-values.yaml
@@ -669,19 +677,20 @@ ifdef OSAC_CHART_OCI_REF
 	# artifact; Helm rejects --version there too (it's always parsed as a
 	# semver constraint, and a digest string is never one), so
 	# OSAC_CHART_OCI_VERSION must stay unset in that case instead of being
-	# required.
-	@case "$(OSAC_CHART_OCI_REF)" in \
+	# required. Both values arrive through the exported environment and are
+	# quoted, so they are matched as data rather than recipe text.
+	@case "$${OSAC_CHART_OCI_REF}" in \
 		*@sha256:*) \
-			[ -z "$(OSAC_CHART_OCI_VERSION)" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION must not be set when OSAC_CHART_OCI_REF already pins a @sha256: digest" >&2; exit 1; }; \
+			[ -z "$${OSAC_CHART_OCI_VERSION}" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION must not be set when OSAC_CHART_OCI_REF already pins a @sha256: digest" >&2; exit 1; }; \
 			case "$(HELM_MAJOR)" in \
 				4) ;; \
 				3) [ -n "$(HELM_MINOR)" ] && [ "$(HELM_MINOR)" -ge 17 ] || { echo "ERROR: installing an OCI chart pinned by @sha256: digest requires Helm 3.17 or later (detected $$(helm version --short 2>/dev/null)); see docs/guides/installation/helm-deployment-guide.md" >&2; exit 1; } ;; \
 				*) echo "ERROR: could not detect a supported Helm version; installing an OCI chart pinned by @sha256: digest requires Helm 3.17 or later" >&2; exit 1 ;; \
 			esac ;; \
-		*) [ -n "$(OSAC_CHART_OCI_VERSION)" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is required when OSAC_CHART_OCI_REF is set without an @sha256: digest" >&2; exit 1; } ;; \
+		*) [ -n "$${OSAC_CHART_OCI_VERSION}" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is required when OSAC_CHART_OCI_REF is set without an @sha256: digest" >&2; exit 1; } ;; \
 	esac
 else
-	@[ -z "$(OSAC_CHART_OCI_VERSION)" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is set without OSAC_CHART_OCI_REF -- this would silently install the local checkout's chart, ignoring the version" >&2; exit 1; }
+	@[ -z "$${OSAC_CHART_OCI_VERSION}" ] || { echo "ERROR: OSAC_CHART_OCI_VERSION is set without OSAC_CHART_OCI_REF -- this would silently install the local checkout's chart, ignoring the version" >&2; exit 1; }
 endif
 
 # The BMF subchart requires netbox.tokenValue when the named token Secret is
@@ -769,7 +778,7 @@ ifeq ($(PLATFORM),kind)
 		--set osacNamespace=$(NS) \
 		$(INFRA_HELM_ARGS) $(OIDC_IDP_CA_HELM_ARGS) && \
 	render_osac_chart_offline "$(NETBOX_OFFLINE_PLACEHOLDER)" \
-		osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+		osac "$${OSAC_CHART_OCI_REF:-$(OSAC_CHART)}" $${OSAC_CHART_OCI_VERSION:+--version "$${OSAC_CHART_OCI_VERSION}"} \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
@@ -822,7 +831,7 @@ else
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
 		$(INFRA_HELM_ARGS) $(OIDC_IDP_CA_HELM_ARGS) && \
 	render_osac_chart_offline "$(NETBOX_OFFLINE_PLACEHOLDER)" \
-		osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+		osac "$${OSAC_CHART_OCI_REF:-$(OSAC_CHART)}" $${OSAC_CHART_OCI_VERSION:+--version "$${OSAC_CHART_OCI_VERSION}"} \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
@@ -886,7 +895,7 @@ endif
 		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"; \
 	fi; \
 	split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}"; \
-	helm upgrade --install osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+	helm upgrade --install osac "$${OSAC_CHART_OCI_REF:-$(OSAC_CHART)}" $${OSAC_CHART_OCI_VERSION:+--version "$${OSAC_CHART_OCI_VERSION}"} \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
@@ -1000,7 +1009,7 @@ else
 		$(OIDC_IDP_CA_HELM_ARGS)
 endif
 	source scripts/lib.sh && split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}" && \
-	helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
+	helm template osac "$${OSAC_CHART_OCI_REF:-$(OSAC_CHART)}" $${OSAC_CHART_OCI_VERSION:+--version "$${OSAC_CHART_OCI_VERSION}"} \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
@@ -1069,8 +1078,11 @@ install-multicluster: validate-inputs validate-remote-cluster-render ## Prepare 
 # same releases with the same inputs first, so a values failure the parent
 # gate masks (an override that corrects a base value) still stops the flow
 # before any cluster change.
+# NS reaches the osac-infra render as recipe text (--set osacNamespace=$(NS)),
+# so validate it first, as every other target interpolating NS does; this
+# holds when the goal is invoked directly or in parallel as well.
 .PHONY: validate-remote-cluster-render
-validate-remote-cluster-render: helm-infra-deps ## Render the workload-cluster charts as prepare-remote-cluster will
+validate-remote-cluster-render: validate-ns helm-infra-deps ## Render the workload-cluster charts as prepare-remote-cluster will
 	@source scripts/lib.sh && render_chart_offline osac-deps $(DEPS_CHART) \
 		-f $(INFRA_VALUES) \
 	|| { echo "ERROR: invalid installer inputs for the workload-cluster osac-deps render; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }

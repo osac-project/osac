@@ -495,8 +495,10 @@ _LIB_OPEN_SCHEMA_MAPS=(
 # listed: each text is static and value-free, and the schemas' ordinary
 # constraints (type, pattern, other maxima) keep the generic message. Paths
 # use the dotted form Helm 3 prints; the lookup normalizes Helm 4's
-# slash-separated form. Keep in step with the schemas and the input-validation
-# tests.
+# slash-separated form. A path under a list carries its entry index, which is
+# a position and not caller data: that rule is listed once for the field, the
+# lookup strips the index to match it, and the printed path keeps it. Keep in
+# step with the schemas and the input-validation tests.
 #
 # A path alone cannot say which constraint failed on it -- the same field
 # can fail its type or its minimum -- so each text names the complete static
@@ -513,6 +515,7 @@ _LIB_SCHEMA_CONSTRAINTS=(
     "bundledVault.podSecurityContext.fsGroup|must be an integer greater than or equal to 0"
     "bundledVault.podSecurityContext|must be an object; runAsUser must not be 0 when runAsNonRoot is true"
     "global.fulfillmentTrust|must be an object; unknown keys are not allowed"
+    "metering.readers.name|must be a string; must be a lowercase DNS name of at most 253 characters"
 )
 
 # Render a chart offline and report only value-free diagnostics on failure.
@@ -536,8 +539,14 @@ offline_render_error() {
     case "$1" in
         *bmf.netbox.tokenValue*"Invalid type"*|*/bmf/netbox/tokenValue*"got number, want string"*)
             echo "bmf.netbox.tokenValue: Invalid type; expected string" >&2 ;;
+        # The reader template identifies a rejected entry by its index and
+        # never by its name, so these texts stay value-free too.
         *"duplicate metering reader"*)
             echo "duplicate metering reader: each reader name must be unique" >&2 ;;
+        *"is a KafkaUser OSAC owns"*)
+            echo "metering.readers[].name: must not name a KafkaUser OSAC owns" >&2 ;;
+        *"uses the reserved osac- or osac. name prefix"*)
+            echo "metering.readers[].name: must not use the reserved osac- or osac. name prefix" >&2 ;;
         *"NETRIS_CONTROLLER_URL must be an https:// URL"*)
             echo "instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL must be an https:// URL" >&2 ;;
         *)
@@ -579,6 +588,10 @@ offline_render_error() {
                 function constraint(path,    dot, i) {
                     dot = path
                     gsub(/\//, ".", dot)
+                    # Reader names are validated per entry, so the path
+                    # from Helm carries the index; match it without one.
+                    if (dot ~ /^metering\.readers\.[0-9]+\.name$/)
+                        dot = "metering.readers.name"
                     for (i = 1; i <= n_rules; i++)
                         if (dot == r_path[i])
                             return r_text[i]

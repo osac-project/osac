@@ -1641,4 +1641,56 @@ grep -Eiq 'duplicate metering reader' "${netbox_gate_err}" \
 grep -Fq 'metrics-reader.internal.example.com' "${netbox_gate_err}" \
   && fail "metering-reader-duplicate: the failure echoed the reader name"
 
+# The reader name's schema rule covers its type, its DNS-name shape and its
+# length, so every rejection of the field names all three rather than
+# leaving the caller to guess which one applies.
+metering_reader_gate_err="${TMP_DIR}/metering-reader-gate.err"
+reader_name_rule='metering\.readers\.0\.name: violates the values schema:'
+reader_name_rule+=' must be a string; must be a lowercase DNS name'
+reader_name_rule+=' of at most 253 characters'
+
+echo "checking metering-reader-dns-name (bad DNS names fail the gate naming the rule)"
+if render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    --set 'metering.readers[0].name=NotADnsName' \
+    >/dev/null 2>"${metering_reader_gate_err}"; then
+  fail "metering-reader-dns-name: the gate accepted a non-DNS reader name"
+fi
+grep -Eq "${reader_name_rule}" "${metering_reader_gate_err}" \
+  || fail "metering-reader-dns-name: the failure did not name the field and rule"
+grep -Fq 'NotADnsName' "${metering_reader_gate_err}" \
+  && fail "metering-reader-dns-name: the failure echoed the reader name"
+
+long_reader_name=$(printf 'a%.0s' {1..254})
+echo "checking metering-reader-too-long (overlong names fail the gate naming the rule)"
+if render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    --set "metering.readers[0].name=${long_reader_name}" \
+    >/dev/null 2>"${metering_reader_gate_err}"; then
+  fail "metering-reader-too-long: the gate accepted an overlong reader name"
+fi
+grep -Eq "${reader_name_rule}" "${metering_reader_gate_err}" \
+  || fail "metering-reader-too-long: the failure did not name the field and rule"
+grep -Fq "${long_reader_name}" "${metering_reader_gate_err}" \
+  && fail "metering-reader-too-long: the failure echoed the reader name"
+
+# The template's own reserved-name rejections are index-only, so the gate
+# maps them as well: Helm's template location alone would not tell the
+# caller which rule the name broke.
+echo "checking metering-reader-reserved (reserved names fail the gate naming the rule)"
+if render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    --set 'metering.readers[0].name=osac-reserved.example.com' \
+    >/dev/null 2>"${metering_reader_gate_err}"; then
+  fail "metering-reader-reserved: the gate accepted a reserved reader name"
+fi
+grep -Fq 'metering.readers[].name: must not use the reserved osac- or osac. name prefix' \
+  "${metering_reader_gate_err}" \
+  || fail "metering-reader-reserved: the failure did not name the field and rule"
+grep -Fq 'osac-reserved.example.com' "${metering_reader_gate_err}" \
+  && fail "metering-reader-reserved: the failure echoed the reader name"
+
 echo "input validation passed"

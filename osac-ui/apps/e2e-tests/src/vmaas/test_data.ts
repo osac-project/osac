@@ -283,30 +283,32 @@ const {
   tenant_name: rawTenantName,
   tenant_password: rawTenantPassword,
 } = rawExtravars;
-const diskImageTestRunId = requiredString(
-  process.env.OSAC_DISK_IMAGE_TEST_RUN_ID,
-  'OSAC_DISK_IMAGE_TEST_RUN_ID',
-);
-const storageTierTestRunId = requiredString(
-  process.env.OSAC_STORAGE_TIER_TEST_RUN_ID,
-  'OSAC_STORAGE_TIER_TEST_RUN_ID',
-);
+const testInstance = process.env.OSAC_E2E_INSTANCE ?? '1';
+if (!/^[0-9]+$/.test(testInstance)) {
+  throw new Error('OSAC_E2E_INSTANCE must be a non-negative integer.');
+}
+
+const indexedResourceName = (name: string): string => `${name.trim()}-${testInstance}`;
+
 const catalogTestRunId = requiredString(
   process.env.OSAC_CATALOG_TEST_RUN_ID,
   'OSAC_CATALOG_TEST_RUN_ID',
 );
+const tenantTestName = rawTenantName ? indexedResourceName(rawTenantName) : undefined;
+const instanceTypeTestName = rawInstanceType.name
+  ? indexedResourceName(rawInstanceType.name)
+  : undefined;
 const diskImageTestName = rawDiskImage.name
-  ? `${rawDiskImage.name}-${diskImageTestRunId}`
+  ? indexedResourceName(rawDiskImage.name)
   : undefined;
 const storageTierTestName = rawStorageTier.name
-  ? `${rawStorageTier.name}-${storageTierTestRunId}`
+  ? indexedResourceName(rawStorageTier.name)
   : undefined;
-const catalogDiskImageName =
-  diskImageTestName !== undefined && rawCatalog.fields.disk_image.name === rawDiskImage.name
-    ? diskImageTestName
-    : rawCatalog.fields.disk_image.name;
+const catalogName = indexedResourceName(rawCatalog.name);
+const catalogInstanceTypeName = indexedResourceName(rawCatalog.fields.instance_type.name);
+const catalogDiskImageName = indexedResourceName(rawCatalog.fields.disk_image.name);
 
-export const tenantName: string | undefined = rawTenantName;
+export const tenantName: string | undefined = tenantTestName;
 export const tenantPassword: string | undefined = rawTenantPassword;
 
 export const tenantNameOrSkip = (): string | undefined => {
@@ -319,8 +321,8 @@ export const tenantNameOrSkip = (): string | undefined => {
 };
 
 export const instanceTypeNameOrSkip = (): string | undefined => {
-  if (rawInstanceType.name !== undefined) {
-    return rawInstanceType.name;
+  if (instanceTypeTestName !== undefined) {
+    return instanceTypeTestName;
   }
 
   test.skip(true, 'instance_type.name is not set in apps/e2e-tests/extravars.yaml.');
@@ -345,16 +347,11 @@ export const storageTierNameOrSkip = (): string | undefined => {
   return undefined;
 };
 
-const catalogName = rawCatalog.name?.trim();
-if (!catalogName) {
-  throw new Error('catalog.name must be set in extravars.yaml');
-}
-
 export const catalogTestData: CatalogTestData = {
   description: rawCatalog.description,
   fields: {
     instanceType: {
-      name: rawCatalog.fields.instance_type.name,
+      name: catalogInstanceTypeName,
     },
     bootDisk: {
       sizeGib: rawCatalog.fields.boot_disk.size_gib,
@@ -376,10 +373,10 @@ const safeCatalogName = (name: string): string =>
 export const catalogOwnershipFilePath = (name: string): string =>
   path.join(tmpdir(), `osac-catalog-${safeCatalogName(name)}-${catalogTestRunId}.created`);
 
-export const vmTestName = `vm-e2e-${catalogTestRunId}`;
+export const vmTestName = indexedResourceName('vm-e2e');
 
 export const instanceTypeTestData: InstanceTypeTestData = {
-  name: rawInstanceType.name ?? '',
+  name: instanceTypeTestName ?? '',
   description: rawInstanceType.description,
   vcpus: rawInstanceType.vcpus,
   memoryGib: rawInstanceType.memory_gib,

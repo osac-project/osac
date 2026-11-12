@@ -1,7 +1,7 @@
 # Non-sensitive seed values for the VMaaS UI tests.
 #
-# The deployment URL and Keycloak credentials must be supplied through
-# OSAC_UI_BASE_URL, OSAC_ADMIN_USERNAME, and OSAC_ADMIN_PASSWORD.
+# Direct Playwright commands use OSAC_UI_BASE_URL and the OSAC_ADMIN_* variables;
+# run-ui-e2e.sh accepts the deployment credentials as command-line parameters.
 
 tenant_name: 'tenant-item-e2e'
 # The break-glass password is replaced with tenant_password, or tenant_name
@@ -30,7 +30,7 @@ instance_type:
   memory_gib: 8
 
 disk_image:
-  # Playwright appends a per-run suffix so teardown only targets this run's image.
+  # The runner appends --instance to resource names for isolated runs.
   name: 'disk-image-e2e'
   source_type: 'Registry'
   source_ref: 'quay.io/containerdisks/fedora:41'

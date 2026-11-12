@@ -35,14 +35,17 @@ respective areas.
 
 ## Integration Testing
 
-See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#bare-metal-fulfillment-operator).
+See [suite boundaries and coverage gaps](../docs/testing/bare-metal-fulfillment-operator.md).
 
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Pure inventory, selection, validation, or client logic | Unit | `make test` |
 | Reconciliation, finalizers, allocation, or status transitions | Envtest | `make test` |
-| Controller deployment, CRDs, pool flows, or Kubernetes wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#bare-metal-fulfillment-operator) |
-| BareMetalInstance host teardown waits for OSAC networking cleanup, then leaves network resources untouched (NET-CLEAN-08) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-08](../docs/INTEGRATION-TESTING.md#net-clean-08-deployed-bmf-ownership-boundary) |
+| Controller deployment, CRDs, pool flows, or Kubernetes wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/testing/bare-metal-fulfillment-operator.md) |
+| BareMetalInstance host teardown waits for OSAC networking cleanup, then leaves network resources untouched (NET-CLEAN-08) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-08](../docs/testing/bare-metal-fulfillment-operator.md#networking-cleanup-ownership-net-clean-08-net-clean-09) |
+| Physical NetworkAttachment deletion waits for confirmed power-off and the networking controller finalizer before releasing the host (NET-CLEAN-09) | Kind component integration — DEV | `test/integration/networking_cleanup_test.go`; `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf`; coverage boundary: [NET-CLEAN-09](../docs/testing/bare-metal-fulfillment-operator.md#networking-cleanup-ownership-net-clean-08-net-clean-09) |
+| Missing NetworkAttachment after it may have been applied retains host ownership | Envtest — DEV | `make test`; coverage boundary: [NET-CLEAN-09](../docs/testing/bare-metal-fulfillment-operator.md#networking-cleanup-ownership-net-clean-08-net-clean-09) |
+| Invalid selected-port MAC status is rejected by the installed CRD | Kind component integration — DEV | `test/integration/networking_cleanup_test.go`; `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf`; coverage boundary: [CRD status validation](../docs/testing/bare-metal-fulfillment-operator.md#coverage-notes) |
 | Metal3, BCM, Ironic, BMC, power, or hardware semantics | Contract or real-provider integration | Follow the owning [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task |
 | Generated CRDs or Helm CRDs | Envtest plus Kind | `make manifests generate helm-crds check-helm-crds`, then the required test command |
 

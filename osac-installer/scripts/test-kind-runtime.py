@@ -1017,6 +1017,19 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
         self.assertIn("operator.aap.statusPollInterval=1s", result.stdout)
         self.assertIn("IT_TEST_SUITE=operator", result.stdout)
 
+    def test_bmf_phase_enables_networking_for_attachment_cleanup(self):
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=bmf", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        self.assertIn("operator.enabled=false", result.stdout)
+        self.assertIn("global.networking.provisioningEnabled=true", result.stdout)
+        self.assertIn("global.networking.fabricManager=netris", result.stdout)
+        self.assertIn("global.networking.k8sManager=cudn_evpn", result.stdout)
+        self.assertIn("ginkgo run --timeout 30m -v test/integration", result.stdout)
+
     def test_service_only_phase_excludes_compute_storage_specs(self):
         result = subprocess.run(
             ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",

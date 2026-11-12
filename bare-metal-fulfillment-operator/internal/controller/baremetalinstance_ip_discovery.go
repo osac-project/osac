@@ -53,6 +53,12 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	if !r.NetworkingEnabled {
+		log.Info("Networking provisioning disabled, skipping IP discovery")
+		markNetworkingProvisioningDisabled(bareMetalInstance)
+		return ctrl.Result{}, nil
+	}
+
 	if len(bareMetalInstance.Spec.NetworkAttachments) == 0 {
 		setIPDiscoveryComplete(bareMetalInstance, metav1.ConditionTrue, "Skipped", "No network attachments configured")
 		return ctrl.Result{}, nil
@@ -63,12 +69,6 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 	// -network lease to the tenant.
 	if !bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionNetworkHandoffComplete) {
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
-	}
-
-	if !r.NetworkingEnabled {
-		log.Info("Networking provisioning disabled, skipping IP discovery")
-		setIPDiscoveryComplete(bareMetalInstance, metav1.ConditionTrue, "Skipped", "Networking provisioning disabled")
-		return ctrl.Result{}, nil
 	}
 
 	attachment := primaryNetworkAttachment(bareMetalInstance)

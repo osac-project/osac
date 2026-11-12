@@ -240,8 +240,21 @@ const (
 	HostConditionReasonPoweringOff          = "PoweringOff"
 	HostConditionReasonPoweringOn           = "PoweringOn"
 	HostConditionReasonNetworkHandoffFailed = "NetworkHandoffFailed"
-	HostConditionReasonLeasePending         = "LeasePending"
-	HostConditionReasonIPDiscoveryFailed    = "IPDiscoveryFailed"
+	// NetworkAttachmentNotCreated means BMF knows no attachment create request
+	// is in flight or has been accepted.
+	HostConditionReasonNetworkAttachmentNotCreated = "NetworkAttachmentNotCreated"
+	// NetworkAttachmentCreating marks a persisted create intent whose request
+	// may still be in flight.
+	HostConditionReasonNetworkAttachmentCreating = "NetworkAttachmentCreating"
+	HostConditionReasonNetworkDetaching          = "NetworkDetaching"
+	// NetworkAttachmentMissing means an attachment may have been applied but
+	// cannot be found during cleanup.
+	HostConditionReasonNetworkAttachmentMissing = "NetworkAttachmentMissing"
+	HostConditionReasonLeasePending             = "LeasePending"
+	HostConditionReasonIPDiscoveryFailed        = "IPDiscoveryFailed"
+	HostConditionReasonProvisioningDisabled     = "ProvisioningDisabled"
+	HostConditionReasonOffboarding              = "Offboarding"
+	HostConditionReasonPowerOffFailed           = "PowerOffFailed"
 )
 
 // HostSelectorSpec defines host selection constraints.

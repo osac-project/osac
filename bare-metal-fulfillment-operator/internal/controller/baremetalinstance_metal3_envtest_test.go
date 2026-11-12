@@ -317,6 +317,80 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 			Expect(updatedBMH.Spec.ConsumerRef.Name).To(Equal(string(bmi.UID)))
 		})
 
+		It("persists the selected interface MAC before the spec update enables provisioning", func() {
+			bmh := createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "gpu-node",
+			}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+			bmh.Annotations = map[string]string{
+				inventory.HostInterfaceMACsAnnotation: `{"data-0":"AA-BB-CC-DD-EE-FF"}`,
+			}
+			Expect(k8sClient.Update(ctx, bmh)).To(Succeed())
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       bmiName,
+					Namespace:  metal3TestNS,
+					Finalizers: []string{BareMetalInstanceInventoryFinalizer},
+				},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					ExternalHostID: metal3TestNS + "/" + bmhName,
+					Selector:       v1alpha1.HostSelectorSpec{HostSelector: map[string]string{"type": "gpu-node"}},
+					TemplateID:     shared.OsacNoopTemplate,
+					NetworkAttachments: []v1alpha1.BareMetalNetworkAttachment{{
+						SubnetRef: "subnet-a", Interface: "data-0", Primary: true,
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			reconciler.NetworkingEnabled = true
+			reconcileN(reconciler, bmiName, 1)
+
+			persisted := getBMI(bmiName)
+			Expect(persisted.Spec.HostClass).To(Equal(metal3HostClass))
+			Expect(persisted.Status.NetworkAttachmentStatuses).To(ConsistOf(v1alpha1.BareMetalNetworkAttachmentStatus{
+				SubnetRef: "subnet-a", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff", Primary: true,
+			}))
+		})
+
+		It("clears a lost host's MAC status before clearing its spec assignment", func() {
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       bmiName,
+					Namespace:  metal3TestNS,
+					Finalizers: []string{BareMetalInstanceInventoryFinalizer},
+				},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					ExternalHostID: "lost-host-id",
+					Selector:       v1alpha1.HostSelectorSpec{HostSelector: map[string]string{"type": "gpu-node"}},
+					TemplateID:     shared.OsacNoopTemplate,
+					NetworkAttachments: []v1alpha1.BareMetalNetworkAttachment{{
+						SubnetRef: "subnet-a", Interface: "data-0", Primary: true,
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+			bmi.Status.NetworkAttachmentStatuses = []v1alpha1.BareMetalNetworkAttachmentStatus{{
+				SubnetRef: "subnet-a", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff", Primary: true,
+			}}
+			Expect(k8sClient.Status().Update(ctx, bmi)).To(Succeed())
+
+			reconciler := NewBareMetalInstanceReconciler(
+				k8sClient, k8sClient.Scheme(),
+				&mockInventoryClient{assignHostFunc: func(context.Context, string, string, map[string]string) (*inventory.Host, error) {
+					return nil, nil
+				}},
+				nil, nil, false, 0, 0, 0, 0, 0,
+			)
+			_, err := reconciler.reconcileInventory(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+
+			persisted := getBMI(bmiName)
+			Expect(persisted.Spec.ExternalHostID).To(BeEmpty())
+			Expect(networkAttachmentStatusFor(persisted, "subnet-a").MACAddress).To(BeEmpty())
+		})
+
 		It("retries allocation until an inspecting BMH becomes available", func() {
 			createMetal3BMH(bmhName, map[string]string{
 				inventory.Metal3HostTypeLabel: "gpu-node",

@@ -41,6 +41,10 @@ const (
 	// DefaultProvisionPollIntervalDuration is the default interval to poll provisioning job status
 	DefaultProvisionPollIntervalDuration = provisioning.DefaultStatusPollInterval
 
+	// NetworkOffboardPollInterval is the fixed retry interval while waiting for
+	// a host to power off before network cleanup.
+	NetworkOffboardPollInterval = 30 * time.Second
+
 	// DefaultHostAvailabilityPollIntervalDuration is the default interval to poll a reserved
 	// inventory host's availability for provisioning (see inventory.Host.Available).
 	DefaultHostAvailabilityPollIntervalDuration = 30 * time.Second

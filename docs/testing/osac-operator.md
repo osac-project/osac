@@ -31,11 +31,15 @@ AAP job or provider. Manager registration enables networking only to inspect
 registrations, not to run provider tasks. Inspect the deployed suite before a
 focused run.
 
-The networking suite and task engine use an in-memory AAP; shared wire goldens
-under `../tests/contract/network-task/` bind only covered create/apply/attach
-shapes at Unit/Envtest tier, not the deployed AAP boundary. Delete/detach,
-SecurityGroup, DHCP-lease, FabricDomain, cluster-ingress and physical-interface
-shapes remain unbound with no owning ticket.
+The networking suite and task engine use an in-memory AAP. For OSAC-7602,
+the shared wire goldens bind physical NetworkAttachment apply/delete and DHCP
+lease query at Unit/Envtest on the operator side and Unit on the AAP side
+([OSAC-7602](https://redhat.atlassian.net/browse/OSAC-7602)). NET-CLEAN-09 also
+checks BMF power-off ordering and finalizer-gated cleanup through Kind
+([OSAC-7598](https://redhat.atlassian.net/browse/OSAC-7598)); the test uses static
+host state and a simulated networking finalizer. No live AAP or provider runs.
+Other delete/detach, SecurityGroup, FabricDomain and cluster-ingress shapes remain
+unbound with no owning ticket.
 
 Local TLS/OIDC endpoints prove client handling, not deployed cross-cluster trust
 or credentials

@@ -115,6 +115,13 @@ ifneq ($(filter command line environment override,$(origin KUBECONFIG)),)
 override KUBECONFIG := $(value KUBECONFIG)
 endif
 
+# oc names the kubeconfig file in its own errors, and that path can carry
+# user or customer names while this output reaches terminals and CI logs.
+# The cluster lookups under $(shell ...) capture stdout only, so their stderr
+# would otherwise pass straight through. Each lookup feeds a value-free guard
+# that names the remedy ("Is oc logged in?"), which is all the caller needs.
+OC_QUERY_STDERR := 2>/dev/null
+
 # Remote-cluster kubeconfig Helm flags, shared by the input-validation gate's
 # osac-chart render and install-osac's upgrade so both see the same merged
 # values. They only name Secret metadata; the kubeconfig file itself is
@@ -599,7 +606,7 @@ endif
 		kubectl apply --server-side --force-conflicts -f "$$f"; \
 	done
 else
-	$(eval OCP_VERSION := $(shell oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2 | grep -Eo '^[0-9]+\.[0-9]+' | head -1))
+	$(eval OCP_VERSION := $(shell oc get clusterversion version -o jsonpath='{.status.desired.version}' $(OC_QUERY_STDERR) | cut -d. -f1,2 | grep -Eo '^[0-9]+\.[0-9]+' | head -1))
 	@bash -c 'source scripts/lib.sh && \
 		for ns in ansible-aap cert-manager-operator cert-manager openshift-storage metallb-system multicluster-engine openshift-cnv osac-kafka; do \
 			wait_for_namespace_cleanup "$$ns"; \
@@ -611,7 +618,7 @@ else
 		$(INFRA_HELM_ARGS) \
 		--timeout 30m --wait
 	@bash -c 'source scripts/lib.sh && wait_for_namespace_cleanup keycloak'
-	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' | grep -Eo '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*' | head -1))
+	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' $(OC_QUERY_STDERR) | grep -Eo '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*' | head -1))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: could not determine cluster domain" >&2; exit 1; }
 	# Render the full chart because the EVPN Job is optional and --show-only fails
 	# when EVPN is disabled. Match Helm's wait to its deadline plus a margin.
@@ -844,8 +851,8 @@ ifeq ($(PROFILE),dev-full)
 	|| { echo "ERROR: invalid installer inputs for osac-devstack; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 endif
 else
-	$(eval OCP_VERSION := $(shell oc get clusterversion version -o jsonpath='{.status.desired.version}' | cut -d. -f1,2 | grep -Eo '^[0-9]+\.[0-9]+' | head -1))
-	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' | grep -Eo '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*' | head -1))
+	$(eval OCP_VERSION := $(shell oc get clusterversion version -o jsonpath='{.status.desired.version}' $(OC_QUERY_STDERR) | cut -d. -f1,2 | grep -Eo '^[0-9]+\.[0-9]+' | head -1))
+	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' $(OC_QUERY_STDERR) | grep -Eo '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*' | head -1))
 	@[ -n "$(OCP_VERSION)" ] || { echo "ERROR: could not determine the OpenShift version for input validation. Is oc logged in?" >&2; exit 1; }
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: could not determine cluster domain for input validation. Is oc logged in?" >&2; exit 1; }
 	@source scripts/lib.sh && render_chart_offline osac-deps $(DEPS_CHART) \
@@ -941,7 +948,7 @@ ifneq ($(PLATFORM),kind)
 		osac.openshift.io/project=osac-aap \
 		-n $(NS) --overwrite
 	@bash -c 'source scripts/lib.sh && check_postgres_prerequisites "$(NS)" "$(INFRA_VALUES)"'
-	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' | grep -Eo '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*' | head -1))
+	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' $(OC_QUERY_STDERR) | grep -Eo '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*' | head -1))
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: Could not determine cluster domain. Is oc logged in?" >&2; exit 1; }
 endif
 	@source scripts/lib.sh; \

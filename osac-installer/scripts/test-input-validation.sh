@@ -629,6 +629,40 @@ grep -q 'Installer input validation passed' "${TMP_DIR}/kubeconfig.out" \
   || fail "kubeconfig-injection-make: the gate did not complete"
 assert_prevalidation_commands kubeconfig-injection-make
 
+# oc names the kubeconfig file in its own errors when it cannot read it, and
+# the gate's clusterversion and ingress-domain lookups run before the first
+# path-free check. Those lookups capture stdout only, so their stderr must be
+# discarded: the value-free guard ("Is oc logged in?") is the whole
+# diagnostic, because a path can carry user or customer names and this output
+# reaches terminals and CI logs. The canary path proves the filename stays
+# out; a failure that no longer names the remedy means the lookup broke.
+echo "checking kubeconfig-error-path (oc's kubeconfig path stays out of the gate output)"
+oc_error_bin="${TMP_DIR}/bin-oc-error"
+cp -a "${STUB_BIN}" "${oc_error_bin}"
+canary_kubeconfig="${TMP_DIR}/canary/customer-name-hub-config"
+{
+  echo '#!/usr/bin/env bash'
+  printf 'echo "error: stat %s: no such file or directory" >&2\n' \
+    "${canary_kubeconfig}"
+  echo 'exit 1'
+} >"${oc_error_bin}/oc"
+chmod +x "${oc_error_bin}/oc"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${oc_error_bin}:${PATH}" \
+  KUBECONFIG="${canary_kubeconfig}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  >"${TMP_DIR}/kubeconfig-error.out" 2>"${TMP_DIR}/kubeconfig-error.err"; then
+  fail "kubeconfig-error-path: the gate passed without a readable kubeconfig"
+fi
+grep -q 'could not determine the OpenShift version for input validation' \
+  "${TMP_DIR}/kubeconfig-error.err" \
+  || fail "kubeconfig-error-path: the gate lost its value-free diagnostic"
+if grep -Fq "${canary_kubeconfig}" "${TMP_DIR}/kubeconfig-error.out" \
+  "${TMP_DIR}/kubeconfig-error.err"; then
+  fail "kubeconfig-error-path: oc's kubeconfig path reached the gate output"
+fi
+
 # Caller-supplied values lists are command-line variables, and make
 # auto-exports command-line variables by expanding them -- GNU Make 4.4+
 # does so when it builds the environment for a parse-time $(shell ...) call,

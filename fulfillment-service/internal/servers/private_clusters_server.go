@@ -351,6 +351,15 @@ func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.C
 	if err != nil {
 		return
 	}
+	if !isDryRun(ctx) && response.GetObject().GetSpec().GetSupportsAutomaticCaasEndpoints() {
+		err = s.autoProvisionClusterSecurityGroup(ctx, response.GetObject())
+		if err != nil {
+			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
+				tx.ReportError(&err)
+			}
+			return
+		}
+	}
 	if !isDryRun(ctx) && s.settings.ProvisioningEnabled &&
 		response.GetObject().GetSpec().GetAutoExternalIpAttachment() {
 		err = s.autoProvisionExternalIPs(ctx, response.GetObject())
@@ -362,6 +371,82 @@ func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.C
 		}
 	}
 	return
+}
+
+// autoProvisionClusterSecurityGroup creates the private SecurityGroup reserved
+// for workers of a CaaS Cluster. It is persisted even when provider networking
+// is disabled, so worker authorization has the same resource contract in both
+// modes.
+func (s *PrivateClustersServer) autoProvisionClusterSecurityGroup(ctx context.Context, cluster *privatev1.Cluster) error {
+	attachment := cluster.GetSpec().GetNetworkAttachment()
+	if attachment == nil || refKey(attachment.GetSubnet()) == "" {
+		return grpcstatus.Error(grpccodes.Internal,
+			"automatic Cluster SecurityGroup requires a resolved network attachment")
+	}
+
+	subnet, err := resolveNetworkingReference(ctx, s.subnetsDao, cluster.GetMetadata(), attachment.GetSubnet(),
+		"subnet", grpccodes.NotFound, true)
+	if err != nil {
+		return fmt.Errorf("automatic Cluster SecurityGroup: failed to resolve Cluster Subnet: %w", err)
+	}
+	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
+	if virtualNetworkID == "" || subnet.GetSpec().GetIpv4Cidr() == "" {
+		return grpcstatus.Error(grpccodes.FailedPrecondition,
+			"automatic Cluster SecurityGroup requires a Subnet VirtualNetwork and IPv4 CIDR")
+	}
+
+	labels := map[string]string{
+		autoCreatedLabel:     "true",
+		autoCreatedForLabel:  cluster.GetId(),
+		autoCreatedKindLabel: "cluster",
+	}
+	securityGroup := privatev1.SecurityGroup_builder{
+		Metadata: privatev1.Metadata_builder{
+			Name:    automaticSecurityGroupPrefix + cluster.GetId(),
+			Tenant:  cluster.GetMetadata().GetTenant(),
+			Project: cluster.GetMetadata().GetProject(),
+			Creator: systemCreator,
+			Labels:  labels,
+			Annotations: map[string]string{
+				tenantAnnotation:         cluster.GetMetadata().GetTenant(),
+				ownerReferenceAnnotation: cluster.GetId(),
+			},
+		}.Build(),
+		Spec: privatev1.SecurityGroupSpec_builder{
+			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+			Ingress: []*privatev1.SecurityRule{
+				privatev1.SecurityRule_builder{
+					Protocol: privatev1.Protocol_PROTOCOL_ALL,
+					Ipv4Cidr: proto.String(subnet.GetSpec().GetIpv4Cidr()),
+				}.Build(),
+				privatev1.SecurityRule_builder{
+					Protocol: privatev1.Protocol_PROTOCOL_TCP,
+					PortFrom: proto.Int32(80),
+					PortTo:   proto.Int32(80),
+					Ipv4Cidr: proto.String("0.0.0.0/0"),
+				}.Build(),
+				privatev1.SecurityRule_builder{
+					Protocol: privatev1.Protocol_PROTOCOL_TCP,
+					PortFrom: proto.Int32(443),
+					PortTo:   proto.Int32(443),
+					Ipv4Cidr: proto.String("0.0.0.0/0"),
+				}.Build(),
+			},
+			Egress: []*privatev1.SecurityRule{
+				privatev1.SecurityRule_builder{
+					Protocol: privatev1.Protocol_PROTOCOL_ALL,
+					Ipv4Cidr: proto.String("0.0.0.0/0"),
+				}.Build(),
+			},
+		}.Build(),
+		Status: privatev1.SecurityGroupStatus_builder{
+			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING,
+		}.Build(),
+	}.Build()
+	if _, err = s.securityGroupsDao.Create().SetObject(securityGroup).Do(ctx); err != nil {
+		return fmt.Errorf("automatic Cluster SecurityGroup: failed to create SecurityGroup: %w", err)
+	}
+	return nil
 }
 
 // prepareCreate fills the new Cluster before it is stored. It selects either a published

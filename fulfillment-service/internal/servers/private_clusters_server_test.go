@@ -1015,7 +1015,7 @@ var _ = Describe("Private clusters server", func() {
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
-							Template:                 privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							Template:                 privatev1.ClusterTemplateReference_builder{Id: "acme.templates.caas-capable"}.Build(),
 							AutoExternalIpAttachment: proto.Bool(true),
 						}.Build(),
 					}.Build(),
@@ -1029,6 +1029,13 @@ var _ = Describe("Private clusters server", func() {
 					Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(eips.GetItems()).To(BeEmpty())
+
+				groups, err := server.securityGroupsDao.List().
+					SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, clusterID)).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(groups.GetItems()).To(HaveLen(1))
+				Expect(groups.GetItems()[0].GetMetadata().GetName()).To(Equal(automaticSecurityGroupPrefix + clusterID))
 			}
 
 			poolResponse, err := server.externalIPPoolDao.Get().SetId(poolID).Do(ctx)
@@ -1125,6 +1132,29 @@ var _ = Describe("Private clusters server", func() {
 			}
 			Expect(endpoints).To(HaveKey("api"))
 			Expect(endpoints).To(HaveKey("ingress"))
+
+			securityGroups, err := server.securityGroupsDao.List().
+				SetFilter(filter).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(securityGroups.GetItems()).To(HaveLen(1))
+			securityGroup := securityGroups.GetItems()[0]
+			Expect(securityGroup.GetMetadata().GetName()).To(Equal(automaticSecurityGroupPrefix + clusterID))
+			Expect(securityGroup.GetMetadata().GetTenant()).To(Equal(response.GetObject().GetMetadata().GetTenant()))
+			Expect(securityGroup.GetMetadata().GetCreator()).To(Equal(systemCreator))
+			Expect(securityGroup.GetMetadata().GetLabels()).To(HaveKeyWithValue(autoCreatedLabel, "true"))
+			Expect(securityGroup.GetMetadata().GetLabels()).To(HaveKeyWithValue(autoCreatedKindLabel, "cluster"))
+			Expect(securityGroup.GetMetadata().GetAnnotations()).To(HaveKeyWithValue(ownerReferenceAnnotation, clusterID))
+			subnet, err := server.subnetsDao.Get().
+				SetId(response.GetObject().GetSpec().GetNetworkAttachment().GetSubnet().GetId()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(securityGroup.GetSpec().GetIngress()).To(HaveLen(3))
+			Expect(securityGroup.GetSpec().GetIngress()[0].GetIpv4Cidr()).To(Equal(subnet.GetObject().GetSpec().GetIpv4Cidr()))
+			Expect(securityGroup.GetSpec().GetIngress()[1].GetPortFrom()).To(BeNumerically("==", 80))
+			Expect(securityGroup.GetSpec().GetIngress()[2].GetPortFrom()).To(BeNumerically("==", 443))
+			Expect(securityGroup.GetSpec().GetEgress()).To(HaveLen(1))
+			Expect(securityGroup.GetSpec().GetEgress()[0].GetIpv4Cidr()).To(Equal("0.0.0.0/0"))
 
 			eiaDao, err := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 			Expect(err).ToNot(HaveOccurred())

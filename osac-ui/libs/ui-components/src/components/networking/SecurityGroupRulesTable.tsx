@@ -55,8 +55,7 @@ export const SecurityGroupRulesTable = ({
 }: SecurityGroupRulesTableProps) => {
   const { t } = useTranslation();
   const reasonId = useId();
-  const disabledReason = editingDisabledReason || undefined;
-  const editingDisabled = disabledReason !== undefined;
+  const editingDisabled = Boolean(editingDisabledReason);
 
   const cidrLabel = direction === 'ingress' ? t('Source CIDR') : t('Destination CIDR');
 
@@ -73,14 +72,20 @@ export const SecurityGroupRulesTable = ({
   );
 
   const addAction = (className: string) =>
-    disabledReason ? (
-      <Tooltip content={disabledReason}>{addButton(className)}</Tooltip>
+    editingDisabledReason ? (
+      <Tooltip content={editingDisabledReason}>{addButton(className)}</Tooltip>
     ) : (
       addButton(className)
     );
 
-  const reason = disabledReason ? (
-    <Alert id={reasonId} variant="info" isInline title={disabledReason} className="pf-v6-u-mb-md" />
+  const reason = editingDisabledReason ? (
+    <Alert
+      id={reasonId}
+      variant="info"
+      isInline
+      title={editingDisabledReason}
+      className="pf-v6-u-mb-md"
+    />
   ) : null;
 
   if (rules.length === 0) {
@@ -132,8 +137,8 @@ export const SecurityGroupRulesTable = ({
                   <Td dataLabel={t('Port Range')}>{formatPortRange(rule.portFrom, rule.portTo)}</Td>
                   <Td dataLabel={cidrLabel}>{formatCidr(rule.ipv4Cidr)}</Td>
                   <Td dataLabel={t('Actions')}>
-                    {disabledReason ? (
-                      <Tooltip content={disabledReason}>
+                    {editingDisabledReason ? (
+                      <Tooltip content={editingDisabledReason}>
                         <Button variant="link" isInline isAriaDisabled aria-describedby={reasonId}>
                           {t('Edit')}
                         </Button>
@@ -148,7 +153,7 @@ export const SecurityGroupRulesTable = ({
                       variant="link"
                       isInline
                       canDelete={!editingDisabled}
-                      disabledReason={disabledReason}
+                      disabledReason={editingDisabledReason}
                       onClick={editingDisabled ? undefined : () => onDeleteRule(index)}
                     />
                   </Td>

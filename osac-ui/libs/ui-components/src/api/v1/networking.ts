@@ -26,7 +26,6 @@ import {
 import { useTranslation } from '../../hooks/useTranslation';
 import { useApiFetch } from '../api-context';
 import { type CelFilter, cel } from '../cel';
-import { assertNetworkUpdateAllowed } from '../networking-immutability';
 import { type ListParams, apiQueryKey } from '../types';
 import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
 import { useListResource } from '../use-resource';
@@ -386,16 +385,20 @@ export const useUpdateSecurityGroup = () => {
         );
       }
 
+      const spec = object.spec;
+      if (!spec || !Array.isArray(spec.ingress) || !Array.isArray(spec.egress)) {
+        throw new ConnectError(t('Security group rules are incomplete.'), Code.FailedPrecondition);
+      }
+
       const projected = {
         object: {
           id,
           spec: {
-            ingress: object.spec?.ingress,
-            egress: object.spec?.egress,
+            ingress: spec.ingress,
+            egress: spec.egress,
           },
         },
       };
-      assertNetworkUpdateAllowed(SecurityGroups.typeName, projected, t);
       return client.update(projected);
     },
     onSuccess: () => invalidateSecurityGroupsQueries(qc),

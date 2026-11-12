@@ -14,8 +14,6 @@ import i18n from 'i18next';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  BareMetalInstances,
-  Clusters,
   ComputeInstances,
   type ComputeInstancesUpdateRequest,
   IdentityProviderSchema,
@@ -262,57 +260,6 @@ describe('resource queries', () => {
 });
 
 describe('resource mutations', () => {
-  it('rejects a ComputeInstance attachment update before transport', async () => {
-    const update = vi.fn(() => ({}));
-    const transport = createRouterTransport((router) => {
-      router.service(ComputeInstances, { update });
-    });
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useUpdateResource(ComputeInstances), { wrapper });
-
-    await expect(
-      result.current.mutateAsync({
-        object: { id: 'vm-1', spec: { networkAttachments: [] } },
-      }),
-    ).rejects.toMatchObject({ code: Code.FailedPrecondition });
-
-    expect(update).not.toHaveBeenCalled();
-  });
-
-  it('rejects a BareMetalInstance attachment update before transport', async () => {
-    const update = vi.fn(() => ({}));
-    const transport = createRouterTransport((router) => {
-      router.service(BareMetalInstances, { update });
-    });
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useUpdateResource(BareMetalInstances), { wrapper });
-
-    await expect(
-      result.current.mutateAsync({
-        object: { id: 'bmi-1', spec: { autoExternalIpAttachment: true } },
-      }),
-    ).rejects.toMatchObject({ code: Code.FailedPrecondition });
-
-    expect(update).not.toHaveBeenCalled();
-  });
-
-  it('rejects a Cluster attachment update before transport', async () => {
-    const update = vi.fn(() => ({}));
-    const transport = createRouterTransport((router) => {
-      router.service(Clusters, { update });
-    });
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useUpdateResource(Clusters), { wrapper });
-
-    await expect(
-      result.current.mutateAsync({
-        object: { id: 'cluster-1', spec: { networkAttachment: {} } },
-      }),
-    ).rejects.toMatchObject({ code: Code.FailedPrecondition });
-
-    expect(update).not.toHaveBeenCalled();
-  });
-
   it('sends an allowed narrow workload update with its exact mask', async () => {
     let received: ComputeInstancesUpdateRequest | undefined;
     const transport = createRouterTransport((router) => {

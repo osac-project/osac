@@ -279,6 +279,36 @@ var _ = Describe("BareMetalHost Manager", func() {
 			Expect(macs).To(Equal([]string{"aa:bb:cc:dd:ee:01", "ff:00:11:22:33:44"}))
 		})
 
+		It("reports each distinct MAC exactly once, sorted", func() {
+			// OSAC-7263: the Metal3 inspection data listed a single-NIC
+			// host's MAC twice, which flowed 1:1 into BMI status.hardware.nics.
+			mgr := newTestManager(
+				bmhWithStatus("node001"),
+				hardwareData("node001",
+					metal3api.NIC{MAC: "FF:00:11:22:33:44"},
+					metal3api.NIC{MAC: "52:54:00:BB:CC:01"},
+					metal3api.NIC{MAC: "52:54:00:bb:cc:01"},
+				),
+			)
+
+			macs, err := mgr.GetHardwareNICs(ctx, "node001")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(macs).To(Equal([]string{"52:54:00:bb:cc:01", "ff:00:11:22:33:44"}))
+		})
+
+		It("deduplicates MACs from the Status.HardwareDetails fallback too", func() {
+			mgr := newTestManager(
+				bmhWithStatus("node001",
+					metal3api.NIC{MAC: "AA:BB:CC:DD:EE:01"},
+					metal3api.NIC{MAC: "aa:bb:cc:dd:ee:01"},
+				),
+			)
+
+			macs, err := mgr.GetHardwareNICs(ctx, "node001")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(macs).To(Equal([]string{"aa:bb:cc:dd:ee:01"}))
+		})
+
 		It("falls back to Status.HardwareDetails when HardwareData NICs all have empty MACs", func() {
 			mgr := newTestManager(
 				bmhWithStatus("node001", metal3api.NIC{MAC: "AA:BB:CC:DD:EE:01"}),

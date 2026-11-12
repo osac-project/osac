@@ -23,6 +23,7 @@ package baremetalhost
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
@@ -181,10 +182,10 @@ func FindOwnedBMH(ctx context.Context, reader client.Reader, namespace, name, ow
 	return bmh, nil
 }
 
-// GetHardwareNICs returns the lowercased MAC addresses for the host's NICs,
-// sourcing them from the standalone HardwareData resource and falling back to
-// the deprecated BareMetalHost.Status.HardwareDetails. Returns nil when neither
-// source has NIC data.
+// GetHardwareNICs returns the lowercased, deduplicated, sorted MAC addresses
+// of the host's NICs. Reads the standalone HardwareData resource, falling
+// back to the deprecated BareMetalHost.Status.HardwareDetails. Returns nil
+// when neither source has NIC data.
 func (m *Manager) GetHardwareNICs(ctx context.Context, name string) ([]string, error) {
 	log := ctrllog.FromContext(ctx)
 
@@ -203,7 +204,7 @@ func (m *Manager) GetHardwareNICs(ctx context.Context, name string) ([]string, e
 		hd = nil
 	}
 
-	macs := hardwareMACs(ResolveHardwareDetails(hd, bmh))
+	macs := HardwareMACs(ResolveHardwareDetails(hd, bmh))
 	if len(macs) == 0 {
 		log.V(1).Info("BareMetalHost has no hardware NIC data",
 			"name", name, "namespace", m.namespace)
@@ -215,7 +216,10 @@ func (m *Manager) GetHardwareNICs(ctx context.Context, name string) ([]string, e
 	return macs, nil
 }
 
-func hardwareMACs(details *metal3api.HardwareDetails) []string {
+// HardwareMACs returns the lowercased, deduplicated, sorted MAC addresses
+// from details. Empty MACs are skipped. Returns nil when details is nil or
+// has no NIC with a MAC.
+func HardwareMACs(details *metal3api.HardwareDetails) []string {
 	if details == nil || len(details.NIC) == 0 {
 		return nil
 	}
@@ -226,7 +230,8 @@ func hardwareMACs(details *metal3api.HardwareDetails) []string {
 		}
 		macs = append(macs, strings.ToLower(nic.MAC))
 	}
-	return macs
+	slices.Sort(macs)
+	return slices.Compact(macs)
 }
 
 // IsBMHAvailable checks whether the BMH has completed Metal3 registration and

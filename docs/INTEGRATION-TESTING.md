@@ -580,6 +580,13 @@ resource that does not become ready fails the step with its name. It does not
 start a cluster; the wait was also exercised once by hand against a Kind API
 server with a slow-starting and a never-ready Deployment.
 
+The `make lvms-optional-path-render-test` Helm contract verifies that the
+OSAC-managed `LVMCluster` targets worker nodes and renders only the configured
+`optionalPaths` allowlist, including the two candidate paths shared by the
+VMaaS and BMaaS CI profiles. It does not create devices or test LVMS readiness;
+an absent optional path can leave the cluster degraded, and every listed path
+that exists may be used.
+
 The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
 implementation work. It uses command stubs to check runtime selection, sudo
 authentication and credential expiry, Makefile/host setup routing, native

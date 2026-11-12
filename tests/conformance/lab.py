@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -35,6 +36,10 @@ class LabClient(Protocol):
     def installed_release(self, *, kubeconfig: Path) -> str: ...
 
 
+def _osac_namespace() -> str:
+    return os.environ.get("OSAC_NAMESPACE", "osac")
+
+
 class HttpLabClient:
     """Read Capabilities over HTTP."""
 
@@ -61,7 +66,9 @@ class KubectlLabClient(HttpLabClient):
     """Read Capabilities over HTTP and registrations and release from the lab hub."""
 
     def registrations(self, *, kubeconfig: Path) -> Mapping[str, Mapping[str, Any]]:
-        output = run("kubectl", "--kubeconfig", str(kubeconfig), "get", "configmaps", "-n", "osac", "-o", "json")
+        output = run(
+            "kubectl", "--kubeconfig", str(kubeconfig), "get", "configmaps", "-n", _osac_namespace(), "-o", "json"
+        )
         payload = json.loads(output)
         result: dict[str, Mapping[str, Any]] = {}
         for item in payload.get("items", []):
@@ -73,7 +80,17 @@ class KubectlLabClient(HttpLabClient):
 
     def installed_release(self, *, kubeconfig: Path) -> str:
         output = run(
-            "kubectl", "--kubeconfig", str(kubeconfig), "get", "secrets", "-n", "osac", "-l", "owner=helm", "-o", "json"
+            "kubectl",
+            "--kubeconfig",
+            str(kubeconfig),
+            "get",
+            "secrets",
+            "-n",
+            _osac_namespace(),
+            "-l",
+            "owner=helm",
+            "-o",
+            "json",
         )
         payload = json.loads(output)
         items = payload.get("items", [])

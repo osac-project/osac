@@ -15,6 +15,7 @@ package servers
 
 import (
 	"slices"
+	"time"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing/pricing"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -46,9 +47,12 @@ type catalogPricingInventory struct {
 	itemsByService map[string]map[string]*privatev1.CatalogPricingInputCatalogItem
 }
 
-func newCatalogPricingInventoryCache() *ttlCache[catalogInventoryKey, catalogPricingInventory] {
-	return newTTLCache[catalogInventoryKey, catalogPricingInventory](catalogInventoryCacheTTL,
-		catalogInventoryCacheFillBudget, 1,
+// newCatalogPricingInventoryCache builds the rate-card server's inventory cache for the same configurable inventory
+// TTL as the catalog pricing inputs server. The fill budget is the shared 15s cap that newTTLCache clamps to at most
+// half the configured TTL. Keeping both servers on one TTL means the freshness bound an administrator reads in the
+// chart applies to every cached catalog sweep.
+func newCatalogPricingInventoryCache(ttl time.Duration) *ttlCache[catalogInventoryKey, catalogPricingInventory] {
+	return newTTLCache[catalogInventoryKey, catalogPricingInventory](ttl, catalogInventoryCacheFillBudget, 1,
 		func(catalogInventoryKey) string { return "catalog-inventory" })
 }
 
@@ -102,12 +106,11 @@ func buildCatalogDimensionIndex(inputs []*privatev1.CatalogPricingInput,
 	return idx
 }
 
-// matchCatalogItems evaluates every one of a rate-card row's conditions together (AC6: "all conditions on a row
-// apply together") against idx, returning the names of the catalog items satisfying all of them. A row with no
-// conditions matches every catalog item of its service. An EQUALS condition matches catalog items locked or
-// defaulted to that exact value; an ANY condition matches catalog items that have any value for that dimension,
-// open or fixed. A row matching no catalog item returns an empty list, which is itself a valid "not in catalog"
-// result (AC6), never a guessed one.
+// matchCatalogItems evaluates every one of a rate-card row's conditions together against idx, returning the names
+// of the catalog items satisfying all of them. A row with no conditions matches every catalog item of its service.
+// An EQUALS condition matches catalog items locked or defaulted to that exact value; an ANY condition matches
+// catalog items that have any value for that dimension, open or fixed. A row matching no catalog item returns an
+// empty list, which is itself a valid "not in catalog" result, never a guessed one.
 func matchCatalogItems(item pricing.RateCardItem, idx catalogDimensionIndex) []string {
 	if len(item.Conditions) == 0 {
 		return catalogItemNames(idx.byService[item.Service])

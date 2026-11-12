@@ -24,6 +24,19 @@ PROVIDER = {
 }
 CA_SECRET = {"caSecret.name": "billing-ca-bundle", "caSecret.key": "ca-bundle"}
 CA_MOUNT_PATH = "/etc/fulfillment-grpc-server/billing-ca"
+# Catalog-pricing cache env vars and their leaf names. These are not
+# billing-gated: the caches serve requests with or without a provider.
+CACHE_ENV = {
+    "defaultSeconds": "OSAC_CATALOG_CACHE_DEFAULT_SECONDS",
+    "inventorySeconds": "OSAC_CATALOG_CACHE_INVENTORY_SECONDS",
+    "rateCardSeconds": "OSAC_CATALOG_CACHE_RATE_CARD_SECONDS",
+}
+# What each chart renders when no tuning values are supplied. The umbrella chart
+# ships a deliberate 30-second inventory override; the subchart declares only
+# defaultSeconds, so there both per-cache leaves inherit the shared 300.
+UMBRELLA_CACHE = {"defaultSeconds": 300, "inventorySeconds": 30, "rateCardSeconds": 300}
+STANDALONE_CACHE = dict.fromkeys(CACHE_ENV, 300)
+CACHE_MAX = 86400
 # --set-string consumes one escape level, so this literal's two runtime
 # backslashes reach the schema as the single backslash the rejection cases need.
 BACKSLASH_IN_HOST_URL = r"https://billing\\example.com"
@@ -63,12 +76,14 @@ def grpc_server(extra: list[str]) -> str:
 
 
 def check_disabled() -> None:
-    """Without provider values no billing environment renders in any profile."""
+    """Without provider values no billing environment renders, but the caches do."""
     for profile in PROFILES:
         doc = select_one(
             render(profile), lambda d: GRPC_SOURCE in d, f"gRPC server Deployment for {profile}"
         )
         assert "OSAC_BILLING" not in doc and "billing" not in doc, profile
+        check_grpc_env(doc)
+        check_cache(container_env(doc), UMBRELLA_CACHE, profile)
 
 
 def check_configured() -> None:
@@ -84,6 +99,7 @@ def check_configured() -> None:
         'OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD\n          value: "5"',
     ):
         assert want in doc, want
+    check_cache(container_env(doc), UMBRELLA_CACHE, "umbrella defaults")
     check_grpc_env(doc)
 
 
@@ -92,6 +108,11 @@ def grpc_pod(doc: str) -> tuple[dict, dict]:
     spec = yaml.safe_load(doc.split("\n", 1)[1])["spec"]["template"]["spec"]
     (container,) = [c for c in spec["containers"] if c["name"] == "grpc-server"]
     return spec, container
+
+
+def container_env(doc: str) -> dict[str, str]:
+    """The grpc-server container environment as a name-to-value mapping."""
+    return {item["name"]: item["value"] for item in grpc_pod(doc)[1]["env"]}
 
 
 def check_grpc_env(doc: str) -> None:
@@ -124,12 +145,79 @@ def check_ca_secret() -> None:
     assert "billing-ca" not in doc and "OSAC_BILLING_CA_FILE" not in doc, "CA rendered unset"
 
 
-def standalone_result(extra: list[str]) -> subprocess.CompletedProcess[str]:
-    """Render the service subchart alone with the provider set, without check."""
+def check_cache(env: dict[str, str], expected: dict[str, int], label: str) -> None:
+    """Assert the three catalog-cache env vars carry exactly the expected seconds."""
+    for leaf, seconds in expected.items():
+        name = CACHE_ENV[leaf]
+        assert env.get(name) == str(seconds), (label, leaf, env.get(name))
+
+
+def check_catalog_cache_tuning() -> None:
+    """The cache env vars honor the shared-default cascade and the schema bounds."""
+    check_cache(container_env(grpc_server(provider_args())), UMBRELLA_CACHE, "umbrella defaults")
+
+    # Each shipped leaf still wins when the operator overrides it on its own.
+    for leaf, shipped in UMBRELLA_CACHE.items():
+        override = shipped + 1
+        extra = ["--set", f"service.tuning.cache.{leaf}={override}"]
+        doc = grpc_server(provider_args() + extra)
+        check_grpc_env(doc)
+        check_cache(container_env(doc), {**UMBRELLA_CACHE, leaf: override}, f"umbrella {leaf}")
+
+    # Clearing an override (null) makes that cache inherit defaultSeconds
+    # instead of the subchart's old per-cache literal.
+    inventory_cleared = [
+        "--set",
+        "service.tuning.cache.inventorySeconds=null",
+    ]
+    doc = grpc_server(provider_args() + inventory_cleared)
+    check_grpc_env(doc)
+    check_cache(
+        container_env(doc),
+        {**UMBRELLA_CACHE, "inventorySeconds": 300},
+        "umbrella inventorySeconds cleared",
+    )
+
+    doc = grpc_server(provider_args() + inventory_cleared + [
+        "--set",
+        "service.tuning.cache.defaultSeconds=600",
+    ])
+    check_grpc_env(doc)
+    check_cache(
+        container_env(doc),
+        {"defaultSeconds": 600, "inventorySeconds": 600, "rateCardSeconds": 300},
+        "umbrella inventorySeconds cleared, shared 600",
+    )
+
+    # Clearing both overrides hands both caches to the shared interval.
+    doc = grpc_server(provider_args() + inventory_cleared + [
+        "--set",
+        "service.tuning.cache.rateCardSeconds=null",
+        "--set",
+        "service.tuning.cache.defaultSeconds=600",
+    ])
+    check_grpc_env(doc)
+    check_cache(
+        container_env(doc),
+        dict.fromkeys(CACHE_ENV, 600),
+        "umbrella both overrides cleared, shared 600",
+    )
+
+    for leaf in CACHE_ENV:
+        for bad in (0, -1, CACHE_MAX + 1):
+            check_rejected(
+                ["--set", f"service.tuning.cache.{leaf}={bad}"], f"{leaf}={bad}", leaf
+            )
+
+
+def standalone_result(
+    extra: list[str], provider: bool = True
+) -> subprocess.CompletedProcess[str]:
+    """Render the service subchart alone, with the provider set unless provider=False."""
     return subprocess.run(
         ["helm", "template", "t", str(SERVICE_CHART)]
         + ["-f", str(SERVICE_CHART / "ci-values.yaml")]
-        + provider_args()
+        + (provider_args() if provider else [])
         + extra,
         capture_output=True,
         text=True,
@@ -137,19 +225,32 @@ def standalone_result(extra: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def standalone(extra: list[str]) -> str:
-    """Render the service subchart alone with the provider set and return the manifest."""
-    result = standalone_result(extra)
+def standalone(extra: list[str], provider: bool = True) -> str:
+    """Render the service subchart alone and return the manifest."""
+    result = standalone_result(extra, provider)
     assert result.returncode == 0, result.stderr
     return result.stdout
 
 
 def check_standalone_subchart() -> None:
-    """Provider set without any tuning: the subchart falls back to its own defaults."""
+    """No tuning values on the subchart: both caches inherit defaultSeconds."""
     docs = [d for d in standalone([]).split("\n---\n") if "OSAC_BILLING_PROVIDER" in d]
     assert len(docs) == 1, len(docs)
     check_grpc_env(docs[0])
+    check_cache(container_env(docs[0]), STANDALONE_CACHE, "standalone no tuning")
     assert 'OSAC_BILLING_RETRY_COUNT\n          value: "3"' in docs[0]
+    # One explicit override leaves the other cache on the shared default.
+    doc = select_one(
+        standalone(["--set", "tuning.cache.inventorySeconds=2"]).split("\n---\n"),
+        lambda d: "OSAC_BILLING_PROVIDER" in d,
+        "standalone gRPC server Deployment with an inventory override",
+    )
+    check_grpc_env(doc)
+    check_cache(
+        container_env(doc),
+        {"defaultSeconds": 300, "inventorySeconds": 2, "rateCardSeconds": 300},
+        "standalone inventory override",
+    )
     breaker = "global.billing.tuning.pricingBreaker"
     leaves = {
         "failureThreshold": ("FAILURE_THRESHOLD", 5),
@@ -192,6 +293,40 @@ def check_standalone_subchart() -> None:
         manifest = standalone(["--values", str(values)])
     for env in ["RETRY_COUNT"] + [f"PRICING_BREAKER_{env}" for env, _ in leaves.values()]:
         assert f'OSAC_BILLING_{env}\n          value: "1000000"' in manifest, env
+
+
+def check_standalone_without_provider() -> None:
+    """No provider values: the cache env vars still render the chart defaults."""
+    manifest = standalone([], provider=False)
+    doc = select_one(
+        [d for d in manifest.split("\n---\n") if d.strip()],
+        lambda d: "OSAC_CATALOG_CACHE_DEFAULT_SECONDS" in d,
+        "standalone gRPC server Deployment",
+    )
+    assert "OSAC_BILLING" not in doc
+    check_grpc_env(doc)
+    check_cache(container_env(doc), STANDALONE_CACHE, "standalone no provider")
+
+    # A values-file integer arrives as a float64: int64 keeps 86400 decimal. The
+    # per-cache leaves are unset, so both inherit the shared 86400.
+    values = {"defaultSeconds": CACHE_MAX}
+    with tempfile.TemporaryDirectory(prefix="cache-values-") as temp_dir:
+        path = pathlib.Path(temp_dir) / "cache.yaml"
+        path.write_text(yaml.safe_dump({"tuning": {"cache": values}}), encoding="utf-8")
+        manifest = standalone(["--values", str(path)], provider=False)
+    assert f'OSAC_CATALOG_CACHE_DEFAULT_SECONDS\n          value: "{CACHE_MAX}"' in manifest
+    assert (
+        f'OSAC_CATALOG_CACHE_INVENTORY_SECONDS\n          value: "{CACHE_MAX}"' in manifest
+    )
+
+    # The subchart schema enforces the same bounds as the umbrella chart.
+    for leaf in CACHE_ENV:
+        for bad in (0, -1, CACHE_MAX + 1):
+            result = standalone_result(
+                ["--set", f"tuning.cache.{leaf}={bad}"], provider=False
+            )
+            assert result.returncode != 0, f"standalone {leaf}={bad} passed validation"
+            assert leaf in result.stderr, result.stderr
 
 
 def check_rejected(extra: list[str], why: str, reason: str) -> None:
@@ -313,7 +448,9 @@ if __name__ == "__main__":
     check_disabled()
     check_configured()
     check_ca_secret()
+    check_catalog_cache_tuning()
     check_standalone_subchart()
+    check_standalone_without_provider()
     check_base_url_forms()
     check_invalid()
     check_standalone_base_url_schema()

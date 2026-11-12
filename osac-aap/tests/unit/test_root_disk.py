@@ -6,7 +6,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parents[2] / "collections/ansible_collections/osac/templates/plugins/filter"))
 
-from root_disk import smallest_root_disk
+from root_disk import root_device_hints, smallest_root_disk
 
 
 def _disk(name: str, gib: int) -> dict[str, Any]:
@@ -28,3 +28,39 @@ def test_keeps_metal3_default_without_eligible_disk() -> None:
     data = [{"spec": {"hardware": {"storage": [_disk("/dev/vda", 2)]}}}]
     assert smallest_root_disk(data, {}, 4) == ""
     assert smallest_root_disk([], {}, 4) == ""
+
+
+def test_hints_prefer_serial() -> None:
+    disk = _disk("/dev/vda", 32) | {"serial": "SER-42", "wwn": "0x5000c50015ea71ad"}
+    data = [{"spec": {"hardware": {"storage": [disk]}}}]
+    assert root_device_hints(data, {}, 4) == {"serial": "SER-42"}
+
+
+def test_hints_use_wwn_without_serial() -> None:
+    disk = _disk("/dev/vda", 32) | {"wwn": "0x5000c50015ea71ad"}
+    data = [{"spec": {"hardware": {"storage": [disk]}}}]
+    assert root_device_hints(data, {}, 4) == {"wwn": "0x5000c50015ea71ad"}
+
+
+def test_hints_fall_back_to_device_name() -> None:
+    data = [{"spec": {"hardware": {"storage": [_disk("/dev/vda", 32)]}}}]
+    assert root_device_hints(data, {}, 4) == {"deviceName": "/dev/vda"}
+
+
+def test_hints_ignore_blank_serial_and_wwn() -> None:
+    disk = _disk("/dev/vdb", 32) | {"serial": "  ", "wwn": ""}
+    data = [{"spec": {"hardware": {"storage": [disk]}}}]
+    assert root_device_hints(data, {}, 4) == {"deviceName": "/dev/vdb"}
+
+
+def test_hints_empty_without_eligible_disk() -> None:
+    data = [{"spec": {"hardware": {"storage": [_disk("/dev/vda", 2)]}}}]
+    assert root_device_hints(data, {}, 4) == {}
+    assert root_device_hints([], {}, 4) == {}
+
+
+def test_hints_describe_the_selected_disk() -> None:
+    small = _disk("/dev/vdb", 32)
+    large = _disk("/dev/vda", 161) | {"serial": "SER-LARGE"}
+    data = [{"spec": {"hardware": {"storage": [large, small]}}}]
+    assert root_device_hints(data, {}, 4) == {"deviceName": "/dev/vdb"}

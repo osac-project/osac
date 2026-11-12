@@ -2,6 +2,10 @@
 #   podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
 FROM registry.access.redhat.com/ubi9/python-312:latest
 
+# The suite runs as UID 0 by design: it runs with --userns=host so it can open
+# the runner's podman socket. See "Running the suite" in the conformance design.
+USER 0
+
 WORKDIR /opt/osac
 
 COPY pyproject.toml uv.lock ./

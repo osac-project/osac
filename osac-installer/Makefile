@@ -1136,23 +1136,31 @@ endif
 .PHONY: install-multicluster
 install-multicluster: validate-inputs validate-remote-cluster-render ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
 	# Paths stay out of these errors: a local path can carry user or
-	# customer names, and this output reaches terminals and CI logs.
+	# customer names, and this output reaches terminals and CI logs. The
+	# readability checks below do not prove a kubeconfig parses, and oc
+	# names the file in its own error, so every oc call here discards
+	# stderr and leaves a value-free failure message as the diagnostic.
 	@test -r "$${KUBECONFIG}" || { echo "ERROR: KUBECONFIG is not readable; check the path you supplied" >&2; exit 1; }
 	@test -r "$${REMOTE_KUBECONFIG}" || { echo "ERROR: REMOTE_KUBECONFIG is not readable; check the path you supplied" >&2; exit 1; }
 	@test -f "$${AAP_LICENSE_FILE}" || { echo "ERROR: AAP_LICENSE_FILE not found; check the path you supplied" >&2; exit 1; }
 	@test -r "$${AAP_LICENSE_FILE}" || { echo "ERROR: AAP_LICENSE_FILE is not readable; check the permissions on the path you supplied" >&2; exit 1; }
 	@if [ -n "$${REMOTE_API_ADDRESS}" ]; then case "$${REMOTE_API_ADDRESS}" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; fi
-	@oc --kubeconfig "$${KUBECONFIG}" get clusterversion version >/dev/null
-	@oc --kubeconfig "$${REMOTE_KUBECONFIG}" get clusterversion version >/dev/null
+	@oc --kubeconfig "$${KUBECONFIG}" get clusterversion version >/dev/null $(OC_QUERY_STDERR) \
+		|| { echo "ERROR: could not reach the cluster in KUBECONFIG. Is oc logged in?" >&2; exit 1; }
+	@oc --kubeconfig "$${REMOTE_KUBECONFIG}" get clusterversion version >/dev/null $(OC_QUERY_STDERR) \
+		|| { echo "ERROR: could not reach the cluster in REMOTE_KUBECONFIG. Is oc logged in?" >&2; exit 1; }
 	@for entry in "KUBECONFIG:$${KUBECONFIG}" "REMOTE_KUBECONFIG:$${REMOTE_KUBECONFIG}"; do \
 		var="$${entry%%:*}"; kubeconfig="$${entry#*:}"; \
-		if [ "$$(oc --kubeconfig "$$kubeconfig" auth can-i '*' '*')" != yes ]; then \
+		if [ "$$(oc --kubeconfig "$$kubeconfig" auth can-i '*' '*' $(OC_QUERY_STDERR))" != yes ]; then \
 			echo "ERROR: cluster-admin access is required for the cluster in $${var}" >&2; exit 1; \
 		fi; \
 	done
-	@hub_api="$$(oc --kubeconfig "$${KUBECONFIG}" config view --minify -o jsonpath='{.clusters[0].cluster.server}')"; \
-	remote_api="$$(oc --kubeconfig "$${REMOTE_KUBECONFIG}" config view --minify -o jsonpath='{.clusters[0].cluster.server}')"; \
-	if [ -z "$$hub_api" ] || [ -z "$$remote_api" ] || [ "$$hub_api" = "$$remote_api" ]; then \
+	@hub_api="$$(oc --kubeconfig "$${KUBECONFIG}" config view --minify -o jsonpath='{.clusters[0].cluster.server}' $(OC_QUERY_STDERR) || true)"; \
+	remote_api="$$(oc --kubeconfig "$${REMOTE_KUBECONFIG}" config view --minify -o jsonpath='{.clusters[0].cluster.server}' $(OC_QUERY_STDERR) || true)"; \
+	if [ -z "$$hub_api" ] || [ -z "$$remote_api" ]; then \
+		echo "ERROR: could not read the API server endpoint from KUBECONFIG or REMOTE_KUBECONFIG. Is oc logged in?" >&2; exit 1; \
+	fi; \
+	if [ "$$hub_api" = "$$remote_api" ]; then \
 		echo "ERROR: KUBECONFIG and REMOTE_KUBECONFIG must specify different API server endpoints" >&2; exit 1; \
 	fi
 	$(MAKE) prepare-remote-cluster NS=$(NS) \

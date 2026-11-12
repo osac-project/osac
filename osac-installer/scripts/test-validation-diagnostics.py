@@ -119,6 +119,33 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, "the existing URL policy changed")
 
+    def test_aap_netris_rule_failures_do_not_echo_values(self):
+        """Check the NETRIS rule failures name the field, never the value."""
+        # An underscore fails both rules, and the canary token keeps a
+        # leaked value recognizable to assert_private.
+        cases = (
+            ("NETRIS_VALIDATE_CERTS",
+             'NETRIS_VALIDATE_CERTS must be "true" or "false"'),
+            ("NETRIS_CA_CONFIGMAP",
+             "NETRIS_CA_CONFIGMAP must be a ConfigMap name"),
+        )
+        for field, phrase in cases:
+            with self.subTest(field=field):
+                values = self.directory / f"aap-{field}.json"
+                values.write_text(json.dumps({"instanceGroups": {
+                    "networkFulfillment": {
+                        "config": {field: f"{self.token}_invalid"}}}}))
+                result = subprocess.run(
+                    [HELM, "template", "aap",
+                     str(INSTALLER.parent / "osac-aap/charts/aap"),
+                     "-f", str(values)], text=True, capture_output=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assert_private(result.stdout + result.stderr)
+                self.assertIn(phrase, result.stderr)
+                # The rejected value is no longer appended to the message.
+                self.assertNotIn("(got", result.stderr)
+
     def test_make_gate_initial_and_retry_errors_are_private(self):
         """Check the make gate keeps a failing render's error private, with or
         without the Secret-injection retry."""
@@ -251,6 +278,33 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         # the chart's three fixed phrases, so nothing may be printed for it.
         self.assertNotIn(caller, result.stdout + result.stderr)
         self.assertNotIn("evpn.nodes: duplicate", result.stderr)
+
+    def test_offline_render_error_names_the_netris_rules(self):
+        """Check the NETRIS rule failures reach the gate as field and rule."""
+        cases = (
+            'instanceGroups.networkFulfillment.config.NETRIS_VALIDATE_CERTS'
+            ' must be "true" or "false"',
+            "instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP"
+            " must be a ConfigMap name",
+        )
+        for phrase in cases:
+            with self.subTest(phrase=phrase):
+                # This reproduces the pre-fix chart text too: even with a
+                # value on the line, the arm prints only the fixed phrase.
+                message = (
+                    "Error: execution error at "
+                    "(aap/templates/config-as-code-secret.yaml:47:8): "
+                    f"{phrase} (got {self.hostname})\n"
+                )
+                result = subprocess.run(
+                    ["bash", "-c", 'source "$1"; offline_render_error "$2"',
+                     "bash", str(INSTALLER / "scripts/lib.sh"), message],
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assert_private(result.stdout + result.stderr)
+                self.assertIn(phrase, result.stderr)
+                self.assertNotIn("(got", result.stderr)
 
     def test_offline_render_error_keeps_metering_reader_index(self):
         """Check a rejected reader keeps its index and drops its name."""

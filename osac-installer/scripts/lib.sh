@@ -554,8 +554,15 @@ offline_render_error() {
                     if (match($0, /metering reader at index [0-9]+ (is a KafkaUser OSAC owns|uses the reserved osac- or osac\. name prefix)/))
                         print substr($0, RSTART, RLENGTH)
                 }' >&2 ;;
+        # The AAP chart's NETRIS rules name the rejected field and its
+        # constraint and never the value, so these arms echo fixed text:
+        # the schema path plus the chart-authored phrase.
         *"NETRIS_CONTROLLER_URL must be an https:// URL"*)
             echo "instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL must be an https:// URL" >&2 ;;
+        *'NETRIS_VALIDATE_CERTS must be "true" or "false"'*)
+            echo 'instanceGroups.networkFulfillment.config.NETRIS_VALIDATE_CERTS must be "true" or "false"' >&2 ;;
+        *"NETRIS_CA_CONFIGMAP must be a ConfigMap name"*)
+            echo "instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP must be a ConfigMap name" >&2 ;;
         # The EVPN duplicate checks name the rejected entry by its index
         # and never by its node name or addresses, so their fail text is
         # chart-authored and value-free. Echo only the matched phrase, so

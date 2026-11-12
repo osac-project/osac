@@ -289,6 +289,60 @@ prepare_pos=$(grep -nF 'setup-remote-cluster.sh prepare' "${mc_joined}" \
 [ "${render_pos}" -lt "${prepare_pos}" ] \
   || fail "install-multicluster: the workload-cluster render follows preparation"
 
+# install-multicluster reads both kubeconfigs with oc before it changes
+# anything. The readability checks do not prove a kubeconfig parses, and oc
+# names the file in its own error, so each of those calls discards stderr and
+# relies on a value-free failure message. Fail the stub at each stage in turn
+# and require the canary path to stay out of the output; a stage that no
+# longer stops the recipe, or stops it without a diagnostic, also fails here.
+echo "checking multicluster-oc-error-path (oc's kubeconfig path stays out of the install checks)"
+mc_oc_bin="${TMP_DIR}/bin-mc-oc-error"
+cp -a "${STUB_BIN}" "${mc_oc_bin}"
+cat >"${mc_oc_bin}/oc" <<'STUB'
+#!/usr/bin/env bash
+kubeconfig=$2
+case "$*" in
+  *"get clusterversion version"*jsonpath*) echo "4.22.14"; exit 0 ;;
+  *"ingresses.config/cluster"*) echo "apps.example.com"; exit 0 ;;
+esac
+case "${STUB_FAIL_AT:-}:$*" in
+  clusterversion:*"get clusterversion version"*|\
+  can-i:*"auth can-i"*|config-view:*"config view"*)
+    echo "error: error loading config file \"${kubeconfig}\": yaml: bad input" >&2
+    exit 1 ;;
+esac
+case "$*" in
+  *"auth can-i"*) echo yes ;;
+  *"config view"*) echo "https://api.example:6443" ;;
+esac
+exit 0
+STUB
+chmod +x "${mc_oc_bin}/oc"
+mkdir -p "${TMP_DIR}/canary"
+mc_hub_kubeconfig="${TMP_DIR}/canary/customer-name-hub-config"
+mc_remote_kubeconfig="${TMP_DIR}/canary/customer-name-remote-config"
+mc_license_file="${TMP_DIR}/canary/customer-name-license.zip"
+printf 'stub\n' >"${mc_hub_kubeconfig}"
+printf 'stub\n' >"${mc_remote_kubeconfig}"
+printf 'stub\n' >"${mc_license_file}"
+for mc_stage in clusterversion can-i config-view; do
+  mc_out="${TMP_DIR}/mc-oc-${mc_stage}.out"
+  mc_err="${TMP_DIR}/mc-oc-${mc_stage}.err"
+  if MOCK_LOG="${LOG}" STUB_FAIL_AT="${mc_stage}" PATH="${mc_oc_bin}:${PATH}" \
+    AAP_LICENSE_FILE="${mc_license_file}" KUBECONFIG="${mc_hub_kubeconfig}" \
+    make -C "${SANDBOX}" --no-print-directory install-multicluster \
+      PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+      REMOTE_KUBECONFIG="${mc_remote_kubeconfig}" \
+      >"${mc_out}" 2>"${mc_err}"; then
+    fail "multicluster-oc-error-path (${mc_stage}): the install proceeded after oc failed"
+  fi
+  grep -q '^ERROR: ' "${mc_err}" \
+    || fail "multicluster-oc-error-path (${mc_stage}): the failure lost its value-free diagnostic"
+  if grep -Fq 'customer-name-' "${mc_out}" "${mc_err}"; then
+    fail "multicluster-oc-error-path (${mc_stage}): oc's kubeconfig path reached the output"
+  fi
+done
+
 # Gate/install parity for INFRA_HELM_ARGS: every helm command touching
 # osac-infra or osac-deps in the OpenShift install plan -- the gate's
 # renders, the EVPN deadline render, and the upgrades -- must apply the

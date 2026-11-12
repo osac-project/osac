@@ -67,6 +67,14 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   with a missing or not-ready tenant default are rejected in the private
   servers suite and the deployed public Create; provider provisioning remains
   E2E coverage.
+- Billing account discovery, tenant billing assignments, and provider status
+  ([OSAC-6871](https://redhat.atlassian.net/browse/OSAC-6871)): handler,
+  adapter, and database specs run in process against
+  `internal/testing/billingfake` and real PostgreSQL. The deployed `it/`
+  billing specs cover the disabled-provider (`BILLING_NOT_CONFIGURED`) paths
+  only; the configured-provider case uses `internal/testing/billingstub` over
+  loopback TLS and skips unless `OSAC_IT_BILLING_STUB_LISTEN` and
+  `OSAC_IT_BILLING_STUB_URL` are set. No real M360 provider is contacted.
 
 ## Coverage gaps
 
@@ -87,6 +95,9 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   and command remain unspecified.
 - Existing-token revocation is separate from fresh-login RoleBinding checks:
   [OSAC-6375](https://redhat.atlassian.net/browse/OSAC-6375).
+- The configured-provider billing spec in `it/` does not run in CI: it skips
+  unless the billing stub variables are set, and no job sets them. No owning
+  follow-up ticket yet.
 
 ## Fulfillment integration reports
 

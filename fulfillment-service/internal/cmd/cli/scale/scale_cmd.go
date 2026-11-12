@@ -136,7 +136,7 @@ func scaleCluster(
 
 	nodeSets := cluster.GetSpec().GetNodeSets()
 	if len(nodeSets) == 0 {
-		_ = console.Render(ctx, "no_node_sets.txt", map[string]any{
+		console.Render(ctx, "no_node_sets.txt", map[string]any{
 			"ClusterId": cluster.GetId(),
 		})
 		return fmt.Errorf("cluster %q has no node sets; the scale command only supports CaaS clusters", cluster.GetId())
@@ -144,7 +144,7 @@ func scaleCluster(
 
 	nodeSet, ok := nodeSets[nodeSetName]
 	if !ok {
-		_ = console.Render(ctx, "node_set_not_found.txt", map[string]any{
+		console.Render(ctx, "node_set_not_found.txt", map[string]any{
 			"ClusterId": cluster.GetId(),
 			"NodeSet":   nodeSetName,
 			"NodeSets":  nodeSets,
@@ -167,9 +167,9 @@ func scaleCluster(
 		return fmt.Errorf("failed to scale cluster: %w", err)
 	}
 
-	_ = console.Infof(ctx, "Scaled cluster '%s' node set '%s': %d → %d\n",
+	console.Infof(ctx, "Scaled cluster '%s' node set '%s': %d → %d\n",
 		cluster.GetId(), nodeSetName, previousSize, newSize)
-	_ = console.Infof(ctx, "Run 'osac describe cluster %s' to monitor reconciliation.\n", cluster.GetId())
+	console.Infof(ctx, "Run 'osac describe cluster %s' to monitor reconciliation.\n", cluster.GetId())
 
 	return nil
 }

@@ -102,7 +102,7 @@ func listBillingAccounts(ctx context.Context, client publicv1.BillingAccountsCli
 func render(ctx context.Context, console *terminal.Console, format string, offset int32,
 	response *publicv1.BillingAccountsListResponse) error {
 	if format == output.Table {
-		return renderTable(ctx, console, offset, response)
+		return renderTable(console, offset, response)
 	}
 	return output.Render(ctx, console, format, "billing accounts", response)
 }
@@ -113,13 +113,13 @@ func render(ctx context.Context, console *terminal.Console, format string, offse
 // on the way out - ingest already sanitizes stored display names, but correlation values are stored raw for
 // exact matching, and rows written before that are best not trusted either. When the page does not reach the
 // total, a continuation hint is written to the console's error stream after the table.
-func renderTable(ctx context.Context, console *terminal.Console, offset int32,
+func renderTable(console *terminal.Console, offset int32,
 	response *publicv1.BillingAccountsListResponse) error {
 	items := response.GetItems()
 	total := response.GetTotal()
 	if len(items) == 0 {
 		if total == 0 {
-			return console.Infof(ctx, "No billing accounts found.\n")
+			return output.Infof(console, "No billing accounts found.\n")
 		}
 		return output.WritePageNotice(console.Stderr(), "billing accounts", offset, 0, total)
 	}

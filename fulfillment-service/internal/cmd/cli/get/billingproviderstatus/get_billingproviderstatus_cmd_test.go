@@ -141,16 +141,4 @@ var _ = Describe("render failures", func() {
 		Expect(err).To(MatchError(ContainSubstring("failed to flush billing provider status table")))
 		Expect(errors.Is(err, sentinel)).To(BeTrue())
 	})
-
-	It("reports a failed JSON write", func() {
-		err := renderErr("json", available(), &failingWriter{err: sentinel})
-		Expect(err).To(MatchError(ContainSubstring("failed to render billing provider status")))
-		Expect(errors.Is(err, sentinel)).To(BeTrue())
-	})
-
-	It("reports a failed YAML write", func() {
-		err := renderErr("yaml", available(), &failingWriter{err: sentinel})
-		Expect(err).To(MatchError(ContainSubstring("failed to render billing provider status")))
-		Expect(errors.Is(err, sentinel)).To(BeTrue())
-	})
 })

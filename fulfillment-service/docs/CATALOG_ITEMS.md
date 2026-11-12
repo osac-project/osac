@@ -232,8 +232,10 @@ You can reference an object by ID or name. An ID must be visible to you, but doe
 or `project` selectors. If you supply both an ID and a name, they must identify the same object.
 
 When using a name, set `tenant: shared` for an object in the shared tenant. Set `project` to reference
-an object in another project within the same tenant. Legacy `shared: true` remains accepted during
-the compatibility period. See
+an object in another project within the same tenant. Omitting `project` selects the tenant's default
+project; it does not inherit the catalog item's project. Specify the non-default project for named
+dependencies there, or the lookup may fail or select a same-named object from the default project.
+Legacy `shared: true` remains accepted during the compatibility period. See
 [Object references](API.md#object-references) for the reference format.
 
 Shared catalogs use shared dependencies. Tenant catalogs can use shared objects or objects from

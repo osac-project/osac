@@ -352,6 +352,7 @@ var _ = Describe("buildSpec", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetInstanceType().GetName()).To(Equal("standard-bm"))
 		Expect(spec.GetInstanceType().GetTenant()).To(Equal("shared"))
+		Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
 	})
 
 	It("should leave instance_type unset when the instance-type flag is empty", func() {

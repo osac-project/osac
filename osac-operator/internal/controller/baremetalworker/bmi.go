@@ -149,7 +149,7 @@ func (r *Reconciler) buildBMICreateRequest(
 	var instanceType *privatev1.BareMetalInstanceTypeReference
 	if nodeSet.BareMetal.InstanceType != "" {
 		instanceType = privatev1.BareMetalInstanceTypeReference_builder{
-			Name: nodeSet.BareMetal.InstanceType, Tenant: "shared",
+			Name: nodeSet.BareMetal.InstanceType, Tenant: "shared", Shared: true,
 		}.Build()
 	}
 

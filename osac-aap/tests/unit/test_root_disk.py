@@ -75,16 +75,6 @@ def test_hints_read_virtio_inspection_serial_number() -> None:
     assert root_device_hints(data, {}, "smallest") == {"serialNumber": "virtual-bmh-1c320d51"}
 
 
-def test_hints_fall_back_to_the_by_path_device_name() -> None:
-    disk = _disk("/dev/vda", 32) | {
-        "alternateNames": ["/dev/vda", "/dev/disk/by-path/pci-0000:03:00.0"]
-    }
-    data = [{"spec": {"hardware": {"storage": [disk]}}}]
-    assert root_device_hints(data, {}, "smallest", min_size=4) == {
-        "deviceName": "/dev/disk/by-path/pci-0000:03:00.0"
-    }
-
-
 def test_hints_use_wwn_without_serial_number() -> None:
     disk = _disk("/dev/vda", 32) | {"wwn": "0x5000c50015ea71ad"}
     data = [{"spec": {"hardware": {"storage": [disk]}}}]

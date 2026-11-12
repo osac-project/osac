@@ -44,24 +44,6 @@ def _select_disk(policy: RootDiskPolicy, disks: list[dict], options: dict) -> di
     raise ValueError(f"unsupported root disk policy: {policy}")
 
 
-def _device_name(disk: dict) -> str:
-    """The most stable device name the inspection reports.
-
-    Virtio disks expose no serial or wwn, so the deviceName fallback is the
-    only option there, and the probe-order name (/dev/vda) is the one that
-    reshuffles between inspection and deploy. Metal3 accepts by-path links
-    as deviceName and they pin the PCI slot instead, so prefer one whenever
-    the inspection reports it, in name or alternateNames.
-    """
-    name = disk.get("name") or ""
-    if name.startswith("/dev/disk/by-path/"):
-        return name
-    for alternate in disk.get("alternateNames") or []:
-        if isinstance(alternate, str) and alternate.startswith("/dev/disk/by-path/"):
-            return alternate
-    return name
-
-
 def root_device_hints(
     hardware_data: list[dict], bmh: dict, policy: str = "smallest", **options
 ) -> dict:
@@ -71,8 +53,14 @@ def root_device_hints(
     the smallest eligible disk; it is configured with min_size, the minimum
     size in GiB, which defaults to DEFAULT_MIN_SIZE_GIB. The hint then uses
     the first non-empty identity the inspected disk reports, in order:
-    serialNumber, wwn, and the device name as the fallback. An empty dict
-    means no eligible disk was found and Metal3 keeps its default behavior.
+    serialNumber, wwn, and the inspection's device name as the fallback.
+    An empty dict means no eligible disk was found and Metal3 keeps its
+    default behavior.
+
+    No device name is stable on virtio: the probe-order letters reshuffle
+    and libvirt reassigns the PCI slots behind by-path links, so disks
+    without a serial or wwn cannot be hinted reliably — set a libvirt disk
+    serial on such guests.
     """
     try:
         selected_policy = RootDiskPolicy(policy)
@@ -85,7 +73,7 @@ def root_device_hints(
         value = disk.get(key)
         if isinstance(value, str) and value.strip():
             return {key: value.strip()}
-    return {"deviceName": _device_name(disk)}
+    return {"deviceName": disk["name"]}
 
 
 class FilterModule:

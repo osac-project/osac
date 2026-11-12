@@ -1,0 +1,5 @@
+apiVersion: v2
+name: osac-caas-bootstrap
+description: AWX bootstrap for the dedicated OSAC CaaS integration installation
+type: application
+version: 0.1.0

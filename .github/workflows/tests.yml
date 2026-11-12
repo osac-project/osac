@@ -18,7 +18,7 @@ on:  # yamllint disable-line rule:truthy
         default: ""
       kind:
         description: >-
-          Which tests: go-unit, ui-unit, metering-contract, it-fulfillment-service, it-osac-operator,
+          Which tests: go-unit, caas-unit, ui-unit, metering-contract, it-caas, it-fulfillment-service, it-osac-operator,
           it-bare-metal-fulfillment-operator, it-osac-aap, it-osac-installer, helm-unit or
           it-osac-installer-preflight-helm3/-helm322/-helm4
         required: true
@@ -123,6 +123,80 @@ jobs:
       - working-directory: osac-ui
         if: inputs.kind == 'ui-unit'
         run: pnpm test
+      # --- CaaS module checks and unit tests
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'caas-unit'
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        if: inputs.kind == 'caas-unit'
+        with:
+          working-directory: tests/integration/caas
+      - name: Install Helm
+        if: inputs.kind == 'caas-unit'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+      - name: Check and test CaaS integration module
+        if: inputs.kind == 'caas-unit'
+        run: make -C tests/integration/caas check unit
+
+      # --- integration test: CaaS with native providers simulated on Kind
+      # PRs test their head commit so AWX can fetch that same revision from the contributor's fork.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'it-caas'
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        if: inputs.kind == 'it-caas'
+        with:
+          working-directory: tests/integration/caas
+      - name: Install Helm
+        if: inputs.kind == 'it-caas'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+      - name: Install Kind
+        if: inputs.kind == 'it-caas'
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
+        with:
+          install_only: true
+      - name: Prepare CaaS integration environment
+        if: inputs.kind == 'it-caas'
+        env:
+          CONTAINER_TOOL: docker
+          LOG_LEVEL: debug
+          PROJECT_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        run: |
+          echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local fulfillment-internal-api.osac.svc.cluster.local keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
+          make -C osac-installer ensure-inotify
+          make -C tests/integration/caas prepare \
+            PROJECT_URL="https://github.com/${PROJECT_REPO}.git"
+
+      - name: Run CaaS integration tests
+        if: inputs.kind == 'it-caas'
+        env:
+          CONTAINER_TOOL: docker
+          LOG_LEVEL: debug
+        run: make -C tests/integration/caas run
+      - name: Collect CaaS diagnostics
+        if: inputs.kind == 'it-caas' && failure()
+        run: |
+          log_dir=tests/integration/caas/logs
+          mkdir -p "$log_dir"
+          kind export logs "$log_dir" --name osac-dev-caas || true
+      - if: inputs.kind == 'it-caas' && failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: caas-integration-logs${{ inputs.artifact_suffix }}
+          path: |
+            tests/integration/caas/logs
+            fulfillment-service/logs
+          retention-days: 7
+
       # --- integration test: fulfillment-service
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'it-fulfillment-service'

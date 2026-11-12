@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: caas-it-ignition
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: caas-it-ignition
+  template:
+    metadata:
+      labels:
+        app: caas-it-ignition
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: http
+          image: {{ .Values.images.ignition | quote }}
+          imagePullPolicy: {{ .Values.images.ignitionPullPolicy }}
+          command: [python3, -m, http.server, '8080', --directory, /ignition]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            timeoutSeconds: 2
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+          volumeMounts:
+            - name: ignition
+              mountPath: /ignition
+              readOnly: true
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+      volumes:
+        - name: ignition
+          configMap:
+            name: caas-it-ignition
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: caas-it-ignition
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  selector:
+    app: caas-it-ignition
+  ports:
+    - port: 80
+      targetPort: 8080

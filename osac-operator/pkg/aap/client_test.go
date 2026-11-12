@@ -346,13 +346,18 @@ var _ = Describe("Client", func() {
 
 					w.WriteHeader(http.StatusOK)
 					_ = json.NewEncoder(w).Encode(map[string]any{
-						"id":               789,
-						"status":           "successful",
-						"started":          time.Now().UTC().Format(time.RFC3339),
-						"finished":         time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
-						"extra_vars":       "{\"key\": \"value\"}",
-						"artifacts":        map[string]any{"l2_vni": 14, "l3_vni": 11},
-						"result_traceback": "",
+						"id":                    789,
+						"status":                "successful",
+						"playbook":              "osac-aap/create.yml",
+						"project":               8,
+						"instance_group":        3,
+						"execution_environment": 4,
+						"scm_revision":          "selected-commit",
+						"started":               time.Now().UTC().Format(time.RFC3339),
+						"finished":              time.Now().UTC().Add(time.Minute).Format(time.RFC3339),
+						"extra_vars":            "{\"key\": \"value\"}",
+						"artifacts":             map[string]any{"l2_vni": 14, "l3_vni": 11},
+						"result_traceback":      "",
 					})
 				}))
 				client = aap.NewClient(server.URL, "test-token", false)
@@ -363,6 +368,11 @@ var _ = Describe("Client", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(job.ID).To(Equal(789))
 				Expect(job.Status).To(Equal("successful"))
+				Expect(job.Playbook).To(Equal("osac-aap/create.yml"))
+				Expect(job.ProjectID).To(Equal(8))
+				Expect(job.InstanceGroupID).To(Equal(3))
+				Expect(job.ExecutionEnvironmentID).To(Equal(4))
+				Expect(job.SCMRevision).To(Equal("selected-commit"))
 				Expect(string(job.Artifacts)).To(MatchJSON(`{"l2_vni":14,"l3_vni":11}`))
 			})
 		})
@@ -382,6 +392,111 @@ var _ = Describe("Client", func() {
 		})
 	})
 
+	DescribeTable("enforces each job query's pagination bound", func(byLabel bool, limit int) {
+		requests := 0
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
+			requests++
+			Expect(r.URL.Query().Get("page")).To(Equal(fmt.Sprint(requests)))
+			Expect(r.URL.Query().Get("page_size")).To(Equal("200"))
+			Expect(json.NewEncoder(w).Encode(map[string]any{
+				"next": "/v2/jobs/?page=next", "results": []any{},
+			})).To(Succeed())
+		}))
+		client = aap.NewClient(server.URL, "test-token", false)
+
+		var jobs []aap.Job
+		var err error
+		if byLabel {
+			jobs, err = client.ListJobsByLabel(ctx, "attempt-label")
+		} else {
+			jobs, err = client.ListJobsByPlaybook(ctx, "create.yml", time.Now())
+		}
+		Expect(err).To(MatchError(ContainSubstring(fmt.Sprintf("exceeded %d pages", limit))))
+		Expect(jobs).To(BeNil())
+		Expect(requests).To(Equal(limit))
+	},
+		Entry("production attempt labels", true, 10),
+		Entry("retained playbook history", false, 100),
+	)
+
+	Describe("ListJobsByPlaybook", func() {
+		It("lists attempts across templates and pages using an encoded playbook filter", func() {
+			const playbook = "osac-aap/create & configure.yml"
+			since := time.Date(2026, time.November, 13, 10, 20, 30, 123, time.UTC)
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
+				Expect(r.Method).To(Equal(http.MethodGet))
+				Expect(r.URL.Path).To(Equal("/v2/jobs/"))
+				Expect(r.Header.Get("Authorization")).To(Equal("Bearer test-token"))
+				Expect(r.URL.Query().Get("playbook")).To(Equal(playbook))
+				Expect(r.URL.Query().Get("created__gte")).To(Equal(since.Format(time.RFC3339Nano)))
+				Expect(r.URL.Query().Has("job_template")).To(BeFalse())
+				Expect(r.URL.Query().Get("order_by")).To(Equal("id"))
+				Expect(r.URL.Query().Get("page_size")).To(Equal("200"))
+				if r.URL.Query().Get("page") == "1" {
+					Expect(json.NewEncoder(w).Encode(map[string]any{
+						"next":    "/api/v2/jobs/?page=2",
+						"results": []map[string]any{{"id": 1, "job_template": 10, "playbook": playbook, "status": "failed"}},
+					})).To(Succeed())
+					return
+				}
+				Expect(r.URL.Query().Get("page")).To(Equal("2"))
+				Expect(json.NewEncoder(w).Encode(map[string]any{
+					"next":    nil,
+					"results": []map[string]any{{"id": 2, "job_template": 11, "playbook": playbook, "status": "successful"}},
+				})).To(Succeed())
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+
+			jobs, err := client.ListJobsByPlaybook(ctx, playbook, since)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(jobs).To(HaveLen(2))
+			Expect(jobs[0].ID).To(Equal(1))
+			Expect(jobs[0].Playbook).To(Equal(playbook))
+			Expect(jobs[0].Status).To(Equal("failed"))
+			Expect(jobs[1].ID).To(Equal(2))
+			Expect(jobs[1].Status).To(Equal("successful"))
+		})
+
+		DescribeTable("rejects incomplete history bounds", func(playbook string, since time.Time) {
+			client = aap.NewClient("http://unused.invalid", "test-token", false)
+			_, err := client.ListJobsByPlaybook(ctx, playbook, since)
+			Expect(err).To(MatchError("job playbook and creation time must be provided"))
+		}, Entry("missing playbook", "", time.Now()), Entry("missing creation time", "create.yml", time.Time{}))
+	})
+
+	Describe("ListActiveJobsByPlaybook", func() {
+		It("excludes terminal history on every page", func() {
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
+				Expect(r.URL.Query().Get("playbook")).To(Equal("create.yml"))
+				Expect(r.URL.Query().Get("not__status__in")).To(Equal("successful,failed,error,canceled"))
+				Expect(r.URL.Query().Has("created__gte")).To(BeFalse())
+				page := r.URL.Query().Get("page")
+				if page == "1" {
+					Expect(json.NewEncoder(w).Encode(map[string]any{
+						"next": "/v2/jobs/?page=2", "results": []aap.Job{{ID: 1, Status: "pending"}},
+					})).To(Succeed())
+					return
+				}
+				Expect(page).To(Equal("2"))
+				Expect(json.NewEncoder(w).Encode(map[string]any{
+					"next": nil, "results": []aap.Job{{ID: 2, Status: "running"}},
+				})).To(Succeed())
+			}))
+			client = aap.NewClient(server.URL, "test-token", false)
+			jobs, err := client.ListActiveJobsByPlaybook(ctx, "create.yml")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(jobs).To(HaveLen(2))
+		})
+
+		It("requires a playbook", func() {
+			client = aap.NewClient("http://unused.invalid", "test-token", false)
+			_, err := client.ListActiveJobsByPlaybook(ctx, "")
+			Expect(err).To(MatchError("job playbook must be provided"))
+		})
+	})
 	Describe("GetTemplateByName", func() {
 		Context("when template is a job_template", func() {
 			BeforeEach(func() {

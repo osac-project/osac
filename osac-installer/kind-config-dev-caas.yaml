@@ -1,0 +1,24 @@
+# Disposable local CaaS integration environment.
+apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.32.2
+    extraPortMappings:
+      - containerPort: 30443
+        hostPort: 8443
+        listenAddress: "127.0.0.1"
+      - containerPort: 30080
+        hostPort: 8080
+        listenAddress: "127.0.0.1"
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            service-account-issuer: https://kubernetes.default.svc
+            service-account-signing-key-file: /etc/kubernetes/pki/sa.key
+      - |
+        kind: KubeletConfiguration
+        containerLogMaxSize: "64Mi"
+        containerLogMaxFiles: 20

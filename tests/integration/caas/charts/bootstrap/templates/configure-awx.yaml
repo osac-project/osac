@@ -1,0 +1,78 @@
+{{- if .Values.bootstrap.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: caas-it-configure-awx
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  template:
+    spec:
+      serviceAccountName: osac-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: Never
+      containers:
+        - name: configure
+          image: {{ required "images.ee is required" .Values.images.ee | quote }}
+          imagePullPolicy: {{ .Values.images.eePullPolicy }}
+          command: [ansible-playbook, /bootstrap/configure-awx.yml]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: CONTROLLER_OPTIONAL_API_URLPATTERN_PREFIX
+              value: /api/
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: AAP_HOSTNAME
+              value: http://awx-service
+            - name: AAP_INSTANCE_NAME
+              value: awx
+            - name: AAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: awx-admin-password
+                  key: password
+            - name: AAP_PROJECT_GIT_URI
+              value: {{ .Values.project.url | quote }}
+            - name: AAP_PROJECT_GIT_BRANCH
+              value: {{ .Values.project.commit | quote }}
+            - name: AAP_EE_IMAGE
+              value: {{ required "images.ee is required" .Values.images.ee | quote }}
+            - name: AAP_EE_IMAGE_PULL
+              value: {{ index (dict "Always" "always" "IfNotPresent" "missing" "Never" "never") .Values.images.eePullPolicy | quote }}
+          volumeMounts:
+            - name: temporary
+              mountPath: /tmp
+            - name: bootstrap
+              mountPath: /bootstrap
+              readOnly: true
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+      volumes:
+        - name: temporary
+          emptyDir: {}
+        - name: bootstrap
+          configMap:
+            name: caas-it-awx-bootstrap
+{{- end }}

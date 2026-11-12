@@ -73,6 +73,7 @@ respective areas.
 | Install preflight rendering contract, hook log policy, or CSI hook deadlines | Helm contract | `uv run --script scripts/test-preflight-render.py` |
 | Kind preflight harness readiness or fixture restoration | Unit (mocked commands) | `uv run --script scripts/test-preflight-harness.py` |
 | Install preflight against a real API server, upgrade behavior, or failed-hook logs | Component integration | `uv run --script scripts/test-preflight-kind.py` against a Kind context; see [install preflight](../docs/INTEGRATION-TESTING.md#install-preflight-osac-6561) |
+| CaaS suite delegation | Unit with command stubs | `make kind-runtime-test`; see the [CaaS guide](../tests/integration/caas/README.md). |
 | Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
 
 ## Validation
@@ -110,5 +111,6 @@ make install-osac PLATFORM=kind PROFILE=dev NS=osac
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```
 
-Supported test suites are `all`, `fulfillment`, `compute-storage`, `operator`, and `bmf`; see the
+Supported test suites are `all`, `fulfillment`, `compute-storage`, `operator`, `bmf`, and the
+opt-in `caas` suite (`PLATFORM=kind PROFILE=dev`); see the
 Makefile and README for profile-specific prerequisites and cleanup.

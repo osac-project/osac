@@ -1,0 +1,75 @@
+---
+# Overlay values/dev/kind-instance.yaml, including its VMaaS-owned DiskImages API.
+global:
+  # Kind dev marks networking resources ready without provider operations.
+  networking:
+    provisioningEnabled: false
+operator:
+  enabled: false
+  image:
+    repository: localhost/osac-operator
+    tag: it
+    pullPolicy: Never
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+  aap:
+    url: http://awx-service.osac.svc.cluster.local:80/api
+    statusPollInterval: 2s
+  controllers:
+    computeInstance: false
+    storage: false
+    volume: false
+  consoleProxy:
+    disabled: true
+service:
+  images:
+    service:
+      repository: localhost/fulfillment-service
+      tag: it
+      pullPolicy: Never
+  log:
+    headers: false
+    bodies: false
+  consoleProxy:
+    disabled: true
+aap:
+  instanceGroups:
+    clusterFulfillment:
+      enabled: true
+      config:
+        HOSTED_CLUSTER_BASE_DOMAIN: caas-it.test
+        # Reserved test domains stay outside the production DNS allowlist.
+        EXTERNAL_ACCESS_BASE_DOMAIN: caas-it.test
+    networkFulfillment:
+      enabled: false
+bmf:
+  replicaCount: 1
+  image:
+    repository: localhost/bmf-operator
+    tag: it
+    pullPolicy: Never
+  testBackend:
+    metal3:
+      enabled: false
+  metal3:
+    enabled: true
+    namespace: simulated-metal3
+    hostClass: metal3
+  secrets:
+    inventoryConfig: osac-inventory-config
+    managementConfig: osac-management-config
+  env:
+    aapUrl: http://awx-service.osac.svc.cluster.local:80/api
+    aapTokenSecretName: awx-token
+    aapTokenSecretKey: token
+    aapInsecureSkipVerify: "false"
+metering:
+  image:
+    repository: localhost/metering-service
+    tag: it
+    pullPolicy: Never
+# Production validation expects real BMO/Provisioning; this suite provides
+# strict APIs and native BMH reactions without BMO/Ironic.
+validation:
+  enabled: false

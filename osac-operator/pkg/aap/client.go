@@ -110,12 +110,17 @@ type LaunchWorkflowTemplateResponse struct {
 
 // Job represents an AAP job with status information.
 type Job struct {
-	ID              int       `json:"id"`
-	Status          string    `json:"status"`
-	Started         time.Time `json:"started"`
-	Finished        time.Time `json:"finished"`
-	ExtraVars       string    `json:"extra_vars"` // AAP returns this as a JSON-encoded string
-	ResultTraceback string    `json:"result_traceback"`
+	ID                     int       `json:"id"`
+	Status                 string    `json:"status"`
+	Playbook               string    `json:"playbook"`
+	ProjectID              int       `json:"project"`
+	InstanceGroupID        int       `json:"instance_group"`
+	ExecutionEnvironmentID int       `json:"execution_environment"`
+	SCMRevision            string    `json:"scm_revision"`
+	Started                time.Time `json:"started"`
+	Finished               time.Time `json:"finished"`
+	ExtraVars              string    `json:"extra_vars"` // AAP returns this as a JSON-encoded string
+	ResultTraceback        string    `json:"result_traceback"`
 	// JobExplanation is AAP's explanation of how the job ended, for example
 	// the timeout explanation.
 	JobExplanation string          `json:"job_explanation"`
@@ -232,31 +237,56 @@ func (c *Client) GetJob(ctx context.Context, jobID string) (*Job, error) {
 // name, lowest job ID first. The list entries carry no artifacts; read a job
 // with GetJob for its result.
 func (c *Client) ListJobsByLabel(ctx context.Context, labelName string) ([]Job, error) {
-	const pageSize = 200
-	const maxPages = 10
+	return c.listJobs(ctx, url.Values{
+		"labels__name": {labelName},
+	}, fmt.Sprintf("label %s", labelName), 10)
+}
+
+// ListJobsByPlaybook returns retained attempts created since the resource existed,
+// oldest first. Jobs from different templates running the same playbook are included.
+func (c *Client) ListJobsByPlaybook(ctx context.Context, playbook string, since time.Time) ([]Job, error) {
+	if playbook == "" || since.IsZero() {
+		return nil, fmt.Errorf("job playbook and creation time must be provided")
+	}
+	return c.listJobs(ctx, url.Values{
+		"playbook":     {playbook},
+		"created__gte": {since.UTC().Format(time.RFC3339Nano)},
+	}, fmt.Sprintf("playbook %s", playbook), 100)
+}
+
+// ListActiveJobsByPlaybook excludes terminal history when checking installation reuse.
+func (c *Client) ListActiveJobsByPlaybook(ctx context.Context, playbook string) ([]Job, error) {
+	if playbook == "" {
+		return nil, fmt.Errorf("job playbook must be provided")
+	}
+	return c.listJobs(ctx, url.Values{
+		"playbook":        {playbook},
+		"not__status__in": {"successful,failed,error,canceled"},
+	}, fmt.Sprintf("active playbook %s", playbook), 100)
+}
+
+// listJobs reads filtered pages in job ID order.
+func (c *Client) listJobs(ctx context.Context, query url.Values, description string, maxPages int) ([]Job, error) {
+	query.Set("order_by", "id")
+	query.Set("page_size", "200")
 	jobs := make([]Job, 0)
 	for page := 1; page <= maxPages; page++ {
-		query := url.Values{
-			"labels__name": {labelName},
-			"order_by":     {"id"},
-			"page":         {fmt.Sprintf("%d", page)},
-			"page_size":    {fmt.Sprintf("%d", pageSize)},
-		}
+		query.Set("page", fmt.Sprintf("%d", page))
 		endpoint := fmt.Sprintf("%s/%s/jobs/?%s", c.baseURL, APIVersion, query.Encode())
 		resp, err := c.doRequestWithRedaction(ctx, http.MethodGet, endpoint, nil, true)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list jobs with label %s: %w", labelName, err)
+			return nil, fmt.Errorf("failed to list jobs for %s: %w", description, err)
 		}
 		var result jobsPage
 		if err := json.Unmarshal(resp, &result); err != nil {
-			return nil, fmt.Errorf("failed to parse job list for label %s: %w", labelName, err)
+			return nil, fmt.Errorf("failed to parse job list for %s: %w", description, err)
 		}
 		jobs = append(jobs, result.Results...)
 		if result.Next == nil || *result.Next == "" {
 			return jobs, nil
 		}
 	}
-	return nil, fmt.Errorf("job list for label %s exceeded %d pages", labelName, maxPages)
+	return nil, fmt.Errorf("job list for %s exceeded %d pages", description, maxPages)
 }
 
 type namedObject struct {

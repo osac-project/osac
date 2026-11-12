@@ -1,0 +1,3 @@
+{{ controller_instance_groups
+   | selectattr('name', 'in', selected_group_names)
+   | list | to_yaml }}

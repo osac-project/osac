@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osac-provider-simulator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: osac-provider-simulator
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: osac-provider-simulator
+  template:
+    metadata:
+      labels:
+        app: osac-provider-simulator
+    spec:
+      serviceAccountName: osac-provider-simulator
+      terminationGracePeriodSeconds: 30
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toJson . }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: simulator
+          image: {{ .Values.images.simulator | quote }}
+          imagePullPolicy: {{ .Values.images.simulatorPullPolicy }}
+          args: [{{ printf "--log-level=%s" .Values.logLevel | quote }}]
+          env:
+            - name: SIMULATED_NAMESPACES
+              value: {{ default (list .Release.Namespace) .Values.namespaces | join "," | quote }}
+            - name: METAL3_NAMESPACE
+              value: {{ .Values.metal3.namespace | quote }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - {name: health, containerPort: 8081}
+          startupProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}

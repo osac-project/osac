@@ -597,9 +597,26 @@ create_cluster() {
     ensure_podman_pid_limits "${name}" kind_cmd container_cmd || return 1
   fi
 
+  # Follow file symlinks so every client of the target receives the merged config.
+  local link hops=0
+  while [[ -L "${kubeconfig}" ]]; do
+    if (( hops >= 40 )); then
+      err "Kubeconfig symlink chain is too deep: ${kubeconfig}"
+      return 1
+    fi
+    link="$(readlink "${kubeconfig}")" || return 1
+    if [[ "${link}" == /* ]]; then
+      kubeconfig="${link}"
+    else
+      kubeconfig="$(dirname "${kubeconfig}")/${link}"
+    fi
+    hops=$((hops + 1))
+  done
+
   # Keep the previous kubeconfig intact if Kind finds a node container whose
   # Kubernetes bootstrap never completed. Write the new config as the invoking
-  # user (not root, even when kind ran under sudo), then replace it atomically.
+  # user (not root, even when kind ran under sudo), merge existing entries,
+  # then replace it atomically.
   mkdir -p "$(dirname "${kubeconfig}")"
   local kubeconfig_tmp
   kubeconfig_tmp="$(mktemp "${kubeconfig}.tmp.XXXXXX")"
@@ -611,6 +628,16 @@ create_cluster() {
     err "Kind cluster '${name}' has no usable kubeconfig; its control plane may be incomplete."
     err "If this cluster has no data to keep, remove it with: ${delete_command}"
     return 1
+  fi
+  if [[ -s "${kubeconfig}" ]]; then
+    local merged
+    merged="$(mktemp "${kubeconfig}.tmp.XXXXXX")"
+    if ! KUBECONFIG="${kubeconfig_tmp}:${kubeconfig}" kubectl config view --raw --flatten > "${merged}" || [[ ! -s "${merged}" ]]; then
+      rm -f "${kubeconfig_tmp}" "${merged}"
+      err "Could not merge Kind kubeconfig; the previous configuration is unchanged."
+      return 1
+    fi
+    mv -f "${merged}" "${kubeconfig_tmp}"
   fi
   chmod 600 "${kubeconfig_tmp}"
   mv -f "${kubeconfig_tmp}" "${kubeconfig}"

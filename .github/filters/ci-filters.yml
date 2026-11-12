@@ -346,6 +346,16 @@ unit-tests-osac-metering-schema:
 # osac-aap and osac-csi-driver hook Jobs.
 unit-tests-osac-installer:
   - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-*.py,osac-installer/scripts/test-kind-runtime.py,osac-installer/scripts/dev-full/**,osac-installer/scripts/lib.sh,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
+unit-tests-caas-integration:
+  - '{tests/integration/caas/**,fulfillment-service/**,osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
+
+# The CaaS Kind suite builds the platform and simulator images, installs the
+# dev infrastructure and AWX, and runs the API-led cluster scenarios.
+integration-tests-caas:
+  - '{tests/integration/caas/**,fulfillment-service/**,osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-aap/**,osac-installer/**,osac-metering/metering-service/**,osac-metering/schema/**,osac-metering/charts/**,osac-ui/charts/ui/**,go.work,go.work.sum,.containerignore,.github/actions/setup-go/**,.github/workflows/tests.yml,.github/workflows/integration-tests.yml,.github/ci-tests.yml}'
+  - '!**/*.md'
+  - '!**/docs/**'
+  - '!**/LICENSE'
 
 # Integration test legs. osac-installer/** is included on the
 # first three: their jobs all run setup/tests via `make -C osac-installer

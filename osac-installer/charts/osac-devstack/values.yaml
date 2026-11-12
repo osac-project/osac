@@ -36,6 +36,8 @@ virt:
 # simplicity - the operator watches its own namespace by default.
 awx:
   enabled: true
+  configure:
+    enabled: true
   operatorChart: awx-operator/awx-operator
   operatorVersion: ""  # Empty = latest
   executionEnvironment:

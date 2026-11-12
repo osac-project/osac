@@ -1,0 +1,15 @@
+---
+virt:
+  enabled: false
+awx:
+  enabled: true
+  configure:
+    # The CaaS chart configures AWX from the selected Git commit and EE image.
+    # Keep the general devstack bootstrap from also configuring this instance.
+    enabled: false
+ui:
+  enabled: false
+catalog:
+  enabled: false
+tenant:
+  enabled: false

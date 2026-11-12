@@ -169,6 +169,7 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args for the OSAC chart only |
+| `KIND_FAKE_CRDS` | Install placeholder APIs on Kind (default `true`); native-provider suites set `false` |
 | `DRY_RUN=1` | Render all releases from `make install` with `helm template`; no cluster connections or cluster commands are used |
 | `DRY_RUN_CLUSTER_DOMAIN` | Cluster ingress domain required for an OpenShift dry run |
 | `DRY_RUN_OCP_VERSION` | OpenShift major.minor version required for an OpenShift dry run, e.g. `4.20` |
@@ -261,6 +262,14 @@ The existing `make install ...` command continues to install a single-cluster
 OSAC deployment. `scripts/setup-remote-cluster.sh prepare` prepares only the
 workload cluster. Without arguments, the script retains the existing
 post-install configuration flow.
+
+#### CaaS integration tests
+
+```bash
+make test PLATFORM=kind PROFILE=dev NS=osac SUITE=caas
+```
+
+See the [CaaS guide](../tests/integration/caas/README.md).
 
 #### Full local dev environment (`PROFILE=dev-full`, kind only)
 

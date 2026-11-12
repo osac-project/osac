@@ -1,5 +1,6 @@
+import IntegerField from '@osac/ui-components/components/Form/base/IntegerField';
+
 import { useTranslation } from '../../../../hooks/useTranslation';
-import { InputField } from '../../../Form/InputField';
 import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 
 interface ClusterPoolSizeFieldProps extends ProvisioningFieldControlProps {
@@ -16,13 +17,12 @@ const ClusterPoolSizeField = ({
   const { t } = useTranslation();
 
   return (
-    <InputField
+    <IntegerField
       name={name}
       label={t('Nodes')}
       fieldId={fieldId}
       isRequired={isRequired}
       isDisabled={isDisabled}
-      type="number"
     />
   );
 };

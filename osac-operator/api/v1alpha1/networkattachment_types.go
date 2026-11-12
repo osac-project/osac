@@ -190,12 +190,17 @@ type NetworkAttachmentList struct {
 	Items           []NetworkAttachment `json:"items"`
 }
 
-// NetworkAttachmentName returns the CR name of the NetworkAttachment of a workload.
-func NetworkAttachmentName(kind NetworkAttachmentTargetKind, id string) string {
-	switch kind {
-	case NetworkAttachmentTargetComputeInstance:
-		return "computeinstance-" + id
-	default:
-		return "baremetalinstance-" + id
+// NetworkAttachmentName returns the CR name of the NetworkAttachment of a
+// workload: the lowercase target kind and the target API ID, followed by the
+// resolved interface name when the interface is named. The VM overlay
+// interface is unnamed; a bare-metal physical interface is named.
+func NetworkAttachmentName(kind NetworkAttachmentTargetKind, id, interfaceName string) string {
+	name := "baremetalinstance-" + id
+	if kind == NetworkAttachmentTargetComputeInstance {
+		name = "computeinstance-" + id
 	}
+	if interfaceName != "" {
+		name += "-" + interfaceName
+	}
+	return name
 }

@@ -661,7 +661,7 @@ var _ = Describe("Tenant lifecycle", func() {
 		Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
 	})
 
-	It("Persists break-glass credentials to a Secret and clears inline status", func(ctx context.Context) {
+	It("Persists the break-glass username without the password and clears inline status", func(ctx context.Context) {
 		// breakGlassSecretName mirrors the unexported constant in the tenant reconciler.
 		const breakGlassSecretName = "break-glass-credentials"
 
@@ -690,39 +690,16 @@ var _ = Describe("Tenant lifecycle", func() {
 			"inline status credentials should be cleared once persisted to a secret")
 		Expect(object.GetStatus().GetBreakGlassUserId()).ToNot(BeEmpty())
 
-		By("Fetching the referenced secret and verifying it carries the credentials")
+		By("Fetching the referenced secret and verifying it omits the password")
 		secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
 		secretResponse, err := secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{
 			Id: ref.GetId(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		data := secretResponse.GetObject().GetData()
-		Expect(data).To(HaveKey("password"))
 		Expect(data).To(HaveKey("username"))
-		Expect(data["password"]).ToNot(BeEmpty())
+		Expect(data).ToNot(HaveKey("password"))
 		Expect(string(data["username"])).To(Equal(fmt.Sprintf("%s-osac-break-glass", name)))
-
-		By("Verifying the persisted password authenticates as the break-glass user")
-		// The credential is created temporary, so the UPDATE_PASSWORD required action must be
-		// cleared before the stored password can be used to obtain a token.
-		code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPut,
-			fmt.Sprintf("/users/%s", object.GetStatus().GetBreakGlassUserId()),
-			map[string]any{
-				"requiredActions": []string{},
-			})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(code).To(Equal(http.StatusNoContent))
-
-		tokenSource, err := tool.makeKeycloakTokenSource(ctx, string(data["username"]), string(data["password"]))
-		Expect(err).ToNot(HaveOccurred())
-
-		// Obtaining an access token from the OIDC password flow proves the persisted password
-		// authenticates as the break-glass user. We deliberately do not exercise a downstream gRPC
-		// call here: that would assert the break-glass user's API authorization, which is out of
-		// scope for this test (and covered separately by the break-glass JWT/role specs).
-		token, err := tokenSource.Token(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(token.Access).ToNot(BeEmpty())
 	})
 
 	It("Duplicate tenant name fails", func(ctx context.Context) {

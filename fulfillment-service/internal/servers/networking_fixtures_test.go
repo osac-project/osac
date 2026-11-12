@@ -254,6 +254,24 @@ func seedReadyDefaultNetworking(tenant string, capacity int64) defaultNetworking
 	return seedReadyDefaultNetworkingIDs(tenant, result, vn)
 }
 
+// seedReadyDefaultNetworkingWithNAT adds a READY NATGateway to the tenant's
+// default VirtualNetwork for Cluster creation tests with provider networking enabled.
+func seedReadyDefaultNetworkingWithNAT(tenant string) defaultNetworkingFixture {
+	result := seedReadyDefaultNetworking(tenant, 0)
+	gateways, err := fixtureDAO[*privatev1.NATGateway]().List().SetFilter(fmt.Sprintf(
+		"this.spec.virtual_network.id == %q", result.virtualNetworkID)).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	for _, gateway := range gateways.GetItems() {
+		if !gateway.GetMetadata().HasDeletionTimestamp() &&
+			gateway.GetStatus().GetState() == privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY {
+			result.natGatewayID = gateway.GetId()
+			return result
+		}
+	}
+	result.natGatewayID = seedReadyNATGateway(tenant, result.virtualNetworkID, true)
+	return result
+}
+
 func seedReadyDefaultNetworkingIDs(tenant string, result defaultNetworkingFixture,
 	vn *privatev1.VirtualNetwork) defaultNetworkingFixture {
 	result.virtualNetworkID = vn.GetId()

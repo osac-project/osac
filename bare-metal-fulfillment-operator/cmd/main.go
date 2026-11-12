@@ -60,6 +60,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/profile"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
+	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	// +kubebuilder:scaffold:imports
@@ -106,6 +107,7 @@ const (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(osacv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(opv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(metal3api.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -289,18 +291,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create shared provisioning, networking, and IP discovery providers
+	// Create the shared provisioning provider
 	var provisioningProvider provisioning.ProvisioningProvider
-	var networkingProvider provisioning.ProvisioningProvider
-	var ipDiscoveryProvider provisioning.ProvisioningProvider
-	var aapClient *aap.Client
 	aapURL := helpers.GetEnvWithDefault(envAAPURL, "")
 	aapToken := helpers.GetEnvWithDefault(envAAPToken, "")
 	if aapURL != "" && aapToken != "" {
 		insecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
 		templatePrefix := helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac")
 
-		aapClient = aap.NewClient(aapURL, aapToken, insecureSkipVerify)
+		aapClient := aap.NewClient(aapURL, aapToken, insecureSkipVerify)
 
 		var err error
 		provisioningProvider, err = provisioning.NewProvider(provisioning.ProviderConfig{
@@ -310,24 +309,6 @@ func main() {
 		if err != nil {
 			setupLog.Error(err, "failed to create AAP provisioning provider")
 			os.Exit(1)
-		}
-
-		if networkingProvisioningEnabled {
-			// Networking provisioning (onboard) and deprovisioning (offboard) are both a
-			// port move; the single move playbook derives the direction from the CR.
-			networkingProvider = provisioning.NewAAPProvider(
-				aapClient,
-				templatePrefix+"-move-network-attachment",
-				templatePrefix+"-move-network-attachment",
-			)
-
-			ipDiscoveryProvider = provisioning.NewAAPProvider(
-				aapClient,
-				templatePrefix+"-query-dhcp-lease",
-				"",
-			)
-		} else {
-			setupLog.Info("BMI networking provisioning disabled, move-network-attachment and query-dhcp-lease will be skipped")
 		}
 
 		setupLog.Info("AAP provisioning provider configured")
@@ -341,8 +322,7 @@ func main() {
 	}
 
 	if err := setupBareMetalInstanceController(
-		ctx, mgr, provisioningProvider, networkingProvider,
-		ipDiscoveryProvider, aapClient,
+		ctx, mgr, provisioningProvider, networkingProvisioningEnabled,
 	); err != nil {
 		setupLog.Error(err, "unable to setup controller", "controller", "BareMetalInstance")
 		os.Exit(1)
@@ -448,9 +428,7 @@ func setupBareMetalInstanceController(
 	ctx context.Context,
 	mgr ctrl.Manager,
 	provisioningProvider provisioning.ProvisioningProvider,
-	networkingProvider provisioning.ProvisioningProvider,
-	ipDiscoveryProvider provisioning.ProvisioningProvider,
-	aapClient *aap.Client,
+	networkingEnabled bool,
 ) error {
 	// Read and parse inventory configuration
 	inventoryConfigPath := helpers.GetEnvWithDefault(envInventoryConfigPath, "/etc/osac/inventory/inventory.yaml")
@@ -528,9 +506,7 @@ func setupBareMetalInstanceController(
 		inventoryClient,
 		managementClient,
 		provisioningProvider,
-		networkingProvider,
-		ipDiscoveryProvider,
-		aapClient,
+		networkingEnabled,
 		noFreeHostsPollInterval,
 		tryLockFailPollInterval,
 		managementRecheckInterval,

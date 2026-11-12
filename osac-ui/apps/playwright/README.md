@@ -54,7 +54,7 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
 export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=<keycloak-user>
 read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD && printf '\n'
 bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
-  --osac-ui-dir="$PWD" --tag=happy_basic
+  --osac-ui-dir="$PWD" --tag=vmaas_all
 unset OSAC_ADMIN_PASSWORD
 ```
 
@@ -89,7 +89,7 @@ Environment variables:
 | --------------------- | ------------------------------------------------------------------------------------------------- |
 | `OSAC_UI_BASE_URL`    | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
 | `OSAC_API_BASE_URL`   | Optional Fulfillment API URL; auto-discovered from the `fulfillment-api` route when possible      |
-| `OSAC_CLI_PATH`       | Optional path to the `osac` binary; the runner also checks `~/.local/bin/osac`                |
+| `OSAC_CLI_PATH`       | Optional path to the `osac` binary; the runner also checks `~/.local/bin/osac`                    |
 | `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                               |
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
@@ -152,21 +152,21 @@ export OSAC_ADMIN_USERNAME=<keycloak-user>
 read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
 ```
 
-Run the tenant create and delete flows together. The `vmaas-delete` project
-depends on `vmaas`, so creation runs before deletion:
+Run the tenant create and delete flows together in `full` mode:
 
 ```bash
-pnpm --filter @osac/playwright exec playwright test --project=vmaas-delete
+OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
+  --project=tenant
 ```
 
 Run the tenant create and delete flows separately:
 
 ```bash
-pnpm --filter @osac/playwright exec playwright test \
-  create.tenant.spec.ts --project=vmaas
+OSAC_VM_FLOW_MODE=create pnpm --filter @osac/playwright exec playwright test \
+  create.tenant.spec.ts --project=tenant
 
 pnpm --filter @osac/playwright exec playwright test \
-  delete.tenant.spec.ts --project=vmaas-delete --no-deps
+  delete.tenant.spec.ts --project=tenant-delete --no-deps
 ```
 
 ### Full VMaaS setup flow
@@ -191,27 +191,36 @@ The creation and VM portion of the full-flow journey runs in this order:
 
 The full-flow projects run in this order:
 
-1. `vmaas-full-flow-resources` creates the infrastructure resources and tenant.
-2. `vmaas-full-flow-catalog` creates and publishes the catalog item.
-3. `vmaas-full-flow` creates and verifies the VM.
-4. `vmaas-full-flow-vm-delete` deletes the VM as the tenant admin.
-5. `vmaas-full-flow-delete` removes the catalog item, disk image, instance
-   type, storage tier, tenant-admin RoleBinding and OSAC User, SSH public-key
-   Secret, tenant, and generated credential file as the admin user.
+1. `vmaas-full-flow-pre-resource` creates the infrastructure resources, catalog
+   item, and tenant.
+2. `vm-flow` creates and verifies the VM.
+3. `vmaas_full_happy_basic` deletes the VM as the tenant admin.
+4. `vmaas-full-flow-pre-resource-delete` removes the catalog item, disk image,
+   instance type, and storage tier as the admin user.
+5. `tenant-delete` removes the tenant-admin RoleBinding and OSAC User, SSH
+   public-key Secret, tenant, generated credential file, and full-flow state.
+
+`vmaas-all-full-flows` is the aggregator for complete VMaaS flows. It currently
+depends on `vmaas_full_happy_basic`; add future full-flow projects to its
+dependencies in `playwright.config.ts`.
 
 Run the complete creation flow, including VM creation, with:
 
 ```bash
 OSAC_VM_FLOW_MODE=create pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow
+  --project=vm-flow
 ```
 
 Run the complete deletion flow for an existing creation run with:
 
 ```bash
 OSAC_VM_FLOW_MODE=delete pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow-delete
+  --project=vmaas-full-flow-pre-resource
 ```
+
+In delete mode, `vmaas-full-flow-pre-resource` depends on `vm-flow`, so VM
+deletion runs first. The resource cleanup and tenant deletion run only after
+that VM cleanup succeeds.
 
 The creation command stores the non-secret run IDs in
 `/tmp/osac-vmaas-full-flow-state.json`. The deletion-only command reuses those
@@ -221,14 +230,14 @@ failed, the state file remains available for cleanup. VM deletion is
 idempotent when the tenant VM list is already empty; a different VM in the
 list is reported as a run-state mismatch instead of being deleted.
 
-The deletion target includes VM deletion first. In `full` mode, its dependency
-chain also runs the complete creation flow before cleanup.
+The full happy-flow project deletes the VM after the complete creation chain.
+Its pre-resource teardown then removes the remaining resources.
 
 Run the complete creation and deletion flow with:
 
 ```bash
 OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow-delete
+  --project=vmaas-all-full-flows
 ```
 
 The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the
@@ -240,7 +249,7 @@ resource already exists, so the remaining flow steps are not started. Use
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-full-flow --headed
+  --project=vm-flow --headed
 ```
 
 ### Storage tier flow tests
@@ -255,15 +264,15 @@ when you need the same suffix across separate commands.
 
 The project run has two steps:
 
-1. `vmaas-storage-tier` creates the Storage tier and verifies its configuration.
-2. `vmaas-storage-tier-delete` deletes the configured Storage tier after the
+1. `storage-tier` creates the Storage tier and verifies its configuration.
+2. `storage-tier-delete` deletes the configured Storage tier after the
    create flow completes.
 
 Set the common variables from the [Running](#running) section, then run the
 complete flow from the repository root:
 
 ```bash
-pnpm --filter @osac/playwright exec playwright test --project=vmaas-storage-tier
+pnpm --filter @osac/playwright exec playwright test --project=storage-tier
 ```
 
 Playwright runs the create project followed by its teardown. Add `--headed` if
@@ -271,7 +280,7 @@ a graphical display is available:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-storage-tier --headed
+  --project=storage-tier --headed
 ```
 
 To run Storage tier create and delete separately, export the same run ID before
@@ -282,10 +291,10 @@ they do not use `tenant_name` or create or delete a tenant:
 export OSAC_STORAGE_TIER_TEST_RUN_ID=mytest123
 
 pnpm --filter @osac/playwright exec playwright test \
-  create.storage_tier.spec.ts --project=vmaas-storage-tier --no-deps
+  create.storage_tier.spec.ts --project=storage-tier --no-deps
 
 pnpm --filter @osac/playwright exec playwright test \
-  delete.storage_tier.spec.ts --project=vmaas-storage-tier-delete --no-deps
+  delete.storage_tier.spec.ts --project=storage-tier-delete --no-deps
 ```
 
 The `--no-deps` option skips the create project's automatic teardown, so the
@@ -319,13 +328,13 @@ Run the disk image lifecycle flow:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-disk-image-lifecycle
+  --project=disk-image-lifecycle
 ```
 
-The `vmaas-disk-image-lifecycle` project depends on `vmaas-disk-image`. The
+The `disk-image-lifecycle` project depends on `disk-image`. The
 create project's teardown deletes the image after the lifecycle project
 finishes, including when the lifecycle test fails. To run only the delete
-project, use `--project=vmaas-disk-image-delete --no-deps`. If the configured
+project, use `--project=disk-image-delete --no-deps`. If the configured
 image is absent, the delete test creates it from `extravars.yaml` and then
 deletes it.
 Each run appends a unique suffix to `disk_image.name`, and the full name appears
@@ -343,10 +352,10 @@ create test fails clearly if that instance type already exists.
 
 The tests run in this dependency order:
 
-1. `vmaas-instance-type` creates the instance type and verifies it is `Active`.
-2. `vmaas-instance-type-lifecycle` verifies the `Deprecate`, `Obsolete`, and
+1. `instance-type` creates the instance type and verifies it is `Active`.
+2. `instance-type-lifecycle` verifies the `Deprecate`, `Obsolete`, and
    `Reactivate` transitions.
-3. `vmaas-instance-type-delete` deletes the instance type and waits for its row
+3. `instance-type-delete` deletes the instance type and waits for its row
    to disappear.
 
 Set the common variables from the [Running](#running) section, then run the
@@ -354,7 +363,7 @@ complete instance type flow from the `osac-ui/` workspace root:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-instance-type-lifecycle
+  --project=instance-type-lifecycle
 ```
 
 Playwright runs the create dependency, then runs the create project's teardown
@@ -363,20 +372,20 @@ command when a graphical display is available:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-instance-type-lifecycle --headed
+  --project=instance-type-lifecycle --headed
 ```
 
 To run the three instance-type tests separately, run them in this order:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  create.instance_type.spec.ts --project=vmaas-instance-type --no-deps
+  create.instance_type.spec.ts --project=instance-type --no-deps
 
 pnpm --filter @osac/playwright exec playwright test \
-  lifecycle.instance_type.spec.ts --project=vmaas-instance-type-lifecycle --no-deps
+  lifecycle.instance_type.spec.ts --project=instance-type-lifecycle --no-deps
 
 pnpm --filter @osac/playwright exec playwright test \
-  delete.instance_type.spec.ts --project=vmaas-instance-type-delete --no-deps
+  delete.instance_type.spec.ts --project=instance-type-delete --no-deps
 ```
 
 The `--no-deps` option is appropriate only for the separate commands because
@@ -391,7 +400,7 @@ projects; each project runs its own resource lifecycle:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-storage-tier --project=vmaas-instance-type-lifecycle
+  --project=storage-tier --project=instance-type-lifecycle
 ```
 
 ### Catalog UI flow tests
@@ -420,17 +429,17 @@ teardown. Both catalog operations verify the Catalog page:
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
 
 pnpm --filter @osac/playwright exec playwright test \
-  --project=vmaas-catalog
+  --project=catalog
 ```
 
 Run the flows separately:
 
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
-  create.catalog.spec.ts --project=vmaas-catalog
+  create.catalog.spec.ts --project=catalog
 
 pnpm --filter @osac/playwright exec playwright test \
-  delete.catalog.spec.ts --project=vmaas-catalog-delete --no-deps
+  delete.catalog.spec.ts --project=catalog-delete --no-deps
 ```
 
 Use `--headed` when a graphical display is available. Run these commands from

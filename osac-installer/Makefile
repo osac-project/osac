@@ -881,9 +881,10 @@ endif
 
 .PHONY: install-osac
 install-osac: validate-osac-inputs validate-osac-chart-oci-ref ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
+# The gate builds the same dependencies as a prerequisite, and a recursive
+# install that skips the gate (MULTICLUSTER_SKIP_GATE) still needs them.
 ifndef OSAC_CHART_OCI_REF
-	rm -rf $(OSAC_CHART)/charts
-	helm --repository-config $(LOCAL_HELM_REPOSITORY_CONFIG) dependency build $(OSAC_CHART)
+install-osac: helm-osac-deps
 endif
 ifneq ($(PLATFORM),kind)
 	oc create namespace $(NS) --dry-run=client -o yaml | oc apply -f -

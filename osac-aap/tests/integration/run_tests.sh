@@ -63,6 +63,7 @@ ROLE_TESTS=(
   "finalizer"
   "fulfillment_trust_sync"
   "lease"
+  "guest_ingress_vip_claim"
   "bmaas_metal3"
   "agentless_net_stub"
   "agentless_net_nat_gateway"

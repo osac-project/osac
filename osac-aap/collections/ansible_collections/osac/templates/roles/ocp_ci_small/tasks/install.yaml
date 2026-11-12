@@ -54,7 +54,6 @@
     external_access_name: "{{ cluster_order.metadata.name }}"
     external_access_state: present
     external_access_namespace: "{{ cluster_working_namespace }}"
-    external_access_agent_namespace: "{{ cluster_order.metadata.namespace }}"
 
 - name: Step - Retrieve kubeconfig
   ansible.builtin.include_role:

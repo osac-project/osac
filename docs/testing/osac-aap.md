@@ -67,6 +67,25 @@ shared ExternalIPPool lifecycle. DHCP leases, Linux and provider commands,
 Kind, an AAP server, a live switch, BGP convergence and packet delivery are
 not run.
 
+## CI guest ingress VIP
+
+`ocp_ci_small` requires `CI_GUEST_INGRESS_IP_RANGE` in
+`cluster-fulfillment-ig`, reserved outside DHCP and other address pools.
+Jobs sharing the range must share the `osac-ci-guest-ingress-vip-claims`
+ConfigMap (in the AAP `POD_NAMESPACE` by default). Claims are keyed by
+ClusterOrder UID and released after DNS and guest teardown; failed cleanup
+retains them.
+
+- Unit: `tests/unit/test_ingress_vip_claim.py` and
+  `tests/unit/test_caas_metallb_ingress.py` cover allocation and task ordering.
+- Integration: `targets/guest_ingress_vip_claim/tasks/baseline.yml`, included
+  in `make test`, exercises concurrent claims, retries, exhaustion, retention
+  and release against a real Kubernetes API. Guest MetalLB, DNS and network
+  traffic are outside this target.
+- E2E: the [two-NodeSet regression](../../tests/e2e/caas/regression/test_cluster_node_sets.py)
+  checks deployed creation, guest ClusterOperator health and deletion.
+  It does not force router or MetalLB advertiser failover.
+
 ## Network role coverage gate
 
 `make test` measures `roles/netris`, `roles/cudn_evpn` and their four plugins.

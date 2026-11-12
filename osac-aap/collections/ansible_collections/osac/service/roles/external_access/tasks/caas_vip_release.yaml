@@ -1,0 +1,55 @@
+---
+# Release the ClusterOrder's guest ingress VIP.
+#
+# DNS removal and hosted_cluster teardown precede this step. Verify that the
+# worker finalizer and HostedCluster are gone before allowing address reuse.
+# Uncertain teardown retains the claim and fails retryably.
+- name: Read the ClusterOrder after the guest cluster teardown
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: ClusterOrder
+    namespace: "{{ cluster_order.metadata.namespace }}"
+    name: "{{ cluster_order.metadata.name }}"
+  register: external_access_release_cluster_order
+  no_log: true
+
+- name: Read the HostedCluster after the guest cluster teardown
+  kubernetes.core.k8s_info:
+    api_version: hypershift.openshift.io/v1beta1
+    kind: HostedCluster
+    namespace: "{{ external_access_namespace }}"
+    name: "{{ external_access_name }}"
+  register: external_access_release_hosted_cluster
+  no_log: true
+
+- name: Set whether the guest ingress VIP can be released
+  ansible.builtin.set_fact:
+    external_access_vip_release_safe: >-
+      {{ (external_access_release_cluster_order.resources | length == 0
+          or (external_access_release_cluster_order.resources[0].metadata.uid == cluster_order.metadata.uid
+              and 'osac.openshift.io/baremetalworker-finalizer' not in
+              (external_access_release_cluster_order.resources[0].metadata.finalizers | default([]))))
+         and external_access_release_hosted_cluster.resources | length == 0 }}
+
+- name: Require verified teardown before releasing the guest ingress VIP
+  ansible.builtin.assert:
+    that:
+      - external_access_release_cluster_order.api_found | default(false) | bool
+      - external_access_release_hosted_cluster.api_found | default(false) | bool
+      - external_access_vip_release_safe | bool
+      - external_access_base_domain in external_access_supported_base_domains | default([])
+    fail_msg: >-
+      Retaining the guest ingress VIP claim until DNS removal, worker teardown
+      and HostedCluster deletion are verified. Keep the DNS domain configured
+      and retry the delete flow after teardown completes.
+
+- name: Release the guest ingress VIP
+  osac.service.ingress_vip_claim:
+    state: absent
+    registry_namespace: "{{ external_access_vip_registry_namespace }}"
+    registry_name: "{{ external_access_vip_registry_name }}"
+    owner_uid: "{{ cluster_order.metadata.uid }}"
+    owner_namespace: "{{ cluster_order.metadata.namespace }}"
+    owner_name: "{{ cluster_order.metadata.name }}"
+  register: external_access_vip_release
+  no_log: true

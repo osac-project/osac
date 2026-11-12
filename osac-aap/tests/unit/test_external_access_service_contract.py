@@ -42,12 +42,13 @@ def test_publish_and_clear_are_annotation_only_entry_points() -> None:
 def test_caas_entry_points_own_dns_lifecycle_without_network_dispatch() -> None:
     create_path = EXTERNAL_ACCESS / "tasks" / "caas_create.yaml"
     delete_path = EXTERNAL_ACCESS / "tasks" / "caas_delete.yaml"
-    dns_create = load_tasks(EXTERNAL_ACCESS / "tasks" / "caas_dns_create.yaml")
+    dns_create = load_tasks(EXTERNAL_ACCESS / "tasks" / "caas_dns_publish.yaml")
     dns_delete = load_tasks(EXTERNAL_ACCESS / "tasks" / "caas_dns_delete.yaml")
     create = load_tasks(create_path)
     delete = load_tasks(delete_path)
 
-    assert create[0]["ansible.builtin.include_tasks"] == "caas_dns_create.yaml"
+    assert create[0]["ansible.builtin.include_tasks"] == "caas_api_dns_create.yaml"
+    assert create[1]["ansible.builtin.include_tasks"] == "caas_ingress_create.yaml"
     assert delete[0]["ansible.builtin.include_tasks"] == "caas_dns_delete.yaml"
     assert any("Create DNS records" in task.get("name", "") for task in dns_create)
     assert any("Resolve authoritative nameserver" in task.get("name", "") for task in dns_create)
@@ -55,25 +56,23 @@ def test_caas_entry_points_own_dns_lifecycle_without_network_dispatch() -> None:
     assert any("Delete DNS records" in task.get("name", "") for task in dns_delete)
     assert "network_steps_collection" not in create_path.read_text()
     assert "network_steps_collection" not in delete_path.read_text()
-    assert create[1]["ansible.builtin.include_tasks"] == "publish.yaml"
+    assert create[2]["ansible.builtin.include_tasks"] == "publish.yaml"
     assert delete[1]["ansible.builtin.include_tasks"] == "clear.yaml"
     assert not any("retrieve_kubeconfig" in str(task) for task in create)
     assert not any("wait_for_network_cluster_operator" in str(task) for task in create)
 
-    agent_lookup = next(task for task in dns_create if task.get("name") == "Get agents assigned to this cluster")
-    assert agent_lookup["kubernetes.core.k8s_info"]["label_selectors"] == [
-        "{{ cluster_order_label }}={{ external_access_name }}"
-    ]
+    assert delete[2]["ansible.builtin.include_tasks"] == "caas_vip_release.yaml"
+    assert not (EXTERNAL_ACCESS / "tasks" / "caas_dns_create.yaml").exists()
 
 
-def test_legacy_ci_external_access_reuses_caas_dns_tasks() -> None:
+def test_legacy_ci_external_access_reuses_caas_lifecycle() -> None:
     create = load_tasks(CI_EXTERNAL_ACCESS / "tasks" / "create.yaml")
     delete = load_tasks(CI_EXTERNAL_ACCESS / "tasks" / "delete.yaml")
 
     assert create[0]["ansible.builtin.include_role"]["name"] == "osac.service.external_access"
-    assert create[0]["ansible.builtin.include_role"]["tasks_from"] == "caas_dns_create.yaml"
+    assert create[0]["ansible.builtin.include_role"]["tasks_from"] == "caas_create.yaml"
     assert delete[0]["ansible.builtin.include_role"]["name"] == "osac.service.external_access"
-    assert delete[0]["ansible.builtin.include_role"]["tasks_from"] == "caas_dns_delete.yaml"
+    assert delete[0]["ansible.builtin.include_role"]["tasks_from"] == "caas_delete.yaml"
 
 
 def test_caas_template_uses_service_entry_points() -> None:
@@ -115,7 +114,9 @@ def test_external_access_argument_spec_covers_caas_inputs() -> None:
     assert "cluster_working_namespace" not in options
 
     for name in (
-        "external_access_agent_namespace",
+        "external_access_metallb_ingress_range",
+        "external_access_vip_registry_namespace",
+        "external_access_vip_registry_name",
         "external_access_resource_wait_retries",
         "external_access_resource_wait_delay",
         "external_access_dns_ttl",

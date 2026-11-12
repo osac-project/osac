@@ -58,8 +58,10 @@ must be extended when generating more services.
   `Sensitive` attributes, and no `RequiresReplace` plan modifiers, so the
   generated schema accepts invalid combinations and can't express that
   immutable fields force replacement. Those rules are policy, not shape, and
-  stay hand-written (or become per-resource overrides in
-  `generator_config.yml`, which supports limited schema options).
+  stay hand-written. Note that the framework generator itself could emit
+  plan modifiers and custom validators — the intermediate specification
+  supports them, with imports and Go code snippets — but the OpenAPI step
+  can't derive them from the spec, so they never reach it.
 - `protoc-gen-openapiv2` doesn't know about `google.api.field_behavior`, so
   output-only fields such as `status` are generated as plain optional
   attributes instead of computed ones.

@@ -293,7 +293,7 @@ permutations and attaching immediately after a VM becomes Ready are not
 established by the ComputeInstance reference rows. No new follow-up ticket or
 individual owner is assigned here; runner authorization and evidence remain
 with the responsible QE/CI operators. See
-[integration testing](../INTEGRATION-TESTING.md#networking-reference-coverage)
+[E2E suite boundaries](../testing/e2e.md#suite-boundaries)
 for selections and execution prerequisites.
 
 ## AgentlessNet NATGateway implementation status

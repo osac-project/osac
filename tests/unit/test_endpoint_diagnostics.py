@@ -399,7 +399,7 @@ import subprocess
 import pytest
 from tests.e2e.core import runner
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.references.test_networking_references import disabled_reference_pool
+from tests.e2e.references.test_networking_references import disabled_reference_mode, disabled_reference_pool
 
 @pytest.fixture
 def private_grpc(monkeypatch):
@@ -407,6 +407,10 @@ def private_grpc(monkeypatch):
     fixture_password = "fixture-password-value"
     def fail(*args, **kwargs):
         """Keep synthetic raw data for callers and force the private create to fail."""
+        if args[0][-1].endswith("InstallationSettings/Get"):
+            assert "-emit-defaults" in args[0][:-2]
+            return subprocess.CompletedProcess(args[0], 0, stdout='{"networkingProvisioningEnabled": false}', stderr="")
+        assert args[0][-1].endswith("ExternalIPPools/Create")
         detail = (
             "Code: PermissionDenied\\nMessage: denied at private-api.synthetic.example.invalid:7443 "
             f"password={fixture_password}"

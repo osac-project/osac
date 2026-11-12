@@ -30,6 +30,12 @@ The disabled reference fixture owns its shared pool; private API auth must allow
 pool create/read/delete and child ExternalIP List/delete, with Kubernetes
 observation for readiness and natural cleanup. No pre-existing pool is needed.
 Read failures remain failures; tenant-only credentials are insufficient.
+Its admin identity must also read private `InstallationSettings/Get`: the guard
+reads the stored mode with explicit JSON defaults before pool creation, skips
+only boolean enabled mode, and fails setup for missing/nonboolean mode or RPC
+errors. Disabled mode retains the full rejection contract; this guard does not
+apply to enabled-provider suites. Hermetic diagnostic tests use synthetic
+subprocess failures, not live provider execution or evidence of real exposure.
 
 - Inter-subnet VM-to-VM routing across CUDNs is Phase 2, tracked by
   [OSAC-3667](https://redhat.atlassian.net/browse/OSAC-3667).

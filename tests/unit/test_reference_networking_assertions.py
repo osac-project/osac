@@ -105,7 +105,7 @@ def test_disabled_pool_cleanup_releases_unexpected_stored_external_ip(monkeypatc
     monkeypatch.setattr(suite, "wait_for_external_ip_pool_ready", Mock())
     cleanup = Mock()
     monkeypatch.setattr(suite, "wait_owned_gone", cleanup)
-    pool = suite.disabled_reference_pool.__wrapped__(private, Mock(), "run")
+    pool = suite.disabled_reference_pool.__wrapped__(private, Mock(), "run", None)
     next(pool)
     pool.close()
     assert [entry.kwargs["resource_id"] for entry in cleanup.call_args_list] == ["leaked-eip", "pool-id"]

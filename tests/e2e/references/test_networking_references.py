@@ -27,8 +27,18 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
+def disabled_reference_mode(private_grpc: GRPCClient) -> None:
+    """Require the installed disabled mode before creating a negative-contract pool."""
+    response = private_grpc.call(service=f"{PRIVATE_API}.InstallationSettings/Get", data={}, emit_defaults=True)
+    if not isinstance(response, dict) or type(response.get("networkingProvisioningEnabled")) is not bool:
+        pytest.fail("InstallationSettings/Get must return a boolean networkingProvisioningEnabled", pytrace=False)
+    if response["networkingProvisioningEnabled"]:
+        pytest.skip("Disabled reference contract is not applicable: provider networking provisioning is enabled")
+
+
+@pytest.fixture
 def disabled_reference_pool(
-    private_grpc: GRPCClient, k8s_hub_client: K8sClient, ref_test_run_id: str
+    private_grpc: GRPCClient, k8s_hub_client: K8sClient, ref_test_run_id: str, disabled_reference_mode: None
 ) -> Iterator[dict[str, str]]:
     """Create a fixture-owned shared pool via private APIs, wait for readiness, then remove children and pool."""
     name = f"ref-disabled-pool-{ref_test_run_id}"

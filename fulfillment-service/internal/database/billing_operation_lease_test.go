@@ -116,11 +116,17 @@ var _ = Describe("Billing operation leases", func() {
 		Expect(err).ToNot(HaveOccurred())
 		tx, err := manager.Begin(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		// Failure-safe: End is not idempotent, so the second End after the explicit one is discarded.
-		DeferCleanup(func() { _ = tx.End(ctx) })
+		// End is not idempotent, so the cleanup ends the transaction only when an earlier assertion failed.
+		ended := false
+		DeferCleanup(func() {
+			if !ended {
+				Expect(tx.End(ctx)).To(Succeed())
+			}
+		})
 		Expect(lease.Check(ctx, tx)).To(Succeed())
 		_, err = AcquireBillingOperation(ctx, time.Minute, key)
 		Expect(err).To(MatchError(ErrBillingOperationBusy))
+		ended = true
 		Expect(tx.End(ctx)).To(Succeed())
 		Expect(lease.Release(ctx)).To(Succeed())
 	})

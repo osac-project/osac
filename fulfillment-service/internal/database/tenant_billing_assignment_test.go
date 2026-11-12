@@ -110,6 +110,19 @@ var _ = Describe("Tenant billing assignments", func() {
 		return id
 	}
 
+	// endOnce returns a function that ends tx at most once, asserting the outcome. End is not idempotent, so a
+	// spec that ends the transaction itself must not have its cleanup end it again.
+	endOnce := func(tx Tx) func() {
+		ended := false
+		return func() {
+			if ended {
+				return
+			}
+			ended = true
+			Expect(tx.End(ctx)).To(Succeed())
+		}
+	}
+
 	// tryAdvisory reports whether the advisory lock for accountID, the exact key LockBillingAccountForAssignment
 	// takes, can be acquired now from a fresh independent transaction.
 	tryAdvisory := func(accountID string) bool {
@@ -362,7 +375,8 @@ var _ = Describe("Tenant billing assignments", func() {
 			// Account A is locked by txA, on its own connection:
 			txA, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(func() { _ = txA.End(ctx) })
+			endTxA := endOnce(txA)
+			DeferCleanup(endTxA)
 			Expect(LockBillingAccountForAssignment(ctx, txA, accountA)).To(Succeed())
 
 			// A contends: the same advisory lock cannot be taken from an independent transaction. This is
@@ -375,25 +389,27 @@ var _ = Describe("Tenant billing assignments", func() {
 			// active assignment and commits.
 			txB, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(func() { _ = txB.End(ctx) })
+			endTxB := endOnce(txB)
+			DeferCleanup(endTxB)
 			Expect(LockBillingAccountForAssignment(ctx, txB, accountB)).To(Succeed())
 			_, err = CloseAndInsertTenantBillingAssignment(ctx, txB, "", TenantBillingAssignmentInsert{
 				ID: uuid.New(), Name: "asg-b", TenantID: "tenant-c", BillingAccountID: accountB,
 				ConnectionState: "CONNECTED",
 			})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(txB.End(ctx)).To(Succeed())
+			endTxB()
 
 			// Release after end: committing txA frees A's lock, and A can be acquired again through the
 			// helper.
-			Expect(txA.End(ctx)).To(Succeed())
+			endTxA()
 			Expect(tryAdvisory(accountA)).To(BeTrue(), "txA's End must have released account A's lock")
 			txC, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(func() { _ = txC.End(ctx) })
+			endTxC := endOnce(txC)
+			DeferCleanup(endTxC)
 			Expect(LockBillingAccountForAssignment(ctx, txC, accountA)).To(Succeed())
 			Expect(tryAdvisory(accountA)).To(BeFalse(), "account A's lock must be held again, now by txC")
-			Expect(txC.End(ctx)).To(Succeed())
+			endTxC()
 		})
 
 		It("blocks another session waiting for the same account's advisory lock until the holding "+
@@ -404,7 +420,8 @@ var _ = Describe("Tenant billing assignments", func() {
 			// The holder takes A's lock through the production helper, on its own connection:
 			txA, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(func() { _ = txA.End(ctx) })
+			endTxA := endOnce(txA)
+			DeferCleanup(endTxA)
 			var holderPID int32
 			Expect(txA.QueryRow(ctx, `select pg_backend_pid()`).Scan(&holderPID)).To(Succeed())
 			Expect(LockBillingAccountForAssignment(ctx, txA, accountA)).To(Succeed())
@@ -414,7 +431,8 @@ var _ = Describe("Tenant billing assignments", func() {
 			// instead of waiting.
 			txW, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(func() { _ = txW.End(ctx) })
+			endTxW := endOnce(txW)
+			DeferCleanup(endTxW)
 			var waiterPID int32
 			Expect(txW.QueryRow(ctx, `select pg_backend_pid()`).Scan(&waiterPID)).To(Succeed())
 			Expect(waiterPID).ToNot(Equal(holderPID), "the waiter must run on a distinct connection")
@@ -447,12 +465,12 @@ var _ = Describe("Tenant billing assignments", func() {
 				"the waiter must be blocked by the transaction holding account A's lock")
 
 			// Ending the holding transaction releases the lock and lets the waiter take it:
-			Expect(txA.End(ctx)).To(Succeed())
+			endTxA()
 			var waitErr error
 			Eventually(acquired, 10*time.Second).Should(Receive(&waitErr))
 			Expect(waitErr).ToNot(HaveOccurred())
 			Expect(tryAdvisory(accountA)).To(BeFalse(), "the waiter must now hold account A's lock")
-			Expect(txW.End(ctx)).To(Succeed())
+			endTxW()
 			Expect(tryAdvisory(accountA)).To(BeTrue(), "the waiter's End must release account A's lock")
 		})
 	})
@@ -524,6 +542,7 @@ var _ = Describe("Tenant billing assignments", func() {
 			// entries stay uncommitted while the race runs:
 			tx1, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			endTx1 := endOnce(tx1)
 			var holderPID int32
 			Expect(tx1.QueryRow(ctx, `select pg_backend_pid()`).Scan(&holderPID)).To(Succeed())
 			winnerID, err := CloseAndInsertTenantBillingAssignment(ctx, tx1, "", winner)
@@ -532,6 +551,7 @@ var _ = Describe("Tenant billing assignments", func() {
 			// The second racer runs on an independent transaction and a distinct connection:
 			tx2, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			endTx2 := endOnce(tx2)
 			var waiterPID int32
 			Expect(tx2.QueryRow(ctx, `select pg_backend_pid()`).Scan(&waiterPID)).To(Succeed())
 			Expect(waiterPID).ToNot(Equal(holderPID), "the racing inserts must run on distinct connections")
@@ -548,7 +568,7 @@ var _ = Describe("Tenant billing assignments", func() {
 				case <-racedErr:
 				case <-time.After(5 * time.Second):
 				}
-				_ = tx2.End(ctx)
+				endTx2()
 			})
 			DeferCleanup(cancel)
 			go func() {
@@ -557,7 +577,7 @@ var _ = Describe("Tenant billing assignments", func() {
 				racedErr <- err
 				close(racedErr)
 			}()
-			DeferCleanup(func() { _ = tx1.End(ctx) })
+			DeferCleanup(endTx1)
 
 			// Observe the actual blocking through pg_stat_activity: the raced insert must wait on the holder's
 			// transaction.
@@ -573,10 +593,10 @@ var _ = Describe("Tenant billing assignments", func() {
 
 			// Committing the first racer resolves the race in its favor: the raced insert hits the partial
 			// unique index.
-			Expect(tx1.End(ctx)).To(Succeed())
+			endTx1()
 			var raced error
 			Eventually(racedErr, 10*time.Second).Should(Receive(&raced))
-			Expect(tx2.End(ctx)).To(Succeed())
+			endTx2()
 
 			var pgErr *pgconn.PgError
 			Expect(errors.As(raced, &pgErr)).To(BeTrue(),

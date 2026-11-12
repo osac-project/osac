@@ -29,29 +29,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/yaml"
 )
-
-// TestCSPFixturePodNetworkingMode checks that either installed networking mode
-// reaches the fixture process through the rendered Pod command.
-func TestCSPFixturePodNetworkingMode(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
-			var pod corev1.Pod
-			if err := yaml.Unmarshal([]byte(cspFixturePodYAML("fixture:test", enabled)), &pod); err != nil {
-				t.Fatal(err)
-			}
-			if len(pod.Spec.Containers) != 1 {
-				t.Fatalf("expected one fixture container, got %d", len(pod.Spec.Containers))
-			}
-			command := strings.Join(pod.Spec.Containers[0].Command, " ")
-			want := "--networking-provisioning-enabled=" + strconv.FormatBool(enabled)
-			if !strings.Contains(command, want) {
-				t.Fatalf("fixture command does not pass %s", want)
-			}
-		})
-	}
-}
 
 // TestOperatorRestartEvidenceOSAC7223 rejects stale process and credential evidence.
 func TestOperatorRestartEvidenceOSAC7223(t *testing.T) {

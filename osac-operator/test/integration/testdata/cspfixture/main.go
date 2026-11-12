@@ -19,7 +19,7 @@ limitations under the License.
 //   - :8443 TLS OIDC HTTPS discovery and client-credentials token issuance
 //   - :8444 Dedicated TLS gRPC (compatible with experimentalcredentials.NewTLSWithALPNDisabled)
 //     serving StorageTiers, StorageBackends, Secrets, Tenants, NetworkClasses,
-//     InstallationSettings, and Health
+//     and Health
 //   - :8080 Plaintext HTTP AAP double (/api/controller/*) and admin control
 //     (/healthz, /admin/stats, /admin/state, /admin/reset)
 package main
@@ -99,8 +99,6 @@ type fixtureServer struct {
 	expectedClientID   string
 	expectedClientPass string
 	expectedBearer     string
-
-	networkingProvisioningEnabled bool
 
 	mu    sync.RWMutex
 	state FixtureState
@@ -307,20 +305,6 @@ func (a *networkClassesAdapter) List(
 	}.Build(), nil
 }
 
-type installationSettingsAdapter struct {
-	privatev1.UnimplementedInstallationSettingsServer
-	srv *fixtureServer
-}
-
-func (a *installationSettingsAdapter) Get(
-	_ context.Context,
-	_ *privatev1.InstallationSettingsGetRequest,
-) (*privatev1.InstallationSettingsGetResponse, error) {
-	return privatev1.InstallationSettingsGetResponse_builder{
-		NetworkingProvisioningEnabled: a.srv.networkingProvisioningEnabled,
-	}.Build(), nil
-}
-
 func (s *fixtureServer) unaryAuthInterceptor(
 	ctx context.Context,
 	req any,
@@ -491,7 +475,6 @@ func (s *fixtureServer) registerGRPCServices(server *grpc.Server) {
 	privatev1.RegisterSecretsServer(server, &secretsAdapter{srv: s})
 	privatev1.RegisterTenantsServer(server, &tenantsAdapter{})
 	privatev1.RegisterNetworkClassesServer(server, &networkClassesAdapter{})
-	privatev1.RegisterInstallationSettingsServer(server, &installationSettingsAdapter{srv: s})
 	healthpb.RegisterHealthServer(server, health.NewServer())
 }
 
@@ -506,8 +489,6 @@ func main() {
 		clientID              string
 		clientCredentialValue string
 		accessMarker          string
-
-		networkingProvisioningEnabled bool
 	)
 
 	flag.StringVar(&tlsCertPath, "tls-cert", "/tls/tls.crt", "Path to TLS server certificate file")
@@ -515,8 +496,6 @@ func main() {
 	flag.StringVar(&oidcAddr, "oidc-addr", ":8443", "Listen address for TLS OIDC HTTPS server")
 	flag.StringVar(&grpcAddr, "grpc-addr", ":8444", "Listen address for dedicated TLS gRPC server")
 	flag.StringVar(&httpAddr, "http-addr", ":8080", "Listen address for HTTP AAP double and admin server")
-	flag.BoolVar(&networkingProvisioningEnabled, "networking-provisioning-enabled", true,
-		"Installed operator networking provisioning mode")
 	flag.StringVar(
 		&issuerURL,
 		"issuer-url",
@@ -548,8 +527,6 @@ func main() {
 		expectedClientID:   clientID,
 		expectedClientPass: clientCredentialValue,
 		expectedBearer:     accessMarker,
-
-		networkingProvisioningEnabled: networkingProvisioningEnabled,
 	}
 
 	grpcTLSConfig := &tls.Config{

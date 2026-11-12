@@ -117,8 +117,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("limits installation settings to administrators", func(ctx context.Context) {
-			method := "/osac.private.v1.InstallationSettings/Get"
+		It("limits private installation reads to administrators", func(ctx context.Context) {
+			method := "/osac.private.v1.NetworkClasses/List"
 			admin := &AuthContext{Username: fmt.Sprintf("system:serviceaccount:%s:admin", testNamespace), AuthMethod: "serviceaccount"}
 			decision, err := evaluator.Evaluate(ctx, admin, method)
 			Expect(err).ToNot(HaveOccurred())

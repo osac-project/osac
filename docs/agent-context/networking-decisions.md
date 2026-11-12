@@ -278,8 +278,12 @@ as follows:
   with `FailedPrecondition`, exact message `provider networking is disabled`,
   before persistence or pool accounting changes. ExternalIPAttachment and
   NATGateway need an ALLOCATED ExternalIP, so disabled provisioning cannot
-  establish their provider-backed paths. The fulfillment service refuses to
-  start when the stored value changes.
+  establish their provider-backed paths. The accepted value is recorded on the
+  deployment's NetworkClass (`spec.provisioningEnabled`), which consumers read;
+  the fulfillment service refuses to start when the stored value changes, and
+  the installer refuses to recreate the class with a different mode. Until the
+  field is readable, consumers retry and run no provider work rather than
+  treating it as disabled.
 - **CaaS endpoint lifecycle:** CaaS ClusterOrders using this shared lifecycle
   discover the management API and guest ingress endpoints, request automatic
   ExternalIPAttachments after each target is ready and its ExternalIP is

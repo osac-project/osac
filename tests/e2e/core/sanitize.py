@@ -10,7 +10,10 @@ REDACTED = "<redacted>"
 _JWT = re.compile(r"eyJ[\w-]+\.eyJ[\w-]+\.[\w-]*")
 # "Basic" is matched capitalised only, so prose such as "basic connectivity" survives.
 _AUTH_SCHEME = re.compile(r"\b((?i:bearer)|Basic)(\s+)[A-Za-z0-9._~+/=-]{8,}")
-_KEY_VALUE = re.compile(r"(?i)\b(password|passwd|client_secret)(\s*=\s*)\S+")
+_KEY_VALUE = re.compile(
+    r"(?i)\b(password|passwd|client[_-]?secret|secret[_-]?key|api[_-]?key|access[_-]?key|token|session[_-]?id)"
+    r"(\s*[=:]\s*)\S+"
+)
 _TOKEN_FLAG = re.compile(r"(--token(?:-script)?)([ =])\S+")
 _JSON_SECRET = re.compile(r'(?i)("[\w-]*(?:password|token|secret)[\w-]*"\s*:\s*)"(?:[^"\\]|\\.)*"')
 

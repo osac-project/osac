@@ -23,6 +23,8 @@ from tests.conformance.model import (
 from tests.conformance.redact import Redactor
 from tests.conformance.report import write_junit, write_report
 
+_FAKE_SECRET = "not-a-real-secret"
+
 
 def _report(message: str = "ok") -> Report:
     identity = TestIdentity(
@@ -78,9 +80,9 @@ def test_report_has_the_exact_top_level_keys(tmp_path: Path) -> None:
 
 
 def test_report_redacts_messages(tmp_path: Path) -> None:
-    path = write_report(_report("secret-value leaked"), tmp_path, Redactor(secrets=("secret-value",)))
+    path = write_report(_report(f"{_FAKE_SECRET} leaked"), tmp_path, Redactor(secrets=(_FAKE_SECRET,)))
 
-    assert "secret-value" not in path.read_text()
+    assert _FAKE_SECRET not in path.read_text()
     assert "<redacted>" in path.read_text()
 
 

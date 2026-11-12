@@ -37,20 +37,7 @@ func (p *Provider) IsConfigured() bool { return p.key != "" }
 // Key is the configured adapter key, such as m360; empty when billing is off.
 func (p *Provider) Key() string { return p.key }
 
-// Adapter returns the provider adapter, or the classified error that kept it from being built. It never returns a
-// nil adapter with a nil error: when billing is off it fails with NOT_CONFIGURED, and a configured provider whose
-// adapter is missing without a stored error fails with UNAVAILABLE, an invariant failure. Request handlers use the
-// servers package guard instead, which never returns a nil adapter and reports the disabled and unavailable states
-// as stable status errors. Match the error with errors.As on *Error and branch on Reason.
-func (p *Provider) Adapter() (Adapter, error) {
-	if p.err != nil {
-		return nil, p.err
-	}
-	if p.adapter != nil {
-		return p.adapter, nil
-	}
-	if !p.IsConfigured() {
-		return nil, NewError(ReasonNotConfigured, "Adapter", false, 0)
-	}
-	return nil, NewError(ReasonUnavailable, "Adapter", false, 0)
-}
+// Adapter returns the provider adapter, or the classified error that kept it from being built; it returns nil, nil
+// when billing is off, so a caller that receives a nil adapter with a nil error must treat billing as off. Request
+// handlers use the servers package guard instead, which never returns a nil adapter.
+func (p *Provider) Adapter() (Adapter, error) { return p.adapter, p.err }

@@ -29,7 +29,12 @@ def test_import_available_managed_cluster(
     if not source_kubeconfig:
         pytest.skip("OSAC_SOURCE_HUB_KUBECONFIG is required for Hub import e2e coverage")
 
-    source_hub = K8sClient(namespace="default", kubeconfig=source_kubeconfig, as_system_admin=False)
+    source_hub = K8sClient(
+        namespace="default",
+        kubeconfig=source_kubeconfig,
+        as_system_admin=False,
+        impersonate=os.environ.get("OSAC_TOKEN_IMPERSONATE") or None,
+    )
     hub_credential_kubeconfig = os.environ.get("OSAC_SOURCE_HUB_CREDENTIAL_KUBECONFIG", source_kubeconfig)
     managed_cluster_name = f"e2e-import-{uuid.uuid4().hex[:8]}"
     cluster_uid = f"e2e-cluster-uid-{uuid.uuid4().hex}"

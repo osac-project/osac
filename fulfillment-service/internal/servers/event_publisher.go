@@ -126,6 +126,8 @@ type eventPublisherChange struct {
 	op        string
 	data      []byte
 	timestamp time.Time
+	reason    string
+	severity  string
 }
 
 // preparedChange is a change converted to an event once, so that the drain and the publish step use the same event.
@@ -529,7 +531,9 @@ func (b *EventPublisherBuilder) calculateFetchSQL(dbTable string) string {
 			"table",
 			"op",
 			"data",
-			"timestamp"
+			"timestamp",
+			coalesce("reason", ''),
+			coalesce("severity", '')
 		from
 			%s
 		where
@@ -768,6 +772,8 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 			&change.op,
 			&change.data,
 			&change.timestamp,
+			&change.reason,
+			&change.severity,
 		)
 		return
 	})
@@ -1145,8 +1151,48 @@ func (p *EventPublisher) convertChange(change *eventPublisherChange) (event *pri
 		Timestamp: timestamppb.New(change.timestamp),
 	}.Build()
 	event.ProtoReflect().Set(field, protoreflect.ValueOfMessage(object.ProtoReflect()))
+	if change.reason != "" {
+		event.SetReason(change.reason)
+		event.SetSeverity(change.severity)
+	}
+	p.decorateWorkloadClusterEvent(event, change.op)
 	p.redactEvent(event)
 	return
+}
+
+func (p *EventPublisher) decorateWorkloadClusterEvent(event *privatev1.Event, operation string) {
+	if !event.HasWorkloadCluster() {
+		return
+	}
+	if event.GetReason() != "" {
+		return
+	}
+	switch operation {
+	case eventPublisherOpInsert:
+		event.SetReason("Registered")
+		event.SetSeverity("Normal")
+	case eventPublisherOpSignal:
+		event.SetReason("HubReconnected")
+		event.SetSeverity("Normal")
+	case eventPublisherOpUpdate:
+		for _, condition := range event.GetWorkloadCluster().GetStatus().GetConditions() {
+			if condition.GetType() != "Available" {
+				continue
+			}
+			reason := condition.GetReason()
+			if reason == "ClusterIdentityMismatch" {
+				event.SetReason("IdentityMismatch")
+				event.SetSeverity("Warning")
+			} else if condition.GetStatus() == "True" {
+				event.SetReason("Available")
+				event.SetSeverity("Normal")
+			} else if condition.GetStatus() == "False" {
+				event.SetReason("Unavailable")
+				event.SetSeverity("Warning")
+			}
+			break
+		}
+	}
 }
 
 // redactEvent removes from the event secrets that should not be written to Kafka.

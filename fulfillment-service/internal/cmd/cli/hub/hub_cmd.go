@@ -137,9 +137,10 @@ func renderHubList(w io.Writer, hubs []*privatev1.Hub) error {
 
 func renderHub(w io.Writer, hub *privatev1.Hub) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(writer, "ID:\t%s\n", hub.GetId())
-	fmt.Fprintf(writer, "Name:\t%s\n", hub.GetMetadata().GetName())
-	fmt.Fprintf(writer, "Namespace:\t%s\n", hub.GetSpec().GetNamespace())
+	if _, err := fmt.Fprintf(writer, "ID:\t%s\nName:\t%s\nNamespace:\t%s\n",
+		hub.GetId(), hub.GetMetadata().GetName(), hub.GetSpec().GetNamespace()); err != nil {
+		return err
+	}
 	// Never render Hub.Spec.Kubeconfig or its secret reference.
 	return writer.Flush()
 }

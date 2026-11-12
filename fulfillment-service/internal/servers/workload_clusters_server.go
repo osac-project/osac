@@ -198,9 +198,5 @@ func (s *WorkloadClustersServer) Update(ctx context.Context,
 
 func (s *WorkloadClustersServer) Delete(ctx context.Context,
 	request *publicv1.WorkloadClustersDeleteRequest) (*publicv1.WorkloadClustersDeleteResponse, error) {
-	_, err := s.delegate.Delete(ctx, privatev1.WorkloadClustersDeleteRequest_builder{Id: request.GetId()}.Build())
-	if err != nil {
-		return nil, err
-	}
-	return &publicv1.WorkloadClustersDeleteResponse{}, nil
+	return nil, grpcstatus.Error(grpccodes.Unimplemented, "deleting workload clusters is not supported")
 }

@@ -87,8 +87,9 @@ const createTransport = (clusters: Cluster[], versions = clusterVersions) => {
             req.filter?.includes('this.metadata.name in') ||
             req.filter === CLUSTER_VERSION_ALL_STATES_LIST_FILTER
           ) {
+            const offset = req.offset ?? 0;
             return {
-              items: req.limit ? versions.slice(req.offset, req.offset + req.limit) : versions,
+              items: req.limit ? versions.slice(offset, offset + req.limit) : versions,
               total: versions.length,
             };
           }

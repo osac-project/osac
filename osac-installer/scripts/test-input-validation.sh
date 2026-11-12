@@ -958,11 +958,17 @@ MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
     PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
     >"${remote_plan}" 2>/dev/null || fail "make -n install-osac (remote) failed"
 join_continuations <"${remote_plan}" | grep 'render_osac_chart_offline' \
-  | grep -q 'operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
+  | grep -Fq 'operator.remoteClusterKubeconfigSecretName=${REMOTE_KUBECONFIG_SECRET_NAME}' \
   || fail "validate-inputs: the gate render omits the remote-cluster args"
 join_continuations <"${remote_plan}" | grep 'helm upgrade --install osac ' \
-  | grep -q 'operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
+  | grep -Fq 'operator.remoteClusterKubeconfigSecretName=${REMOTE_KUBECONFIG_SECRET_NAME}' \
   || fail "install-osac: the upgrade omits the remote-cluster args"
+# Make echoes recipe text, so the plan must carry the shell references and
+# never the resolved identifier values.
+if join_continuations <"${remote_plan}" \
+  | grep -q 'remoteClusterKubeconfigSecretName=osac-remote-kubeconfig'; then
+  fail "validate-inputs: the plan echoes the resolved Secret identifier"
+fi
 
 # The remote-cluster flags must also resolve in the same order everywhere:
 # the gate's render applies them after EXTRA_HELM_ARGS like install-osac's
@@ -980,7 +986,7 @@ MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
     >"${remote_order_plan}" 2>/dev/null || fail "make -n install-osac (remote order) failed"
 for remote_cmd in 'render_osac_chart_offline' 'helm upgrade --install osac '; do
   join_continuations <"${remote_order_plan}" | grep "${remote_cmd}" \
-    | grep -Eq '\$\{ARGV\[@\]\+"\$\{ARGV\[@\]\}"\}.*operator\.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
+    | grep -Eq '\$\{ARGV\[@\]\+"\$\{ARGV\[@\]\}"\}.*operator\.remoteClusterKubeconfigSecretName=\$\{REMOTE_KUBECONFIG_SECRET_NAME\}' \
     || fail "remote-flag order: ${remote_cmd} does not expand EXTRA_HELM_ARGS before the remote-cluster flags"
 done
 # At runtime the override must reach Helm before the remote-cluster flags:
@@ -1006,6 +1012,37 @@ remote_pos=$(grep -n 'operator.remoteClusterKubeconfigSecretName=osac-remote-kub
   || fail "remote-flag order: the osac render argv omits the caller override or the remote-cluster flag"
 [ "${caller_pos}" -lt "${remote_pos}" ] \
   || fail "remote-flag order: the gate render applies the remote-cluster flags before EXTRA_HELM_ARGS"
+
+# Make echoes every recipe line it runs without an @ prefix, so the
+# remote-cluster flags must stay shell references in that text. Distinct
+# canary identifiers make any leak unambiguous, and the stub prints
+# nothing, making the recipe echo the only possible source of them in this
+# dry-run's stdout. The argv log proves Helm still received the values.
+echo "checking remote-args-log-hygiene (dry-run output omits the identifiers)"
+canary_name='hygiene-canary-name'
+canary_key='hygiene-canary-key'
+hygiene_argv="${TMP_DIR}/hygiene-argv.log"
+: >"${LOG}"; : >"${hygiene_argv}"
+MOCK_LOG="${LOG}" MOCK_OSAC_ARGV_LOG="${hygiene_argv}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-dry-run \
+  PLATFORM=kind PROFILE=dev NS=osac REMOTE_KUBECONFIG="${LOG}" \
+  REMOTE_KUBECONFIG_SECRET_NAME="${canary_name}" \
+  REMOTE_KUBECONFIG_SECRET_KEY="${canary_key}" \
+  >"${TMP_DIR}/remote-hygiene.out" 2>"${TMP_DIR}/remote-hygiene.err" \
+  || fail "remote-args-log-hygiene: install-dry-run failed for valid canaries"
+grep -Fq 'operator.remoteClusterKubeconfigSecretName=${REMOTE_KUBECONFIG_SECRET_NAME}' \
+  "${TMP_DIR}/remote-hygiene.out" \
+  || fail "remote-args-log-hygiene: the dry-run output omits the remote-cluster args"
+if grep -q "${canary_name}" "${TMP_DIR}/remote-hygiene.out"; then
+  fail "remote-args-log-hygiene: the dry-run output echoes the Secret name"
+fi
+if grep -q "${canary_key}" "${TMP_DIR}/remote-hygiene.out"; then
+  fail "remote-args-log-hygiene: the dry-run output echoes the Secret key"
+fi
+grep -Fq "operator.remoteClusterKubeconfigSecretName=${canary_name}" "${hygiene_argv}" \
+  || fail "remote-args-log-hygiene: Helm did not receive the Secret name"
+grep -Fq "operator.remoteClusterKubeconfigSecretKey=${canary_key}" "${hygiene_argv}" \
+  || fail "remote-args-log-hygiene: Helm did not receive the Secret key"
 
 # The gate's osac-chart render goes through render_osac_chart_offline with
 # the render-only placeholder token: the function applies the placeholder

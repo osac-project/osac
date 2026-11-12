@@ -71,7 +71,8 @@ REMOTE_KUBECONFIG_SECRET_KEY ?= kubeconfig
 # gate's validate_remote_kubeconfig_secret check (and install-osac's re-check)
 # receive them through the environment and validate them before the shared
 # Helm args below are expanded; the DNS-subdomain and Secret-key grammars
-# cannot produce shell metacharacters, so those args expand as a word list.
+# cannot produce shell metacharacters, so the shell expands those references
+# as a word list.
 override REMOTE_KUBECONFIG_SECRET_NAME := $(value REMOTE_KUBECONFIG_SECRET_NAME)
 override REMOTE_KUBECONFIG_SECRET_KEY := $(value REMOTE_KUBECONFIG_SECRET_KEY)
 export REMOTE_KUBECONFIG_SECRET_NAME REMOTE_KUBECONFIG_SECRET_KEY
@@ -117,15 +118,18 @@ endif
 # Remote-cluster kubeconfig Helm flags, shared by the input-validation gate's
 # osac-chart render and install-osac's upgrade so both see the same merged
 # values. They only name Secret metadata; the kubeconfig file itself is
-# staged by scripts/stage-remote-cluster-secret.sh at install time.
+# staged by scripts/stage-remote-cluster-secret.sh at install time. The
+# identifiers stay shell references resolved from the exported, validated
+# environment, so the recipe text make echoes -- and any failure that
+# quotes it -- carries the variable names, never the identifier values.
 REMOTE_CLUSTER_HELM_ARGS :=
 ifneq ($(strip $(REMOTE_KUBECONFIG)),)
 REMOTE_CLUSTER_HELM_ARGS := \
-	--set-string operator.remoteClusterKubeconfig=/var/run/secrets/remote/$(REMOTE_KUBECONFIG_SECRET_KEY) \
-	--set-string operator.remoteClusterKubeconfigSecretName=$(REMOTE_KUBECONFIG_SECRET_NAME) \
-	--set-string operator.remoteClusterKubeconfigSecretKey=$(REMOTE_KUBECONFIG_SECRET_KEY) \
-	--set-string aap.configAsCode.remoteClusterKubeconfigSecretName=$(REMOTE_KUBECONFIG_SECRET_NAME) \
-	--set-string aap.configAsCode.remoteClusterKubeconfigSecretKey=$(REMOTE_KUBECONFIG_SECRET_KEY)
+	--set-string operator.remoteClusterKubeconfig=/var/run/secrets/remote/$${REMOTE_KUBECONFIG_SECRET_KEY} \
+	--set-string operator.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME} \
+	--set-string operator.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY} \
+	--set-string aap.configAsCode.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME} \
+	--set-string aap.configAsCode.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}
 endif
 
 # Work around HTTP/2 stream resets from proxy.golang.org during container
@@ -1122,6 +1126,7 @@ install-multicluster: validate-inputs validate-remote-cluster-render ## Prepare 
 	@test -r "$${KUBECONFIG}" || { echo "ERROR: KUBECONFIG is not readable; check the path you supplied" >&2; exit 1; }
 	@test -r "$${REMOTE_KUBECONFIG}" || { echo "ERROR: REMOTE_KUBECONFIG is not readable; check the path you supplied" >&2; exit 1; }
 	@test -f "$${AAP_LICENSE_FILE}" || { echo "ERROR: AAP_LICENSE_FILE not found; check the path you supplied" >&2; exit 1; }
+	@test -r "$${AAP_LICENSE_FILE}" || { echo "ERROR: AAP_LICENSE_FILE is not readable; check the permissions on the path you supplied" >&2; exit 1; }
 	@if [ -n "$${REMOTE_API_ADDRESS}" ]; then case "$${REMOTE_API_ADDRESS}" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; fi
 	@oc --kubeconfig "$${KUBECONFIG}" get clusterversion version >/dev/null
 	@oc --kubeconfig "$${REMOTE_KUBECONFIG}" get clusterversion version >/dev/null

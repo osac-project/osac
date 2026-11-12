@@ -14,7 +14,6 @@
 package provider
 
 import (
-	"context"
 	"fmt"
 
 	stringvalidator "github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -54,33 +53,4 @@ func nameLookupValidators() []validator.String {
 			path.MatchRoot("id"),
 		),
 	}
-}
-
-// lookupIdentifier resolves the identifier of a data source lookup: the identifier itself when given, or the name,
-// using the provided lister, which must return the identifiers of all the objects with that name.
-func lookupIdentifier(ctx context.Context, kind, name, id string,
-	lister func(ctx context.Context) (ids []string, err error)) (string, error) {
-	if id != "" {
-		return id, nil
-	}
-	ids, err := lister(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to find %s: %w", kind, err)
-	}
-	if len(ids) != 1 {
-		return "", fmt.Errorf("expected exactly one %s named '%s', but found %d", kind, name, len(ids))
-	}
-	return ids[0], nil
-}
-
-// markSensitiveDataSource marks the given attributes of a generated data source schema as sensitive. The generator
-// can't express sensitivity for map attributes, so the data source glue marks them.
-func markSensitiveDataSource(generated schema.Schema, names ...string) schema.Schema {
-	for _, name := range names {
-		if attribute, ok := generated.Attributes[name].(schema.MapAttribute); ok {
-			attribute.Sensitive = true
-			generated.Attributes[name] = attribute
-		}
-	}
-	return generated
 }

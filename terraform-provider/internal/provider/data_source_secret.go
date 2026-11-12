@@ -20,7 +20,6 @@ import (
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 
-	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	gen "github.com/osac-project/osac/terraform-provider/internal/gen/datasource_secret"
@@ -35,14 +34,10 @@ type secretDataSource struct {
 	client *Client
 }
 
-// secretModel is the generated model plus the `name` lookup attribute. The `data` entries are base64 encoded,
-// like in the REST API.
+// secretModel is the generated model plus the `name` lookup attribute.
 type secretModel struct {
-	Name     types.String      `tfsdk:"name"`
-	Data     types.Map         `tfsdk:"data"`
-	Id       types.String      `tfsdk:"id"`
-	Metadata gen.MetadataValue `tfsdk:"metadata"`
-	Type     types.String      `tfsdk:"type"`
+	Name types.String `tfsdk:"name"`
+	gen.SecretModel
 }
 
 // NewSecretDataSource creates a new data source.
@@ -60,12 +55,8 @@ func (d *secretDataSource) Metadata(ctx context.Context,
 // definitions, adapted so that the secret can also be resolved by name.
 func (d *secretDataSource) Schema(ctx context.Context,
 	request datasource.SchemaRequest, response *datasource.SchemaResponse) {
-	// The contents are exposed, but marked sensitive: the generator can't express that (the OpenAPI format
-	// that maps to sensitivity doesn't survive the map translation), so it is done here. Note that sensitive is
-	// a display hint: the values are still recorded in the Terraform state.
-	response.Schema = markSensitiveDataSource(
-		withNameLookup(gen.SecretDataSourceSchema(ctx), "secret"),
-		"data",
+	response.Schema = withNameLookup(
+		gen.SecretDataSourceSchema(ctx), "secret",
 	)
 }
 
@@ -85,19 +76,8 @@ func (d *secretDataSource) Read(ctx context.Context,
 	}
 
 	// Resolve the identifier, by name when necessary:
-	id, err := lookupIdentifier(ctx, "secret",
-		state.Name.ValueString(), state.Id.ValueString(),
-		func(ctx context.Context) ([]string, error) {
-			items, err := d.client.list(ctx, secretsPath, nameFilter(state.Name.ValueString()))
-			if err != nil {
-				return nil, err
-			}
-			ids := make([]string, 0, len(items))
-			for _, item := range items {
-				ids = append(ids, item.Id)
-			}
-			return ids, nil
-		})
+	id, err := d.client.lookupID(ctx, secretsPath, "secret",
+		state.Name.ValueString(), state.Id.ValueString())
 	if err != nil {
 		response.Diagnostics.AddError("Failed to find secret", err.Error())
 		return
@@ -113,23 +93,16 @@ func (d *secretDataSource) Read(ctx context.Context,
 
 	// Copy the results to the state. The response is in the same JSON shape as the generated schema:
 	var object struct {
-		Data     map[string]string `json:"data"`
 		Id       string            `json:"id"`
 		Metadata jsontext.Value    `json:"metadata"`
+		Data     map[string]string `json:"data"`
 		Type     string            `json:"type"`
 	}
 	_ = json.Unmarshal(data, &object)
 	state.Id = types.StringValue(object.Id)
 	state.Metadata = valueOfJSON(ctx, object.Metadata, gen.MetadataValue{})
+	state.Data = mapValue(object.Data)
 	state.Type = types.StringValue(object.Type)
-	entries := make(map[string]attr.Value, len(object.Data))
-	for name, value := range object.Data {
-		entries[name] = types.StringValue(value)
-	}
-	if len(entries) > 0 {
-		state.Data = types.MapValueMust(types.StringType, entries)
-	} else {
-		state.Data = types.MapNull(types.StringType)
-	}
+
 	response.Diagnostics.Append(response.State.Set(ctx, &state)...)
 }

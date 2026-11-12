@@ -248,6 +248,27 @@ func (c *Client) delete(ctx context.Context, path, id string) error {
 	return err
 }
 
+// lookupID resolves the identifier of a data source lookup: the identifier itself when given, or the name through
+// a list request, which must match exactly one object.
+func (c *Client) lookupID(ctx context.Context, path, kind, name, id string) (string, error) {
+	if id != "" {
+		return id, nil
+	}
+	items, err := c.list(ctx, path, nameFilter(name))
+	if err != nil {
+		return "", fmt.Errorf("failed to find %s: %w", kind, err)
+	}
+	if len(items) != 1 {
+		return "", fmt.Errorf("expected exactly one %s named '%s', but found %d", kind, name, len(items))
+	}
+	return items[0].Id, nil
+}
+
+// nameFilter builds the CEL filter that the fulfillment service uses to select objects by name.
+func nameFilter(name string) string {
+	return fmt.Sprintf("this.metadata.name == '%s'", name)
+}
+
 // resolveReference resolves the name or identifier of a reference to its identifier and whether it lives in the
 // shared tenant. The server resolves references in the tenant of the containing object unless they are explicitly
 // marked as shared, so both are needed to build a valid request body.

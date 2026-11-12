@@ -30,7 +30,7 @@ import (
 var _ = Describe("Resolver.ListServiceRateCardItems", func() {
 	ctx := context.Background()
 
-	It("normalizes a QUANTITY row with no attribute values as a single ANY condition (OSAC-6891 AC2/AC5)", func() {
+	It("normalizes a QUANTITY row with no attribute values as a single ANY condition (OSAC-6891)", func() {
 		resolver := pricing.NewResolver(billingfake.New(baseScenario()))
 		items, skipped, err := resolver.ListServiceRateCardItems(ctx, "compute_instance", "USD")
 		Expect(err).ToNot(HaveOccurred())
@@ -43,7 +43,7 @@ var _ = Describe("Resolver.ListServiceRateCardItems", func() {
 		Expect(items[0].Conditions).To(Equal([]pricing.RateCondition{{Dimension: "cpu_hours", Operator: pricing.OperatorAny}}))
 	})
 
-	It("normalizes a row with attribute values as EQUALS conditions (AC5)", func() {
+	It("normalizes a row with attribute values as EQUALS conditions", func() {
 		scenario := baseScenario()
 		scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{
 			Rows: []billing.RateRow{{
@@ -77,7 +77,7 @@ var _ = Describe("Resolver.ListServiceRateCardItems", func() {
 		Expect(skipped).To(Equal(map[string]int{pricing.SkipConditionValueEmpty: 1}))
 	})
 
-	DescribeTable("omits an unsupported row shape and counts it (AC3)",
+	DescribeTable("omits an unsupported row shape and counts it",
 		func(row billing.RateRow) {
 			scenario := baseScenario()
 			scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{Rows: []billing.RateRow{row}}

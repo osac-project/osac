@@ -399,6 +399,18 @@ var _ = Describe("typed finalizer updates", func() {
 			for _, c := range slices.Concat(publicFinalizerCases(), catalogItemFinalizerCases()) {
 				covered[string(protoreflect.FullName(c.service).Name())] = true
 			}
+			// Finalizers only matter for a resource that can be deleted. A public service whose private counterpart has
+			// no Delete method never needs a finalizer case; every other public Update is still checked below.
+			noPrivateDelete := map[string]bool{}
+			privatePackage := (privatev1.EventType)(0).Descriptor().FullName().Parent()
+			protoregistry.GlobalFiles.RangeFilesByPackage(privatePackage, func(file protoreflect.FileDescriptor) bool {
+				services := file.Services()
+				for i := range services.Len() {
+					service := services.Get(i)
+					noPrivateDelete[string(service.Name())] = service.Methods().ByName("Delete") == nil
+				}
+				return true
+			})
 			unimplemented := map[string]func() error{
 				"Tenants": func() error {
 					server, err := NewTenantsServer().
@@ -425,6 +437,7 @@ var _ = Describe("typed finalizer updates", func() {
 					name := string(service.Name())
 					switch {
 					case service.Methods().ByName("Update") == nil || covered[name]:
+					case noPrivateDelete[name]:
 					case unimplemented[name] != nil:
 						Expect(status.Code(unimplemented[name]())).To(Equal(codes.Unimplemented),
 							"the public %s server implements Update now, so it needs a case", name)

@@ -22,6 +22,7 @@ package baremetalhost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -71,21 +72,21 @@ type Manager struct {
 
 // NewManager creates a manager for the given Metal3 namespace.
 //
-// direct must be built with directclient.New. It is required: NewManager panics
-// rather than falling back to k8sClient, because a cached client would silently
-// make deletion confirmation read stale state.
-func NewManager(k8sClient client.Client, direct directclient.Client, namespace string) *Manager {
+// direct must be built with directclient.New. It is required: NewManager returns
+// an error rather than falling back to k8sClient, because a cached client would
+// silently make deletion confirmation read stale state.
+func NewManager(k8sClient client.Client, direct directclient.Client, namespace string) (*Manager, error) {
 	if k8sClient == nil {
-		panic("baremetalhost: NewManager requires a non-nil client")
+		return nil, errors.New("cached client is required")
 	}
 	if direct == nil {
-		panic("baremetalhost: NewManager requires a non-nil direct client")
+		return nil, errors.New("direct client is required")
 	}
 	return &Manager{
 		client:    k8sClient,
 		direct:    direct,
 		namespace: namespace,
-	}
+	}, nil
 }
 
 // Namespace returns the Metal3 namespace used for BareMetalHost CRs.

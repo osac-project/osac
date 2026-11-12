@@ -87,9 +87,9 @@ func New(cfg *rest.Config, scheme *runtime.Scheme, mapper meta.RESTMapper) (Clie
 // value built with client.New, an envtest client, or a fake client in tests.
 // Never pass mgr.GetClient(), whose reads are served by the cache. Production
 // code should use New instead.
-func Wrap(c client.Client) Client {
+func Wrap(c client.Client) (Client, error) {
 	if c == nil {
-		panic("directclient: Wrap called with a nil client")
+		return nil, errors.New("direct client is required")
 	}
-	return directClient{Client: c}
+	return directClient{Client: c}, nil
 }

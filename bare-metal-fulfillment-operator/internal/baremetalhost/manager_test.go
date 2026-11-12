@@ -47,7 +47,11 @@ func newTestManager(objects ...client.Object) *Manager {
 		WithObjects(objects...).
 		WithStatusSubresource(&metal3api.BareMetalHost{}).
 		Build()
-	return NewManager(k8sClient, directclient.Wrap(k8sClient), testNamespace)
+	direct, err := directclient.Wrap(k8sClient)
+	Expect(err).NotTo(HaveOccurred())
+	mgr, err := NewManager(k8sClient, direct, testNamespace)
+	Expect(err).NotTo(HaveOccurred())
+	return mgr
 }
 
 type replacementOnDeleteClient struct {
@@ -80,13 +84,19 @@ var _ = Describe("BareMetalHost Manager", func() {
 		It("rejects a nil direct client instead of falling back to the cached one", func() {
 			k8sClient := fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
 
-			Expect(func() { NewManager(k8sClient, nil, testNamespace) }).To(Panic())
+			mgr, err := NewManager(k8sClient, nil, testNamespace)
+			Expect(err).To(MatchError(ContainSubstring("direct client is required")))
+			Expect(mgr).To(BeNil())
 		})
 
 		It("rejects a nil cached client", func() {
 			k8sClient := fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
+			direct, err := directclient.Wrap(k8sClient)
+			Expect(err).NotTo(HaveOccurred())
 
-			Expect(func() { NewManager(nil, directclient.Wrap(k8sClient), testNamespace) }).To(Panic())
+			mgr, err := NewManager(nil, direct, testNamespace)
+			Expect(err).To(MatchError(ContainSubstring("cached client is required")))
+			Expect(mgr).To(BeNil())
 		})
 	})
 
@@ -447,7 +457,10 @@ var _ = Describe("BareMetalHost Manager", func() {
 			scheme := newTestScheme()
 			cachedClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 			apiClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bmh).Build()
-			mgr := NewManager(cachedClient, directclient.Wrap(apiClient), testNamespace)
+			direct, err := directclient.Wrap(apiClient)
+			Expect(err).NotTo(HaveOccurred())
+			mgr, err := NewManager(cachedClient, direct, testNamespace)
+			Expect(err).NotTo(HaveOccurred())
 
 			exists, err := mgr.BMHExists(ctx, "node001")
 			Expect(err).NotTo(HaveOccurred())
@@ -483,7 +496,10 @@ var _ = Describe("BareMetalHost Manager", func() {
 			replacement := original.DeepCopy()
 			replacement.UID = "host-new"
 			base := newTestManager(original)
-			manager := NewManager(base.client, directclient.Wrap(&replacementOnDeleteClient{Client: base.client, replacement: replacement}), testNamespace)
+			direct, err := directclient.Wrap(&replacementOnDeleteClient{Client: base.client, replacement: replacement})
+			Expect(err).NotTo(HaveOccurred())
+			manager, err := NewManager(base.client, direct, testNamespace)
+			Expect(err).NotTo(HaveOccurred())
 
 			Expect(manager.DeleteBMH(ctx, "netbox-46", "bmi-A")).To(HaveOccurred())
 			current := &metal3api.BareMetalHost{}

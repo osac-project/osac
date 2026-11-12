@@ -19,6 +19,7 @@ package bmh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -54,8 +55,11 @@ var _ credentials.Writer = (*SecretWriter)(nil)
 // direct must be built with directclient.New. Secrets are written with
 // CreateOrUpdate, whose internal read must reach the API server: through the
 // cached client it would start a cluster-wide Secret informer.
-func NewSecretWriter(direct directclient.Client, namespace string) *SecretWriter {
-	return &SecretWriter{client: direct, namespace: namespace}
+func NewSecretWriter(direct directclient.Client, namespace string) (*SecretWriter, error) {
+	if direct == nil {
+		return nil, errors.New("direct client is required")
+	}
+	return &SecretWriter{client: direct, namespace: namespace}, nil
 }
 
 // Create creates or updates the Secret consumed by BMO for its BMI owner.

@@ -59,7 +59,11 @@ func newWriter(objects ...client.Object) (*SecretWriter, client.Client) {
 	Expect(corev1.AddToScheme(scheme)).To(Succeed())
 	Expect(metal3api.AddToScheme(scheme)).To(Succeed())
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
-	return NewSecretWriter(directclient.Wrap(k8sClient), testNamespace), k8sClient
+	direct, err := directclient.Wrap(k8sClient)
+	Expect(err).NotTo(HaveOccurred())
+	writer, err := NewSecretWriter(direct, testNamespace)
+	Expect(err).NotTo(HaveOccurred())
+	return writer, k8sClient
 }
 
 var _ = Describe("BMC Secret Writer", func() {
@@ -67,6 +71,14 @@ var _ = Describe("BMC Secret Writer", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+	})
+
+	Describe("NewSecretWriter", func() {
+		It("rejects a missing direct client", func() {
+			writer, err := NewSecretWriter(nil, testNamespace)
+			Expect(err).To(MatchError(ContainSubstring("direct client is required")))
+			Expect(writer).To(BeNil())
+		})
 	})
 
 	Describe("Create", func() {

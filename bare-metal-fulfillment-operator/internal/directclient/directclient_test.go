@@ -96,13 +96,9 @@ func TestNewReadsThroughToAPIServer(t *testing.T) {
 }
 
 func TestWrapRejectsNilClient(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("Wrap(nil) should panic")
-		}
-	}()
-
-	Wrap(nil)
+	if _, err := Wrap(nil); err == nil {
+		t.Fatal("Wrap(nil) should return an error")
+	}
 }
 
 func TestWrapForwardsToUnderlyingClient(t *testing.T) {
@@ -110,10 +106,13 @@ func TestWrapForwardsToUnderlyingClient(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "present", Namespace: "default"},
 	}).Build()
 
-	direct := Wrap(underlying)
+	direct, err := Wrap(underlying)
+	if err != nil {
+		t.Fatalf("Wrap returned an error: %v", err)
+	}
 
 	got := &corev1.ConfigMap{}
-	err := direct.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "present"}, got)
+	err = direct.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "present"}, got)
 	if err != nil {
 		t.Fatalf("Get through wrapped client: %v", err)
 	}

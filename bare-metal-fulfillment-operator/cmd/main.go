@@ -722,5 +722,14 @@ func createMetal3Managers(
 		return nil, nil, fmt.Errorf("failed to create direct Kubernetes client: %w", err)
 	}
 
-	return baremetalhost.NewManager(mgr.GetClient(), direct, ns), bmh.NewSecretWriter(direct, ns), nil
+	bmhManager, err := baremetalhost.NewManager(mgr.GetClient(), direct, ns)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create BMH manager: %w", err)
+	}
+	secretWriter, err := bmh.NewSecretWriter(direct, ns)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create BMC Secret writer: %w", err)
+	}
+
+	return bmhManager, secretWriter, nil
 }

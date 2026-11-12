@@ -377,10 +377,18 @@ split_argv() {
 # chart reads, with its key, through a read-only cluster lookup; a missing
 # Secret or key stays a real input error that fails the gate.
 #
-# Every other failure -- including a caller-supplied token that violates
-# the schema, however it was supplied (--set, --set-string, or a values
-# file) -- aborts with safe diagnostics, so the gate always validates the
-# caller's actual merged value, never a placeholder masking it.
+# Every other failure -- including a caller-supplied non-empty token that
+# violates the schema, however it was supplied (--set, --set-string, or a
+# values file) -- aborts with safe diagnostics, so the gate validates the
+# caller's actual merged value whenever one exists, never a placeholder
+# masking it. An explicitly empty caller token (--set-string
+# bmf.netbox.tokenValue=) means the same as none: the chart needs a value
+# only when the Secret is absent, and the install-time lookup finds the
+# seeded or pre-existing one. The placeholder must therefore also be
+# applied with --set-string, because Helm merges --set-string after --set
+# regardless of argument order; a --set placeholder would be overridden
+# by the caller's empty value, the retry would fail the same way, and the
+# gate would reject a valid install.
 #
 # Usage: render_osac_chart_offline PLACEHOLDER_TOKEN RELEASE CHART [HELM_ARGS...]
 render_osac_chart_offline() {
@@ -394,7 +402,7 @@ render_osac_chart_offline() {
         *"netbox.tokenValue is required when Secret"*)
             bridged_err_file=$(mktemp)
             if ! bridged=$(helm template "$@" \
-                --set "bmf.netbox.tokenValue=${placeholder_token}" \
+                --set-string "bmf.netbox.tokenValue=${placeholder_token}" \
                 2>"${bridged_err_file}"); then
                 offline_render_error "$(cat "${bridged_err_file}")"
                 rm -f "${bridged_err_file}"

@@ -974,6 +974,23 @@ echo "input-validation gate wiring passed"
 # Section B: schema rejections with a real Helm render
 # ---------------------------------------------------------------------------
 
+# The library helpers exercised below (render_chart_offline,
+# render_osac_chart_offline, netbox_seed_check) call `helm` by name, while
+# the direct renders use ${HELM_BIN}. Put the selected executable first on
+# PATH so both halves of the suite test the same Helm: when HELM_BIN names
+# a real Helm 4 that is not the `helm` on PATH, the helpers would
+# otherwise fail to find it or silently test a different version. Section
+# A is unaffected -- each of its commands prepends STUB_BIN, so its
+# stubbed Helm still wins.
+selected_helm=$(command -v -- "${HELM_BIN}") \
+  || fail "HELM_BIN (${HELM_BIN}) does not resolve to an executable"
+selected_helm=$(readlink -f -- "${selected_helm}") \
+  || fail "HELM_BIN (${HELM_BIN}) cannot be resolved to a real path"
+helm_shim_dir="${TMP_DIR}/helm-bin"
+mkdir -p "${helm_shim_dir}"
+ln -sf -- "${selected_helm}" "${helm_shim_dir}/helm"
+PATH="${helm_shim_dir}:${PATH}"
+
 COMMON_ARGS=(template osac "${OSAC_CHART_DIR}"
   --values "${OSAC_CHART_DIR}/ci/default-values.yaml")
 INFRA_ARGS=(template osac-infra "${INFRA_CHART_DIR}"
@@ -1265,6 +1282,20 @@ render_osac_chart_offline "${offline_token}" \
   --namespace osac \
   "${NETBOX_PROFILE_ARGS[@]}" \
   || fail "netbox-profile-gate-placeholder: the bridged render failed"
+
+# An explicitly empty caller token is the same as none: the chart needs a
+# value only when the Secret is absent, and the install-time lookup finds
+# the seeded one. Helm merges --set-string after --set regardless of
+# argument order, so the bridge's placeholder must be a --set-string as
+# well; a --set placeholder is overridden by the caller's empty value, the
+# retry repeats the lookup failure, and the gate rejects a valid install.
+echo "checking netbox-empty-set-string-token (bridged render, empty caller token)"
+NETBOX_TOKEN_SEEDED=1 render_osac_chart_offline "${offline_token}" \
+  osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+  --namespace osac \
+  "${NETBOX_PROFILE_ARGS[@]}" \
+  --set-string bmf.netbox.tokenValue= \
+  || fail "netbox-empty-set-string-token: the bridge did not survive an empty token"
 
 # The bridge must verify the seed hook's Secret identity: a caller override
 # that diverges from the seeded Secret (here the key, via

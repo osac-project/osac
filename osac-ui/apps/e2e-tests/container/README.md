@@ -166,3 +166,139 @@ done
 The image does not run the prepare script's capacity check, which needs a
 kubeconfig at build time. Make sure the cluster can schedule the VM that
 `extravars.yaml` describes.
+
+## Use in CI
+
+The image is a self-contained test step: it takes a flow tag, runs it against
+a deployed OSAC, returns the result as its exit code, and leaves an HTML
+report. That is enough to run it from a CI pipeline or a GitHub Actions job.
+
+It has been run end to end on two different hosts (a Fedora workstation with
+podman 5.8, and a RHEL 9 lab host with podman 5.4), with both route discovery
+methods, for `vmaas_full_happy_basic` and `full_vm_power`. It has not yet run
+inside a hosted CI service; the workflow below is a starting template.
+
+### Runner prerequisites
+
+- **Rootless podman.** Docker is not tested. The runner user needs
+  subordinate UIDs and GIDs (`/etc/subuid`, `/etc/subgid`) for
+  `--userns=keep-id`.
+- **Network access to the deployment:** the `osac-ui` and `fulfillment-api`
+  routes over HTTPS, plus the Kubernetes API when route discovery uses a
+  kubeconfig. Lab clusters are usually reachable only from inside the lab, so
+  use a self-hosted runner there; GitHub-hosted runners cannot reach them.
+- **Internet access to build the image** (UBI 9 repositories, npm, the
+  Playwright Chromium build, `mirror.openshift.com`), about 5 GB of disk for
+  the image, and several minutes for the build. Build once per commit under
+  test and reuse the image for every flow.
+- **Running as a non-root user.** `run-ui-e2e.sh` refuses credentialed runs
+  as root.
+
+### Deployment prerequisites
+
+- OSAC is installed and healthy, with the `osac-ui` and `fulfillment-api`
+  routes.
+- A Keycloak user with the cloud provider admin role (default `admin`). The
+  runner uses it for the UI and also logs the bundled `osac` CLI in with it,
+  so no CLI session or token needs to be provided.
+- Capacity for the VM described in `extravars.yaml`, and a storage backend
+  for its storage tier (LVMS in the default values).
+- No objects left with the names in `extravars.yaml` (tenant, instance type,
+  catalog item). Only one run per deployment at a time: concurrent runs use
+  the same names and fail. To run in parallel against one deployment, give
+  each run its own `extravars.yaml` with different names.
+
+### Inputs
+
+| Input                          | How to pass it                                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| Flow to run                    | `--tag=TAG` (run the image without arguments to list the tags)                                                     |
+| Deployment routes              | a kubeconfig mounted and set with `-e KUBECONFIG=...`, or `-e OSAC_UI_BASE_URL=...` and `-e OSAC_API_BASE_URL=...` |
+| Admin password                 | a file mounted read-only and passed with `--admin-password-file=PATH`; store it as a CI secret                     |
+| Admin user                     | `--admin-user=USER` (default `admin`)                                                                              |
+| Test data                      | committed `extravars.yaml`, or a mounted file with `--extravars=PATH`                                              |
+| Self-signed route certificates | `--ignore-tls`                                                                                                     |
+| Results directory              | a writable directory mounted at `/tmp/test-output`                                                                 |
+| `osac` CLI version             | build argument `FULFILLMENT_SERVICE_IMAGE`; pin it to the image the deployment runs                                |
+
+Do not pass `-e CI=true`: with `CI` set, the Playwright configuration
+retries a failed test once, and a retried create step fails on the object
+the first attempt left behind.
+
+### Outcomes
+
+- **Exit code:** `0` when every test of the flow passed, non-zero otherwise
+  (a test failure, or a setup error such as an unreachable route or a failed
+  CLI login). The first failure stops the run.
+- **Artifacts:** `playwright-report/` (open `index.html`) and
+  `test-results/` in the results directory, copied there even when the run
+  fails. There is no JUnit output. Tracing and video are off because the
+  flows type the admin password.
+- **Log:** the container's standard output shows each step as
+  `[flow] Starting/Completed/Failed: ...`.
+- **Cleanup:** `full_*` flows and `vmaas_full_happy_basic` delete everything
+  they created when they pass. `create_*` flows keep it. A failed run leaves
+  what it had created, and the `delete_*` tags cannot clean it up from a new
+  container: they read the run state from the previous container's `/tmp`,
+  which `--rm` removed. Delete the leftovers by name with the `osac` CLI
+  (see [Before a run](#before-a-run)).
+- **Duration:** about 6 minutes for `vmaas_full_happy_basic` and about
+  8 to 9 minutes for `full_vm_power` on a lab deployment, plus the image
+  build.
+
+### Suggested pipeline
+
+1. Build the image from the commit under test, with
+   `FULFILLMENT_SERVICE_IMAGE` set to the image the deployment runs.
+2. Check that no objects with the `extravars.yaml` names exist; stop or clean
+   up if they do.
+3. Run the image with the flow tag. Its exit code is the job result.
+4. Always keep the results directory as a job artifact.
+5. If the run failed, delete the objects it left behind before the next run.
+6. Remove the password file.
+
+GitHub Actions template for a self-hosted runner in the lab (not yet run in
+GitHub Actions; adjust the labels, secrets, and the cleanup step to your
+environment):
+
+```yaml
+jobs:
+  ui-e2e:
+    runs-on: [self-hosted, osac-lab]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the UI E2E image
+        run: |
+          podman build \
+            -f osac-ui/apps/e2e-tests/container/Containerfile \
+            --build-arg FULFILLMENT_SERVICE_IMAGE="${{ vars.FULFILLMENT_SERVICE_IMAGE }}" \
+            -t osac-ui-e2e:${{ github.sha }} .
+      - name: Run the happy flow
+        env:
+          OSAC_ADMIN_PASSWORD: ${{ secrets.OSAC_ADMIN_PASSWORD }}
+        run: |
+          umask 077
+          printf %s "$OSAC_ADMIN_PASSWORD" > admin-password
+          mkdir -p test-output
+          podman run --rm \
+            --network=host \
+            --userns=keep-id \
+            --user "$(id -u):0" \
+            -v ./admin-password:/work/admin-password:ro,Z \
+            -v ./test-output:/tmp/test-output:Z \
+            -e OSAC_UI_BASE_URL="${{ vars.OSAC_UI_BASE_URL }}" \
+            -e OSAC_API_BASE_URL="${{ vars.OSAC_API_BASE_URL }}" \
+            osac-ui-e2e:${{ github.sha }} \
+            --tag=vmaas_full_happy_basic \
+            --ignore-tls \
+            --admin-password-file=/work/admin-password
+      - name: Remove the password file
+        if: always()
+        run: rm -f admin-password
+      - name: Keep the Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-e2e-report
+          path: test-output/
+```

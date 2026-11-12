@@ -14,8 +14,9 @@ custom resources and reconciles them to their desired state:
 - **ComputeInstance** (`ci`) — provisions virtual machines via
   [KubeVirt](https://kubevirt.io/).
 - **Tenant** — tracks the tenant lifecycle and leaves `status.namespace` unset.
-  In remote-cluster mode with provider networking disabled, it creates and
-  removes the Tenant-named namespace on the workload cluster. VMs with a subnet
+  In remote-cluster mode with provider networking disabled, it creates the
+  Tenant-named namespace on the workload cluster and repairs or removes it only
+  if its owner UID matches the Tenant. VMs with a subnet
   use the subnet namespace; VMs without one fall back to the tenant name.
 - **VirtualNetwork** (`vnet`) — represents a cloud virtual network / VPC with
   an IPv4 CIDR block.

@@ -51,6 +51,9 @@ var (
 	// osacTenantIDLabel stores the immutable fulfillment-service identifier of the tenant.
 	osacTenantIDLabel string = fmt.Sprintf("%s/tenant-id", osacPrefix)
 
+	// osacTenantUIDLabel identifies the Tenant object that owns a remote namespace.
+	osacTenantUIDLabel = osacPrefix + "/tenant-uid"
+
 	// osacTenantRefLabel the label used to reference the tenant object
 	osacTenantRefLabel string = fmt.Sprintf("%s/tenant-ref", osacPrefix)
 
@@ -58,7 +61,7 @@ var (
 	osacProjectRefLabel string = fmt.Sprintf("%s/project", osacPrefix)
 
 	// osacTenantKey is the key used to associate resources with a tenant.
-	// Used as a label on StorageClasses/Secrets and as an annotation on ComputeInstances.
+	// Tenant-scoped resources use it as a label or annotation.
 	osacTenantKey string = fmt.Sprintf("%s/tenant", osacPrefix)
 
 	// osacStorageTierLabel is the label key that identifies the storage tier of a StorageClass

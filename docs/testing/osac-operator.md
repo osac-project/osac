@@ -31,6 +31,10 @@ AAP job or provider. Manager registration enables networking only to inspect
 registrations, not to run provider tasks. Inspect the deployed suite before a
 focused run.
 
+ComputeInstance Envtest coverage feeds a retryable missing-namespace error from
+an in-memory AAP to the controller, then checks backoff and the next attempt.
+It does not run the Ansible job or a deployed AAP server.
+
 The networking suite and task engine use an in-memory AAP; shared wire goldens
 under `../tests/contract/network-task/` bind covered producer inputs and result
 parsers at Unit/Envtest tier, not the deployed AAP boundary. Physical
@@ -55,8 +59,12 @@ a minimal TopoLVM CRD and fixture status, so real device provisioning and CSI
 mounting remain E2E
 ([OSAC-3711](https://redhat.atlassian.net/browse/OSAC-3711)). Remote StorageClass coverage needs dual Envtest plus a second Kind cluster.
 Remote Tenant namespace lifecycle ([OSAC-7297](https://redhat.atlassian.net/browse/OSAC-7297))
-uses the same two-cluster Kind suite to check creation, labels, management-cluster
-absence and deletion waits. It does not run AAP or create a VM.
+uses the same two-cluster Kind suite to verify that the operator marks new
+namespaces with the Tenant UID, repairs removed or changed association labels
+through the namespace watch, and leaves a same-name namespace with a different
+owner untouched. It checks
+that deletion waits for the owned remote namespace and that this fixture creates
+no management-cluster namespace. It does not run AAP or create a VM.
 
 ClusterOrder upgrade dispatch, observation, and deadline coverage
 ([DEV] OSAC-6265, OSAC-7232) uses Envtest for dispatch and feedback against the

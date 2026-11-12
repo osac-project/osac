@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -67,6 +68,14 @@ const (
 	localDecoyStorageClass           = "local-mgmt-only-gold-sc"
 	remoteWorkloadStorageClass       = "remote-workload-gold-sc"
 	remoteWorkloadSilverStorageClass = "remote-workload-silver-sc"
+
+	// Tenant namespace labels mirrored here because this integration package is separate.
+	osacTenantRefLabel       = "osac.openshift.io/tenant-ref"
+	osacProjectRefLabel      = "osac.openshift.io/project"
+	osacTenantIDLabel        = "osac.openshift.io/tenant-id"
+	osacTenantUIDLabel       = "osac.openshift.io/tenant-uid"
+	osacTenantKey            = "osac.openshift.io/tenant"
+	tenantNamespaceFinalizer = "osac.openshift.io/tenant"
 
 	cspFixtureResourceName  = "csp-storage-fixture"
 	cspFixtureCAConfigMap   = "csp-storage-fixture-ca"
@@ -1863,13 +1872,7 @@ func updateRemoteNamespaceFinalizer(
 			return err
 		}
 
-		index := -1
-		for i, existing := range namespace.Spec.Finalizers {
-			if existing == finalizer {
-				index = i
-				break
-			}
-		}
+		index := slices.Index(namespace.Spec.Finalizers, finalizer)
 		if add {
 			if index >= 0 {
 				return nil
@@ -1879,7 +1882,7 @@ func updateRemoteNamespaceFinalizer(
 			if index < 0 {
 				return nil
 			}
-			namespace.Spec.Finalizers = append(namespace.Spec.Finalizers[:index], namespace.Spec.Finalizers[index+1:]...)
+			namespace.Spec.Finalizers = slices.Delete(namespace.Spec.Finalizers, index, index+1)
 		}
 
 		_, err = kubeClient.CoreV1().Namespaces().Finalize(ctx, namespace, metav1.UpdateOptions{})

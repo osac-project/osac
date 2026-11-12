@@ -26,9 +26,20 @@ All OSAC custom resources remain on the management cluster. The
 `ComputeInstance`, `Tenant`, and `Storage` controllers watch downstream
 Kubernetes objects (VMs, namespaces, UDN, StorageClasses) on the remote cluster
 via a dedicated kubeconfig. When provider networking is disabled, the Tenant
-controller creates and removes only the namespace named for that Tenant. It
-leaves `Tenant.status.namespace` unset. AAP checks that the selected namespace
-exists before creating VM resources but does not manage namespace lifecycle.
+controller creates the namespace named for that Tenant and sets its
+`osac.openshift.io/tenant-uid` label to the management-cluster Tenant's
+`metadata.uid`. It repairs `tenant-ref` and `project` labels or deletes a
+namespace only when the UID label matches. It leaves
+`Tenant.status.namespace` unset. AAP checks that the selected namespace exists
+before creating VM resources but does not manage namespace lifecycle.
+
+A namespace with a missing or different owner UID is left untouched. It blocks
+Tenant readiness or, during deletion, leaves the Tenant finalizer in place.
+For an existing namespace, a cluster administrator must verify that it and its
+contents belong to the current Tenant before updating the ownership label.
+Do not infer ownership from a matching name, `tenant-ref`, or `project` label.
+The UID changes if the Tenant object is recreated, even if its name stays the
+same. Keep remote namespace write access restricted to trusted identities.
 
 osac-operator relies on
 [multicluster-runtime](https://github.com/kubernetes-sigs/multicluster-runtime)

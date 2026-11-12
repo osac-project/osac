@@ -79,6 +79,10 @@ class K8sClient:
         args.extend(["-o", "json"])
         return json.loads(run(*args))
 
+    def list_json_all_namespaces(self, *, resource: str) -> dict[str, Any]:
+        """List a resource across every namespace, for resources whose namespace is a setting."""
+        return json.loads(run(*self._base(), "get", resource, "-A", "-o", "json"))
+
     def get_operator_metrics(self) -> str:
         services = self.list_json(resource="services", namespace=self.namespace).get("items", [])
         metrics_service = next(
@@ -315,6 +319,18 @@ class K8sClient:
             checked=checked,
         )
         return output if rc == 0 else ""
+
+    def get_condition(self, *, resource: str, name: str, condition_type: str) -> dict[str, Any]:
+        """The status condition of one type, or an empty dict when it is not carried."""
+        conditions: list[dict[str, Any]] = (
+            self.get_json(resource=resource, name=name).get("status", {}).get("conditions", [])
+        )
+        return next((condition for condition in conditions if condition.get("type") == condition_type), {})
+
+    def get_status_jobs(self, *, resource: str, name: str) -> list[dict[str, Any]]:
+        """The provider networking jobs the operator recorded on the resource, if any."""
+        jobs: list[dict[str, Any]] | None = self.get_json(resource=resource, name=name).get("status", {}).get("jobs")
+        return list(jobs or [])
 
     def get_virtual_network_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(

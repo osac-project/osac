@@ -11,6 +11,7 @@ from tests.e2e.bmaas.conftest import BMI_DISK_IMAGE_SOURCE_REF
 from tests.e2e.core.fulfillment_trust import assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
+    assert_no_network_attachment,
     wait_for_bmh_available,
     wait_for_bmh_provisioned,
     wait_for_bmi_cr,
@@ -116,6 +117,7 @@ def test_baremetal_instance_lifecycle(
     test_run_id: str,
     ssh_key_secret: str,
     ssh_public_key: str,
+    networking_provisioning_enabled: bool,
 ) -> None:
     """Provision a BMI end-to-end and assert its terminal stage, NIC metadata, power cycle, and deprovision."""
     name = f"e2e-bmi-{test_run_id}"
@@ -179,6 +181,23 @@ def test_baremetal_instance_lifecycle(
         assert provisioned_condition.get("reason") == _PROVISIONED_REASON, (
             f"PROVISIONED condition reason {provisioned_condition.get('reason')!r}, expected {_PROVISIONED_REASON!r}"
         )
+
+        if not networking_provisioning_enabled:
+            # Disabled mode skips the port move, handoff, and DHCP query for this
+            # host: no attachment state, no networking job record, and no
+            # NetworkAttachment object to delete during deprovisioning.
+            bmi_status: dict[str, Any] = k8s_hub_client.get_json(resource="baremetalinstance", name=bmi_cr_name).get(
+                "status", {}
+            )
+            assert not bmi_status.get("networkAttachmentStatuses"), (
+                f"provider networking is disabled, but {bmi_cr_name} reports "
+                f"networkAttachmentStatuses {bmi_status.get('networkAttachmentStatuses')}"
+            )
+            assert not bmi_status.get("networkingJobs"), (
+                f"provider networking is disabled, but {bmi_cr_name} records networking jobs "
+                f"{bmi_status.get('networkingJobs')}"
+            )
+            assert_no_network_attachment(k8s=k8s_hub_client, target_kind="BareMetalInstance", target_id=bmi_id)
 
         external_host_id: str = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi_cr_name)
         assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"

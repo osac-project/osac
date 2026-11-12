@@ -369,6 +369,7 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
             ssh_key_secret="test-ssh-key-secret",
             ssh_public_key_path=str(key_file),
             metering=metering,
+            networking_provisioning_enabled=True,
         )
 
     assert snapshot_times == [0, 65, 125]  # BMI, parent and dependent-GC waits share a monotonic throttle.

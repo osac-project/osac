@@ -13,6 +13,8 @@ from tests.e2e.core import failure_report, failure_snapshot, telemetry
 from tests.e2e.core.caas_versions import ensure_caas_disk_image_version
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
+    assert_no_default_external_access,
+    read_installed_networking_mode,
     unique_name,
     wait_for_grpc_subnet_ready,
     wait_for_tenant_condition,
@@ -250,6 +252,19 @@ def private_grpc(fulfillment_private_address: str, namespace: str, service_accou
 
 
 @pytest.fixture(scope="session")
+def networking_provisioning_enabled(private_grpc: GRPCClient) -> bool:
+    """The provider networking mode the installation stored at its first start."""
+    return read_installed_networking_mode(private_grpc=private_grpc)
+
+
+@pytest.fixture
+def provider_networking_disabled(networking_provisioning_enabled: bool) -> None:
+    """Skip a test that only exercises the provider networking disabled contract."""
+    if networking_provisioning_enabled:
+        pytest.skip("Provider networking is enabled on this deployment")
+
+
+@pytest.fixture(scope="session")
 def caas_disk_image_version(private_grpc: GRPCClient) -> str:
     """Explicit backed version for positive bare-metal CaaS scenarios."""
     return ensure_caas_disk_image_version(private_grpc)
@@ -268,6 +283,7 @@ def _wait_for_default_networking_ready(
     grpc: GRPCClient,
     private_grpc: GRPCClient,
     jwt_tenant: str,
+    networking_provisioning_enabled: bool,
 ) -> None:
     """Wait for tenant defaults, including the default SecurityGroup, to be READY.
 
@@ -278,6 +294,11 @@ def _wait_for_default_networking_ready(
     the subnet became READY before its default SecurityGroup, causing Cluster
     Create to reject requests that rely on defaults. Keep the subnet feedback
     check as well because tests also resolve default subnets directly.
+
+    With provider networking disabled the accepted reason is narrowed to
+    ProvisioningDisabled, and onboarding must not have created a default
+    ExternalIP or NATGateway: disabled defaults are logical only and claim no
+    outbound NAT.
 
     Depends on ``ensure_jwt_users`` (which itself depends on ``ensure_tenants``)
     so that the ``grpc`` client's first call does not trigger JIT user
@@ -291,7 +312,13 @@ def _wait_for_default_networking_ready(
     """
     # OSAC-5564: subnet readiness alone does not guarantee the matching default
     # SecurityGroup is READY, which Cluster Create now requires for defaulting.
-    wait_for_tenant_default_networking_ready(grpc=private_grpc, tenant_name=jwt_tenant)
+    wait_for_tenant_default_networking_ready(
+        grpc=private_grpc,
+        tenant_name=jwt_tenant,
+        expected_reasons=None if networking_provisioning_enabled else {"ProvisioningDisabled"},
+    )
+    if not networking_provisioning_enabled:
+        assert_no_default_external_access(private_grpc=private_grpc)
 
     # Timeout must exceed 2x the operator's statusPollInterval (30s) to
     # accommodate two sequential polling cycles (VirtualNetwork -> Subnet).

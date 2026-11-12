@@ -9,6 +9,7 @@ import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    assert_no_network_jobs,
     unique_name,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion,
@@ -39,6 +40,7 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
     pull_secret_name: str,
     ssh_key_secret: str,
     metering: MeteringCollector,
+    networking_provisioning_enabled: bool,
 ) -> None:
     """Verify that cluster deletion transitions through DELETING state
     without waiting for full provisioning (OSAC-1586).
@@ -90,6 +92,12 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
         cli.delete_cluster(uuid=uuid)
 
         wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
+        if not networking_provisioning_enabled:
+            # Disabled mode runs no reserve, release, ingress, or DNS task, so the
+            # deletion leaves the operator's job record empty.
+            assert_no_network_jobs(
+                k8s=k8s_hub_client, resource="clusterorder", name=co_name, context=f"ClusterOrder {co_name} deletion"
+            )
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)

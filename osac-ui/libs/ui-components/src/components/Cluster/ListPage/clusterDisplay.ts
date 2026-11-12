@@ -1,6 +1,12 @@
 import type { TFunction } from 'i18next';
 
-import { ClusterState, Metadata } from '@osac/types';
+import {
+  type Cluster,
+  ClusterState,
+  type ClusterUpgradeHistoryEntry,
+  ClusterUpgradeState,
+  Metadata,
+} from '@osac/types';
 
 export type ClusterStatusFilter = 'progressing' | 'ready' | 'failed' | 'deleting' | 'delete-failed';
 
@@ -42,6 +48,19 @@ export const clusterStatusFilterLabel = (filter: ClusterStatusFilter, t: TFuncti
 };
 
 export const isClusterSpecFilterValue = (value: string): value is string => value.trim().length > 0;
+
+export const getControlPlaneUpgradeHistory = (cluster: Cluster): ClusterUpgradeHistoryEntry[] =>
+  cluster.status?.upgradeHistory.filter(
+    (entry) => entry.component?.target.case === 'controlPlane',
+  ) ?? [];
+
+export const getActiveControlPlaneUpgradeTarget = (cluster: Cluster): string | undefined => {
+  const latestAttempt = getControlPlaneUpgradeHistory(cluster)[0];
+  const active =
+    latestAttempt?.state === ClusterUpgradeState.PENDING ||
+    latestAttempt?.state === ClusterUpgradeState.PROGRESSING;
+  return active ? latestAttempt.targetVersion || undefined : undefined;
+};
 
 const CARD_CREATED_FORMAT = new Intl.DateTimeFormat('en-US', {
   month: 'short',

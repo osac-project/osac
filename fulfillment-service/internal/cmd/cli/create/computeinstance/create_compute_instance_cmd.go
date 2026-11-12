@@ -966,8 +966,7 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 	// The attachment API wants the instance RUNNING, READY, and with
 	// a network address. RUNNING alone is not enough, the network
 	// can still be coming up.
-	c.console.Infof(ctx, "Waiting for compute instance '%s' to become ready for attachment...\n",
-		ci.GetMetadata().GetName())
+	c.console.Infof(ctx, "Waiting for compute instance to become ready for attachment...\n")
 
 	// wait.Poll gives back a zero object on error, keep the created
 	// one for error reporting.
@@ -994,8 +993,8 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 		},
 		Timeout: c.args.timeout,
 		OnProgress: func(r *publicv1.ComputeInstance) {
-			c.console.Infof(ctx, "  compute instance '%s': %s\n",
-				r.GetMetadata().GetName(), r.GetStatus().GetState().String())
+			c.console.Infof(ctx, "  compute instance state: %s\n",
+				r.GetStatus().GetState().String())
 		},
 	})
 	if err != nil {
@@ -1006,7 +1005,7 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 
 	// The API requires a name, build one from the external IP.
 	attachName := externalip.AttachmentName(eip)
-	attachResp, err := c.externalIPAttachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
+	_, err = c.externalIPAttachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 		Object: publicv1.ExternalIPAttachment_builder{
 			Metadata: metautil.ForCreate(ctx, attachName).Build(),
 			Spec: publicv1.ExternalIPAttachmentSpec_builder{
@@ -1022,11 +1021,7 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 		)
 	}
 
-	c.console.Infof(ctx,
-		"Attached external IP '%s' (address: %s) to compute instance '%s' (attachment ID: %s).\n",
-		eip.GetMetadata().GetName(), eip.GetStatus().GetAddress(),
-		ci.GetMetadata().GetName(), attachResp.GetObject().GetId(),
-	)
+	c.console.Infof(ctx, "Attached external IP to compute instance.\n")
 	return nil
 }
 

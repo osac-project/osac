@@ -245,6 +245,43 @@ var _ = Describe("Billing accounts", func() {
 			Expect(items[1].State).To(Equal("UNKNOWN"))
 		})
 
+		It("advances the observation time of an account a later sweep also omits", func() {
+			first := time.Now().UTC().Truncate(time.Second).Add(-time.Minute)
+			second := first.Add(30 * time.Second)
+			upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1",
+				State: "ACTIVE", StatusObservedAt: first,
+			})
+			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, first)).To(Succeed())
+			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, second)).To(Succeed())
+			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(items[0].State).To(Equal("UNKNOWN"))
+			Expect(items[0].StatusObservedAt).To(BeTemporally("==", second),
+				"a sweep must move an already UNKNOWN row's observation forward")
+		})
+
+		It("keeps an account UNKNOWN when a walk that read it earlier commits after the newer sweep", func() {
+			walkAt := time.Now().UTC().Truncate(time.Second).Add(-time.Minute)
+			sweepAt := walkAt.Add(30 * time.Second)
+			upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1",
+				State: "ACTIVE", StatusObservedAt: walkAt,
+			})
+			// The sweep that omits the account commits first, carrying the newer observation. The walk that still
+			// listed it commits last, carrying the older one, and must not restore it.
+			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, walkAt)).To(Succeed())
+			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, sweepAt)).To(Succeed())
+			upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1",
+				State: "ACTIVE", StatusObservedAt: walkAt,
+			})
+			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(items[0].State).To(Equal("UNKNOWN"),
+				"the newer sweep must win over a walk that read the account earlier")
+		})
+
 		It("does not touch accounts under a different provider_key", func() {
 			upsert(BillingAccountUpsert{ProviderKey: "m360", ProviderAccountReference: "acct-1", State: "ACTIVE"})
 			upsert(BillingAccountUpsert{ProviderKey: "fake", ProviderAccountReference: "acct-1", State: "ACTIVE"})

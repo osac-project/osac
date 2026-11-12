@@ -47,7 +47,7 @@ func newTestManager(objects ...client.Object) *Manager {
 		WithObjects(objects...).
 		WithStatusSubresource(&metal3api.BareMetalHost{}).
 		Build()
-	direct, err := directclient.Wrap(k8sClient)
+	direct, err := directclient.WrapForTest(k8sClient)
 	Expect(err).NotTo(HaveOccurred())
 	mgr, err := NewManager(k8sClient, direct, testNamespace)
 	Expect(err).NotTo(HaveOccurred())
@@ -91,7 +91,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 
 		It("rejects a nil cached client", func() {
 			k8sClient := fake.NewClientBuilder().WithScheme(newTestScheme()).Build()
-			direct, err := directclient.Wrap(k8sClient)
+			direct, err := directclient.WrapForTest(k8sClient)
 			Expect(err).NotTo(HaveOccurred())
 
 			mgr, err := NewManager(nil, direct, testNamespace)
@@ -457,7 +457,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			scheme := newTestScheme()
 			cachedClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 			apiClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bmh).Build()
-			direct, err := directclient.Wrap(apiClient)
+			direct, err := directclient.WrapForTest(apiClient)
 			Expect(err).NotTo(HaveOccurred())
 			mgr, err := NewManager(cachedClient, direct, testNamespace)
 			Expect(err).NotTo(HaveOccurred())
@@ -496,7 +496,7 @@ var _ = Describe("BareMetalHost Manager", func() {
 			replacement := original.DeepCopy()
 			replacement.UID = "host-new"
 			base := newTestManager(original)
-			direct, err := directclient.Wrap(&replacementOnDeleteClient{Client: base.client, replacement: replacement})
+			direct, err := directclient.WrapForTest(&replacementOnDeleteClient{Client: base.client, replacement: replacement})
 			Expect(err).NotTo(HaveOccurred())
 			manager, err := NewManager(base.client, direct, testNamespace)
 			Expect(err).NotTo(HaveOccurred())

@@ -59,7 +59,7 @@ func newWriter(objects ...client.Object) (*SecretWriter, client.Client) {
 	Expect(corev1.AddToScheme(scheme)).To(Succeed())
 	Expect(metal3api.AddToScheme(scheme)).To(Succeed())
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
-	direct, err := directclient.Wrap(k8sClient)
+	direct, err := directclient.WrapForTest(k8sClient)
 	Expect(err).NotTo(HaveOccurred())
 	writer, err := NewSecretWriter(direct, testNamespace)
 	Expect(err).NotTo(HaveOccurred())

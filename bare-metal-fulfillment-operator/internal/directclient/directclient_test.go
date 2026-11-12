@@ -95,20 +95,20 @@ func TestNewReadsThroughToAPIServer(t *testing.T) {
 	}
 }
 
-func TestWrapRejectsNilClient(t *testing.T) {
-	if _, err := Wrap(nil); err == nil {
-		t.Fatal("Wrap(nil) should return an error")
+func TestWrappingRejectsNilClient(t *testing.T) {
+	if _, err := WrapForTest(nil); err == nil {
+		t.Fatal("WrapForTest(nil) should return an error")
 	}
 }
 
-func TestWrapForwardsToUnderlyingClient(t *testing.T) {
+func TestWrappingForwardsToUnderlyingClient(t *testing.T) {
 	underlying := fake.NewClientBuilder().WithObjects(&corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "present", Namespace: "default"},
 	}).Build()
 
-	direct, err := Wrap(underlying)
+	direct, err := WrapForTest(underlying)
 	if err != nil {
-		t.Fatalf("Wrap returned an error: %v", err)
+		t.Fatalf("WrapForTest returned an error: %v", err)
 	}
 
 	got := &corev1.ConfigMap{}

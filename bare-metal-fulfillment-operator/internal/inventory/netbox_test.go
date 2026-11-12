@@ -1036,7 +1036,7 @@ func testNetBoxSelectorBMHManager() *baremetalhost.Manager {
 
 // newTestDirectClient wraps an already-uncached client as a direct client.
 func newTestDirectClient(c client.Client) directclient.Client {
-	direct, err := directclient.Wrap(c)
+	direct, err := directclient.WrapForTest(c)
 	Expect(err).NotTo(HaveOccurred())
 	return direct
 }

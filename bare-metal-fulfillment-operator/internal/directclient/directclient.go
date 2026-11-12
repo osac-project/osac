@@ -81,13 +81,13 @@ func New(cfg *rest.Config, scheme *runtime.Scheme, mapper meta.RESTMapper) (Clie
 	return directClient{Client: c}, nil
 }
 
-// Wrap marks an existing client as direct.
+// WrapForTest marks an existing client as direct. It exists so tests in other
+// packages can inject a fake client; production code must use New.
 //
 // Callers must only pass a client known to read through to the API server: a
-// value built with client.New, an envtest client, or a fake client in tests.
-// Never pass mgr.GetClient(), whose reads are served by the cache. Production
-// code should use New instead.
-func Wrap(c client.Client) (Client, error) {
+// value built with client.New, an envtest client, or a fake client. Never pass
+// mgr.GetClient(), whose reads are served by the cache.
+func WrapForTest(c client.Client) (Client, error) {
 	if c == nil {
 		return nil, errors.New("direct client is required")
 	}

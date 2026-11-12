@@ -73,10 +73,10 @@
           spec: {}
         fallback_root_device_hints: >-
           {{ [] | osac.templates.root_device_hints(
-            {'status': {'hardware': {'storage': [
+            bmh={'status': {'hardware': {'storage': [
               {'name': '/dev/vda', 'sizeBytes': 17179869184,
                'serial': 'SER-42', 'wwn': '0x5000c50015ea71ad'}
-            ]}}}, 4) }}
+            ]}}}, min_size=4) }}
 
     - name: Build BMH patch using actual role code
       ansible.builtin.include_role:

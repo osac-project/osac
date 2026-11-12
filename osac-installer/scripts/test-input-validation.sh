@@ -342,6 +342,21 @@ for mc_stage in clusterversion can-i config-view; do
     fail "multicluster-oc-error-path (${mc_stage}): oc's kubeconfig path reached the output"
   fi
 done
+# prepare-remote-cluster is a separate entry point with the same access
+# check, so it is guarded the same way.
+mc_out="${TMP_DIR}/mc-oc-prepare.out"
+mc_err="${TMP_DIR}/mc-oc-prepare.err"
+if MOCK_LOG="${LOG}" STUB_FAIL_AT=clusterversion PATH="${mc_oc_bin}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory prepare-remote-cluster NS=osac \
+    REMOTE_KUBECONFIG="${mc_remote_kubeconfig}" \
+    >"${mc_out}" 2>"${mc_err}"; then
+  fail "multicluster-oc-error-path (prepare-remote-cluster): the preparation proceeded after oc failed"
+fi
+grep -q '^ERROR: ' "${mc_err}" \
+  || fail "multicluster-oc-error-path (prepare-remote-cluster): the failure lost its value-free diagnostic"
+if grep -Fq 'customer-name-' "${mc_out}" "${mc_err}"; then
+  fail "multicluster-oc-error-path (prepare-remote-cluster): oc's kubeconfig path reached the output"
+fi
 
 # Gate/install parity for INFRA_HELM_ARGS: every helm command touching
 # osac-infra or osac-deps in the OpenShift install plan -- the gate's

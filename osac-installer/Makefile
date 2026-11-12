@@ -1199,7 +1199,8 @@ validate-remote-cluster-render: validate-ns helm-infra-deps ## Render the worklo
 .PHONY: prepare-remote-cluster
 prepare-remote-cluster: validate-ns helm-infra-deps ## Prepare the remote VMaaS workload cluster without changing management
 	@test -r "$${REMOTE_KUBECONFIG}" || { echo "ERROR: REMOTE_KUBECONFIG is not readable; check the path you supplied" >&2; exit 1; }
-	@oc --kubeconfig "$${REMOTE_KUBECONFIG}" get clusterversion version >/dev/null
+	@oc --kubeconfig "$${REMOTE_KUBECONFIG}" get clusterversion version >/dev/null $(OC_QUERY_STDERR) \
+		|| { echo "ERROR: could not reach the cluster in REMOTE_KUBECONFIG. Is oc logged in?" >&2; exit 1; }
 	REMOTE_KUBECONFIG="$${REMOTE_KUBECONFIG}" \
 	REMOTE_STORAGE_CLASS="$(REMOTE_STORAGE_CLASS)" \
 	EVPN_VALUES="$(EVPN_VALUES)" \

@@ -34,6 +34,7 @@ Read the applicable references before changing behavior:
 
 <a id="integration-testing"></a>
 
+
 ## Validation
 
 ### Tools and working directory
@@ -60,16 +61,16 @@ Focused contracts, selected by the changed wiring:
 
 | Wiring | Command |
 |---|---|
-| Networking values, manager settings, overlays and admission | `make helm-networking-test` |
-| NetworkClass step against a fake fulfillment API | `make network-class-step-test` |
-| MCE defaults and lifecycle gate | `make mce-render-test` |
-| Optional LVMS worker/device allowlist | `make lvms-optional-path-render-test` |
-| Fulfillment trust and CA mounts | `make fulfillment-trust-render-test` |
-| Service-account IDP credentials and realm roles | `make service-account-idp-render-test` |
-| Fulfillment hook token exchange and dev-full wiring | `make fulfillment-auth-test dev-full-render-test` |
-| Billing provider mounts and tuning bounds | `make billing-render-test` |
-| EVPN host networking | `make evpn-render-test` |
-| OpenBao security context on Kind/OpenShift | `make openbao-security-context-test` |
+| Networking values, manager settings, overlays and admission | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/network` |
+| NetworkClass step against a fake fulfillment API | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/network/test_network-class-step.py` |
+| MCE defaults and lifecycle gate | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_mce-render.py` |
+| Optional LVMS worker/device allowlist | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_lvms-optional-path-render.py` |
+| Fulfillment trust and CA mounts | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_fulfillment-trust-render.py` |
+| Service-account IDP credentials and realm roles | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_service-account-idp-render.py` |
+| Fulfillment hook token exchange and dev-full wiring | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_fulfillment-auth.py` and `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_dev-full-render.py` |
+| Billing provider mounts and tuning bounds | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_billing-render.py` |
+| EVPN host networking | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/network/test_evpn-render.py` |
+| OpenBao security context on Kind/OpenShift | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_openbao-security-context.py` |
 
 For metering reader values, run `make -C ../osac-metering readers-render-test`.
 Offline chart rendering does not prove live exporter or broker behavior.
@@ -77,11 +78,16 @@ Offline chart rendering does not prove live exporter or broker behavior.
 ### Local script and harness checks
 
 - Runtime, image/dependency loading, cleanup and test-phase wiring:
-  `make kind-runtime-test` uses command stubs.
+  `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_kind-runtime.py`
+  uses command stubs.
+- Mac Fedora image build/load and catalog contracts:
+  `make dev-full-fedora-test` uses fake commands.
 - Infra readiness waits: `make infra-ready-wait-test` uses command stubs.
 - Upfront input gate and schema rejection: `make input-validation-test`.
-- Preflight render/hook policy: `uv run --script scripts/test-preflight-render.py`.
-- Preflight harness restoration: `uv run --script scripts/test-preflight-harness.py`.
+- Preflight render/hook policy:
+  `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_preflight-render.py`.
+- Preflight harness restoration:
+  `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_preflight-harness.py`.
 - Disk-handoff AAP recording double:
   `python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py`.
 
@@ -110,7 +116,7 @@ make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
   `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage`.
   This uses real Fulfillment/PostgreSQL/operator with a recording AAP double.
 - For preflight real-API, upgrade and failed-hook logs, run
-  `uv run --script scripts/test-preflight-kind.py` against the selected Kind context.
+  `uv run --script scripts/helm-validate/preflight-kind.py` against the selected Kind context.
 - For UI Gateway reachability, run `./scripts/test-ui-gateway.sh` against
   deployed dev-full. Local rendering does not prove hook token acceptance.
 - Render tests and stubs do not establish live readiness, networking traffic

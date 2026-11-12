@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-INSTALLER = pathlib.Path(__file__).resolve().parents[1]
+INSTALLER = pathlib.Path(__file__).resolve().parents[3]
 INFRA_CHART = INSTALLER / "charts/osac-infra"
 LVMS_CONFIG = ("ConfigMap", "osac-infra-lvms-config")
 DEFAULT_DEVICE_PATH = "/dev/sample-osac-disk"
@@ -48,7 +48,7 @@ def find_resource(docs: list[dict[str, Any]], kind: str, name: str) -> dict[str,
     return matches[0]
 
 
-def main() -> None:
+def test_main() -> None:
     with tempfile.TemporaryDirectory(prefix="lvms-optional-path-chart-") as temp_dir:
         chart = pathlib.Path(temp_dir) / "osac-infra"
         templates = chart / "templates"
@@ -96,7 +96,3 @@ def main() -> None:
                 "optionalPaths": expected_paths
             }, f"{profile} must use only its explicit optional paths {expected_paths}"
     print("LVMS optional-path render checks passed.")
-
-
-if __name__ == "__main__":
-    main()

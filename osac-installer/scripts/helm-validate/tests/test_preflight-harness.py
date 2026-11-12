@@ -5,7 +5,7 @@
 # ///
 """Mocked harness behavior checks; the Kind suite validates the real API race.
 
-Run: uv run --script scripts/test-preflight-harness.py
+Run: uv run pytest scripts/helm-validate/tests/test_preflight-harness.py
 """
 
 import importlib.util
@@ -17,7 +17,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import Mock, patch
 
-SCRIPT = pathlib.Path(__file__).with_name("test-preflight-kind.py")
+SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "preflight-kind.py"
 spec = importlib.util.spec_from_file_location("preflight_kind", SCRIPT)
 preflight = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(preflight)
@@ -201,7 +201,3 @@ class RestorationTests(unittest.TestCase):
         for error in cleanup.exceptions:
             self.assertIsInstance(error.exceptions[0], subprocess.TimeoutExpired)
             self.assertIn(error.message, output.getvalue())
-
-
-if __name__ == "__main__":
-    unittest.main()

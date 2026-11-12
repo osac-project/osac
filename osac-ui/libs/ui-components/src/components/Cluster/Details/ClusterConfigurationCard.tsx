@@ -36,9 +36,14 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
         <DescriptionList isCompact>
           <DescriptionListGroup>
             <DescriptionListTerm>
-              {t('Current version')}{' '}
+              {t('Current version')}
               {upgradeHistory.length > 0 && (
-                <Button variant="link" isInline onClick={() => setHistoryClusterId(cluster.id)}>
+                <Button
+                  variant="link"
+                  isInline
+                  className="pf-v6-u-ml-sm"
+                  onClick={() => setHistoryClusterId(cluster.id)}
+                >
                   {t('Upgrade history')}
                 </Button>
               )}

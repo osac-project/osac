@@ -358,14 +358,6 @@ Notes on individual components:
   again after every infrastructure upgrade, add a CIDR that covers that range
   to `global.networking.excludedIpv4Cidrs`, and check the pool before you
   create Clusters.
-- **multicluster engine for Kubernetes Operator** is required for
-  agent-based cluster provisioning but is disabled by default. Set
-  `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
-  infrastructure profile does so explicitly. Leave it `false` when Red Hat
-  Advanced Cluster Management for Kubernetes (RHACM) or another MCE
-  installation already owns it. The disabled state also prevents the phase-1
-  chart from applying its temporary Assisted image override `ConfigMap` and
-  compatibility RBAC.
 - **Kubernetes NMState Operator** sets the uplink and VTEP addresses of the
   VMaaS nodes. Your platform administrators prepare it for EVPN networking.
 - **EVPN host networking** needs OVN-Kubernetes and OpenShift Container

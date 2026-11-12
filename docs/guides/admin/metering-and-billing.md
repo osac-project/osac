@@ -227,3 +227,97 @@ topics once at startup, so a tenant created after it starts is read on the next
 restart. It keeps its seen ids in memory, so a restart forgets them. It commits
 its offsets to the consumer group after the bill prints. A production reader
 stores its seen ids durably and re-lists or watches for new topics.
+
+## Billing provider
+
+The fulfillment service prices the catalog from one billing provider. Set
+`global.billing.provider` and `global.billing.tuning` in the installer
+values; the chart turns each value into an environment variable on the
+fulfillment gRPC server:
+
+| Value | Environment variable | Default and bounds |
+|---|---|---|
+| `provider.key` | `OSAC_BILLING_PROVIDER` | Required; `m360` is the only key |
+| `provider.baseUrl` | `OSAC_BILLING_BASE_URL` | Required; HTTPS for any host, HTTP only for a loopback host |
+| `provider.credentialSecret` | `OSAC_BILLING_CREDENTIAL_FILE` | Required; chart mounts the Secret key and passes its path |
+| `provider.caSecret` | `OSAC_BILLING_CA_FILE` | Optional; rendered only when set |
+| `tuning.retryCount` | `OSAC_BILLING_RETRY_COUNT` | 3; 0 or more retries after the first attempt |
+| `tuning.pricingBreaker.failureThreshold` | `OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD` | 5; 1 or more |
+| `tuning.pricingBreaker.failureWindowSeconds` | `OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS` | 30; 1 to 9223372036 |
+| `tuning.pricingBreaker.openSeconds` | `OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS` | 30; 1 to 9223372036 |
+
+The schema enforces the required fields and bounds before rendering, so a
+missing `key`, `baseUrl`, or `credentialSecret`, a key other than `m360`, a
+credential in values, or an out-of-range tuning value fails the install. The
+breaker opens after `failureThreshold` failed pricing requests within
+`failureWindowSeconds`, stays open for `openSeconds`, then allows one probe.
+
+These variables render only when `global.billing.provider` is set. Leave the
+provider unset and the chart renders no billing configuration at all; the
+catalog-pricing cache settings below are separate and always render.
+
+The credential never lives in values: name an existing Secret key in
+`credentialSecret`, and the chart mounts it into the gRPC server and passes
+only the file path. `caSecret` names an existing Secret holding PEM roots the
+service trusts on top of the system roots.
+
+If no `OSAC_BILLING_PROVIDER` is set, the provider state is `NOT_CONFIGURED`.
+A provider that is named but cannot be used, from incomplete settings to an
+empty or unreadable credential file or a CA bundle with no certificate, stays
+configured and reports `UNAVAILABLE`, as does one whose health check fails.
+
+## Catalog pricing cache
+
+The fulfillment service keeps two catalog answers in memory for a short time, so
+a busy deployment does not re-read its database or call the billing provider on
+every request. The first is the metered catalog inventory behind
+`CatalogPricingInputs.List`, the distinct service, dimension, and value rows
+derived from the VMaaS and CaaS catalog items. It is an administrator gap-check
+view and contains no prices. The second is provider rate card items, the prices
+your billing system publishes for one OSAC service. Both caches answer while no
+pricing provider is configured, so these settings apply to every installation,
+with or without billing.
+
+Set the intervals in seconds in the installer values:
+
+```yaml
+service:
+  tuning:
+    cache:
+      defaultSeconds: 300
+      inventorySeconds: 30
+      rateCardSeconds: 300
+```
+
+`defaultSeconds` is the shared interval: every catalog-pricing cache uses it
+unless it has an override of its own. The installer ships two overrides,
+`inventorySeconds: 30` for the catalog inventory cache and
+`rateCardSeconds: 300` for the provider rate-card cache, so the shipped
+freshness is 30 seconds for inventory and 300 for rate cards. An override takes
+the place of the shared default only while it is set: clear it (set it to null,
+or remove it from your values) and that cache inherits `defaultSeconds` again.
+A deployment that supplies no tuning at all uses 300 seconds for both caches.
+The chart rejects an interval outside 1 to 86400 seconds, and the service falls
+back to the shared default if it still receives an unusable value. The chart
+passes the values to the fulfillment service as
+`OSAC_CATALOG_CACHE_DEFAULT_SECONDS`, `OSAC_CATALOG_CACHE_INVENTORY_SECONDS`,
+and `OSAC_CATALOG_CACHE_RATE_CARD_SECONDS`.
+
+An interval bounds staleness. After you edit a catalog item, at most
+`inventorySeconds` passes before a `CatalogPricingInputs.List` read reflects the
+edit. After a rate card changes in the billing system, at most `rateCardSeconds`
+passes before a provider rate-card read returns the new prices. The inventory
+interval is the short one because a catalog edit is the change an administrator
+expects to see first. The rate-card interval is longer because each miss calls
+the provider.
+
+The service bounds each detached refresh, not the caller's read. A request that
+misses starts a fill that keeps running even when every waiting request has
+gone away. That fill gets half the configured interval, capped at 15 seconds
+for the catalog inventory cache and 120 seconds for the provider rate card. A
+fill that needs longer fails, so the read that started it fails with it and the
+next read starts a new one. Keep each interval at least twice the time a normal
+catalog sweep or provider call takes; for the rate card the 120-second cap
+binds once the interval exceeds 240 seconds. Raise an interval while you
+investigate a slow catalog or provider; lower one only for a change that must
+appear sooner than the default.

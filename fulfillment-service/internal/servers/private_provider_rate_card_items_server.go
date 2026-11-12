@@ -17,9 +17,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -32,7 +32,7 @@ import (
 )
 
 // unsupportedRateCardItemsMetricName is the counter PrivateProviderRateCardItemsServer increments for every
-// rate-card row it omits from a List response (AC3). It carries provider and reason labels only, never a tenant,
+// rate-card row it omits from a List response. It carries provider and reason labels only, never a tenant,
 // service name, or any other detail that could make the metric high-cardinality or leak request content.
 const unsupportedRateCardItemsMetricName = "osac_fulfillment_billing_rate_card_items_unsupported_total"
 
@@ -48,13 +48,18 @@ type PrivateProviderRateCardItemsServerBuilder struct {
 	provider          *billing.Provider
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	// cacheTTL overrides rateCardCacheDefaultTTL. It is nil when the deployment configures no rate-card cache TTL.
+	cacheTTL *time.Duration
+	// inventoryCacheTTL overrides catalogInventoryCacheDefaultTTL for the cross-reference inventory. It is nil when
+	// the deployment configures no inventory cache TTL.
+	inventoryCacheTTL *time.Duration
 }
 
 var _ privatev1.ProviderRateCardItemsServer = (*PrivateProviderRateCardItemsServer)(nil)
 
 // PrivateProviderRateCardItemsServer returns provider rate-card rows as currency-specific, provider-neutral rows
 // (OSAC-6891). It never returns a provider rule id, rate-card id, service id, native account id, or raw provider
-// payload (AC7); it only uses those internally to call the adapter.
+// payload; it only uses those internally to call the adapter.
 type PrivateProviderRateCardItemsServer struct {
 	privatev1.UnimplementedProviderRateCardItemsServer
 	logger                 *slog.Logger
@@ -63,8 +68,8 @@ type PrivateProviderRateCardItemsServer struct {
 	clusterCatalogItemsDao *dao.GenericDAO[*privatev1.ClusterCatalogItem]
 	unsupportedRowsCounter *prometheus.CounterVec
 	// rateCardCache keeps one successful provider read of a (service, currency) rate card for a short TTL, so an
-	// admin List does not repeat the provider's paginated service, priceable-attribute and rate-card sweeps on
-	// every request. See ttlCache for the semantics.
+	// admin List does not repeat the provider's service, priceable-attribute and rate-card reads on every request.
+	// See ttlCache for the semantics.
 	rateCardCache *ttlCache[rateCardKey, rateCardEntry]
 	// inventoryCache keeps one sweep of the catalog inventory and the complete per-service catalog item set used by
 	// conditionless provider rows, so a List served from the rate-card cache does not still pay a full catalog-table
@@ -103,7 +108,23 @@ func (b *PrivateProviderRateCardItemsServerBuilder) SetMetricsRegisterer(
 	return b
 }
 
-// Build fails when a mandatory dependency is missing.
+// SetRateCardCacheTTL sets how long the rate-card cache reuses one provider read. It is optional: an unset value
+// keeps rateCardCacheDefaultTTL, and a non-positive value makes Build fail.
+func (b *PrivateProviderRateCardItemsServerBuilder) SetRateCardCacheTTL(
+	value time.Duration) *PrivateProviderRateCardItemsServerBuilder {
+	b.cacheTTL = &value
+	return b
+}
+
+// SetInventoryCacheTTL sets how long the cross-reference inventory cache reuses one sweep of both catalog tables. It
+// is optional: an unset value keeps catalogInventoryCacheDefaultTTL, and a non-positive value makes Build fail.
+func (b *PrivateProviderRateCardItemsServerBuilder) SetInventoryCacheTTL(
+	value time.Duration) *PrivateProviderRateCardItemsServerBuilder {
+	b.inventoryCacheTTL = &value
+	return b
+}
+
+// Build fails when a mandatory dependency is missing, or when a configured cache TTL is not positive.
 func (b *PrivateProviderRateCardItemsServerBuilder) Build() (result *PrivateProviderRateCardItemsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -116,6 +137,22 @@ func (b *PrivateProviderRateCardItemsServerBuilder) Build() (result *PrivateProv
 	if b.tenancyLogic == nil {
 		err = errors.New("tenancy logic is mandatory")
 		return
+	}
+	cacheTTL := rateCardCacheDefaultTTL
+	if b.cacheTTL != nil {
+		if *b.cacheTTL <= 0 {
+			err = errors.New("cache TTL must be positive")
+			return
+		}
+		cacheTTL = *b.cacheTTL
+	}
+	inventoryCacheTTL := catalogInventoryCacheDefaultTTL
+	if b.inventoryCacheTTL != nil {
+		if *b.inventoryCacheTTL <= 0 {
+			err = errors.New("inventory cache TTL must be positive")
+			return
+		}
+		inventoryCacheTTL = *b.inventoryCacheTTL
 	}
 	computeCatalogItemsDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceCatalogItem]().
 		SetLogger(b.logger).
@@ -154,8 +191,8 @@ func (b *PrivateProviderRateCardItemsServerBuilder) Build() (result *PrivateProv
 		computeCatalogItemsDao: computeCatalogItemsDao,
 		clusterCatalogItemsDao: clusterCatalogItemsDao,
 		unsupportedRowsCounter: counter,
-		rateCardCache:          newRateCardCache(),
-		inventoryCache:         newCatalogPricingInventoryCache(),
+		rateCardCache:          newRateCardCache(cacheTTL),
+		inventoryCache:         newCatalogPricingInventoryCache(inventoryCacheTTL),
 	}
 	return
 }
@@ -198,7 +235,7 @@ func (s *PrivateProviderRateCardItemsServer) List(ctx context.Context,
 				return rateCardEntry{items: items, skipped: skipped}, nil
 			})
 		if err != nil {
-			return nil, classifyBillingError(err)
+			return nil, billingFailure(codes.Unavailable, "billing provider is unavailable", string(probeReason(err)))
 		}
 		for reason, count := range entry.skipped {
 			s.unsupportedRowsCounter.WithLabelValues(s.provider.Key(), reason).Add(float64(count))
@@ -261,17 +298,6 @@ func sweepProviderRateCardCatalogInventory(ctx context.Context,
 		inputs:         aggregateCatalogPricingInputs(computeItems, clusterItems),
 		itemsByService: catalogItemsByService(computeItems, clusterItems),
 	}, nil
-}
-
-// classifyBillingError maps an adapter failure to UNAVAILABLE (AC8): a provider failure never serves a cached or
-// guessed card as current. It reuses probeReason's *billing.Error extraction (private_billing_provider_statuses_
-// server.go), the same classification BillingProviderStatuses already applies to a provider failure.
-func classifyBillingError(err error) error {
-	result := status.New(codes.Unavailable, "billing provider is unavailable")
-	if detailed, werr := result.WithDetails(&errdetails.ErrorInfo{Reason: string(probeReason(err))}); werr == nil {
-		result = detailed
-	}
-	return result.Err()
 }
 
 // toProtoRateCardItem converts one normalized pricing.RateCardItem into its wire shape.

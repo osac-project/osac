@@ -15,6 +15,7 @@ package servers
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -44,6 +45,31 @@ var _ = Describe("Private catalog pricing inputs server", func() {
 			Expect(err).To(MatchError("tenancy logic is mandatory"))
 			Expect(server).To(BeNil())
 		})
+
+		It("keeps the compiled-in inventory cache TTL when none is configured", func() {
+			server, err := NewPrivateCatalogPricingInputsServer().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(server.inventoryCache.ttl).To(Equal(30 * time.Second))
+			Expect(server.inventoryCache.fillBudget).To(Equal(15 * time.Second))
+		})
+
+		It("uses the configured inventory cache TTL", func() {
+			server, err := NewPrivateCatalogPricingInputsServer().
+				SetLogger(logger).SetTenancyLogic(tenancy).SetCacheTTL(2 * time.Second).Build()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(server.inventoryCache.ttl).To(Equal(2 * time.Second))
+			Expect(server.inventoryCache.fillBudget).To(Equal(time.Second))
+		})
+
+		DescribeTable("Fails if the cache TTL is not positive", func(ttl time.Duration) {
+			server, err := NewPrivateCatalogPricingInputsServer().
+				SetLogger(logger).SetTenancyLogic(tenancy).SetCacheTTL(ttl).Build()
+			Expect(err).To(MatchError("cache TTL must be positive"))
+			Expect(server).To(BeNil())
+		},
+			Entry("zero", time.Duration(0)),
+			Entry("negative", -time.Second),
+		)
 	})
 
 	Describe("Behaviour", func() {
@@ -184,7 +210,7 @@ var _ = Describe("Private catalog pricing inputs server", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
-		// AC5: this server never imports the billing package, so it structurally cannot make a provider call.
+		// This server never imports the billing package, so it structurally cannot make a provider call.
 		// This is proven once, at package scope, by ../catalog_pricing_inputs_aggregation_test.go and by the
 		// absence of any billing import in private_catalog_pricing_inputs_server.go.
 	})

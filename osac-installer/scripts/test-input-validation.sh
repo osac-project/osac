@@ -519,10 +519,11 @@ grep -q 'Installer input validation passed' "${TMP_DIR}/kubeconfig.out" \
   || fail "kubeconfig-injection-make: the gate did not complete"
 assert_prevalidation_commands kubeconfig-injection-make
 
-# An empty caller KUBECONFIG is not a path: the Makefile must fall back to
-# the kind kubeconfig so helm never silently uses the home kubeconfig. The
-# frozen value has origin "override", so the fallback assignment must be an
-# override too; a plain assignment would leave the value empty.
+# An empty caller KUBECONFIG is not a path: the Makefile must fall back to a
+# real kubeconfig so helm never silently uses localhost:8080. The default is
+# the kind file on PLATFORM=kind and ~/.kube/config on OpenShift. The frozen
+# value has origin "override", so the fallback assignments must be overrides
+# too; a plain assignment would leave the value empty.
 echo "checking kubeconfig-empty-fallback (an empty KUBECONFIG uses the kind file)"
 if ! KUBECONFIG= make -C "${SANDBOX}" --no-print-directory \
     --eval='print-kubeconfig: ; @echo $(KUBECONFIG)' \
@@ -532,6 +533,19 @@ if ! KUBECONFIG= make -C "${SANDBOX}" --no-print-directory \
 fi
 grep -q -- '-kind\.kubeconfig$' "${TMP_DIR}/kubeconfig-empty.out" \
   || fail "kubeconfig-empty-fallback: an empty KUBECONFIG did not use the kind file"
+
+# The non-kind default is the caller's own home kubeconfig, so an OpenShift
+# caller who exported an empty KUBECONFIG still reaches the cluster oc and
+# helm would use on their own.
+if ! KUBECONFIG= make -C "${SANDBOX}" --no-print-directory \
+    --eval='print-kubeconfig: ; @echo $(KUBECONFIG)' \
+    print-kubeconfig PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    >"${TMP_DIR}/kubeconfig-empty-openshift.out" \
+    2>"${TMP_DIR}/kubeconfig-empty-openshift.err"; then
+  fail "kubeconfig-empty-fallback: make rejected an empty KUBECONFIG"
+fi
+grep -Fxq "${HOME}/.kube/config" "${TMP_DIR}/kubeconfig-empty-openshift.out" \
+  || fail "kubeconfig-empty-fallback: OpenShift did not use ~/.kube/config"
 
 # Caller-supplied Helm args are data, never command text: EXTRA_HELM_ARGS
 # is frozen verbatim (no Make expression in it expands, including at
@@ -630,7 +644,7 @@ extra_continuation_only_argv_log="${TMP_DIR}/extra-continuation-only-argv.log"
 if MOCK_LOG="${LOG}" MOCK_ARGV_LOG="${extra_continuation_only_argv_log}" \
   PATH="${STUB_BIN}:${PATH}" \
   REMOTE_KUBECONFIG="${LOG}" \
-  EXTRA_HELM_ARGS="$(printf '\\\n')" \
+  EXTRA_HELM_ARGS=$'\\\n' \
   make -C "${SANDBOX}" --no-print-directory validate-inputs \
     PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
     >"${TMP_DIR}/extra-continuation-only.out" \
@@ -935,12 +949,16 @@ assert_install_osac_order standalone install-osac independent \
 # before install-infra creates the Kind cluster, and its seeded catalog and
 # UI route before install-osac. A standalone install-devstack keeps no edge
 # to the other targets.
+# The plan request pins HOST_IS_MAC_ARM=false: on an Apple Silicon host make
+# would otherwise select the ARM composite plan, whose recipe recurses into
+# ../fulfillment-service, which this sandbox copy does not contain.
 assert_install_devstack_order() {
   local label=$1 target=$2 expect=$3
   shift 3
   local db="${TMP_DIR}/order-${label}.db" prereqs
   MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
-    make -C "${SANDBOX}" --no-print-directory -p -n "${target}" "$@" \
+    make -C "${SANDBOX}" --no-print-directory -p -n "${target}" \
+      HOST_IS_MAC_ARM=false "$@" \
     >"${db}" 2>/dev/null \
     || fail "make -p -n ${target} (${label}) failed"
   prereqs=$(grep -E '^install-devstack:' "${db}" | grep -v ':=' | head -1)

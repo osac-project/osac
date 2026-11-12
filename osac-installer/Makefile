@@ -425,16 +425,21 @@ KIND_KUBECONFIG := $(HOME)/.kube/$(KIND_CLUSTER_NAME)-kind-root.kubeconfig
 else
 KIND_KUBECONFIG := $(HOME)/.kube/$(KIND_CLUSTER_NAME)-kind.kubeconfig
 endif
-# Use the caller's KUBECONFIG if they set a non-empty one, otherwise the kind
-# file. An empty-but-defined value still gets the default: a shell that exports
-# KUBECONFIG= would otherwise leave helm/kubectl on localhost:8080. A caller
-# value was frozen verbatim above, under an origin guard; here it is only
-# compared through $(value ...) so a Make expression in it cannot expand. The
-# kind-file default stays chart-owned text; it needs override because the
-# frozen value carries origin "override", which a plain assignment cannot
-# replace.
+# Use the caller's KUBECONFIG if they set a non-empty one. An empty-but-defined
+# value still gets a default, because a shell that exports KUBECONFIG= would
+# otherwise leave helm/kubectl on localhost:8080. The default is the kind file
+# for PLATFORM=kind and ~/.kube/config otherwise, so an OpenShift caller keeps
+# the path oc and helm would use on their own instead of a kind file that may
+# not exist. A caller value was frozen verbatim above, under an origin guard;
+# here it is only compared through $(value ...) so a Make expression in it
+# cannot expand. The defaults need override because the frozen value carries
+# origin "override", which a plain assignment cannot replace.
 ifeq ($(strip $(value KUBECONFIG)),)
+ifeq ($(PLATFORM),kind)
 override KUBECONFIG := $(KIND_KUBECONFIG)
+else
+override KUBECONFIG := $(HOME)/.kube/config
+endif
 endif
 export KUBECONFIG
 

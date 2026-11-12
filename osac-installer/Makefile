@@ -1001,7 +1001,15 @@ endif
 # `install` goal already has this edge above, and each target alone keeps its
 # standalone behavior. DRY_RUN does not change these targets, so the edge
 # applies under it too.
+#
+# The paired goals also need install-infra to wait for validate-osac-inputs:
+# under `make -j install-osac install-infra` install-infra's own prerequisite
+# is only the shared gate, so it could create its namespaces and run its
+# readiness waits while validate-osac-inputs is still rejecting a missing AAP
+# license or a non-https remote address. The composite `install` goal has the
+# same edge above; a standalone `make install-infra` stays license-free.
 ifneq ($(and $(filter install-infra,$(MAKECMDGOALS)),$(filter install-osac,$(MAKECMDGOALS))),)
+install-infra: validate-osac-inputs
 install-osac: install-infra
 endif
 

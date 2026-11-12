@@ -992,6 +992,38 @@ assert_install_osac_order standalone install-osac independent \
 assert_install_osac_order reversed install-osac after \
   install-infra PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
 
+# Paired goals must also validate the OSAC-only inputs before the cluster
+# changes: under `make -j install-infra install-osac` install-infra's own
+# prerequisite is only the shared gate, so it could create namespaces and run
+# readiness waits while validate-osac-inputs is still rejecting a missing AAP
+# license. A standalone install-infra must stay license-free.
+assert_install_infra_prereqs() {
+  local label=$1 expect=$2
+  shift 2
+  local db="${TMP_DIR}/infra-prereqs-${label}.db" prereqs
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -p -n "$@" \
+    >"${db}" 2>/dev/null \
+    || fail "make -p -n $* (${label}) failed"
+  prereqs=$(grep -E '^install-infra:' "${db}" | grep -v ':=' | head -1)
+  [ -n "${prereqs}" ] || fail "${label}: no install-infra rule in the database"
+  case "${prereqs}" in
+    *validate-osac-inputs*)
+      [ "${expect}" = gated ] \
+        || fail "${label}: standalone install-infra must not require the OSAC-only inputs"
+      ;;
+    *)
+      [ "${expect}" = license-free ] \
+        || fail "${label}: paired install-infra must wait for validate-osac-inputs"
+      ;;
+  esac
+}
+
+assert_install_infra_prereqs paired gated \
+  install-infra install-osac PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
+assert_install_infra_prereqs standalone license-free \
+  install-infra PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
+
 # install-devstack has the same composite-only ordering requirement: under
 # `make -j install` on dev-full its cluster check and node setup could run
 # before install-infra creates the Kind cluster, and its seeded catalog and

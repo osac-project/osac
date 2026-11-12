@@ -23,6 +23,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
@@ -208,6 +209,8 @@ func (r *authorizationRows) Values() ([]any, error) {
 func (r *authorizationRows) RawValues() [][]byte { return nil }
 
 func (r *authorizationRows) Conn() *pgx.Conn { return nil }
+
+func (r *authorizationRows) TypeMap() *pgtype.Map { return nil }
 
 var _ pgx.Row = authorizationRow{}
 var _ pgx.Rows = (*authorizationRows)(nil)

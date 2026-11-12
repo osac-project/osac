@@ -691,11 +691,6 @@ addresses from the node; administrators remove stale addresses separately.
 Uninstalling OSAC leaves EVPN host resources and cluster-network settings in
 place.
 
-EVPN host networking can be prepared on a separate workload cluster, but OSAC
-provider networking for VMs on a separate cluster is not supported in this
-release. VMaaS with VMs on a separate workload cluster is not fully supported;
-see [Section 9.4](#94-not-supported).
-
 ---
 
 ## 3. OSAC component versions
@@ -3189,11 +3184,7 @@ instance values in production and follow the storage handoff in
 - OSAC networking in air-gapped or disconnected deployments, and IPv6 or
   dual-stack networking.
 - VMaaS with VMs on a separate workload cluster is not fully supported in
-  this release. OSAC provider networking for VMs on a separate cluster is not
-  supported. Platform administrators can prepare EVPN host networking on that
-  cluster using the administrator procedure in the [Helm Deployment
-  Guide](helm-deployment-guide.md#evpn-host-networking-vmaas); this configures
-  host networking only.
+  this release. OSAC provider networking for that layout is not supported.
 - BMaaS-specific provider networking beyond the CaaS worker and endpoint flow
   described in [Section 6.2](#62-installing-osac-for-caas).
 - East-west FabricDomains with fabric configuration, which need BMaaS

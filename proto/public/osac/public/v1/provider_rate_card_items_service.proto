@@ -31,8 +31,8 @@ message ProviderRateCardItemsListRequest {
   // Reserved for tenant-to-account assignment support in OSAC-6871. Any nonempty value currently returns
   // UNIMPLEMENTED; OSAC tenant identifiers are never treated as provider account correlation values.
   optional string tenant_id = 5;
-  // Exact provider service name. Omission includes every mapped OSAC service (compute_instance and cluster),
-  // even when the catalog inventory is empty. An unknown service returns no rows.
+  // OSAC service name; matched to the provider service of the same name. Omit to list compute_instance and
+  // cluster. An unknown service returns no rows.
   optional string service = 6;
   // Required three-character ISO-4217 currency code. Callers supply the currency; this method does not resolve
   // it from an account or discover it from the provider.

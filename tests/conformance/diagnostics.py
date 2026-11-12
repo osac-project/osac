@@ -1,8 +1,7 @@
-"""Collect the conformance diagnostics bundle through the lab credentials."""
+"""Collect the conformance diagnostics bundle through the target credentials."""
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -27,9 +26,11 @@ class DiagnosticsCollector:
         output = context.results_dir / "diagnostics"
         output.mkdir(parents=True, exist_ok=True)
         redactor = context.redactor or Redactor()
-        kubeconfig = context.config.lab_kubeconfig if context.config is not None else Path("/config/lab-hub.kubeconfig")
+        kubeconfig = (
+            context.config.target_kubeconfig if context.config is not None else Path("/config/target-hub.kubeconfig")
+        )
         base = ("kubectl", "--kubeconfig", str(kubeconfig))
-        namespace = os.environ.get("OSAC_NAMESPACE", "osac")
+        namespace = context.config.target_namespace if context.config is not None else "osac"
         files = {
             "osac-state.yaml": self._safe(*base, "get", "pods,deployments,events", "-n", namespace, "-o", "yaml"),
             "pod-logs.txt": self._safe(

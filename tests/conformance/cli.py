@@ -18,7 +18,6 @@ from tests.conformance.config import Config, load_config
 from tests.conformance.diagnostics import DiagnosticsCollector
 from tests.conformance.errors import CommandLineError, ConfigError
 from tests.conformance.interrupt import Interrupted, InterruptGate
-from tests.conformance.lab import LabClient, LabFacts, read_lab
 from tests.conformance.model import (
     Classification,
     ComponentResult,
@@ -36,6 +35,7 @@ from tests.conformance.profiles import ProfileDefinition, expand_profiles, load_
 from tests.conformance.redact import Redactor
 from tests.conformance.report import write_junit, write_report
 from tests.conformance.selection import compute_plan, enrich_identities, plan_from_names
+from tests.conformance.target import TargetClient, TargetFacts, read_target
 from tests.conformance.testtree import PytestTestTree, TestTree
 from tests.conformance.verdict import evaluate, exit_code
 
@@ -50,7 +50,7 @@ class Runtime:
     areas: dict[str, AreaDeclaration]
     profile_catalog: dict[str, ProfileDefinition]
     tree: TestTree
-    lab: LabClient
+    target: TargetClient
     results: Path
     redactor: Redactor
     output: OutputSink
@@ -93,14 +93,14 @@ def _check_results(path: Path) -> None:
 def _redactor_from_document(document: Mapping[str, object]) -> Redactor:
     """Build the one redaction boundary from a raw conformance.yaml document."""
     redactor = Redactor()
-    lab = document.get("lab")
-    if not isinstance(lab, Mapping):
+    target = document.get("target")
+    if not isinstance(target, Mapping):
         return redactor
     token_files: list[str] = []
-    token_file = lab.get("tokenFile")
+    token_file = target.get("tokenFile")
     if isinstance(token_file, str):
         token_files.append(token_file)
-    aap = lab.get("aap")
+    aap = target.get("aap")
     if isinstance(aap, Mapping):
         aap_token_file = aap.get("tokenFile")
         if isinstance(aap_token_file, str):
@@ -112,7 +112,7 @@ def _redactor_from_document(document: Mapping[str, object]) -> Redactor:
         with contextlib.suppress(OSError):
             redactor.add_secret(Path(value).read_text().strip())
     hub: object = None
-    kubeconfig = lab.get("kubeconfig")
+    kubeconfig = target.get("kubeconfig")
     if isinstance(kubeconfig, str):
         with contextlib.suppress(OSError, yaml.YAMLError):
             hub = yaml.safe_load(Path(kubeconfig).read_text())
@@ -131,21 +131,21 @@ def _redactor_from_document(document: Mapping[str, object]) -> Redactor:
                 server = cluster.get("cluster", {}).get("server") if isinstance(cluster, Mapping) else None
                 if isinstance(server, str) and urlparse(server).hostname:
                     redactor.add_host(urlparse(server).hostname or "")
-    api_url = lab.get("apiURL")
+    api_url = target.get("apiURL")
     if isinstance(api_url, str) and urlparse(api_url).hostname:
         redactor.add_host(urlparse(api_url).hostname or "")
     return redactor
 
 
 def redactor_for_config(config: Config) -> Redactor:
-    lab: dict[str, object] = {
-        "kubeconfig": str(config.lab_kubeconfig),
-        "apiURL": config.lab_api_url,
-        "tokenFile": str(config.lab_token_file),
+    target: dict[str, object] = {
+        "kubeconfig": str(config.target_kubeconfig),
+        "apiURL": config.target_api_url,
+        "tokenFile": str(config.target_token_file),
     }
-    if config.lab_aap is not None:
-        lab["aap"] = {"url": config.lab_aap.url, "tokenFile": str(config.lab_aap.token_file)}
-    return _redactor_from_document({"lab": lab})
+    if config.target_aap is not None:
+        target["aap"] = {"url": config.target_aap.url, "tokenFile": str(config.target_aap.token_file)}
+    return _redactor_from_document({"target": target})
 
 
 def redactor_for_config_path(path: Path) -> Redactor:
@@ -172,7 +172,7 @@ def _build_runtime(args: argparse.Namespace) -> Runtime:
         areas=areas,
         profile_catalog=catalog,
         tree=PytestTestTree(root=Path(args.tree)),
-        lab=KubectlLabClientAdapter(),
+        target=KubectlTargetClientAdapter(),
         results=results,
         redactor=redactor,
         output=OutputSink(results, redactor),
@@ -181,23 +181,23 @@ def _build_runtime(args: argparse.Namespace) -> Runtime:
     )
 
 
-class KubectlLabClientAdapter:
-    """Default lab client; imported lazily so unit tests need no kubectl."""
+class KubectlTargetClientAdapter:
+    """Default target client; imported lazily so unit tests need no kubectl."""
 
     def capabilities(self, *, url: str, token: str, ca_file: Path | None):  # type: ignore[no-untyped-def]
-        from tests.conformance.lab import KubectlLabClient
+        from tests.conformance.target import KubectlTargetClient
 
-        return KubectlLabClient().capabilities(url=url, token=token, ca_file=ca_file)
+        return KubectlTargetClient().capabilities(url=url, token=token, ca_file=ca_file)
 
-    def registrations(self, *, kubeconfig: Path):  # type: ignore[no-untyped-def]
-        from tests.conformance.lab import KubectlLabClient
+    def registrations(self, *, kubeconfig: Path, namespace: str):  # type: ignore[no-untyped-def]
+        from tests.conformance.target import KubectlTargetClient
 
-        return KubectlLabClient().registrations(kubeconfig=kubeconfig)
+        return KubectlTargetClient().registrations(kubeconfig=kubeconfig, namespace=namespace)
 
-    def installed_release(self, *, kubeconfig: Path) -> str:
-        from tests.conformance.lab import KubectlLabClient
+    def installed_release(self, *, kubeconfig: Path, namespace: str) -> str:
+        from tests.conformance.target import KubectlTargetClient
 
-        return KubectlLabClient().installed_release(kubeconfig=kubeconfig)
+        return KubectlTargetClient().installed_release(kubeconfig=kubeconfig, namespace=namespace)
 
 
 def _plan_names(plan_path: Path) -> list[str]:
@@ -244,7 +244,7 @@ def _derive_profiles(
 
 
 def _derive_components(
-    facts: LabFacts,
+    facts: TargetFacts,
     plan: Plan,
     outcomes: Sequence[TestOutcome],
     profiles: Sequence[ProfileResult],
@@ -295,7 +295,7 @@ def _run_plan(runtime: Runtime, *, plan_path: Path | None, keep: bool) -> int:
     ):
         raise ConfigError([f"podman socket {runtime.podman_socket} is missing"])
 
-    facts = read_lab(runtime.config, runtime.lab, runtime.areas)
+    facts = read_target(runtime.config, runtime.target, runtime.areas)
     run_id = new_run_id()
     context = RunContext(
         run_id=run_id,

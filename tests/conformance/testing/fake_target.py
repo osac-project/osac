@@ -1,4 +1,4 @@
-"""Fake lab facts for conformance unit and integration tests."""
+"""Fake target facts for conformance unit and integration tests."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
-class FakeLab:
+class FakeTarget:
     enabled_services: tuple[str, ...] = ("vmaas",)
     registrations: Mapping[str, Mapping[str, Any]] = field(
         default_factory=lambda: {"networking": {"name": "mock", "ansibleRole": "mock.fabric"}}
@@ -21,41 +21,41 @@ class FakeLab:
     installed_release: str = "1.4.0"
 
 
-class FakeLabClient:
-    def __init__(self, lab: FakeLab) -> None:
-        self.lab = lab
+class FakeTargetClient:
+    def __init__(self, target: FakeTarget) -> None:
+        self.target = target
 
     def capabilities(self, *, url: str, token: str, ca_file: Path | None) -> Mapping[str, Any]:
-        return {"enabled_services": list(self.lab.enabled_services)}
+        return {"enabled_services": list(self.target.enabled_services)}
 
-    def registrations(self, *, kubeconfig: Path) -> Mapping[str, Mapping[str, Any]]:
-        return self.lab.registrations
+    def registrations(self, *, kubeconfig: Path, namespace: str) -> Mapping[str, Mapping[str, Any]]:
+        return self.target.registrations
 
-    def installed_release(self, *, kubeconfig: Path) -> str:
-        return self.lab.installed_release
+    def installed_release(self, *, kubeconfig: Path, namespace: str) -> str:
+        return self.target.installed_release
 
 
-class FakeLabServer:
-    """Serve the fake lab over HTTP for component-integration tests."""
+class FakeTargetServer:
+    """Serve the fake target over HTTP for component-integration tests."""
 
-    def __init__(self, lab: FakeLab) -> None:
-        self.lab = lab
+    def __init__(self, target: FakeTarget) -> None:
+        self.target = target
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self.url = ""
 
-    def __enter__(self) -> FakeLabServer:
-        lab = self.lab
+    def __enter__(self) -> FakeTargetServer:
+        target = self.target
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 path = urlparse(self.path).path
                 if path == "/api/fulfillment/v1/capabilities":
-                    body = json.dumps({"enabled_services": list(lab.enabled_services)}).encode()
+                    body = json.dumps({"enabled_services": list(target.enabled_services)}).encode()
                 elif path == "/registrations":
-                    body = json.dumps(lab.registrations).encode()
+                    body = json.dumps(target.registrations).encode()
                 elif path == "/release":
-                    body = json.dumps({"release": lab.installed_release}).encode()
+                    body = json.dumps({"release": target.installed_release}).encode()
                 else:
                     self.send_error(404)
                     return

@@ -11,8 +11,8 @@ import yaml
 
 from tests.conformance.errors import ConfigError
 
-_COMMON_KEYS = frozenset({"osacRelease", "profiles", "lab", "timeouts"})
-_LAB_KEYS = frozenset({"kubeconfig", "apiURL", "tokenFile", "caFile", "aap"})
+_COMMON_KEYS = frozenset({"osacRelease", "profiles", "target", "timeouts"})
+_TARGET_KEYS = frozenset({"namespace", "kubeconfig", "apiURL", "tokenFile", "caFile", "aap"})
 _AAP_KEYS = frozenset({"url", "tokenFile"})
 
 
@@ -26,11 +26,12 @@ class AapConfig:
 class Config:
     osac_release: str
     profiles: tuple[str, ...]
-    lab_kubeconfig: Path
-    lab_api_url: str
-    lab_token_file: Path
-    lab_ca_file: Path
-    lab_aap: AapConfig | None
+    target_namespace: str
+    target_kubeconfig: Path
+    target_api_url: str
+    target_token_file: Path
+    target_ca_file: Path
+    target_aap: AapConfig | None
     timeouts: Mapping[str, str]
     areas: Mapping[str, Mapping[str, Any]]
     raw: Mapping[str, Any]
@@ -89,24 +90,29 @@ def load_config(path: Path, *, area_names: Collection[str]) -> Config:
 
     release = _string(document.get("osacRelease"), "osacRelease", checks)
     profiles = _profiles(document.get("profiles"), checks)
-    lab = _mapping(document.get("lab"), "lab", checks)
-    if lab is not None:
-        for key in lab:
-            if key not in _LAB_KEYS:
-                checks.append(f"lab.{key} is not defined by this release")
-        kubeconfig = _path(lab.get("kubeconfig"), "lab.kubeconfig", checks)
-        api_url = _string(lab.get("apiURL"), "lab.apiURL", checks)
-        token_file = _path(lab.get("tokenFile"), "lab.tokenFile", checks)
-        ca_file = _path(lab.get("caFile"), "lab.caFile", checks)
+    target = _mapping(document.get("target"), "target", checks)
+    namespace = "osac"
+    if target is not None:
+        for key in target:
+            if key not in _TARGET_KEYS:
+                checks.append(f"target.{key} is not defined by this release")
+        if target.get("namespace") is not None:
+            parsed_namespace = _string(target.get("namespace"), "target.namespace", checks)
+            if parsed_namespace is not None:
+                namespace = parsed_namespace
+        kubeconfig = _path(target.get("kubeconfig"), "target.kubeconfig", checks)
+        api_url = _string(target.get("apiURL"), "target.apiURL", checks)
+        token_file = _path(target.get("tokenFile"), "target.tokenFile", checks)
+        ca_file = _path(target.get("caFile"), "target.caFile", checks)
         aap: AapConfig | None = None
-        if lab.get("aap") is not None:
-            aap_doc = _mapping(lab.get("aap"), "lab.aap", checks)
+        if target.get("aap") is not None:
+            aap_doc = _mapping(target.get("aap"), "target.aap", checks)
             if aap_doc is not None:
                 for key in aap_doc:
                     if key not in _AAP_KEYS:
-                        checks.append(f"lab.aap.{key} is not defined by this release")
-                aap_url = _string(aap_doc.get("url"), "lab.aap.url", checks)
-                aap_token = _path(aap_doc.get("tokenFile"), "lab.aap.tokenFile", checks)
+                        checks.append(f"target.aap.{key} is not defined by this release")
+                aap_url = _string(aap_doc.get("url"), "target.aap.url", checks)
+                aap_token = _path(aap_doc.get("tokenFile"), "target.aap.tokenFile", checks)
                 if aap_url is not None and aap_token is not None:
                     aap = AapConfig(url=aap_url, token_file=aap_token)
     else:
@@ -131,16 +137,18 @@ def load_config(path: Path, *, area_names: Collection[str]) -> Config:
         raise ConfigError(checks)
 
     assert release is not None
+    assert namespace
     assert kubeconfig is not None and api_url is not None and token_file is not None and ca_file is not None
     assert timeouts is not None
     return Config(
         osac_release=release,
         profiles=profiles,
-        lab_kubeconfig=kubeconfig,
-        lab_api_url=api_url,
-        lab_token_file=token_file,
-        lab_ca_file=ca_file,
-        lab_aap=aap,
+        target_namespace=namespace,
+        target_kubeconfig=kubeconfig,
+        target_api_url=api_url,
+        target_token_file=token_file,
+        target_ca_file=ca_file,
+        target_aap=aap,
         timeouts=timeouts,
         areas=areas,
         raw=document,

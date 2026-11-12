@@ -165,6 +165,29 @@ describe('ExternalIpPoolWizardPage', () => {
       expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
     });
 
+    it('shows a CIDR field error for a host address and advances after correction', async () => {
+      const onExternalIPPoolCreate = vi.fn();
+      const { user } = renderCreatePage({ onExternalIPPoolCreate });
+
+      await fillPoolStep(user, 'prod-v4', '2.3.4.5/23');
+      await clickNext(user);
+
+      const cidrInput = screen.getByRole('textbox', { name: 'CIDR' });
+      await screen.findByText('Use 2.3.4.0/23 instead. CIDRs must start at the network address.');
+      expect(cidrInput).toHaveAttribute('aria-invalid', 'true');
+      expect(cidrInput).toHaveAccessibleDescription(/Use 2\.3\.4\.0\/23 instead/);
+      expect(screen.queryByRole('heading', { name: 'Review' })).not.toBeInTheDocument();
+      expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
+
+      await user.clear(cidrInput);
+      await user.type(cidrInput, '2.3.4.0/23');
+      await clickNext(user);
+
+      expect(await screen.findByRole('heading', { name: 'Review' })).toBeInTheDocument();
+      expect(screen.getByText('2.3.4.0/23')).toBeInTheDocument();
+      expect(onExternalIPPoolCreate).not.toHaveBeenCalled();
+    });
+
     it('rejects an IPv6 CIDR', async () => {
       const onExternalIPPoolCreate = vi.fn();
       const { user } = renderCreatePage({ onExternalIPPoolCreate });

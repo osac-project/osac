@@ -9,6 +9,11 @@ aapOperator:
   enabled: true
 lvms:
   enabled: true
+  # Standard CI exposes sdb; the Netris SNO guest exposes vdb.
+  deviceSelector:
+    optionalPaths:
+      - /dev/sdb
+      - /dev/vdb
 metallb:
   enabled: true
 cnv:

@@ -996,6 +996,10 @@ billing-render-test: helm-osac-deps ## Check billing provider config renders and
 mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py
 
+.PHONY: lvms-optional-path-render-test
+lvms-optional-path-render-test: ## Check the OSAC-managed LVMS worker allowlist renders
+	uv run --project .. python scripts/test-lvms-optional-path-render.py
+
 .PHONY: evpn-render-test
 evpn-render-test: helm-infra-deps ## Check EVPN host networking renders
 	uv run --project .. python scripts/test-evpn-render.py
@@ -1038,7 +1042,7 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

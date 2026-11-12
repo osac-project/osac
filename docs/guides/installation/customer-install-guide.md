@@ -277,7 +277,7 @@ Platform 4.22.6 in September 2026 are listed in
 | [Red Hat Ansible Automation Platform Operator](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index) | `stable-2.6-cluster-scoped` | `ansible-aap` | All services |
 | [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | Provider-defined | Fulfillment events and metering; see [Kafka configuration](kafka-configuration.md) for external broker requirements. |
 | [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | VMaaS |
-| [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | VMaaS |
+| [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | VMaaS | `lvms.enabled` | Development/CI VMaaS using OSAC-managed local storage |
 | [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | CaaS |
 | [multicluster engine for Kubernetes Operator](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview) | `stable-2.17` | `multicluster-engine` | CaaS |
 | Kubernetes NMState Operator | `stable` | `openshift-nmstate` | VMaaS with provider networking |
@@ -339,6 +339,34 @@ Notes on individual components:
 - **multicluster engine for Kubernetes Operator** is required for agent-based
   cluster provisioning. An existing standalone installation or Red Hat
   Advanced Cluster Management for Kubernetes (RHACM) can provide it.
+  minor version; the installation sets it. The OSAC-managed LVMS path is for
+  development and CI and uses an explicit `optionalPaths` allowlist; it does
+  not create devices. In production, disable `lvms.enabled` and configure the
+  customer-managed LVMS operator and its `LVMCluster` selector yourself; do not
+  rely on dynamic device discovery.
+- **MetalLB Operator** provides a `LoadBalancer`-class implementation. CaaS
+  uses it on the hub to give each hosted cluster's API its management VIP.
+  Only CaaS needs it. Any solution that provides one works if you disable
+  `metallb.enabled`. With `metallb.enabled`, the installation creates the
+  address pool `caas-address-pool` and sets it to addresses `.240` to `.250`
+  of the first node's network. It keeps the first three octets of that node's
+  `InternalIP`, so it assumes a /24. It resets the pool to that range on every
+  install and upgrade of the infrastructure chart. Before the first Cluster,
+  make sure that range is free and routable on your management network, and
+  add a CIDR that covers it to `global.networking.excludedIpv4Cidrs`, for
+  example `<prefix>.240/28`: a Cluster keeps its VIP for its whole life. To
+  use a different range, patch the `IPAddressPool` after the installation and
+  again after every infrastructure upgrade, add a CIDR that covers that range
+  to `global.networking.excludedIpv4Cidrs`, and check the pool before you
+  create Clusters.
+- **multicluster engine for Kubernetes Operator** is required for
+  agent-based cluster provisioning but is disabled by default. Set
+  `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
+  infrastructure profile does so explicitly. Leave it `false` when Red Hat
+  Advanced Cluster Management for Kubernetes (RHACM) or another MCE
+  installation already owns it. The disabled state also prevents the phase-1
+  chart from applying its temporary Assisted image override `ConfigMap` and
+  compatibility RBAC.
 - **Kubernetes NMState Operator** sets the uplink and VTEP addresses of the
   VMaaS nodes. Your platform administrators prepare it for EVPN networking.
 - **EVPN host networking** needs OVN-Kubernetes and OpenShift Container

@@ -7,7 +7,7 @@ import {
   isSubnetWithinVN,
   isValidCidr,
 } from './cidr-validation';
-import { tIdentity } from '../test-utils/i18n';
+import { initTestI18n, tIdentity } from '../test-utils/i18n';
 
 describe('isValidCidr (ipv4)', () => {
   it.each([
@@ -35,12 +35,33 @@ describe('buildCidrSchema (ipv4)', () => {
     await expect(schema.validate('10.128.0.0/14')).resolves.toBe('10.128.0.0/14');
   });
 
+  it.each(['0.0.0.0/0', '192.168.1.0/24', '192.168.1.5/32'])(
+    'accepts the network address %s',
+    async (cidr) => {
+      await expect(schema.validate(cidr)).resolves.toBe(cidr);
+    },
+  );
+
+  it.each([
+    ['2.3.4.5/23', '2.3.4.0/23'],
+    ['192.168.1.5/24', '192.168.1.0/24'],
+  ])('suggests the network address for %s', async (cidr, expected) => {
+    const i18n = await initTestI18n();
+    await expect(buildCidrSchema(i18n.t, 'ipv4').validate(cidr)).rejects.toThrow(
+      `Use ${expected} instead. CIDRs must start at the network address.`,
+    );
+  });
+
   it('rejects IPv6 CIDR', async () => {
     await expect(schema.validate('fd01::/48')).rejects.toThrow('Invalid IPv4 CIDR notation');
   });
 
   it('allows empty string for optional fields', async () => {
     await expect(schema.validate('')).resolves.toBe('');
+  });
+
+  it('allows whitespace-only input for optional fields without throwing', async () => {
+    await expect(schema.validate('   ')).resolves.toBe('   ');
   });
 
   it('rejects invalid CIDR without prefix', async () => {

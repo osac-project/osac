@@ -650,4 +650,85 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 		Expect(err.Error()).To(ContainSubstring("my-vm"))
 		Expect(err.Error()).To(ContainSubstring("ci-1"))
 	})
+
+	It("should reject --externalip combined with halted run strategy", func() {
+		runner.args.externalIP = "my-ip"
+		runner.args.runStrategy = "halted"
+		err := runner.validateExternalIPFlags()
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("halted"))
+	})
+
+	It("should accept --externalip with other run strategies", func() {
+		runner.args.externalIP = "my-ip"
+		runner.args.runStrategy = "always"
+		Expect(runner.validateExternalIPFlags()).To(Succeed())
+	})
+
+	It("should fail fast when the created CI has halted run strategy", func() {
+		runner.args.externalIP = "my-ip"
+		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+		halted := publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED
+		haltedCI := publicv1.ComputeInstance_builder{
+			Id:       "ci-1",
+			Metadata: publicv1.Metadata_builder{Name: "my-vm"}.Build(),
+			Spec: publicv1.ComputeInstanceSpec_builder{
+				RunStrategy: &halted,
+			}.Build(),
+		}.Build()
+
+		err := runner.maybeAttachExistingExternalIP(ctx, haltedCI, allocatedEIP)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("HALTED"))
+	})
+
+	It("should fail early when the EIP is already attached", func() {
+		runner.args.externalIP = "my-ip"
+		attachedEIP := publicv1.ExternalIP_builder{
+			Id:       "eip-1",
+			Metadata: publicv1.Metadata_builder{Name: "my-ip"}.Build(),
+			Status: publicv1.ExternalIPStatus_builder{
+				State:    publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED,
+				Address:  "203.0.113.5",
+				Attached: true,
+			}.Build(),
+		}.Build()
+
+		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			publicv1.ExternalIPsListResponse_builder{Items: []*publicv1.ExternalIP{attachedEIP}}.Build(), nil)
+
+		_, err := runner.resolveAttachableExternalIP(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("already attached"))
+	})
+
+	It("should fail early when the EIP has a pending attachment", func() {
+		runner.args.externalIP = "my-ip"
+		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+
+		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			publicv1.ExternalIPsListResponse_builder{Items: []*publicv1.ExternalIP{allocatedEIP}}.Build(), nil)
+		mockAtts.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			publicv1.ExternalIPAttachmentsListResponse_builder{
+				Items: []*publicv1.ExternalIPAttachment{attachment("att-1")},
+			}.Build(), nil)
+
+		_, err := runner.resolveAttachableExternalIP(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("pending attachment"))
+	})
+
+	It("should resolve an unattached ALLOCATED EIP", func() {
+		runner.args.externalIP = "my-ip"
+		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+
+		mockEIPs.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			publicv1.ExternalIPsListResponse_builder{Items: []*publicv1.ExternalIP{allocatedEIP}}.Build(), nil)
+		mockAtts.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			publicv1.ExternalIPAttachmentsListResponse_builder{}.Build(), nil)
+
+		resolved, err := runner.resolveAttachableExternalIP(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolved.GetId()).To(Equal("eip-1"))
+	})
 })

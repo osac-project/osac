@@ -583,9 +583,16 @@ var _ = Describe("Private projects server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		original := created.GetObject()
 
-		updated, err := privateServer.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
-			Object: privatev1.Project_builder{Id: original.GetId()}.Build(),
-		}.Build())
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		var updated *privatev1.ProjectsUpdateResponse
+		err = tx.Savepoint(ctx, func(savepointCtx context.Context) error {
+			var updateErr error
+			updated, updateErr = privateServer.Update(savepointCtx, privatev1.ProjectsUpdateRequest_builder{
+				Object: privatev1.Project_builder{Id: original.GetId()}.Build(),
+			}.Build())
+			return updateErr
+		})
 		Expect(err).To(HaveOccurred())
 		Expect(updated).To(BeNil())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))

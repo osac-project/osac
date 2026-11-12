@@ -345,7 +345,7 @@ func RegisterIdentityProvidersHandlerServer(ctx context.Context, mux *runtime.Se
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_IdentityProviders_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_IdentityProviders_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_IdentityProviders_Delete_0{resp.(*IdentityProvidersDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterIdentityProvidersHandlerClient(ctx context.Context, mux *runtime.Se
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_IdentityProviders_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_IdentityProviders_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_IdentityProviders_Delete_0{resp.(*IdentityProvidersDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -480,6 +480,14 @@ type response_IdentityProviders_Get_0 struct {
 }
 
 func (m response_IdentityProviders_Get_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_IdentityProviders_Delete_0 struct {
+	*IdentityProvidersDeleteResponse
+}
+
+func (m response_IdentityProviders_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

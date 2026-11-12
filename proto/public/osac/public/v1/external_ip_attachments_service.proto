@@ -83,7 +83,7 @@ message ExternalIPAttachmentsDeleteRequest {
   string id = 1;
 }
 
-message ExternalIPAttachmentsDeleteResponse {}
+message ExternalIPAttachmentsDeleteResponse { ExternalIPAttachment object = 1; }
 
 service ExternalIPAttachments {
   // Retrieves the list of external IP attachments.
@@ -110,6 +110,6 @@ service ExternalIPAttachments {
 
   // Deletes an external IP attachment. Triggers the detach workflow to unbind the ExternalIP from the target.
   rpc Delete(ExternalIPAttachmentsDeleteRequest) returns (ExternalIPAttachmentsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/external_ip_attachments/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/external_ip_attachments/{id}" response_body: "object"};
   }
 }

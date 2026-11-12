@@ -345,7 +345,7 @@ func RegisterExternalIPPoolsHandlerServer(ctx context.Context, mux *runtime.Serv
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ExternalIPPools_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ExternalIPPools_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ExternalIPPools_Delete_0{resp.(*ExternalIPPoolsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterExternalIPPoolsHandlerClient(ctx context.Context, mux *runtime.Serv
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ExternalIPPools_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ExternalIPPools_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ExternalIPPools_Delete_0{resp.(*ExternalIPPoolsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_ExternalIPPools_Update_0 struct {
 }
 
 func (m response_ExternalIPPools_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_ExternalIPPools_Delete_0 struct {
+	*ExternalIPPoolsDeleteResponse
+}
+
+func (m response_ExternalIPPools_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

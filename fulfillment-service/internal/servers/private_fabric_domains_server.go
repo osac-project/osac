@@ -203,7 +203,7 @@ func (s *PrivateFabricDomainsServer) Delete(ctx context.Context, request *privat
 		return nil, err
 	}
 	if deleteAlreadyAccepted(domain.GetMetadata()) {
-		return &privatev1.FabricDomainsDeleteResponse{}, nil
+		return &privatev1.FabricDomainsDeleteResponse{Object: domain}, nil
 	}
 	var response *privatev1.FabricDomainsDeleteResponse
 	err = s.generic.Delete(ctx, request, &response)

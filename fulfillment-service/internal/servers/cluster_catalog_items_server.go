@@ -270,11 +270,20 @@ func (s *ClusterCatalogItemsServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.ClusterCatalogItemsDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	publicCatalogItem := &publicv1.ClusterCatalogItem{}
+	err = s.outMapper.Copy(ctx, privateResponse.GetObject(), publicCatalogItem)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map private cluster catalog item to public", slog.Any("error", err))
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster catalog item")
+	}
+
+	// Create the public response:
 	response = &publicv1.ClusterCatalogItemsDeleteResponse{}
+	response.SetObject(publicCatalogItem)
 	return
 }

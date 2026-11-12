@@ -133,7 +133,7 @@ message ProjectMembershipsDeleteRequest {
 }
 
 // Response message for deleting a project membership.
-message ProjectMembershipsDeleteResponse {}
+message ProjectMembershipsDeleteResponse { ProjectMembership object = 1; }
 
 // Request message for signaling a project membership.
 message ProjectMembershipsSignalRequest {
@@ -185,7 +185,7 @@ service ProjectMemberships {
 
   // Deletes a project membership.
   rpc Delete(ProjectMembershipsDeleteRequest) returns (ProjectMembershipsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/project_memberships/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/project_memberships/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

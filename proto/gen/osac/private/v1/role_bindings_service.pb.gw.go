@@ -345,7 +345,7 @@ func RegisterRoleBindingsHandlerServer(ctx context.Context, mux *runtime.ServeMu
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_RoleBindings_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_RoleBindings_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_RoleBindings_Delete_0{resp.(*RoleBindingsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterRoleBindingsHandlerClient(ctx context.Context, mux *runtime.ServeMu
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_RoleBindings_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_RoleBindings_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_RoleBindings_Delete_0{resp.(*RoleBindingsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_RoleBindings_Update_0 struct {
 }
 
 func (m response_RoleBindings_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_RoleBindings_Delete_0 struct {
+	*RoleBindingsDeleteResponse
+}
+
+func (m response_RoleBindings_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

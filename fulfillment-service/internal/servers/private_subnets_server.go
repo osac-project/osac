@@ -194,7 +194,7 @@ func (s *PrivateSubnetsServer) Delete(ctx context.Context,
 		return
 	}
 	if deleteAlreadyAccepted(subnet.GetMetadata()) {
-		return &privatev1.SubnetsDeleteResponse{}, nil
+		return &privatev1.SubnetsDeleteResponse{Object: subnet}, nil
 	}
 	if err = validateNotDefault(ctx, subnet.GetMetadata().GetLabels(), "subnet"); err != nil {
 		return

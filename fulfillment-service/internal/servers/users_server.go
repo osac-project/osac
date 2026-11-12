@@ -296,13 +296,24 @@ func (s *UsersServer) Delete(ctx context.Context,
 	privateRequest.SetId(request.GetId())
 
 	// Delegate to private server:
-	_, err = s.private.Delete(ctx, privateRequest)
+	privateResponse, err := s.private.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	// Map the deleted object to the public format, pruning credential data so that sensitive
+	// information like passwords is never returned in public API responses:
+	publicObject := &publicv1.User{}
+	err = s.outMapper.Copy(ctx, privateResponse.GetObject(), publicObject)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map private user to public", slog.Any("error", err))
+		return nil, err
+	}
+	s.pruneCredentials(publicObject)
+
 	// Build and return the response:
 	response = &publicv1.UsersDeleteResponse{}
+	response.SetObject(publicObject)
 	return
 }
 

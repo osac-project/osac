@@ -102,7 +102,7 @@ message ClustersDeleteRequest {
   string id = 1;
 }
 
-message ClustersDeleteResponse {}
+message ClustersDeleteResponse { Cluster object = 1; }
 
 service Clusters {
   // Retrieves the list of clusters.
@@ -161,6 +161,6 @@ service Clusters {
 
   // Delete a cluster.
   rpc Delete(ClustersDeleteRequest) returns (ClustersDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/clusters/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/clusters/{id}" response_body: "object"};
   }
 }

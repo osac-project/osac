@@ -54,7 +54,7 @@ message HubsDeleteRequest {
   string id = 1;
 }
 
-message HubsDeleteResponse {}
+message HubsDeleteResponse { Hub object = 1; }
 
 message HubsUpdateRequest {
   Hub object = 1;
@@ -94,7 +94,7 @@ service Hubs {
     };
   }
   rpc Delete(HubsDeleteRequest) returns (HubsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/hubs/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/hubs/{id}" response_body: "object"};
   }
   rpc Update(HubsUpdateRequest) returns (HubsUpdateResponse) {
     option (google.api.http) = {

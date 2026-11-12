@@ -345,7 +345,7 @@ func RegisterComputeInstanceTemplatesHandlerServer(ctx context.Context, mux *run
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ComputeInstanceTemplates_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ComputeInstanceTemplates_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ComputeInstanceTemplates_Delete_0{resp.(*ComputeInstanceTemplatesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterComputeInstanceTemplatesHandlerClient(ctx context.Context, mux *run
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ComputeInstanceTemplates_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ComputeInstanceTemplates_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ComputeInstanceTemplates_Delete_0{resp.(*ComputeInstanceTemplatesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_ComputeInstanceTemplates_Update_0 struct {
 }
 
 func (m response_ComputeInstanceTemplates_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_ComputeInstanceTemplates_Delete_0 struct {
+	*ComputeInstanceTemplatesDeleteResponse
+}
+
+func (m response_ComputeInstanceTemplates_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

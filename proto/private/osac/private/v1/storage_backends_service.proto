@@ -105,7 +105,7 @@ message StorageBackendsDeleteRequest {
   string id = 1;
 }
 
-message StorageBackendsDeleteResponse {}
+message StorageBackendsDeleteResponse { StorageBackend object = 1; }
 
 message StorageBackendsSignalRequest {
   string id = 1;
@@ -147,7 +147,7 @@ service StorageBackends {
 
   // Deletes a storage backend.
   rpc Delete(StorageBackendsDeleteRequest) returns (StorageBackendsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/storage_backends/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/storage_backends/{id}" response_body: "object"};
   }
 
   // Signal is required by the generic server infrastructure but is not implemented for StorageBackend

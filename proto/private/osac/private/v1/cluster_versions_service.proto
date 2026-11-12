@@ -106,7 +106,7 @@ message ClusterVersionsDeleteRequest {
   string id = 1;
 }
 
-message ClusterVersionsDeleteResponse {}
+message ClusterVersionsDeleteResponse { ClusterVersion object = 1; }
 
 message ClusterVersionsSignalRequest {
   option (cleanapi.message).private = true;
@@ -160,7 +160,7 @@ service ClusterVersions {
   //
   // This method isn't allowed for regular users, only for the system itself.
   rpc Delete(ClusterVersionsDeleteRequest) returns (ClusterVersionsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/cluster_versions/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/cluster_versions/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

@@ -1097,15 +1097,20 @@ func (s *GenericServer[O]) Delete(ctx context.Context, request any, response any
 	}
 
 	// Delete the object:
-	_, err := s.dao.Delete().
+	daoResponse, err := s.dao.Delete().
 		SetId(requestId).
 		Do(ctx)
 	if err != nil {
 		return ConvertDAOErrorToGRPC(err, "delete", requestId)
 	}
+	object := daoResponse.GetObject()
 
 	// Create the response message:
-	responseMsg := proto.Clone(s.deleteResponse)
+	type responseIface interface {
+		SetObject(O)
+	}
+	responseMsg := proto.Clone(s.deleteResponse).(responseIface)
+	responseMsg.SetObject(object)
 	s.setPointer(response, responseMsg)
 
 	return nil

@@ -295,7 +295,7 @@ func (s *PrivateSecurityGroupsServer) Delete(ctx context.Context,
 		return
 	}
 	if deleteAlreadyAccepted(securityGroup.GetMetadata()) {
-		return &privatev1.SecurityGroupsDeleteResponse{}, nil
+		return &privatev1.SecurityGroupsDeleteResponse{Object: securityGroup}, nil
 	}
 	if isAutomatic(securityGroup.GetMetadata()) && !auth.IsControllerServiceAccount(ctx) {
 		err = grpcstatus.Errorf(grpccodes.FailedPrecondition,

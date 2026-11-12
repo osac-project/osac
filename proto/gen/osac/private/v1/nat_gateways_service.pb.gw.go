@@ -345,7 +345,7 @@ func RegisterNATGatewaysHandlerServer(ctx context.Context, mux *runtime.ServeMux
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_NATGateways_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_NATGateways_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_NATGateways_Delete_0{resp.(*NATGatewaysDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterNATGatewaysHandlerClient(ctx context.Context, mux *runtime.ServeMux
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_NATGateways_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_NATGateways_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_NATGateways_Delete_0{resp.(*NATGatewaysDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_NATGateways_Update_0 struct {
 }
 
 func (m response_NATGateways_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_NATGateways_Delete_0 struct {
+	*NATGatewaysDeleteResponse
+}
+
+func (m response_NATGateways_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

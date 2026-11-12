@@ -76,7 +76,7 @@ message BareMetalInstancesDeleteRequest {
   string id = 1;
 }
 
-message BareMetalInstancesDeleteResponse {}
+message BareMetalInstancesDeleteResponse { BareMetalInstance object = 1; }
 
 message BareMetalInstancesSignalRequest {
   option (cleanapi.message).private = true;
@@ -113,7 +113,7 @@ service BareMetalInstances {
     };
   }
   rpc Delete(BareMetalInstancesDeleteRequest) returns (BareMetalInstancesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/baremetal_instances/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/baremetal_instances/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

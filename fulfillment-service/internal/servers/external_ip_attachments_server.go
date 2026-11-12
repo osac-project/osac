@@ -241,11 +241,24 @@ func (s *ExternalIPAttachmentsServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.ExternalIPAttachmentsDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err := s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateAttachment := privateResponse.GetObject()
+	publicAttachment := &publicv1.ExternalIPAttachment{}
+	err = s.outMapper.Copy(ctx, privateAttachment, publicAttachment)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private external IP attachment to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process external IP attachment")
+	}
+
 	response := &publicv1.ExternalIPAttachmentsDeleteResponse{}
+	response.SetObject(publicAttachment)
 	return response, nil
 }

@@ -705,7 +705,7 @@ func (s *PrivateClustersServer) autoCleanupExternalIP(ctx context.Context, clust
 		if eipID != "" {
 			err = s.lifecycle.deleteAttachmentAndExternalIP(ctx, attachmentID, eipID)
 		} else {
-			err = s.lifecycle.deleteAttachment(ctx, attachmentID)
+			_, err = s.lifecycle.deleteAttachment(ctx, attachmentID)
 		}
 		if err != nil {
 			return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)

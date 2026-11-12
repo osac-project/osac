@@ -725,7 +725,7 @@ func (s *PrivateComputeInstancesServer) Delete(ctx context.Context,
 		return
 	}
 	if deleteAlreadyAccepted(instance.GetMetadata()) {
-		return &privatev1.ComputeInstancesDeleteResponse{}, nil
+		return &privatev1.ComputeInstancesDeleteResponse{Object: instance}, nil
 	}
 	if err = s.lifecycle.rejectManualAttachmentDelete(ctx, "ComputeInstance", id, instance.GetMetadata()); err != nil {
 		return

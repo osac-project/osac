@@ -345,7 +345,7 @@ func RegisterClustersHandlerServer(ctx context.Context, mux *runtime.ServeMux, s
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Clusters_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Clusters_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Clusters_Delete_0{resp.(*ClustersDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterClustersHandlerClient(ctx context.Context, mux *runtime.ServeMux, c
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Clusters_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Clusters_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Clusters_Delete_0{resp.(*ClustersDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_Clusters_Update_0 struct {
 }
 
 func (m response_Clusters_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_Clusters_Delete_0 struct {
+	*ClustersDeleteResponse
+}
+
+func (m response_Clusters_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

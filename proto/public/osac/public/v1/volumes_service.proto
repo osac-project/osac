@@ -107,6 +107,7 @@ message VolumesDeleteRequest {
 }
 
 message VolumesDeleteResponse {
+  Volume object = 1;
 }
 
 service Volumes {
@@ -143,6 +144,6 @@ service Volumes {
 
   // Deletes a volume.
   rpc Delete(VolumesDeleteRequest) returns (VolumesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/volumes/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/volumes/{id}" response_body: "object"};
   }
 }

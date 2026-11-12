@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 var _ = Describe("Private virtual networks server", func() {
@@ -219,6 +220,31 @@ var _ = Describe("Private virtual networks server", func() {
 			}
 			_, err = server.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vn.GetId()}.Build())
 			Expect(grpcstatus.Code(err)).To(BeElementOf(grpccodes.OK, grpccodes.NotFound))
+		})
+
+		It("keeps a DELETING VirtualNetwork unchanged on a repeated delete", func() {
+			// Hold the vn with a finalizer, so the first delete leaves it in deletion.
+			vnDAO := fixtureDAO[*privatev1.VirtualNetwork]()
+			held, err := vnDAO.Get().SetId(vn.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			heldObject := held.GetObject()
+			heldObject.GetMetadata().SetFinalizers([]string{"test/hold"})
+			_, err = vnDAO.Update().SetObject(heldObject).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			first, err := server.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vn.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			before, err := server.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vn.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			second, err := server.Delete(ctx, privatev1.VirtualNetworksDeleteRequest_builder{Id: vn.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(second.GetObject().GetId()).To(Equal(vn.GetId()))
+			Expect(proto.Equal(first.GetObject(), second.GetObject())).To(BeTrue())
+
+			after, err := server.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: vn.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(before.GetObject(), after.GetObject())).To(BeTrue())
 		})
 
 		It("rejects the delete while a Subnet exists and names it", func() {

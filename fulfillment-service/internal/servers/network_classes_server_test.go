@@ -233,6 +233,30 @@ var _ = Describe("Network classes server", func() {
 			Expect(err.Error()).To(ContainSubstring(pool.GetId()))
 		})
 
+		It("keeps a deleting NetworkClass unchanged on a repeated delete", func() {
+			networkClassDAO := fixtureDAO[*privatev1.NetworkClass]()
+			held, err := networkClassDAO.Get().SetId(object.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			heldObject := held.GetObject()
+			heldObject.GetMetadata().SetFinalizers([]string{"test/hold"})
+			_, err = networkClassDAO.Update().SetObject(heldObject).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			first, err := server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			before, err := server.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			second, err := server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(second.GetObject().GetId()).To(Equal(object.GetId()))
+			Expect(proto.Equal(first.GetObject(), second.GetObject())).To(BeTrue())
+
+			after, err := server.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(before.GetObject(), after.GetObject())).To(BeTrue())
+		})
+
 		It("deletes the NetworkClass and accepts a second delete", func() {
 			_, err := server.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: object.GetId()}.Build())
 			Expect(err).ToNot(HaveOccurred())

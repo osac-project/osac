@@ -345,7 +345,7 @@ func RegisterComputeInstancesHandlerServer(ctx context.Context, mux *runtime.Ser
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ComputeInstances_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ComputeInstances_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ComputeInstances_Delete_0{resp.(*ComputeInstancesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterComputeInstancesHandlerClient(ctx context.Context, mux *runtime.Ser
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ComputeInstances_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ComputeInstances_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ComputeInstances_Delete_0{resp.(*ComputeInstancesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_ComputeInstances_Update_0 struct {
 }
 
 func (m response_ComputeInstances_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_ComputeInstances_Delete_0 struct {
+	*ComputeInstancesDeleteResponse
+}
+
+func (m response_ComputeInstances_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

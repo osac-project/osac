@@ -563,7 +563,7 @@ func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Cont
 			s.logger.InfoContext(ctx, "Auto-EIP cleanup: deleted attachment and EIP",
 				slog.String("attachment_id", attachmentID), slog.String("eip_id", eipID))
 		} else {
-			if err = s.lifecycle.deleteAttachment(ctx, attachmentID); err != nil {
+			if _, err = s.lifecycle.deleteAttachment(ctx, attachmentID); err != nil {
 				return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
 			}
 		}

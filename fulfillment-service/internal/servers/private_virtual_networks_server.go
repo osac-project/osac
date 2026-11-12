@@ -189,7 +189,7 @@ func (s *PrivateVirtualNetworksServer) Delete(ctx context.Context,
 		return nil, err
 	}
 	if deleteAlreadyAccepted(virtualNetwork.GetMetadata()) {
-		return &privatev1.VirtualNetworksDeleteResponse{}, nil
+		return &privatev1.VirtualNetworksDeleteResponse{Object: virtualNetwork}, nil
 	}
 	if err = validateNotDefault(ctx, virtualNetwork.GetMetadata().GetLabels(), "virtual network"); err != nil {
 		return

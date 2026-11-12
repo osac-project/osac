@@ -1050,10 +1050,12 @@ var _ = Describe("Private external IP attachments server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			_, err = server.Delete(ctx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{
+			deleteResponse, err := server.Delete(ctx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{
 				Id: createResponse.GetObject().GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(deleteResponse.GetObject().GetId()).To(Equal(createResponse.GetObject().GetId()))
+			Expect(deleteResponse.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 		})
 
 		It("Signals an external IP attachment", func() {
@@ -1519,6 +1521,18 @@ var _ = Describe("Private external IP attachments server", func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, err = server.Delete(ctx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{Id: first.GetObject().GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
+
+		By("a repeated delete of the held attachment returns it and changes nothing")
+		heldID := first.GetObject().GetId()
+		beforeRepeat, err := server.Get(ctx, privatev1.ExternalIPAttachmentsGetRequest_builder{Id: heldID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		repeated, err := server.Delete(ctx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{Id: heldID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(repeated.GetObject().GetId()).To(Equal(heldID))
+		Expect(repeated.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+		afterRepeat, err := server.Get(ctx, privatev1.ExternalIPAttachmentsGetRequest_builder{Id: heldID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(proto.Equal(beforeRepeat.GetObject(), afterRepeat.GetObject())).To(BeTrue())
 
 		_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
 			Object: privatev1.ExternalIPAttachment_builder{

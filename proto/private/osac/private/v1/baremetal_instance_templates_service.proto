@@ -72,7 +72,7 @@ message BareMetalInstanceTemplatesDeleteRequest {
   string id = 1;
 }
 
-message BareMetalInstanceTemplatesDeleteResponse {}
+message BareMetalInstanceTemplatesDeleteResponse { BareMetalInstanceTemplate object = 1; }
 
 message BareMetalInstanceTemplatesSignalRequest {
   option (cleanapi.message).private = true;
@@ -109,7 +109,7 @@ service BareMetalInstanceTemplates {
     };
   }
   rpc Delete(BareMetalInstanceTemplatesDeleteRequest) returns (BareMetalInstanceTemplatesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/baremetal_instance_templates/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/baremetal_instance_templates/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

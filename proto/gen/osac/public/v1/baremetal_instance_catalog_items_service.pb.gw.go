@@ -345,7 +345,7 @@ func RegisterBareMetalInstanceCatalogItemsHandlerServer(ctx context.Context, mux
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_BareMetalInstanceCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_BareMetalInstanceCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_BareMetalInstanceCatalogItems_Delete_0{resp.(*BareMetalInstanceCatalogItemsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterBareMetalInstanceCatalogItemsHandlerClient(ctx context.Context, mux
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_BareMetalInstanceCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_BareMetalInstanceCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_BareMetalInstanceCatalogItems_Delete_0{resp.(*BareMetalInstanceCatalogItemsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_BareMetalInstanceCatalogItems_Update_0 struct {
 }
 
 func (m response_BareMetalInstanceCatalogItems_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_BareMetalInstanceCatalogItems_Delete_0 struct {
+	*BareMetalInstanceCatalogItemsDeleteResponse
+}
+
+func (m response_BareMetalInstanceCatalogItems_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

@@ -328,7 +328,7 @@ func (s *PrivateNATGatewaysServer) Delete(ctx context.Context,
 		return
 	}
 	if deleteAlreadyAccepted(natGateway.GetMetadata()) {
-		response = &privatev1.NATGatewaysDeleteResponse{}
+		response = &privatev1.NATGatewaysDeleteResponse{Object: natGateway}
 		return
 	}
 	if err = validateNotDefault(ctx, natGateway.GetMetadata().GetLabels(), "NAT gateway"); err != nil {
@@ -340,9 +340,10 @@ func (s *PrivateNATGatewaysServer) Delete(ctx context.Context,
 	if err = markDeleting(ctx, s.generic.dao, natGateway); err != nil {
 		return
 	}
-	err = translateLifecycleError(s.lifecycle.deleteLockedNATGateway(ctx, natGateway))
+	deletedNATGateway, lifecycleErr := s.lifecycle.deleteLockedNATGateway(ctx, natGateway)
+	err = translateLifecycleError(lifecycleErr)
 	if err == nil {
-		response = &privatev1.NATGatewaysDeleteResponse{}
+		response = &privatev1.NATGatewaysDeleteResponse{Object: deletedNATGateway}
 	}
 	return
 }

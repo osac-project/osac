@@ -106,7 +106,7 @@ message ClustersDeleteRequest {
   string id = 1;
 }
 
-message ClustersDeleteResponse {}
+message ClustersDeleteResponse { Cluster object = 1; }
 
 message ClustersSignalRequest {
   option (cleanapi.message).private = true;
@@ -174,7 +174,7 @@ service Clusters {
 
   // Delete a cluster.
   rpc Delete(ClustersDeleteRequest) returns (ClustersDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/clusters/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/clusters/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

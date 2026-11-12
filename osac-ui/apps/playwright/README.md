@@ -51,7 +51,6 @@ the browser flow starts.
 bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
   --osac-ui-dir="$PWD" --kubeconfig="${KUBECONFIG:-}"
 
-export OSAC_UI_BASE_URL=https://...
 bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
   --osac-ui-dir="$PWD" --tag=vmaas_all \
   --instance=1 --admin-user=<keycloak-user> \
@@ -101,9 +100,10 @@ Environment variables:
 | `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                               |
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
-When `OSAC_API_BASE_URL` is unset, the runner derives the Fulfillment API
-route from a standard `osac-ui-...` route name. Set it explicitly for
-deployments that use a different route naming convention.
+When `OSAC_UI_BASE_URL` is unset, the runner reads the `osac-ui` route from
+the standard kubeconfig locations. When `OSAC_API_BASE_URL` is unset, it reads
+the `fulfillment-api` route or derives it from a standard `osac-ui-...` route
+name. Set either URL explicitly for deployments that use different routes.
 
 ```bash
 export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=...

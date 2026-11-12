@@ -1,4 +1,10 @@
-import { Modal, ModalBody, ModalHeader } from '@patternfly/react-core';
+import { Icon, Modal, ModalBody, ModalHeader } from '@patternfly/react-core';
+import CheckCircleIcon from '@patternfly/react-icons/dist/esm/icons/check-circle-icon';
+import ClockIcon from '@patternfly/react-icons/dist/esm/icons/clock-icon';
+import ExclamationCircleIcon from '@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon';
+import HourglassHalfIcon from '@patternfly/react-icons/dist/esm/icons/hourglass-half-icon';
+import InProgressIcon from '@patternfly/react-icons/dist/esm/icons/in-progress-icon';
+import QuestionCircleIcon from '@patternfly/react-icons/dist/esm/icons/question-circle-icon';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import { type ClusterUpgradeHistoryEntry, ClusterUpgradeState } from '@osac/types';
@@ -14,20 +20,20 @@ interface ClusterUpgradeHistoryModalProps {
 const ClusterUpgradeHistoryModal = ({ attempts, onClose }: ClusterUpgradeHistoryModalProps) => {
   const { t } = useTranslation();
 
-  const stateLabel = (state: ClusterUpgradeState) => {
+  const stateDisplay = (state: ClusterUpgradeState) => {
     switch (state) {
       case ClusterUpgradeState.PENDING:
-        return t('Pending');
+        return { label: t('Pending'), icon: ClockIcon, color: 'info' as const };
       case ClusterUpgradeState.PROGRESSING:
-        return t('In progress');
+        return { label: t('In progress'), icon: InProgressIcon, color: 'info' as const };
       case ClusterUpgradeState.SUCCEEDED:
-        return t('Succeeded');
+        return { label: t('Succeeded'), icon: CheckCircleIcon, color: 'success' as const };
       case ClusterUpgradeState.FAILED:
-        return t('Failed');
+        return { label: t('Failed'), icon: ExclamationCircleIcon, color: 'danger' as const };
       case ClusterUpgradeState.TIMED_OUT:
-        return t('Timed out');
+        return { label: t('Timed out'), icon: HourglassHalfIcon, color: 'warning' as const };
       default:
-        return t('Unknown');
+        return { label: t('Unknown'), icon: QuestionCircleIcon, color: 'custom' as const };
     }
   };
 
@@ -50,12 +56,18 @@ const ClusterUpgradeHistoryModal = ({ attempts, onClose }: ClusterUpgradeHistory
               const completed =
                 attempt.state === ClusterUpgradeState.SUCCEEDED ||
                 attempt.state === ClusterUpgradeState.FAILED;
+              const { label, icon: StatusIcon, color } = stateDisplay(attempt.state);
               return (
                 <Tr key={index}>
                   <Td dataLabel={t('Upgrade')}>
                     {attempt.sourceVersion || '—'} → {attempt.targetVersion || '—'}
                   </Td>
-                  <Td dataLabel={t('Status')}>{stateLabel(attempt.state)}</Td>
+                  <Td dataLabel={t('Status')}>
+                    <Icon status={color} isInline className="pf-v6-u-mr-xs" aria-hidden>
+                      <StatusIcon />
+                    </Icon>
+                    {label}
+                  </Td>
                   <Td dataLabel={t('Accepted')}>
                     <Timestamp value={attempt.acceptedTime} />
                   </Td>

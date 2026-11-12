@@ -3,31 +3,31 @@ import { test } from '@playwright/test';
 import {
   baseInstanceType,
   lifecycleTimeout,
+  resizeCpuUpMemoryDownInstanceType,
   resizeInstanceType,
-  resizeMixedInstanceType,
   resizeRunningVmAndVerify,
   restartVmAndVerify,
   useResizeVmLifecycle,
+  verifyResizeCliConfiguration,
+  verifyResizeUiConfiguration,
 } from './resize.helpers';
-import { expectComputeInstanceConfiguration } from '../../../../../libs/osac-cli/src/compute_instance';
 import { openAndLogin } from '../../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../../libs/test-utils/src/general/test_progress';
 import {
   createInstanceType,
-  deleteInstanceType,
+  deleteInstanceTypeIfPresent,
   expectInstanceTypeNotToExist,
   openCreateInstanceTypePage,
 } from '../../../../../libs/test-utils/src/instance_types.page';
 import { openInstanceTypesPage } from '../../../../../libs/test-utils/src/main.page';
 import {
-  expectVmConfiguration,
   resizeVmInstanceType,
   runVmPowerAction,
   waitForVmDetailsStatus,
 } from '../../../../../libs/test-utils/src/vms.page';
 import {
+  resizeCpuUpMemoryDownInstanceTypeTestData,
   resizeInstanceTypeTestData,
-  resizeMixedInstanceTypeTestData,
   resizeVmTestName,
   tenantNameOrSkip,
 } from '../test_data';
@@ -35,11 +35,15 @@ import {
 test.setTimeout(900_000);
 useResizeVmLifecycle();
 
-const resizeInstanceTypes = [resizeInstanceTypeTestData, resizeMixedInstanceTypeTestData] as const;
+const resizeInstanceTypes = [
+  resizeInstanceTypeTestData,
+  resizeCpuUpMemoryDownInstanceTypeTestData,
+] as const;
 const createdResizeInstanceTypes: string[] = [];
 
 /** Create the resize-only instance types after the shared catalog flow. */
-test.beforeAll(async ({ browser }) => {
+test.beforeAll(async ({ browser }, testInfo) => {
+  testInfo.setTimeout(900_000);
   const page = await browser.newPage();
   try {
     await testStep('resize-prerequisites', 'Log in as the admin test user', () =>
@@ -66,16 +70,19 @@ test.beforeAll(async ({ browser }) => {
         `Open the creation form for "${instanceType.name}"`,
         () => openCreateInstanceTypePage(page),
       );
-      await testStep('resize-prerequisites', `Create instance type "${instanceType.name}"`, () =>
-        createInstanceType(
-          page,
-          instanceType.name,
-          instanceType.description,
-          instanceType.vcpus,
-          instanceType.memoryGib,
-        ),
-      );
       createdResizeInstanceTypes.push(instanceType.name);
+      await testStep(
+        'resize-prerequisites',
+        `Create instance type "${instanceType.name}" (${instanceType.vcpus} vCPUs, ${instanceType.memoryGib} GiB)`,
+        () =>
+          createInstanceType(
+            page,
+            instanceType.name,
+            instanceType.description,
+            instanceType.vcpus,
+            instanceType.memoryGib,
+          ),
+      );
     }
   } finally {
     await page.close();
@@ -104,8 +111,18 @@ test.afterAll(async ({ browser }) => {
     );
 
     for (const name of [...createdResizeInstanceTypes].reverse()) {
-      await testStep('resize-prerequisites', `Delete instance type "${name}"`, () =>
-        deleteInstanceType(page, name),
+      await testStep(
+        'resize-prerequisites',
+        `Delete instance type "${name}" if present`,
+        async () => {
+          const deleted = await deleteInstanceTypeIfPresent(page, name);
+          logProgress(
+            'resize-prerequisites',
+            deleted
+              ? `Deleted resize instance type "${name}".`
+              : `Resize instance type "${name}" was not present; cleanup continued.`,
+          );
+        },
       );
     }
   } finally {
@@ -120,32 +137,48 @@ test('TC-NFR1-01 Resize a running VM from the UI — restart required', async ({
     return;
   }
 
-  await testStep('vm-resize', 'Verify the initial instance type and sizing', () =>
-    expectVmConfiguration(page, baseInstanceType),
+  await testStep(
+    'vm-resize',
+    `Verify the initial UI sizing: ${baseInstanceType.name} (${baseInstanceType.vcpus} vCPUs, ${baseInstanceType.memoryGib} GiB)`,
+    () => verifyResizeUiConfiguration(page, baseInstanceType, 'Verify initial UI sizing'),
   );
-  await testStep('vm-resize', 'Verify the initial active sizing through the CLI', () =>
-    expectComputeInstanceConfiguration(tenantName, resizeVmTestName, {
-      desired: baseInstanceType,
-      active: baseInstanceType,
-    }),
+  await testStep(
+    'vm-resize',
+    `Verify initial CLI/backend sizing: desired and active are ${baseInstanceType.name} (${baseInstanceType.vcpus} vCPUs, ${baseInstanceType.memoryGib} GiB)`,
+    () =>
+      verifyResizeCliConfiguration(
+        tenantName,
+        resizeVmTestName,
+        {
+          desired: baseInstanceType,
+          active: baseInstanceType,
+        },
+        'Verify initial CLI/backend sizing',
+      ),
   );
-  await testStep('vm-resize', 'Resize the running VM to the target instance type', () =>
-    resizeRunningVmAndVerify(
-      page,
-      tenantName,
-      resizeVmTestName,
-      baseInstanceType,
-      resizeInstanceType,
-    ),
+  await testStep(
+    'vm-resize',
+    `Resize running VM from ${baseInstanceType.name} (${baseInstanceType.vcpus} vCPUs, ${baseInstanceType.memoryGib} GiB) to ${resizeInstanceType.name} (${resizeInstanceType.vcpus} vCPUs, ${resizeInstanceType.memoryGib} GiB)`,
+    () =>
+      resizeRunningVmAndVerify(
+        page,
+        tenantName,
+        resizeVmTestName,
+        baseInstanceType,
+        resizeInstanceType,
+      ),
   );
-  await testStep('vm-resize', 'Resize the running VM back to the base instance type', () =>
-    resizeRunningVmAndVerify(
-      page,
-      tenantName,
-      resizeVmTestName,
-      resizeInstanceType,
-      baseInstanceType,
-    ),
+  await testStep(
+    'vm-resize',
+    `Resize running VM back to ${baseInstanceType.name} (${baseInstanceType.vcpus} vCPUs, ${baseInstanceType.memoryGib} GiB)`,
+    () =>
+      resizeRunningVmAndVerify(
+        page,
+        tenantName,
+        resizeVmTestName,
+        resizeInstanceType,
+        baseInstanceType,
+      ),
   );
 });
 
@@ -158,30 +191,70 @@ test('TC-FR1-02 Resize a stopped VM from the UI, then start — new sizing is ap
     return;
   }
 
-  await testStep('vm-resize', 'Verify the initial instance type and sizing', () =>
-    expectVmConfiguration(page, baseInstanceType),
+  await testStep(
+    'vm-resize',
+    `Verify the initial UI sizing: ${baseInstanceType.name} (${baseInstanceType.vcpus} vCPUs, ${baseInstanceType.memoryGib} GiB)`,
+    () => verifyResizeUiConfiguration(page, baseInstanceType, 'Verify initial UI sizing'),
   );
-  await testStep('vm-resize', 'Verify the initial active sizing through the CLI', () =>
-    expectComputeInstanceConfiguration(tenantName, resizeVmTestName, {
-      desired: baseInstanceType,
-      active: baseInstanceType,
-    }),
+  await testStep(
+    'vm-resize',
+    `Verify initial CLI/backend sizing: desired and active are ${baseInstanceType.name} (${baseInstanceType.vcpus} vCPUs, ${baseInstanceType.memoryGib} GiB)`,
+    () =>
+      verifyResizeCliConfiguration(
+        tenantName,
+        resizeVmTestName,
+        {
+          desired: baseInstanceType,
+          active: baseInstanceType,
+        },
+        'Verify initial CLI/backend sizing',
+      ),
   );
-  await testStep('vm-resize', 'Stop the VM', async () => {
-    await runVmPowerAction(page, 'stop');
-    await waitForVmDetailsStatus(page, resizeVmTestName, 'Stopped', lifecycleTimeout);
-  });
-  // TC-FR2-02: Mixed-direction resize (increase CPU, decrease memory).
-  await testStep('vm-resize', 'TC-FR2-02: Resize to the mixed-direction type', () =>
-    resizeVmInstanceType(page, resizeMixedInstanceType),
+  await testStep(
+    'vm-resize',
+    `Stop VM "${resizeVmTestName}" before the stopped-VM resize`,
+    async () => {
+      await runVmPowerAction(page, 'stop');
+      await waitForVmDetailsStatus(page, resizeVmTestName, 'Stopped', lifecycleTimeout);
+      logProgress('vm-resize-state', `${resizeVmTestName}: lifecycle status=Stopped.`);
+    },
   );
-  await testStep('vm-resize', 'Verify the target is requested before the VM starts', () =>
-    expectComputeInstanceConfiguration(tenantName, resizeVmTestName, {
-      desired: resizeMixedInstanceType,
-      active: baseInstanceType,
-    }),
+  // TC-FR2-02: Increase CPU while decreasing memory.
+  await testStep(
+    'vm-resize',
+    `TC-FR2-02: Increase CPU and decrease memory: ${baseInstanceType.vcpus} → ${resizeCpuUpMemoryDownInstanceType.vcpus} vCPUs; ${baseInstanceType.memoryGib} → ${resizeCpuUpMemoryDownInstanceType.memoryGib} GiB`,
+    async () => {
+      await resizeVmInstanceType(page, resizeCpuUpMemoryDownInstanceType);
+      logProgress(
+        'vm-resize-ui',
+        `${resizeVmTestName}: requested instance type ${resizeCpuUpMemoryDownInstanceType.name} (${resizeCpuUpMemoryDownInstanceType.vcpus} vCPUs, ${resizeCpuUpMemoryDownInstanceType.memoryGib} GiB).`,
+      );
+    },
   );
-  await testStep('vm-resize', 'Start the VM with the new sizing', () =>
-    restartVmAndVerify(page, tenantName, resizeVmTestName, 'start', resizeMixedInstanceType),
+  await testStep(
+    'vm-resize',
+    `Verify requested versus active CLI/backend sizing before start: desired=${resizeCpuUpMemoryDownInstanceType.name} (${resizeCpuUpMemoryDownInstanceType.vcpus} vCPUs, ${resizeCpuUpMemoryDownInstanceType.memoryGib} GiB), active=${baseInstanceType.name} (${baseInstanceType.vcpus} vCPUs, ${baseInstanceType.memoryGib} GiB)`,
+    () =>
+      verifyResizeCliConfiguration(
+        tenantName,
+        resizeVmTestName,
+        {
+          desired: resizeCpuUpMemoryDownInstanceType,
+          active: baseInstanceType,
+        },
+        'Verify requested versus active CLI/backend sizing before start',
+      ),
+  );
+  await testStep(
+    'vm-resize',
+    `Start VM "${resizeVmTestName}" and verify active sizing ${resizeCpuUpMemoryDownInstanceType.name} (${resizeCpuUpMemoryDownInstanceType.vcpus} vCPUs, ${resizeCpuUpMemoryDownInstanceType.memoryGib} GiB)`,
+    () =>
+      restartVmAndVerify(
+        page,
+        tenantName,
+        resizeVmTestName,
+        'start',
+        resizeCpuUpMemoryDownInstanceType,
+      ),
   );
 });

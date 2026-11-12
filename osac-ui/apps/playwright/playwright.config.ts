@@ -189,6 +189,7 @@ export default defineConfig({
       testMatch: preResourceBaseCreateTestMatch,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: flowMode === 'full' ? 'tenant-delete' : undefined,
     },
     {
       name: 'vmaas-full-flow-pre-resource',
@@ -260,7 +261,6 @@ export default defineConfig({
       testMatch: preResourceDeleteTestMatch,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: 'tenant-delete',
     },
     {
       name: 'storage-tier',

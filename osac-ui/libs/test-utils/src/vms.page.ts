@@ -179,13 +179,35 @@ const detailValue = (page: Page, label: string): Locator =>
     .locator('dd');
 
 /** Verify the instance type and the sizing values shown on the VM details page. */
+export const getVmConfiguration = async (page: Page): Promise<VmResizeTarget> => ({
+  name: (await detailValue(page, 'Instance type').textContent())?.trim() ?? '',
+  vcpus: Number((await detailValue(page, 'vCPUs').textContent())?.trim()),
+  memoryGib: Number(
+    (await detailValue(page, 'Memory').textContent())?.trim().replace(/\s+GiB$/, ''),
+  ),
+});
+
+/** Verify the instance type and the sizing values shown on the VM details page. */
 export const expectVmConfiguration = async (
   page: Page,
   instanceType: VmResizeTarget,
 ): Promise<void> => {
-  await expect(detailValue(page, 'Instance type')).toContainText(instanceType.name);
-  await expect(detailValue(page, 'vCPUs')).toHaveText(exactText(String(instanceType.vcpus)));
-  await expect(detailValue(page, 'Memory')).toHaveText(exactText(`${instanceType.memoryGib} GiB`));
+  await expect
+    .poll(
+      async () => {
+        return getVmConfiguration(page);
+      },
+      {
+        message: `Wait for VM sizing to show ${instanceType.name} (${instanceType.vcpus} vCPUs, ${instanceType.memoryGib} GiB)`,
+        timeout: 60_000,
+        intervals: [1_000, 2_000, 5_000],
+      },
+    )
+    .toMatchObject({
+      name: expect.stringContaining(instanceType.name),
+      vcpus: instanceType.vcpus,
+      memoryGib: instanceType.memoryGib,
+    });
 };
 
 /** Verify a condition row rendered in the VM details Conditions table. */

@@ -76,7 +76,7 @@ interface RawExtravars {
   catalog: RawCatalog;
   instance_type: RawInstanceType;
   resize_instance_type: RawResizeInstanceType;
-  resize_mixed_instance_type: RawResizeInstanceType;
+  resize_cpu_up_memory_down_instance_type: RawResizeInstanceType;
   disk_image: RawDiskImage;
   storage_tier: RawStorageTier;
   lifecycle_actions: LifecycleAction[];
@@ -211,9 +211,9 @@ const parseExtravars = (value: unknown): RawExtravars => {
   const catalogDiskImage = asRecord(catalogFields.disk_image, 'catalog.fields.disk_image');
   const instanceType = asRecord(root.instance_type, 'instance_type');
   const resizeInstanceType = asRecord(root.resize_instance_type, 'resize_instance_type');
-  const resizeMixedInstanceType = asRecord(
-    root.resize_mixed_instance_type,
-    'resize_mixed_instance_type',
+  const resizeCpuUpMemoryDownInstanceType = asRecord(
+    root.resize_cpu_up_memory_down_instance_type,
+    'resize_cpu_up_memory_down_instance_type',
   );
   const diskImage = asRecord(root.disk_image, 'disk_image');
   const storageTier = asRecord(root.storage_tier, 'storage_tier');
@@ -269,16 +269,22 @@ const parseExtravars = (value: unknown): RawExtravars => {
       vcpus: positiveInteger(resizeInstanceType.vcpus, 'resize_instance_type.vcpus'),
       memory_gib: positiveInteger(resizeInstanceType.memory_gib, 'resize_instance_type.memory_gib'),
     },
-    resize_mixed_instance_type: {
-      name: requiredString(resizeMixedInstanceType.name, 'resize_mixed_instance_type.name'),
-      description: requiredString(
-        resizeMixedInstanceType.description,
-        'resize_mixed_instance_type.description',
+    resize_cpu_up_memory_down_instance_type: {
+      name: requiredString(
+        resizeCpuUpMemoryDownInstanceType.name,
+        'resize_cpu_up_memory_down_instance_type.name',
       ),
-      vcpus: positiveInteger(resizeMixedInstanceType.vcpus, 'resize_mixed_instance_type.vcpus'),
+      description: requiredString(
+        resizeCpuUpMemoryDownInstanceType.description,
+        'resize_cpu_up_memory_down_instance_type.description',
+      ),
+      vcpus: positiveInteger(
+        resizeCpuUpMemoryDownInstanceType.vcpus,
+        'resize_cpu_up_memory_down_instance_type.vcpus',
+      ),
       memory_gib: positiveInteger(
-        resizeMixedInstanceType.memory_gib,
-        'resize_mixed_instance_type.memory_gib',
+        resizeCpuUpMemoryDownInstanceType.memory_gib,
+        'resize_cpu_up_memory_down_instance_type.memory_gib',
       ),
     },
     disk_image: {
@@ -310,7 +316,7 @@ const {
   catalog: rawCatalog,
   instance_type: rawInstanceType,
   resize_instance_type: rawResizeInstanceType,
-  resize_mixed_instance_type: rawResizeMixedInstanceType,
+  resize_cpu_up_memory_down_instance_type: rawResizeCpuUpMemoryDownInstanceType,
   disk_image: rawDiskImage,
   storage_tier: rawStorageTier,
   lifecycle_actions: rawLifecycleActions,
@@ -435,11 +441,11 @@ export const resizeInstanceTypeTestData: ResizeInstanceTypeTestData = {
   memoryGib: rawResizeInstanceType.memory_gib,
 };
 
-export const resizeMixedInstanceTypeTestData: ResizeInstanceTypeTestData = {
-  name: rawResizeMixedInstanceType.name ?? '',
-  description: rawResizeMixedInstanceType.description,
-  vcpus: rawResizeMixedInstanceType.vcpus,
-  memoryGib: rawResizeMixedInstanceType.memory_gib,
+export const resizeCpuUpMemoryDownInstanceTypeTestData: ResizeInstanceTypeTestData = {
+  name: rawResizeCpuUpMemoryDownInstanceType.name ?? '',
+  description: rawResizeCpuUpMemoryDownInstanceType.description,
+  vcpus: rawResizeCpuUpMemoryDownInstanceType.vcpus,
+  memoryGib: rawResizeCpuUpMemoryDownInstanceType.memory_gib,
 };
 
 export const diskImagesTestData: DiskImageTestData = {

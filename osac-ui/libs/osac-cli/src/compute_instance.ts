@@ -39,6 +39,7 @@ interface ComputeInstance {
     instance_type?: InstanceTypeReference;
   };
   status?: {
+    last_restarted_at?: string;
     instance_type?: InstanceTypeReference;
   };
 }
@@ -85,6 +86,15 @@ const getComputeInstance = async (tenantName: string, name: string): Promise<Com
   ]);
   expectOsacCommandSucceeded(result, `Get compute instance '${name}'`);
   return parseResource<ComputeInstance>(result.stdout, `compute instance '${name}'`);
+};
+
+/** Return the time the controller last processed a restart, if any. */
+export const getComputeInstanceLastRestartedAt = async (
+  tenantName: string,
+  name: string,
+): Promise<string | undefined> => {
+  const computeInstance = await getComputeInstance(tenantName, name);
+  return computeInstance.status?.last_restarted_at;
 };
 
 const getInstanceType = async (

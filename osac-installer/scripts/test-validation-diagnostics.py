@@ -56,6 +56,32 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         self.assertIn("--set-file input could not be read", result.stderr)
         self.assertNotIn(path, result.stdout + result.stderr)
 
+    def test_offline_render_error_reports_bad_values_input_class(self):
+        """Check an unreadable values input reports its class, not the path."""
+        path = f"/srv/{self.token}/values.yaml"
+        values_hint = "a values file (-f/--values) could not be read or parsed"
+        flag_hint = "an unknown Helm flag was passed"
+        cases = (
+            (f"Error: open {path}: no such file or directory\n", values_hint),
+            (f"Error: failed to parse {path}: error converting YAML to"
+             " JSON: yaml: line 1: did not find expected node content\n",
+             values_hint),
+            (f"Error: unknown flag: --{self.token}\n", flag_hint),
+            (f"Error: unknown shorthand flag: '{self.token[0]}' in"
+             f" -{self.token[0]}\n", flag_hint),
+        )
+        for message, hint in cases:
+            with self.subTest(hint=hint):
+                result = subprocess.run(
+                    ["bash", "-c", 'source "$1"; offline_render_error "$2"',
+                     "bash", str(INSTALLER / "scripts/lib.sh"), message],
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assert_private(result.stdout + result.stderr)
+                self.assertIn(hint, result.stderr)
+                self.assertNotIn(path, result.stdout + result.stderr)
+
     def test_failure_diagnostics_do_not_echo_canaries(self):
         """Check a failed assertion's diagnostic output does not echo canaries."""
         output = io.StringIO()

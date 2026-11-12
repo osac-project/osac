@@ -637,6 +637,19 @@ offline_render_error() {
                         print "--set-file input could not be read; check" \
                             " OIDC_IDP_CA_FILE and other --set-file" \
                             " arguments"
+                    } else if ($0 ~ /^Error: open / \
+                        || $0 ~ /^Error: failed to parse /) {
+                        # Helm names the file it could not read or parse
+                        # and may add a reason that can quote a caller
+                        # value, so only the input class is reported.
+                        print "a values file (-f/--values) could not be" \
+                            " read or parsed; check INFRA_VALUES_EXTRA," \
+                            " INSTANCE_VALUES_EXTRA and EXTRA_HELM_ARGS"
+                    } else if ($0 ~ /^Error: unknown (shorthand )?flag/) {
+                        # Helm echoes the rejected flag, which is caller
+                        # input, so only the input class is reported.
+                        print "an unknown Helm flag was passed; check" \
+                            " EXTRA_HELM_ARGS and other *_HELM_ARGS inputs"
                     } else if ($0 ~ /^Error: values don/) {
                         schema = 1
                     }

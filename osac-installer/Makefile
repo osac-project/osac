@@ -325,9 +325,11 @@ endif
 # append above) means no Make expression in a command-line or environment
 # value expands -- including at export time -- and recipes word-split
 # $${INFRA_VALUES_EXTRA}/$${INSTANCE_VALUES_EXTRA} from the environment,
-# so shell metacharacters in a caller value reach Helm as argument text
-# instead of executing. Makefile-authored profile values contain no Make
-# expressions, so freezing them is a no-op.
+# so shell command syntax in a caller value reaches Helm as argument text
+# instead of executing. These lists still expand unquoted, so pathname
+# patterns (*, ?, [) glob against the working directory and a leading ~ is
+# not expanded; pass expanded paths. Makefile-authored profile values
+# contain no Make expressions, so freezing them is a no-op.
 override INFRA_VALUES_EXTRA := $(value INFRA_VALUES_EXTRA)
 export INFRA_VALUES_EXTRA
 override INSTANCE_VALUES_EXTRA := $(value INSTANCE_VALUES_EXTRA)

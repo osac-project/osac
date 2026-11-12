@@ -78,7 +78,7 @@ Examples:
   bash $0 --osac-ui-dir=/work/osac/osac-ui
 
 After preparation, run for example:
-  bash run-ui-e2e.sh --osac-ui-dir=/work/osac/osac-ui --tag=create_image
+  bash run-ui-e2e.sh --osac-ui-dir=/work/osac/osac-ui --tag=create_disk_image
 EOF
       exit 0
       ;;
@@ -497,7 +497,7 @@ cat <<EOF
 Run a flow separately, for example:
   OSAC_CLI_PATH=${OSAC_CLI_PATH} \
     bash ${OSAC_UI_DIR}/apps/e2e-tests/run_scripts/run-ui-e2e.sh \
-    --osac-ui-dir=${OSAC_UI_DIR} --extravars=${OSAC_EXTRAVARS} --tag=create_image
+    --osac-ui-dir=${OSAC_UI_DIR} --extravars=${OSAC_EXTRAVARS} --tag=create_disk_image
 
 EOF
 popd >/dev/null

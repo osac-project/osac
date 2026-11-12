@@ -55,13 +55,13 @@ describe('buildClusterCatalogStepSchema', () => {
               rowId: 'first',
               name: 'workers',
               hostType: { id: 'standard', name: 'standard' },
-              size: '3',
+              size: 3,
             },
             {
               rowId: 'second',
               name: ' workers ',
               hostType: { id: 'standard', name: 'standard' },
-              size: '3',
+              size: 3,
             },
           ],
         },
@@ -85,14 +85,14 @@ describe('buildClusterCatalogStepSchema', () => {
               rowId: 'workers',
               name: 'workers',
               hostType: { id: 'standard', name: 'standard' },
-              size: '1.5',
+              size: 1.5,
             },
           ],
         },
       }),
     ).rejects.toMatchObject({
       path: 'nodeSets.value[0].size',
-      message: 'Pool size must be greater than zero',
+      message: 'Must be a whole number',
     });
   });
 });

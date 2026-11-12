@@ -18,12 +18,12 @@ tests:
     asserts:
       - matchRegex:
           path: stringData["inventory.yaml"]
-          pattern: "disableBMCVerification: false"
+          pattern: "(?m)^    enableBMCCertificateVerification: true$"
 
   - it: propagates the fleet-wide override to the inventory config
     set:
-      bmf.netbox.disableBMCVerification: true
+      bmf.netbox.enableBMCCertificateVerification: false
     asserts:
       - matchRegex:
           path: stringData["inventory.yaml"]
-          pattern: "disableBMCVerification: true"
+          pattern: "(?m)^    enableBMCCertificateVerification: false$"

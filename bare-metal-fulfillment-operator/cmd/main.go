@@ -596,7 +596,7 @@ func createNetBoxInventoryClientWithManager(
 	credentialsReader := netboxcredentials.NewReader(secretsClient)
 	netBoxClient := inventory.NewNetBoxClient(
 		netBoxAPI, bmhManager, secretWriter, inventoryCfg.HostClass, credentialsReader,
-		netBoxConfig.DisableBMCVerification,
+		netBoxConfig.BMCVerificationEnabled(),
 	)
 	return netBoxClient, nil
 }

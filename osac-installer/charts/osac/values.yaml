@@ -497,10 +497,10 @@ bmf:
     tokenValue: ""
     caCert: ""
     allowInsecureHTTP: false
-    # Default for spec.bmc.disableCertificateVerification on BareMetalHosts the
-    # NetBox inventory backend creates. The NetBox device custom field
-    # osac_bmc_disable_cert_verification overrides it per device.
-    disableBMCVerification: false
+    # Verify BMC TLS certificates on the BareMetalHosts the NetBox inventory
+    # backend creates. The NetBox device custom field
+    # osac_bmc_certificate_verification overrides it per device.
+    enableBMCCertificateVerification: true
   metal3:
     enabled: false
     # Namespace where Metal3 inventory reads BareMetalHost resources.

@@ -56,6 +56,8 @@ func credentialResolutionFailure(err error) error {
 	return fmt.Errorf("%w: %w", credentials.ErrResolutionFailed, err)
 }
 
+func ptrTo[T any](v T) *T { return &v }
+
 type noOpCredentialsWriter struct{}
 
 func (noOpCredentialsWriter) Create(context.Context, credentials.Reference, credentials.BMC) error {
@@ -64,7 +66,7 @@ func (noOpCredentialsWriter) Create(context.Context, credentials.Reference, cred
 func (noOpCredentialsWriter) Delete(context.Context, credentials.Reference) error { return nil }
 
 func newNetBoxClient(api NetBoxAPI, manager baremetalhost.BMHLifecycleManager, hostClass string, reader credentials.Reader) *NetBoxClient {
-	return NewNetBoxClient(api, manager, noOpCredentialsWriter{}, hostClass, reader, false)
+	return NewNetBoxClient(api, manager, noOpCredentialsWriter{}, hostClass, reader, true)
 }
 
 var _ = Describe("NetBox inventory client", func() {
@@ -82,23 +84,45 @@ var _ = Describe("NetBox inventory client", func() {
 
 		It("parses valid options", func() {
 			options := map[string]any{"netbox": map[string]any{
-				"url":                    "https://netbox.example.test/",
-				"tokenFile":              "/var/run/secrets/netbox/token",
-				"caFile":                 "/var/run/secrets/netbox/ca.crt",
-				"allowInsecureHTTP":      true,
-				"disableBMCVerification": true,
+				"url":                              "https://netbox.example.test/",
+				"tokenFile":                        "/var/run/secrets/netbox/token",
+				"caFile":                           "/var/run/secrets/netbox/ca.crt",
+				"allowInsecureHTTP":                true,
+				"enableBMCCertificateVerification": false,
 			}}
 
 			got, err := ParseNetBoxOptions(options)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got).To(Equal(&NetBoxClientConfig{
-				URL:                    "https://netbox.example.test/",
-				TokenFile:              "/var/run/secrets/netbox/token",
-				CAFile:                 "/var/run/secrets/netbox/ca.crt",
-				AllowInsecureHTTP:      true,
-				DisableBMCVerification: true,
+				URL:                              "https://netbox.example.test/",
+				TokenFile:                        "/var/run/secrets/netbox/token",
+				CAFile:                           "/var/run/secrets/netbox/ca.crt",
+				AllowInsecureHTTP:                true,
+				EnableBMCCertificateVerification: ptrTo(false),
 			}))
+		})
+
+		It("keeps BMC certificate verification enabled when the setting is absent", func() {
+			options := map[string]any{"netbox": map[string]any{
+				"url":       "https://netbox.example.test/",
+				"tokenFile": "/var/run/secrets/netbox/token",
+			}}
+
+			got, err := ParseNetBoxOptions(options)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.EnableBMCCertificateVerification).To(BeNil())
+			Expect(got.BMCVerificationEnabled()).To(BeTrue())
+		})
+
+		It("reports the stored default when the setting is present", func() {
+			enabled := false
+
+			Expect((&NetBoxClientConfig{EnableBMCCertificateVerification: &enabled}).BMCVerificationEnabled()).To(BeFalse())
+
+			enabled = true
+			Expect((&NetBoxClientConfig{EnableBMCCertificateVerification: &enabled}).BMCVerificationEnabled()).To(BeTrue())
 		})
 
 		It("rejects values that cannot be marshaled", func() {
@@ -125,7 +149,7 @@ var _ = Describe("NetBox inventory client", func() {
 			manager := baremetalhost.NewManager(nil, nil, "metal3-system")
 			writer := NewMockWriter(ctrl)
 			credentialsReader := &fakeCredentialsReaderRepository{}
-			client := NewNetBoxClient(api, manager, writer, testNetBoxHostClass, credentialsReader, true)
+			client := NewNetBoxClient(api, manager, writer, testNetBoxHostClass, credentialsReader, false)
 
 			Expect(client.api).To(BeIdenticalTo(api))
 			Expect(client.bmhManager).To(BeIdenticalTo(manager))
@@ -133,7 +157,7 @@ var _ = Describe("NetBox inventory client", func() {
 			Expect(client.bmhManager.Namespace()).To(Equal("metal3-system"))
 			Expect(client.hostClass).To(Equal(testNetBoxHostClass))
 			Expect(client.credentialsReader).To(BeIdenticalTo(credentialsReader))
-			Expect(client.disableBMCVerification).To(BeTrue())
+			Expect(client.enableBMCCertificateVerification).To(BeFalse())
 		})
 	})
 
@@ -541,7 +565,7 @@ func newTestNetBoxClientWithWriter(
 	manager baremetalhost.BMHLifecycleManager,
 	writer credentials.Writer,
 ) *NetBoxClient {
-	return NewNetBoxClient(api, manager, writer, testNetBoxHostClass, resolver, false)
+	return NewNetBoxClient(api, manager, writer, testNetBoxHostClass, resolver, true)
 }
 
 func newNetBoxResourceManager(objects ...client.Object) (*baremetalhost.Manager, client.Client) {
@@ -914,10 +938,10 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 	})
 
 	DescribeTable("propagates the BMC certificate-verification setting to the BareMetalHost",
-		func(deviceValue any, setDeviceValue, defaultDisable, wantDisabled bool) {
+		func(deviceValue any, setDeviceValue, defaultEnabled, wantEnabled bool) {
 			snapshot := testNetBoxAssignmentSnapshot(netBoxStatusActive, "bmi-123")
 			if setDeviceValue {
-				snapshot.Device.CustomFields[netBoxDisableCertVerificationField] = deviceValue
+				snapshot.Device.CustomFields[netBoxCertificateVerificationField] = deviceValue
 			}
 			api := &selectorQueryTestAPI{deviceSnapshot: snapshot}
 			ctrl := gomock.NewController(GinkgoT())
@@ -936,24 +960,24 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 			availabilityCall := manager.EXPECT().IsBMHAvailable(gomock.Any(), "netbox-46").Return(true, nil)
 			gomock.InOrder(ensureCall, createCall, availabilityCall)
 			client := NewNetBoxClient(api, manager, writer, testNetBoxHostClass,
-				&fakeCredentialsReaderRepository{credentials: testNetBoxCredentials()}, defaultDisable)
+				&fakeCredentialsReaderRepository{credentials: testNetBoxCredentials()}, defaultEnabled)
 
 			host, err := client.AssignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
-			Expect(createParams.DisableCertificateVerification).To(Equal(wantDisabled))
+			Expect(createParams.DisableCertificateVerification).To(Equal(!wantEnabled))
 		},
-		Entry("device field unset keeps verification by default", nil, false, false, false),
-		Entry("device field unset inherits a disabled default", nil, false, true, true),
-		Entry("device field null inherits a disabled default", nil, true, true, true),
-		Entry("device override disables verification over a verifying default", true, true, false, true),
-		Entry("device override keeps verification over a disabled default", false, true, true, false),
+		Entry("device field unset keeps verification by default", nil, false, true, true),
+		Entry("device field unset inherits a disabled default", nil, false, false, false),
+		Entry("device field null inherits a disabled default", nil, true, false, false),
+		Entry("device override disables verification over a verifying default", false, true, true, false),
+		Entry("device override keeps verification over a disabled default", true, true, false, true),
 	)
 
 	It("rejects an invalid per-device certificate-verification value", func() {
 		snapshot := testNetBoxAssignmentSnapshot(netBoxStatusActive, "bmi-123")
-		snapshot.Device.CustomFields[netBoxDisableCertVerificationField] = "not-a-bool"
+		snapshot.Device.CustomFields[netBoxCertificateVerificationField] = "not-a-bool"
 		api := &selectorQueryTestAPI{deviceSnapshot: snapshot}
 		ctrl := gomock.NewController(GinkgoT())
 		manager := baremetalhost.NewMockBMHLifecycleManager(ctrl)
@@ -966,7 +990,7 @@ var _ = Describe("NetBox Metal3 preparation", func() {
 		host, err := client.AssignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)
 
 		Expect(host).To(BeNil())
-		Expect(err).To(MatchError(ContainSubstring(netBoxDisableCertVerificationField)))
+		Expect(err).To(MatchError(ContainSubstring(netBoxCertificateVerificationField)))
 	})
 
 	DescribeTable("returns preparation failures without compensating the confirmed NetBox claim",

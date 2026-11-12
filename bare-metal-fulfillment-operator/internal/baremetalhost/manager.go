@@ -57,12 +57,14 @@ type CreateParams struct {
 }
 
 // CreateOptions holds optional settings for a BareMetalHost created by the
-// operator. The zero value verifies the BMC certificate.
+// operator.
 type CreateOptions struct {
 	// DisableCertificateVerification sets spec.bmc.disableCertificateVerification
-	// so BMO/Ironic skip TLS verification of the BMC certificate. BMO propagates
-	// this into Ironic's driver_info.redfish_verify_ca only when the node is
-	// enrolled, so it must be correct at creation time.
+	// so BMO/Ironic skip TLS verification of the BMC certificate. It is stated
+	// negatively on purpose: the zero value must keep verification on, so a
+	// caller that omits this option can never silently weaken TLS. BMO
+	// propagates it into Ironic's driver_info.redfish_verify_ca only when the
+	// node is enrolled, so it must be correct at creation time.
 	DisableCertificateVerification bool
 }
 

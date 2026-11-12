@@ -411,6 +411,7 @@ export const catalogOwnershipFilePath = (name: string): string =>
   path.join(tmpdir(), `osac-catalog-${safeCatalogName(name)}-${catalogTestRunId}.created`);
 
 export const vmTestName = `vm-e2e-${catalogTestRunId}`;
+export const resizeVmTestName = `vm-e2e-resize-${catalogTestRunId}`;
 
 export const instanceTypeTestData: InstanceTypeTestData = {
   name: rawInstanceType.name ?? '',

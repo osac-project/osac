@@ -200,9 +200,9 @@ The full-flow projects run in this order:
 5. `tenant-delete` removes the tenant-admin RoleBinding and OSAC User, SSH
    public-key Secret, tenant, generated credential file, and full-flow state.
 
-`vmaas-all-full-flows` is the aggregator for complete VMaaS flows. It currently
-depends on `vmaas_full_happy_basic`; add future full-flow projects to its
-dependencies in `playwright.config.ts`.
+`vmaas-all-full-flows` is the aggregator for complete VMaaS flows. It depends
+on `vmaas_full_happy_basic` and `vmaas-full-resize`; add future full-flow
+projects to its dependencies in `playwright.config.ts`.
 
 Run the complete creation flow, including VM creation, with:
 
@@ -254,12 +254,12 @@ pnpm --filter @osac/playwright exec playwright test \
 
 ### VM resize flow tests
 
-The resize flow reuses the existing `vmaas-full-flow-resources` and
-`vmaas-full-flow-catalog` projects for its base instance type, disk image,
-storage tier, tenant, and published catalog item. The resize spec creates its
-target and mixed-direction instance types in `beforeAll`, creates a fresh VM at
-the start of each scenario, and deletes that VM in `afterEach`. The existing
-delete specs clean up the shared resources after the resize project finishes.
+The resize flow reuses the existing `vmaas-full-flow-pre-resource` project for
+its base instance type, disk image, storage tier, tenant, and published catalog
+item. The resize spec creates its target and mixed-direction instance types in
+`beforeAll`, creates a fresh, resize-specific VM at the start of each scenario,
+and deletes that VM in `afterEach`. The existing full-flow teardown chain cleans
+up the shared resources after the resize project finishes.
 
 The scenario is in
 `apps/e2e-tests/src/vmaas/resize/resize.vm.spec.ts` and uses the test-plan

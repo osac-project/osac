@@ -231,12 +231,28 @@ export default defineConfig({
       dependencies: flowMode === 'full' ? ['vm-flow'] : [],
     },
     {
+      name: 'vmaas-resize',
+      testDir: vmaasDir,
+      testMatch: /resize\/resize\.vm\.spec\.ts/,
+      fullyParallel: false,
+      workers: 1,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-full-flow-pre-resource'],
+    },
+    {
+      name: 'vmaas-full-resize',
+      testDir: vmaasDir,
+      testMatch: /$^/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-resize'],
+    },
+    {
       name: 'vmaas-all-full-flows',
       testDir: vmaasDir,
       testMatch: /$^/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       // Add future complete VMaaS flows here as they become available.
-      dependencies: ['vmaas_full_happy_basic'],
+      dependencies: ['vmaas_full_happy_basic', 'vmaas-full-resize'],
     },
     {
       name: 'vmaas-full-flow-pre-resource-delete',

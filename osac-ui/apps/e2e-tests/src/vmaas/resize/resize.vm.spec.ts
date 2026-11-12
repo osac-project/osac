@@ -28,8 +28,8 @@ import {
 import {
   resizeInstanceTypeTestData,
   resizeMixedInstanceTypeTestData,
+  resizeVmTestName,
   tenantNameOrSkip,
-  vmTestName,
 } from '../test_data';
 
 test.setTimeout(900_000);
@@ -124,16 +124,28 @@ test('TC-NFR1-01 Resize a running VM from the UI — restart required', async ({
     expectVmConfiguration(page, baseInstanceType),
   );
   await testStep('vm-resize', 'Verify the initial active sizing through the CLI', () =>
-    expectComputeInstanceConfiguration(tenantName, vmTestName, {
+    expectComputeInstanceConfiguration(tenantName, resizeVmTestName, {
       desired: baseInstanceType,
       active: baseInstanceType,
     }),
   );
   await testStep('vm-resize', 'Resize the running VM to the target instance type', () =>
-    resizeRunningVmAndVerify(page, tenantName, vmTestName, baseInstanceType, resizeInstanceType),
+    resizeRunningVmAndVerify(
+      page,
+      tenantName,
+      resizeVmTestName,
+      baseInstanceType,
+      resizeInstanceType,
+    ),
   );
   await testStep('vm-resize', 'Resize the running VM back to the base instance type', () =>
-    resizeRunningVmAndVerify(page, tenantName, vmTestName, resizeInstanceType, baseInstanceType),
+    resizeRunningVmAndVerify(
+      page,
+      tenantName,
+      resizeVmTestName,
+      resizeInstanceType,
+      baseInstanceType,
+    ),
   );
 });
 
@@ -150,26 +162,26 @@ test('TC-FR1-02 Resize a stopped VM from the UI, then start — new sizing is ap
     expectVmConfiguration(page, baseInstanceType),
   );
   await testStep('vm-resize', 'Verify the initial active sizing through the CLI', () =>
-    expectComputeInstanceConfiguration(tenantName, vmTestName, {
+    expectComputeInstanceConfiguration(tenantName, resizeVmTestName, {
       desired: baseInstanceType,
       active: baseInstanceType,
     }),
   );
   await testStep('vm-resize', 'Stop the VM', async () => {
     await runVmPowerAction(page, 'stop');
-    await waitForVmDetailsStatus(page, vmTestName, 'Stopped', lifecycleTimeout);
+    await waitForVmDetailsStatus(page, resizeVmTestName, 'Stopped', lifecycleTimeout);
   });
   // TC-FR2-02: Mixed-direction resize (increase CPU, decrease memory).
   await testStep('vm-resize', 'TC-FR2-02: Resize to the mixed-direction type', () =>
     resizeVmInstanceType(page, resizeMixedInstanceType),
   );
   await testStep('vm-resize', 'Verify the target is requested before the VM starts', () =>
-    expectComputeInstanceConfiguration(tenantName, vmTestName, {
+    expectComputeInstanceConfiguration(tenantName, resizeVmTestName, {
       desired: resizeMixedInstanceType,
       active: baseInstanceType,
     }),
   );
   await testStep('vm-resize', 'Start the VM with the new sizing', () =>
-    restartVmAndVerify(page, tenantName, vmTestName, 'start', resizeMixedInstanceType),
+    restartVmAndVerify(page, tenantName, resizeVmTestName, 'start', resizeMixedInstanceType),
   );
 });

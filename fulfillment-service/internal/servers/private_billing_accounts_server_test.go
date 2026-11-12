@@ -80,9 +80,8 @@ func (a *hangingDiscoveryAdapter) ListAccounts(ctx context.Context, _ billing.Ac
 	return billing.AccountPage{}, billing.NewError(billing.ReasonTimeout, "ListAccounts", true, 0)
 }
 
-// gatedDiscoveryAdapter blocks its ListAccounts calls until released - it reproduces a discovery walk that is
-// in flight while another List arrives. entered closes once the walk has reached the provider, so the suite can
-// observe the walk started without sleeping.
+// gatedDiscoveryAdapter blocks ListAccounts until released, reproducing a walk in flight while another List
+// arrives. entered closes once the walk reaches the provider, so the suite observes the start without sleeping.
 type gatedDiscoveryAdapter struct {
 	billing.Adapter
 	entered chan struct{}
@@ -102,9 +101,8 @@ func (a *gatedDiscoveryAdapter) ListAccounts(_ context.Context, _ billing.Accoun
 	}, nil
 }
 
-// gatedTwoPageAdapter serves the first page immediately and holds the second page until released - it
-// reproduces a multi-page walk that is in flight, waiting on the provider, while the suite checks that the
-// walk holds no database connection. enteredSecondPage closes once the walk has asked for page two.
+// gatedTwoPageAdapter serves the first page immediately and holds the second until released, reproducing a
+// multi-page walk waiting on the provider while the suite checks that no database connection is held.
 type gatedTwoPageAdapter struct {
 	billing.Adapter
 	enteredSecondPage chan struct{}
@@ -129,10 +127,9 @@ func (a *gatedTwoPageAdapter) ListAccounts(_ context.Context, _ billing.AccountF
 	return billing.AccountPage{}, nil
 }
 
-// canceledCallerAdapter blocks its first ListAccounts call until that walk's context is done - it reproduces a
-// caller that cancels its own discovery walk - and serves one normal active-account page with no next page on
-// every later call. entered closes once the walk has reached the provider, and calls counts the provider calls,
-// so the suite can observe both without sleeping.
+// canceledCallerAdapter blocks its first ListAccounts call until that walk's context is done, reproducing a caller
+// that cancels its own walk, and serves one active-account page on later calls. entered and calls let the suite
+// observe both without sleeping.
 type canceledCallerAdapter struct {
 	billing.Adapter
 	entered chan struct{}
@@ -168,9 +165,8 @@ var _ = Describe("Private billing accounts server", func() {
 		}
 		return s.List(ctx, req)
 	}
-	// storedCount reads the billing_accounts row count on the suite pool's own connection, outside any
-	// transaction: like a later request in another process, it can only observe durably committed rows, never
-	// an ambient request transaction's uncommitted state.
+	// storedCount reads the billing_accounts row count on the suite pool's own connection, so it observes only
+	// durably committed rows.
 	storedCount := func() int {
 		var count int
 		Expect(testPool.QueryRow(ctx, `select count(*) from billing_accounts`).Scan(&count)).To(Succeed())
@@ -316,9 +312,8 @@ var _ = Describe("Private billing accounts server", func() {
 		_, err := list(server, nil)
 		Expect(err).ToNot(HaveOccurred())
 
-		// The provider's list becomes empty: the sweep must still run, marking the stored row UNKNOWN.
-		// This is the nil-seen regression: an empty walk collects no references, and pgx encodes a nil
-		// slice as SQL NULL, which the sweep's not-in predicate never matches.
+		// The provider's list becomes empty: the sweep must still run and mark the stored row UNKNOWN. This is the
+		// nil-seen regression, since pgx encodes a nil slice as SQL NULL, which the not-in predicate never matches.
 		empty := billingfake.New(billingfake.Scenario{})
 		server2 := build(empty.Provider())
 		response, err := list(server2, nil)
@@ -348,8 +343,8 @@ var _ = Describe("Private billing accounts server", func() {
 		server.discoverFailureBackoff = 10 * time.Millisecond
 
 		// Reject only the second account's write, the same trigger-injection pattern as
-		// service_account_create_test.go: the first upsert succeeds inside the store transaction, so only a
-		// real rollback - not failing before any write - can keep it out of the table.
+		// service_account_create_test.go: the first upsert succeeds inside the store transaction, so only a real
+		// rollback keeps it out of the table.
 		_, err := testPool.Exec(ctx, `create function reject_second_billing_account() returns trigger language plpgsql as $$
 		begin
 			if new.provider_account_reference = 'acct-2' then

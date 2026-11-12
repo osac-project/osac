@@ -22,26 +22,20 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ErrInvalidFlatTableQuery reports a malformed filter or order expression in a flat-table list call
-// (ListBillingAccounts, ListTenantBillingAssignments). Callers should map it to INVALID_ARGUMENT; any other
-// error those functions return is a database execution failure and should be treated as an internal error
-// instead - the two must not be conflated, or a transient database problem gets reported to the caller as
-// "your request is invalid".
+// ErrInvalidFlatTableQuery reports a malformed filter or order expression in a flat-table list call. Callers map
+// it to INVALID_ARGUMENT; every other error from those functions is a database failure and maps to INTERNAL.
 type ErrInvalidFlatTableQuery struct{ error }
 
 func invalidFlatTableQueryf(format string, args ...any) error {
 	return &ErrInvalidFlatTableQuery{fmt.Errorf(format, args...)}
 }
 
-// flatTableDefaultLimit and flatTableMaxLimit bound flat-table list pages, mirroring the generic DAO's
-// defaultLimit/maxLimit: an unset limit serves the default page rather than the whole table, and an explicit
-// limit is clamped to the maximum rather than rejected. The assignment table is append-only history that is
-// never pruned, so an unbounded List would materialize it in full.
+// flatTableDefaultLimit and flatTableMaxLimit bound flat-table list pages: an unset limit serves the default page
+// rather than the whole table, and an explicit limit is clamped rather than rejected. The assignment table is
+// append-only history that is never pruned, so an unbounded list would materialize it in full.
 //
-// Deliberate deviation from the billing design's openapi.yaml: the design documents limit: 0 as an empty
-// page, but this code keeps the platform convention shared with the generic DAO and the other list services
-// instead - 0 (proto3's unset value) and an omitted limit both serve the default page of 100, and a limit
-// above the maximum clamps to 1000 rather than being rejected.
+// This keeps the platform convention shared with the generic DAO: 0 (proto3's unset value) and an omitted limit
+// both serve 100, and a limit above the maximum clamps to 1000.
 const (
 	flatTableDefaultLimit = 100
 	flatTableMaxLimit     = 1000
@@ -64,10 +58,9 @@ func normalizeFlatTableLimit(limit int32) int32 {
 // shortcut: order supports only a single field, not a comma-separated list.
 var flatTableOrderPattern = regexp.MustCompile(`^([a-z_]+)(?: (asc|desc))?$`)
 
-// translateFlatTableFilter splits filter on "&&" and translates each trimmed clause with parseClause, joining
-// the fragments with " and ". parseClause returns the clause's SQL fragment; when the clause carries a literal
-// value it passes the value to addArg and splices the returned "$<n>" placeholder into the fragment. An empty
-// filter yields "", nil, nil.
+// translateFlatTableFilter splits filter on "&&", translates each trimmed clause with parseClause, and joins the
+// fragments with " and ". parseClause passes literal values to addArg and splices the "$<n>" placeholder into its
+// fragment. An empty filter yields "", nil, nil.
 func translateFlatTableFilter(
 	filter string,
 	parseClause func(clause string, addArg func(any) string) (string, error),
@@ -111,13 +104,9 @@ func translateFlatTableOrder(order string, columns map[string]string, defaultOrd
 	return column, nil
 }
 
-// withIDTieBreaker appends ", id" to orderSQL unless the ordering is already on id alone. Both flat billing
-// tables carry a unique text id primary key, so the appended key turns any otherwise-partial ordering into a
-// total one: without it, rows that tie on the primary order expression can come back in any order, which makes
-// offset/limit pagination unstable - a row can repeat on one page and be skipped from another. The tie-breaker
-// is always ascending id and preserves the primary order and its direction; it never rewrites the caller's
-// ordering. orderSQL comes from translateFlatTableOrder, so it is already an allowlisted "column" or
-// "column asc|desc" - appending the literal ", id" needs no further validation.
+// withIDTieBreaker appends ", id" unless the ordering is already on id alone, making any partial ordering total so
+// offset/limit pagination cannot repeat or skip rows across pages. It preserves the primary order and direction.
+// orderSQL is already allowlisted, so appending the literal ", id" needs no further validation.
 func withIDTieBreaker(orderSQL string) string {
 	switch orderSQL {
 	case "id", "id asc", "id desc":
@@ -126,15 +115,13 @@ func withIDTieBreaker(orderSQL string) string {
 	return orderSQL + ", id"
 }
 
-// listFlatTable runs the shared flat-table list query: it counts the rows matching whereSQL/args, then selects
-// selectColumns from table ordered by orderSQL with the normalized limit and offset, scanning each row with
-// scanRow (which wraps its own scan errors). table names the SQL table; label names it in the count/list error
-// messages. Both billing list functions use it, so their page bounds and query shape cannot drift apart.
+// listFlatTable counts the rows matching whereSQL/args, then selects selectColumns from table ordered by orderSQL
+// with the normalized limit and offset, scanning each row with scanRow. label names the table in error messages;
+// both billing list functions share this query so their page bounds cannot drift apart.
 func listFlatTable[T any](ctx context.Context, tx Tx, table, label, selectColumns, whereSQL, orderSQL string,
 	args []any, limit, offset int32, scanRow func(pgx.Row) (T, error)) (items []T, total int32, err error) {
-	// Reject negative page bounds here rather than in SQL: a negative limit or offset is a client mistake the
-	// callers surface as INVALID_ARGUMENT via ErrInvalidFlatTableQuery, and Postgres would otherwise answer it
-	// with a query error the callers surface as an opaque INTERNAL.
+	// Reject negative page bounds before SQL: they are a client mistake that callers surface as INVALID_ARGUMENT,
+	// while Postgres would answer with an error surfaced as an opaque INTERNAL.
 	if limit < 0 {
 		return nil, 0, invalidFlatTableQueryf("limit must not be negative")
 	}

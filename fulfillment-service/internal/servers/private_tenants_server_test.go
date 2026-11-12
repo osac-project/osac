@@ -536,10 +536,9 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 	})
 
 	It("Deletes a tenant that has a billing assignment without rejecting the delete or "+
-		"cascade-deleting the assignment (OSAC-6886)", func() {
-		// Create a tenant with no finalizers, so deletion is attempted immediately once its
-		// default project is gone (same shape as "Can delete a tenant after deleting all
-		// projects" above).
+		"cascade-deleting the assignment", func() {
+		// Create a tenant with no finalizers, so deletion is attempted immediately once its default project is
+		// gone.
 		createTenantResponse, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
@@ -593,8 +592,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		// Neither the closed nor the current assignment row was cascade-deleted; history
-		// stays intact as a tombstone.
+		// Neither assignment row was cascade-deleted; history stays intact as a tombstone.
 		closedRow, err := database.GetTenantBillingAssignment(ctx, tx, firstAssignment)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(closedRow.TenantID).To(Equal("billed-tenant"))
@@ -603,10 +601,8 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(currentRow.TenantID).To(Equal("billed-tenant"))
 
-		// The tenant row itself stays live-but-deleted rather than being archived away, so the
-		// tombstone intervals above stay queryable against the tenant that owned them: the live
-		// row carries the deletion timestamp (the column's epoch default means never deleted)
-		// and no archived copy exists.
+		// The tenant row stays live-but-deleted rather than archived, so the tombstone intervals stay queryable: it
+		// carries a deletion timestamp and has no archived copy.
 		var deletedAt time.Time
 		err = tx.QueryRow(ctx,
 			"select deletion_timestamp from tenants where name = 'billed-tenant'").Scan(&deletedAt)
@@ -723,10 +719,9 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 
 	It("Cannot delete a tenant that has projects and billing assignments when the assignment FK is "+
 		"the reported violation", func() {
-		// Same shape as the default-order spec, but with projects_tenant_fk deferrable initially
-		// deferred. The deferred project check is rolled back with the savepoint, so the assignment
-		// FK is the reported violation and only the explicit projects check can catch the project
-		// blocker: without it the tenant would end up live-but-deleted while still owning projects.
+		// Same shape as the default-order spec, but with projects_tenant_fk deferred: the deferred project check
+		// rolls back with the savepoint, leaving the assignment FK as the reported violation, so only the explicit
+		// projects check can catch the blocker.
 		createResponse, err := tenantsServer.Create(
 			ctx,
 			privatev1.TenantsCreateRequest_builder{

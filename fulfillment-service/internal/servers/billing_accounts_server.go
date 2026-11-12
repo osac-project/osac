@@ -35,11 +35,9 @@ var _ publicv1.BillingAccountsServer = (*BillingAccountsServer)(nil)
 
 // BillingAccountsServer is the public server; it delegates to the private one.
 //
-// Tenant isolation note: billing accounts are a platform-wide, admin-only surface, and this server applies no
-// tenant scoping of its own - every method reaches every stored account. authz.rego's default deny keeps these
-// methods out of every allow set, so only Cloud Provider Admins reach them; the authorization evaluator suites
-// pin that. If a future change grants tenant roles access to any method here, add a tenant-scoped filter to it
-// first: unlike RegisterResourceServers resources, these delegates do not filter by the caller's tenant.
+// Billing accounts are a platform-wide, admin-only surface: this server applies no tenant scoping, and authz.rego
+// keeps these methods out of every allow set so only Cloud Provider Admins reach them. If a future change grants
+// tenant roles access here, add a tenant-scoped filter first.
 type BillingAccountsServer struct {
 	publicv1.UnimplementedBillingAccountsServer
 	logger    *slog.Logger
@@ -84,9 +82,9 @@ func (b *BillingAccountsServerBuilder) Build() (result *BillingAccountsServer, e
 	return
 }
 
-// List maps the public shared list request to the private one and the private response back to public BillingAccount
-// items. provider_account_reference never appears here: the outMapper copies only fields the public message
-// declares, and the public BillingAccount message has no such field (CleanAPI strips it at proto generation).
+// List maps the public list request to the private one and the response back to public items.
+// provider_account_reference never appears here: the public message does not declare it, because CleanAPI strips
+// it at proto generation.
 func (s *BillingAccountsServer) List(ctx context.Context,
 	request *publicv1.BillingAccountsListRequest) (*publicv1.BillingAccountsListResponse, error) {
 	privateRequest := &privatev1.BillingAccountsListRequest{}

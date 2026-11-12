@@ -91,8 +91,7 @@ var _ = Describe("Billing stub", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(next.Accounts).To(HaveLen(1))
 		Expect(next.Next).To(BeEmpty())
-		// A lone INACTIVE status (no ApprovalStatus) wins over the missing signal (OSAC-6883's mapState:
-		// either signal reporting INACTIVE wins over the other); the raw value is still exposed.
+		// A lone INACTIVE status (no ApprovalStatus) wins over the missing signal; the raw value is still exposed.
 		Expect(next.Accounts[0].State).To(Equal(billing.AccountInactive))
 		Expect(next.Accounts[0].RawStatus).To(Equal("Inactive"))
 

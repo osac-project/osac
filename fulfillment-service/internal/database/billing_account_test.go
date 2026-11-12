@@ -231,8 +231,8 @@ var _ = Describe("Billing accounts", func() {
 				ProviderKey: "m360", ProviderAccountReference: "acct-2", DisplayName: "Stale",
 				State: "ACTIVE", StatusObservedAt: sweepAt.Add(-time.Minute),
 			})
-			// A walk that started after this sweep already saw and stored acct-1, so the older sweep
-			// committing last must not demote it back to UNKNOWN.
+			// A walk that started after this sweep already stored acct-1, so the older sweep committing last must
+			// not demote it.
 			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, sweepAt)).To(Succeed())
 			items, total, err := ListBillingAccounts(ctx, tx, 0, 10, "", "display_name")
 			Expect(err).ToNot(HaveOccurred())
@@ -322,9 +322,9 @@ var _ = Describe("Billing accounts", func() {
 	})
 
 	Describe("ListBillingAccounts pagination", func() {
-		// seedAccounts inserts count accounts with unique provider references and, when non-empty, one
-		// shared display_name. The ids are zero-padded and fixed-shape, so Go's string ordering and
-		// PostgreSQL's text collation agree on them and the expected page sequences are exact.
+		// seedAccounts inserts count accounts with unique provider references and, when non-empty, one shared
+		// display_name. The zero-padded fixed-shape ids order the same in Go and PostgreSQL, so expected pages are
+		// exact.
 		seedAccounts := func(count int, displayName string) []string {
 			ids := make([]string, count)
 			for i := 0; i < count; i++ {

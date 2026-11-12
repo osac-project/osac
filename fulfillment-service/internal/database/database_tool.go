@@ -488,9 +488,8 @@ func (t *tool) CheckSchema(ctx context.Context) error {
 }
 
 // listObjectTables returns the sorted list of object table names from the public schema, excluding active companion
-// tables, archive tables, internal bookkeeping tables, and flat (non-object-shaped) tables
-// like billing_accounts and tenant_billing_assignments that intentionally have no Metadata/Spec/Status columns,
-// archive table, or object triggers.
+// such as billing_accounts and tenant_billing_assignments, which intentionally have no Metadata/Spec/Status
+// columns, archive table, or object triggers.
 func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result []string, err error) {
 	rows, err := pool.Query(
 		ctx,

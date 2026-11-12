@@ -31,25 +31,22 @@ var (
 	ErrBillingOperationExpired = errors.New("billing operation ownership expired; retry")
 )
 
-// BillingOperationKey separates account, tenant and correlation namespaces and never
-// stores the raw value in the guard table or its errors.
+// BillingOperationKey separates account, tenant, and correlation namespaces and never stores the raw value.
 func BillingOperationKey(kind, value string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(kind+"\x00"+value)))
 }
 
-// BillingOperationLease is a durable guard, NOT a provider fencing token. A paused
-// owner can still complete remote writes after expiry; only its local finalization
-// is fenced. Provider writes and the final database commit cannot be atomic.
-// Callers must bound provider I/O and revalidate their snapshot before committing.
+// BillingOperationLease is a durable guard, not a provider fencing token: a paused owner can still complete remote
+// writes after expiry, and only its local finalization is fenced. Callers must bound provider I/O and revalidate
+// their snapshot before committing.
 type BillingOperationLease struct {
 	owner     string
 	expiresAt time.Time
 	keys      []string
 }
 
-// AcquireBillingOperation commits ownership in a short independent transaction.
-// The context must carry a manager, not an open request transaction. Contention
-// fails immediately, including while another short acquisition/commit is running.
+// AcquireBillingOperation commits ownership in a short independent transaction. The context must carry a manager,
+// not an open request transaction; contention fails immediately.
 func AcquireBillingOperation(ctx context.Context, ttl time.Duration, keys ...string) (*BillingOperationLease, error) {
 	if deadline, ok := ctx.Deadline(); ok {
 		ttl = min(ttl, time.Until(deadline))
@@ -103,8 +100,8 @@ func (l *BillingOperationLease) acquireKey(ctx context.Context, tx Tx, key strin
 	return err
 }
 
-// Reserve adds a correlation candidate before any external write. Ownership of
-// all earlier keys is checked in the same short transaction as the reservation.
+// Reserve adds a correlation candidate before any external write, checking ownership of all earlier keys in the
+// same short transaction.
 func (l *BillingOperationLease) Reserve(ctx context.Context, key string) error {
 	_, err := WithNewTx(ctx, func(txCtx context.Context) (struct{}, error) {
 		tx, _ := TxFromContext(txCtx)
@@ -120,8 +117,7 @@ func (l *BillingOperationLease) Reserve(ctx context.Context, key string) error {
 	return err
 }
 
-// Check fences local finalization, holding the guard rows until this short
-// transaction commits. An expired or replaced owner cannot commit local changes.
+// Check fences local finalization, holding the guard rows until this short transaction commits.
 func (l *BillingOperationLease) Check(ctx context.Context, tx Tx) error {
 	for _, key := range l.keys {
 		if err := tryBillingOperationLock(ctx, tx, key); err != nil {
@@ -140,8 +136,8 @@ func (l *BillingOperationLease) Check(ctx context.Context, tx Tx) error {
 	return nil
 }
 
-// Release only removes this owner's records; a delayed cleanup cannot remove a
-// successor's lease. Failure is safe: the records remain reclaimable at expiry.
+// Release removes only this owner's records, so a delayed cleanup cannot remove a successor's lease; failure
+// leaves them reclaimable at expiry.
 func (l *BillingOperationLease) Release(ctx context.Context) error {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()

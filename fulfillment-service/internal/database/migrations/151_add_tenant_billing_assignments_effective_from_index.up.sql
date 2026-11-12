@@ -13,11 +13,10 @@
 
 -- This migration adds the index backing the tenant billing assignments List default order.
 --
--- Migration 150 created tenant_billing_assignments as an append-only history table: reassignment closes the
--- active row and inserts a new one, and rows are never pruned or deleted. The List default order is
--- effective_from desc, but 150 created no index on that column, so every unfiltered List - the default for
--- both the API and `osac get tenantbillingassignment` - paid a sequential scan plus a top-N sort, degrading
--- linearly as history accumulates. 150 is immutable once applied, so the index lands here.
+-- Migration 150 created tenant_billing_assignments as append-only history: reassignment closes the active row and
+-- inserts a new one, and rows are never pruned. The List default order is effective_from desc, so without an index
+-- every unfiltered List paid a sequential scan plus a top-N sort that degraded as history grew. 150 is immutable
+-- once applied, so the index lands here.
 --
 
 create index tenant_billing_assignments_by_effective_from

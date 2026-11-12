@@ -39,11 +39,10 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Assignment-time provider account-match validation state. PENDING means validation is incomplete; gated publish
-// and launch fail with BILLING_ACCOUNT_UNAVAILABLE while an assignment is PENDING. CONNECTED means the required
-// provider match was validated: where the provider exposes a correlation field, exactly one account carried it.
-// FAILED means the match could not be validated or was not unique; this contract value exists for completeness,
-// the current implementation never persists an assignment in this state.
+// Assignment-time provider account-match validation state. PENDING means validation is incomplete, and gated
+// publish/launch fail with BILLING_ACCOUNT_UNAVAILABLE. CONNECTED means the required provider match was validated:
+// exactly one account carried the correlation value where the provider exposes one. FAILED means validation could
+// not be completed; the current implementation never persists it.
 type TenantBillingAssignmentConnectionState int32
 
 const (
@@ -303,9 +302,8 @@ func (b0 TenantBillingAssignmentStatus_builder) Build() *TenantBillingAssignment
 }
 
 // A time-bounded association between an OSAC tenant and a billing account. Reassignment closes the current
-// interval and opens a new one; history is retained. At most one active (status.connection_state with
-// effective_to unset) assignment exists per tenant and per billing account at a time, enforced at the database
-// level by a partial unique index, not by this API alone.
+// interval and opens a new one, retaining history. At most one active assignment exists per tenant and per billing
+// account, enforced by a database partial unique index.
 type TenantBillingAssignment struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
 	// OSAC id of this assignment interval. A later reassignment creates a new id; it does not reuse this one.

@@ -228,16 +228,11 @@ type filterOracleCase struct {
 // built early (for JIT provisioning, before RegisterResourceServers is even called) and its public half is built
 // afterward in run() — a targeted filter-oracle regression test for Users (covering the private-only
 // UserStatus.keycloak_user_id field) is added separately in users_server_test.go as part of this same fix.
-// BillingAccount is excluded because it is a flat, non-object-shaped resource (design.md Sec4.2) registered
-// standalone in start_grpc_server_cmd.go, not through RegisterResourceServers, and its filter/order is a bespoke
-// allowlist-based translator (internal/database/billing_account.go), not dao.FilterTranslator — a targeted
-// filter-oracle regression test for it (covering the private-only provider_account_reference field) is added
-// separately in billing_accounts_server_test.go.
-// TenantBillingAssignment is excluded for the same registration-wiring reason: a flat, bespoke-filter resource
-// (internal/database/tenant_billing_assignment.go) registered standalone, not through RegisterResourceServers, so
-// it is unreachable on this test's gRPC server. Its TenantBillingAssignment message has no private-only field
-// (unlike BillingAccount, whose provider_account_reference is private), so no separate targeted filter-oracle
-// regression test is needed for it.
+// BillingAccount is excluded because it is a flat, non-object-shaped resource registered standalone in
+// start_grpc_server_cmd.go, not through RegisterResourceServers, and uses a bespoke allowlist-based translator
+// rather than dao.FilterTranslator; its targeted filter-oracle regression test lives in
+// billing_accounts_server_test.go. TenantBillingAssignment is excluded for the same reason, and its message has no
+// private-only field, so no targeted test is needed.
 var resourcesExcludedFromDiscovery = map[string]bool{
 	"User":                    true,
 	"BillingAccount":          true,

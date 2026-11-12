@@ -107,12 +107,10 @@ func render(ctx context.Context, console *terminal.Console, format string, offse
 	return output.Render(ctx, console, format, "billing accounts", response)
 }
 
-// renderTable writes a compact table of discovered billing accounts. An empty currency and an unknown state are
-// rendered explicitly - "-" and "UNKNOWN" - rather than left blank, so a viewer can tell "not supplied" apart
-// from a rendering bug. The display-name and correlation-id cells are provider-supplied text and are sanitized
-// on the way out - ingest already sanitizes stored display names, but correlation values are stored raw for
-// exact matching, and rows written before that are best not trusted either. When the page does not reach the
-// total, a continuation hint is written to the console's error stream after the table.
+// renderTable writes a compact table of discovered billing accounts. Empty currency and unknown state are rendered
+// explicitly as "-" and "UNKNOWN" so a viewer can tell "not supplied" from a rendering bug. Display-name and
+// correlation-id cells are sanitized on output: correlation values are stored raw for exact matching. When the page
+// does not reach the total, a continuation hint follows the table on the error stream.
 func renderTable(console *terminal.Console, offset int32,
 	response *publicv1.BillingAccountsListResponse) error {
 	items := response.GetItems()

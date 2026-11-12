@@ -69,8 +69,8 @@ const (
 )
 
 // Account keeps the raw provider status values next to the normalized state. Its correlation value is
-// ExternalID, which must never reach logs or formatted output. Each adapter maps its own provider-native
-// status values to State; a provider-neutral caller never re-derives it from RawStatus/ApprovalStatus.
+// ExternalID, which must never reach logs or formatted output. Callers use State, never RawStatus or
+// ApprovalStatus.
 type Account struct {
 	opaque
 	Ref            AccountRef
@@ -79,8 +79,8 @@ type Account struct {
 	State          AccountState
 	RawStatus      string
 	ApprovalStatus string
-	// BaseCurrency is the ISO-4217 currency the provider supplies for this account, empty when the provider has
-	// no currency field (as with M360) or does not supply one for this account.
+	// BaseCurrency is the ISO-4217 currency the provider supplies, empty when the provider has no currency field
+	// (as with M360) or does not supply one for this account.
 	BaseCurrency string
 }
 

@@ -11,9 +11,9 @@
 -- specific language governing permissions and limitations under the License.
 --
 
--- Create the table for time-versioned tenant <-> billing account assignments (OSAC-6884). A flat table, like
--- billing_accounts, not the generic Metadata/Spec/Status jsonb object shape: reassignment closes the active row
--- and inserts a new one (history, not in-place mutation), which the generic single-row CRUD DAO does not model.
+-- Create the table for time-versioned tenant <-> billing account assignments. A flat table, like billing_accounts,
+-- not the generic jsonb object shape: reassignment closes the active row and inserts a new one (history, not
+-- in-place mutation), which the generic single-row CRUD DAO cannot model.
 create table tenant_billing_assignments (
   id text not null primary key,
   name text not null check (name <> ''),
@@ -28,8 +28,8 @@ create table tenant_billing_assignments (
   creator text not null default ''
 );
 
--- At most one active (effective_to is null) assignment per tenant. This is the authoritative, single point of
--- defense for the 1:1 invariant: application code must not reimplement it as a redundant check.
+-- At most one active (effective_to is null) assignment per tenant. This is the authoritative defense for the 1:1
+-- invariant; application code must not reimplement it.
 create unique index tenant_billing_assignments_unique_active_tenant
   on tenant_billing_assignments (tenant_id)
   where effective_to is null;

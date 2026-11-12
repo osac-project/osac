@@ -22,14 +22,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// BillingAccountUpsert carries one discovered account's provider-observed values into
-// UpsertBillingAccount.
+// BillingAccountUpsert carries one discovered account's provider-observed values into UpsertBillingAccount.
 type BillingAccountUpsert struct {
 	ID                       string
 	ProviderKey              string
 	ProviderAccountReference string
-	// DisplayName and BaseCurrency are "" when the provider did not supply one for this read; an
-	// existing stored value is preserved rather than cleared.
+	// DisplayName and BaseCurrency are "" when the provider did not supply one; an existing stored value is
+	// preserved rather than cleared.
 	DisplayName  string
 	BaseCurrency string
 	// CorrelationID is "" when the provider has no native correlation value for this account.
@@ -38,20 +37,12 @@ type BillingAccountUpsert struct {
 	StatusObservedAt time.Time
 }
 
-// UpsertBillingAccount inserts a new billing_accounts row keyed by (ProviderKey,
-// ProviderAccountReference), or refreshes an existing one. The stored observation is monotonic in
-// StatusObservedAt: State and StatusObservedAt are refreshed only when the incoming observation is
-// not older than the stored one, and StatusObservedAt can never move backwards. Walks that commit
-// out of order - a rolling update briefly runs two servers - therefore leave the newer observation
-// in place instead of letting the older one restore a stale state. DisplayName and BaseCurrency only
-// overwrite a stored value when the incoming value is non-empty and the observation is not older:
-// discovery never clears a known value just because this read of the provider did not carry it, and a
-// stale walk never reverts a newer one. CorrelationID is written only when the local value is
-// currently null, the incoming value is non-empty, and no other row already holds it (the partial
-// unique index would otherwise reject the write); any other case - including a local value that
-// already differs from the incoming one - leaves the stored correlation_id unchanged. That
-// disagreement is a conflict for a later resolver to detect (OSAC-6885), not something discovery
-// corrects.
+// UpsertBillingAccount inserts a billing_accounts row keyed by (ProviderKey, ProviderAccountReference) or
+// refreshes it. State and StatusObservedAt only move forward: an observation older than the stored one is ignored,
+// so out-of-order walks cannot restore a stale state. DisplayName and BaseCurrency change only when the incoming
+// value is non-empty and not older, so discovery never clears a known value. CorrelationID is written only when
+// the local value is null, the incoming value is non-empty, and no other row holds it; otherwise the stored value
+// stays, and any disagreement is left for a later resolver.
 func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (id string, err error) {
 	err = tx.QueryRow(ctx, `
 		insert into billing_accounts (
@@ -60,8 +51,8 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 		)
 		select
 			$1, $2, $3, $4, $5,
-			-- A brand-new row must honor the unique index too: an insert (as opposed to the
-			-- on-conflict update below) is not covered by that update's own conflict check.
+			-- A new row must honor the unique index too: the insert path is not covered by the on-conflict
+			-- check below.
 			case
 				when nullif($6, '') is not null
 				 and not exists (select 1 from billing_accounts b2 where b2.correlation_id = nullif($6, ''))
@@ -70,11 +61,9 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 			end,
 			$7, $8
 		on conflict (provider_key, provider_account_reference) do update set
-			-- An observation older than the stored one comes from a walk that started before the walk
-			-- that produced the stored row, and may commit after it. It must not restore a stale state
-			-- or move status_observed_at backwards. This guard is a conditional assignment rather than
-			-- a WHERE on the conflict branch: a WHERE would suppress the row, and returning id would
-			-- then yield no row at all.
+			-- An older observation must not restore a stale state or move status_observed_at backwards. A
+			-- conditional assignment is used instead of a WHERE on the conflict branch: a WHERE would suppress
+			-- the row, and RETURNING id would then yield nothing.
 			display_name = case
 				when excluded.status_observed_at >= billing_accounts.status_observed_at
 				 and excluded.display_name <> ''
@@ -112,14 +101,10 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 	return id, nil
 }
 
-// MarkBillingAccountsUnobserved marks UNKNOWN every billing_accounts row for providerKey whose
-// provider_account_reference is not in seenReferences, i.e. the account disappeared from the
-// provider's current list. The row is retained, never deleted. Only a row whose status_observed_at is
-// not newer than observedAt is marked: a row observed after this walk started was seen by a walk that
-// committed first, and this sweep must not demote an account a newer walk has already discovered. A
-// nil seenReferences is treated as empty: pgx encodes a nil slice as SQL NULL, and "not (x =
-// any(NULL))" is NULL, which would match no rows and silently skip the sweep for a provider whose
-// list has become empty.
+// MarkBillingAccountsUnobserved marks UNKNOWN every row for providerKey whose reference is not in
+// seenReferences, retaining the row. Only rows not newer than observedAt are marked, so a newer walk's discovery
+// is not demoted. A nil seenReferences is treated as empty: pgx encodes nil as SQL NULL, and the sweep would
+// otherwise match nothing.
 func MarkBillingAccountsUnobserved(
 	ctx context.Context, tx Tx, providerKey string, seenReferences []string, observedAt time.Time,
 ) error {
@@ -151,11 +136,9 @@ type BillingAccountRow struct {
 	StatusObservedAt time.Time
 }
 
-// billingAccountColumns maps the API field names accepted in filter/order expressions to their
-// SQL columns. Only API-visible fields are selectable here: the private provider_account_reference
-// must never be reachable through a filter or order string (see dao.FilterTranslator's docs on the
-// filter-oracle boundary between public and private data - the same boundary applies here even
-// though this table does not use that translator).
+// billingAccountColumns maps API field names in filter/order expressions to SQL columns. Only API-visible
+// fields are selectable: provider_account_reference is private and must never be reachable from a filter or
+// order string.
 var billingAccountColumns = map[string]string{
 	"id":             "id",
 	"provider_key":   "provider_key",
@@ -167,12 +150,9 @@ var billingAccountColumns = map[string]string{
 
 // filterClausePattern matches one `this.<field> == "<value>"` clause.
 //
-// shortcut: filter supports only exact-match equality on a known column, clauses chained with
-// " && " - no !=, no ||, no numeric/date comparisons, no CEL functions. Upgrade to a real
-// CEL-based translator (see internal/database/dao/filter_translator.go) if a future billing list
-// (e.g. ProviderRateCardItems.List) needs richer filtering on a flat, non-jsonb table; that
-// translator cannot be reused as-is because it always emits `data->>'field'` SQL tied to the
-// generic Metadata/Spec/Status object shape, which billing_accounts deliberately does not use.
+// Filtering supports only exact-match equality on a known column, chained with " && ": no !=, ||, or
+// numeric/date comparisons. Richer filtering needs a real translator, which cannot be reused as-is because it
+// emits `data->>'field'` SQL tied to the generic Metadata/Spec/Status shape.
 var filterClausePattern = regexp.MustCompile(`^this\.([a-z_]+) == "([^"]*)"$`)
 
 // billingAccountFilterSQL translates a filter expression into a SQL WHERE clause and its args, using
@@ -193,10 +173,8 @@ func billingAccountFilterSQL(filter string) (string, []any, error) {
 	})
 }
 
-// billingAccountOrderSQL translates an order expression into a SQL ORDER BY column (with optional
-// asc/desc), defaulting to "id" for an empty order. withIDTieBreaker then appends an ascending-id
-// tie-breaker so offset/limit pagination stays deterministic across ties on the primary order; the
-// default "id" order is already unique and passes through unchanged.
+// billingAccountOrderSQL translates an order expression into ORDER BY, defaulting to "id". A caller appends
+// withIDTieBreaker so offset/limit pagination stays deterministic across ties.
 func billingAccountOrderSQL(order string) (string, error) {
 	translated, err := translateFlatTableOrder(order, billingAccountColumns, "id")
 	if err != nil {
@@ -205,9 +183,8 @@ func billingAccountOrderSQL(order string) (string, error) {
 	return withIDTieBreaker(translated), nil
 }
 
-// ListBillingAccounts returns the page of billing_accounts rows matching filter, ordered by
-// order, along with the total count of matching rows ignoring offset/limit. An unset limit serves
-// flatTableDefaultLimit rows and an explicit one is clamped to flatTableMaxLimit.
+// ListBillingAccounts returns the matching page and the total count ignoring offset/limit. An unset limit serves
+// flatTableDefaultLimit rows; an explicit one is clamped to flatTableMaxLimit.
 func ListBillingAccounts(ctx context.Context, tx Tx, offset, limit int32, filter, order string) (
 	items []BillingAccountRow, total int32, err error) {
 	whereSQL, args, err := billingAccountFilterSQL(filter)

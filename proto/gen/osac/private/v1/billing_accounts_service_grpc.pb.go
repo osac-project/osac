@@ -39,9 +39,9 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BillingAccountsClient interface {
-	// Reads the configured billing provider's account list (refreshing the local record of it), then returns the
-	// discovered accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled, and `UNAVAILABLE` when the
-	// provider cannot be reached: it never serves a stale list unmarked as current.
+	// Reads the configured billing provider's account list, refreshing the local record, then returns the discovered
+	// accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled and `UNAVAILABLE` when the provider
+	// cannot be reached; it never serves a stale list unmarked as current.
 	List(ctx context.Context, in *BillingAccountsListRequest, opts ...grpc.CallOption) (*BillingAccountsListResponse, error)
 }
 
@@ -67,9 +67,9 @@ func (c *billingAccountsClient) List(ctx context.Context, in *BillingAccountsLis
 // All implementations must embed UnimplementedBillingAccountsServer
 // for forward compatibility.
 type BillingAccountsServer interface {
-	// Reads the configured billing provider's account list (refreshing the local record of it), then returns the
-	// discovered accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled, and `UNAVAILABLE` when the
-	// provider cannot be reached: it never serves a stale list unmarked as current.
+	// Reads the configured billing provider's account list, refreshing the local record, then returns the discovered
+	// accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled and `UNAVAILABLE` when the provider
+	// cannot be reached; it never serves a stale list unmarked as current.
 	List(context.Context, *BillingAccountsListRequest) (*BillingAccountsListResponse, error)
 	mustEmbedUnimplementedBillingAccountsServer()
 }

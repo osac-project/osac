@@ -37,10 +37,9 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Last observed normalized state of a billing account. ACTIVE accounts can be linked and used for new priced
-// publish and launch. INACTIVE accounts cannot be newly linked or used for gated publish and launch, but existing
-// resources are not stopped and usage submission continues. UNKNOWN means OSAC could not classify the state from
-// the provider's native values.
+// Last observed normalized state of a billing account. ACTIVE accounts can be linked for new priced publish and
+// launch; INACTIVE accounts cannot be newly linked, though existing resources keep running and usage submission
+// continues. UNKNOWN means OSAC could not classify the provider's native values.
 type BillingAccountState int32
 
 const (
@@ -237,17 +236,16 @@ type BillingAccount_builder struct {
 	ProviderKey string
 	// Provider-supplied account label.
 	DisplayName string
-	// ISO-4217 currency used to interpret this account's prices. Provider-supplied: from the account where the
-	// provider exposes one. Empty when the provider has no currency field (M360) or does not supply one for this
-	// account; a missing currency is never invented or defaulted.
+	// ISO-4217 currency used to interpret this account's prices, provider-supplied. Empty when the provider has no
+	// currency field (M360) or does not supply one; a missing currency is never invented or defaulted.
 	BaseCurrency string
 	// Last normalized provider-account state.
 	State BillingAccountState
 	// Time OSAC last read the normalized account state from the provider.
 	StatusObservedAt *timestamppb.Timestamp
 	// OSAC's provider-agnostic attribution id carried on usage events. When the provider exposes a native
-	// correlation field (`externalId` in M360), assignment validation matches this value against it. It is not the
-	// OSAC tenant id or the provider's native account id. Empty until discovery or assignment establishes one.
+	// correlation field (`externalId` in M360), assignment validation matches this value against it. Not the tenant
+	// id or the provider's account id. Empty until discovery or assignment establishes one.
 	CorrelationId string
 	// Provider-native account id used for backend calls. Never returned to ordinary clients.
 	ProviderAccountReference string

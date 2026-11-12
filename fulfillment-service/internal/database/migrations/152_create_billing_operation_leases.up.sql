@@ -1,5 +1,5 @@
--- Committed, expiring guards for billing operations that perform provider I/O
--- outside a database transaction. Keys are SHA-256 digests, not provider data.
+-- Committed, expiring guards for billing operations that do provider I/O outside a database transaction. Keys
+-- are SHA-256 digests, not provider data.
 create table billing_operation_leases (
     operation_key text primary key,
     owner text not null,

@@ -57,8 +57,7 @@ func (a *endlessPagesAdapter) ListAccounts(ctx context.Context, filter billing.A
 }
 
 // foreignCarrierAdapter wraps a fake so every exact-value uniqueness scan reports one extra foreign account
-// carrying the scanned value. A generated candidate is unknowable in advance, so this is how a test scripts
-// "some other provider account already holds the fresh value" for the generate branch.
+// carrying the value, scripting the case where another provider account already holds a freshly generated value.
 type foreignCarrierAdapter struct {
 	*billingfake.Fake
 }

@@ -46,9 +46,8 @@ func (a *hangingCorrelationAdapter) CorrelationValue(ctx context.Context, _ bill
 	return "", false, billing.NewError(billing.ReasonTimeout, "CorrelationValue", true, 0)
 }
 
-// gatedCorrelationAdapter holds every CorrelationValue call until its release channel closes (or its context
-// is done), then answers normally - it reproduces an in-flight assign whose provider call is slow but
-// eventually succeeds, so a concurrent assign has to fail fast instead of queueing behind it.
+// gatedCorrelationAdapter holds every CorrelationValue call until released or its context ends, reproducing an
+// in-flight assign whose provider call is slow, so a concurrent assign must fail fast.
 type gatedCorrelationAdapter struct {
 	*billingfake.Fake
 	entered    chan struct{}
@@ -243,10 +242,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			created, err := server.Create(adminCtx(), createRequest(testTenant, account1, "asg-1"))
 			Expect(err).ToNot(HaveOccurred())
 
-			// A second tenant with no assignment, so the dead-tenant rejection is what Create hits rather
-			// than TENANT_ALREADY_BOUND. Mark it deleted without removing its row: that is the OSAC-6886
-			// tombstone state, and it keeps the tenant FK satisfied — only the explicit liveness check in
-			// the shared assign tail can reject it.
+			// A second tenant with no assignment, so Create hits the dead-tenant rejection rather than
+			// TENANT_ALREADY_BOUND. It is marked deleted without removing its row, the tombstone state that keeps
+			// the tenant FK satisfied; only the explicit liveness check can reject it.
 			_, err = testPool.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
 				values ('dead-tenant', 'dead-tenant', 'dead-tenant', 'system', '{}') on conflict do nothing`)
 			Expect(err).ToNot(HaveOccurred())
@@ -343,9 +341,8 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		It("rejects two provider accounts carrying the same value with ACCOUNT_AMBIGUOUS and creates no row", func() {
 			var accounts []billingfake.AccountSpec
 			account := newAccount(&accounts, "corr-dup", "corr-dup", "ACTIVE")
-			// A second, unrelated provider account also carries the same value. Every resolution branch,
-			// including the already-consistent one, runs the resolver's bounded uniqueness scan, so this
-			// exercises that scan's ACCOUNT_AMBIGUOUS verdict.
+			// A second, unrelated provider account carries the same value. Every resolution branch runs the bounded
+			// uniqueness scan, so this exercises its ACCOUNT_AMBIGUOUS verdict.
 			accounts = append(accounts, billingfake.AccountSpec{ID: "decoy", ExternalID: "corr-dup", State: billing.AccountActive})
 			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
 			server := build(fake.Provider())
@@ -742,9 +739,8 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			var accounts []billingfake.AccountSpec
 			first := newAccount(&accounts, "shared-candidate", "", "ACTIVE")
 			second := newAccount(&accounts, "shared-candidate", "", "ACTIVE")
-			// Each provider view is individually consistent but stale relative to
-			// the other. The durable local reservation must still prevent double
-			// adoption while neither billing_accounts row has committed a value.
+			// Each provider view is individually consistent but stale relative to the other. The durable local
+			// reservation must still prevent double adoption while neither row has committed a value.
 			firstFake := billingfake.New(billingfake.Scenario{Accounts: accounts[:1]})
 			secondFake := billingfake.New(billingfake.Scenario{Accounts: accounts[1:]})
 			adapter := &gatedAccountScanAdapter{Fake: firstFake, entered: make(chan struct{}), release: make(chan struct{})}
@@ -847,8 +843,8 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				}
 			})
 			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
-			// Even a full provider window must not hide resource contention:
-			// account/tenant guards are tested before semaphore admission.
+			// Even a full provider window must not hide resource contention: account/tenant guards run before
+			// semaphore admission.
 			for range maxConcurrentAssigns {
 				server2.assignSem <- struct{}{}
 			}
@@ -993,10 +989,8 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		})
 	})
 
-	// Only Cloud Provider Admins ever reach List/Get in production (design.md §4.3/§4.7; enforced by authz.rego's
-	// is_admin catch-all, see authorization_evaluator_test.go's "tenant billing assignments authorization" table).
-	// There is no tenant self-service read path, so this package's tests - like
-	// private_billing_accounts_server_test.go's - only exercise the admin behavior.
+	// Only Cloud Provider Admins reach List/Get in production (authz.rego's is_admin catch-all; there is no tenant
+	// self-service read path), so these tests exercise only admin behavior.
 	Describe("List and Get", func() {
 		It("lists every assignment", func() {
 			createOtherTenant()
@@ -1030,9 +1024,8 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		})
 	})
 
-	// The durable guard coordinates participating RPCs, while the final partial
-	// unique indexes remain the authoritative defense against any other writer.
-	// These cases test their error mapping; the real guard contention is above.
+	// The durable guard coordinates participating RPCs; the final partial unique indexes remain the authoritative
+	// defense against any other writer. These cases test error mapping; real guard contention is covered above.
 	Describe("mapTenantBillingAssignmentError", func() {
 		var server *PrivateTenantBillingAssignmentsServer
 		BeforeEach(func() {

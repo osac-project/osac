@@ -5,6 +5,7 @@ import { useField } from 'formik';
 import { getVisibleFieldError } from './fieldError';
 import { useShowFieldValidationErrors } from './FieldValidationContext';
 import { FormFieldHelper, getFormFieldHelperDescribedBy } from './FormFieldHelper';
+import { useTrimmedInput } from './useTrimmedInput';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface FileUploadFieldProps {
@@ -28,13 +29,14 @@ export const FileUploadField = ({
   const showValidationErrors = useShowFieldValidationErrors();
   const error = getVisibleFieldError(meta, showValidationErrors);
   const helperDescribedBy = getFormFieldHelperDescribedBy(fieldId, error, helperText);
+  const trimmedInput = useTrimmedInput(field.value, helpers.setValue);
 
   return (
     <FormGroup fieldId={fieldId}>
       <FileUpload
         id={fieldId}
         type="text"
-        value={field.value ?? ''}
+        value={trimmedInput.value}
         filename={filename}
         textAreaPlaceholder={placeholder}
         allowEditingUploadedText
@@ -47,7 +49,7 @@ export const FileUploadField = ({
           setFilename(file.name);
         }}
         onTextChange={(_event, text) => {
-          void helpers.setValue(text);
+          trimmedInput.onChange(text);
         }}
         onDataChange={(_event, data) => {
           void helpers.setValue(data);
@@ -55,6 +57,7 @@ export const FileUploadField = ({
         }}
         onTextAreaBlur={() => {
           void helpers.setTouched(true);
+          trimmedInput.onBlur();
         }}
         onClearClick={() => {
           setFilename('');

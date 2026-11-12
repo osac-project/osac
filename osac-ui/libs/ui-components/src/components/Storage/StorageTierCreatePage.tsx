@@ -16,30 +16,36 @@ import { Formik } from 'formik';
 import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
 
-import type { StorageTier } from '@osac/types/private';
-import { StorageProtocol } from '@osac/types/private';
+import type { StorageBackend, StorageTier } from '@osac/types/private';
+import {
+  StorageBackendState,
+  StorageBackends,
+  StorageProtocol,
+  StorageTiers,
+} from '@osac/types/private';
+import { cel } from '@osac/ui-components/api/cel';
+import {
+  useCreateResource,
+  useGetResource,
+  useListResource,
+  useUpdateResource,
+} from '@osac/ui-components/api/use-resource';
 
 import { storageTierFieldIds } from './fieldIds';
-import {
-  STORAGE_BACKEND_READY_LIST_FILTER,
-  usePrivateStorageBackend,
-  usePrivateStorageBackends,
-} from '../../api/v1/private/storage-backends';
-import {
-  useCreateStorageTier,
-  usePrivateStorageTier,
-  useUpdateStorageTier,
-} from '../../api/v1/private/storage-tiers';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { resourceNameSchema } from '../../validation/resource-name';
-import { InputField } from '../Form/InputField';
+import TextField from '../Form/base/TextField';
 import LeaveFormConfirmation from '../Form/LeaveFormConfirmation';
 import NameField from '../Form/NameField';
 import OsacForm from '../Form/OsacForm';
 import { RadioButtonField } from '../Form/RadioButtonField';
 import { SelectField, type SelectFieldOption } from '../Form/SelectField';
 import ListPageBody from '../Page/ListPageBody';
+
+const STORAGE_BACKEND_READY_LIST_FILTER = cel<StorageBackend>((filter) =>
+  filter.field('status.state').equals(StorageBackendState.READY),
+);
 
 const TIERS_LIST_PATH = '/admin/infrastructure/storage/tiers';
 
@@ -91,8 +97,8 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
   const navigate = useNavigate();
   const isEdit = !!tier;
 
-  const { mutateAsync: create, error: createError } = useCreateStorageTier();
-  const { mutateAsync: update, error: updateError } = useUpdateStorageTier();
+  const { mutateAsync: create, error: createError } = useCreateResource(StorageTiers);
+  const { mutateAsync: update, error: updateError } = useUpdateResource(StorageTiers);
   const error = isEdit ? updateError : createError;
 
   const initialValues = getInitialValues(tier);
@@ -117,18 +123,22 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
         if (descriptionChanged) {
           spec.description = values.description;
         }
-        await update({ id: tier.id, metadata: { version: tier.metadata?.version ?? 0 }, spec });
+        await update({
+          object: { id: tier.id, metadata: { version: tier.metadata?.version ?? 0 }, spec },
+        });
         navigate(TIERS_LIST_PATH);
       } else {
         const created = await create({
-          metadata: values.metadata,
-          spec: {
-            description: values.description,
-            protocol,
-            backends: [backendPayload],
+          object: {
+            metadata: values.metadata,
+            spec: {
+              description: values.description,
+              protocol,
+              backends: [backendPayload],
+            },
           },
         });
-        navigate(`${TIERS_LIST_PATH}/${created.id}`);
+        navigate(`${TIERS_LIST_PATH}/${created.object?.id}`);
       }
     } catch {
       // Surfaced via the mutation's own `error` state below; nothing further to do here.
@@ -167,7 +177,7 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
                 <StackItem>
                   <OsacForm>
                     <NameField fieldId={storageTierFieldIds.name} isDisabled={isEdit} />
-                    <InputField
+                    <TextField
                       name="description"
                       label={t('Description')}
                       fieldId={storageTierFieldIds.description}
@@ -256,22 +266,33 @@ const StorageTierForm = ({ tier, backendOptions, backendsLoading }: StorageTierF
 
 const StorageTierCreatePage = () => {
   const { id } = useParams<{ id: string }>();
-  const { data: tier, isLoading, error } = usePrivateStorageTier(id ?? '');
+  const {
+    data: tier,
+    isLoading,
+    error,
+  } = useGetResource(StorageTiers, { id: id ?? '' }, { enabled: !!id });
 
-  const assignedBackendId = tier?.spec?.backends[0]?.backendId ?? '';
-  const { data: readyBackends = [], isLoading: backendsLoading } = usePrivateStorageBackends({
+  const assignedBackendId = tier?.object?.spec?.backends[0]?.backendId ?? '';
+  const { data: readyBackends, isLoading: backendsLoading } = useListResource(StorageBackends, {
     filter: STORAGE_BACKEND_READY_LIST_FILTER,
   });
-  const { data: assignedBackend } = usePrivateStorageBackend(assignedBackendId);
+  const { data: assignedBackend } = useGetResource(
+    StorageBackends,
+    { id: assignedBackendId },
+    { enabled: !!assignedBackendId },
+  );
 
-  const backendOptions = readyBackends.map((backend) => ({
+  const backendOptions = (readyBackends?.items || []).map((backend) => ({
     value: backend.id,
     label: backend.metadata?.name ?? backend.id,
   }));
-  if (assignedBackend && !backendOptions.some((option) => option.value === assignedBackend.id)) {
+  if (
+    assignedBackend?.object &&
+    !backendOptions.some((option) => option.value === assignedBackend.object?.id)
+  ) {
     backendOptions.push({
-      value: assignedBackend.id,
-      label: assignedBackend.metadata?.name ?? assignedBackend.id,
+      value: assignedBackend.object.id,
+      label: assignedBackend.object.metadata?.name ?? assignedBackend.object.id,
     });
   }
 
@@ -280,7 +301,7 @@ const StorageTierCreatePage = () => {
       <ListPageBody isLoading={isLoading} error={error}>
         {tier && (
           <StorageTierForm
-            tier={tier}
+            tier={tier.object}
             backendOptions={backendOptions}
             backendsLoading={backendsLoading}
           />

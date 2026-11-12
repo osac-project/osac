@@ -1,7 +1,6 @@
 - name: Set install step defaults
   ansible.builtin.set_fact:
-    # CaaS uses service-owned entry points. Provider step-collection dispatch
-    # remains outside this CaaS workflow.
+    # CaaS external access uses service-owned DNS and endpoint entry points.
     install_step_pre_install_hook_default:
       name: osac.templates.ocp_ci_small
       tasks_from: noop.yaml

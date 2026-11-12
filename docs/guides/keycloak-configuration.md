@@ -11,6 +11,7 @@ For the Keycloak client and OIDC settings needed by Vault or OpenBao, see the
 ## Table of Contents
 
 - [Overview](#overview)
+  - [Keycloak Version Requirement](#keycloak-version-requirement)
 - [OSAC Realm](#osac-realm)
   - [Clients](#clients)
   - [Client Scopes](#client-scopes)
@@ -51,6 +52,20 @@ The authoritative realm definition lives in the
 repository at `fulfillment-service/it/charts/keycloak/files/realm.json`. The
 [osac-installer](https://github.com/osac-project/osac) maintains a
 deployment-ready copy at `osac-installer/charts/osac-prereqs/files/realm.json`.
+
+### Keycloak Version Requirement
+
+When OSAC manages tenant identity providers linked to Keycloak Organizations,
+use **Keycloak 26.6.0 or later**. The fulfillment service sets
+`kc.org.broker.login.hide-when-org-unknown` on managed identity providers so
+Keycloak hides them when the submitted email does not resolve to an
+organization. Keycloak versions before 26.6.0, including 26.5.0, do not apply
+this setting and may show those providers for unmatched email domains.
+
+The bundled installer currently uses Keycloak 26.6.4, as set in the
+[infra chart values](../../osac-installer/charts/osac-infra/values.yaml). If you
+disable bundled Keycloak or use a BYO Keycloak deployment, ensure the external
+server meets the 26.6.0 minimum.
 
 ---
 

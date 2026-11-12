@@ -163,43 +163,9 @@ else
   exit 1
 fi
 
-# ── 1b. Ensure subnet target namespace(s) for legacy standalone setup ────────────
-# Each Subnet gets its own k8s namespace named after the Subnet CR: the osac-operator
-# ComputeInstance controller creates/looks for the KubeVirt VM in that
-# subnet-target namespace (osac.openshift.io/subnet-target-namespace annotation),
-# NOT in the tenant namespace. In a real environment that namespace is created by
-# subnet provisioning (the cudn_evpn role, which also builds the OVN CUDN). On kind
-# global.networking.provisioningEnabled=false makes subnets reconcile to Ready without any AAP
-# dispatch, so nothing creates the namespace and the VM would have nowhere to live
-# (the CI would hang at Provisioned=False/WaitingForVM). kind VMs use the default
-# pod network + cluster-wide l2bridge binding — no per-namespace CUDN/NAD — so a
-# plain namespace is all that's needed. Create one per onboarded subnet (idempotent).
-#
-# Subnets are scoped to a tenant by the osac.openshift.io/tenant annotation (not a
-# label), and onboarding creates them asynchronously, so poll for the tenant's
-# subnet(s) to appear before ensuring their namespaces.
-subnets_for_tenant() {
-  kubectl -n "${NS}" get subnets -o json 2>/dev/null | python3 -c "
-import json,sys
-for s in json.load(sys.stdin).get('items', []):
-    if s.get('metadata', {}).get('annotations', {}).get('osac.openshift.io/tenant') == '${TENANT}':
-        print(s['metadata']['name'])
-" 2>/dev/null || true
-}
-onboarded_subnets=""
-for _ in $(seq 1 30); do
-  onboarded_subnets=$(subnets_for_tenant)
-  [[ -n "${onboarded_subnets}" ]] && break
-  sleep 2
-done
-if [[ -z "${onboarded_subnets}" ]]; then
-  warn "  no subnet found for tenant '${TENANT}' yet — VM provisioning will hang until its subnet namespace exists"
-else
-  for sn in ${onboarded_subnets}; do
-    kubectl create namespace "${sn}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-    log "  subnet target namespace ready: ${sn}"
-  done
-fi
+# Kind dev-full disables provider networking. The operator places these VMs in
+# the Tenant namespace and uses the default pod network with masquerade, so the
+# tenant bootstrap does not need provider-created Subnet namespaces or CUDNs.
 
 # ── 2 & 3. Keycloak organization + membership ───────────────────────────────────
 # Port-forward Keycloak and drive its admin API to create an enabled organization

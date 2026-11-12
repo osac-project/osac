@@ -235,6 +235,18 @@ func (o *NetworkAttachment) SetNetworkManagers(managers *NetworkManagers) {
 // GetConditionsRef returns a pointer to status.conditions.
 func (o *NetworkAttachment) GetConditionsRef() *[]metav1.Condition { return &o.Status.Conditions }
 
+// GetNetworkJobs returns status.jobs.
+func (o *ClusterOrder) GetNetworkJobs() []NetworkJobStatus { return o.Status.Jobs }
+
+// SetNetworkJobs replaces status.jobs.
+func (o *ClusterOrder) SetNetworkJobs(jobs []NetworkJobStatus) { o.Status.Jobs = jobs }
+
+// GetTaskInput returns status.taskInput.
+func (o *ClusterOrder) GetTaskInput() *runtime.RawExtension { return o.Status.TaskInput }
+
+// SetTaskInput replaces status.taskInput.
+func (o *ClusterOrder) SetTaskInput(input *runtime.RawExtension) { o.Status.TaskInput = input }
+
 var (
 	_ NetworkResourceObject = &VirtualNetwork{}
 
@@ -255,4 +267,6 @@ var (
 	_ NetworkResourceObject = &NetworkAttachment{}
 
 	_ NetworkTaskObject = &ComputeInstance{}
+
+	_ NetworkInputObject = &ClusterOrder{}
 )

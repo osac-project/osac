@@ -160,94 +160,9 @@ else
   exit 1
 fi
 
-# ── 1b. Create the subnet target namespace(s) ───────────────────────────────────
-# Each Subnet gets its own k8s namespace named after the Subnet CR: the osac-operator
-# ComputeInstance controller creates/looks for the KubeVirt VM in that
-# subnet-target namespace (osac.openshift.io/subnet-target-namespace annotation),
-# NOT in the tenant namespace. In a real environment that namespace is created by
-# subnet provisioning (the cudn_evpn role, which also builds the OVN CUDN). On kind
-# global.networking.provisioningEnabled=false makes subnets reconcile to Ready without any AAP
-# dispatch, so nothing creates the namespace and the VM would have nowhere to live
-# (the CI would hang at Provisioned=False/WaitingForVM). kind VMs use the default
-# pod network + cluster-wide l2bridge binding — no per-namespace CUDN/NAD — so a
-# plain namespace is all that's needed. Create one per onboarded subnet (idempotent).
-#
-# Subnets are scoped to a tenant by the osac.openshift.io/tenant annotation (not a
-# label), and onboarding creates them asynchronously, so poll for the tenant's
-# subnet(s) to appear before creating their namespaces.
-subnets_for_tenant() {
-  kubectl -n "${NS}" get subnets -o json 2>/dev/null | TENANT="${TENANT}" python3 -c '
-import json,os,sys
-tenant = os.environ["TENANT"]
-for s in json.load(sys.stdin).get("items", []):
-    metadata = s.get("metadata", {})
-    if metadata.get("annotations", {}).get("osac.openshift.io/tenant") == tenant:
-        subnet_name = metadata["name"]
-        subnet_id = metadata.get("labels", {}).get("osac.openshift.io/subnet-uuid")
-        if subnet_id is None:
-            subnet_id = subnet_name
-        print(f"{subnet_name}\t{subnet_id}")
-' 2>/dev/null || true
-}
-onboarded_subnets=""
-subnet_targets_ready=false
-for _ in $(seq 1 180); do
-  onboarded_subnets=$(subnets_for_tenant)
-  if [[ -n "${onboarded_subnets}" ]]; then
-    subnet_targets_ready=true
-    while IFS=$'\t' read -r subnet_name subnet_id; do
-      [[ -n "${subnet_name}" ]] || continue
-      if ! kubectl get namespace "${subnet_name}" -o json 2>/dev/null \
-          | SUBNET_ID="${subnet_id}" TENANT="${TENANT}" python3 -c '
-import json,os,sys
-labels = json.load(sys.stdin).get("metadata", {}).get("labels", {})
-subnet_id = os.environ["SUBNET_ID"]
-tenant = os.environ["TENANT"]
-required = {
-    "k8s.ovn.org/primary-user-defined-network",
-}
-sys.exit(
-    0
-    if required.issubset(labels)
-    and subnet_id
-    and tenant
-    and labels.get("osac.openshift.io/subnet-id") == subnet_id
-    and labels.get("osac.openshift.io/tenant") == tenant
-    else 1
-)
-' 2>/dev/null \
-        || ! kubectl get clusteruserdefinednetwork "${subnet_name}" -o json 2>/dev/null \
-          | SUBNET_ID="${subnet_id}" python3 -c '
-import json,os,sys
-selector = json.load(sys.stdin).get("spec", {}).get("namespaceSelector", {})
-expected = {
-    "matchLabels": {
-        "osac.openshift.io/subnet-id": os.environ["SUBNET_ID"],
-    },
-}
-sys.exit(0 if selector == expected else 1)
-' 2>/dev/null; then
-        subnet_targets_ready=false
-        break
-      fi
-    done <<< "${onboarded_subnets}"
-    [[ "${subnet_targets_ready}" == true ]] && break
-  fi
-  sleep 5
-done
-if [[ -z "${onboarded_subnets}" ]]; then
-  warn "  no subnet found for tenant '${TENANT}' after waiting for onboarding"
-  exit 1
-fi
-if [[ "${subnet_targets_ready}" != true ]]; then
-  warn "  timed out waiting for Subnet AAP to create target namespaces and CUDN objects"
-  warn "  check the subnet job, networkingProvisioning, and the Kind CUDN CRD"
-  exit 1
-fi
-while IFS=$'\t' read -r subnet_name subnet_id; do
-  [[ -n "${subnet_name}" ]] || continue
-  log "  Subnet AAP provisioned target namespace and CUDN: ${subnet_name}"
-done <<< "${onboarded_subnets}"
+# Kind dev-full disables provider networking. The operator places these VMs in
+# the Tenant namespace and uses the default pod network with masquerade, so this
+# hook does not wait for provider-created Subnet namespaces or CUDNs.
 
 # ── 2 & 3. Keycloak organization + membership ───────────────────────────────────
 # Port-forward Keycloak and drive its admin API to create an enabled organization

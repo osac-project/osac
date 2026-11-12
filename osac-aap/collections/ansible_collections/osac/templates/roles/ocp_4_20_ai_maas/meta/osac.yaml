@@ -11,6 +11,8 @@ description: >
   (playbook_osac_verify_maas_deployment.yml).
 template_type: cluster
 implementation_strategy: ocp_4_20_ai_maas
+capabilities:
+  supports_automatic_caas_endpoints: true
 default_node_request:
   - resourceClass: g5
     numberOfNodes: 2

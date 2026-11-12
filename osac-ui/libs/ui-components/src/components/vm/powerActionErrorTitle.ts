@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next';
 
-import type { ComputeInstancePowerAction } from '../../api/v1/compute-instance';
+export type ComputeInstancePowerAction = 'start' | 'stop' | 'restart';
 
 export const getPowerActionErrorTitle = (
   t: TFunction,

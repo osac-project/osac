@@ -1,0 +1,10 @@
+---
+- name: Capture controller-supplied DNS values without provider access
+  ansible.builtin.copy:
+    dest: "{{ lookup('env', 'OSAC_TEST_DNS_CAPTURE') }}"
+    content: "{{ {'record': dns_record_name, 'value': dns_record_value} | to_json }}"
+    mode: "0600"
+
+- name: Stop before calling a DNS provider
+  ansible.builtin.fail:
+    msg: Test DNS role captured the controller input

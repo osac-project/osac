@@ -421,8 +421,15 @@ def test_multiple_nodes() -> None:
 
 
 def test_active_active_bgp() -> None:
+    """Render both uplinks with IPv4 multipath and no active-backup policy."""
     values = base_values(
-        [node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")])]
+        [
+            node(
+                "worker-0",
+                "10.200.255.1",
+                [uplink("ens6", "169.254.133.1"), uplink("ens7", "169.254.134.1")],
+            )
+        ]
     )
     values["evpn"]["bgp"]["activeActive"] = True
     with tempfile.TemporaryDirectory(prefix="evpn-values-") as temp:
@@ -441,6 +448,8 @@ def test_active_active_bgp() -> None:
     )[0]
     assert "maximum-paths 16" in ipv4_af
     assert "address-family l2vpn evpn" in raw_config
+    assert "neighbor 169.254.133.1 activate" in raw_config
+    assert "neighbor 169.254.134.1 activate" in raw_config
     assert "OSAC-EVPN-ACTIVE-BACKUP" not in raw_config
 
 
@@ -577,8 +586,18 @@ def test_active_backup_requires_one_active_and_one_backup() -> None:
 
 
 def test_active_backup_is_mutually_exclusive_with_active_active() -> None:
+    """Reject both modes even when the active-backup uplinks are valid."""
     values = base_values(
-        [node("worker-0", "10.200.255.1", [uplink("ens5f0", "169.254.133.1")])]
+        [
+            node(
+                "worker-0",
+                "10.200.255.1",
+                [
+                    uplink("ens5f0", "169.254.133.1", role="active"),
+                    uplink("ens5f1", "169.254.133.3", role="backup"),
+                ],
+            )
+        ]
     )
     values["evpn"]["bgp"]["activeActive"] = True
     values["evpn"]["bgp"]["activeBackup"] = True
@@ -708,6 +727,7 @@ def main() -> None:
     test_active_backup_requires_one_active_and_one_backup()
     test_active_backup_is_mutually_exclusive_with_active_active()
     test_uplink_without_address()
+    test_unnumbered_uplink()
     test_nmstate_install_disabled()
     test_invalid_values()
     print("EVPN host networking Helm render contract passed.")

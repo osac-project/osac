@@ -3,7 +3,7 @@
 # The deployment URL and Keycloak credentials must be supplied through
 # OSAC_UI_BASE_URL, OSAC_ADMIN_USERNAME, and OSAC_ADMIN_PASSWORD.
 
-tenant_name: 'tenant1'
+tenant_name: 'tenant-item-e2e'
 # The break-glass password is replaced with tenant_password, or tenant_name
 # when tenant_password is not set.
 

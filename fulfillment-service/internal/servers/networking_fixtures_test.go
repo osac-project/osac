@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -35,6 +36,16 @@ func fixtureDAO[O dao.Object]() *dao.GenericDAO[O] {
 		SetTenancyLogic(tenancy).
 		Build()
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	return result
+}
+
+// newAdminTenancy returns tenancy logic for a caller that can assign every tenant, such as an admin. As with the
+// real tenancy logic, its default tenant is the shared tenant.
+func newAdminTenancy() *auth.MockTenancyLogic {
+	result := auth.NewMockTenancyLogic(ctrl)
+	result.EXPECT().DetermineAssignableTenants(gomock.Any()).Return(auth.AllTenants, nil).AnyTimes()
+	result.EXPECT().DetermineDefaultTenant(gomock.Any()).Return(auth.SharedTenant, nil).AnyTimes()
+	result.EXPECT().DetermineVisibility(gomock.Any()).Return(auth.TotalVisibility(), nil).AnyTimes()
 	return result
 }
 
@@ -241,6 +252,24 @@ func seedReadyDefaultNetworking(tenant string, capacity int64) defaultNetworking
 		markDefaultNetworkingReady(tenant)
 	}
 	return seedReadyDefaultNetworkingIDs(tenant, result, vn)
+}
+
+// seedReadyDefaultNetworkingWithNAT adds a READY NATGateway to the tenant's
+// default VirtualNetwork for Cluster creation tests with provider networking enabled.
+func seedReadyDefaultNetworkingWithNAT(tenant string) defaultNetworkingFixture {
+	result := seedReadyDefaultNetworking(tenant, 0)
+	gateways, err := fixtureDAO[*privatev1.NATGateway]().List().SetFilter(fmt.Sprintf(
+		"this.spec.virtual_network.id == %q", result.virtualNetworkID)).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	for _, gateway := range gateways.GetItems() {
+		if !gateway.GetMetadata().HasDeletionTimestamp() &&
+			gateway.GetStatus().GetState() == privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY {
+			result.natGatewayID = gateway.GetId()
+			return result
+		}
+	}
+	result.natGatewayID = seedReadyNATGateway(tenant, result.virtualNetworkID, true)
+	return result
 }
 
 func seedReadyDefaultNetworkingIDs(tenant string, result defaultNetworkingFixture,

@@ -20,8 +20,9 @@ metadata:
     {{- include "osac-aap.labels" . | nindent 4 }}
     osac.openshift.io/project: osac-aap
 data:
+  {{- /* Network manager settings belong only to network-fulfillment jobs. */}}
   {{- range $key, $val := $cfg }}
-  {{- if and $val (ne $key "HOSTED_CLUSTER_BASE_DOMAIN") }}
+  {{- if and $val (ne $key "HOSTED_CLUSTER_BASE_DOMAIN") (ne $key "NETWORK_CLASS") (not (hasPrefix "NETRIS_" $key)) }}
   {{ $key }}: {{ $val | quote }}
   {{- end }}
   {{- end }}
@@ -37,8 +38,9 @@ metadata:
     osac.openshift.io/project: osac-aap
 type: Opaque
 data:
+  {{- /* Network manager credentials belong only to network-fulfillment jobs. */}}
   {{- range $key, $val := $sec }}
-  {{- if $val }}
+  {{- if and $val (not (hasPrefix "NETRIS_" $key)) }}
   {{ $key }}: {{ $val | b64enc | quote }}
   {{- end }}
   {{- end }}

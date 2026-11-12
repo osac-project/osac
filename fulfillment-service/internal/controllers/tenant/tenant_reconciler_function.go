@@ -385,10 +385,10 @@ func (t *task) resolveBreakGlassPassword(ctx context.Context) (string, error) {
 
 const breakGlassSecretName = "break-glass-credentials"
 
-// persistBreakGlassSecret stores generated break-glass credentials as a Secret and records the
-// reference on the tenant spec. No-op when a reference is already set or no secrets client is
-// configured (unit tests). If the Secret already exists (retry after a failed status save),
-// the existing object is adopted instead of failing.
+// persistBreakGlassSecret stores the break-glass username as a Secret and records the reference
+// on the tenant spec. The password is only shown once at tenant creation and is not persisted.
+// No-op when a reference is already set or no secrets client is configured (unit tests). If the
+// Secret already exists (retry after a failed status save), the existing object is adopted.
 func (t *task) persistBreakGlassSecret(ctx context.Context) error {
 	if t.tenant.GetSpec().GetBreakGlassCredentialsSecret() != nil {
 		return nil
@@ -410,7 +410,6 @@ func (t *task) persistBreakGlassSecret(ctx context.Context) error {
 			Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
 			Data: map[string][]byte{
 				"username": []byte(creds.GetUsername()),
-				"password": []byte(creds.GetPassword()),
 			},
 		}.Build(),
 	}.Build())
@@ -909,21 +908,19 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 	if t.r.vaultLifecycle == nil {
 		return nil
 	}
-	if t.isConditionTrue(condType) {
-		return nil
-	}
 
 	tenantName := t.tenant.GetMetadata().GetName()
 	err := t.r.vaultLifecycle.EnsureTenantNamespace(ctx, tenantName)
 	if err != nil {
+		code := grpcstatus.Code(vault.ToGrpcError(err))
 		t.r.logger.ErrorContext(ctx, "Failed to provision vault namespace for tenant",
 			slog.String("tenant_id", t.tenant.GetId()),
 			slog.String("tenant_name", tenantName),
-			slog.Any("error", err),
+			slog.String("error_code", code.String()),
 		)
 
 		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"ProvisionFailed", fmt.Sprintf("Failed to provision vault namespace: %v", err))
+			"ProvisionFailed", "Failed to provision vault namespace ("+code.String()+")")
 		return nil
 	}
 

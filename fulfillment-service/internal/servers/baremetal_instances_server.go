@@ -30,11 +30,12 @@ import (
 )
 
 type BareMetalInstancesServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
-	secretStore       vault.SecretStore
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	secretStore        vault.SecretStore
+	networkingSettings *NetworkingSettings
 }
 
 var _ publicv1.BareMetalInstancesServer = (*BareMetalInstancesServer)(nil)
@@ -82,6 +83,13 @@ func (b *BareMetalInstancesServerBuilder) SetSecretStore(value vault.SecretStore
 	return b
 }
 
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *BareMetalInstancesServerBuilder) SetNetworkingSettings(value NetworkingSettings) *BareMetalInstancesServerBuilder {
+	b.networkingSettings = &value
+	return b
+}
+
 func (b *BareMetalInstancesServerBuilder) Build() (result *BareMetalInstancesServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -120,6 +128,7 @@ func (b *BareMetalInstancesServerBuilder) Build() (result *BareMetalInstancesSer
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetSecretStore(b.secretStore).
+		SetNetworkingSettings(resolveNetworkingSettings(b.networkingSettings)).
 		SetFilterDesc((*publicv1.BareMetalInstance)(nil).ProtoReflect().Descriptor()).
 		Build()
 	if err != nil {

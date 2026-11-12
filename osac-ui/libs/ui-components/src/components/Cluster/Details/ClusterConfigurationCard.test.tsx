@@ -149,7 +149,7 @@ describe('ClusterConfigurationCard', () => {
     expect(screen.queryByText(/→/)).not.toBeInTheDocument();
   });
 
-  it('shows the latest timed-out upgrade message without offering another upgrade', () => {
+  it('shows a concise timeout description without offering another upgrade', async () => {
     const timedOut = clone(ClusterSchema, cluster);
     if (!timedOut.status) {
       throw new Error('The cluster fixture needs status');
@@ -162,19 +162,22 @@ describe('ClusterConfigurationCard', () => {
         message: 'Control plane upgrade timed out',
       }),
     ];
-    renderWithProviders(<ClusterConfigurationCard cluster={timedOut} />);
+    const { user } = renderWithProviders(<ClusterConfigurationCard cluster={timedOut} />);
 
     const label = screen.getByText('Upgrade timed out');
     expect(label.closest('.pf-v6-c-label')).toHaveClass('pf-m-compact');
     expect(label.closest('.pf-v6-c-label')).not.toHaveClass('pf-m-warning', 'pf-m-danger');
     expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
-    expect(screen.getByText('Control plane upgrade timed out')).toBeInTheDocument();
+    expect(screen.getByText('HyperShift may still complete the upgrade.')).toBeInTheDocument();
+    expect(screen.queryByText('Control plane upgrade timed out')).not.toBeInTheDocument();
+    expect(screen.queryByText(/→/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Upgrade history' }));
     expect(
-      screen.getByText(
-        'HyperShift may still complete the upgrade. OSAC continues to monitor its status.',
+      within(screen.getByRole('dialog', { name: 'Upgrade history' })).getByText(
+        'Control plane upgrade timed out',
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/→/)).not.toBeInTheDocument();
   });
 
   it('offers a different target after a failed upgrade', async () => {

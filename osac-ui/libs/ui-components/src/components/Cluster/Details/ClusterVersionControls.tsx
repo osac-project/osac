@@ -137,9 +137,8 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   if (upgradeFailed) {
     explanation =
       latestControlPlaneUpgrade?.message || t('HyperShift reported a terminal error and stopped.');
-  } else if (upgradeTimedOut) {
-    explanation =
-      latestControlPlaneUpgrade?.message || t('No definitive result within the timeout.');
+  } else if (timedOut) {
+    explanation = t('HyperShift may still complete the upgrade.');
   } else if (upgradeInProgress) {
     explanation = latestControlPlaneUpgrade?.message || undefined;
   } else if (action.kind === 'blocked') {
@@ -180,11 +179,6 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
       {explanation && (
         <Content component="p" id={reasonId}>
           {explanation}
-        </Content>
-      )}
-      {timedOut && (
-        <Content component="p">
-          {t('HyperShift may still complete the upgrade. OSAC continues to monitor its status.')}
         </Content>
       )}
       {dialogOpen && (

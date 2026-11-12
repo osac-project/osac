@@ -723,6 +723,13 @@ class ValidationDiagnosticsTests(unittest.TestCase):
 
     def test_make_gate_real_aap_error_is_private(self):
         """Check the real AAP render failure through the make gate stays private."""
+        self.assertIsNotNone(HELM, "helm is not installed")
+        # The gate calls the helm on PATH, so select the same binary this
+        # test resolved through HELM_BIN instead of whichever helm the
+        # ambient PATH happens to hold.
+        helm_dir = self.directory / "helm-bin"
+        helm_dir.mkdir()
+        (helm_dir / "helm").symlink_to(Path(HELM).resolve())
         values = self.directory / "osac.json"
         values.write_text(json.dumps({"aap": {"instanceGroups": {"networkFulfillment": {
             "config": {"NETRIS_CONTROLLER_URL": self.url}}}}}))
@@ -730,7 +737,8 @@ class ValidationDiagnosticsTests(unittest.TestCase):
             ["make", "--no-print-directory", "-C", str(INSTALLER),
              "-o", "helm-osac-deps", "-o", "helm-infra-deps", "validate-inputs",
              "PLATFORM=kind", "PROFILE=dev", "NS=osac", f"INSTANCE_VALUES_EXTRA=-f {values}"],
-            env=os.environ,
+            env={**os.environ,
+                 "PATH": f"{helm_dir}{os.pathsep}{os.environ.get('PATH', '')}"},
             text=True, capture_output=True, timeout=60,
         )
         self.assertNotEqual(result.returncode, 0)

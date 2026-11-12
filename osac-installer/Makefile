@@ -271,6 +271,13 @@ export OSAC_CHART_OCI_REF OSAC_CHART_OCI_VERSION
 # Runtime supplies hostnames and credentials; use the minimal CI fixture for
 # local chart checks without loosening the required-values schema.
 HELM_VALIDATION_VALUES := $(OSAC_CHART)/ci/default-values.yaml
+# Command-line variables are auto-exported, and GNU Make 4.4+ expands every
+# exported variable when it builds the environment for a parse-time
+# $(shell ...) call. Suppress the export of the caller-supplied values lists
+# until their freeze block below, so a Make expression in a caller value
+# cannot run during these dependency lookups; the freeze block re-exports
+# both.
+unexport INFRA_VALUES_EXTRA INSTANCE_VALUES_EXTRA
 # One archive and repository per external subchart declared in the chart's
 # Chart.yaml; both lists are derived, so adding a dependency to osac-infra or
 # osac-devstack requires no Makefile change.
@@ -331,10 +338,12 @@ endif
 # value expands -- including at export time -- and recipes word-split
 # $${INFRA_VALUES_EXTRA}/$${INSTANCE_VALUES_EXTRA} from the environment,
 # so shell command syntax in a caller value reaches Helm as argument text
-# instead of executing. These lists still expand unquoted, so pathname
-# patterns (*, ?, [) glob against the working directory and a leading ~ is
-# not expanded; pass expanded paths. Makefile-authored profile values
-# contain no Make expressions, so freezing them is a no-op.
+# instead of executing. Their export is suppressed before the first
+# parse-time $(shell ...) call above, so this freeze is what first makes
+# the frozen value exportable. These lists still expand unquoted, so
+# pathname patterns (*, ?, [) glob against the working directory and a
+# leading ~ is not expanded; pass expanded paths. Makefile-authored profile
+# values contain no Make expressions, so freezing them is a no-op.
 override INFRA_VALUES_EXTRA := $(value INFRA_VALUES_EXTRA)
 export INFRA_VALUES_EXTRA
 override INSTANCE_VALUES_EXTRA := $(value INSTANCE_VALUES_EXTRA)
@@ -763,7 +772,21 @@ endif
 validate-ns:
 	@bash -c 'source scripts/lib.sh && validate_namespace "$${NS:?NS is required}"' \
 	|| { echo "ERROR: invalid NS; no cluster changes were made. NS must be a lowercase DNS label (a-z, 0-9, '-', at most 63 characters)." >&2; exit 1; }
-validate-inputs: validate-ns
+# The remote-cluster Secret identifiers are interpolated into recipe text
+# through REMOTE_CLUSTER_HELM_ARGS, which the gate, install-dry-run and
+# install-osac expand, so validate them before any recipe that expands that
+# line; a literal value such as k$(touch ...) would run as command
+# substitution once it reaches the shell. The values reach this validator
+# through the exported environment, never through Make expansion into the
+# quoted bash -c string, so a value cannot break out of the quoting.
+.PHONY: validate-remote-cluster-identifiers
+validate-remote-cluster-identifiers:
+ifneq ($(strip $(REMOTE_KUBECONFIG)),)
+	@bash -c 'source scripts/lib.sh && \
+		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"' \
+	|| { echo "ERROR: invalid remote-cluster inputs; no cluster changes were made. Fix REMOTE_KUBECONFIG_SECRET_NAME/KEY and retry." >&2; exit 1; }
+endif
+validate-inputs: validate-ns validate-remote-cluster-identifiers
 # Helm reads "--set-file name=-" from stdin, and any single-read path (a
 # process substitution, FIFO, or piped /dev/stdin) is drained the same way,
 # but the gate and install-infra render the same argument more than once: the
@@ -774,17 +797,13 @@ validate-inputs: validate-ns
 # expansion into the quoted bash -c string.
 	@bash -c 'source scripts/lib.sh && validate_oidc_idp_ca_file "$${OIDC_IDP_CA_FILE:-}"' \
 	|| { echo "ERROR: invalid OIDC IdP CA input; no cluster changes were made." >&2; exit 1; }
-# Remote-cluster inputs are static: the gate rejects an invalid
-# REMOTE_KUBECONFIG_SECRET_NAME/KEY and an unreadable REMOTE_KUBECONFIG
-# before any cluster mutation. install-osac re-checks both, but only after
-# install-infra and namespace creation have already changed the cluster.
-# The values reach the validators through the exported environment, never
-# through Make expansion into the quoted bash -c string, so a value cannot
-# break out of the quoting.
+# Remote-cluster inputs are static: the gate also rejects an unreadable
+# REMOTE_KUBECONFIG before any cluster mutation, and the
+# validate-remote-cluster-identifiers prerequisite above checks the Secret
+# name/key before the REMOTE_CLUSTER_HELM_ARGS render expands them.
+# install-osac re-checks both, but only after install-infra and namespace
+# creation have already changed the cluster.
 ifneq ($(strip $(REMOTE_KUBECONFIG)),)
-	@bash -c 'source scripts/lib.sh && \
-		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"' \
-	|| { echo "ERROR: invalid remote-cluster inputs; no cluster changes were made. Fix REMOTE_KUBECONFIG_SECRET_NAME/KEY and retry." >&2; exit 1; }
 	@[ -r "$${REMOTE_KUBECONFIG}" ] || { echo "ERROR: REMOTE_KUBECONFIG is not readable; no cluster changes were made. Fix the path or its permissions and retry." >&2; exit 1; }
 endif
 ifeq ($(PLATFORM),kind)
@@ -1030,7 +1049,7 @@ install-osac: install-infra
 endif
 
 .PHONY: install-dry-run
-install-dry-run: validate-ns helm-deps validate-osac-chart-oci-ref ## Render every release in make install without connecting to a cluster
+install-dry-run: validate-ns validate-remote-cluster-identifiers helm-deps validate-osac-chart-oci-ref ## Render every release in make install without connecting to a cluster
 ifeq ($(PLATFORM),kind)
 	helm template cert-manager oci://quay.io/jetstack/charts/cert-manager \
 		--version v1.20.0 --namespace cert-manager \

@@ -515,6 +515,26 @@ grep -q 'NS must be a lowercase DNS label' "${TMP_DIR}/nsung.err" \
   || fail "ns-injection-ungated: the failure did not name the namespace rule"
 assert_prevalidation_commands ns-injection-ungated
 
+# install-dry-run expands REMOTE_CLUSTER_HELM_ARGS into recipe text, so it
+# must validate the Secret name/key before that line. The frozen value stays
+# literal at parse time, but once it reaches the shell a value such as
+# 'k$(touch ...)' would run as command substitution. The sentinel proves the
+# expression never executed and no render ran before the rejection.
+echo "checking remote-secret-key-injection (dry-run validates before the render)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-dry-run \
+  PLATFORM=kind PROFILE=dev NS=osac REMOTE_KUBECONFIG="${TMP_DIR}/dry-run-kubeconfig" \
+  "REMOTE_KUBECONFIG_SECRET_KEY=k\$(touch ${ns_sentinel}-secret-key)" \
+  >"${TMP_DIR}/secretkey.out" 2>"${TMP_DIR}/secretkey.err"; then
+  fail "remote-secret-key-injection: the dry-run accepted a Make-expression-bearing Secret key"
+fi
+[ ! -e "${ns_sentinel}-secret-key" ] \
+  || fail "remote-secret-key-injection: a Make expression in the Secret key executed"
+grep -q 'REMOTE_KUBECONFIG_SECRET_KEY must be a valid Secret data key' "${TMP_DIR}/secretkey.err" \
+  || fail "remote-secret-key-injection: the failure did not name the Secret-key rule"
+assert_prevalidation_commands remote-secret-key-injection
+
 # validate-remote-cluster-render interpolates NS into the osac-infra render
 # (--set osacNamespace=$(NS)), so it must validate NS first, like every goal
 # the parse-time gate covers. The sentinel proves a metacharacter-bearing NS
@@ -608,6 +628,30 @@ fi
 grep -q 'Installer input validation passed' "${TMP_DIR}/kubeconfig.out" \
   || fail "kubeconfig-injection-make: the gate did not complete"
 assert_prevalidation_commands kubeconfig-injection-make
+
+# Caller-supplied values lists are command-line variables, and make
+# auto-exports command-line variables by expanding them -- GNU Make 4.4+
+# does so when it builds the environment for a parse-time $(shell ...) call,
+# such as the dependency lookups above. Both lists stay unexported until
+# they are frozen, so a Make expression in a caller value must not run at
+# parse or export time; the values still reach Helm as literal argument
+# text instead.
+echo "checking values-extra-injection-make (Make expressions in values lists stay data)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=kind PROFILE=dev NS=osac \
+  "INFRA_VALUES_EXTRA=\$(shell touch ${ns_sentinel}-values-extra)" \
+  "INSTANCE_VALUES_EXTRA=\$(shell touch ${ns_sentinel}-instance-values-extra)" \
+  >"${TMP_DIR}/valuesextra.out" 2>"${TMP_DIR}/valuesextra.err"; then
+  :
+else
+  fail "values-extra-injection-make: the gate rejected valid values lists"
+fi
+[ ! -e "${ns_sentinel}-values-extra" ] \
+  || fail "values-extra-injection-make: a Make expression in INFRA_VALUES_EXTRA executed"
+[ ! -e "${ns_sentinel}-instance-values-extra" ] \
+  || fail "values-extra-injection-make: a Make expression in INSTANCE_VALUES_EXTRA executed"
 
 # A missing path is not a valid remote-cluster input: install-osac would
 # create the namespace before its own readability check, so the gate must

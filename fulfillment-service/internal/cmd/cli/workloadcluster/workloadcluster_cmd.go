@@ -240,6 +240,9 @@ func runUpdate(cmd *cobra.Command, ref string, args *updateArgs) error {
 	if len(paths) == 0 {
 		return errors.New("at least one update flag must be specified")
 	}
+	if args.clearLabels && len(args.labels) > 0 {
+		return errors.New("--clear-labels cannot be combined with --label")
+	}
 	workloads := args.supportedWorkload
 	if cmd.Flags().Changed("supported-workloads") {
 		var err error
@@ -251,9 +254,6 @@ func runUpdate(cmd *cobra.Command, ref string, args *updateArgs) error {
 	labels, err := metautil.ParseLabels(args.labels)
 	if err != nil {
 		return err
-	}
-	if args.clearLabels && len(args.labels) > 0 {
-		return errors.New("--clear-labels cannot be combined with --label")
 	}
 
 	ctx := cmd.Context()
@@ -387,17 +387,21 @@ func renderWorkloadClusterList(w io.Writer, objects []*privatev1.WorkloadCluster
 
 func renderWorkloadCluster(w io.Writer, object *privatev1.WorkloadCluster) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(writer, "ID:\t%s\n", object.GetId())
-	fmt.Fprintf(writer, "Name:\t%s\n", object.GetMetadata().GetName())
-	fmt.Fprintf(writer, "Source Hub ID:\t%s\n", object.GetSpec().GetSourceHubId())
-	fmt.Fprintf(writer, "ManagedCluster:\t%s\n", object.GetSpec().GetManagedClusterName())
-	fmt.Fprintf(writer, "Supported workloads:\t%s\n", strings.Join(object.GetSpec().GetSupportedWorkloads(), ", "))
-	fmt.Fprintf(writer, "ManagedCluster UID:\t%s\n", object.GetStatus().GetManagedClusterUid())
-	fmt.Fprintln(writer, "Conditions:")
+	if _, err := fmt.Fprintf(writer, "ID:\t%s\nName:\t%s\nSource Hub ID:\t%s\nManagedCluster:\t%s\nSupported workloads:\t%s\nManagedCluster UID:\t%s\n",
+		object.GetId(), object.GetMetadata().GetName(), object.GetSpec().GetSourceHubId(),
+		object.GetSpec().GetManagedClusterName(), strings.Join(object.GetSpec().GetSupportedWorkloads(), ", "),
+		object.GetStatus().GetManagedClusterUid()); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(writer, "Conditions:"); err != nil {
+		return err
+	}
 	conditions := append([]*privatev1.WorkloadClusterCondition(nil), object.GetStatus().GetConditions()...)
 	sort.Slice(conditions, func(i, j int) bool { return conditions[i].GetType() < conditions[j].GetType() })
 	for _, condition := range conditions {
-		fmt.Fprintf(writer, "  %s:\t%s (%s) %s\n", condition.GetType(), condition.GetStatus(), condition.GetReason(), condition.GetMessage())
+		if _, err := fmt.Fprintf(writer, "  %s:\t%s (%s) %s\n", condition.GetType(), condition.GetStatus(), condition.GetReason(), condition.GetMessage()); err != nil {
+			return err
+		}
 	}
 	return writer.Flush()
 }

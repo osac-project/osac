@@ -227,6 +227,15 @@ func testHub(name string) *privatev1.Hub {
 	}.Build()
 }
 
+func finalizerWorkloadClusterSourceHubID() string {
+	GinkgoHelper()
+	hub := testHub(finalizerName("hub-parent"))
+	hub.SetId(uuid.NewString())
+	created, err := fixtureDAO[*privatev1.Hub]().Create().SetObject(hub).Do(ctx)
+	Expect(err).ToNot(HaveOccurred())
+	return created.GetObject().GetId()
+}
+
 func finalizerName(prefix string) string {
 	return fmt.Sprintf("%s-%s", prefix, uuid.NewString()[:8])
 }
@@ -253,6 +262,24 @@ func finalizerCases() []finalizerCase {
 				return testHub(finalizerName("hub"))
 			},
 			func(b *GenericServerBuilder[*privatev1.Hub]) {
+				b.AddAllowedTenants(auth.SharedTenant)
+			},
+		),
+		newFinalizerCase(privatev1.WorkloadClusters_ServiceDesc,
+			func() *privatev1.WorkloadCluster {
+				return privatev1.WorkloadCluster_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   finalizerName("workload-cluster"),
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.WorkloadClusterSpec_builder{
+						SourceHubId:        finalizerWorkloadClusterSourceHubID(),
+						ManagedClusterName: "managed-cluster",
+						SupportedWorkloads: []string{"maas"},
+					}.Build(),
+				}.Build()
+			},
+			func(b *GenericServerBuilder[*privatev1.WorkloadCluster]) {
 				b.AddAllowedTenants(auth.SharedTenant)
 			},
 		),

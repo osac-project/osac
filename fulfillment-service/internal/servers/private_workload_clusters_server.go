@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	osacmetrics "github.com/osac-project/osac/fulfillment-service/internal/metrics"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -43,6 +44,7 @@ type PrivateWorkloadClustersServer struct {
 	privatev1.UnimplementedWorkloadClustersServer
 	generic    *GenericServer[*privatev1.WorkloadCluster]
 	hubsServer privatev1.HubsServer
+	metrics    *osacmetrics.WorkloadClusterMetrics
 }
 
 func NewPrivateWorkloadClustersServer() *PrivateWorkloadClustersServerBuilder {
@@ -91,6 +93,12 @@ func (b *PrivateWorkloadClustersServerBuilder) Build() (result *PrivateWorkloadC
 	}
 
 	s := &PrivateWorkloadClustersServer{hubsServer: b.hubsServer}
+	if b.metricsRegisterer != nil {
+		s.metrics, err = osacmetrics.NewWorkloadClusterMetrics(b.metricsRegisterer)
+		if err != nil {
+			return nil, err
+		}
+	}
 	s.generic, err = NewGenericServer[*privatev1.WorkloadCluster]().
 		SetLogger(b.logger).
 		SetService(privatev1.WorkloadClusters_ServiceDesc.ServiceName).
@@ -122,15 +130,34 @@ func (s *PrivateWorkloadClustersServer) Get(ctx context.Context,
 
 func (s *PrivateWorkloadClustersServer) Create(ctx context.Context,
 	request *privatev1.WorkloadClustersCreateRequest) (*privatev1.WorkloadClustersCreateResponse, error) {
+	registrationResult := "success"
+	defer func() {
+		if s.metrics != nil {
+			s.metrics.Registrations.WithLabelValues(registrationResult).Inc()
+		}
+	}()
+	setRegistrationResult := func(err error) error {
+		if err != nil {
+			if grpcstatus.Code(err) == grpccodes.AlreadyExists {
+				registrationResult = "already_exists"
+			} else {
+				registrationResult = "invalid"
+			}
+		}
+		return err
+	}
+	if request == nil || request.GetObject() == nil {
+		return nil, setRegistrationResult(grpcstatus.Error(grpccodes.InvalidArgument, "object is required"))
+	}
 	object := request.GetObject()
 	if err := s.validateSourceHub(ctx, object.GetSpec().GetSourceHubId()); err != nil {
-		return nil, err
+		return nil, setRegistrationResult(err)
 	}
 	if err := s.rejectDuplicate(ctx, object); err != nil {
-		return nil, err
+		return nil, setRegistrationResult(err)
 	}
 	if object.GetMetadata() == nil {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "metadata is required")
+		return nil, setRegistrationResult(grpcstatus.Error(grpccodes.InvalidArgument, "metadata is required"))
 	}
 	object.GetMetadata().SetTenant(auth.SharedTenant)
 
@@ -141,7 +168,7 @@ func (s *PrivateWorkloadClustersServer) Create(ctx context.Context,
 		candidate.SetStatus(initialWorkloadClusterStatus())
 		return nil
 	})
-	return response, err
+	return response, setRegistrationResult(err)
 }
 
 func (s *PrivateWorkloadClustersServer) Update(ctx context.Context,
@@ -164,15 +191,13 @@ func (s *PrivateWorkloadClustersServer) Update(ctx context.Context,
 
 func (s *PrivateWorkloadClustersServer) Delete(ctx context.Context,
 	request *privatev1.WorkloadClustersDeleteRequest) (*privatev1.WorkloadClustersDeleteResponse, error) {
-	var response *privatev1.WorkloadClustersDeleteResponse
-	err := s.generic.Delete(ctx, request, &response)
-	return response, err
+	return nil, grpcstatus.Error(grpccodes.Unimplemented, "deleting workload clusters is not supported")
 }
 
 func (s *PrivateWorkloadClustersServer) Signal(ctx context.Context,
 	request *privatev1.WorkloadClustersSignalRequest) (*privatev1.WorkloadClustersSignalResponse, error) {
 	var response *privatev1.WorkloadClustersSignalResponse
-	err := s.generic.Signal(ctx, request, &response)
+	err := s.generic.SignalWithEventMetadata(ctx, request, &response, request.GetReason(), request.GetSeverity())
 	return response, err
 }
 

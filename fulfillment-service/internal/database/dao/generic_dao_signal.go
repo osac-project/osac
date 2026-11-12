@@ -28,12 +28,20 @@ import (
 // SignalRequest represents a request to signal an object by its identifier.
 type SignalRequest[O Object] struct {
 	request[O]
-	id string
+	id            string
+	eventReason   string
+	eventSeverity string
 }
 
 // SetId sets the identifier of the object to signal.
 func (r *SignalRequest[O]) SetId(value string) *SignalRequest[O] {
 	r.id = value
+	return r
+}
+
+func (r *SignalRequest[O]) SetEventMetadata(reason, severity string) *SignalRequest[O] {
+	r.eventReason = reason
+	r.eventSeverity = severity
 	return r
 }
 
@@ -79,6 +87,18 @@ func (r *SignalRequest[O]) do(ctx context.Context) (response *SignalResponse, er
 	_, err = r.exec(ctx, signalOpType, "set local osac.signal = 'on'")
 	if err != nil {
 		return
+	}
+	if r.eventReason != "" {
+		_, err = r.exec(ctx, signalOpType, "set local osac.event_reason = $1", r.eventReason)
+		if err != nil {
+			return
+		}
+	}
+	if r.eventSeverity != "" {
+		_, err = r.exec(ctx, signalOpType, "set local osac.event_severity = $1", r.eventSeverity)
+		if err != nil {
+			return
+		}
 	}
 
 	// Assign the version to itself to cause the change trigger to enqueue the signal event without changing the object.

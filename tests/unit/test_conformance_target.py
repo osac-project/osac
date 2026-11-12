@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.conformance.area import AreaDeclaration
 from tests.conformance.config import Config
+from tests.conformance.domain import DomainDeclaration
 from tests.conformance.errors import ConfigError
 from tests.conformance.target import HttpTargetClient, KubectlTargetClient, read_target
 from tests.conformance.testing.fake_target import FakeTarget, FakeTargetClient
@@ -25,6 +25,7 @@ def _config(tmp_path: Path, *, token: str = _FAKE_TOKEN) -> Config:
     kubeconfig.write_text("hub")
     return Config(
         osac_release="1.4.0",
+        path=tmp_path / "conformance.yaml",
         profiles=("generic",),
         target_namespace="osac-devel",
         target_kubeconfig=kubeconfig,
@@ -33,7 +34,7 @@ def _config(tmp_path: Path, *, token: str = _FAKE_TOKEN) -> Config:
         target_ca_file=ca_file,
         target_aap=None,
         timeouts={},
-        areas={},
+        domains={},
         raw={},
     )
 
@@ -49,7 +50,7 @@ def test_read_target_reports_enabled_services_components_and_release(tmp_path: P
 
     assert facts.enabled_services == ("vmaas",)
     assert facts.installed_release == "1.4.0"
-    assert facts.components[0].area == "networking"
+    assert facts.components[0].domain == "networking"
     assert facts.components[0].fields["name"] == "acme"
 
 
@@ -144,8 +145,8 @@ def test_kubectl_client_uses_the_configured_namespace(monkeypatch: pytest.Monkey
         assert command[command.index("-n") + 1] == "osac-devel"
 
 
-def test_read_target_filters_registrations_by_area_source(tmp_path: Path) -> None:
-    area = AreaDeclaration(
+def test_read_target_filters_registrations_by_domain_source(tmp_path: Path) -> None:
+    domain = DomainDeclaration(
         name="networking",
         component_tests=(),
         identity_fields=(),
@@ -163,6 +164,6 @@ def test_read_target_filters_registrations_by_area_source(tmp_path: Path) -> Non
     )
     fake = FakeTarget(registrations={"networking": {"name": "acme"}, "unrelated": {"name": "other"}})
 
-    facts = read_target(_config(tmp_path), FakeTargetClient(fake), {"networking": area})
+    facts = read_target(_config(tmp_path), FakeTargetClient(fake), {"networking": domain})
 
-    assert [component.area for component in facts.components] == ["networking"]
+    assert [component.domain for component in facts.components] == ["networking"]

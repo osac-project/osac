@@ -10,15 +10,15 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.request import Request, urlopen
 
-from tests.conformance.area import AreaDeclaration
 from tests.conformance.config import Config
+from tests.conformance.domain import DomainDeclaration
 from tests.conformance.errors import ConfigError
 from tests.e2e.core.runner import run
 
 
 @dataclass(frozen=True)
 class ComponentIdentity:
-    area: str
+    domain: str
     fields: Mapping[str, Any]
 
 
@@ -98,7 +98,7 @@ class KubectlTargetClient(HttpTargetClient):
 
 
 def read_target(
-    config: Config, client: TargetClient, areas: Mapping[str, AreaDeclaration] | None = None
+    config: Config, client: TargetClient, domains: Mapping[str, DomainDeclaration] | None = None
 ) -> TargetFacts:
     try:
         token = config.target_token_file.read_text().strip()
@@ -116,14 +116,14 @@ def read_target(
     services = capabilities.get("enabled_services", [])
     if not isinstance(services, list) or any(not isinstance(item, str) for item in services):
         raise ConfigError(["Capabilities enabled_services must be a list of strings"])
-    if areas:
+    if domains:
         components = tuple(
-            ComponentIdentity(area=area.name, fields=dict(registrations[area.registration_source]))
-            for area in sorted(areas.values(), key=lambda item: item.name)
-            if area.registration_source in registrations
+            ComponentIdentity(domain=domain.name, fields=dict(registrations[domain.registration_source]))
+            for domain in sorted(domains.values(), key=lambda item: item.name)
+            if domain.registration_source in registrations
         )
     else:
         components = tuple(
-            ComponentIdentity(area=name, fields=dict(fields)) for name, fields in sorted(registrations.items())
+            ComponentIdentity(domain=name, fields=dict(fields)) for name, fields in sorted(registrations.items())
         )
     return TargetFacts(enabled_services=tuple(services), components=components, installed_release=release)

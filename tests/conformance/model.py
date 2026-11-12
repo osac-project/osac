@@ -58,7 +58,7 @@ class TestIdentity:
     name: str
     nodeid: str
     labels: frozenset[str]
-    area: str
+    domain: str
     layer: Layer
     profiles: tuple[str, ...]
     classification: Classification
@@ -102,7 +102,7 @@ class ProfileResult:
 
 @dataclass(frozen=True)
 class ComponentResult:
-    area: str
+    domain: str
     identity: Mapping[str, Any]
     result: Verdict
 

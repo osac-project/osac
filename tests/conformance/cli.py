@@ -13,9 +13,9 @@ from urllib.parse import urlparse
 
 import yaml
 
-from tests.conformance.area import AreaDeclaration, load_areas
 from tests.conformance.config import Config, load_config
 from tests.conformance.diagnostics import DiagnosticsCollector
+from tests.conformance.domain import DomainDeclaration, load_domains
 from tests.conformance.errors import CommandLineError, ConfigError
 from tests.conformance.interrupt import Interrupted, InterruptGate
 from tests.conformance.model import (
@@ -39,7 +39,7 @@ from tests.conformance.target import TargetClient, TargetFacts, read_target
 from tests.conformance.testtree import PytestTestTree, TestTree
 from tests.conformance.verdict import evaluate, exit_code
 
-_DEFAULT_AREAS = Path(__file__).with_name("areas")
+_DEFAULT_DOMAINS = Path(__file__).with_name("domains")
 _DEFAULT_PROFILES = Path(__file__).with_name("profiles.yaml")
 _ALLOWED_RESULTS = {"conformance-plan.yaml"}
 
@@ -47,7 +47,7 @@ _ALLOWED_RESULTS = {"conformance-plan.yaml"}
 @dataclass
 class Runtime:
     config: Config
-    areas: dict[str, AreaDeclaration]
+    domains: dict[str, DomainDeclaration]
     profile_catalog: dict[str, ProfileDefinition]
     tree: TestTree
     target: TargetClient
@@ -67,7 +67,7 @@ def _parser() -> argparse.ArgumentParser:
     parent = _Parser(add_help=False)
     parent.add_argument("--config", default="/config/conformance.yaml")
     parent.add_argument("--results", default="/results")
-    parent.add_argument("--areas", default=str(_DEFAULT_AREAS))
+    parent.add_argument("--domains", default=str(_DEFAULT_DOMAINS))
     parent.add_argument("--profile-catalog", default=str(_DEFAULT_PROFILES))
     parent.add_argument("--tree", default="tests/e2e")
     parent.add_argument("--podman-socket", default="/run/podman/podman.sock")
@@ -160,16 +160,16 @@ def redactor_for_config_path(path: Path) -> Redactor:
 
 
 def _build_runtime(args: argparse.Namespace) -> Runtime:
-    areas = load_areas(Path(args.areas))
+    domains = load_domains(Path(args.domains))
     catalog = load_profiles(Path(args.profile_catalog))
-    config = load_config(Path(args.config), area_names=areas)
+    config = load_config(Path(args.config), domain_names=domains)
     expand_profiles(config.profiles, catalog)
     results = Path(args.results)
     _check_results(results)
     redactor = redactor_for_config(config)
     return Runtime(
         config=config,
-        areas=areas,
+        domains=domains,
         profile_catalog=catalog,
         tree=PytestTestTree(root=Path(args.tree)),
         target=KubectlTargetClientAdapter(),
@@ -248,30 +248,32 @@ def _derive_components(
     plan: Plan,
     outcomes: Sequence[TestOutcome],
     profiles: Sequence[ProfileResult],
-    areas: dict[str, AreaDeclaration],
+    domains: dict[str, DomainDeclaration],
 ) -> tuple[ComponentResult, ...]:
     by_id = {outcome.identity.id: outcome for outcome in outcomes}
     results: list[ComponentResult] = []
     for component in facts.components:
-        tests = [test for test in plan.tests if test.area == component.area and test.layer is Layer.COMPONENT]
+        tests = [test for test in plan.tests if test.domain == component.domain and test.layer is Layer.COMPONENT]
         component_tests_pass = bool(tests) and all(
             by_id.get(test.id) is not None and by_id[test.id].result is Result.PASS for test in tests
         )
-        area = areas.get(component.area)
-        area_selectors = set(area.selectors) if area is not None else set()
+        domain = domains.get(component.domain)
+        domain_selectors = set(domain.selectors) if domain is not None else set()
         relevant_profiles = [
-            profile for profile in profiles if profile.required and area_selectors.intersection(profile.selectors)
+            profile for profile in profiles if profile.required and domain_selectors.intersection(profile.selectors)
         ]
-        area_profiles_pass = all(profile.result is Result.PASS for profile in relevant_profiles)
-        verdict = Verdict.CONFORMANT if component_tests_pass and area_profiles_pass else Verdict.IN_PROGRESS
-        results.append(ComponentResult(component.area, component.fields, verdict))
+        domain_profiles_pass = all(profile.result is Result.PASS for profile in relevant_profiles)
+        verdict = Verdict.CONFORMANT if component_tests_pass and domain_profiles_pass else Verdict.IN_PROGRESS
+        results.append(ComponentResult(component.domain, component.fields, verdict))
     return tuple(results)
 
 
 def _run_list(runtime: Runtime) -> int:
     selected_profiles, selectors = expand_profiles(runtime.config.profiles, runtime.profile_catalog)
     raw = runtime.tree.collect()
-    tests: tuple[TestIdentity, ...] = enrich_identities(raw, runtime.areas, runtime.profile_catalog, selected_profiles)
+    tests: tuple[TestIdentity, ...] = enrich_identities(
+        raw, runtime.domains, runtime.profile_catalog, selected_profiles
+    )
     plan = compute_plan(tests, selectors, selected_profiles)
     path = write_plan(plan, runtime.results)
     runtime.output.line(path.read_text().rstrip())
@@ -281,7 +283,7 @@ def _run_list(runtime: Runtime) -> int:
 def _run_plan(runtime: Runtime, *, plan_path: Path | None, keep: bool) -> int:
     selected_profiles, selectors = expand_profiles(runtime.config.profiles, runtime.profile_catalog)
     raw = runtime.tree.collect()
-    tests = enrich_identities(raw, runtime.areas, runtime.profile_catalog, selected_profiles)
+    tests = enrich_identities(raw, runtime.domains, runtime.profile_catalog, selected_profiles)
     if plan_path is None:
         plan = compute_plan(tests, selectors, selected_profiles)
     else:
@@ -295,7 +297,7 @@ def _run_plan(runtime: Runtime, *, plan_path: Path | None, keep: bool) -> int:
     ):
         raise ConfigError([f"podman socket {runtime.podman_socket} is missing"])
 
-    facts = read_target(runtime.config, runtime.target, runtime.areas)
+    facts = read_target(runtime.config, runtime.target, runtime.domains)
     run_id = new_run_id()
     context = RunContext(
         run_id=run_id,
@@ -319,7 +321,7 @@ def _run_plan(runtime: Runtime, *, plan_path: Path | None, keep: bool) -> int:
         gate.restore()
 
     profiles = _derive_profiles(plan, outcomes, runtime.profile_catalog)
-    components = _derive_components(facts, plan, outcomes, profiles, runtime.areas)
+    components = _derive_components(facts, plan, outcomes, profiles, runtime.domains)
     report = evaluate(
         plan,
         outcomes,

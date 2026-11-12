@@ -35,6 +35,16 @@ class PytestTestTree:
         env[name] = str(path)
         return env
 
+    def _run_env(self, context: RunContext, results_path: Path) -> dict[str, str]:
+        env = self._env("OSAC_CONFORMANCE_RESULTS", results_path)
+        env["OSAC_CONFORMANCE_RUN_ID"] = context.run_id
+        env["OSAC_CONFORMANCE_RESULTS_DIR"] = str(context.results_dir)
+        if context.config is not None:
+            env["OSAC_CONFORMANCE_CONFIG"] = str(context.config.path)
+        if context.tenant:
+            env["OSAC_CONFORMANCE_TENANT"] = context.tenant
+        return env
+
     def collect(self) -> tuple[TestIdentity, ...]:
         import tempfile
 
@@ -73,12 +83,12 @@ class PytestTestTree:
         if separator and not Path(file_part).is_absolute():
             nodeid = f"{(self.root / file_part).resolve()}::{rest}"
         markers = frozenset(str(marker) for marker in item.get("markers", []))
-        area = "unknown"
+        domain = "unknown"
         for marker in markers:
             if marker.startswith("sig/"):
-                area = marker.split("/", 1)[1]
+                domain = marker.split("/", 1)[1]
             elif marker.startswith("sig_"):
-                area = marker.removeprefix("sig_")
+                domain = marker.removeprefix("sig_")
         classification = (
             Classification.INFORMING
             if {"conformance_informing", "conformance/informing"} & markers
@@ -89,7 +99,7 @@ class PytestTestTree:
             name=name,
             nodeid=nodeid,
             labels=markers,
-            area=area,
+            domain=domain,
             layer=Layer.COMPONENT,
             profiles=(),
             classification=classification,
@@ -115,7 +125,7 @@ class PytestTestTree:
                     *nodeids,
                 ],
                 cwd=self.cwd,
-                env=self._env("OSAC_CONFORMANCE_RESULTS", results_path),
+                env=self._run_env(context, results_path),
                 text=True,
                 capture_output=True,
                 check=False,

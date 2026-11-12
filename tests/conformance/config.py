@@ -25,6 +25,7 @@ class AapConfig:
 @dataclass(frozen=True)
 class Config:
     osac_release: str
+    path: Path
     profiles: tuple[str, ...]
     target_namespace: str
     target_kubeconfig: Path
@@ -33,7 +34,7 @@ class Config:
     target_ca_file: Path
     target_aap: AapConfig | None
     timeouts: Mapping[str, str]
-    areas: Mapping[str, Mapping[str, Any]]
+    domains: Mapping[str, Mapping[str, Any]]
     raw: Mapping[str, Any]
 
 
@@ -69,7 +70,7 @@ def _profiles(value: object, checks: list[str]) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def load_config(path: Path, *, area_names: Collection[str]) -> Config:
+def load_config(path: Path, *, domain_names: Collection[str]) -> Config:
     checks: list[str] = []
     try:
         raw = yaml.safe_load(path.read_text())
@@ -85,7 +86,7 @@ def load_config(path: Path, *, area_names: Collection[str]) -> Config:
         raise ConfigError(checks)
 
     for key in document:
-        if key not in _COMMON_KEYS and key not in area_names:
+        if key not in _COMMON_KEYS and key not in domain_names:
             checks.append(f"{key} is not defined by this release")
 
     release = _string(document.get("osacRelease"), "osacRelease", checks)
@@ -125,13 +126,13 @@ def load_config(path: Path, *, area_names: Collection[str]) -> Config:
         checks.append("timeouts must map keys to duration strings")
         timeouts = {}
 
-    areas: dict[str, Mapping[str, Any]] = {}
-    for name in area_names:
+    domains: dict[str, Mapping[str, Any]] = {}
+    for name in domain_names:
         section = document.get(name)
         if section is not None:
             section_doc = _mapping(section, name, checks)
             if section_doc is not None:
-                areas[name] = section_doc
+                domains[name] = section_doc
 
     if checks:
         raise ConfigError(checks)
@@ -142,6 +143,7 @@ def load_config(path: Path, *, area_names: Collection[str]) -> Config:
     assert timeouts is not None
     return Config(
         osac_release=release,
+        path=path,
         profiles=profiles,
         target_namespace=namespace,
         target_kubeconfig=kubeconfig,
@@ -150,6 +152,6 @@ def load_config(path: Path, *, area_names: Collection[str]) -> Config:
         target_ca_file=ca_file,
         target_aap=aap,
         timeouts=timeouts,
-        areas=areas,
+        domains=domains,
         raw=document,
     )

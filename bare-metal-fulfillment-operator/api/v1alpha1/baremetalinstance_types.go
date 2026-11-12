@@ -236,6 +236,12 @@ const (
 	// HostConditionReasonNetworkAttachmentFailed indicates the network attachment
 	// reached a final failed state.
 	HostConditionReasonNetworkAttachmentFailed = "NetworkAttachmentFailed"
+
+	HostConditionReasonPoweringOff          = "PoweringOff"
+	HostConditionReasonPoweringOn           = "PoweringOn"
+	HostConditionReasonNetworkHandoffFailed = "NetworkHandoffFailed"
+	HostConditionReasonLeasePending         = "LeasePending"
+	HostConditionReasonIPDiscoveryFailed    = "IPDiscoveryFailed"
 )
 
 // HostSelectorSpec defines host selection constraints.

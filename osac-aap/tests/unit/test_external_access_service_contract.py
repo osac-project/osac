@@ -47,8 +47,9 @@ def test_caas_entry_points_own_dns_lifecycle_without_network_dispatch() -> None:
     create = load_tasks(create_path)
     delete = load_tasks(delete_path)
 
-    assert create[0]["ansible.builtin.include_tasks"] == "caas_api_dns_create.yaml"
-    assert create[1]["ansible.builtin.include_tasks"] == "caas_ingress_create.yaml"
+    assert "ansible.builtin.assert" in create[0]
+    assert create[1]["ansible.builtin.include_tasks"] == "caas_api_dns_create.yaml"
+    assert create[2]["ansible.builtin.include_tasks"] == "caas_ingress_create.yaml"
     assert delete[0]["ansible.builtin.include_tasks"] == "caas_dns_delete.yaml"
     assert any("Create DNS records" in task.get("name", "") for task in dns_create)
     assert any("Resolve authoritative nameserver" in task.get("name", "") for task in dns_create)
@@ -56,7 +57,7 @@ def test_caas_entry_points_own_dns_lifecycle_without_network_dispatch() -> None:
     assert any("Delete DNS records" in task.get("name", "") for task in dns_delete)
     assert "network_steps_collection" not in create_path.read_text()
     assert "network_steps_collection" not in delete_path.read_text()
-    assert create[2]["ansible.builtin.include_tasks"] == "publish.yaml"
+    assert create[3]["ansible.builtin.include_tasks"] == "publish.yaml"
     assert delete[1]["ansible.builtin.include_tasks"] == "clear.yaml"
     assert not any("retrieve_kubeconfig" in str(task) for task in create)
     assert not any("wait_for_network_cluster_operator" in str(task) for task in create)

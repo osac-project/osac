@@ -89,6 +89,22 @@ def test_range_accepts_canonical_and_rejects_invalid_input() -> None:
     assert claim_utils.parse_range("10.10.0.240-10.10.0.240") == ["10.10.0.240"]
 
 
+@pytest.mark.parametrize("ip_range", [
+    "127.0.0.1-127.0.0.1",
+    "0.0.0.0-0.0.0.0",
+    "0.0.0.0-0.0.0.3",
+    "224.0.0.1-224.0.0.1",
+])
+def test_unusable_vip_ranges_fail_without_writing_claims(ip_range) -> None:
+    store = FakeStore()
+
+    with pytest.raises(claim_utils.InvalidRangeError):
+        claim_utils.claim_address(ip_range, owner("uid-a"), store, retry_delay=0)
+
+    assert store.data == {}
+    assert store.writes == 0
+
+
 def test_first_claim_takes_the_first_address_and_writes_once() -> None:
     store = FakeStore()
 

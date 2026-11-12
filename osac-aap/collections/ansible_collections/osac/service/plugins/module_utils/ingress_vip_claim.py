@@ -76,7 +76,15 @@ def parse_range(spec: str) -> list[str]:
         raise InvalidRangeError(
             f"{spec!r} spans more than one /24; CI guests share one L2 network"
         )
-    return [str(first + offset) for offset in range(int(last) - int(first) + 1)]
+    addresses = [first + offset for offset in range(int(last) - int(first) + 1)]
+    if any(
+        address.is_loopback or address.is_unspecified or address.is_multicast
+        for address in addresses
+    ):
+        raise InvalidRangeError(
+            f"{spec!r} contains a loopback, unspecified or multicast address"
+        )
+    return [str(address) for address in addresses]
 
 
 def _validated_owner(owner: dict) -> dict:

@@ -57,6 +57,31 @@ def test_caas_create_sequences_api_dns_ingress_then_feedback() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("domains", "allowed"),
+    [
+        pytest.param(["example.test"], True, id="supported"),
+        pytest.param(["other.test"], False, id="unsupported"),
+        pytest.param([], False, id="empty"),
+        pytest.param(None, False, id="missing"),
+    ],
+)
+def test_domain_validation_precedes_dns_and_vip_allocation(domains, allowed) -> None:
+    tasks = load_tasks(TASKS / "caas_create.yaml")
+    guard = tasks[0]["ansible.builtin.assert"]
+    variables = {"external_access_base_domain": "example.test"}
+    if domains is not None:
+        variables["external_access_supported_base_domains"] = domains
+
+    passed = all(
+        bool(render("{{ " + condition + " }}", variables))
+        for condition in guard["that"]
+    )
+    assert passed is allowed
+    assert index_of(tasks, "ansible.builtin.assert") < index_of(tasks, "caas_api_dns_create.yaml")
+    assert index_of(tasks, "ansible.builtin.assert") < index_of(tasks, "caas_ingress_create.yaml")
+
+
 def test_api_bootstrap_dns_precedes_every_guest_readiness_wait() -> None:
     api_tasks = load_tasks(TASKS / "caas_api_dns_create.yaml")
     api_text = yaml.safe_dump(api_tasks)

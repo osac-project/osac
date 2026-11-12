@@ -1,3 +1,11 @@
+- name: Require a supported CaaS DNS domain
+  ansible.builtin.assert:
+    that:
+      - external_access_base_domain in (external_access_supported_base_domains | default([]))
+    fail_msg: >-
+      The CaaS DNS base domain must be listed in
+      external_access_supported_base_domains.
+
 - name: Publish the API bootstrap DNS records
   ansible.builtin.include_tasks: caas_api_dns_create.yaml
 

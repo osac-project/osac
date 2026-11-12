@@ -4,6 +4,55 @@
   gather_facts: false
 
   tasks:
+    - name: Reject a missing tenant annotation before creating VM resources
+      block:
+        - name: Attempt resource creation without a tenant annotation
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_resources.yaml
+          vars:
+            compute_instance:
+              metadata:
+                annotations: {}
+            vm_disk_volume_ids:
+              boot: volume-boot
+            vm_additional_disks: []
+
+        - name: Fail if a missing tenant annotation was accepted
+          ansible.builtin.fail:
+            msg: Resource creation accepted a missing tenant annotation
+      rescue:
+        - name: Confirm the missing tenant guard rejected the request
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require ComputeInstance tenant annotation for VM resources'
+              - "'osac.openshift.io/tenant' in ansible_failed_result.msg"
+
+    - name: Reject an empty tenant annotation before creating VM resources
+      block:
+        - name: Attempt resource creation with an empty tenant annotation
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_resources.yaml
+          vars:
+            compute_instance:
+              metadata:
+                annotations:
+                  osac.openshift.io/tenant: ''
+            vm_disk_volume_ids:
+              boot: volume-boot
+            vm_additional_disks: []
+
+        - name: Fail if an empty tenant annotation was accepted
+          ansible.builtin.fail:
+            msg: Resource creation accepted an empty tenant annotation
+      rescue:
+        - name: Confirm the empty tenant guard rejected the request
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require ComputeInstance tenant annotation for VM resources'
+              - "'osac.openshift.io/tenant' in ansible_failed_result.msg"
+
     - name: Reject a missing boot disk Volume ID
       block:
         - name: Attempt resource creation without a boot disk Volume ID

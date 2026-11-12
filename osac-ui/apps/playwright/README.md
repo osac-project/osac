@@ -51,11 +51,28 @@ the browser flow starts.
 bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
   --osac-ui-dir="$PWD" --kubeconfig="${KUBECONFIG:-}"
 
-bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
-  --osac-ui-dir="$PWD" --tag=vmaas_all \
-  --instance=1 --admin-user=<keycloak-user> \
-  --admin-password=<password>
+(
+  set -o pipefail
+  printf 'Enter admin password: '
+  read -rs E2E_PASSWORD
+  printf '\n'
+  bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
+    --osac-ui-dir="$PWD" \
+    --tag=vmaas_all \
+    --instance=1 \
+    --admin-user=admin \
+    --admin-password="$E2E_PASSWORD" \
+    --allow-root-e2e \
+    --ignore-tls \
+    --reporter=line 2>&1 | tee vmaas-flow-1.log
+  status=${PIPESTATUS[0]}
+  unset E2E_PASSWORD
+  exit "$status"
+)
 ```
+
+Enter the admin password when prompted; the live output is saved to
+`vmaas-flow-1.log`.
 
 The default HTML reporter does not show the full live test log in the terminal.
 Add `--reporter=line` to the runner command for live progress and test output.

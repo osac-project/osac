@@ -10,7 +10,7 @@ USER 0
 
 WORKDIR /opt/osac
 
-COPY --from=kubectl /kubectl /usr/local/bin/kubectl
+COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
 COPY pyproject.toml uv.lock ./
 COPY tests ./tests
 RUN python3 -m pip install --no-cache-dir .

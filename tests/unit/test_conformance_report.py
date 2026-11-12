@@ -46,10 +46,31 @@ def _report(message: str = "ok") -> Report:
         profiles=(ProfileResult("vm", ("vmaas",), True, Result.PASS),),
         tests=(TestOutcome(identity, Result.PASS, 1.5, message, Path()),),
         checks=(
-            Check("all-blocking-tests-pass", "every selected blocking test passed", "rule", "remedy", CheckResult.PASS),
-            Check("all-components-conformant", "every component is conformant", "rule", "remedy", CheckResult.PASS),
-            Check("no-leftovers", "nothing was left behind", "rule", "remedy", CheckResult.PASS),
-            Check("complete-plan", "the plan was complete", "rule", "remedy", CheckResult.PASS),
+            Check(
+                "all-blocking-tests-pass",
+                "every selected blocking test passed",
+                "rule",
+                "remedy",
+                CheckResult.PASS,
+                "1 blocking test passed",
+            ),
+            Check(
+                "all-components-conformant",
+                "every component is conformant",
+                "rule",
+                "remedy",
+                CheckResult.PASS,
+                "1 component conformant",
+            ),
+            Check("no-leftovers", "nothing was left behind", "rule", "remedy", CheckResult.PASS, "no leftovers"),
+            Check(
+                "complete-plan",
+                "the plan was complete",
+                "rule",
+                "remedy",
+                CheckResult.PASS,
+                "plan contained all 1 selected test",
+            ),
         ),
         leftovers=(),
         complete=True,
@@ -75,6 +96,7 @@ def test_report_has_the_exact_top_level_keys(tmp_path: Path) -> None:
         "result",
     ]
     assert data["tests"][0]["id"] == "TC-1"
+    assert data["checks"][0]["message"] == "1 blocking test passed"
     assert data["tests"][0]["durationSeconds"] == 1.5
     assert data["profiles"][0] == {"name": "vm", "selectors": ["vmaas"], "required": True, "result": "pass"}
 

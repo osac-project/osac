@@ -90,6 +90,7 @@ class Check:
     rule: str
     remedy: str
     result: CheckResult
+    message: str = ""
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,7 @@ class ComponentResult:
     domain: str
     identity: Mapping[str, Any]
     result: Verdict
+    reason: str = ""
 
 
 @dataclass(frozen=True)

@@ -264,7 +264,21 @@ def _derive_components(
         ]
         domain_profiles_pass = all(profile.result is Result.PASS for profile in relevant_profiles)
         verdict = Verdict.CONFORMANT if component_tests_pass and domain_profiles_pass else Verdict.IN_PROGRESS
-        results.append(ComponentResult(component.domain, component.fields, verdict))
+        failed_tests = [
+            test.id
+            for test in tests
+            if by_id.get(test.id) is None or by_id[test.id].result is not Result.PASS
+        ]
+        failed_profiles = [profile.name for profile in relevant_profiles if profile.result is not Result.PASS]
+        if not tests:
+            reason = "no component tests in the plan"
+        elif failed_tests:
+            reason = f"component tests failed: {', '.join(failed_tests)}"
+        elif failed_profiles:
+            reason = f"selected profiles failed: {', '.join(failed_profiles)}"
+        else:
+            reason = "all component tests and selected profiles passed"
+        results.append(ComponentResult(component.domain, component.fields, verdict, reason))
     return tuple(results)
 
 

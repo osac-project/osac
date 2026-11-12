@@ -51,6 +51,7 @@ def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:
                 "rule": check.rule,
                 "remedy": check.remedy,
                 "result": check.result.value,
+                "message": check.message,
             }
             for check in report.checks
         ],

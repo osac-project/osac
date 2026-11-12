@@ -103,7 +103,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create virtual network: %w", err)
 	}
 
-	_ = c.console.Infof(ctx, "Created virtual network '%s' (ID: %s).\n", response.Object.GetMetadata().GetName(), response.Object.GetId())
+	c.console.Infof(ctx, "Created virtual network '%s' (ID: %s).\n", response.Object.GetMetadata().GetName(), response.Object.GetId())
 
 	return nil
 }

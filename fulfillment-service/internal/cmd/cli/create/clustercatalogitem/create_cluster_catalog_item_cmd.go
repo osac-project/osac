@@ -140,7 +140,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	catalogItem = response.Object
-	_ = c.console.Infof(ctx, "Created cluster catalog item '%s'.\n", catalogItem.GetId())
+	c.console.Infof(ctx, "Created cluster catalog item '%s'.\n", catalogItem.GetId())
 
 	return nil
 }

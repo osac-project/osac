@@ -216,7 +216,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create external IP attachment: %w", err)
 	}
 
-	_ = c.console.Infof(ctx, "Created external IP attachment '%s' (external IP '%s' -> %s).\n",
+	c.console.Infof(ctx, "Created external IP attachment '%s' (external IP '%s' -> %s).\n",
 		response.GetObject().GetId(), eip.GetId(), targetDesc)
 
 	return nil

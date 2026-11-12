@@ -48,7 +48,9 @@ func Validate(format string) error {
 
 // Render writes message to console as JSON or YAML per format, encoding through protojson with proto field
 // names. The table format is the caller's: every command owns its table renderer and dispatches Table itself,
-// so Render only sees Json or Yaml. label names the entity in encoding and rendering error messages.
+// so Render only sees Json or Yaml. label names the entity in encoding error messages. The console's render
+// methods log write failures but do not return them, so a broken output stream goes unreported here; a shared
+// error-returning output contract is separate work.
 func Render(ctx context.Context, console *terminal.Console, format string, label string, message proto.Message) error {
 	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(message)
 	if err != nil {
@@ -59,13 +61,18 @@ func Render(ctx context.Context, console *terminal.Console, format string, label
 		return fmt.Errorf("failed to encode %s: %w", label, err)
 	}
 	if format == Json {
-		if err := console.RenderJson(ctx, value); err != nil {
-			return fmt.Errorf("failed to render %s: %w", label, err)
-		}
+		console.RenderJson(ctx, value)
 	} else {
-		if err := console.RenderYaml(ctx, value); err != nil {
-			return fmt.Errorf("failed to render %s: %w", label, err)
-		}
+		console.RenderYaml(ctx, value)
+	}
+	return nil
+}
+
+// Infof writes a message to the console's standard output stream and returns the write error. It exists
+// because the console's Infof method logs write failures but does not return them.
+func Infof(console *terminal.Console, format string, args ...any) error {
+	if _, err := fmt.Fprintf(console, format, args...); err != nil {
+		return fmt.Errorf("failed to write info output: %w", err)
 	}
 	return nil
 }

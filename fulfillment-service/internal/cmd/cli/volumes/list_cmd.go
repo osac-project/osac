@@ -87,7 +87,7 @@ func (c *listRunner) run(cmd *cobra.Command, args []string) (err error) {
 	}
 
 	if len(allItems) == 0 {
-		_ = c.console.Infof(ctx, "No volumes found.\n")
+		c.console.Infof(ctx, "No volumes found.\n")
 		return nil
 	}
 

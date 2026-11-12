@@ -240,18 +240,6 @@ var _ = Describe("render failures", func() {
 		Expect(errors.Is(err, sentinel)).To(BeTrue())
 	})
 
-	It("reports a failed JSON write", func() {
-		err := renderErr("json", 0, pageWith(1, active), &failingWriter{err: sentinel}, &bytes.Buffer{})
-		Expect(err).To(MatchError(ContainSubstring("failed to render billing accounts")))
-		Expect(errors.Is(err, sentinel)).To(BeTrue())
-	})
-
-	It("reports a failed YAML write", func() {
-		err := renderErr("yaml", 0, pageWith(1, active), &failingWriter{err: sentinel}, &bytes.Buffer{})
-		Expect(err).To(MatchError(ContainSubstring("failed to render billing accounts")))
-		Expect(errors.Is(err, sentinel)).To(BeTrue())
-	})
-
 	It("reports a failed page notice write", func() {
 		err := renderErr("table", 0, pageWith(5, active), &bytes.Buffer{}, &failingWriter{err: sentinel})
 		Expect(err).To(MatchError(ContainSubstring("failed to write the billing accounts page notice")))

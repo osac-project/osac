@@ -101,7 +101,7 @@ func listTenantBillingAssignments(ctx context.Context, client publicv1.TenantBil
 func render(ctx context.Context, console *terminal.Console, format string, offset int32,
 	response *publicv1.TenantBillingAssignmentsListResponse) error {
 	if format == output.Table {
-		return renderTable(ctx, console, offset, response)
+		return renderTable(console, offset, response)
 	}
 	return output.Render(ctx, console, format, "tenant billing assignments", response)
 }
@@ -110,13 +110,13 @@ func render(ctx context.Context, console *terminal.Console, format string, offse
 // than left blank, and the PENDING remediation message (or any other status message) is always shown, never
 // truncated to a placeholder, so an operator can act on it directly from this output. When the page does not
 // reach the total, a continuation hint is written to the console's error stream after the table.
-func renderTable(ctx context.Context, console *terminal.Console, offset int32,
+func renderTable(console *terminal.Console, offset int32,
 	response *publicv1.TenantBillingAssignmentsListResponse) error {
 	items := response.GetItems()
 	total := response.GetTotal()
 	if len(items) == 0 {
 		if total == 0 {
-			return console.Infof(ctx, "No tenant billing assignments found.\n")
+			return output.Infof(console, "No tenant billing assignments found.\n")
 		}
 		return output.WritePageNotice(console.Stderr(), "tenant billing assignments", offset, 0, total)
 	}

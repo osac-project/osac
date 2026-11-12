@@ -193,7 +193,7 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 	for _, warning := range response.GetWarnings() {
 		console.Errorf(ctx, "Warning: %s\n", warning)
 	}
-	_ = console.Infof(ctx, "Created bare metal instance '%s'.\n", response.GetObject().GetId())
+	console.Infof(ctx, "Created bare metal instance '%s'.\n", response.GetObject().GetId())
 	return nil
 }
 

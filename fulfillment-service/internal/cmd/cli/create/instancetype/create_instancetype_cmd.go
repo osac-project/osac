@@ -161,7 +161,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Display the result:
-	_ = c.console.Infof(ctx, "Created instance type '%s'.\n", response.GetObject().GetId())
+	c.console.Infof(ctx, "Created instance type '%s'.\n", response.GetObject().GetId())
 
 	return nil
 }

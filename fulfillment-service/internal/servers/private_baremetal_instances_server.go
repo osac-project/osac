@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
@@ -483,26 +484,39 @@ func (s *PrivateBareMetalInstancesServer) validateClusterWorkerType(
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"CaaS worker instance type does not match Cluster node set '%s'", nodeSetName)
 	}
+	fabricInterface := nodeSet.GetFabricInterface()
+	if fabricInterface != "" {
+		if errs := utilvalidation.IsDNS1123Label(fabricInterface); len(errs) > 0 {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"CaaS worker interface '%s' is not a valid DNS label: %s", fabricInterface, strings.Join(errs, ", "))
+		}
+	}
+	attachments := bmi.GetSpec().GetNetworkAttachments()
+	if len(attachments) > 0 {
+		if len(attachments) != 1 || attachments[0] == nil {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+				"CaaS worker requires the Cluster network attachment")
+		}
+		if attachments[0].GetInterface() != fabricInterface {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"CaaS worker interface must match Cluster node set '%s'", nodeSetName)
+		}
+	}
 	if s.settings.ProvisioningEnabled {
-		if nodeSet.GetFabricInterface() == "" {
+		if fabricInterface == "" {
 			return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
 				"Cluster node set '%s' has no authorized fabric interface", nodeSetName)
 		}
-		attachments := bmi.GetSpec().GetNetworkAttachments()
 		if len(attachments) != 1 || attachments[0] == nil {
 			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
 				"CaaS worker requires the Cluster network attachment")
 		}
 		attachment := attachments[0]
-		if attachment.GetInterface() != nodeSet.GetFabricInterface() {
-			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"CaaS worker interface must match Cluster node set '%s'", nodeSetName)
-		}
 		return attachment, nil
-	} else if len(bmi.GetSpec().GetNetworkAttachments()) != 0 {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
-			"CaaS worker must not specify a network attachment when provider networking is disabled")
 	}
+	// The current ClusterOrder sender still copies the Cluster attachment when
+	// provider networking is disabled. Keep that matching attachment for BMF's
+	// disabled-provider status path, but skip network-resource authorization.
 	return nil, nil
 }
 
@@ -574,9 +588,9 @@ func (s *PrivateBareMetalInstancesServer) authorizeClusterWorkerNetwork(
 				"CaaS worker SecurityGroups must include its Cluster network attachment groups")
 		}
 	}
-	if automaticGroups > 1 {
+	if automaticGroups != 1 {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
-			"CaaS worker may use at most one Cluster automatic SecurityGroup")
+			"CaaS worker requires exactly one Cluster automatic SecurityGroup")
 	}
 	attachment.SetSubnet(resolution.subnetReference())
 	attachment.SetSecurityGroups(resolution.securityGroupReferences())
@@ -1296,6 +1310,11 @@ func validateBareMetalAttachmentsForInstanceType(
 		iface := attachment.GetInterface()
 		if iface == "" {
 			continue
+		}
+		if errs := utilvalidation.IsDNS1123Label(iface); len(errs) > 0 {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"%snetwork_attachments[%d]: interface '%s' is not a valid DNS label: %s",
+				prefix, i, iface, strings.Join(errs, ", "))
 		}
 		role, found := interfaceRoles[iface]
 		switch {

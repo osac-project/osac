@@ -1625,6 +1625,43 @@ var _ = Describe("delete", func() {
 		Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 	})
 
+	It("should report network cleanup failures while the BMI remains DELETING", func() {
+		now := metav1.Now()
+		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, &now)
+		cr.Status.Phase = bmfov1alpha1.BareMetalInstancePhaseDeleting
+		cr.Status.Conditions = []metav1.Condition{{
+			Type:    string(bmfov1alpha1.HostConditionNetworkOffboardComplete),
+			Status:  metav1.ConditionFalse,
+			Reason:  "PowerOffFailed",
+			Message: "raw BMC diagnostic must remain administrator-visible",
+		}}
+
+		scheme := newFakeScheme()
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(cr).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
+			Namespace: hubNamespace, Client: fakeClient,
+		}, nil)
+
+		t := newTaskForDelete(bmiID, hubID, hubCache)
+		err := t.delete(ctx)
+		Expect(err).To(MatchError("kubernetes bare metal instance deletion is still in progress"))
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING))
+
+		networkReady := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+		Expect(networkReady).ToNot(BeNil())
+		Expect(networkReady.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(networkReady.GetReason()).To(Equal("PowerOffFailed"))
+		Expect(networkReady.GetMessage()).To(Equal("Network cleanup did not complete."))
+		Expect(networkReady.GetMessage()).ToNot(ContainSubstring("raw BMC diagnostic"))
+	})
+
 	It("should remove finalizer when no hub is assigned", func() {
 		bmi := privatev1.BareMetalInstance_builder{
 			Id: bmiID,
@@ -1908,15 +1945,27 @@ var _ = Describe("syncStatus", func() {
 		Entry("network attachment failure", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
 			"NetworkAttachmentFailed", "NetworkAttachmentFailed", "Network attachment did not complete."),
 		Entry("network attachment template failure", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
-			bmfov1alpha1.HostConditionReasonTemplateFailed, "NetworkSetupFailed", "Network setup did not complete."),
+			bmfov1alpha1.HostConditionReasonTemplateFailed, "NetworkSetupFailed", "Network attachment did not complete."),
 		Entry("network handoff failure", bmfov1alpha1.HostConditionNetworkHandoffComplete,
 			"NetworkHandoffFailed", "NetworkHandoffFailed", "Network handoff did not complete."),
 		Entry("IP discovery failure", bmfov1alpha1.HostConditionIPDiscoveryComplete,
 			"IPDiscoveryFailed", "IPDiscoveryFailed", "IP address discovery did not complete."),
 		Entry("IP discovery template failure", bmfov1alpha1.HostConditionIPDiscoveryComplete,
-			bmfov1alpha1.HostConditionReasonTemplateFailed, "NetworkSetupFailed", "Network setup did not complete."),
+			bmfov1alpha1.HostConditionReasonTemplateFailed, "NetworkSetupFailed", "IP address discovery did not complete."),
 		Entry("attachment progress", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
 			"Progressing", "Progressing", "Network attachment is in progress."),
+		Entry("pre-create progress", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
+			"NetworkAttachmentNotCreated", "Progressing", "Network attachment is in progress."),
+		Entry("create intent progress", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
+			"NetworkAttachmentCreating", "Progressing", "Network attachment is in progress."),
+		Entry("legacy MAC recording progress", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
+			"NetworkAttachmentRecordingMAC", "Progressing", "Network attachment is in progress."),
+		Entry("legacy rejected create progress", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
+			"NetworkAttachmentCreateRejected", "Progressing", "Network attachment is in progress."),
+		Entry("legacy skipped create progress", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
+			"NetworkAttachmentCreationSkipped", "Progressing", "Network attachment is in progress."),
+		Entry("legacy apply progress", bmfov1alpha1.HostConditionNetworkAttachmentsReady,
+			"NetworkAttachmentApplying", "Progressing", "Network attachment is in progress."),
 		Entry("handoff progress", bmfov1alpha1.HostConditionNetworkHandoffComplete,
 			"Progressing", "Progressing", "Network handoff is in progress."),
 		Entry("IP discovery progress", bmfov1alpha1.HostConditionIPDiscoveryComplete,
@@ -1980,10 +2029,11 @@ var _ = Describe("syncStatus", func() {
 		Expect(condition.GetMessage()).To(Equal("Network cleanup did not complete."))
 	})
 
-	It("reports the first missing network phase as in progress after networking starts", func() {
+	It("reports the first missing network phase as in progress while the BMI progresses", func() {
 		t := newTask(0)
 		object := &bmfov1alpha1.BareMetalInstance{
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseProgressing,
 				Conditions: []metav1.Condition{{
 					Type:   string(bmfov1alpha1.HostConditionNetworkAttachmentsReady),
 					Status: metav1.ConditionTrue,
@@ -1999,6 +2049,27 @@ var _ = Describe("syncStatus", func() {
 		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
 		Expect(condition.GetReason()).To(Equal("PoweringOff"))
 		Expect(condition.GetMessage()).To(Equal("Network handoff is in progress."))
+	})
+
+	It("reports a generic failure instead of synthesizing progress for a failed BMI", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseFailed,
+				Conditions: []metav1.Condition{{
+					Type:   string(bmfov1alpha1.HostConditionNetworkAttachmentsReady),
+					Status: metav1.ConditionTrue, Reason: "Succeeded",
+				}},
+			},
+		}
+		t.syncStatus(object)
+
+		condition := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+		Expect(condition).ToNot(BeNil())
+		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(condition.GetReason()).To(Equal("NetworkSetupFailed"))
+		Expect(condition.GetMessage()).To(Equal("Network setup did not complete."))
 	})
 
 	It("uses a generic tenant-safe reason for an unknown network condition", func() {
@@ -2027,7 +2098,7 @@ var _ = Describe("syncStatus", func() {
 		Expect(condition.GetMessage()).ToNot(ContainSubstring("sensitive host diagnostic"))
 	})
 
-	It("reports completed network setup with the discovered or disabled reason", func() {
+	It("reports completed network setup based on skipped phases and stored attachments", func() {
 		conditions := func(reason string) []metav1.Condition {
 			return []metav1.Condition{
 				{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: reason},
@@ -2037,14 +2108,26 @@ var _ = Describe("syncStatus", func() {
 		}
 
 		for _, tc := range []struct {
-			reason          string
-			expectedReason  string
-			expectedMessage string
+			reason               string
+			hasNetworkAttachment bool
+			expectedReason       string
+			expectedMessage      string
 		}{
 			{reason: "IPDiscovered", expectedReason: "IPDiscovered", expectedMessage: "Network setup is complete."},
-			{reason: "ProvisioningDisabled", expectedReason: "ProvisioningDisabled", expectedMessage: "Provider networking is disabled; this operation was skipped."},
+			{reason: "Skipped", expectedReason: "IPDiscovered", expectedMessage: "Network setup is complete."},
+			{reason: "Skipped", hasNetworkAttachment: true, expectedReason: "ProvisioningDisabled",
+				expectedMessage: "Provider networking is disabled; this operation was skipped."},
+			{reason: "ProvisioningDisabled", hasNetworkAttachment: true, expectedReason: "ProvisioningDisabled",
+				expectedMessage: "Provider networking is disabled; this operation was skipped."},
 		} {
 			t := newTask(0)
+			if tc.hasNetworkAttachment {
+				t.bareMetalInstance.GetSpec().SetNetworkAttachments([]*privatev1.BareMetalNetworkAttachment{
+					privatev1.BareMetalNetworkAttachment_builder{
+						Subnet: privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+					}.Build(),
+				})
+			}
 			t.syncStatus(&bmfov1alpha1.BareMetalInstance{
 				Status: bmfov1alpha1.BareMetalInstanceStatus{Conditions: conditions(tc.reason)},
 			})
@@ -2057,12 +2140,12 @@ var _ = Describe("syncStatus", func() {
 		}
 	})
 
-	It("reports skipped setup only when every network phase was disabled", func() {
+	It("does not report disabled networking for a mixture of skipped and completed phases", func() {
 		t := newTask(0)
 		t.syncStatus(&bmfov1alpha1.BareMetalInstance{
 			Status: bmfov1alpha1.BareMetalInstanceStatus{
 				Conditions: []metav1.Condition{
-					{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: "ProvisioningDisabled"},
+					{Type: string(bmfov1alpha1.HostConditionNetworkAttachmentsReady), Status: metav1.ConditionTrue, Reason: "Skipped"},
 					{Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue, Reason: "Succeeded"},
 					{Type: string(bmfov1alpha1.HostConditionIPDiscoveryComplete), Status: metav1.ConditionTrue, Reason: "Succeeded"},
 				},

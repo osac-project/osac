@@ -273,6 +273,9 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 func (s *PrivateFabricDomainsServer) lockFabricDomainServerHost(
 	ctx context.Context, domain *privatev1.FabricDomain, host string,
 ) error {
+	if strings.TrimSpace(host) == "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "FabricDomain server name must not be empty")
+	}
 	matchedID := ""
 	ambiguous := false
 	err := forEachRecord(ctx, s.guards.bareMetalInstances, func(instance *privatev1.BareMetalInstance) {
@@ -291,31 +294,32 @@ func (s *PrivateFabricDomainsServer) lockFabricDomainServerHost(
 		return grpcstatus.Error(grpccodes.Internal, "failed to resolve FabricDomain server host")
 	}
 	if ambiguous || matchedID == "" {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"FabricDomain server '%s' must identify one BareMetalInstance host in the same tenant", host)
+		return invalidFabricDomainServer(host)
 	}
 	response, err := s.guards.bareMetalInstances.Get().SetId(matchedID).SetLock(true).Do(ctx)
 	if err != nil {
 		var notFound *dao.ErrNotFound
 		if errors.As(err, &notFound) {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"FabricDomain server '%s' must identify one BareMetalInstance host in the same tenant", host)
+			return invalidFabricDomainServer(host)
 		}
 		return ConvertDAOErrorToGRPC(err, "get", matchedID)
 	}
 	instance := response.GetObject()
 	if instance.GetMetadata().GetTenant() != domain.GetMetadata().GetTenant() ||
 		instance.GetStatus().GetExternalHostName() != host {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"FabricDomain server '%s' must identify one BareMetalInstance host in the same tenant", host)
+		return invalidFabricDomainServer(host)
 	}
 	if instance.GetMetadata().HasDeletionTimestamp() {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"BareMetalInstance host '%s' is being deleted", host)
+		return invalidFabricDomainServer(host)
 	}
 	if clusterWorkerMarkerPresent(instance) || refKey(instance.GetStatus().GetCluster()) != "" {
-		return grpcstatus.Error(grpccodes.InvalidArgument,
-			"FabricDomain cannot list a CaaS worker BareMetalInstance host")
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"FabricDomain server %s is a Cluster worker", host)
 	}
 	return nil
+}
+
+func invalidFabricDomainServer(host string) error {
+	return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		"FabricDomain server %s is not a bare-metal host of this tenant", host)
 }

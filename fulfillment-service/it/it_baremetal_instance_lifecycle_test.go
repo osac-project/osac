@@ -313,7 +313,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	})
 
 	It("projects BMFO network status without injecting operator-owned conditions", func(ctx context.Context) {
-		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+		// Give this projection test its own Subnet so parallel integration specs
+		// cannot remove the shared tenant-default fixture during Create.
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Metadata: publicv1.Metadata_builder{

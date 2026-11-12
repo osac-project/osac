@@ -2692,6 +2692,23 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Message()).To(ContainSubstring("not found in instance type"))
 		})
 
+		It("rejects an interface name that is not a DNS label", func() {
+			bmi := privatev1.BareMetalInstance_builder{
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+						privatev1.BareMetalNetworkAttachment_builder{
+							Subnet:    privatev1.SubnetLocalReference_builder{Id: "subnet-1"}.Build(),
+							Interface: strPtr("Data_0"),
+						}.Build(),
+					},
+				}.Build(),
+			}.Build()
+			err := server.validateNetworkAttachments(bmi, bareMetalInstanceTypeFixture("test-instance-type",
+				bareMetalNetworkPort("Data_0", "fabric")))
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("not a valid DNS label")))
+		})
+
 		It("Rejects interface with lifecycle role", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
@@ -4333,6 +4350,131 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("fabric"))
 		})
+	})
+})
+
+var _ = Describe("CaaS worker network authorization", func() {
+	var (
+		server     *PrivateBareMetalInstancesServer
+		cluster    *privatev1.Cluster
+		attachment *privatev1.BareMetalNetworkAttachment
+	)
+
+	BeforeEach(func() {
+		var err error
+		server, err = NewPrivateBareMetalInstancesServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		network := seedReadyDefaultNetworking(testTenant, 0)
+		clusterID := "test-caas-worker-cluster"
+		autoGroupResp, err := fixtureDAO[*privatev1.SecurityGroup]().Create().SetObject(
+			privatev1.SecurityGroup_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "auto-sg-" + clusterID,
+					Tenant:  testTenant,
+					Creator: systemCreator,
+					Labels: map[string]string{
+						autoCreatedLabel:    "true",
+						autoCreatedForLabel: clusterID,
+					},
+					Annotations: map[string]string{ownerReferenceAnnotation: clusterID},
+				}.Build(),
+				Spec: privatev1.SecurityGroupSpec_builder{
+					VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: network.virtualNetworkID}.Build(),
+				}.Build(),
+				Status: privatev1.SecurityGroupStatus_builder{
+					State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+					Hub:   "network-hub-a",
+				}.Build(),
+			}.Build()).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		cluster = privatev1.Cluster_builder{
+			Id:       clusterID,
+			Metadata: privatev1.Metadata_builder{Name: clusterID, Tenant: testTenant}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{Id: network.subnetID}.Build(),
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+						privatev1.SecurityGroupLocalReference_builder{Id: network.securityGroupID}.Build(),
+					},
+				}.Build(),
+			}.Build(),
+		}.Build()
+		attachment = privatev1.BareMetalNetworkAttachment_builder{
+			Subnet: privatev1.SubnetLocalReference_builder{Id: network.subnetID}.Build(),
+			SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+				privatev1.SecurityGroupLocalReference_builder{Id: network.securityGroupID}.Build(),
+				privatev1.SecurityGroupLocalReference_builder{Id: autoGroupResp.GetObject().GetId()}.Build(),
+			},
+		}.Build()
+	})
+
+	It("allows the stored Cluster groups plus its automatic group", func() {
+		_, err := server.authorizeClusterWorkerNetwork(ctx, attachment, cluster)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("rejects a worker attachment that omits the automatic group", func() {
+		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
+			privatev1.SecurityGroupLocalReference_builder{Id: refKey(cluster.GetSpec().GetNetworkAttachment().GetSecurityGroups()[0])}.Build(),
+		})
+		_, err := server.authorizeClusterWorkerNetwork(ctx, attachment, cluster)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err).To(MatchError(ContainSubstring("requires exactly one Cluster automatic SecurityGroup")))
+	})
+
+	It("rejects a Cluster fabric interface that is not a DNS label", func() {
+		cluster.GetSpec().SetNodeSets(map[string]*privatev1.ClusterNodeSet{
+			"workers": privatev1.ClusterNodeSet_builder{
+				BaremetalInstanceType: bareMetalInstanceTypeReference("worker-type"),
+				FabricInterface:       "Data_0",
+			}.Build(),
+		})
+		worker := privatev1.BareMetalInstance_builder{
+			Status: privatev1.BareMetalInstanceStatus_builder{NodeSet: new("workers")}.Build(),
+		}.Build()
+		_, err := server.validateClusterWorkerType(worker, cluster,
+			bareMetalInstanceTypeFixture("worker-type", bareMetalNetworkPort("Data_0", "fabric")))
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err).To(MatchError(ContainSubstring("not a valid DNS label")))
+	})
+
+	It("accepts the ClusterOrder attachment when provider networking is disabled", func() {
+		server.settings.ProvisioningEnabled = false
+		worker := privatev1.BareMetalInstance_builder{
+			Status: privatev1.BareMetalInstanceStatus_builder{NodeSet: new("workers")}.Build(),
+			Spec: privatev1.BareMetalInstanceSpec_builder{
+				NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+					privatev1.BareMetalNetworkAttachment_builder{
+						Subnet: attachment.GetSubnet(),
+						SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+							privatev1.SecurityGroupLocalReference_builder{
+								Id: refKey(cluster.GetSpec().GetNetworkAttachment().GetSecurityGroups()[0]),
+							}.Build(),
+						},
+						Interface: new("data-0"),
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		cluster.GetSpec().SetNodeSets(map[string]*privatev1.ClusterNodeSet{
+			"workers": privatev1.ClusterNodeSet_builder{
+				BaremetalInstanceType: bareMetalInstanceTypeReference("worker-type"),
+				FabricInterface:       "data-0",
+			}.Build(),
+		})
+		instanceType := bareMetalInstanceTypeFixture("worker-type", bareMetalNetworkPort("data-0", "fabric"))
+
+		resolved, err := server.validateClusterWorkerType(worker, cluster, instanceType)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolved).To(BeNil(), "disabled provider networking skips network-resource authorization")
+		Expect(worker.GetSpec().GetNetworkAttachments()).To(HaveLen(1),
+			"keep the matching attachment so BMFO can report the disabled-provider result")
 	})
 })
 

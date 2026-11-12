@@ -143,6 +143,32 @@ func seedClusterInProject(project, subnetID, securityGroupID string) *privatev1.
 		}.Build(),
 	).Do(ctx)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+
+	securityGroupResponse, err := fixtureDAO[*privatev1.SecurityGroup]().Get().SetId(securityGroupID).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	automaticGroupID := "auto-sg-" + resp.GetObject().GetId()
+	_, err = fixtureDAO[*privatev1.SecurityGroup]().Create().SetObject(privatev1.SecurityGroup_builder{
+		Id: automaticGroupID,
+		Metadata: privatev1.Metadata_builder{
+			Name:    automaticGroupID,
+			Tenant:  testTenant,
+			Project: project,
+			Creator: systemCreator,
+			Labels: map[string]string{
+				autoCreatedLabel:    "true",
+				autoCreatedForLabel: resp.GetObject().GetId(),
+			},
+			Annotations: map[string]string{ownerReferenceAnnotation: resp.GetObject().GetId()},
+		}.Build(),
+		Spec: privatev1.SecurityGroupSpec_builder{
+			VirtualNetwork: securityGroupResponse.GetObject().GetSpec().GetVirtualNetwork(),
+		}.Build(),
+		Status: privatev1.SecurityGroupStatus_builder{
+			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+			Hub:   "network-hub-a",
+		}.Build(),
+	}.Build()).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	return resp.GetObject()
 }
 
@@ -221,6 +247,7 @@ var _ = Describe("Worker attribution", func() {
 							Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
 							SecurityGroups: []*privatev1.SecurityGroupLocalReference{
 								privatev1.SecurityGroupLocalReference_builder{Id: securityGroupID}.Build(),
+								privatev1.SecurityGroupLocalReference_builder{Id: "auto-sg-" + refKey(ownerRef)}.Build(),
 							},
 							Interface: new("data-0"),
 						}.Build(),

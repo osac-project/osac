@@ -187,6 +187,9 @@ func (g *networkingGuards) rejectBareMetalInstanceDeleteIfFabricDomainReferences
 	}
 	return rejectGuardedDelete(ctx, g, g.fabricDomains, "FabricDomain", "BareMetalInstance", instance,
 		func(domain *privatev1.FabricDomain) bool {
+			if domain.GetMetadata().GetTenant() != instance.GetMetadata().GetTenant() {
+				return false
+			}
 			for _, server := range domain.GetSpec().GetServers() {
 				if server == host {
 					return true

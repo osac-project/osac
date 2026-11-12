@@ -415,6 +415,10 @@ func (t *task) delete(ctx context.Context) (err error) {
 		t.removeFinalizer()
 		return
 	}
+	// OSAC-6818: Keep NETWORK_READY current while deletion retries. The projector
+	// preserves the last condition until BMF reports its network cleanup conditions.
+	t.syncNetworkReady(object.Status.Phase, object.Status.Conditions)
+
 	if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.bareMetalInstance.GetId()); err != nil {
 		return err
 	}
@@ -765,14 +769,14 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 	}
 }
 
-func (t *task) syncNetworkReady(phase bmfov1alpha1.BareMetalInstancePhaseType, conditions []metav1.Condition) {
+func (t *task) syncNetworkReady(bmiPhase bmfov1alpha1.BareMetalInstancePhaseType, conditions []metav1.Condition) {
 	offboard := apimeta.FindStatusCondition(conditions, string(bmfov1alpha1.HostConditionNetworkOffboardComplete))
 	attachments := apimeta.FindStatusCondition(conditions, string(bmfov1alpha1.HostConditionNetworkAttachmentsReady))
 	handoff := apimeta.FindStatusCondition(conditions, string(bmfov1alpha1.HostConditionNetworkHandoffComplete))
 	ipDiscovery := apimeta.FindStatusCondition(conditions, string(bmfov1alpha1.HostConditionIPDiscoveryComplete))
 
 	if offboard == nil && attachments == nil && handoff == nil && ipDiscovery == nil {
-		switch phase {
+		switch bmiPhase {
 		case bmfov1alpha1.BareMetalInstancePhaseProgressing:
 			t.setNetworkReady(metav1.ConditionFalse, "Progressing", "")
 		case bmfov1alpha1.BareMetalInstancePhaseDeleting:
@@ -797,36 +801,44 @@ func (t *task) syncNetworkReady(phase bmfov1alpha1.BareMetalInstancePhaseType, c
 		{handoff, bmfov1alpha1.HostConditionNetworkHandoffComplete, "PoweringOff"},
 		{ipDiscovery, bmfov1alpha1.HostConditionIPDiscoveryComplete, "LeasePending"},
 	}
-	for _, phase := range phases {
-		if phase.condition == nil {
-			t.setNetworkReady(metav1.ConditionFalse, phase.missingReason, string(phase.conditionType))
+	for _, networkPhase := range phases {
+		if networkPhase.condition == nil {
+			switch bmiPhase {
+			case bmfov1alpha1.BareMetalInstancePhaseProgressing:
+				t.setNetworkReady(metav1.ConditionFalse, networkPhase.missingReason,
+					string(networkPhase.conditionType))
+			case bmfov1alpha1.BareMetalInstancePhaseFailed:
+				t.setNetworkReady(metav1.ConditionFalse, reasonNetworkSetupFailed,
+					string(networkPhase.conditionType))
+			}
 			return
 		}
-		if phase.condition.Status != metav1.ConditionTrue {
-			t.setNetworkReady(phase.condition.Status, phase.condition.Reason, phase.condition.Type)
+		if networkPhase.condition.Status != metav1.ConditionTrue {
+			t.setNetworkReady(networkPhase.condition.Status, networkPhase.condition.Reason, networkPhase.condition.Type)
 			return
 		}
 	}
 
 	reason := "IPDiscovered"
 	allPhasesSkipped := true
-	for _, phase := range phases {
-		if phase.condition.Reason != "ProvisioningDisabled" {
+	for _, networkPhase := range phases {
+		if networkPhase.condition.Reason != "Skipped" && networkPhase.condition.Reason != "ProvisioningDisabled" {
 			allPhasesSkipped = false
 			break
 		}
 	}
-	if allPhasesSkipped {
+	if allPhasesSkipped && len(t.bareMetalInstance.GetSpec().GetNetworkAttachments()) > 0 {
 		reason = "ProvisioningDisabled"
 	}
 	t.setNetworkReady(metav1.ConditionTrue, reason, string(bmfov1alpha1.HostConditionIPDiscoveryComplete))
 }
 
 func (t *task) setNetworkReady(status metav1.ConditionStatus, reason, conditionType string) {
+	message := networkReadyMessage(conditionType, reason)
 	reason = networkReadyReason(reason)
 	t.updateCondition(
 		privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY,
-		mapConditionStatus(status), reason, networkReadyMessage(conditionType, reason))
+		mapConditionStatus(status), reason, message)
 }
 
 func networkReadyReason(reason string) string {
@@ -835,6 +847,9 @@ func networkReadyReason(reason string) string {
 		"Progressing", "Offboarding", "PoweringOff", "PoweringOn", "LeasePending",
 		"NetworkDetaching", "ProvisioningDisabled", "PowerOffFailed", "IPDiscovered":
 		return reason
+	case "NetworkAttachmentNotCreated", "NetworkAttachmentCreating", "NetworkAttachmentApplying",
+		"NetworkAttachmentRecordingMAC", "NetworkAttachmentCreateRejected", "NetworkAttachmentCreationSkipped":
+		return "Progressing"
 	case "Detaching":
 		return "NetworkDetaching"
 	default:
@@ -843,6 +858,15 @@ func networkReadyReason(reason string) string {
 }
 
 func networkReadyMessage(conditionType, reason string) string {
+	if reason == bmfov1alpha1.HostConditionReasonTemplateFailed {
+		switch bmfov1alpha1.BareMetalInstanceConditionType(conditionType) {
+		case bmfov1alpha1.HostConditionNetworkAttachmentsReady:
+			return failureMessage(bmfov1alpha1.FailureNetworkAttachment)
+		case bmfov1alpha1.HostConditionIPDiscoveryComplete:
+			return failureMessage(bmfov1alpha1.FailureIPDiscovery)
+		}
+	}
+	reason = networkReadyReason(reason)
 	switch reason {
 	case "NetworkHandoffFailed":
 		return failureMessage(bmfov1alpha1.FailureNetworkHandoff)

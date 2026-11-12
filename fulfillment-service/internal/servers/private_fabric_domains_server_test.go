@@ -99,7 +99,16 @@ var _ = Describe("Private fabric domains server", func() {
 		object.GetSpec().SetServers([]string{"unknown-host"})
 		_, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err).To(MatchError(ContainSubstring("same tenant")))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal(
+			"FabricDomain server unknown-host is not a bare-metal host of this tenant"))
+	})
+
+	It("rejects an empty server name with InvalidArgument", func() {
+		seedNetwork(true)
+		object.GetSpec().SetServers([]string{""})
+		_, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("FabricDomain server name must not be empty"))
 	})
 
 	It("rejects a CaaS worker host", func() {
@@ -123,7 +132,7 @@ var _ = Describe("Private fabric domains server", func() {
 		object.GetSpec().SetServers([]string{"worker-host"})
 		_, err = server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err).To(MatchError(ContainSubstring("cannot list a CaaS worker")))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("FabricDomain server worker-host is a Cluster worker"))
 	})
 
 	It("keeps a BMI host protected while its FabricDomain is deleting", func() {

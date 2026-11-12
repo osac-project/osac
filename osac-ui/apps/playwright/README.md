@@ -101,9 +101,10 @@ Environment variables:
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
 
 When `OSAC_UI_BASE_URL` is unset, the runner reads the `osac-ui` route from
-the standard kubeconfig locations. When `OSAC_API_BASE_URL` is unset, it reads
-the `fulfillment-api` route or derives it from a standard `osac-ui-...` route
-name. Set either URL explicitly for deployments that use different routes.
+the standard kubeconfig locations or derives the standard route from the
+kubeconfig API server. When `OSAC_API_BASE_URL` is unset, it reads the
+`fulfillment-api` route or derives it from a standard `osac-ui-...` route name.
+Set either URL explicitly for deployments that use different routes.
 
 ```bash
 export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=...

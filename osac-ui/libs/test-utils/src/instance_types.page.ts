@@ -338,10 +338,14 @@ export const expectInstanceTypeListed = async (
 
 /** Delete an instance type only when it appears in the list. */
 export const deleteInstanceTypeIfPresent = async (page: Page, name: string): Promise<boolean> => {
-  try {
-    await expectInstanceTypeToExist(page, name);
-  } catch {
+  await waitForInstanceTypeListReady(page);
+  const instanceTypeRow = getInstanceTypeRow(page, name);
+  const rowCount = await instanceTypeRow.count();
+  if (rowCount === 0) {
     return false;
+  }
+  if (rowCount !== 1) {
+    throw new Error(`Expected exactly one instance type row for "${name}", but found ${rowCount}.`);
   }
 
   await deleteInstanceType(page, name);

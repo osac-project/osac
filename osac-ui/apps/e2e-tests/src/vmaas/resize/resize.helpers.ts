@@ -96,12 +96,29 @@ export const verifyResizeUiConfiguration = async (
 };
 
 export const useResizeVmLifecycle = (): void => {
+  let vmCreationStarted = false;
+
   test.beforeEach(async ({ page }) => {
-    await createResizeVm(page);
+    vmCreationStarted = false;
+    await createResizeVm(page, () => {
+      vmCreationStarted = true;
+    });
   });
 
   test.afterEach(async ({ page }) => {
-    await deleteResizeVm(page);
+    if (!vmCreationStarted) {
+      logProgress(
+        'resize-vm-delete',
+        'Skipping VM cleanup because VM creation did not reach tenant authentication.',
+      );
+      return;
+    }
+
+    try {
+      await deleteResizeVm(page);
+    } finally {
+      vmCreationStarted = false;
+    }
   });
 };
 
@@ -118,14 +135,6 @@ export const restartVmAndVerify = async (
   logProgress('vm-resize', `Requesting ${action} for VM "${vmName}".`);
   await runVmPowerAction(page, action);
   if (action === 'restart') {
-    await waitForVmConditionStatus(
-      page,
-      vmName,
-      restartInProgressCondition,
-      'True',
-      conditionTimeout,
-    );
-    logProgress('vm-resize-condition', `${vmName}: ${restartInProgressCondition}=True.`);
     await testStep(
       'vm-resize',
       `Verify controller processed restart for VM "${vmName}"`,

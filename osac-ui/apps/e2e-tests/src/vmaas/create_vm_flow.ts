@@ -28,6 +28,7 @@ import {
 export interface CreateVmFromCatalogOptions {
   progressLabel: string;
   vmName: string;
+  onCreationStarted?: () => void;
 }
 
 const cloudInit = '#cloud-config\nruncmd:\n  - echo vm-e2e';
@@ -52,6 +53,7 @@ export const createVmFromCatalog = async (
     );
     return;
   }
+  options.onCreationStarted?.();
 
   const progressLabel = options.progressLabel;
   const tenantCredentials = await testStep(progressLabel, 'Read generated tenant credentials', () =>
@@ -92,7 +94,13 @@ export const createVmFromCatalog = async (
   });
 
   await testStep(progressLabel, 'Configure the base instance type', async () => {
-    await selectOption(page, VmCreatePage.instanceType, new RegExp(instanceTypeTestData.name));
+    await selectOption(
+      page,
+      VmCreatePage.instanceType,
+      `${instanceTypeTestData.name.normalize('NFC')} — ${instanceTypeTestData.vcpus} vCPUs, ${instanceTypeTestData.memoryGib} GiB`,
+      0,
+      true,
+    );
     await page.getByRole(...VmCreatePage.next).click();
   });
 
@@ -135,7 +143,9 @@ export const createVmFromCatalog = async (
     await expect(
       page.getByText(catalogTestData.fields.diskImage.name, { exact: true }),
     ).toBeVisible();
-    await expect(page.getByText(new RegExp(instanceTypeTestData.name))).toBeVisible();
+    await expect(
+      page.getByText(instanceTypeTestData.name.normalize('NFC'), { exact: true }),
+    ).toBeVisible();
     await expect(page.getByText(sshKeyName, { exact: true })).toBeVisible();
     await expect(page.getByText('Tenant default', { exact: true })).toBeVisible();
     await expect(page.getByText('Yes', { exact: true })).toBeVisible();

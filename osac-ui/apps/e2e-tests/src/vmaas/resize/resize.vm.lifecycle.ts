@@ -9,7 +9,7 @@ import { createVmFromCatalog } from '../create_vm_flow';
 import { instanceTypeTestData, resizeVmTestName } from '../test_data';
 
 /** Create the VM used by one resize scenario from the resize catalog blocks. */
-export const createResizeVm = async (page: Page): Promise<void> => {
+export const createResizeVm = async (page: Page, onCreationStarted?: () => void): Promise<void> => {
   logProgress(
     'resize-vm-create',
     `Creating VM "${resizeVmTestName}" with base instance type "${instanceTypeTestData.name}" (${instanceTypeTestData.vcpus} vCPUs, ${instanceTypeTestData.memoryGib} GiB).`,
@@ -17,6 +17,7 @@ export const createResizeVm = async (page: Page): Promise<void> => {
   await createVmFromCatalog(page, {
     progressLabel: 'resize-vm-create',
     vmName: resizeVmTestName,
+    onCreationStarted,
   });
   await testStep(
     'resize-vm-create',

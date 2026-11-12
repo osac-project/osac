@@ -62,6 +62,7 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
+// NewTenantReconciler creates a TenantReconciler for the target cluster.
 func NewTenantReconciler(
 	mgr mcmanager.Manager,
 	tenantNamespace string,
@@ -183,6 +184,8 @@ func (r *TenantReconciler) handleDelete(ctx context.Context, instance *v1alpha1.
 	return ctrl.Result{}, nil
 }
 
+// ensureRemoteTenantNamespace creates or validates the Tenant namespace on the
+// remote cluster.
 func (r *TenantReconciler) ensureRemoteTenantNamespace(ctx context.Context, instance *v1alpha1.Tenant) error {
 	if r.targetCluster == mcmanager.LocalCluster {
 		return nil
@@ -237,6 +240,7 @@ func (r *TenantReconciler) ensureRemoteTenantNamespace(ctx context.Context, inst
 	return nil
 }
 
+// tenantNamespaceLabels returns the identity labels for a Tenant namespace.
 func tenantNamespaceLabels(instance *v1alpha1.Tenant) map[string]string {
 	labels := map[string]string{
 		osacTenantKey:       instance.GetName(),
@@ -249,6 +253,8 @@ func tenantNamespaceLabels(instance *v1alpha1.Tenant) map[string]string {
 	return labels
 }
 
+// tenantNamespaceMatches reports whether a namespace's ownership labels are
+// compatible with the Tenant.
 func tenantNamespaceMatches(namespace *corev1.Namespace, instance *v1alpha1.Tenant) bool {
 	if namespace.Labels[osacTenantRefLabel] != instance.GetName() ||
 		namespace.Labels[osacProjectRefLabel] != instance.GetNamespace() ||

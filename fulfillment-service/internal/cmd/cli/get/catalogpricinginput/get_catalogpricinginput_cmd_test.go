@@ -22,7 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
-	"github.com/osac-project/osac/fulfillment-service/internal/testing/golden"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -53,6 +53,7 @@ var _ = Describe("render", func() {
 			}.Build(),
 		}
 	}
+	emptyItems := func() []*publicv1.CatalogPricingInput { return nil }
 	run := func(format string, items []*publicv1.CatalogPricingInput) string {
 		buffer := &bytes.Buffer{}
 		console, err := terminal.NewConsole().SetLogger(logger).SetStdout(buffer).Build()
@@ -103,15 +104,41 @@ var _ = Describe("render", func() {
 		Expect(output).To(ContainSubstring("accepts_any_value: true"))
 	})
 
-	// Golden files live in testdata/. Regenerate with UPDATE_GOLDEN=1 and review the diff.
-	DescribeTable("matches the golden output",
-		func(format string, source func() []*publicv1.CatalogPricingInput, name string) {
-			golden.Assert(name, run(format, source()))
+	DescribeTable("renders the expected output",
+		func(format string, source func() []*publicv1.CatalogPricingInput, assert func(string)) {
+			assert(run(format, source()))
 		},
-		Entry("table, with items", "table", items, "items.table.golden"),
-		Entry("table, empty", "table", func() []*publicv1.CatalogPricingInput { return nil }, "empty.table.golden"),
-		Entry("json, with items", "json", items, "items.json.golden"),
-		Entry("json, empty", "json", func() []*publicv1.CatalogPricingInput { return nil }, "empty.json.golden"),
+		Entry("table, with items", "table", items, func(output string) {
+			Expect(testing.TableRows(output)).To(Equal([][]string{
+				{"SERVICE", "DIMENSION", "VALUE", "ACCEPTS ANY VALUE", "CATALOG ITEMS"},
+				{"compute_instance", "instance_type", "m1.small", "false", "basic-vm"},
+				{"cluster", "node_count", "<any>", "true", "flex-cluster"},
+			}))
+		}),
+		Entry("table, empty", "table", emptyItems, func(output string) {
+			Expect(testing.TableRows(output)).To(Equal([][]string{
+				{"SERVICE", "DIMENSION", "VALUE", "ACCEPTS ANY VALUE", "CATALOG ITEMS"},
+			}))
+		}),
+		Entry("json, with items", "json", items, func(output string) {
+			Expect(output).To(MatchJSON(`[
+				{
+					"service": "compute_instance",
+					"dimension": "instance_type",
+					"value": "m1.small",
+					"catalog_items": [{"id": "c1", "name": "basic-vm", "title": "Basic VM", "published": true}]
+				},
+				{
+					"service": "cluster",
+					"dimension": "node_count",
+					"accepts_any_value": true,
+					"catalog_items": [{"id": "c2", "name": "flex-cluster", "title": "Flex Cluster"}]
+				}
+			]`))
+		}),
+		Entry("json, empty", "json", emptyItems, func(output string) {
+			Expect(output).To(MatchJSON(`[]`))
+		}),
 	)
 
 	It("returns an error when writing the table fails immediately", func() {

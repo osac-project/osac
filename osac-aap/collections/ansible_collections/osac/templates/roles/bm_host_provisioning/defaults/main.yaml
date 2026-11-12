@@ -1,7 +1,5 @@
 ---
 bm_host_openstack_external_network: "external"
-# TODO(OSAC-4576): Replace this minimum when the required image size is agreed.
-bm_host_root_disk_min_gib: 4
 # Polling budget for the Metal3 create/delete waits on the BMH provisioning
 # state. The defaults tolerate a slow bare-metal provision; callers that
 # drive the status themselves (integration tests) can lower both.

@@ -17,8 +17,8 @@ class RootDiskPolicy(enum.Enum):
     SMALLEST = "smallest"
 
 
-# Default minimum root disk size (GiB), mirroring the role's
-# bm_host_root_disk_min_gib default.
+# Default minimum root disk size (GiB) for the smallest-disk policy.
+# TODO(OSAC-4576): Replace this minimum when the required image size is agreed.
 DEFAULT_MIN_SIZE_GIB = 4
 
 

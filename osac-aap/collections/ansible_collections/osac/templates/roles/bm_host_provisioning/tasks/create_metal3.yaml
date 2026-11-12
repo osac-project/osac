@@ -58,16 +58,15 @@
     - name: Select fallback root device hints
       # Prefer a stable hardware identity over the probe-order device name:
       # serial, then wwn, then deviceName. The disk is chosen by the filter's
-      # default smallest-disk policy, bounded by the role's minimum size. The
-      # full hint is recorded as JSON in the fallback-root-device annotation
-      # so delete_metal3.yaml can recognize and clear exactly what was
-      # generated here.
+      # default smallest-disk policy and minimum size. The full hint is
+      # recorded as JSON in the fallback-root-device annotation so
+      # delete_metal3.yaml can recognize and clear exactly what was generated
+      # here.
       when: not (bmh_info.spec.rootDeviceHints | default({}))
       ansible.builtin.set_fact:
         fallback_root_device_hints: >-
           {{ hardware_data_result.resources
-             | osac.templates.root_device_hints(bmh_info, 'smallest',
-                                                min_size=bm_host_root_disk_min_gib) }}
+             | osac.templates.root_device_hints(bmh_info) }}
 
     - name: Build userData content
       when: user_data_secret_ref | length > 0

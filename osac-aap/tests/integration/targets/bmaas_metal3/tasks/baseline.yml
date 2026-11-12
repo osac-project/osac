@@ -76,7 +76,7 @@
             {'status': {'hardware': {'storage': [
               {'name': '/dev/vda', 'sizeBytes': 17179869184,
                'serial': 'SER-42', 'wwn': '0x5000c50015ea71ad'}
-            ]}}}, 'smallest', min_size=4) }}
+            ]}}}) }}
 
     - name: Build BMH patch using actual role code
       ansible.builtin.include_role:

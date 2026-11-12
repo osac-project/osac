@@ -16,6 +16,11 @@ argument_specs:
           record that appears after an initial NXDOMAIN is still detected once
           the resolver's negative-cache TTL expires, provided
           wait_for_dns_retries * wait_for_dns_delay exceeds that TTL.
+      wait_for_dns_expected_value:
+        type: str
+        description: >-
+          Optional expected A-record value. When set, the wait succeeds only
+          after the DNS answer contains this exact IPv4 address.
       wait_for_dns_retries:
         type: int
       wait_for_dns_delay:

@@ -43,32 +43,62 @@ Tasks performed:
 
 ### Install Flow (tasks/install.yaml)
 
-**6 overrideable steps**.
+**7 overrideable steps**.
 
 | Step Name | Default Role | Override Variable | Description |
 |-----------|-------------|-------------------|-------------|
-| Pre-install Hook | osac.workflows.workflow_helpers (noop.yml) | `install_step_pre_install_hook_override` | Hook before cluster creation (noop by default) |
+| Pre-install Hook | osac.templates.ocp_small (noop.yaml) | `install_step_pre_install_hook_override` | Hook before cluster creation (noop by default) |
 | **Create Hosted Cluster** | osac.service.hosted_cluster | `install_step_hosted_cluster_override` | **Creates HostedCluster and NodePool CRDs** ⚠️ |
-| **Create Cluster Infra** | osac.service.cluster_infra | `install_step_cluster_infra_override` | **Creates Agent infrastructure and bare metal hosts via OpenStack/ESI** ⚠️ |
-| **Configure Port Forwarding** | osac.service.external_access | `install_step_external_access_override` | **Allocates floating IPs and configures port forwarding via OpenStack/ESI** ⚠️ |
+| **Configure External Access** | osac.templates.ocp_small (`noop.yaml`) | `install_step_external_access_override` | No provider-specific dispatch; the ClusterOrder controller owns endpoint discovery, ingress reservation, DNS, and attachment ordering |
 | Retrieve Kubeconfig | osac.service.retrieve_kubeconfig | `install_step_retrieve_kubeconfig_override` | Retrieves admin kubeconfig from cluster |
-| Post-install Hook | osac.workflows.workflow_helpers (noop.yml) | `install_step_post_install_hook_override` | Hook after cluster creation (noop by default) |
+| Wait for Nodes | osac.service.wait_for (`wait_for_nodes.yaml`) | `install_step_wait_for_nodes_override` | Waits for all requested cluster nodes to be ready |
+| Wait for Cluster Operators | osac.service.wait_for (`wait_for_cluster_operators.yaml`) | `install_step_wait_for_cluster_operators_override` | Waits for cluster operators to become available |
+| Post-install Hook | osac.templates.ocp_small (noop.yaml) | `install_step_post_install_hook_override` | Hook after cluster creation (noop by default) |
 
-**Critical for Testing**: Override infrastructure steps (hosted_cluster, cluster_infra, external_access) to skip actual resource creation.
+**Critical for Testing**: Override hosted-cluster and external-access steps to
+avoid those AAP steps creating resources or DNS records. The external-access
+override replaces only the AAP step; it does not disable the ClusterOrder
+controller's endpoint lifecycle. If a test runs the controller with an
+eligible HostedCluster and provider networking enabled, the controller may
+still discover or reserve ingress, create automatic attachments, and publish
+DNS. Control the controller lifecycle separately in those tests.
+
+Leaving `install_step_external_access_override` unset keeps the template no-op
+and is the pattern used by `targets/caas_core_lifecycle` (OSAC-5998,
+GATE-CAAS-04) to prove core install/delete run with no provider networking
+role.
 
 ### Delete Flow (tasks/delete.yaml)
 
-**5 overrideable steps**.
+**4 overrideable steps**.
 
 | Step Name | Default Role | Override Variable | Description |
 |-----------|-------------|-------------------|-------------|
-| Pre-delete Hook | osac.workflows.workflow_helpers (noop.yml) | `delete_step_pre_delete_hook_override` | Hook before cluster deletion (noop by default) |
+| Pre-delete Hook | osac.templates.ocp_small (noop.yaml) | `delete_step_pre_delete_hook_override` | Hook before cluster deletion (noop by default) |
 | **Destroy Hosted Cluster** | osac.service.hosted_cluster | `delete_step_hosted_cluster_override` | **Deletes HostedCluster and NodePool CRDs** ⚠️ |
-| **Remove Port Forwarding** | osac.service.external_access | `delete_step_external_access_override` | **Removes floating IPs and port forwarding via OpenStack/ESI** ⚠️ |
-| **Destroy Cluster Infra** | osac.service.cluster_infra | `delete_step_cluster_infra_override` | **Destroys Agent infrastructure and bare metal hosts** ⚠️ |
-| Post-delete Hook | osac.workflows.workflow_helpers (noop.yml) | `delete_step_post_delete_hook_override` | Hook after cluster deletion (noop by default) |
+| **Remove External Access** | osac.templates.ocp_small (`noop.yaml`) | `delete_step_external_access_override` | No provider-specific dispatch; the ClusterOrder controller removes DNS and automatic endpoint resources in dependency order |
+| Post-delete Hook | osac.templates.ocp_small (noop.yaml) | `delete_step_post_delete_hook_override` | Hook after cluster deletion (noop by default) |
 
-**Critical for Testing**: Override infrastructure steps (hosted_cluster, external_access, cluster_infra) to skip actual resource deletion.
+**Critical for Testing**: Override hosted-cluster and external-access steps to
+avoid those AAP steps deleting resources or DNS records. The external-access
+override replaces only the AAP step; it does not disable the ClusterOrder
+controller's endpoint lifecycle. If a test runs the controller with an
+eligible HostedCluster and provider networking enabled, the controller may
+still remove automatic attachments and DNS. Control the controller lifecycle
+separately in those tests. Leaving `delete_step_external_access_override` unset
+is the disabled-mode delete pattern used by `targets/caas_core_lifecycle`.
+
+## CI Cluster Template: osac.templates.ocp_ci_small
+
+The CI CaaS template uses the service's dedicated DNS discovery and record
+tasks instead of the controller-owned endpoint lifecycle used by `ocp_small`.
+
+### Install and Delete Flows
+
+| Step Name | Default Role | Override Variable | Description |
+|-----------|-------------|-------------------|-------------|
+| **Configure External Access** | osac.service.external_access (`caas_create.yaml`) | `install_step_external_access_override` | Discovers the CI cluster API IP from the `kube-apiserver` Service and the ingress IP from ClusterOrder-labeled Agent inventory, creates DNS records, and publishes endpoints |
+| **Remove External Access** | osac.service.external_access (`caas_delete.yaml`) | `delete_step_external_access_override` | Deletes the CI cluster DNS records and clears endpoint annotations |
 
 ### Post-Install Flow (tasks/post_install.yaml)
 
@@ -104,10 +134,13 @@ create_step_wait_annotate_override:
 install_step_hosted_cluster_override:
   name: osac.workflows.workflow_helpers
   tasks_from: noop.yml
-install_step_cluster_infra_override:
+install_step_external_access_override:
   name: osac.workflows.workflow_helpers
   tasks_from: noop.yml
-install_step_external_access_override:
+install_step_wait_for_nodes_override:
+  name: osac.workflows.workflow_helpers
+  tasks_from: noop.yml
+install_step_wait_for_cluster_operators_override:
   name: osac.workflows.workflow_helpers
   tasks_from: noop.yml
 install_step_retrieve_kubeconfig_override:
@@ -122,9 +155,6 @@ delete_step_hosted_cluster_override:
   name: osac.workflows.workflow_helpers
   tasks_from: noop.yml
 delete_step_external_access_override:
-  name: osac.workflows.workflow_helpers
-  tasks_from: noop.yml
-delete_step_cluster_infra_override:
   name: osac.workflows.workflow_helpers
   tasks_from: noop.yml
 ```
@@ -206,9 +236,11 @@ template_id_override: osac.test_overrides.test_template
 
 The following tasks **cannot be tested without real infrastructure**:
 
-### OpenStack/ESI Resources
-- `osac.service.cluster_infra` - Creates bare metal hosts via OpenStack Ironic
-- Requires OpenStack auth_url and credentials
+### CaaS Networking
+- Networking resources and Agent lifecycle are managed through the OSAC
+  Networking API and operator.
+- Standard CaaS endpoint DNS and status are owned by the ClusterOrder
+  controller; CI and NICo external access publish endpoint annotations.
 
 ### AAP Resources
 - Not currently used by any workflows in the collection

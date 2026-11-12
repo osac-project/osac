@@ -23,6 +23,113 @@
           },
           "additionalProperties": false
         },
+        "billing": {
+          "type": "object",
+          "description": "Optional billing provider connection shared with the fulfillment service and metering. Omit provider to run with billing disabled. The chart carries no service, dimension, unit, currency, or account-status mapping.",
+          "properties": {
+            "provider": {
+              "type": ["object", "null"],
+              "description": "The single billing provider endpoint. Null disables billing and renders no provider Secret mount.",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Provider adapter key",
+                  "enum": ["m360"]
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "description": "Provider base URL including the whole path to the provider API, for example https://billing.example.com/api/v1/external; the adapter appends only the endpoint paths. No query, fragment, URL credentials or percent escapes in the host; well-formed percent escapes are allowed in the path. HTTPS for any host, HTTP only for a loopback host (localhost, 127.0.0.0/8, [::1]).",
+                  "anyOf": [
+                    {
+                      "description": "https to any host, with an optional numeric port and API path",
+                      "pattern": "^https://(\\[[0-9a-fA-F:.]+\\]|[^/?#\\s@:%\\[\\]\\\\|\\x00-\\x1F\\x7F]+)(:[0-9]+)?(/([^%?#\\s\\x00-\\x1F\\x7F]|%[0-9a-fA-F]{2})*)?$"
+                    },
+                    {
+                      "description": "http to a loopback host only, like billing.Config.Validate",
+                      "pattern": "^http://(localhost|127(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}|\\[::1\\])(:[0-9]+)?(/([^%?#\\s\\x00-\\x1F\\x7F]|%[0-9a-fA-F]{2})*)?$"
+                    }
+                  ]
+                },
+                "credentialSecret": {
+                  "type": "object",
+                  "description": "Existing Secret holding the provider credential. The credential value is never part of Helm values.",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "key": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["name", "key"],
+                  "additionalProperties": false
+                },
+                "caSecret": {
+                  "type": "object",
+                  "description": "Optional existing Secret holding a PEM CA bundle that the fulfillment service trusts in addition to the system roots when it calls the provider. Mounted only when set.",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "key": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["name", "key"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["key", "baseUrl", "credentialSecret"],
+              "additionalProperties": false
+            },
+            "tuning": {
+              "type": "object",
+              "description": "Catalog-pricing tuning consumed by the fulfillment service when a provider is configured",
+              "properties": {
+                "retryCount": {
+                  "type": "integer",
+                  "description": "Provider retries after the first attempt (default 3 means four attempts in total)",
+                  "minimum": 0,
+                  "default": 3
+                },
+                "pricingBreaker": {
+                  "type": "object",
+                  "description": "Pricing circuit breaker",
+                  "properties": {
+                    "failureThreshold": {
+                      "type": "integer",
+                      "description": "Failed pricing requests within the window that open the circuit",
+                      "minimum": 1,
+                      "default": 5
+                    },
+                    "failureWindowSeconds": {
+                      "type": "integer",
+                      "description": "Window in which failed pricing requests are counted toward failureThreshold",
+                      "minimum": 1,
+                      "maximum": 9223372036,
+                      "default": 30
+                    },
+                    "openSeconds": {
+                      "type": "integer",
+                      "description": "Time the circuit stays open before one probe is allowed",
+                      "minimum": 1,
+                      "maximum": 9223372036,
+                      "default": 30
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "fulfillmentTrust": {
           "type": "object",
           "description": "Cross-cluster fulfillment trust configuration shared with tenant-cluster workloads",
@@ -1292,26 +1399,6 @@
                   "type": "object",
                   "description": "Environment variables for the cluster-fulfillment instance group",
                   "properties": {
-                    "NETWORK_CLASS": {
-                      "type": "string",
-                      "description": "Supported values: netris, agentless_net, ci (CUDN CaaS only). Legacy backends (esi, nico) are removed from the standard schema.",
-                      "enum": [
-                        "",
-                        "netris",
-                        "agentless_net",
-                        "ci"
-                      ]
-                    },
-                    "NETWORK_STEPS_COLLECTION": {
-                      "type": "string",
-                      "description": "Supported values: netris.steps, ci.steps, agentless_net.steps. Legacy collections (nico.steps, osac.steps) are removed from the standard schema.",
-                      "enum": [
-                        "",
-                        "netris.steps",
-                        "ci.steps",
-                        "agentless_net.steps"
-                      ]
-                    },
                     "DNS_CLASS": {
                       "type": "string",
                       "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.noop.dns skips external DNS for environments that do not manage DNS records.",
@@ -1323,18 +1410,6 @@
                     "DNS_ZONE": {
                       "type": "string",
                       "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN)"
-                    },
-                    "NETRIS_MGMT_VPC_ID": {
-                      "type": "string",
-                      "description": "Netris management VPC ID"
-                    },
-                    "NETRIS_MGMT_VPC_NAME": {
-                      "type": "string",
-                      "description": "Netris management VPC name"
-                    },
-                    "NETRIS_RESOURCE_CLASS_MAP": {
-                      "type": "string",
-                      "description": "JSON mapping of resource classes to Netris server labels"
                     },
                     "SERVER_SSH_BASTION_HOST": {
                       "type": "string",
@@ -1393,22 +1468,6 @@
                     "PARKING_VNET_NAME": {
                       "type": "string",
                       "description": "Name of the parking V-Net where idle CaaS agents sit before cluster assignment (effective default: idle-agents-network)"
-                    },
-                    "NETRIS_SITE_ID": {
-                      "type": "string",
-                      "description": "Netris site identifier"
-                    },
-                    "NETRIS_TENANT_ID": {
-                      "type": "string",
-                      "description": "Netris tenant identifier"
-                    },
-                    "NETRIS_TENANT_NAME": {
-                      "type": "string",
-                      "description": "Netris tenant display name"
-                    },
-                    "NETRIS_USERNAME": {
-                      "type": "string",
-                      "description": "Netris API username"
                     }
                   },
                   "additionalProperties": false
@@ -1417,10 +1476,6 @@
                   "type": "object",
                   "description": "Secret values for the cluster-fulfillment instance group",
                   "properties": {
-                    "NETRIS_PASSWORD": {
-                      "type": "string",
-                      "description": "Netris controller password for the CaaS Netris steps"
-                    },
                     "AWS_ACCESS_KEY_ID": {
                       "type": "string",
                       "description": "AWS access key for Route 53 DNS backend"

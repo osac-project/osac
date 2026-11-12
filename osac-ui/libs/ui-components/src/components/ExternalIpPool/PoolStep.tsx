@@ -1,6 +1,6 @@
 import { Content, FormSection, Stack, StackItem, Title } from '@patternfly/react-core';
 
-import { InputField } from '@osac/ui-components/components/Form/InputField';
+import TextField from '@osac/ui-components/components/Form/base/TextField';
 import NameField from '@osac/ui-components/components/Form/NameField';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
@@ -26,7 +26,7 @@ const PoolStep = () => {
         <OsacForm>
           <NameField isDisabled={false} />
           <FormSection title={t('IPv4 CIDR')}>
-            <InputField
+            <TextField
               name="cidrs.0"
               label={t('CIDR')}
               fieldId="external-ip-pool-cidr-0"

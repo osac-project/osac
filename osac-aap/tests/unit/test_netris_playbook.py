@@ -35,6 +35,7 @@ def run(tmp_path: Path, job_vars: dict, env: dict | None = None) -> tuple[int, d
         "ANSIBLE_LOCALHOST_WARNING": "False",
         "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
         "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
+        "OSAC_LAUNCH_EXTRA_VARS_PATH": str(extra),
     })
     environ.update(env if env is not None else {})
     proc = subprocess.run(
@@ -51,21 +52,23 @@ def assert_error(rc: int, stats: dict, retryable: bool) -> str:
     err = stats["osac_error"]
     assert set(err) == {"message", "retryable"}
     assert err["retryable"] is retryable
-    assert "pw-not-a-secret" not in err["message"]
+    assert GOOD_ENV["NETRIS_PASSWORD"] not in err["message"]
     return err["message"]
 
 
 def test_extra_vars_other_than_osac_job_vars_are_rejected(tmp_path: Path) -> None:
     extra = tmp_path / "extravars.json"
-    extra.write_text(json.dumps({"osac_job_vars": job(), "netris_site_id": 9}))
+    extra.write_text(json.dumps({"osac_job_vars": job(), "untrusted_setting": 9}))
     proc = subprocess.run(
         [str(ANSIBLE_PLAYBOOK), "-i", "localhost,", "-c", "local", "playbook_osac_network_task.yml", "-e", f"@{extra}"],
         cwd=ROOT, capture_output=True, text=True, timeout=300,
         env={**os.environ, "ANSIBLE_STDOUT_CALLBACK": "ansible.posix.json", "ANSIBLE_SHOW_CUSTOM_STATS": "true",
-             "ANSIBLE_LOCALHOST_WARNING": "False", "ANSIBLE_PYTHON_INTERPRETER": sys.executable},
+             "ANSIBLE_LOCALHOST_WARNING": "False", "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
+             "OSAC_LAUNCH_EXTRA_VARS_PATH": str(extra)},
     )
+    assert "{" in proc.stdout, proc.stdout + proc.stderr
     stats = json.loads(proc.stdout[proc.stdout.index("{"):]).get("global_custom_stats") or {}
-    assert "netris_site_id" in assert_error(proc.returncode, stats, retryable=False)
+    assert "untrusted_setting" in assert_error(proc.returncode, stats, retryable=False)
 
 
 def test_helper_files_are_not_launchable_tasks(tmp_path: Path) -> None:

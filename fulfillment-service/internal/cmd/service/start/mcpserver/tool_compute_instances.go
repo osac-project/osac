@@ -145,7 +145,7 @@ func handleCreateComputeInstance(
 			}.Build(),
 		}.Build())
 		if err != nil {
-			return nil, CreateComputeInstanceOutput{}, safePublicAPIError(err)
+			return nil, CreateComputeInstanceOutput{}, safeComputeInstanceWriteAPIError(err)
 		}
 		created := response.GetObject()
 		return nil, CreateComputeInstanceOutput{
@@ -468,11 +468,15 @@ func handleUpdateComputeInstance(
 			if status.Code(err) == codes.FailedPrecondition {
 				return nil, UpdateComputeInstanceOutput{}, safeUpdatePreconditionError()
 			}
-			return nil, UpdateComputeInstanceOutput{}, safePublicAPIError(err)
+			return nil, UpdateComputeInstanceOutput{}, safeComputeInstanceWriteAPIError(err)
 		}
 		updated := response.GetObject()
+		updatedID := updated.GetId()
+		if updatedID == "" {
+			updatedID = input.ID
+		}
 		return nil, UpdateComputeInstanceOutput{
-			ID:       input.ID,
+			ID:       updatedID,
 			Version:  updated.GetMetadata().GetVersion(),
 			State:    updated.GetStatus().GetState().String(),
 			Warnings: response.GetWarnings(),
@@ -562,8 +566,16 @@ func handleDeleteComputeInstance(
 		}
 		_, err = client.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: input.ID}.Build())
 		if err != nil {
-			return nil, DeleteComputeInstanceOutput{}, safePublicAPIError(err)
+			return nil, DeleteComputeInstanceOutput{}, safeComputeInstanceWriteAPIError(err)
 		}
 		return nil, DeleteComputeInstanceOutput(input), nil
 	}
+}
+
+// safeComputeInstanceWriteAPIError maps write errors to safe MCP envelopes.
+func safeComputeInstanceWriteAPIError(err error) error {
+	if reference, ok := missingSecretReferenceFromAPIError(err); ok {
+		return safeMissingSecretReferenceError(reference)
+	}
+	return safePublicAPIError(err)
 }

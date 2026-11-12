@@ -53,11 +53,14 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bmcdiscovery"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/controller"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmh"
+	netboxcredentials "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/netbox"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/helpers"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/profile"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
+	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
 	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 	// +kubebuilder:scaffold:imports
@@ -104,6 +107,7 @@ const (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(osacv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(opv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(metal3api.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -287,18 +291,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create shared provisioning, networking, and IP discovery providers
+	// Create the shared provisioning provider
 	var provisioningProvider provisioning.ProvisioningProvider
-	var networkingProvider provisioning.ProvisioningProvider
-	var ipDiscoveryProvider provisioning.ProvisioningProvider
-	var aapClient *aap.Client
 	aapURL := helpers.GetEnvWithDefault(envAAPURL, "")
 	aapToken := helpers.GetEnvWithDefault(envAAPToken, "")
 	if aapURL != "" && aapToken != "" {
 		insecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
 		templatePrefix := helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac")
 
-		aapClient = aap.NewClient(aapURL, aapToken, insecureSkipVerify)
+		aapClient := aap.NewClient(aapURL, aapToken, insecureSkipVerify)
 
 		var err error
 		provisioningProvider, err = provisioning.NewProvider(provisioning.ProviderConfig{
@@ -308,24 +309,6 @@ func main() {
 		if err != nil {
 			setupLog.Error(err, "failed to create AAP provisioning provider")
 			os.Exit(1)
-		}
-
-		if networkingProvisioningEnabled {
-			// Networking provisioning (onboard) and deprovisioning (offboard) are both a
-			// port move; the single move playbook derives the direction from the CR.
-			networkingProvider = provisioning.NewAAPProvider(
-				aapClient,
-				templatePrefix+"-move-network-attachment",
-				templatePrefix+"-move-network-attachment",
-			)
-
-			ipDiscoveryProvider = provisioning.NewAAPProvider(
-				aapClient,
-				templatePrefix+"-query-dhcp-lease",
-				"",
-			)
-		} else {
-			setupLog.Info("BMI networking provisioning disabled, move-network-attachment and query-dhcp-lease will be skipped")
 		}
 
 		setupLog.Info("AAP provisioning provider configured")
@@ -339,8 +322,7 @@ func main() {
 	}
 
 	if err := setupBareMetalInstanceController(
-		ctx, mgr, provisioningProvider, networkingProvider,
-		ipDiscoveryProvider, aapClient,
+		ctx, mgr, provisioningProvider, networkingProvisioningEnabled,
 	); err != nil {
 		setupLog.Error(err, "unable to setup controller", "controller", "BareMetalInstance")
 		os.Exit(1)
@@ -446,9 +428,7 @@ func setupBareMetalInstanceController(
 	ctx context.Context,
 	mgr ctrl.Manager,
 	provisioningProvider provisioning.ProvisioningProvider,
-	networkingProvider provisioning.ProvisioningProvider,
-	ipDiscoveryProvider provisioning.ProvisioningProvider,
-	aapClient *aap.Client,
+	networkingEnabled bool,
 ) error {
 	// Read and parse inventory configuration
 	inventoryConfigPath := helpers.GetEnvWithDefault(envInventoryConfigPath, "/etc/osac/inventory/inventory.yaml")
@@ -526,9 +506,7 @@ func setupBareMetalInstanceController(
 		inventoryClient,
 		managementClient,
 		provisioningProvider,
-		networkingProvider,
-		ipDiscoveryProvider,
-		aapClient,
+		networkingEnabled,
 		noFreeHostsPollInterval,
 		tryLockFailPollInterval,
 		managementRecheckInterval,
@@ -581,11 +559,11 @@ func createNetBoxInventoryClient(
 	if err := validateNetBoxInventoryConfig(inventoryCfg, managementCfg); err != nil {
 		return nil, err
 	}
-	bmhManager, err := createMetal3BMHManager(managementCfg, mgr)
+	bmhManager, secretWriter, err := createMetal3Managers(managementCfg, mgr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to configure Metal3 BMH manager for NetBox: %w", err)
+		return nil, fmt.Errorf("failed to configure Metal3 dependencies for NetBox: %w", err)
 	}
-	return createNetBoxInventoryClientWithManager(ctx, inventoryCfg, bmhManager)
+	return createNetBoxInventoryClientWithManager(ctx, inventoryCfg, bmhManager, secretWriter)
 }
 
 func validateNetBoxInventoryConfig(inventoryCfg *inventory.Config, managementCfg *management.Config) error {
@@ -603,6 +581,7 @@ func createNetBoxInventoryClientWithManager(
 	ctx context.Context,
 	inventoryCfg *inventory.Config,
 	bmhManager *baremetalhost.Manager,
+	secretWriter *bmh.SecretWriter,
 ) (inventory.Client, error) {
 	netBoxAPI, err := inventory.NewNetBoxAPI(inventoryCfg)
 	if err != nil {
@@ -612,14 +591,16 @@ func createNetBoxInventoryClientWithManager(
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Secret API client for NetBox inventory: %w", err)
 	}
-	setupLog.Info("BMH manager configured", "namespace", bmhManager.Namespace())
+	setupLog.Info("Metal3 dependencies configured", "namespace", bmhManager.Namespace())
 
-	credentialsReader := inventory.NewNetBoxCredentialResolver(secretsClient)
-	netBoxClient := inventory.NewNetBoxClient(netBoxAPI, bmhManager, inventoryCfg.HostClass, credentialsReader)
+	credentialsReader := netboxcredentials.NewReader(secretsClient)
+	netBoxClient := inventory.NewNetBoxClient(
+		netBoxAPI, bmhManager, secretWriter, inventoryCfg.HostClass, credentialsReader,
+	)
 	return netBoxClient, nil
 }
 
-func createSecretAPIClientFromEnv() (inventory.SecretAPIClient, error) {
+func createSecretAPIClientFromEnv() (netboxcredentials.SecretAPIClient, error) {
 	if strings.TrimSpace(os.Getenv(envSecretAPIURL)) == "" {
 		return nil, fmt.Errorf("%s is required", envSecretAPIURL)
 	}
@@ -672,13 +653,13 @@ func createBCMInventoryClient(
 		}
 		return nil, fmt.Errorf("BCM inventory requires Metal3 management backend (got %q)", managementType)
 	}
-	bmhMgr, err := createMetal3BMHManager(managementCfg, mgr)
+	bmhMgr, secretWriter, err := createMetal3Managers(managementCfg, mgr)
 	if err != nil {
 		return nil, err
 	}
-	setupLog.Info("BMH manager configured", "namespace", bmhMgr.Namespace())
+	setupLog.Info("Metal3 dependencies configured", "namespace", bmhMgr.Namespace())
 
-	client := inventory.NewBCMClient(bcmClient, bmhMgr, inventoryCfg.HostClass)
+	client := inventory.NewBCMClient(bcmClient, bmhMgr, secretWriter, inventoryCfg.HostClass)
 
 	discoverer := &bmcdiscovery.GofishDiscoverer{
 		InsecureSkipVerify: bcmCfg.InsecureSkipVerify,
@@ -696,25 +677,26 @@ func createBCMInventoryClient(
 	return client, nil
 }
 
-func createMetal3BMHManager(
+func createMetal3Managers(
 	managementCfg *management.Config,
 	mgr ctrl.Manager,
-) (*baremetalhost.Manager, error) {
+) (*baremetalhost.Manager, *bmh.SecretWriter, error) {
 	ns, err := management.ParseMetal3ManagementNamespace(managementCfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse metal3 namespace for BMH manager: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse metal3 namespace: %w", err)
 	}
 	if mgr == nil {
-		return nil, fmt.Errorf("kubernetes manager is required to create Metal3 BMH manager")
+		return nil, nil, fmt.Errorf("kubernetes manager is required to create Metal3 dependencies")
 	}
 
-	// Keep BMC credential Secret access off the cluster-wide informer. The
-	// uncached client avoids Secret list/watch permissions and limits access to
-	// the operations performed by the BMH manager.
-	secretClient, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper()})
+	// Keep BMC credential Secret access off the cluster-wide informer.
+	uncachedClient, err := client.New(
+		mgr.GetConfig(),
+		client.Options{Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper()},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create uncached Secret client: %w", err)
+		return nil, nil, fmt.Errorf("failed to create uncached Kubernetes client: %w", err)
 	}
 
-	return baremetalhost.NewManager(mgr.GetClient(), secretClient, ns), nil
+	return baremetalhost.NewManager(mgr.GetClient(), uncachedClient, ns), bmh.NewSecretWriter(uncachedClient, ns), nil
 }

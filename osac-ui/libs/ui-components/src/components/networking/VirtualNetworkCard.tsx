@@ -14,6 +14,7 @@ import type { NatGatewayWithAddress } from '@osac/ui-components/api/v1/networkin
 import VirtualNetworkActionsMenu from '@osac/ui-components/components/networking/VirtualNetworkActionsMenu';
 import VirtualNetworkLoadedField from '@osac/ui-components/components/networking/VirtualNetworkLoadedField';
 import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
+import OsacCardFooterRow from '@osac/ui-components/components/Primitives/OsacCardFooterRow';
 
 import { CidrDisplay } from './CidrDisplay';
 import { getVirtualNetworkName } from './virtual-network-list-utils';
@@ -99,20 +100,18 @@ const VirtualNetworkCard = ({
       </CardBody>
       <Divider />
       <CardFooter>
-        <DescriptionList isCompact isHorizontal>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('NAT gateway')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              <VirtualNetworkLoadedField
-                unavailableAriaLabel={t('Failed to load NAT gateways')}
-                isLoading={natGatewaysLoading}
-                error={natGatewaysError}
-              >
-                <VirtualNetworkNatGatewayCell natGatewayWithAddress={natGatewayWithAddress} />
-              </VirtualNetworkLoadedField>
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-        </DescriptionList>
+        <OsacCardFooterRow
+          term={t('NAT gateway')}
+          description={
+            <VirtualNetworkLoadedField
+              unavailableAriaLabel={t('Failed to load NAT gateways')}
+              isLoading={natGatewaysLoading}
+              error={natGatewaysError}
+            >
+              <VirtualNetworkNatGatewayCell natGatewayWithAddress={natGatewayWithAddress} />
+            </VirtualNetworkLoadedField>
+          }
+        />
       </CardFooter>
     </ListPageCard>
   );

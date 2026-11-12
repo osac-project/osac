@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { type MessageInitShape } from '@bufbuild/protobuf';
-import { keepPreviousData, useMutation } from '@tanstack/react-query';
 
-import { Cluster, ClusterSchema, Clusters, ClustersListResponse, Secrets } from '@osac/types';
+import { type Cluster, Clusters, Secrets } from '@osac/types';
 import { type CelFilter, cel } from '@osac/ui-components/api/cel';
 import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
 
 import { useApiFetch } from '../api-context';
-import { apiQueryKey } from '../types';
-import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
+import { useListResource } from '../use-resource';
 
 const combineClusterListFilter = (
   projectFilter: CelFilter<Cluster> | undefined,
@@ -27,75 +24,23 @@ export const useClusters = (
   isLoading: boolean;
   error: unknown;
 } => {
-  const client = useApiFetch(Clusters);
   const projectFilter = useProjectFilterQuery<Cluster>();
   const filter = combineClusterListFilter(projectFilter, filters);
   const totalsFilter = projectFilter;
 
-  const filteredClustersQuery = useApiQuery<ClustersListResponse, Cluster[]>({
-    queryKey: apiQueryKey('v1/clusters', undefined, filter ? { filter } : undefined),
-    queryFn: () => client.list(filter ? { filter } : {}),
-    select: (data) => data.items,
-    placeholderData: keepPreviousData,
-    enabled,
-  });
-
-  const totalClustersQuery = useApiQuery<ClustersListResponse, number>({
-    queryKey: apiQueryKey(
-      'v1/clusters',
-      ['total'],
-      totalsFilter ? { filter: totalsFilter } : undefined,
-    ),
-    queryFn: () => client.list(totalsFilter ? { filter: totalsFilter, limit: 0 } : { limit: 0 }),
-    select: (data) => data.total ?? data.items.length,
-    placeholderData: keepPreviousData,
-    enabled,
-  });
+  const filteredClustersQuery = useListResource(Clusters, filter ? { filter } : {}, { enabled });
+  const totalClustersQuery = useListResource(
+    Clusters,
+    totalsFilter ? { filter: totalsFilter, limit: 0 } : { limit: 0 },
+    { enabled },
+  );
 
   return {
-    clusters: filteredClustersQuery.data ?? [],
-    totalItems: totalClustersQuery.data ?? 0,
+    clusters: filteredClustersQuery.data?.items ?? [],
+    totalItems: totalClustersQuery.data?.total ?? 0,
     isLoading: filteredClustersQuery.isLoading || totalClustersQuery.isLoading,
     error: filteredClustersQuery.error ?? totalClustersQuery.error,
   };
-};
-
-export const useCluster = (id: string) => {
-  const client = useApiFetch(Clusters);
-  const trimmedId = id?.trim() ?? '';
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/clusters', [trimmedId]),
-    queryFn: () => client.get({ id: trimmedId }),
-    select: (data) => data.object,
-    enabled: Boolean(trimmedId),
-  });
-};
-
-export const invalidateClustersQueries = async (qc: ApiQueryClient) => {
-  await qc.invalidateQueries({ queryKey: apiQueryKey('v1/clusters') });
-};
-
-export const useDeleteCluster = () => {
-  const client = useApiFetch(Clusters);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => client.delete({ id }),
-    onSuccess: () => invalidateClustersQueries(qc),
-    retry: false,
-  });
-};
-
-export const useProvisionCluster = () => {
-  const client = useApiFetch(Clusters);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: (cluster: MessageInitShape<typeof ClusterSchema>) =>
-      client.create({ object: cluster }).then((r) => r.object),
-    onSuccess: async () => {
-      await invalidateClustersQueries(qc);
-    },
-    retry: false,
-  });
 };
 
 const triggerDownload = (content: string, filename: string) => {

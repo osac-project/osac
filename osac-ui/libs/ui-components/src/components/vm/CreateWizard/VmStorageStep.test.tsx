@@ -30,7 +30,7 @@ const renderStep = (
         spec: {
           ...createEmptyComputeInstanceValues().spec,
           bootDisk: {
-            sizeGib: provisioningFieldValue(''),
+            sizeGib: provisioningFieldValue(undefined),
             storageTier: provisioningFieldValue(storageTier, storageTierLocked),
           },
         },

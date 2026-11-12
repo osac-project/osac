@@ -204,6 +204,7 @@ def run(tmp_path: Path, server: Netris, job: dict) -> tuple[int, dict]:
         "ANSIBLE_LOCALHOST_WARNING": "False",
         "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
         "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
+        "OSAC_LAUNCH_EXTRA_VARS_PATH": str(extra),
     })
     proc = subprocess.run(
         [str(ANSIBLE_PLAYBOOK), "-i", "localhost,", "-c", "local", "playbook_osac_network_task.yml", "-e", f"@{extra}"],
@@ -222,7 +223,7 @@ def ok(rc: int, stats: dict) -> dict:
 def err(rc: int, stats: dict, retryable: bool) -> str:
     assert rc != 0 and "osac_result" not in stats
     assert stats["osac_error"]["retryable"] is retryable, stats
-    assert "pw-not-a-secret" not in stats["osac_error"]["message"]
+    assert GOOD_ENV["NETRIS_PASSWORD"] not in stats["osac_error"]["message"]
     return stats["osac_error"]["message"]
 
 

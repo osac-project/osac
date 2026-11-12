@@ -105,7 +105,7 @@ def test_volume_bills_gibibyte_seconds(
         # assertions below need its recorded deletion timestamp.
         volume_cr_name = poll_until(
             fn=lambda: k8s_hub_client.get_by_label(
-                resource="volume",
+                resource="volumes.osac.openshift.io",
                 label=f"osac.openshift.io/volume-uuid={volume_id}",
                 jsonpath="{.items[0].metadata.name}",
             ),
@@ -196,14 +196,14 @@ def _delete_volume(grpc: GRPCClient, k8s: K8sClient, *, volume_id: str, cr_name:
     else:
         deletion_recorded = delete_recording_timestamp(
             k8s,
-            resource="volume",
+            resource="volumes.osac.openshift.io",
             cr_name=cr_name,
             delete=lambda: grpc.call(service=f"{PRIVATE_API}.Volumes/Delete", data={"id": volume_id}),
             resource_kind=WaitResourceKind.VOLUME,
         )
         with contextlib.suppress(Exception):
             poll_until(
-                fn=lambda: not k8s.is_present(resource="volume", name=cr_name),
+                fn=lambda: not k8s.is_present(resource="volumes.osac.openshift.io", name=cr_name),
                 until=lambda gone: gone is True,
                 retries=60,
                 delay=5,

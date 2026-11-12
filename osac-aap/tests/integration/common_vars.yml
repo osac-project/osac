@@ -3,3 +3,7 @@ cluster_order_label: "osac.openshift.io/clusterorder"
 cluster_order_infrastructure_finalizer: "osac.openshift.io/infrastructure"
 compute_instance_label: "osac.openshift.io/computeinstance"
 compute_instance_osac_finalizer: "osac.openshift.io/computeinstance-aap"
+
+# Match the fake provider credentials created by setup_test_env.sh.
+cluster_settings_default_credentials_secret_namespace: "default"
+cluster_settings_default_credentials_secret_name: "cluster-credentials"

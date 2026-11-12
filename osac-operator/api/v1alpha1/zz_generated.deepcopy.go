@@ -275,6 +275,20 @@ func (in *ClusterOrderStatus) DeepCopyInto(out *ClusterOrderStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.APIDNSRecordsPublishedTime != nil {
+		in, out := &in.APIDNSRecordsPublishedTime, &out.APIDNSRecordsPublishedTime
+		*out = (*in).DeepCopy()
+	}
+	if in.TaskInput != nil {
+		in, out := &in.TaskInput, &out.TaskInput
+		*out = new(runtime.RawExtension)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.Jobs != nil {
+		in, out := &in.Jobs, &out.Jobs
+		*out = make([]NetworkJobStatus, len(*in))
+		copy(*out, *in)
+	}
 	if in.DesiredWorkers != nil {
 		in, out := &in.DesiredWorkers, &out.DesiredWorkers
 		*out = new(int32)

@@ -2,7 +2,7 @@ import { Stack, StackItem, Title } from '@patternfly/react-core';
 
 import { Secret, SecretType } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
-import { InputField } from '@osac/ui-components/components/Form/InputField';
+import TextField from '@osac/ui-components/components/Form/base/TextField';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
 import SecretSelectionField from '@osac/ui-components/components/Form/SecretSelectionField';
 
@@ -19,7 +19,7 @@ const IdpConfigurationStep = () => {
       </StackItem>
       <StackItem>
         <OsacForm>
-          <InputField
+          <TextField
             name="spec.config.clientId"
             label={t('Client ID')}
             fieldId="idp-client-id"
@@ -36,37 +36,37 @@ const IdpConfigurationStep = () => {
             name="spec.config.clientSecretSecret.name"
             isRequired
           />
-          <InputField
+          <TextField
             name="spec.config.issuer"
             label={t('Issuer')}
             fieldId="idp-issuer"
             isRequired
           />
-          <InputField
+          <TextField
             name="spec.config.authorizationUrl"
             label={t('Authorization URL')}
             fieldId="idp-authorization-url"
             isRequired
           />
-          <InputField
+          <TextField
             name="spec.config.tokenUrl"
             label={t('Token URL')}
             fieldId="idp-token-url"
             isRequired
           />
-          <InputField
+          <TextField
             name="spec.config.defaultScopes"
             label={t('Default scopes')}
             fieldId="idp-default-scopes"
             helperText={t('Space-separated list of scopes (e.g. openid profile email)')}
           />
-          <InputField
+          <TextField
             name="spec.config.userInfoUrl"
             label={t('User info URL')}
             fieldId="idp-user-info-url"
           />
-          <InputField name="spec.config.jwksUrl" label={t('JWKS URL')} fieldId="idp-jwks-url" />
-          <InputField
+          <TextField name="spec.config.jwksUrl" label={t('JWKS URL')} fieldId="idp-jwks-url" />
+          <TextField
             name="spec.config.logoutUrl"
             label={t('Logout URL')}
             fieldId="idp-logout-url"

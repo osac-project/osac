@@ -1,8 +1,7 @@
 ---
 # Case 1: every task of the Fabric set runs once through the generic playbook
 # with valid input. Each publishes its contract result; SecurityGroup create and
-# delete, the overlay attachment and the ingress release are documented
-# no-ops that publish nothing; reserve_cluster_ingress_ip is a final error.
+# delete and the overlay attachment are documented no-ops that publish nothing.
 - name: Read the generic playbook
   ansible.builtin.set_fact:
     _nf_play: "{{ (lookup('ansible.builtin.file', nf.repo ~ '/playbook_osac_network_task.yml') | from_yaml)[0] }}"
@@ -47,5 +46,12 @@
       - nf_state.vnets | map(attribute='name') | list == ['provisioning']
       - nf_state.vni.vpc.free == [10001]
       - nf_state.vni.vnet.free == [5000001]
-    fail_msg: "objects are left after the lifecycle: {{ nf_state }}"
+    fail_msg: >-
+      objects are left after the lifecycle: vpcs={{ nf_state.vpcs | length }},
+      allocations={{ nf_state.allocations | length }},
+      ipam_subnets={{ nf_state.ipam_subnets | length }},
+      nats={{ nf_state.nats | length }}, clusters={{ nf_state.clusters | length }},
+      vnets={{ nf_state.vnets | map(attribute='name') | list }},
+      free_vpc_vnis={{ nf_state.vni.vpc.free }},
+      free_vnet_vnis={{ nf_state.vni.vnet.free }}
     quiet: true

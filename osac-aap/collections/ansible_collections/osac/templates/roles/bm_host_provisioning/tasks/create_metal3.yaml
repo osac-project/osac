@@ -66,8 +66,7 @@
       ansible.builtin.set_fact:
         fallback_root_device_hints: >-
           {{ hardware_data_result.resources
-             | osac.templates.root_device_hints('smallest',
-                                                bmh=bmh_info,
+             | osac.templates.root_device_hints(bmh_info, 'smallest',
                                                 min_size=bm_host_root_disk_min_gib) }}
 
     - name: Build userData content

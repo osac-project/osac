@@ -43,7 +43,7 @@ def _select_disk(policy: RootDiskPolicy, disks: list[dict], options: dict) -> di
 
 
 def root_device_hints(
-    hardware_data: list[dict], policy: str = "smallest", bmh: dict | None = None, **options
+    hardware_data: list[dict], bmh: dict, policy: str = "smallest", **options
 ) -> dict:
     """Build rootDeviceHints for the disk chosen by the policy.
 
@@ -58,7 +58,7 @@ def root_device_hints(
         selected_policy = RootDiskPolicy(policy)
     except ValueError:
         raise ValueError(f"unsupported root disk policy: {policy}") from None
-    disk = _select_disk(selected_policy, _disks(hardware_data, bmh or {}), options)
+    disk = _select_disk(selected_policy, _disks(hardware_data, bmh), options)
     if not disk:
         return {}
     for key in HINT_KEYS[:-1]:

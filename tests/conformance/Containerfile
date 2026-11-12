@@ -1,6 +1,6 @@
 # Build context: the osac repository root.
 #   podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
-FROM registry.access.redhat.com/ubi10/python-312:latest
+FROM registry.access.redhat.com/ubi9/python-312:latest
 
 WORKDIR /opt/osac
 

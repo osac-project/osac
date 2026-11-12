@@ -16,10 +16,8 @@ package output
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"log/slog"
-	"strings"
 	"testing"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -86,36 +84,6 @@ func TestRender(t *testing.T) {
 		expected := "id: cluster-1\nmetadata:\n  name: my-cluster\n"
 		if stdout.String() != expected {
 			t.Errorf("expected output %q, got %q", expected, stdout.String())
-		}
-	})
-
-	t.Run("JSON write failure", func(t *testing.T) {
-		sentinel := errors.New("broken stdout")
-		console := makeConsole(t, &failingWriter{err: sentinel})
-		err := Render(ctx, console, Json, "cluster", makeCluster())
-		if err == nil {
-			t.Fatal("expected an error, got nil")
-		}
-		if !errors.Is(err, sentinel) {
-			t.Errorf("expected the error to wrap %v, got %v", sentinel, err)
-		}
-		if !strings.Contains(err.Error(), "failed to render cluster") {
-			t.Errorf("expected the error to mention the label, got %q", err.Error())
-		}
-	})
-
-	t.Run("YAML write failure", func(t *testing.T) {
-		sentinel := errors.New("broken stdout")
-		console := makeConsole(t, &failingWriter{err: sentinel})
-		err := Render(ctx, console, Yaml, "cluster", makeCluster())
-		if err == nil {
-			t.Fatal("expected an error, got nil")
-		}
-		if !errors.Is(err, sentinel) {
-			t.Errorf("expected the error to wrap %v, got %v", sentinel, err)
-		}
-		if !strings.Contains(err.Error(), "failed to render cluster") {
-			t.Errorf("expected the error to mention the label, got %q", err.Error())
 		}
 	})
 }

@@ -148,7 +148,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create storage tier: %w", err)
 	}
 
-	_ = c.console.Infof(ctx, "Created storage tier '%s'.\n", response.GetObject().GetId())
+	c.console.Infof(ctx, "Created storage tier '%s'.\n", response.GetObject().GetId())
 
 	return nil
 }

@@ -12,7 +12,7 @@ REDACTED = "<redacted>"
 
 _ENDPOINT_HOSTS: frozenset[str] = frozenset()
 _ENDPOINT_LOCK = Lock()
-_ENDPOINT_URL = re.compile(r"^(?:https?|grpcs?)://")
+_ENDPOINT_URL = re.compile(r"^(?:https?|grpcs?)://", re.IGNORECASE)
 
 
 def _is_transport_target(value: str) -> bool:

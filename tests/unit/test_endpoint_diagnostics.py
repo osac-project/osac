@@ -30,6 +30,43 @@ FIXTURE_PASSWORD = "fixture-password-value"
 DETAIL = f"Code: PermissionDenied\nMessage: denied at {ADDRESS}; host {HOST}."
 
 
+@pytest.mark.parametrize("scheme", ["HTTP", "HTTPS", "GRPC", "GRPCS", "hTtP", "hTtPs", "gRpC", "gRpCs"])
+@pytest.mark.parametrize("as_bytes", [False, True])
+def test_mixed_case_url_targets_stay_private_in_failure_consumers(
+    scheme: str, as_bytes: bool, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Learn fresh URL targets without changing caller captures or useful RPC evidence."""
+    target = f"{scheme}://{ADDRESS}/fixture/path?request=fixture-id"
+    argv = ["osac", "--endpoint=" + target, METHOD]
+    cleaned = sanitize_args(argv)
+    assert cleaned[1] == f"--endpoint={scheme}://<redacted>/fixture/path?request=fixture-id"
+    detail = f"{DETAIL}; password={FIXTURE_PASSWORD}"
+    raw = detail.encode() if as_bytes else detail
+    error = runner.CommandFailed(7, argv, output=raw, stderr=raw)
+    result = classify(error)
+    assert result.kind is Kind.API_REFUSED
+    assert "PermissionDenied" in result.summary
+    reporter = FailureReporter(Mock())
+    reporter.snapshotter = Mock()
+    reporter.snapshotter.take.return_value = None
+    reporter._path = tmp_path / "results-main.jsonl"
+    with caplog.at_level(logging.ERROR):
+        reporter.capture_fixture_failure(error, "fixture-url", 0)
+    for rendered in (
+        str(error),
+        repr(error),
+        str(error.cmd),
+        str(error.args),
+        result.summary,
+        caplog.text,
+        reporter._path.read_text(),
+    ):
+        assert HOST not in rendered and FIXTURE_PASSWORD not in rendered
+        assert METHOD in rendered
+    assert argv[1] == "--endpoint=" + target
+    assert error.output == raw and error.stderr == raw and error.returncode == 7
+
+
 @pytest.mark.parametrize(
     ("host", "credential"),
     [

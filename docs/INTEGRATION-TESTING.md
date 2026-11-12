@@ -384,6 +384,14 @@ variables set and a network path from the kind nodes to the test host. The
 same configured-provider boundary is listed as unresolved in the billing
 provider-status coverage note above; no follow-up ticket exists yet for
 wiring these specs into CI.
+### Kubernetes JWKS origin unit coverage
+
+The unit cases in `internal/auth/auth_jwks_cache_test.go`
+use real local TLS issuer and JWKS servers plus a fixture service-account token.
+They verify that cross-origin requests are rejected by default, an explicitly
+configured HTTPS origin receives the token, and redirects cannot forward it to
+another origin. They do not validate the discovery URL or authentication policy
+of a deployed Kubernetes API server.
 
 ### Fulfillment integration timings
 
@@ -626,7 +634,9 @@ the enabled path's AAP jobs are E2E.
 The `make fulfillment-trust-render-test` Helm contract renders the production
 umbrella chart with trust enabled and disabled. It asserts the operator trust
 reconciler gate and checks that CA mounts and verified
-curl commands remain present in both states. It checks rendered manifests only;
+curl commands remain present in both states. It also checks that configured
+Kubernetes JWKS origins reach the gRPC and MCP server arguments. It checks
+rendered manifests only;
 it does not start the hooks or prove a deployed fulfillment endpoint accepts
 the certificate. The Kind
 `SUITE=fulfillment` target exercises deployed startup and API behavior, subject

@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import subprocess
 
 CHART = pathlib.Path(__file__).resolve().parents[1] / "charts/osac"
+SERVICE_CHART = CHART.parents[2] / "fulfillment-service/charts/service"
 VALUES = CHART.parents[1] / "values"
 HOOKS = {
     "fulfillment-create-hub",
@@ -22,11 +24,7 @@ FULFILLMENT_AUTH_HOOKS = {
     "seed-cluster-versions": "osac/templates/hooks/seed-cluster-versions.yaml",
     "register-local-storage": "osac/templates/hooks/register-local-storage.yaml",
 }
-PLATFORM_IDENTITY_HOOKS = {
-    "create-network-class",
-    "seed-cluster-versions",
-    "register-local-storage",
-}
+PLATFORM_IDENTITY_HOOKS = {"create-network-class", "seed-cluster-versions", "register-local-storage"}
 
 
 def render(
@@ -35,6 +33,8 @@ def render(
     custom_auth_credentials: bool = False,
     openshift: bool = False,
     server_address: str | None = None,
+    kubernetes_jwks_origins: list[str] | None = None,
+    mcp_enabled: bool = False,
 ) -> list[str]:
     cmd = [
         "helm",
@@ -75,6 +75,24 @@ def render(
         cmd.extend(("--api-versions", "security.openshift.io/v1"))
     if server_address is not None:
         cmd.extend(("--set", f"operator.fulfillment.serverAddress={server_address}"))
+    if kubernetes_jwks_origins:
+        cmd.extend((
+            "--set-json",
+            f"service.auth.kubernetesJWKSOrigins={json.dumps(kubernetes_jwks_origins)}",
+        ))
+    if mcp_enabled:
+        cmd.extend(
+            (
+                "--set",
+                "service.mcp.enabled=true",
+                "--set",
+                "service.mcp.externalHostname=mcp.osac.localhost",
+                "--set",
+                "service.mcp.exchangeClientId=osac-mcp-resource",
+                "--set",
+                "service.mcp.exchangeCredentialsSecret=mcp-exchange-credentials",
+            )
+        )
     manifest = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
     return [doc for doc in manifest.split("\n---\n") if doc.strip()]
 
@@ -89,9 +107,7 @@ def select(docs: list[str], source: str, name: str | None = None) -> str:
 
 
 def trust_reconciler_enabled(operator: str) -> bool:
-    match = re.search(
-        r'- name: OSAC_ENABLE_FULFILLMENT_TRUST_RECONCILER\n\s+value: "(true|false)"', operator
-    )
+    match = re.search(r'- name: OSAC_ENABLE_FULFILLMENT_TRUST_RECONCILER\n\s+value: "(true|false)"', operator)
     if match is None:
         raise AssertionError("rendered operator deployment is missing the trust reconciler setting")
     return match.group(1) == "true"
@@ -116,9 +132,7 @@ def check_main_container_tls(job: str, name: str) -> None:
 def check_openshift_restricted_scc(job: str, name: str) -> None:
     template = job.split("  template:\n", 1)[1]
     pod_metadata, pod_spec = template.split("    spec:\n", 1)
-    assert re.search(
-        r"(?m)^      annotations:\n        openshift.io/required-scc: restricted-v2$", pod_metadata
-    ), name
+    assert re.search(r"(?m)^      annotations:\n        openshift.io/required-scc: restricted-v2$", pod_metadata), name
     assert not re.search(r"(?m)^      hostUsers: false$", pod_spec), name
     assert re.search(r"(?m)^        runAsNonRoot: true$", pod_spec), name
     assert not re.search(r"(?m)^        (?:runAsUser|runAsGroup|fsGroup):", pod_spec), name
@@ -127,11 +141,7 @@ def check_openshift_restricted_scc(job: str, name: str) -> None:
 def check_kind_non_root_identity(job: str, name: str) -> None:
     template = job.split("  template:\n", 1)[1]
     pod_spec = template.split("    spec:\n", 1)[1]
-    for field, value in (
-        ("runAsNonRoot", "true"),
-        ("runAsUser", "1000"),
-        ("fsGroup", "1000"),
-    ):
+    for field, value in (("runAsNonRoot", "true"), ("runAsUser", "1000"), ("fsGroup", "1000")):
         assert re.search(rf"(?m)^        {field}: {value}$", pod_spec), name
 
 
@@ -260,36 +270,50 @@ def check_custom_auth_credentials() -> None:
     assert 'OSAC_FULFILLMENT_CLIENT_SECRET_SECRET_KEY: "custom-client-secret"' in runtime_config
 
 
+def check_kubernetes_jwks_origins() -> None:
+    origins = ["https://api.cluster.example.com:6443", "https://api2.cluster.example.com:6443"]
+    docs = render(kubernetes_jwks_origins=origins, mcp_enabled=True)
+    expected_flag = f"--grpc-authn-kubernetes-jwks-origins={','.join(origins)}"
+    grpc = select(docs, "osac/charts/service/templates/grpc-server/deployment.yaml")
+    mcp = select(docs, "osac/charts/service/templates/mcp-server/deployment.yaml")
+    assert expected_flag in grpc
+    assert expected_flag in mcp
+
+    default_docs = render()
+    default_grpc = select(default_docs, "osac/charts/service/templates/grpc-server/deployment.yaml")
+    assert "--grpc-authn-kubernetes-jwks-origins" not in default_grpc
+
+    invalid_origin = "https://api.cluster.example.com,other.example.com"
+    try:
+        render(kubernetes_jwks_origins=[invalid_origin])
+    except subprocess.CalledProcessError as error:
+        assert "kubernetesJWKSOrigins" in error.stderr, error.stderr
+    else:
+        raise AssertionError("installer schema accepted a comma-separated JWKS origin")
+
+    command = [
+        "helm",
+        "template",
+        "fulfillment-service",
+        str(SERVICE_CHART),
+        "--values",
+        str(SERVICE_CHART / "ci-values.yaml"),
+        "--set-json",
+        f"auth.kubernetesJWKSOrigins={json.dumps([invalid_origin])}",
+    ]
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert result.returncode != 0, "service-chart schema accepted a comma-separated JWKS origin"
+    assert "kubernetesJWKSOrigins" in result.stderr, result.stderr
+
+
 def check_profile_emergency_service_accounts() -> None:
     expected_profiles = {
-        "caas-ci/instance.yaml": {
-            "admin",
-            "template-publisher",
-            "osac-metering",
-        },
-        "vmaas-ci/instance.yaml": {
-            "admin",
-            "template-publisher",
-            "osac-metering",
-        },
-        "dev/instance.yaml": {
-            "admin",
-            "template-publisher",
-            "osac-metering",
-        },
-        "bmaas-ci/instance.yaml": {
-            "admin",
-            "template-publisher",
-            "osac-metering",
-        },
-        "dev/kind-instance.yaml": {
-            "admin",
-        },
-        "full-ci/instance.yaml": {
-            "admin",
-            "template-publisher",
-            "osac-metering",
-        },
+        "caas-ci/instance.yaml": {"admin", "template-publisher", "osac-metering"},
+        "vmaas-ci/instance.yaml": {"admin", "template-publisher", "osac-metering"},
+        "dev/instance.yaml": {"admin", "template-publisher", "osac-metering"},
+        "bmaas-ci/instance.yaml": {"admin", "template-publisher", "osac-metering"},
+        "dev/kind-instance.yaml": {"admin"},
+        "full-ci/instance.yaml": {"admin", "template-publisher", "osac-metering"},
     }
     for profile, expected_accounts in expected_profiles.items():
         cmd = [
@@ -314,10 +338,7 @@ def check_profile_emergency_service_accounts() -> None:
         ]
         manifest = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
         docs = [doc for doc in manifest.split("\n---\n") if doc.strip()]
-        deployment = select(
-            docs,
-            "osac/charts/service/templates/grpc-server/deployment.yaml",
-        )
+        deployment = select(docs, "osac/charts/service/templates/grpc-server/deployment.yaml")
         match = re.search(r"--emergency-service-accounts=([^\s]+)", deployment)
         assert match, profile
         accounts = set(match.group(1).split(","))
@@ -351,9 +372,7 @@ def check_trust_gate(enabled: bool) -> None:
 
 def check_infra_ca_bundle_targets() -> None:
     script = (CHART.parents[1] / "charts/osac-infra/files/hooks/apply-ca-bundle.sh").read_text(encoding="utf-8")
-    template = (CHART.parents[1] / "charts/osac-infra/templates/hooks/apply-ca-bundle.yaml").read_text(
-        encoding="utf-8"
-    )
+    template = (CHART.parents[1] / "charts/osac-infra/templates/hooks/apply-ca-bundle.yaml").read_text(encoding="utf-8")
     assert '- "${RELEASE_NAMESPACE}"' in script
     assert '- "${OSAC_NAMESPACE}"' in script
     assert "CSI_NAMESPACE" not in script
@@ -365,6 +384,7 @@ if __name__ == "__main__":
     check(True)
     check_production_default()
     check_custom_auth_credentials()
+    check_kubernetes_jwks_origins()
     check_profile_emergency_service_accounts()
     check_operator_fulfillment_can_be_disabled()
     check_trust_gate(False)

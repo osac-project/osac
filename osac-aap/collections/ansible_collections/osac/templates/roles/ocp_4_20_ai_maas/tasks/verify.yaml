@@ -42,6 +42,39 @@
         _cluster_domain: "{{ _verify_ingress.resources[0].spec.domain }}"
       when: _cluster_domain is not defined
 
+    # The gateway uses the cluster's default ingress certificate. Trust the
+    # matching OpenShift ingress CA when it is available; otherwise uri uses the
+    # execution environment's system roots. Certificate verification stays on.
+    - name: Verify | Read the OpenShift ingress CA bundle
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ admin_kubeconfig }}"
+        api_version: v1
+        kind: ConfigMap
+        name: default-ingress-cert
+        namespace: openshift-config-managed
+      register: _verify_ingress_ca
+
+    - name: Verify | Extract the OpenShift ingress CA bundle
+      ansible.builtin.set_fact:
+        _verify_ingress_ca_bundle: >-
+          {{ ((_verify_ingress_ca.resources | default([]) | first | default({})).get('data', {})).get('ca-bundle.crt', '') }}
+      no_log: true
+
+    - name: Verify | Create a temporary ingress CA bundle file
+      ansible.builtin.tempfile:
+        state: file
+        prefix: osac-maas-ingress-ca-
+        suffix: .pem
+      register: _verify_ingress_ca_file
+      when: _verify_ingress_ca_bundle | length > 0
+
+    - name: Verify | Write the ingress CA bundle
+      ansible.builtin.copy:
+        content: "{{ _verify_ingress_ca_bundle }}"
+        dest: "{{ _verify_ingress_ca_file.path }}"
+        mode: "0600"
+      when: _verify_ingress_ca_bundle | length > 0
+
     # Normalise verify_tenants to a real list. `-e key='["a","b"]'` passes a STRING (only
     # `-e '{json}'` yields a list), so accept both: a JSON string is decoded, a real list is
     # used as-is, anything empty/undefined becomes []. Without this, a string is silently
@@ -142,3 +175,12 @@
           Verification complete — {{ _inscope_descriptors | length }} tenant(s),
           depth={{ ocp_4_20_ai_maas_verify_depth }}, keys minted for:
           {{ _verify_ctx.keys() | list | join(', ') }}
+
+  always:
+    - name: Verify | Remove the temporary ingress CA bundle
+      ansible.builtin.file:
+        path: "{{ _verify_ingress_ca_file.path }}"
+        state: absent
+      when:
+        - _verify_ingress_ca_file is defined
+        - _verify_ingress_ca_file.path is defined

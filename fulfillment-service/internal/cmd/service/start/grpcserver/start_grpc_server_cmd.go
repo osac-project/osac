@@ -150,6 +150,12 @@ func Cmd() *cobra.Command {
 		[]string{},
 		grpcAuthnTrustedTokenIssuersFlagHelp,
 	)
+	flags.StringSliceVar(
+		&runner.args.kubernetesJWKSOrigins,
+		"grpc-authn-kubernetes-jwks-origins",
+		[]string{},
+		grpcAuthnKubernetesJWKSOriginsFlagHelp,
+	)
 	flags.StringVar(
 		&runner.args.tenancyLogic,
 		"tenancy-logic",
@@ -229,6 +235,7 @@ type runnerContext struct {
 		authType                 string
 		externalAuthAddress      string
 		trustedTokenIssuers      []string
+		kubernetesJWKSOrigins    []string
 		tenancyLogic             string
 		tokenSignerCrt           string
 		tokenSignerKey           string
@@ -468,6 +475,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetCaPool(caPool).
 		AddIssuers(c.args.trustedTokenIssuers...).
 		AddKubernetesIssuer(true).
+		AddKubernetesJWKSOrigins(c.args.kubernetesJWKSOrigins...).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create JWKS cache: %w", err)
@@ -1014,6 +1022,12 @@ _PREFIX_ - Prefix of the Kafka topics that contain fulfillment events.
 const grpcAuthnTrustedTokenIssuersFlagHelp = `
 _ISSUERS_ - Comma separated list of token issuers that
 are advertised as trusted by the gRPC server.
+`
+
+const grpcAuthnKubernetesJWKSOriginsFlagHelp = `
+_ORIGINS_ - Comma separated list of exact HTTPS origins allowed for Kubernetes
+JWKS requests on a different origin from the issuer. The projected service-account
+bearer token is sent to these origins; same-origin requests need no entry.
 `
 
 const tenancyLogicFlagHelp = `

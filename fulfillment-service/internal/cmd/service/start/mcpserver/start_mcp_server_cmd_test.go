@@ -62,6 +62,11 @@ var _ = Describe("Cmd", func() {
 		Expect(cmd.Flags().Lookup("grpc-authn-trusted-token-issuers")).ToNot(BeNil())
 	})
 
+	It("Has a --grpc-authn-kubernetes-jwks-origins flag", func() {
+		cmd := Cmd()
+		Expect(cmd.Flags().Lookup("grpc-authn-kubernetes-jwks-origins")).ToNot(BeNil())
+	})
+
 	It("Has a --ca-file flag", func() {
 		cmd := Cmd()
 		Expect(cmd.Flags().Lookup("ca-file")).ToNot(BeNil())

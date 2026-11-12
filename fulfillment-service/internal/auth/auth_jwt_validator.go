@@ -350,21 +350,19 @@ func (v *jwtValidator) translateError(ctx context.Context, token *jwt.Token, err
 		}
 		return errors.New("token has invalid claims")
 	case errors.Is(err, ErrBadIssuer):
-		iss, err := token.Claims.GetIssuer()
-		if err != nil {
+		if _, issuerErr := token.Claims.GetIssuer(); issuerErr != nil {
 			return errors.New("token does not contain the 'iss' claim")
 		}
-		return fmt.Errorf("issuer URL '%s' is not trusted", iss)
+		return errors.New("token issuer is not trusted")
 	case errors.Is(err, ErrBadKey):
-		iss, err := token.Claims.GetIssuer()
-		if err != nil {
+		if _, issuerErr := token.Claims.GetIssuer(); issuerErr != nil {
 			return errors.New("token does not contain the 'iss' claim")
 		}
 		kid, ok := token.Header["kid"].(string)
 		if !ok || kid == "" {
 			return errors.New("token does not contain the 'kid' claim")
 		}
-		return fmt.Errorf("there is no key '%s' for issuer URL '%s'", kid, iss)
+		return errors.New("token signing key is not available")
 	default:
 		v.logger.ErrorContext(
 			ctx,

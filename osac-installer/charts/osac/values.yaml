@@ -237,6 +237,10 @@ service:
     # global.clusterDomain (e.g. kind) must override this explicitly instead.
     issuerUrl: "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac"
     controllerCredentials: []
+    # Exact HTTPS origins trusted for Kubernetes JWKS requests when discovery
+    # advertises the JWKS endpoint on an origin different from the issuer.
+    # The service-account bearer token is sent to these configured origins.
+    kubernetesJWKSOrigins: []
   idp:
     provider: keycloak
     # tpl is applied at render time -- see service.auth.issuerUrl above.

@@ -84,6 +84,9 @@ spec:
         - --http-cors-allowed-origins=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}
         - --grpc-server-address=fulfillment-api:8000
         - --grpc-authn-trusted-token-issuers={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
+        {{- if .Values.auth.kubernetesJWKSOrigins }}
+        - --grpc-authn-kubernetes-jwks-origins={{ join "," .Values.auth.kubernetesJWKSOrigins }}
+        {{- end }}
         - --oauth-authorization-server={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
         - --oauth-resource-url=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}/
         - --oauth-token-endpoint={{ trimSuffix "/" (tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) .) }}/protocol/openid-connect/token

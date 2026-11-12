@@ -205,6 +205,9 @@ service:
     # tokens for OSAC API authentication.
     # Example: https://keycloak.keycloak.svc.cluster.local/realms/osac
     issuerUrl: https://keycloak.keycloak.svc.cluster.local/realms/osac
+    # Add only when Kubernetes discovery advertises JWKS on a distinct trusted
+    # API-server origin. The service-account bearer token is sent there.
+    kubernetesJWKSOrigins: []
 
     # Credentials for the fulfillment controller to authenticate with
     # the OIDC provider. Mounted as projected volumes.

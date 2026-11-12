@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"net/url"
 	"strings"
 	"time"
 
@@ -92,7 +93,14 @@ var _ = Describe("JWT token validation", func() {
 
 		// Create the issuer URLs:
 		goodIssuerUrl = "https://good-issuer.example.com"
-		badIssuerUrl = "https://bad-issuer.example.com"
+		testIssuerURL := &url.URL{
+			Scheme:   "https",
+			Host:     "bad-issuer.example.com",
+			User:     url.UserPassword("test-user", "fixture-password"),
+			RawQuery: url.Values{"client_secret": {"fixture-query"}}.Encode(),
+			Fragment: "fixture-fragment",
+		}
+		badIssuerUrl = testIssuerURL.String()
 
 		// Create the JWKS cache:
 		jwksCache = NewMockJwksCache(ctrl)
@@ -200,7 +208,8 @@ var _ = Describe("JWT token validation", func() {
 		bearer := MakeTokenString(badIssuerUrl, "Bearer", time.Minute)
 		token, err := validator.Validate(ctx, bearer)
 		Expect(err).To(HaveOccurred())
-		Expect(err).To(MatchError(fmt.Sprintf("issuer URL '%s' is not trusted", badIssuerUrl)))
+		Expect(err).To(MatchError("token issuer is not trusted"))
+		Expect(err.Error()).NotTo(ContainSubstring(badIssuerUrl))
 		Expect(token).To(BeNil())
 	})
 
@@ -222,7 +231,7 @@ var _ = Describe("JWT token validation", func() {
 		).Raw
 		token, err := validator.Validate(ctx, bearer)
 		Expect(err).To(HaveOccurred())
-		Expect(err).To(MatchError(fmt.Sprintf("there is no key 'junk' for issuer URL '%s'", goodIssuerUrl)))
+		Expect(err).To(MatchError("token signing key is not available"))
 		Expect(token).To(BeNil())
 	})
 

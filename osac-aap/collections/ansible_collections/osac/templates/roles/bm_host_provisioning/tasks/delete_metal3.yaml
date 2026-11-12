@@ -71,14 +71,25 @@
 
         - name: Clear generated root device hint
           vars:
-            generated_root_hints_json: >-
+            # The annotation as stored: the generated hint serialized as JSON,
+            # or the bare device name the role wrote before hints carried an
+            # identity. ansible-core native-converts the JSON form to a dict.
+            generated_root_hints_annotation: >-
               {{ bmh_deprovision_status.resources[0].metadata.annotations['osac.openshift.io/fallback-root-device'] | default('') }}
+            # The hint the annotation records: the JSON form itself, or the
+            # legacy scalar as a deviceName hint.
+            generated_root_hints: >-
+              {{ generated_root_hints_annotation
+                 if generated_root_hints_annotation is mapping
+                 else {'deviceName': generated_root_hints_annotation} }}
+            # The annotation value exactly as stored on the BMH.
+            generated_root_hints_stored: >-
+              {{ generated_root_hints_annotation | to_json
+                 if generated_root_hints_annotation is mapping
+                 else generated_root_hints_annotation }}
           when:
-            - generated_root_hints_json | length > 0
-            # Both sides go through to_json: the annotation var is
-            # native-converted to a dict when it parses as JSON, while the
-            # spec side renders as text, so a raw == would compare types.
-            - "bmh_deprovision_status.resources[0].spec.rootDeviceHints | default({}) | to_json == generated_root_hints_json | to_json"
+            - generated_root_hints_annotation | length > 0
+            - "bmh_deprovision_status.resources[0].spec.rootDeviceHints | default({}) == generated_root_hints"
           kubernetes.core.k8s_json_patch:
             api_version: metal3.io/v1alpha1
             kind: BareMetalHost
@@ -87,10 +98,10 @@
             patch:
               - op: test
                 path: /metadata/annotations/osac.openshift.io~1fallback-root-device
-                value: "{{ generated_root_hints_json | to_json }}"
+                value: "{{ generated_root_hints_stored }}"
               - op: test
                 path: /spec/rootDeviceHints
-                value: "{{ generated_root_hints_json | to_json | from_json }}"
+                value: "{{ generated_root_hints }}"
               - op: remove
                 path: /spec/rootDeviceHints
               - op: remove

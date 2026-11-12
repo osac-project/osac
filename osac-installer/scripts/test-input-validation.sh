@@ -930,6 +930,38 @@ assert_install_osac_order composite install after \
 assert_install_osac_order standalone install-osac independent \
   PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
 
+# install-devstack has the same composite-only ordering requirement: under
+# `make -j install` on dev-full its cluster check and node setup could run
+# before install-infra creates the Kind cluster, and its seeded catalog and
+# UI route before install-osac. A standalone install-devstack keeps no edge
+# to the other targets.
+assert_install_devstack_order() {
+  local label=$1 target=$2 expect=$3
+  shift 3
+  local db="${TMP_DIR}/order-${label}.db" prereqs
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -p -n "${target}" "$@" \
+    >"${db}" 2>/dev/null \
+    || fail "make -p -n ${target} (${label}) failed"
+  prereqs=$(grep -E '^install-devstack:' "${db}" | grep -v ':=' | head -1)
+  [ -n "${prereqs}" ] || fail "${label}: no install-devstack rule in the database"
+  case " ${prereqs#install-devstack: } " in
+    *" install-osac "*)
+      [ "${expect}" = after ] \
+        || fail "${label}: standalone install-devstack must not depend on install-osac"
+      ;;
+    *)
+      [ "${expect}" = independent ] \
+        || fail "${label}: install-devstack must be ordered after install-osac"
+      ;;
+  esac
+}
+
+assert_install_devstack_order composite install after \
+  PLATFORM=kind PROFILE=dev-full NS=osac
+assert_install_devstack_order standalone install-devstack independent \
+  PLATFORM=kind PROFILE=dev-full NS=osac
+
 # install-devstack rejects a wrong profile at parse time, before the gate's
 # cluster lookups or renders, so the user sees the actual mistake.
 if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
@@ -1189,12 +1221,23 @@ gate_failure_matching vault-runasuser-negative-gate \
   "${GATE_INFRA_ARGS[@]}" --set bundledVault.podSecurityContext.runAsUser=-1
 
 gate_failure_matching vault-runasuser-zero-nonroot-gate \
-  '^(bundledVault\.podSecurityContext|bundledVault/podSecurityContext): violates the values schema: runAsUser must not be 0 when runAsNonRoot is true$' \
+  '^(bundledVault\.podSecurityContext|bundledVault/podSecurityContext): violates the values schema: must be an object; runAsUser must not be 0 when runAsNonRoot is true$' \
   "${GATE_INFRA_ARGS[@]}" --set bundledVault.podSecurityContext.runAsUser=0
 
+# A non-object value fails the same object path on its type, not on the
+# `not` rule, and the printed text covers both so the caller is not sent to
+# the wrong field.
+gate_failure_matching vault-runasuser-type-gate \
+  '^(bundledVault\.podSecurityContext|bundledVault/podSecurityContext): violates the values schema: must be an object; runAsUser must not be 0 when runAsNonRoot is true$' \
+  "${GATE_INFRA_ARGS[@]}" --set bundledVault.podSecurityContext=1
+
 gate_failure_matching fulfillment-trust-unknown-key-gate \
-  '^(global\.fulfillmentTrust|global/fulfillmentTrust): violates the values schema: unknown keys are not allowed$' \
+  '^(global\.fulfillmentTrust|global/fulfillmentTrust): violates the values schema: must be an object; unknown keys are not allowed$' \
   "${GATE_OSAC_ARGS[@]}" --set global.fulfillmentTrust.unknownKey=1
+
+gate_failure_matching fulfillment-trust-type-gate \
+  '^(global\.fulfillmentTrust|global/fulfillmentTrust): violates the values schema: must be an object; unknown keys are not allowed$' \
+  "${GATE_OSAC_ARGS[@]}" --set global.fulfillmentTrust=1
 
 netbox_gate_err="${TMP_DIR}/netbox-gate.err"
 # The render-only placeholder mirrors the Makefile's runtime-generated

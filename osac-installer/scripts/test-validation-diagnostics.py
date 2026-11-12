@@ -429,7 +429,14 @@ class ValidationDiagnosticsTests(unittest.TestCase):
             " in the following chart(s):\n"
         )
         minimum = "must be an integer greater than or equal to 0"
-        nonroot = "runAsUser must not be 0 when runAsNonRoot is true"
+        # The two object-level paths carry their type requirement too: a
+        # scalar there fails the object type check, not the rule named
+        # after it, and the path alone cannot say which one failed.
+        nonroot = (
+            "must be an object; runAsUser must not be 0 when runAsNonRoot"
+            " is true"
+        )
+        unknown_key = "must be an object; unknown keys are not allowed"
         cases = (
             # Helm 3.18 prints the dotted path and its own minimum wording.
             (schema + "osac:\n- aap.bootstrap.backoffLimit:"
@@ -461,6 +468,20 @@ class ValidationDiagnosticsTests(unittest.TestCase):
              " 'not' failed\n",
              "bundledVault/podSecurityContext: violates the values schema: "
              + nonroot),
+            # A scalar at either object path fails its type check, and the
+            # same text covers both rules the path can break.
+            (schema + "osac:\n- bundledVault.podSecurityContext:"
+             " Invalid type. Expected: object, given: integer\n",
+             "bundledVault.podSecurityContext: violates the values schema: "
+             + nonroot),
+            (schema + "osac:\n- global.fulfillmentTrust:"
+             " Invalid type. Expected: object, given: integer\n",
+             "global.fulfillmentTrust: violates the values schema: "
+             + unknown_key),
+            (schema + "osac:\n- global.fulfillmentTrust: Additional property"
+             " unknownKey is not allowed\n",
+             "global.fulfillmentTrust: violates the values schema: "
+             + unknown_key),
         )
         for message, expected in cases:
             with self.subTest(expected=expected):
@@ -486,8 +507,8 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assert_private(result.stdout + result.stderr)
         self.assertIn(
-            "global.fulfillmentTrust: violates the values schema: unknown"
-            " keys are not allowed", result.stderr)
+            "global.fulfillmentTrust: violates the values schema: must be an"
+            " object; unknown keys are not allowed", result.stderr)
 
     def test_schema_constraint_texts_match_the_schemas(self):
         """Check the constraints named in lib.sh still describe the schemas."""

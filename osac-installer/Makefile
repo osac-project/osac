@@ -960,14 +960,20 @@ endif
 # too: its chart looks up the NetBox token Secret, which the infra seed hook
 # creates before install-infra's own upgrade returns (--wait-for-jobs), so
 # in parallel the osac upgrade could render before the Secret exists and
-# fail after the namespace and license Secret were written. Order only the
-# composite goal: standalone `make install-infra` still needs no license,
-# standalone `make install-osac` keeps no edge to install-infra, and
+# fail after the namespace and license Secret were written. install-devstack
+# follows install-osac for the same reason the composite recipe runs it
+# last: its cluster check and node setup need the Kind cluster, which
+# install-infra creates, and its seeded catalog and UI route belong to the
+# installed OSAC instance. Order only the composite goal: standalone
+# `make install-infra` still needs no license, standalone
+# `make install-osac` keeps no edge to install-infra, standalone
+# `make install-devstack` keeps no edge to the other targets, and
 # DRY_RUN=1 maps install to install-dry-run, which does no cluster change.
 ifneq ($(DRY_RUN),1)
 ifneq ($(filter install,$(MAKECMDGOALS)),)
 install-infra: validate-osac-inputs
 install-osac: install-infra
+install-devstack: install-osac
 endif
 endif
 

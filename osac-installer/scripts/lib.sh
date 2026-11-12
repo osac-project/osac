@@ -482,14 +482,16 @@ _LIB_OPEN_SCHEMA_MAPS=(
 # requirement, and holds for every failure the field can produce. The
 # numeric fields are integers with minimum 0, so a string value (for
 # example from --set-string) and a negative number report the same accurate
-# text.
+# text. The two object-level entries carry their type requirement for the
+# same reason: an integer there fails the object type check, not the rule
+# named after it.
 _LIB_SCHEMA_CONSTRAINTS=(
     "aap.bootstrap.backoffLimit|must be an integer greater than or equal to 0"
     "bundledVault.podSecurityContext.runAsUser|must be an integer greater than or equal to 0"
     "bundledVault.podSecurityContext.runAsGroup|must be an integer greater than or equal to 0"
     "bundledVault.podSecurityContext.fsGroup|must be an integer greater than or equal to 0"
-    "bundledVault.podSecurityContext|runAsUser must not be 0 when runAsNonRoot is true"
-    "global.fulfillmentTrust|unknown keys are not allowed"
+    "bundledVault.podSecurityContext|must be an object; runAsUser must not be 0 when runAsNonRoot is true"
+    "global.fulfillmentTrust|must be an object; unknown keys are not allowed"
 )
 
 # Render a chart offline and report only value-free diagnostics on failure.
@@ -537,12 +539,12 @@ offline_render_error() {
             # A path that matches a rule in _LIB_SCHEMA_CONSTRAINTS also
             # gets that rule's value-free constraint text.
             local maps="${_LIB_OPEN_SCHEMA_MAPS[*]}" constraints=''
-            printf -v constraints '%s;' "${_LIB_SCHEMA_CONSTRAINTS[@]}"
+            printf -v constraints '%s\n' "${_LIB_SCHEMA_CONSTRAINTS[@]}"
             printf '%s\n' "$1" | LC_ALL=C awk -v q="'" -v maps="${maps}" \
                 -v constraints="${constraints}" '
                 BEGIN {
                     n_maps = split(maps, map_path, " ")
-                    n_rules = split(constraints, rule, ";")
+                    n_rules = split(constraints, rule, "\n")
                     for (i = 1; i <= n_rules; i++) {
                         sep = index(rule[i], "|")
                         if (sep > 0) {

@@ -15,14 +15,15 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
 
 // Represents a role that can be assigned to groups.
 //
-// Roles are predefined named entities that represent a set of permissions within the system. They are assigned to
-// groups to control what actions the members of those groups can perform. Roles themselves do not carry any data
-// beyond their identity and metadata; the actual permissions are determined by the system based on the role name.
+// Roles are named entities that represent a set of permissions within the system. They are assigned to
+// groups to control what actions the members of those groups can perform. The permissions of a role are
+// defined by the rules of its spec
 //
 // Predefined roles include `cloud-provider-admin`, `cloud-provider-reader`, `tenant-idp-manager`, `tenant-admin`, and `tenant-reader`.
 message Role {
@@ -48,6 +49,29 @@ message RoleSpec {
   // Human-friendly long description of the role, using Markdown format. This should explain what permissions the
   // role grants and in what contexts it is typically used.
   string description = 2;
+
+  // Permission rules that define what the role grants. Each rule names one service and the methods of that service
+  // that are granted.
+  repeated PermissionRule permissions = 3;
+}
+
+// A permission rule granting a set of methods of one API service.
+message PermissionRule {
+  // Name of the service that the methods belong to, in lower case and without the version segment, for example
+  // "osac.public.clusters" or "osac.private.volumes". The wildcards "*" (every service), "osac.public.*" and
+  // "osac.private.*" (every service of one API layer) select multiple services. The server resolves the name
+  // against a permission catalog and rejects names that don't correspond to a cataloged service.
+  string service = 1 [(buf.validate.field).string.pattern = "^(\\*|osac\\.(public|private)\\.\\*|osac\\.(public|private)\\.[a-z]+)$"];
+
+  // Names of the methods that the rule grants, in lower case, for example "get" or "create". The
+  // wildcard "*" selects all the methods of the service. The server rejects names that don't correspond to a
+  // method of the selected service.
+  repeated string methods = 2 [(buf.validate.field).repeated = {
+    min_items: 1
+    items: {
+      string: {pattern: "^(\\*|[a-z]+)$"}
+    }
+  }];
 }
 
 // Current observed state of a role, reflecting its synchronization with the underlying authorization system.

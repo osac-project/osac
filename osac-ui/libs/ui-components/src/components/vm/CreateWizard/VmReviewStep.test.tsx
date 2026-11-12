@@ -25,11 +25,11 @@ describe('VmReviewStep — Storage section', () => {
   it('lists the boot disk and each additional disk with size and resolved tier', async () => {
     renderReviewStep({
       bootDisk: {
-        sizeGib: provisioningFieldValue('40'),
+        sizeGib: provisioningFieldValue(40),
         storageTier: provisioningFieldValue({ id: 'id-balanced', name: 'balanced' }),
       },
       additionalDisks: provisioningFieldValue([
-        { sizeGib: '100', storageTier: { id: 'id-fast', name: 'fast' } },
+        { sizeGib: 100, storageTier: { id: 'id-fast', name: 'fast' } },
       ]),
     });
 
@@ -41,7 +41,7 @@ describe('VmReviewStep — Storage section', () => {
   it('falls back to the raw tier value when no tier matches', async () => {
     renderReviewStep({
       bootDisk: {
-        sizeGib: provisioningFieldValue('40'),
+        sizeGib: provisioningFieldValue(40),
         storageTier: provisioningFieldValue({ id: '', name: 'unknown-tier' }),
       },
     });
@@ -52,7 +52,7 @@ describe('VmReviewStep — Storage section', () => {
   it('no longer lists the boot disk under the Configuration section', async () => {
     renderReviewStep({
       bootDisk: {
-        sizeGib: provisioningFieldValue('40'),
+        sizeGib: provisioningFieldValue(40),
         storageTier: provisioningFieldValue({ id: 'id-balanced', name: 'balanced' }),
       },
     });

@@ -81,7 +81,7 @@ const fillValidWizard = async (user: ReturnType<typeof renderWithProviders>['use
   const tierToggle = await screen.findByLabelText(/^Storage tier/);
   await user.click(tierToggle);
   await user.click(screen.getByRole('option', { name: 'block-tier' }));
-  await user.type(screen.getByRole('spinbutton', { name: 'Size (GiB)' }), '64');
+  await user.type(screen.getByRole('textbox', { name: 'Size (GiB)' }), '64');
   await user.click(screen.getByRole('button', { name: 'Access Mode' }));
   await user.click(screen.getByRole('option', { name: 'ReadWriteOnce' }));
   await user.click(screen.getByRole('button', { name: 'Next' }));
@@ -175,7 +175,7 @@ describe('VolumeWizardPage', () => {
 
       await user.click(screen.getByRole('button', { name: 'Back' }));
       expect(await screen.findByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
-      expect(screen.getByRole('spinbutton', { name: 'Size (GiB)' })).toHaveValue(64);
+      expect(screen.getByRole('textbox', { name: 'Size (GiB)' })).toHaveValue('64');
 
       await user.click(screen.getByRole('button', { name: 'Back' }));
       expect(await screen.findByRole('heading', { name: 'General' })).toBeInTheDocument();

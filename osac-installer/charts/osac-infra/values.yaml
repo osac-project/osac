@@ -94,6 +94,11 @@ aapOperator:
 lvms:
   enabled: false
   channel: "stable-4.22"
+  # The chart never creates these devices. Development/CI profiles should
+  # override this allowlist with paths provisioned by their environment.
+  deviceSelector:
+    optionalPaths:
+      - /dev/sample-osac-disk
 
 # Optional local LVM CSI provisioning for the Kind dev-full profile.
 topolvm:

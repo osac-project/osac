@@ -24,32 +24,21 @@ const toVersionReference = (value: ResourceSelectValue) => ({
 });
 
 const toNodeSetMap = (value: ClusterNodeSetRow[]) => {
-  const items = Object.create(null) as Record<
-    string,
-    {
-      size: number;
-      baremetalInstanceType: { id: string; name?: string; shared: boolean };
-    }
-  >;
-
-  for (const row of value) {
-    const name = row.name.trim();
-    const hostType = row.hostType;
-    const size = Number(row.size.trim());
-    if (!name || !hostType.id || !Number.isFinite(size) || size <= 0) {
-      continue;
-    }
-    items[name] = {
-      size,
-      baremetalInstanceType: {
-        id: hostType.id,
-        ...(hostType.name ? { name: hostType.name } : {}),
-        shared: true,
-      },
+  if (value.length > 0) {
+    return {
+      items: Object.fromEntries(
+        value.map((row) => [
+          row.name,
+          {
+            baremetalInstanceType: { id: row.hostType.id, name: row.hostType.name, shared: true },
+            size: row.size,
+          },
+        ]),
+      ),
     };
   }
 
-  return { items };
+  return { items: undefined };
 };
 
 const buildClusterCatalogItemFieldsPayload = (

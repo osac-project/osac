@@ -41,6 +41,7 @@ export const cidrsOverlap = (left: string, right: string, ipFamily: CidrIpFamily
 
 /**
  * Yup schema for validating CIDR notation for the requested IP family.
+ * IPv4 CIDRs must also start at their network address.
  * Use .required() when the field is mandatory.
  */
 export const buildCidrSchema = (t: TFunction, ipFamily: CidrIpFamily) => {
@@ -48,11 +49,32 @@ export const buildCidrSchema = (t: TFunction, ipFamily: CidrIpFamily) => {
   const message =
     ipFamily === 'ipv4' ? t('Invalid IPv4 CIDR notation') : t('Invalid IPv6 CIDR notation');
 
-  return Yup.string().test(testName, message, (value) => {
+  const schema = Yup.string().test(testName, message, (value) => {
     if (!value) {
       return true;
     }
     return isValidCidr(value, ipFamily);
+  });
+
+  if (ipFamily === 'ipv6') {
+    return schema;
+  }
+
+  return schema.test('canonical-ipv4-cidr', (value, context) => {
+    if (!value?.trim() || !isValidCidr(value, 'ipv4')) {
+      return true;
+    }
+
+    const address = new Address4(value.trim());
+    if (address.bigInt() === address.startAddress().bigInt()) {
+      return true;
+    }
+
+    return context.createError({
+      message: t('Use {{cidr}} instead. CIDRs must start at the network address.', {
+        cidr: address.networkForm(),
+      }),
+    });
   });
 };
 

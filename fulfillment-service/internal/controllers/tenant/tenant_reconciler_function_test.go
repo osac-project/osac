@@ -827,14 +827,15 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 		Expect(err.Error()).To(ContainSubstring(`missing data["password"]`))
 	})
 
-	It("should store generated credentials as a Secret after IDP sync", func() {
+	It("should store the break-glass username as a Secret after IDP sync", func() {
 		secrets := &mockSecretsClient{
 			createFunc: func(_ context.Context, req *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
 				secret := req.GetObject()
 				Expect(secret.GetMetadata().GetName()).To(Equal("break-glass-credentials"))
 				Expect(secret.GetMetadata().GetTenant()).To(Equal("test-org"))
 				Expect(secret.GetType()).To(Equal(privatev1.SecretType_SECRET_TYPE_OPAQUE))
-				Expect(secret.GetData()).To(HaveKeyWithValue("password", []byte(testPreGeneratedPassword)))
+				Expect(secret.GetData()).To(HaveKeyWithValue("username", []byte("test-org-osac-break-glass")))
+				Expect(secret.GetData()).ToNot(HaveKey("password"))
 				secret.SetId("created-secret-id")
 				return privatev1.SecretsCreateResponse_builder{Object: secret}.Build(), nil
 			},

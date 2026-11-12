@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/rendering"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -205,9 +206,9 @@ func (c *runnerContext) displayEvent(ctx context.Context, event proto.Message, o
 
 	var render func(context.Context, []proto.Message) error
 	switch c.args.format {
-	case outputFormatJson:
+	case rendering.JSON:
 		render = c.renderJson
-	case outputFormatYaml:
+	case rendering.YAML:
 		render = c.renderYaml
 	default:
 		render = c.renderTable

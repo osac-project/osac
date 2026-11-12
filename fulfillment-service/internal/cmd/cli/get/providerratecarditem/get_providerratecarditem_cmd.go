@@ -22,8 +22,8 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/output"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/rendering"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -40,7 +40,7 @@ func Cmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE:    runner.run,
 	}
-	result.Flags().StringVarP(&runner.format, "output", "o", output.Table, outputFlagHelp)
+	result.Flags().StringVarP(&runner.format, "output", "o", rendering.Table, outputFlagHelp)
 	result.Flags().StringVar(&runner.tenantID, "tenant-id", "", tenantIDFlagHelp)
 	result.Flags().StringVar(&runner.service, "service", "", serviceFlagHelp)
 	result.Flags().StringVar(&runner.currencyCode, "currency-code", "", currencyCodeFlagHelp)
@@ -66,7 +66,7 @@ type runnerContext struct {
 // run fetches the rows over gRPC and renders them in the requested format.
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	if err := output.Validate(c.format); err != nil {
+	if err := rendering.ValidateFormat(c.format); err != nil {
 		return err
 	}
 	if len(c.currencyCode) != 3 {
@@ -136,16 +136,20 @@ func (c *runnerContext) list(ctx context.Context, client publicv1.ProviderRateCa
 	}
 }
 
-// render writes the rows as a table, JSON or YAML; the JSON and YAML encoding is shared in the output package.
+// render writes the rows as a table, JSON or YAML; the JSON and YAML encoding is shared in the rendering package.
 func render(ctx context.Context, console *terminal.Console, format string, items []*publicv1.ProviderRateCardItem) error {
-	if format == output.Table {
+	if format == rendering.Table {
 		return renderTable(console, items)
 	}
-	values, err := output.Messages(items)
+	values, err := rendering.EncodeList(items)
 	if err != nil {
 		return fmt.Errorf("failed to encode provider rate card items: %w", err)
 	}
-	output.Render(ctx, console, format, values)
+	if format == rendering.JSON {
+		console.RenderJson(ctx, values)
+	} else {
+		console.RenderYaml(ctx, values)
+	}
 	return nil
 }
 
@@ -162,7 +166,7 @@ func renderTable(console *terminal.Console, items []*publicv1.ProviderRateCardIt
 	for _, item := range items {
 		printf("%s\t%s\t%s\t%s\t%s\t%s\n",
 			item.GetService(), item.GetCurrencyCode(), renderConditions(item), item.GetRate().GetAmount(),
-			item.GetRate().GetUnit(), output.OrDash(strings.Join(item.GetCatalogItemMatches(), ", ")))
+			item.GetRate().GetUnit(), rendering.Dash(strings.Join(item.GetCatalogItemMatches(), ", ")))
 	}
 	if writeErr != nil {
 		return writeErr

@@ -82,7 +82,7 @@ var _ = Describe("Catalog pricing inputs server", func() {
 		Expect(item.GetCatalogItems()[0].GetTitle()).To(Equal("VMaaS item"))
 		Expect(item.GetCatalogItems()[0].GetPublished()).To(BeTrue())
 
-		// AC6: the public message has no price, provider rule, account id, or correlation id field.
+		// The public message has no price, provider rule, account id, or correlation id field.
 		descriptor := item.ProtoReflect().Descriptor()
 		for i := range descriptor.Fields().Len() {
 			name := string(descriptor.Fields().Get(i).Name())

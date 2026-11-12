@@ -33,7 +33,7 @@ const (
 // metric; they are never returned to a client as a Reason on a result, unlike the pricing Reason* constants.
 const (
 	// SkipRateShapeUnsupported is a price method other than QUANTITY, or a missing/unparsable unit rate: a
-	// FLAT_RATE, TIERED, AMOUNT, NO_PRICE, percentage-rate or pricing-logic shape (AC3).
+	// FLAT_RATE, TIERED, AMOUNT, NO_PRICE, percentage-rate or pricing-logic shape.
 	SkipRateShapeUnsupported = ReasonRateShapeUnsupported
 	// SkipDimensionUnmapped is a row whose priced attribute id does not match any of the service's priceable
 	// attributes, so the row cannot be named in resource_conditions.
@@ -52,28 +52,28 @@ type RateCondition struct {
 }
 
 // RateCardItem is one normalized, supported rate-card row: a provider rule translated into OSAC's provider-neutral
-// shape. It carries no provider rule id, rate-card id, service id or native account id (AC7).
+// shape. It carries no provider rule id, rate-card id, service id or native account id.
 type RateCardItem struct {
 	Service    string
 	Currency   string
 	Conditions []RateCondition
-	// Amount is the provider decimal exactly as returned, never rounded (AC2).
+	// Amount is the provider decimal exactly as returned, never rounded.
 	Amount decimal.Decimal
-	// Unit is always unitSecond: OSAC treats every rate as per second and performs no unit validation (AC2).
+	// Unit is always unitSecond: OSAC treats every rate as per second and performs no unit validation.
 	Unit string
 }
 
 // ListServiceRateCardItems reads service's current rate card in currency and normalizes every QUANTITY row with a
-// parsable unitRate into a RateCardItem (AC2, AC3). It never evaluates a provider formula and never guesses a price
-// for an unsupported row: such a row is omitted and counted in skipped, keyed by one of the Skip* reasons above.
+// parsable unitRate into a RateCardItem. It never evaluates a provider formula and never guesses a price for an
+// unsupported row: such a row is omitted and counted in skipped, keyed by one of the Skip* reasons above.
 //
-// A service name with no exact provider match, or a currency with no rate card, yields an empty, error-free result
-// (AC4's "service with no matching provider name" and "currency with no rate card" edge cases): both mean nothing to
-// list, not a provider failure. Any other adapter failure (ambiguous service match, timeout, malformed response) is
-// returned as a classified *billing.Error for the caller to map to UNAVAILABLE, the same way resolveComponent does.
+// A service name with no exact provider match, or a currency with no rate card, yields an empty, error-free result:
+// both mean nothing to list, not a provider failure. Any other adapter failure (ambiguous service match, timeout,
+// malformed response) is returned as a classified *billing.Error for the caller to map to UNAVAILABLE, the same way
+// resolveComponent does.
 //
-// This performs no tenant/account resolution and no override lookup: OSAC applies no separate override tier (AC4),
-// so the rows returned here are identical whether or not a caller has already validated a tenant's account.
+// This performs no tenant/account resolution and no override lookup: OSAC applies no separate override tier, so the
+// rows returned here are identical whether or not a caller has already validated a tenant's account.
 func (r *Resolver) ListServiceRateCardItems(ctx context.Context, service, currency string) (
 	items []RateCardItem, skipped map[string]int, err error) {
 	skipped = map[string]int{}
@@ -116,20 +116,20 @@ func (r *Resolver) ListServiceRateCardItems(ctx context.Context, service, curren
 }
 
 // normalizeRateRow converts one provider row into a RateCardItem, or reports why it was skipped. The ANY/EQUALS
-// inference matches the Jira implementation guidance for this story: a row's AttributeValues being empty makes its
-// one priced dimension ANY (the row matches every value, i.e. "no conditions"); a non-empty AttributeValues list
-// produces one EQUALS condition per entry, using the attribute Name each entry already carries (the same shape
-// matchRow/rowMatches use for request-side matching). Empty EQUALS values are invalid because empty is reserved for
-// ANY; those rows are rejected so the caller can skip and count them.
+// inference is: a row's AttributeValues being empty makes its one priced dimension ANY (the row matches every value,
+// i.e. "no conditions"); a non-empty AttributeValues list produces one EQUALS condition per entry, using the
+// attribute Name each entry already carries (the same shape matchRow/rowMatches use for request-side matching). Empty
+// EQUALS values are invalid because empty is reserved for ANY; those rows are rejected so the caller can skip and
+// count them.
 func normalizeRateRow(row billing.RateRow, names map[string]string, cardCurrency string) (
 	item RateCardItem, skipReason string, ok bool) {
 	name, known := names[row.DimensionID]
 	if !known {
 		return RateCardItem{}, SkipDimensionUnmapped, false
 	}
-	amount, parseErr := decimal.NewFromString(row.UnitRate)
-	if row.PriceMethod != priceMethodQuantity || row.UnitRate == "" || parseErr != nil {
-		return RateCardItem{}, SkipRateShapeUnsupported, false
+	amount, reason, ok := parseUnitRate(row)
+	if !ok {
+		return RateCardItem{}, reason, false
 	}
 
 	var conditions []RateCondition

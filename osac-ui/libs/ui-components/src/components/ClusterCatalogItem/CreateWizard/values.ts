@@ -48,7 +48,7 @@ export const getClusterCatalogItemInitialValues = (
     ...createEmptyNodeSetRow(),
     name,
     hostType: resourceSelectValueFromReference(nodeSet.baremetalInstanceType),
-    size: nodeSet.size ? String(nodeSet.size) : '',
+    size: nodeSet.size,
   }));
   const version = getFieldFromCatalogItemPolicy<ClusterVersionReference | undefined>(
     fields?.version,

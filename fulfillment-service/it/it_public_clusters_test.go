@@ -31,13 +31,15 @@ import (
 
 var _ = Describe("Public clusters", func() {
 	var (
-		ctx                 context.Context
-		clustersClient      publicv1.ClustersClient
-		instanceTypesClient privatev1.BareMetalInstanceTypesClient
-		templatesClient     privatev1.ClusterTemplatesClient
-		networkClassID      string
-		bmitName            string
-		templateId          string
+		ctx                   context.Context
+		clustersClient        publicv1.ClustersClient
+		privateClustersClient privatev1.ClustersClient
+		instanceTypesClient   privatev1.BareMetalInstanceTypesClient
+		templatesClient       privatev1.ClusterTemplatesClient
+		networkClassID        string
+		bmitName              string
+		templateId            string
+		network               catalogItemNetworkFixture
 	)
 
 	BeforeEach(func() {
@@ -45,12 +47,14 @@ var _ = Describe("Public clusters", func() {
 		ctx = context.Background()
 		// Public cluster requests validate the canonical networking Hub even when
 		// the request does not specify a subnet or SecurityGroup.
-		networkClassID = ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "").networkClassID
+		networkClassID = createCatalogItemNetworkClassFixture(ctx)
 
 		// Create the clients:
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
+		privateClustersClient = privatev1.NewClustersClient(tool.InternalView().AdminConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
+		network = createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 
 		// Create a bare metal instance type for testing:
 		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])
@@ -115,8 +119,9 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -154,18 +159,16 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object := createResponse.GetObject()
-		DeferCleanup(func() {
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
-				Id: object.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			Expect(cleanupClusterFixture(cleanupCtx, clustersClient, privateClustersClient, object.GetId())).To(Succeed())
 		})
 
 		// Get the list of clusters and verify that it isn't empty:
@@ -223,8 +226,9 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -258,18 +262,16 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object := createResponse.GetObject()
-		DeferCleanup(func() {
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
-				Id: object.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			Expect(cleanupClusterFixture(cleanupCtx, clustersClient, privateClustersClient, object.GetId())).To(Succeed())
 		})
 
 		// Update the cluster:
@@ -309,8 +311,6 @@ var _ = Describe("Public clusters", func() {
 	})
 
 	It("rejects public updates that change the network attachment", func() {
-		// Reuse the deployment's singleton NetworkClass from BeforeEach.
-		network := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 		createResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -381,8 +381,9 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -670,8 +671,9 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					NodeSets: testClusterNodeSets(bmitName, 3),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 3),
+					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
 			}.Build(),
 		}.Build())

@@ -57,11 +57,20 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		defaultDiskImageId                  string
 		defaultDiskImageName                string
 		defaultNetworkingFixture            catalogItemNetworkFixture
+		tenantName                          string
+		tenantUsername                      string
+		tenantPassword                      string
 	)
 
 	BeforeEach(func(ctx context.Context) {
+		tenantIdentity := createCatalogItemTenantAdminIdentityFixture(ctx)
+		tenantName = tenantIdentity.TenantID
+		tenantUsername = tenantIdentity.Username
+		tenantPassword = tenantIdentity.Password
+		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, tenantName, "")
+
 		// Create clients
-		bareMetalInstancesClient = publicv1.NewBareMetalInstancesClient(tool.ExternalView().UserConn())
+		bareMetalInstancesClient = publicv1.NewBareMetalInstancesClient(tenantIdentity.Conn)
 		privateBareMetalInstancesClient = privatev1.NewBareMetalInstancesClient(tool.InternalView().AdminConn())
 		bareMetalInstanceTemplatesClient = privatev1.NewBareMetalInstanceTemplatesClient(tool.InternalView().AdminConn())
 		bareMetalInstanceCatalogItemsClient = privatev1.NewBareMetalInstanceCatalogItemsClient(tool.InternalView().AdminConn())
@@ -112,10 +121,6 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
-
-		// Lifecycle Creates omit network_attachments and use shared catalog items without
-		// network field policies; hard-fail defaulting needs a tenant-default Subnet/SG.
-		defaultNetworkingFixture = ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		// Create BareMetalInstanceTemplate with an explicit ID that matches the BMFO CRD
 		// validation pattern (^[a-zA-Z_][a-zA-Z0-9._]*$). Auto-generated UUIDs start with
@@ -193,7 +198,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("Creates a BareMetalInstance with omitted networking and verifies fields", func(ctx context.Context) {
 		// Omitted network_attachments request the tenant default Subnet and
 		// SecurityGroup; the BeforeEach ensured a ready default fixture.
-		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+		network := defaultNetworkingFixture
 
 		// Create BareMetalInstance via public API
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
@@ -469,7 +474,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 	It("rejects public updates that change network attachments", func(ctx context.Context) {
 		// NetworkClass is a deployment singleton. Reuse the tenant-default subnet
 		// and security group instead of creating a second NetworkClass.
-		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+		network := getTenantDefaultNetworkFixture(ctx, tenantName, "")
 		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -1081,7 +1086,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				createSecret := func(name string) *privatev1.Secret {
 					response, createErr := secretsClient.Create(ctx, privatev1.SecretsCreateRequest_builder{
 						Object: privatev1.Secret_builder{
-							Metadata: privatev1.Metadata_builder{Name: name, Tenant: usersGroup}.Build(),
+							Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenantName}.Build(),
 							Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
 							Data:     map[string][]byte{"public_key": []byte(bmiTestSSHPublicKey)},
 						}.Build(),
@@ -1213,7 +1218,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				DeferCleanup(func() {
 					Expect(os.RemoveAll(homeDir)).To(Succeed())
 				})
-				_, stderr, exitCode := tool.LoginCLI(ctx, homeDir, userUsername, usersPassword)
+				_, stderr, exitCode := tool.LoginCLI(ctx, homeDir, tenantUsername, tenantPassword)
 				Expect(exitCode).To(Equal(0), "login failed: %s", stderr)
 
 				name := fmt.Sprintf("it-cli-bmi-%s", uuid.New()[24:32])

@@ -1,16 +1,14 @@
+import { Code, ConnectError } from '@connectrpc/connect';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ComputeInstance } from '@osac/types';
+import type { ComputeInstance, InstanceType } from '@osac/types';
 import { ComputeInstanceState } from '@osac/types';
 
 import VmDetails from './VmDetails';
+import type { MockTransportOverrides } from '../../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
-
-vi.mock('../../../api/v1/instance-types', () => ({
-  useInstanceType: vi.fn(),
-}));
 
 vi.mock('../../../api/v1/disk-image', () => ({
   useDiskImage: vi.fn(),
@@ -47,7 +45,6 @@ vi.mock('../../../VmStatusLabel', () => ({
   VmStatusLabel: () => <span>Running</span>,
 }));
 
-const { useInstanceType } = await import('../../../api/v1/instance-types');
 const { useDiskImage } = await import('../../../api/v1/disk-image');
 
 const vm = {
@@ -57,15 +54,19 @@ const vm = {
   status: { state: ComputeInstanceState.RUNNING },
 } as ComputeInstance;
 
-const renderDetails = () => renderWithProviders(<VmDetails vm={vm} />);
+const instanceType = {
+  id: 'standard-4-8',
+  metadata: { name: 'Standard 4 vCPU / 8 GiB' },
+} as InstanceType;
+
+const renderDetails = (transportOverrides?: MockTransportOverrides) =>
+  renderWithProviders(<VmDetails vm={vm} />, {
+    apiFixtures: { instanceTypes: [instanceType] },
+    transportOverrides,
+  });
 
 describe('VmDetails', () => {
   beforeEach(() => {
-    vi.mocked(useInstanceType).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      error: null,
-    } as ReturnType<typeof useInstanceType>);
     vi.mocked(useDiskImage).mockReturnValue({
       data: undefined,
       isLoading: false,
@@ -92,16 +93,14 @@ describe('VmDetails', () => {
     openWindow.mockRestore();
   });
 
-  it('shows an alert and still renders the page when instance type lookup fails', () => {
-    vi.mocked(useInstanceType).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      error: new Error('Instance type unavailable'),
-    } as ReturnType<typeof useInstanceType>);
+  it('shows an alert and still renders the page when instance type lookup fails', async () => {
+    renderDetails({
+      onPublicInstanceTypeGet: () => {
+        throw new ConnectError('Instance type unavailable', Code.Unavailable);
+      },
+    });
 
-    renderDetails();
-
-    expect(screen.getByText('Could not load instance types')).toBeInTheDocument();
+    expect(await screen.findByText('Could not load instance types')).toBeInTheDocument();
     expect(screen.getByText('Instance type unavailable')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'web-01' })).toBeInTheDocument();
     expect(screen.queryByText('VM icon')).not.toBeInTheDocument();

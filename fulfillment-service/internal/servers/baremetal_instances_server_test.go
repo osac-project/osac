@@ -45,6 +45,20 @@ var _ = Describe("Bare metal instances server", func() {
 			Expect(server).ToNot(BeNil())
 		})
 
+		It("passes networking settings to its private delegate", func() {
+			server, err := NewBareMetalInstancesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetNetworkingSettings(NetworkingSettings{ProvisioningEnabled: false}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			delegate, ok := server.delegate.(*PrivateBareMetalInstancesServer)
+			Expect(ok).To(BeTrue())
+			Expect(delegate.settings.ProvisioningEnabled).To(BeFalse())
+		})
+
 		It("Fails if logger is not set", func() {
 			server, err := NewBareMetalInstancesServer().
 				SetAttributionLogic(attribution).
@@ -74,7 +88,6 @@ var _ = Describe("Bare metal instances server", func() {
 			var err error
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
-			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 
 			// Seed a published catalog item.
 			catalogServer, err := NewPrivateBareMetalInstanceCatalogItemsServer().

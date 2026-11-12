@@ -289,6 +289,14 @@ fields; in YAML, write them as nested mappings.
 | `auto_external_ip_attachment` | — | Whether to provision external IP attachments automatically |
 | `add_on_operators` | `--add-on-operator` | Policy for the complete list of published add-on operators |
 
+Templates that declare the `supports_automatic_caas_endpoints` capability
+(the CaaS `ocp_small` and its MaaS wrapper) require automatic API and ingress
+external access. Fulfillment stores `auto_external_ip_attachment: true` for
+these templates. A request or catalog policy that explicitly sets the field
+to `false` is rejected with `InvalidArgument`; do not lock it to `false` in a
+catalog item. Automatic ExternalIPs are created only when provider networking
+is enabled. CI and NICo template behavior is unchanged.
+
 **ComputeInstanceCatalogItem** policies:
 
 | Field | Description |

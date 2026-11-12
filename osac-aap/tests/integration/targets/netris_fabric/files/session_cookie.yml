@@ -1,0 +1,16 @@
+---
+# Supply the session fact before the unchanged generic dispatcher. It is a
+# host fact, not an extra variable, so launch-variable validation still runs.
+- name: Reuse an existing Netris session
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Set the existing Netris session cookie
+      ansible.builtin.set_fact:
+        netris_session_cookie: >-
+          {{ lookup('ansible.builtin.file',
+                    lookup('ansible.builtin.env', 'NF_SESSION_COOKIE_FILE')) | trim }}
+      no_log: true
+
+- name: Run the generic playbook
+  ansible.builtin.import_playbook: ../../../../../playbook_osac_network_task.yml

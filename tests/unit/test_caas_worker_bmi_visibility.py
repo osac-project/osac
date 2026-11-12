@@ -7,11 +7,9 @@ from unittest.mock import Mock
 import pytest
 
 from tests.e2e.caas.sanity import test_cluster_create as scenario
-from tests.e2e.caas.sanity.test_cluster_create import (
-    _agent_is_installing,
-    _cluster_order_agents,
-    _list_owned_worker_bmis,
-)
+from tests.e2e.caas.sanity.test_cluster_create import _list_owned_worker_bmis
+from tests.e2e.core import helpers, runner
+from tests.e2e.core.helpers import cluster_order_agents
 
 
 @pytest.mark.parametrize("bad_field", ["tenant", "label", "owner"])
@@ -74,23 +72,34 @@ def test_cluster_order_agents_only_returns_agents_from_its_infraenv_and_namespac
     }
     k8s.list_json.return_value = {"items": [wrong_infraenv, wrong_namespace, expected]}
 
-    assert _cluster_order_agents(k8s=k8s, co_name="order-a", namespace="osac") == [expected]
+    assert cluster_order_agents(k8s=k8s, co_name="order-a", namespace="osac") == [expected]
     k8s.list_json.assert_called_once_with(resource="agents.agent-install.openshift.io", namespace="osac")
 
 
 @pytest.mark.parametrize(
-    ("state", "expected"),
+    ("status", "expected"),
     [
-        ("known", False),
-        ("preparing-for-installation", False),
-        ("Installing", False),
-        ("installing", True),
-        ("installing-in-progress", True),
-        ("installed", False),
+        ({}, "unknown"),
+        ({"debugInfo": {"state": "installing-in-progress"}}, "installing-in-progress"),
+        (
+            {"debugInfo": {"state": "error", "stateInfo": "Installation failed: disk /dev/sda is too small"}},
+            "error, Installation failed: disk /dev/sda is too small",
+        ),
+        (
+            {
+                "debugInfo": {"state": "installing-in-progress"},
+                "progress": {"currentStage": "Rebooting", "installationPercentage": 55},
+            },
+            "installing-in-progress, Rebooting, 55%",
+        ),
+        (
+            {"debugInfo": {"state": "added-to-existing-cluster"}, "progress": {"currentStage": "Verifying disks"}},
+            "added-to-existing-cluster, Verifying disks",
+        ),
     ],
 )
-def test_agent_is_installing_uses_assisted_service_debug_state(state: str, expected: bool) -> None:
-    assert _agent_is_installing({"status": {"debugInfo": {"state": state}}}) is expected
+def test_agent_install_progress_reports_status_without_filtering(status: dict, expected: str) -> None:
+    assert helpers._agent_install_progress({"status": status}) == expected
 
 
 def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
@@ -106,6 +115,7 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
     grpc.list_cluster_ids.return_value = ["cluster-id"]
     catalog_item_id = Mock(name="catalog-item-id")
     private.create_cluster_catalog_item.return_value = catalog_item_id
+    # The catalog offering, not caller input, materializes the cluster spec.
     grpc.get_cluster.return_value = {
         "object": {
             "metadata": {"tenant": "tenant1"},
@@ -140,10 +150,14 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
         "nodeRequests": [{"bareMetal": {"instanceType": "ci-worker-bm"}, "numberOfNodes": 1}],
         "sshKey": {"id": "secret-id"},
     }
-    k8s.get_json.return_value = {
+    cluster_order = {
         "metadata": {"namespace": "osac", "annotations": {"osac.openshift.io/tenant": "tenant1"}},
-        "spec": {"sshAuthorizedKey": "ssh-ed25519 unit-test-key"},
+        "spec": {"nodeRequests": [{"nodeSet": "compute", "numberOfNodes": 1}]},
+        "status": {"desiredWorkers": 1, "currentWorkers": 1, "readyWorkers": 1},
     }
+    k8s.get_json.side_effect = lambda *, resource, **_kwargs: (
+        cluster_order if resource == "clusterorder" else {"spec": {"sshAuthorizedKey": "ssh-ed25519 unit-test-key"}}
+    )
     k8s.list_json.return_value = {
         "items": [
             {
@@ -152,14 +166,17 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
                     "namespace": "osac",
                     "labels": {"infraenvs.agent-install.openshift.io": "order-a-infraenv"},
                 },
-                "status": {"debugInfo": {"state": "installing-in-progress", "stateInfo": "sensitive-agent-data"}},
+                "status": {
+                    "debugInfo": {"state": "installing-in-progress", "stateInfo": "Waiting for reboot"},
+                    "inventory": {"hostname": "inventory-not-for-logs"},
+                },
             }
         ]
     }
     monkeypatch.setattr(scenario, "wait_for_cluster_order_cr", lambda **_kwargs: "order-a")
     monkeypatch.setattr(scenario, "wait_for_cluster_progressing", lambda **_kwargs: None)
 
-    class StopAfterAgent(Exception):
+    class StopAfterWorkersJoined(Exception):
         pass
 
     calls = 0
@@ -167,14 +184,17 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
     def poll_once(**kwargs: object) -> object:
         nonlocal calls
         calls += 1
-        if calls == 4:  # Stop before the unrelated operator metrics check.
-            raise StopAfterAgent
+        if calls == 5:  # Stop before the unrelated operator metrics check.
+            raise StopAfterWorkersJoined
         fn = kwargs["fn"]
         assert callable(fn)
         return fn()
 
+    # The bring-up waits live in helpers, so both modules must use the harness.
     monkeypatch.setattr(scenario, "poll_until", poll_once)
-    with caplog.at_level(logging.INFO, logger=scenario.logger.name), pytest.raises(StopAfterAgent):
+    monkeypatch.setattr(helpers, "poll_until", poll_once)
+    monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
+    with caplog.at_level(logging.INFO, logger=scenario.logger.name), pytest.raises(StopAfterWorkersJoined):
         scenario.test_cluster_create(
             cli=cli,
             grpc=grpc,
@@ -187,8 +207,10 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
             metering=metering,
         )
 
-    messages = [record.getMessage() for record in caplog.records if record.name == scenario.logger.name]
-    stages = [message for message in messages if message.startswith("CaaS:")]
+    loggers = {scenario.logger.name, helpers.logger.name}
+    messages = [record.getMessage() for record in caplog.records if record.name in loggers]
+    stages = [message for message in messages if message.startswith(("CaaS:", "CaaS phase:"))]
+    # Every bring-up step announces itself, so a long run reads as phases.
     assert stages == [
         "CaaS: ensuring DiskImage and ClusterVersion",
         "CaaS: ClusterVersion available",
@@ -198,12 +220,20 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
         "CaaS: cluster created",
         "CaaS: waiting for ClusterOrder",
         "CaaS: waiting for ClusterOrder to progress",
+        "CaaS phase: BareMetalInstances binding",
         "CaaS: waiting for tenant-visible child BareMetalInstance",
         "CaaS: child BareMetalInstance found",
-        "CaaS: waiting for Agent in ClusterOrder namespace",
-        "CaaS: Agent found; waiting for installing state",
-        "CaaS: Agent entered installing state",
+        "CaaS phase: Agents binding",
+        "CaaS: 1 of 1 worker Agent(s) registered",
+        "CaaS: Agents bound: 1 worker Agent(s) registered",
+        "CaaS phase: starting install",
+        "CaaS: installing, 0 of 1 done (installing-in-progress, Waiting for reboot)",
+        "CaaS phase: install done",
+        "CaaS: installation finished on 1 worker Agent(s)",
+        "CaaS phase: waiting for workers to join",
+        "CaaS: workers desired 1, current 1, ready 1 (unknown)",
+        "CaaS phase: workers joined",
+        "CaaS: 1 worker(s) joined and ready",
     ]
-    assert "CaaS Agent state: installing-in-progress" in messages
     assert "sensitive-token" not in caplog.text
-    assert "sensitive-agent-data" not in caplog.text
+    assert "inventory-not-for-logs" not in caplog.text

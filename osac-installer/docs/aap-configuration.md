@@ -16,10 +16,11 @@ Two instance groups carry networking and CaaS settings:
   `NETRIS_PASSWORD` or `NETRIS_SITE_ID`. See
   [Networking configuration](network-backend.md).
 
-The CaaS Netris steps (`NETWORK_CLASS=netris`) take the Netris controller URL,
-certificate validation and CA ConfigMap from the Netris settings in
-`aap.instanceGroups.networkFulfillment.config`; see
-[CaaS on Netris](network-backend.md#caas-on-netris).
+Netris manager settings and credentials are read directly from
+`aap.instanceGroups.networkFulfillment.config` and `.secret` by generic
+networking jobs. They are not selected through a `NETWORK_CLASS` environment
+variable. See [shared CaaS endpoint lifecycle](network-backend.md#shared-caas-endpoint-lifecycle)
+for the endpoint flow and upgrade guidance.
 
 ## How It Works
 

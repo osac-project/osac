@@ -2741,7 +2741,6 @@ var _ = Describe("Private compute instances server", func() {
 
 			It("Should fill a missing SecurityGroup list for a default Subnet", func() {
 				defaultSubnet := createTestSubnet(ctx, virtualNetwork.GetId(), privatev1.SubnetState_SUBNET_STATE_READY, true)
-				createTestSecurityGroup(ctx, virtualNetwork.GetId(), privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY, true)
 
 				response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
 					Object: privatev1.ComputeInstance_builder{
@@ -4721,7 +4720,7 @@ var _ = Describe("Private compute instances server", func() {
 				Object: privatev1.ComputeInstance_builder{
 					Metadata: privatev1.Metadata_builder{
 						Tenant: testTenant,
-						Name:   "auto-eip-test",
+						Name:   fmt.Sprintf("auto-eip-test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "auto-eip-template"}.Build(),
@@ -4738,6 +4737,44 @@ var _ = Describe("Private compute instances server", func() {
 				}.Build(),
 			}.Build()
 		}
+
+		It("skips automatic ExternalIPs and pool reservations when provider networking is disabled", func() {
+			server.settings.ProvisioningEnabled = false
+			createPool("pool-1", 5)
+
+			createWithoutExternalIP := func() string {
+				response, err := server.Create(ctx, createRequest(true))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).ToNot(BeNil())
+
+				ciID := response.GetObject().GetId()
+				eipList, err := externalIPDao.List().
+					SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, ciID)).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(eipList.GetItems()).To(BeEmpty())
+				return ciID
+			}
+
+			createWithoutExternalIP()
+			poolResponse, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(int64(5)))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+
+			// A pool that is not READY must not block workload creation when provider
+			// networking is disabled.
+			pool := poolResponse.GetObject()
+			pool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
+			_, err = externalIPPoolDao.Update().SetObject(pool).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			createWithoutExternalIP()
+			poolResponse, err = externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(int64(5)))
+			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+		})
 
 		It("creates an auto ExternalIP on ComputeInstance create and defers its attachment", func() {
 			createPool("pool-1", 5)

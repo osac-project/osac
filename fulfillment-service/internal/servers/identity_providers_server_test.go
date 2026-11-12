@@ -17,8 +17,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -150,7 +152,7 @@ var _ = Describe("Identity Providers Server", func() {
 			Expect(listResp.GetItems()).To(HaveLen(3))
 		})
 
-		It("updates an identity provider", func() {
+		It("updates an identity provider through the public API without adding status to the update mask", func() {
 			createResp, err := publicServer.Create(ctx, publicv1.IdentityProvidersCreateRequest_builder{
 				Object: publicv1.IdentityProvider_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -172,12 +174,35 @@ var _ = Describe("Identity Providers Server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			object := createResp.GetObject()
-			object.GetSpec().SetTitle("Updated Title")
-			updateResp, err := publicServer.Update(ctx, publicv1.IdentityProvidersUpdateRequest_builder{
-				Object: object,
+			_, err = publicServer.private.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+				Object: privatev1.IdentityProvider_builder{
+					Id: object.GetId(),
+					Status: privatev1.IdentityProviderStatus_builder{
+						Phase: privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY,
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.phase"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+
+			object.GetSpec().SetTitle("Updated Title")
+			updateRequest := publicv1.IdentityProvidersUpdateRequest_builder{
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.title"}},
+			}.Build()
+			updateResp, err := publicServer.Update(ctx, updateRequest)
+			Expect(err).ToNot(HaveOccurred())
 			Expect(updateResp.GetObject().GetSpec().GetTitle()).To(Equal("Updated Title"))
+			Expect(updateRequest.GetUpdateMask().GetPaths()).To(Equal([]string{"spec.title"}))
+
+			getResp, err := publicServer.Get(ctx, publicv1.IdentityProvidersGetRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getResp.GetObject().GetSpec().GetTitle()).To(Equal("Updated Title"))
+			Expect(getResp.GetObject().GetStatus().GetPhase()).To(Equal(
+				publicv1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN,
+			))
 		})
 
 		It("deletes an identity provider", func() {

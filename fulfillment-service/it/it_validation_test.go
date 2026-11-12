@@ -323,6 +323,7 @@ var _ = Describe("Protovalidate validation", func() {
 					Title: "Updated Title",
 				}.Build(),
 			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.name", "spec.title"}},
 		}.Build())
 
 		Expect(err).To(HaveOccurred())

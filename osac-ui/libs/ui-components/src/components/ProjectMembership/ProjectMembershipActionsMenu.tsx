@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/react-core';
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
-import type { ProjectMembership } from '@osac/types';
-import { useDeleteProjectMembership } from '@osac/ui-components/api/v1/project-membership';
+import { type ProjectMembership, ProjectMemberships } from '@osac/types';
+import { useDeleteResource } from '@osac/ui-components/api/use-resource';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import { useTranslation } from '../../hooks/useTranslation';
@@ -24,7 +24,7 @@ const ProjectMembershipActionsMenu = ({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const navigate = useNavigate();
 
-  const deleteProjectMembership = useDeleteProjectMembership();
+  const deleteProjectMembership = useDeleteResource(ProjectMemberships);
 
   return (
     <>
@@ -38,7 +38,7 @@ const ProjectMembershipActionsMenu = ({
           onClose={() => setDeleteOpen(false)}
           onSuccess={() => setDeleteOpen(false)}
           mutation={deleteProjectMembership}
-          variables={projectMembership.id}
+          variables={{ id: projectMembership.id }}
         />
       )}
       <Dropdown

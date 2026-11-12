@@ -1,7 +1,7 @@
-import type { StorageBackend } from '@osac/types/private';
+import { type StorageBackend, StorageBackends } from '@osac/types/private';
+import { useDeleteResource } from '@osac/ui-components/api/use-resource';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal.tsx';
 
-import { useDeleteStorageBackend } from '../../api/v1/private/storage-backends';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface StorageBackendDeleteConfirmModalProps {
@@ -16,7 +16,7 @@ const StorageBackendDeleteConfirmModal = ({
   onSuccess,
 }: StorageBackendDeleteConfirmModalProps) => {
   const { t } = useTranslation();
-  const deleteBackend = useDeleteStorageBackend();
+  const deleteBackend = useDeleteResource(StorageBackends);
   const backendName = backend.metadata?.name ?? backend.id;
 
   return (
@@ -27,7 +27,7 @@ const StorageBackendDeleteConfirmModal = ({
       onClose={onClose}
       onSuccess={onSuccess}
       mutation={deleteBackend}
-      variables={backend.id}
+      variables={{ id: backend.id }}
     />
   );
 };

@@ -2,12 +2,18 @@
 - name: Cluster settings never supply missing node requests
   hosts: localhost
   gather_facts: false
+  vars:
+    fixture_pull_secret: >-
+      {{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}
   tasks:
     - name: Provide credentials without node requests
       ansible.builtin.set_fact:
         cluster_order:
           spec:
-            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa legacy-template-value"}'
+            templateParameters: >-
+              {{ {'pull_secret': fixture_pull_secret,
+                  'ssh_public_key': 'ssh-rsa legacy-template-value'} | to_json }}
+      no_log: true
 
     - name: Resolve cluster settings without node requests
       ansible.builtin.include_role:
@@ -23,17 +29,23 @@
 - name: Cluster settings preserve requested instance types
   hosts: localhost
   gather_facts: false
+  vars:
+    fixture_pull_secret: >-
+      {{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}
   tasks:
     - name: Provide order with selected hardware
       ansible.builtin.set_fact:
         cluster_order:
           spec:
-            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa legacy-template-value"}'
+            templateParameters: >-
+              {{ {'pull_secret': fixture_pull_secret,
+                  'ssh_public_key': 'ssh-rsa legacy-template-value'} | to_json }}
             nodeRequests:
               - nodeSet: workers
                 numberOfNodes: 2
                 bareMetal:
                   instanceType: bm.large
+      no_log: true
 
     - name: Resolve cluster settings with node requests
       ansible.builtin.include_role:
@@ -49,12 +61,18 @@
 - name: Launch SSH key beats legacy template parameters
   hosts: localhost
   gather_facts: false
+  vars:
+    fixture_pull_secret: >-
+      {{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}
   tasks:
     - name: Provide a legacy inline template value
       ansible.builtin.set_fact:
         cluster_order:
           spec:
-            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa legacy-template-value"}'
+            templateParameters: >-
+              {{ {'pull_secret': fixture_pull_secret,
+                  'ssh_public_key': 'ssh-rsa legacy-template-value'} | to_json }}
+      no_log: true
 
     - name: Resolve cluster settings with an explicit launch key
       ansible.builtin.include_role:
@@ -71,12 +89,18 @@
 - name: Legacy template SSH key alone is ignored
   hosts: localhost
   gather_facts: false
+  vars:
+    fixture_pull_secret: >-
+      {{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}
   tasks:
     - name: Provide only a legacy inline template value
       ansible.builtin.set_fact:
         cluster_order:
           spec:
-            templateParameters: '{"pull_secret": "test-secret", "ssh_public_key": "ssh-rsa legacy-template-value"}'
+            templateParameters: >-
+              {{ {'pull_secret': fixture_pull_secret,
+                  'ssh_public_key': 'ssh-rsa legacy-template-value'} | to_json }}
+      no_log: true
 
     - name: Resolve cluster settings without launch input
       ansible.builtin.include_role:
@@ -86,3 +110,47 @@
       ansible.builtin.assert:
         that:
           - cluster_settings_ssh_public_key == ''
+
+- name: Cluster settings honor release image precedence
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fixture_pull_secret: >-
+      {{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}
+  tasks:
+    - name: Provide order with explicit and template release images
+      ansible.builtin.set_fact:
+        cluster_order:
+          spec:
+            releaseImage: quay.io/example/ocp-release:explicit
+            templateParameters: >-
+              {{ {'pull_secret': fixture_pull_secret, 'ssh_public_key': 'ssh-rsa AAAA',
+                  'release_image': 'quay.io/example/ocp-release:parameter'} | to_json }}
+      no_log: true
+
+    - name: Resolve cluster settings with explicit release image
+      ansible.builtin.include_role:
+        name: osac.service.cluster_settings
+
+    - name: Verify explicit release image takes precedence
+      ansible.builtin.assert:
+        that:
+          - ocp_release_image == 'quay.io/example/ocp-release:explicit'
+
+    - name: Provide order with only a template release image
+      ansible.builtin.set_fact:
+        cluster_order:
+          spec:
+            templateParameters: >-
+              {{ {'pull_secret': fixture_pull_secret, 'ssh_public_key': 'ssh-rsa AAAA',
+                  'release_image': 'quay.io/example/ocp-release:parameter'} | to_json }}
+      no_log: true
+
+    - name: Resolve cluster settings with template release image
+      ansible.builtin.include_role:
+        name: osac.service.cluster_settings
+
+    - name: Verify template release image is used when explicit is absent
+      ansible.builtin.assert:
+        that:
+          - ocp_release_image == 'quay.io/example/ocp-release:parameter'

@@ -16,7 +16,7 @@ import * as Yup from 'yup';
 import type { VirtualNetwork } from '@osac/types';
 
 import { useCreateVirtualNetwork } from '../../api/v1/networking';
-import { InputField } from '../../components/Form/InputField';
+import TextField from '../../components/Form/base/TextField';
 import OsacForm from '../../components/Form/OsacForm';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
@@ -39,7 +39,7 @@ const VirtualNetworkCreateForm = () => {
     <OsacForm>
       <ProjectField />
       <NameField />
-      <InputField
+      <TextField
         name="ipv4Cidr"
         label={t('IPv4 CIDR')}
         fieldId="vn-ipv4-cidr"

@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.conformance.area import load_areas
 from tests.conformance.cli import Runtime, main
 from tests.conformance.config import load_config
+from tests.conformance.domain import load_domains
 from tests.conformance.output import OutputSink
 from tests.conformance.profiles import ProfileDefinition
 from tests.conformance.redact import Redactor
@@ -39,7 +39,7 @@ def _config(path: Path, token: Path, ca: Path, hub: Path) -> Path:
     return path
 
 
-def _area(path: Path) -> Path:
+def _domain(path: Path) -> Path:
     path.write_text(
         yaml.safe_dump(
             {
@@ -90,19 +90,19 @@ def test_list_and_run_the_core_against_a_fake_target(tmp_path: Path) -> None:
     hub = tmp_path / "hub"
     hub.write_text("hub")
     config_path = _config(tmp_path / "conformance.yaml", token, ca, hub)
-    areas_dir = tmp_path / "areas"
-    areas_dir.mkdir()
-    _area(areas_dir / "networking.yaml")
+    domains_dir = tmp_path / "domains"
+    domains_dir.mkdir()
+    _domain(domains_dir / "networking.yaml")
     tree_dir = _tree(tmp_path / "tree")
     results = tmp_path / "results"
     results.mkdir()
     (tmp_path / "podman.sock").write_text("socket")
 
-    config = load_config(config_path, area_names={"networking"})
+    config = load_config(config_path, domain_names={"networking"})
     redactor = Redactor(secrets=(_FAKE_SECRET,))
     runtime = Runtime(
         config=config,
-        areas=load_areas(areas_dir),
+        domains=load_domains(domains_dir),
         profile_catalog=_catalog(),
         tree=PytestTestTree(root=tree_dir),
         target=FakeTargetClient(FakeTarget()),
@@ -131,7 +131,7 @@ def test_list_and_run_the_core_against_a_fake_target(tmp_path: Path) -> None:
     focused_results.mkdir()
     focused_runtime = Runtime(
         config=config,
-        areas=load_areas(areas_dir),
+        domains=load_domains(domains_dir),
         profile_catalog=_catalog(),
         tree=PytestTestTree(root=tree_dir),
         target=FakeTargetClient(FakeTarget()),
@@ -163,21 +163,21 @@ def test_missing_podman_socket_and_empty_plan_are_config_errors(
     hub = tmp_path / "hub"
     hub.write_text("hub")
     config_path = _config(tmp_path / "conformance.yaml", token, ca, hub)
-    areas_dir = tmp_path / "areas"
-    areas_dir.mkdir()
-    _area(areas_dir / "networking.yaml")
+    domains_dir = tmp_path / "domains"
+    domains_dir.mkdir()
+    _domain(domains_dir / "networking.yaml")
     tree_dir = _tree(tmp_path / "tree")
     results = tmp_path / "results"
     results.mkdir()
     socket = tmp_path / "podman.sock"
     socket.write_text("socket")
-    config = load_config(config_path, area_names={"networking"})
+    config = load_config(config_path, domain_names={"networking"})
     redactor = Redactor()
 
     def runtime_for(path: Path, podman_socket: Path) -> Runtime:
         return Runtime(
             config=config,
-            areas=load_areas(areas_dir),
+            domains=load_domains(domains_dir),
             profile_catalog=_catalog(),
             tree=PytestTestTree(root=tree_dir),
             target=FakeTargetClient(FakeTarget()),
@@ -230,9 +230,9 @@ def test_unknown_profile_is_a_config_error(tmp_path: Path, capsys: pytest.Captur
             sort_keys=False,
         )
     )
-    areas_dir = tmp_path / "areas"
-    areas_dir.mkdir()
-    _area(areas_dir / "networking.yaml")
+    domains_dir = tmp_path / "domains"
+    domains_dir.mkdir()
+    _domain(domains_dir / "networking.yaml")
     results = tmp_path / "results"
 
     assert (
@@ -243,8 +243,8 @@ def test_unknown_profile_is_a_config_error(tmp_path: Path, capsys: pytest.Captur
                 str(config_path),
                 "--results",
                 str(results),
-                "--areas",
-                str(areas_dir),
+                "--domains",
+                str(domains_dir),
                 "--tree",
                 str(tmp_path / "tree"),
             ]

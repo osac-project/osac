@@ -1,4 +1,4 @@
-"""Load area declarations for the conformance suite."""
+"""Load domain declarations for the conformance suite."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ _KNOWN_FIELDS = frozenset({"name", *_LIST_FIELDS, *_STRING_FIELDS, *_MAPPING_LIS
 
 
 @dataclass(frozen=True)
-class AreaDeclaration:
+class DomainDeclaration:
     name: str
     component_tests: tuple[str, ...]
     identity_fields: tuple[str, ...]
@@ -61,7 +61,7 @@ def _mapping_of_lists(value: object, field: str, filename: str) -> Mapping[str, 
     return result
 
 
-def _parse(path: Path) -> AreaDeclaration:
+def _parse(path: Path) -> DomainDeclaration:
     try:
         data: Any = yaml.safe_load(path.read_text())
     except OSError as exc:
@@ -69,7 +69,7 @@ def _parse(path: Path) -> AreaDeclaration:
     except yaml.YAMLError as exc:
         raise ConfigError([f"{path.name}: invalid YAML: {exc}"]) from None
     if not isinstance(data, Mapping):
-        raise ConfigError([f"{path.name}: area declaration must be a mapping"])
+        raise ConfigError([f"{path.name}: domain declaration must be a mapping"])
 
     checks: list[str] = []
     for key in data:
@@ -90,7 +90,7 @@ def _parse(path: Path) -> AreaDeclaration:
     if checks:
         raise ConfigError([f"{path.name}: {check}" for check in checks])
 
-    return AreaDeclaration(
+    return DomainDeclaration(
         name=name,
         component_tests=_list_of_strings(data["componentTests"], "componentTests", path.name),
         identity_fields=_list_of_strings(data["identityFields"], "identityFields", path.name),
@@ -108,18 +108,18 @@ def _parse(path: Path) -> AreaDeclaration:
     )
 
 
-def known_selectors(areas: Mapping[str, AreaDeclaration]) -> frozenset[str]:
-    return frozenset({"generic"} | {selector for area in areas.values() for selector in area.selectors})
+def known_selectors(domains: Mapping[str, DomainDeclaration]) -> frozenset[str]:
+    return frozenset({"generic"} | {selector for domain in domains.values() for selector in domain.selectors})
 
 
-def load_areas(path: Path) -> dict[str, AreaDeclaration]:
-    """Return area declarations found under ``path`` keyed by area name."""
+def load_domains(path: Path) -> dict[str, DomainDeclaration]:
+    """Return domain declarations found under ``path`` keyed by domain name."""
     if not path.exists():
         return {}
-    areas: dict[str, AreaDeclaration] = {}
+    domains: dict[str, DomainDeclaration] = {}
     for source in sorted((*path.glob("*.yaml"), *path.glob("*.yml"))):
-        area = _parse(source)
-        if area.name in areas:
-            raise ConfigError([f"{source.name}: duplicate area name {area.name}"])
-        areas[area.name] = area
-    return areas
+        domain = _parse(source)
+        if domain.name in domains:
+            raise ConfigError([f"{source.name}: duplicate domain name {domain.name}"])
+        domains[domain.name] = domain
+    return domains

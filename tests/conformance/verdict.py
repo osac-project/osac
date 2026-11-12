@@ -37,7 +37,7 @@ def evaluate(
     osac_release: str,
     suite_image_digest: str,
     enabled_services: Sequence[str],
-    area_checks: Sequence[Check] = (),
+    domain_checks: Sequence[Check] = (),
 ) -> Report:
     by_id = {outcome.identity.id: outcome for outcome in outcomes}
     tests = tuple(_outcome_for(plan, by_id, test.id) for test in plan.tests)
@@ -75,7 +75,7 @@ def evaluate(
             remedy="run the plan a full list computes",
             result=CheckResult.PASS if plan.complete else CheckResult.FAIL,
         ),
-        *area_checks,
+        *domain_checks,
     ]
     overall = Verdict.CONFORMANT if all(check.result is CheckResult.PASS for check in checks) else Verdict.IN_PROGRESS
     return Report(

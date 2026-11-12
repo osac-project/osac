@@ -20,7 +20,7 @@ def _test() -> TestIdentity:
         name="[networking][component] TC-1: test",
         nodeid="tests/e2e/test_tc.py::test_tc",
         labels=frozenset({"conformance_generic"}),
-        area="networking",
+        domain="networking",
         layer=Layer.COMPONENT,
         profiles=(),
         classification=Classification.BLOCKING,

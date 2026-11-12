@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conformance.area import AreaDeclaration
+from tests.conformance.domain import DomainDeclaration
 from tests.conformance.errors import ConfigError
 from tests.conformance.model import Classification, Layer, TestIdentity
 from tests.conformance.profiles import ProfileDefinition, expand_profiles
 from tests.conformance.selection import compute_plan, enrich_identities, plan_from_names
 
 
-def _test(test_id: str, *labels: str, area: str = "networking") -> TestIdentity:
+def _test(test_id: str, *labels: str, domain: str = "networking") -> TestIdentity:
     return TestIdentity(
         id=test_id,
-        name=f"[{area}][component] {test_id}: test",
+        name=f"[{domain}][component] {test_id}: test",
         nodeid=f"tests/e2e/test_{test_id}.py::test_{test_id}",
         labels=frozenset(labels),
-        area=area,
+        domain=domain,
         layer=Layer.COMPONENT,
         profiles=(),
         classification=Classification.BLOCKING,
@@ -97,7 +97,7 @@ def test_plan_from_names_rejects_a_test_no_selected_profile_selects() -> None:
 
 
 def test_enrich_identities_uses_the_catalog_for_layer_and_profiles() -> None:
-    area = AreaDeclaration(
+    domain = DomainDeclaration(
         name="networking",
         component_tests=("TC-COMP-01",),
         identity_fields=("name",),
@@ -118,7 +118,7 @@ def test_enrich_identities_uses_the_catalog_for_layer_and_profiles() -> None:
         _test("TC-PROFILE-01", "sig_networking", "conformance_vmaas"),
     ]
 
-    enriched = enrich_identities(raw, {"networking": area}, _catalog(), ("generic", "vm"))
+    enriched = enrich_identities(raw, {"networking": domain}, _catalog(), ("generic", "vm"))
 
     assert enriched[0].layer is Layer.COMPONENT
     assert enriched[1].layer is Layer.PROFILE

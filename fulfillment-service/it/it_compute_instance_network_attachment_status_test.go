@@ -27,8 +27,7 @@ import (
 
 var _ = Describe("Compute instance network attachment status", Label("compute-networking"), func() {
 	It("persists per-attachment status and exposes it through the public API", func(ctx context.Context) {
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
-		network := getTenantDefaultNetworkFixture(ctx, usersGroup, "")
+		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		publicClient := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 		created, err := publicClient.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{

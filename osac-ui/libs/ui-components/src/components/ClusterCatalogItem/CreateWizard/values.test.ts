@@ -31,7 +31,7 @@ describe('getClusterCatalogItemInitialValues', () => {
       expect.objectContaining({
         name: 'workers',
         hostType: { id: 'bmit-1', name: 'worker' },
-        size: '2',
+        size: 2,
       }),
     ]);
   });
@@ -61,7 +61,7 @@ describe('getClusterCatalogItemInitialValues', () => {
       expect.objectContaining({
         name: 'workers',
         hostType: { id: 'bmit-1', name: '' },
-        size: '2',
+        size: 2,
       }),
     ]);
   });

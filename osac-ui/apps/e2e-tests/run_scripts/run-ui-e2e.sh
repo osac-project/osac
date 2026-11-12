@@ -78,14 +78,15 @@ Usage: $0 [OPTIONS]
 Run prepared OSAC UI Playwright flows. Run prepare-setup-for-ui-run.sh first.
 
 Flow tags:
-  all, happy_basic                         complete VMaaS flow
-  create_resources, delete_resources       infrastructure resource group
-  create_image, delete_image, full_image   disk image lifecycle
-  create_storage, delete_storage, full_storage
-  create_instance_type, delete_instance_type, full_instance_type
-  create_tenant, delete_tenant, full_tenant
-  create_catalog, delete_catalog, full_catalog
-  create_vm, delete_vm, full_vm
+  vmaas_all  - all VMaaS flows (happy flow for now)
+  vmaas_full_happy_basic - complete VMaaS happy basic flow (no features, includes creation of all requires resources, create VM, delete VM and delete all pre-created resources)
+  create_pre-resources, delete_pre-resources, full_pre-resources - infrastructure resource group: create and delete resources requred for VM creation
+  create_disk_image, delete_disk_image, full_disk_image - disk image lifecycle
+  create_storage-tier, delete_storage-tier, full_storage-tier - storage tier lifecycle
+  create_instance_type, delete_instance_type, full_instance_type - instance type lifecycle
+  create_tenant, delete_tenant, full_tenant - tenant lifecycle
+  create_catalog, delete_catalog, full_catalog - catalog lifecycle
+  create_vm, delete_vm, full_vm - VM lifecycle
 
 create_* leaves a resource for delete_*; full_* runs the configured teardown.
 
@@ -109,9 +110,9 @@ Options:
   --help, -h             print this help
 
 Examples:
-  bash $0 --tag=create_image
-  bash $0 --tag=delete_image
-  bash $0 --tag=full_image
+  bash $0 --tag=create_disk_image
+  bash $0 --tag=delete_disk_image
+  bash $0 --tag=full_disk_image
 EOF
       exit 0
       ;;
@@ -174,34 +175,33 @@ placeholder_username() {
 }
 
 declare -A FLOW_CONFIG=(
-  [all]='vmaas-full-flow-delete|full||false'
-  [happy_basic]='vmaas-full-flow-delete|full||false'
-  [create_resources]='vmaas-full-flow-resources|create||false'
-  [resources_create]='vmaas-full-flow-resources|create||false'
-  [delete_resources]='vmaas-full-flow-delete|delete||false'
-  [resources_delete]='vmaas-full-flow-delete|delete||false'
-  [create_image]='vmaas-full-flow-resources|create|creates disk image|false'
-  [delete_image]='vmaas-disk-image-delete|delete||false'
-  [full_image]='vmaas-disk-image|full||false'
-  [create_storage]='vmaas-full-flow-resources|create|creates a storage tier|false'
-  [delete_storage]='vmaas-storage-tier-delete|delete||false'
-  [full_storage]='vmaas-storage-tier|full||false'
-  [create_instance_type]='vmaas-full-flow-resources|create|creates an instance type|false'
-  [delete_instance_type]='vmaas-instance-type-delete|delete||false'
-  [full_instance_type]='vmaas-instance-type|full||false'
-  [create_tenant]='vmaas|create||false'
-  [delete_tenant]='vmaas-delete|delete||true'
-  [full_tenant]='vmaas-delete|full||false'
-  [create_catalog]='vmaas-full-flow-catalog|create||false'
-  [delete_catalog]='vmaas-catalog-delete|delete||false'
-  [full_catalog]='vmaas-catalog|full||false'
-  [create_vm]='vmaas-full-flow|create||false'
-  [delete_vm]='vmaas-full-flow-vm-delete|delete||false'
-  [full_vm]='vmaas-full-flow-vm-delete|full||false'
+  [vmaas_all]='vmaas-all-full-flows|full||false'
+  [vmaas_full_happy_basic]='vmaas_full_happy_basic|full||false'
+  [create_pre-resources]='vmaas-full-flow-pre-resource|create||false'
+  [delete_pre-resources]='vmaas-full-flow-pre-resource|delete||false'
+  [full_pre-resources]='vmaas-full-flow-pre-resource|full||false'
+  [create_disk_image]='disk-image|create||false'
+  [delete_disk_image]='disk-image|delete||false'
+  [full_disk_image]='disk-image|full||false'
+  [create_storage-tier]='storage-tier|create||false'
+  [delete_storage-tier]='storage-tier|delete||false'
+  [full_storage-tier]='storage-tier|full||false'
+  [create_instance_type]='instance-type|create||false'
+  [delete_instance_type]='instance-type|delete||false'
+  [full_instance_type]='instance-type|full||false'
+  [create_tenant]='tenant|create||false'
+  [delete_tenant]='tenant|delete||false'
+  [full_tenant]='tenant|full||false'
+  [create_catalog]='catalog|create||false'
+  [delete_catalog]='catalog|delete||false'
+  [full_catalog]='catalog|full||false'
+  [create_vm]='vm-flow|create||false'
+  [delete_vm]='vm-flow|delete||false'
+  [full_vm]='vm-flow|full||false'
 )
 
 if [[ -n "$FLOW_TAG" ]]; then
-  [[ "$FLOW_TAG" =~ ^[a-z_]+$ ]] ||
+  [[ "$FLOW_TAG" =~ ^[a-z0-9_-]+$ ]] ||
     fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags."
   [[ -n "${FLOW_CONFIG[$FLOW_TAG]+set}" ]] ||
     fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags."

@@ -35,17 +35,16 @@ var _ = Describe("Node set removal", func() {
 		workerBmitName      string
 		storageBmitName     string
 		templateId          string
+		network             catalogItemNetworkFixture
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
-		// A persisted tenant-default subnet can be injected into Cluster creates;
-		// keep a ready NetworkClass available for its canonical Hub validation.
-		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
 
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
+		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
 
 		// Create worker bare metal instance type:
 		workerBmitName = fmt.Sprintf("worker-bmit-%s", uuid.New()[24:32])
@@ -138,7 +137,8 @@ var _ = Describe("Node set removal", func() {
 					Name: fmt.Sprintf("nodeset-rm-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					NetworkAttachment: network.clusterAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"workers": publicv1.ClusterNodeSet_builder{Size: new(int32(3)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: workerBmitName, Shared: true}.Build()}.Build(),
 						"storage": publicv1.ClusterNodeSet_builder{Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: storageBmitName, Shared: true}.Build()}.Build(),
@@ -147,8 +147,9 @@ var _ = Describe("Node set removal", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		clusterId := createResponse.Object.Id
-		deferClusterDeletion(clusterId, tool.ExternalView().UserConn())
+		clusterId := createResponse.GetObject().GetId()
+		deferClusterDeletion(clusterId, tool.InternalView().AdminConn())
+		Expect(createResponse.GetObject().GetMetadata().GetTenant()).To(Equal(usersGroup))
 
 		// Step 2: Verify cluster has 2 node sets
 		getResponse, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{

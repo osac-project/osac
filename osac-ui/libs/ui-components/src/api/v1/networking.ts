@@ -97,21 +97,24 @@ export const VIRTUAL_NETWORK_READY_LIST_FILTER = cel<VirtualNetwork>((filter) =>
 
 const DEFAULT_NETWORK_LABEL_FILTER = 'this.metadata.labels["osac.openshift.io/default"] == "true"';
 
-export const defaultSubnetListFilter = (project: string) =>
+// Tenant defaults are tenant-wide: they live in the tenant's default project ("")
+// and apply to every project of the tenant. The server scopes a tenant user's lists
+// to their tenant, so the filters carry no tenant clause.
+export const defaultSubnetListFilter = () =>
   cel<Subnet>((filter) =>
     filter.and(
       DEFAULT_NETWORK_LABEL_FILTER as CelFilter<Subnet>,
-      filter.field('metadata.project').equals(project),
+      filter.field('metadata.project').equals(''),
       filter.field('status.state').equals(SubnetState.READY),
       'has(this.spec.ipv4_cidr)' as CelFilter<Subnet>,
     ),
   );
 
-export const defaultSecurityGroupListFilter = (project: string, virtualNetworkId: string) =>
+export const defaultSecurityGroupListFilter = (virtualNetworkId: string) =>
   cel<SecurityGroup>((filter) =>
     filter.and(
       DEFAULT_NETWORK_LABEL_FILTER as CelFilter<SecurityGroup>,
-      filter.field('metadata.project').equals(project),
+      filter.field('metadata.project').equals(''),
       filter.field('spec.virtualNetwork.id').equals(virtualNetworkId),
       filter.field('status.state').equals(SecurityGroupState.READY),
     ),

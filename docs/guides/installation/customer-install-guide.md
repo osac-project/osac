@@ -1990,8 +1990,9 @@ override; publish the required templates to Fulfillment separately.
    VMaaS needs. Disable it only if those templates are supplied separately.
 
    For production, keep `lvms.enabled: false` in the `osac` instance values,
-   including when the workload cluster uses LVMS. Before requesting VM
-   workloads, have your storage administrators register the
+   including when the workload cluster uses LVMS. After installing OSAC in
+   step 3 below and before requesting VM workloads, have your storage
+   administrators register the
    [StorageBackend](../../storage/concepts/storagebackend.md#managing-backends)
    and [StorageTiers](../../storage/concepts/storagetier.md#managing-tiers)
    in OSAC and complete

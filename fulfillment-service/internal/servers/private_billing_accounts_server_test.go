@@ -129,6 +129,32 @@ func (a *gatedTwoPageAdapter) ListAccounts(_ context.Context, _ billing.AccountF
 	return billing.AccountPage{}, nil
 }
 
+// canceledCallerAdapter blocks its first ListAccounts call until that walk's context is done - it reproduces a
+// caller that cancels its own discovery walk - and serves one normal active-account page with no next page on
+// every later call. entered closes once the walk has reached the provider, and calls counts the provider calls,
+// so the suite can observe both without sleeping.
+type canceledCallerAdapter struct {
+	billing.Adapter
+	entered chan struct{}
+	once    sync.Once
+	calls   int
+}
+
+// ListAccounts waits for the walk's context to end on the first call and serves one active account on every
+// later call.
+func (a *canceledCallerAdapter) ListAccounts(ctx context.Context, _ billing.AccountFilter, _ billing.Page) (
+	billing.AccountPage, error) {
+	a.calls++
+	if a.calls == 1 {
+		a.once.Do(func() { close(a.entered) })
+		<-ctx.Done()
+		return billing.AccountPage{}, billing.NewError(billing.ReasonTimeout, "ListAccounts", true, 0)
+	}
+	return billing.AccountPage{
+		Accounts: []billing.Account{{Ref: billing.NewAccountRef("acct-1"), State: billing.AccountActive}},
+	}, nil
+}
+
 var _ = Describe("Private billing accounts server", func() {
 	build := func(p *billing.Provider) *PrivateBillingAccountsServer {
 		server, err := NewPrivateBillingAccountsServer().SetLogger(logger).SetProvider(p).Build()
@@ -391,6 +417,10 @@ var _ = Describe("Private billing accounts server", func() {
 				enteredSecondPage: make(chan struct{}),
 				release:           make(chan struct{}),
 			}
+			// Release the walk whatever happens below: a failed assertion while the provider is still gated
+			// would leave the walk blocked, and the pool cleanup below waits for the connection it holds.
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(adapter.release) }) }
 
 			// A pool with a single connection, and the server's transaction manager over that pool: if the
 			// discovery walk held a connection (or an open transaction) while waiting on the provider,
@@ -400,7 +430,12 @@ var _ = Describe("Private billing accounts server", func() {
 			config.MaxConns = 1
 			singlePool, err := pgxpool.NewWithConfig(ctx, config)
 			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(singlePool.Close)
+			// Cleanups run last-in-first-out, so this one must release the walk itself before closing the
+			// pool: closing the pool waits for the walk's checked-out connection to come back.
+			DeferCleanup(func() {
+				release()
+				singlePool.Close()
+			})
 			singlePoolTm, err := database.NewTxManager().
 				SetLogger(logger).
 				SetPool(singlePool).
@@ -422,15 +457,13 @@ var _ = Describe("Private billing accounts server", func() {
 				Should(BeClosed(), "the walk must reach the provider's second page")
 
 			// The pool's only connection must be free while the provider is being read:
-			unrelated := make(chan error, 1)
-			go func() {
-				_, execErr := singlePool.Exec(context.Background(), `select 1`)
-				unrelated <- execErr
-			}()
-			Eventually(unrelated, 5*time.Second).Should(Receive(Succeed()),
+			probeCtx, probeCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer probeCancel()
+			_, err = singlePool.Exec(probeCtx, `select 1`)
+			Expect(err).ToNot(HaveOccurred(),
 				"the walk must not pin the pool's only connection while the provider is waiting")
 
-			close(adapter.release)
+			release()
 			var outcome listOutcome
 			Eventually(result, 5*time.Second).Should(Receive(&outcome))
 			Expect(outcome.err).ToNot(HaveOccurred())
@@ -506,6 +539,33 @@ var _ = Describe("Private billing accounts server", func() {
 		}, 5*time.Second).Should(Succeed())
 		Expect(response.GetTotal()).To(Equal(int32(1)))
 		Expect(fake.Count("ListAccounts")).To(Equal(2))
+	})
+
+	It("does not open the failure backoff when the caller cancels the walk", func() {
+		adapter := &canceledCallerAdapter{entered: make(chan struct{})}
+		server := build(billing.NewProvider("m360", adapter, nil))
+
+		callerCtx, cancel := context.WithCancel(ctx)
+		DeferCleanup(cancel)
+		first := make(chan error, 1)
+		go func() {
+			_, err := server.List(callerCtx, &privatev1.BillingAccountsListRequest{})
+			first <- err
+		}()
+		Eventually(adapter.entered, 5*time.Second).Should(BeClosed(),
+			"the first List must start the walk and reach the provider")
+
+		// The caller gives up on its own walk: that says nothing about the provider, so it must not open the
+		// server-wide failure backoff for the Lists of every other caller.
+		cancel()
+		var firstErr error
+		Eventually(first, 5*time.Second).Should(Receive(&firstErr))
+		Expect(firstErr).To(HaveOccurred())
+
+		response, err := server.List(ctx, &privatev1.BillingAccountsListRequest{})
+		Expect(err).ToNot(HaveOccurred(), "a live List must walk the provider again, not fail fast")
+		Expect(response.GetTotal()).To(Equal(int32(1)))
+		Expect(adapter.calls).To(Equal(2), "the canceled walk must not have opened the failure backoff")
 	})
 
 	It("runs at most one discovery walk at a time, failing a concurrent stale List fast", func() {

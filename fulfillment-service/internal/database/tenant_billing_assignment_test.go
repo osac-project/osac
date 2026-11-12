@@ -423,13 +423,25 @@ var _ = Describe("Tenant billing assignments", func() {
 			// of waiting.
 			txW, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func() { _ = txW.End(ctx) })
 			var waiterPID int32
 			Expect(txW.QueryRow(ctx, `select pg_backend_pid()`).Scan(&waiterPID)).To(Succeed())
 			Expect(waiterPID).ToNot(Equal(holderPID), "the waiter must run on a distinct connection")
 
 			waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			DeferCleanup(cancel)
 			acquired := make(chan error, 1)
+			// DeferCleanup runs LIFO, so this runs before the txW.End cleanup registered above: it cancels
+			// the wait and only then waits for the goroutine to leave Exec. Both parts matter. Cancelling
+			// alone does not release txW's checked-out connection, so a failing assertion below would
+			// leave it held and the suite's pool.Close would block forever; and ending txW before the
+			// goroutine has left Exec would use the transaction concurrently, which it does not support.
+			// Receiving is safe on every path because the goroutine sends exactly once into a buffered
+			// channel and then closes it, so a receive after the success path's own receive returns
+			// immediately from the closed channel.
+			DeferCleanup(func() {
+				cancel()
+				<-acquired
+			})
 			go func() {
 				_, err := txW.Exec(waitCtx, `select pg_advisory_xact_lock(hashtextextended($1, 1))`, accountA)
 				acquired <- err

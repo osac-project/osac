@@ -21,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -94,6 +95,53 @@ var _ = Describe("Billing accounts", func() {
 			Expect(items[0].BaseCurrency).To(Equal("USD"))
 			Expect(items[0].State).To(Equal("INACTIVE"))
 		})
+
+		It("keeps state and status_observed_at when an older observation is applied last", func() {
+			observed := time.Now().UTC().Truncate(time.Second)
+			older := observed.Add(-time.Minute)
+			id := upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1",
+				DisplayName: "Acme", State: "ACTIVE", StatusObservedAt: observed,
+			})
+			// A walk that started before the one above - a rolling update briefly runs two servers - can
+			// still commit after it, so its older observation must not overwrite the stored one.
+			got := upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1",
+				DisplayName: "Acme Stale", State: "INACTIVE", StatusObservedAt: older,
+			})
+			// The guard must be a conditional assignment, never a WHERE on the conflict branch: a WHERE
+			// would suppress the row, and returning id would then yield no row at all.
+			Expect(got).To(Equal(id), "the stale upsert must still return the existing row's id")
+			items, total, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(1)))
+			Expect(items[0].State).To(Equal("ACTIVE"), "a stale walk must not restore its state")
+			Expect(items[0].StatusObservedAt).To(BeTemporally("==", observed),
+				"the observation time must never move backwards")
+			Expect(items[0].DisplayName).To(Equal("Acme"),
+				"a stale walk must not revert a newer display_name")
+		})
+
+		DescribeTable("applies an observation that is not older than the stored one",
+			func(delta time.Duration) {
+				observed := time.Now().UTC().Truncate(time.Second)
+				upsert(BillingAccountUpsert{
+					ProviderKey: "m360", ProviderAccountReference: "acct-1",
+					State: "ACTIVE", StatusObservedAt: observed,
+				})
+				upsert(BillingAccountUpsert{
+					ProviderKey: "m360", ProviderAccountReference: "acct-1",
+					State: "INACTIVE", StatusObservedAt: observed.Add(delta),
+				})
+				items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(items[0].State).To(Equal("INACTIVE"),
+					"the observation-order guard must not freeze state updates")
+				Expect(items[0].StatusObservedAt).To(BeTemporally("==", observed.Add(delta)))
+			},
+			Entry("equal observation time", time.Duration(0)),
+			Entry("newer observation time", time.Minute),
+		)
 
 		It("never clears display_name or base_currency when the provider does not supply one", func() {
 			upsert(BillingAccountUpsert{
@@ -170,6 +218,30 @@ var _ = Describe("Billing accounts", func() {
 			Expect(items[0].DisplayName).To(Equal("Kept"))
 			Expect(items[0].State).To(Equal("ACTIVE"))
 			Expect(items[1].DisplayName).To(Equal("Vanished"))
+			Expect(items[1].State).To(Equal("UNKNOWN"))
+		})
+
+		It("leaves a row untouched when its observation is newer than the sweep", func() {
+			sweepAt := time.Now().UTC().Truncate(time.Second)
+			upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1", DisplayName: "Fresh",
+				State: "ACTIVE", StatusObservedAt: sweepAt.Add(time.Minute),
+			})
+			upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-2", DisplayName: "Stale",
+				State: "ACTIVE", StatusObservedAt: sweepAt.Add(-time.Minute),
+			})
+			// A walk that started after this sweep already saw and stored acct-1, so the older sweep
+			// committing last must not demote it back to UNKNOWN.
+			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, sweepAt)).To(Succeed())
+			items, total, err := ListBillingAccounts(ctx, tx, 0, 10, "", "display_name")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(2)))
+			Expect(items[0].DisplayName).To(Equal("Fresh"))
+			Expect(items[0].State).To(Equal("ACTIVE"),
+				"a sweep older than the stored observation must not demote")
+			Expect(items[0].StatusObservedAt).To(BeTemporally("==", sweepAt.Add(time.Minute)))
+			Expect(items[1].DisplayName).To(Equal("Stale"))
 			Expect(items[1].State).To(Equal("UNKNOWN"))
 		})
 

@@ -30,15 +30,21 @@ SHELL := /usr/bin/env bash -o pipefail
 .SHELLFLAGS := -ec
 
 # Extra helm --set/--set-string args appended to the OSAC chart command.
-# Caller-supplied Helm args are data, never command text: the value is
-# frozen verbatim -- Make-side references such as DRY_RUN_HELM_FLAGS below
-# read the frozen text without expanding Make expressions in it -- and
-# exported. Recipes parse it into the ARGV array with split_argv from the
-# environment, so shell metacharacters in a caller value reach Helm as
-# argument text instead of executing, while quotes and backslashes still
-# group a value that contains spaces into one argument. The array is
-# expanded with the ${ARGV[@]+...} form so an empty list stays valid under
-# `set -u` on every supported bash.
+# This variable and the caller-supplied values lists below are data, never
+# command text: each value is frozen verbatim -- Make-side references such
+# as DRY_RUN_HELM_FLAGS below read the frozen text without expanding Make
+# expressions in it -- and exported. Recipes parse it into the ARGV array
+# with split_argv from the environment, so shell metacharacters in a
+# caller value reach Helm as argument text instead of executing, while
+# quotes and backslashes still group a value that contains spaces into one
+# argument. The array is expanded with the ${ARGV[@]+...} form so an empty
+# list stays valid under `set -u` on every supported bash.
+#
+# INFRA_HELM_ARGS, INSTANCE_HELM_ARGS, and DEVSTACK_HELM_ARGS are outside
+# that guarantee. Their plain `:=` defaults ignore the environment, so
+# they hold Makefile-assembled profile values unless a caller overrides
+# one on the command line, and Make expands them into the recipe text as
+# it always has. Only the caller's own command line can set them.
 EXTRA_HELM_ARGS ?=
 override EXTRA_HELM_ARGS := $(value EXTRA_HELM_ARGS)
 export EXTRA_HELM_ARGS

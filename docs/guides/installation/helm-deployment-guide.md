@@ -1113,7 +1113,7 @@ not register an OSAC storage offering. See the
 [storage documentation](../../storage/README.md), especially the
 [tenant storage onboarding guide](../../storage/guides/tenant-onboarding.md).
 The automatic local-storage registration hook is for development and CI only; see
-[Evaluation only](customer-install-guide.md#92-evaluation-only).
+[LVMS registration for evaluation](developer-ci-reference.md#lvms-registration-for-evaluation).
 
 ## When Prerequisites Already Exist
 

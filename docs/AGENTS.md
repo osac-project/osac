@@ -176,6 +176,12 @@ where a path with no other owner needs a member of a working group).
 
 ### Content Organization
 
+- **Customer installation guide**: Assume administrator-prepared platform
+  prerequisites. Keep development/CI, Phase-1 setup, CI profiles, nightly/source
+  builds, and LVMS evaluation recipes in developer references, not the customer
+  procedure. Preserve real customer configuration and preview/unsupported
+  caveats. Hand off storage administration and tenant onboarding through
+  branch-relative links to `storage/` rather than duplicating provider runbooks.
 - **Architecture docs**: Technical depth with sequence diagrams, state machines, component relationships
 - **Feature docs**: User-facing explanations of what features do and how to use them
 - **Developer guides**: Step-by-step procedures with examples and troubleshooting

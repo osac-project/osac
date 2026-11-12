@@ -12,8 +12,9 @@ Container Platform cluster by using the OpenShift CLI (`oc`) and Helm. This
 guide covers the VMaaS, CaaS, and BMaaS services and assumes that your
 platform administrators have prepared the prerequisite Operators and external
 services listed in [Section 2](#2-prerequisites).
-For prerequisite setup instructions, see the
-[Helm Deployment Guide](helm-deployment-guide.md) before continuing.
+Coordinate prerequisite readiness with those administrators before continuing.
+Storage preparation and tenant storage onboarding are separate from the OSAC
+installation; see [Section 6.1](#61-installing-osac-for-vmaas).
 
 ## Contents
 
@@ -107,15 +108,10 @@ that the chart is available in OCI using `helm show chart` as described in
 [Section 3](#3-osac-component-versions).
 
 An umbrella release's `osac-release/v<VERSION>` tag and matching
-`osac/v<VERSION>` source tag point to the same commit. The source checkout
-and download commands below use `osac/v`; nightly source tags also use this
-prefix. This guide targets the OSAC `0.4.0` release.
-
-For evaluation builds, check the
-[OSAC Nightly Build workflow](https://github.com/osac-project/osac/actions/workflows/nightly-build.yaml)
-and select the newest successful run. Use its exact chart version; a newer
-tag alone does not mean that the full pipeline succeeded. The chart
-includes a `values.schema.json` file and a `values-example.yaml` file.
+`osac/v<VERSION>` source tag point to the same commit. The download commands
+below use `osac/v`. This guide targets the OSAC `0.4.0`
+release. The chart includes a `values.schema.json` file and a
+`values-example.yaml` file.
 
 Select the final umbrella chart version from the release links above and
 export it once. The following example uses version `0.4.0`:
@@ -135,8 +131,7 @@ values, combined with the documented external-service and separate-workload
 settings, were rendered successfully with `helm template` against the `0.4.0`
 chart contents.
 
-Use only the chart version, without either tag prefix. For evaluation, set
-`OSAC_RELEASE_VERSION` to the exact nightly version from that successful run.
+Use only the chart version, without either tag prefix.
 Select the version before retrieving chart values and keep it unchanged
 throughout the installation. Run the remaining commands in the same shell
 session; they use `OSAC_CHART` for the chart location and
@@ -212,6 +207,9 @@ To install with provider networking, see
 
   For more information, see
   [Changing the default storage class](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/storage/dynamic-provisioning#change-default-storage-class_dynamic-provisioning).
+  This platform storage prerequisite does not register an OSAC tenant storage
+  offering. Complete the storage handoff in
+  [Section 6.1](#61-installing-osac-for-vmaas) before requesting VM workloads.
 - The cluster pull secret (`openshift-config/pull-secret`) authenticates to
   `registry.redhat.io` and `quay.io`. To download a current pull secret, see
   the pull secret page in the
@@ -244,8 +242,7 @@ To install with provider networking, see
   [Section 11.1](#111-the-install-preflight-stops-the-installation)).
 - The `osac` CLI matching the selected chart's `fulfillment-service` version,
   for postinstallation verification, hub registration, and day-2 operations
-  (see [Section 8.2](#82-installing-the-osac-cli)). Nightly component versions
-  require Git and Go to build the CLI from source. The CLI is not required
+  (see [Section 8.2](#82-installing-the-osac-cli)). The CLI is not required
   for the Helm installation.
 - `curl` and `jq`, for the private API calls that set up networking (see
   [Section 4.4](#44-installing-with-provider-networking)).
@@ -277,7 +274,7 @@ Platform 4.22.6 in September 2026 are listed in
 | [Red Hat Ansible Automation Platform Operator](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index) | `stable-2.6-cluster-scoped` | `ansible-aap` | All services |
 | [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | Provider-defined | Fulfillment events and metering; see [Kafka configuration](kafka-configuration.md) for external broker requirements. |
 | [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | VMaaS |
-| [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | VMaaS | `lvms.enabled` | Development/CI VMaaS using OSAC-managed local storage |
+| Administrator-prepared dynamic storage and CSI integration | Provider-defined | Provider-defined | VMaaS; see [Section 6.1](#61-installing-osac-for-vmaas) |
 | [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | CaaS |
 | [multicluster engine for Kubernetes Operator](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview) | `stable-2.17` | `multicluster-engine` | CaaS |
 | Kubernetes NMState Operator | `stable` | `openshift-nmstate` | VMaaS with provider networking |
@@ -289,32 +286,18 @@ Notes on individual components:
   `cert-manager-operator` namespace and creates its operands in the
   `cert-manager` namespace. The `certificates.cert-manager.io` CRD is a
   mandatory install preflight check.
-- trust-manager is required for every installation and can distribute the CA
-  bundle. `caIssuer.enabled` is `true` by default, so the chart's `Bundle`
-  manages the ConfigMap named by `certs.caBundle.configMap` (normally
-  `ca-bundle`) and can overwrite it. Before removing or changing an existing
-  `Bundle`, copy the full `bundle.pem` data from each ConfigMap it manages to a
-  replacement ConfigMap with a different name in each affected namespace.
-  Update the affected services to use those replacements and verify they are
-  available first; removing a `Bundle` can delete its target ConfigMaps. If
-  `service.certs.caBundle.configMap` and `certs.caBundle.configMap` name the
-  same ConfigMap and you manage it directly, complete this transfer before
-  changing the `Bundle` so it no longer targets that ConfigMap. Then set
-  `caIssuer.enabled: false` in the infrastructure values file, such as
-  `my-infra-values.yaml`, not `my-values.yaml`, and apply the infrastructure
-  release before installing or upgrading OSAC. If
-  `service.certs.caBundle.configMap` uses a different name, you can provide
-  that ConfigMap directly and leave `caIssuer.enabled: true`. On an existing
-  installation, check who owns `default-ca` and which certificates use it
-  before disabling `caIssuer`; it removes the issuer and CA certificate and
-  may stop Keycloak certificate renewal. See [CA bundle and issuer guidance](helm-deployment-guide.md#when-prerequisites-already-exist).
-  Disabling `caIssuer.enabled` also disables the chart's issuer, so provide any
-  issuer you need. The ConfigMap must exist in the namespace where OSAC is
-  installed.
-  Disabling `caIssuer.enabled` also disables the automatic Keycloak Route
-  update. If your public-ingress Keycloak Route uses `reencrypt`, set
-  `destinationCACertificate` to the CA that signs Keycloak's serving
-  certificate and keep it current. See
+- **trust-manager** is required for every installation and can distribute the
+  CA bundle. Have your platform administrators provide the ConfigMap named by
+  `service.certs.caBundle.configMap` in the OSAC release namespace and confirm
+  whether a trust-manager `Bundle` manages it. A `Bundle` can overwrite its
+  target ConfigMaps; removing it can delete them. Before its owner changes or
+  removes it, preserve the full `bundle.pem` in replacement ConfigMaps and
+  update and verify the consumers. The prerequisite owner must also preserve
+  a ready certificate issuer and Keycloak certificate renewal when changing
+  issuer ownership. See [CA bundle and issuer guidance](helm-deployment-guide.md#when-prerequisites-already-exist).
+  If your public-ingress Keycloak Route uses `reencrypt`, its administrator
+  must keep `destinationCACertificate` aligned with the CA that signs
+  Keycloak's serving certificate. See
   [Keycloak Route with Public Ingress Certificates](helm-deployment-guide.md#keycloak-route-with-public-ingress-certificates).
 - **Certificate issuer:** `service.certs.issuerRef` defaults to the
   `default-ca` `ClusterIssuer`. Select an existing, ready `Issuer` or
@@ -329,9 +312,10 @@ Notes on individual components:
   are ready with your Kafka administrators.
 - **OpenShift Virtualization** was formerly named Container-native
   Virtualization (CNV).
-- **LVM Storage** uses a channel that tracks the OpenShift Container Platform
-  minor version. Another dynamic storage class can satisfy the VMaaS storage
-  prerequisite.
+- **VMaaS storage** requires administrator-prepared dynamic storage and the
+  appropriate CSI integration. Installing a storage Operator alone does not
+  register an OSAC storage offering; see
+  [Section 6.1](#61-installing-osac-for-vmaas).
 - **MetalLB Operator** provides the CaaS API management VIPs on the hub. Ask
   your platform administrators for the reserved, free, routable address range
   and add a covering CIDR to `global.networking.excludedIpv4Cidrs` before
@@ -339,34 +323,6 @@ Notes on individual components:
 - **multicluster engine for Kubernetes Operator** is required for agent-based
   cluster provisioning. An existing standalone installation or Red Hat
   Advanced Cluster Management for Kubernetes (RHACM) can provide it.
-  minor version; the installation sets it. The OSAC-managed LVMS path is for
-  development and CI and uses an explicit `optionalPaths` allowlist; it does
-  not create devices. In production, disable `lvms.enabled` and configure the
-  customer-managed LVMS operator and its `LVMCluster` selector yourself; do not
-  rely on dynamic device discovery.
-- **MetalLB Operator** provides a `LoadBalancer`-class implementation. CaaS
-  uses it on the hub to give each hosted cluster's API its management VIP.
-  Only CaaS needs it. Any solution that provides one works if you disable
-  `metallb.enabled`. With `metallb.enabled`, the installation creates the
-  address pool `caas-address-pool` and sets it to addresses `.240` to `.250`
-  of the first node's network. It keeps the first three octets of that node's
-  `InternalIP`, so it assumes a /24. It resets the pool to that range on every
-  install and upgrade of the infrastructure chart. Before the first Cluster,
-  make sure that range is free and routable on your management network, and
-  add a CIDR that covers it to `global.networking.excludedIpv4Cidrs`, for
-  example `<prefix>.240/28`: a Cluster keeps its VIP for its whole life. To
-  use a different range, patch the `IPAddressPool` after the installation and
-  again after every infrastructure upgrade, add a CIDR that covers that range
-  to `global.networking.excludedIpv4Cidrs`, and check the pool before you
-  create Clusters.
-- **multicluster engine for Kubernetes Operator** is required for
-  agent-based cluster provisioning but is disabled by default. Set
-  `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
-  infrastructure profile does so explicitly. Leave it `false` when Red Hat
-  Advanced Cluster Management for Kubernetes (RHACM) or another MCE
-  installation already owns it. The disabled state also prevents the phase-1
-  chart from applying its temporary Assisted image override `ConfigMap` and
-  compatibility RBAC.
 - **Kubernetes NMState Operator** sets the uplink and VTEP addresses of the
   VMaaS nodes. Your platform administrators prepare it for EVPN networking.
 - **EVPN host networking** needs OVN-Kubernetes and OpenShift Container
@@ -502,8 +458,9 @@ networking resources exist is not supported (see
 [Table 4.2](#table-42-settings-fixed-at-installation)).
 
 - **VMaaS** (`global.services.vmaas.enabled`) requires OpenShift Virtualization,
-  LVM Storage or another dynamic storage class, and OSAC's Kubernetes Manager
-  `cudn_evpn`. With provider networking enabled, it also requires a Fabric
+  administrator-prepared dynamic storage and CSI integration, and OSAC's
+  Kubernetes Manager `cudn_evpn`. With provider networking enabled, it also
+  requires a Fabric
   Manager whose registration lists the `evpn` network type, EVPN host
   networking on the cluster that runs the VMs
   ([Section 2.6](#26-evpn-host-networking-for-vmaas)), and the fabric side
@@ -726,7 +683,7 @@ that channel resolved to on OpenShift Container Platform 4.22.6 in September
 | `osac` umbrella chart | Selected in [Section 1.1](#11-what-is-released) | Release-specific |
 | cert-manager Operator for Red Hat OpenShift | `stable-v1` | `v1.20.0` |
 | Red Hat Ansible Automation Platform | `stable-2.6-cluster-scoped` | `v2.6.0` |
-| LVM Storage | `stable-<cluster_minor>` | `v4.22.0` |
+| LVM Storage (if selected by the storage administrator) | `stable-<cluster_minor>` | `v4.22.0` |
 | MetalLB | `stable` | `v4.22.0` |
 | OpenShift Virtualization | `stable` | `v4.22.6` |
 | multicluster engine | `stable-2.17` | `v2.17.2` |
@@ -1097,10 +1054,10 @@ Use this procedure when the cluster already meets the prerequisites.
       --wait --timeout 40m
   ```
 
-  This command uses the same stable or nightly chart version selected in
+  This command uses the same released chart version selected in
   [Section 1.1](#11-what-is-released) and used to retrieve the chart values in
-  [Section 4.2](#42-configuring-the-helm-values). Nightly versions are for
-  testing unreleased fixes. The AAP bootstrap job takes 10 to 40 minutes.
+  [Section 4.2](#42-configuring-the-helm-values). The AAP bootstrap job takes
+  10 to 40 minutes.
   Helm does not return until it and, for CaaS, the `osac-publish-templates`
   hook have finished.
 
@@ -1942,7 +1899,10 @@ override; publish the required templates to Fulfillment separately.
 **Prerequisites**
 
 - OpenShift Virtualization is installed.
-- LVM Storage is installed, or another dynamic storage class exists.
+- Your storage administrators have prepared dynamic storage and the CSI
+  integration for the selected provider and ownership model. The OSAC chart
+  does not install a CSI driver. See the
+  [storage documentation](../../storage/README.md).
 - With provider networking enabled, you have the provider's Fabric Manager,
   with `evpn` in the `network_types` of its registration.
 - With provider networking enabled, you completed
@@ -1989,22 +1949,11 @@ override; publish the required templates to Fulfillment separately.
    VMaaS needs. Disable it only if those templates are supplied separately.
 
    For production, keep `lvms.enabled: false`, including when the workload
-   cluster uses LVMS. Have your storage administrators prepare the appropriate
-   CSI integration, StorageBackend, StorageTier, and tenant storage
-   configuration according to the [storage documentation](../../storage/README.md),
-   especially its [tenant storage onboarding
-   guide](../../storage/guides/tenant-onboarding.md).
-   Installing LVM Storage or another dynamic storage class alone does not
-   register an OSAC storage offering. The automatic LVMS registration hook is
-   for development and CI only; see [Section 9.2](#92-evaluation-only).
+   cluster uses LVMS. This disables the evaluation-only automatic storage
+   registration hook, not the administrator-managed storage service.
 
    For Netris connection settings, see
    [CUDN EVPN with Netris](#cudn-evpn-with-netris).
-
-   For an installation smoke test without a prepared fabric, set
-   `global.networking.provisioningEnabled: false` before the first install.
-   This skips provider jobs and does not verify VM networking or connectivity.
-   You cannot switch it to `true` later on the same deployment.
 
    For virtual machines on a different cluster from the OSAC management
    services, see
@@ -2021,6 +1970,24 @@ override; publish the required templates to Fulfillment separately.
    [Section 4.4.7](#447-creating-the-externalippools). With provider networking
    disabled, check the `NetworkClass`
    ([Section 4.4.6](#446-checking-the-networkclass)).
+
+5. Before requesting VM workloads, have your storage administrators register
+   the StorageBackend and StorageTiers in OSAC and complete
+   [tenant storage onboarding](../../storage/guides/tenant-onboarding.md).
+   The platform's default StorageClass does not register these offerings.
+   Follow the [storage documentation](../../storage/README.md) for your
+   provider, ownership, and tenancy model. For CSP-managed NetApp with shared
+   tenancy on VMaaS, use the
+   [shared NetApp profile guide](../../storage/guides/csp-managed-netapp-shared.md)
+   (**Dev Preview**).
+
+   Check the tenant's storage conditions and current
+   `status.storageClasses` mappings for every tier the VM will request.
+   `StorageReady` for CSP-managed storage is a latched milestone, not a
+   guarantee that tiers added later have resolved. Incomplete tier resolution
+   causes disk provisioning to fail; do not treat a completed Helm install
+   as storage readiness. The onboarding guide describes the conditions and
+   checks for each ownership model.
 
 **Verification**
 
@@ -2469,33 +2436,21 @@ Ensure OpenShift Virtualization is installed on the workload cluster. A
 separate workload cluster does not require removing an existing installation
 from the management cluster.
 
-If your platform administrators use Helm-based infrastructure charts, set
-`cnv.enabled: false` in the management cluster's infrastructure values, not
-in OSAC `my-values.yaml`, for a new release that should not manage OpenShift
-Virtualization. For an existing management-cluster release, keep its current
-setting unless its owner plans a migration. Changing `true` to `false` can remove release-managed resources,
-including the `openshift-cnv` namespace, and disrupt workloads. Check release
-ownership and plan how to preserve or migrate the resources before changing
-the value.
-
-On the workload cluster, set `cnv.enabled: true` in the infrastructure values
-only if those charts install and manage OpenShift Virtualization; keep it
-`false` when administrators manage an existing installation. In OSAC
-`my-values.yaml`, skip only the `kubevirt-crds` preflight check and give the
-verified reason shown below. Leave the remaining checks enabled.
+Your platform administrators own the OpenShift Virtualization installation
+and its lifecycle on each cluster. Changing prerequisite release ownership
+can remove resources, including the `openshift-cnv` namespace, and disrupt
+workloads; coordinate any migration with the prerequisite owner. In OSAC
+`my-values.yaml`, skip only the `kubevirt-crds` preflight check after verifying
+the workload-cluster CRD, and give the reason shown below. Leave the remaining
+checks enabled.
 
 Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
 including the storage registration and networking settings. Select storage
 based on the workload cluster, and put its values in `my-values.yaml` on the
-management cluster. For production, keep `lvms.enabled: false` for every
-storage provider, including LVMS. Have your storage administrators prepare
-that provider's StorageBackend, StorageTier, and tenant storage configuration
-as described in Section 6.1 and the [tenant storage onboarding
-guide](../../storage/guides/tenant-onboarding.md). For an overview of storage
-providers and ownership models, see the
-[storage documentation](../../storage/README.md).
-For development or CI with LVMS, see
-[Section 9.2](#92-evaluation-only).
+management cluster. Keep `lvms.enabled: false` in production, including when
+the workload cluster uses LVMS. Complete the storage handoff in
+[Section 6.1](#61-installing-osac-for-vmaas) for that workload cluster before
+requesting VMs; a default StorageClass alone does not register OSAC offerings.
 
 The chart still requires a non-empty `fabricManager` value when provider
 networking is disabled, and VMaaS requires `k8sManager: cudn_evpn`. No Fabric
@@ -2752,9 +2707,9 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
    ```
 
    Compare the CA fingerprints in `keycloak-truststore.pem` with the ConfigMap
-   Keycloak mounts. For bundled Keycloak, use the name set by
-   `certs.caBundle.configMap` in `my-infra-values.yaml` (`ca-bundle` by
-   default) in the `keycloak` namespace. Extract its `bundle.pem`:
+   Keycloak mounts. Ask your Keycloak administrator for that ConfigMap's
+   name and namespace (`ca-bundle` in `keycloak` for bundled Keycloak by
+   default). Extract its `bundle.pem`:
 
    ```console
    oc get configmap <keycloak_ca_bundle_configmap> -n keycloak \
@@ -3083,30 +3038,6 @@ curl --fail --location --show-error -o osac "https://github.com/osac-project/osa
   sudo mv osac /usr/local/bin/
 ```
 
-**Nightly component version**
-
-Nightly builds publish charts and images, but no CLI binary release assets.
-If `FULFILLMENT_SERVICE_VERSION` contains `-nightly.`, build the CLI from
-the exact umbrella source tag selected by `OSAC_RELEASE_VERSION`. This
-uses the Fulfillment Service's documented
-[CLI build procedure](../../../fulfillment-service/README.md#building-the-binaries).
-Install Git and a Go toolchain satisfying the selected checkout's
-`go.work` and `fulfillment-service/go.mod` requirements. The build needs
-network access to download Go module dependencies. Use a new
-`osac-cli-source` directory:
-
-```console
-git clone --depth 1 --branch "osac/v${OSAC_RELEASE_VERSION}" \
-  https://github.com/osac-project/osac.git osac-cli-source &&
-(
-  cd osac-cli-source/fulfillment-service &&
-  CGO_ENABLED=0 go build \
-    -ldflags "-X github.com/osac-project/osac/fulfillment-service/internal/version.id=${FULFILLMENT_SERVICE_VERSION}" \
-    -o osac ./cmd/osac &&
-  sudo install -m 0755 osac /usr/local/bin/osac
-)
-```
-
 Use the installed CLI for the verification commands in
 [Section 7](#7-verifying-the-installation) and hub registration below.
 
@@ -3338,24 +3269,6 @@ reconciles the `ConfigMap` from those values.
 - Bundled PostgreSQL and OpenBao instances supplied for testing or CI.
 - Keycloak test fixtures and default administrator credentials.
 - Development or CI reference values files and `main`/`latest` image tags.
-
-**LVMS registration for evaluation**
-
-For a development or CI environment with LVMS already installed on the
-workload cluster, merge this override into `my-values.yaml`:
-
-```yaml
-lvms:
-  enabled: true
-```
-
-This enables the local-storage registration hook, which creates the `local`
-StorageBackend and StorageTier with provider `lvms` in Fulfillment. It does
-not install LVM Storage. For a separate workload cluster, pass the override
-to the OSAC release on the management cluster. Keep `lvms.enabled: false` in
-production and have your storage administrators prepare the StorageBackend,
-StorageTier, and tenant storage configuration as described in
-[Section 6.1](#61-installing-osac-for-vmaas).
 
 ### 9.3 Not covered by this guide
 
@@ -3798,6 +3711,9 @@ values and run `helm upgrade` again.
   `oc get sc --show-labels` for the `osac.openshift.io/tenant` and
   `osac.openshift.io/storage-tier` labels and the `status.storageClasses` field
   of the `Tenant`, and align the requested tier with a labeled storage class.
+  Confirm backend/tier registration and tenant onboarding as described in
+  [Section 6.1](#61-installing-osac-for-vmaas); check current mappings even if
+  the CSP-managed `StorageReady` milestone is already `True`.
 - Networking resources stuck in `PENDING`: see
   [Section 11.13](#1113-networking-problems).
 - **CaaS:** watch the AAP `cluster-fulfillment` job for the failing task.

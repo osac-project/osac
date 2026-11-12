@@ -15,6 +15,32 @@
 # Generates the Terraform plugin framework schema and model code for a public API service from its proto
 # definitions. See README.md in this directory for the full description of the pipeline and its caveats.
 #
+# The first step of the pipeline converts the protos into an OpenAPI document. Three plugins were
+# evaluated for that step, all run with the original proto field names:
+#
+#   github.com/google/gnostic/cmd/protoc-gen-openapi
+#     Emits OpenAPI 3 directly, and maps OUTPUT_ONLY field behavior to readOnly. Rejected because it
+#     honors the `body` option of the google.api.http annotations but not `response_body`: the
+#     responses of operations with `response_body: "object"` reference the whole RPC response
+#     message, so the merged Terraform schemas contain the envelope attributes, the generated Go
+#     code has duplicate type names and doesn't compile, and enums are emitted as numbers instead
+#     of strings.
+#
+#   connectrpc.com/protoc-gen-connect-openapi
+#     Emits OpenAPI 3.1 directly, honors `response_body`, and maps field behavior (OUTPUT_ONLY to
+#     readOnly, REQUIRED to required). Rejected because it represents optional fields as
+#     `oneOf: [<schema>, null]`, and tfplugingen-openapi doesn't look through that wrapper, so the
+#     enums lose their generated OneOf validators: invalid values would only be rejected by the
+#     server at apply time instead of by the plan. It is the better OpenAPI document for other
+#     consumers (documentation, client generation), so it could be run alongside this pipeline.
+#
+#   github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2   (used here)
+#     The plugin of the REST gateway itself, so the document matches the contract the gateway
+#     actually serves, including `body` and `response_body`, and enums are emitted as strings with
+#     their values, which become OneOf validators. Its two costs are accepted: it emits Swagger
+#     2.0, requiring the swagger2openapi conversion below, and it ignores google.api.field_behavior,
+#     so output-only and immutable semantics stay in the provider glue.
+#
 # Usage:
 #
 #   ./generate.sh <service>

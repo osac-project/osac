@@ -435,14 +435,17 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(bmi.Spec.ExternalHostName).To(Equal(hostname))
 
 			listRequests := mock.requestsFor(http.MethodGet, "/api/dcim/devices/")
-			Expect(listRequests).NotTo(BeEmpty())
+			listCount := len(listRequests)
+			Expect(listCount).To(BeNumerically(">", 0))
 			query := listRequests[0].Query
 			Expect(query["status"]).To(ConsistOf("staged"))
 			Expect(query["cf_osac_managed"]).To(ConsistOf("true"))
 			Expect(query["cf_osac_instance_id__empty"]).To(ConsistOf("true"))
 			Expect(query["cf_cpu_cores"]).To(ConsistOf("16"))
-			Expect(strings.HasPrefix(listRequests[0].Authorization, "Token ")).To(BeTrue())
-			Expect(mock.requestsFor(http.MethodPatch, "/api/dcim/devices/42/")).To(BeEmpty())
+			authorized := listRequests[0].Authorization == "Token "+testNetBoxToken
+			Expect(authorized).To(BeTrue())
+			claimPatches := len(mock.requestsFor(http.MethodPatch, "/api/dcim/devices/42/"))
+			Expect(claimPatches).To(Equal(0))
 
 			// Claim: the device becomes active and owned by the BareMetalInstance UID.
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 1)
@@ -452,7 +455,8 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(device.CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
 			Expect(mock.device(43).Status).To(Equal("staged"))
 			patches := mock.requestsFor(http.MethodPatch, "/api/dcim/devices/42/")
-			Expect(patches).To(HaveLen(1))
+			patchCount := len(patches)
+			Expect(patchCount).To(Equal(1))
 			Expect(patches[0].IfMatch).NotTo(BeEmpty())
 
 			bmh := netboxBMH(hostname)
@@ -510,7 +514,8 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 			patches := mock.requestsFor(http.MethodPatch, "/api/dcim/devices/42/")
-			Expect(patches).To(HaveLen(2), "one claim and one release PATCH")
+			patchCount := len(patches)
+			Expect(patchCount).To(Equal(2))
 			Expect(patches[1].IfMatch).NotTo(BeEmpty())
 		})
 	})
@@ -568,8 +573,10 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			// reselecting or releasing the claim.
 			Expect(k8sClient.Delete(ctx, foreign)).To(Succeed())
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 1)
-			Expect(mock.requestsFor(http.MethodGet, "/api/dcim/devices/")).To(HaveLen(1))
-			Expect(mock.requestsFor(http.MethodPatch, "/api/dcim/devices/42/")).To(HaveLen(1))
+			searchCount := len(mock.requestsFor(http.MethodGet, "/api/dcim/devices/"))
+			Expect(searchCount).To(Equal(1))
+			retryPatchCount := len(mock.requestsFor(http.MethodPatch, "/api/dcim/devices/42/"))
+			Expect(retryPatchCount).To(Equal(1))
 			claimedBMH := netboxBMH(hostname)
 			Expect(claimedBMH.Spec.ConsumerRef).NotTo(BeNil())
 			Expect(claimedBMH.Spec.ConsumerRef.Name).To(Equal(string(bmi.UID)))

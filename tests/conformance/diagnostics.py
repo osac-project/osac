@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import yaml
+
 from tests.conformance.model import RunContext
 from tests.conformance.redact import Redactor
 from tests.e2e.core.runner import run
@@ -37,5 +39,17 @@ class DiagnosticsCollector:
                 *base, "get", "all", "-A", "-l", f"osac.openshift.io/tenant={tenant}", "-o", "yaml"
             )
         for name, content in files.items():
-            (output / name).write_text(redactor.text(content), encoding="utf-8")
+            (output / name).write_text(_render(name, content, redactor), encoding="utf-8")
         return output
+
+
+def _render(name: str, content: str, redactor: Redactor) -> str:
+    """Redact YAML by key as well as by value, and other output as text."""
+    if name.endswith((".yaml", ".yml")):
+        try:
+            document = yaml.safe_load(content)
+        except yaml.YAMLError:
+            return redactor.text(content)
+        if isinstance(document, (dict, list)):
+            return yaml.safe_dump(redactor.obj(document), sort_keys=False)
+    return redactor.text(content)

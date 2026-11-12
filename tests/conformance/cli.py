@@ -6,7 +6,7 @@ import argparse
 import contextlib
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -90,31 +90,73 @@ def _check_results(path: Path) -> None:
         path.mkdir(parents=True)
 
 
-def redactor_for_config(config: Config) -> Redactor:
-    values: list[str] = []
-    for token_file in (config.lab_token_file, config.lab_aap.token_file if config.lab_aap else None):
-        if token_file is not None:
-            with contextlib.suppress(OSError):
-                values.append(token_file.read_text().strip())
-    try:
-        hub = yaml.safe_load(config.lab_kubeconfig.read_text())
-    except (OSError, yaml.YAMLError):
-        hub = None
-    if isinstance(hub, dict):
-        for user in hub.get("users", []):
-            credentials = user.get("user", {}) if isinstance(user, dict) else {}
-            for key, value in credentials.items():
-                if key in {"token", "password", "client-key-data"} and isinstance(value, str):
-                    values.append(value)
-        for cluster in hub.get("clusters", []):
-            server = cluster.get("cluster", {}).get("server") if isinstance(cluster, dict) else None
-            if isinstance(server, str) and urlparse(server).hostname:
-                values.append(urlparse(server).hostname)
-    redactor = Redactor(secrets=values)
-    host = urlparse(config.lab_api_url).hostname
-    if host:
-        redactor.add_host(host)
+def _redactor_from_document(document: Mapping[str, object]) -> Redactor:
+    """Build the one redaction boundary from a raw conformance.yaml document."""
+    redactor = Redactor()
+    lab = document.get("lab")
+    if not isinstance(lab, Mapping):
+        return redactor
+    token_files: list[str] = []
+    token_file = lab.get("tokenFile")
+    if isinstance(token_file, str):
+        token_files.append(token_file)
+    aap = lab.get("aap")
+    if isinstance(aap, Mapping):
+        aap_token_file = aap.get("tokenFile")
+        if isinstance(aap_token_file, str):
+            token_files.append(aap_token_file)
+        aap_url = aap.get("url")
+        if isinstance(aap_url, str) and urlparse(aap_url).hostname:
+            redactor.add_host(urlparse(aap_url).hostname or "")
+    for value in token_files:
+        with contextlib.suppress(OSError):
+            redactor.add_secret(Path(value).read_text().strip())
+    hub: object = None
+    kubeconfig = lab.get("kubeconfig")
+    if isinstance(kubeconfig, str):
+        with contextlib.suppress(OSError, yaml.YAMLError):
+            hub = yaml.safe_load(Path(kubeconfig).read_text())
+    if isinstance(hub, Mapping):
+        users = hub.get("users", [])
+        if isinstance(users, list):
+            for user in users:
+                credentials = user.get("user", {}) if isinstance(user, Mapping) else {}
+                if isinstance(credentials, Mapping):
+                    for key, value in credentials.items():
+                        if key in {"token", "password", "client-key-data"} and isinstance(value, str):
+                            redactor.add_secret(value)
+        clusters = hub.get("clusters", [])
+        if isinstance(clusters, list):
+            for cluster in clusters:
+                server = cluster.get("cluster", {}).get("server") if isinstance(cluster, Mapping) else None
+                if isinstance(server, str) and urlparse(server).hostname:
+                    redactor.add_host(urlparse(server).hostname or "")
+    api_url = lab.get("apiURL")
+    if isinstance(api_url, str) and urlparse(api_url).hostname:
+        redactor.add_host(urlparse(api_url).hostname or "")
     return redactor
+
+
+def redactor_for_config(config: Config) -> Redactor:
+    lab: dict[str, object] = {
+        "kubeconfig": str(config.lab_kubeconfig),
+        "apiURL": config.lab_api_url,
+        "tokenFile": str(config.lab_token_file),
+    }
+    if config.lab_aap is not None:
+        lab["aap"] = {"url": config.lab_aap.url, "tokenFile": str(config.lab_aap.token_file)}
+    return _redactor_from_document({"lab": lab})
+
+
+def redactor_for_config_path(path: Path) -> Redactor:
+    """Best-effort redactor for configuration errors raised before a Config exists."""
+    try:
+        document = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError):
+        return Redactor()
+    if not isinstance(document, Mapping):
+        return Redactor()
+    return _redactor_from_document(document)
 
 
 def _build_runtime(args: argparse.Namespace) -> Runtime:
@@ -305,14 +347,16 @@ def main(argv: Sequence[str] | None = None, *, runtime: Runtime | None = None) -
         print(f"osac-conformance: {exc}", file=sys.stderr)
         return 2
 
+    active: Runtime | None = None
     try:
         active = runtime or _build_runtime(args)
         if args.command == "list":
             return _run_list(active)
         return _run_plan(active, plan_path=Path(args.plan) if args.plan else None, keep=args.keep)
     except ConfigError as exc:
+        redactor = active.redactor if active is not None else redactor_for_config_path(Path(args.config))
         for check in exc.checks:
-            print(f"osac-conformance: {check}", file=sys.stderr)
+            print(f"osac-conformance: {redactor.text(check)}", file=sys.stderr)
         return 2
 
 

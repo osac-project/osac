@@ -16,6 +16,8 @@ from tests.conformance.redact import Redactor
 from tests.conformance.testing.fake_lab import FakeLab, FakeLabClient
 from tests.conformance.testtree import PytestTestTree
 
+_FAKE_SECRET = "not-a-real-secret"
+
 
 def _config(path: Path, token: Path, ca: Path, hub: Path) -> Path:
     path.write_text(
@@ -75,7 +77,7 @@ def _tree(path: Path) -> Path:
         "@pytest.mark.sig_networking\n"
         "@pytest.mark.conformance_blocking\n"
         "def test_passes():\n"
-        "    print('secret-value')\n"
+        f"    print('{_FAKE_SECRET}')\n"
     )
     return path
 
@@ -97,7 +99,7 @@ def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
     (tmp_path / "podman.sock").write_text("socket")
 
     config = load_config(config_path, area_names={"networking"})
-    redactor = Redactor(secrets=("secret-value",))
+    redactor = Redactor(secrets=(_FAKE_SECRET,))
     runtime = Runtime(
         config=config,
         areas=load_areas(areas_dir),
@@ -123,7 +125,7 @@ def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
     assert report["complete"] is True
     assert report["tests"][0]["result"] == "pass"
     assert (results / "junit.xml").exists()
-    assert "secret-value" not in (results / "conformance.log").read_text()
+    assert _FAKE_SECRET not in (results / "conformance.log").read_text()
 
     focused_results = tmp_path / "focused-results"
     focused_results.mkdir()
@@ -148,7 +150,7 @@ def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
     assert vm["result"] == "skip"
     for path in results.rglob("*"):
         if path.is_file():
-            assert "secret-value" not in path.read_text(errors="ignore")
+            assert _FAKE_SECRET not in path.read_text(errors="ignore")
 
 
 def test_missing_podman_socket_and_empty_plan_are_config_errors(

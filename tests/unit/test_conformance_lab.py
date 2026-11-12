@@ -13,9 +13,11 @@ from tests.conformance.errors import ConfigError
 from tests.conformance.lab import HttpLabClient, KubectlLabClient, read_lab
 from tests.conformance.testing.fake_lab import FakeLab, FakeLabClient
 
+_FAKE_TOKEN = "not-a-real-credential"
 
-def _config(tmp_path: Path, *, token: str = "admin-token") -> Config:
-    token_file = tmp_path / "admin-token"
+
+def _config(tmp_path: Path, *, token: str = _FAKE_TOKEN) -> Config:
+    token_file = tmp_path / "token"
     token_file.write_text(token)
     ca_file = tmp_path / "ca.pem"
     ca_file.write_text("ca")
@@ -90,7 +92,7 @@ def test_http_client_reads_capabilities(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr("tests.conformance.lab.urlopen", lambda *_args, **_kwargs: Response())
 
-    payload = HttpLabClient().capabilities(url="http://lab.example.test", token="t", ca_file=None)
+    payload = HttpLabClient().capabilities(url="http://lab.example.test", token=_FAKE_TOKEN, ca_file=None)
 
     assert payload["enabled_services"] == ["vmaas", "bmaas"]
 

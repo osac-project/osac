@@ -11,6 +11,9 @@ from tests.conformance.cli import redactor_for_config
 from tests.conformance.config import Config, load_config
 from tests.conformance.errors import ConfigError
 
+_FAKE_TOKEN = "not-a-real-credential"
+_FAKE_PASSWORD = "not-a-real-password"
+
 
 def _write(path: Path, data: dict[str, object]) -> Path:
     path.write_text(yaml.safe_dump(data, sort_keys=False))
@@ -24,7 +27,7 @@ def _valid_data() -> dict[str, object]:
         "lab": {
             "kubeconfig": "/config/lab-hub.kubeconfig",
             "apiURL": "https://fulfillment.example.test",
-            "tokenFile": "/config/admin-token",
+            "tokenFile": "/config/lab-token",
             "caFile": "/config/api-ca.pem",
         },
         "timeouts": {"delete": "30m"},
@@ -111,15 +114,15 @@ def test_missing_config_file_is_a_config_error(tmp_path: Path) -> None:
 
 
 def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
-    token = tmp_path / "admin-token"
-    token.write_text("admin-token-value")
+    token = tmp_path / "token"
+    token.write_text(_FAKE_TOKEN)
     ca = tmp_path / "ca.pem"
     ca.write_text("ca")
     hub = tmp_path / "hub.kubeconfig"
     hub.write_text(
         yaml.safe_dump(
             {
-                "users": [{"user": {"token": "hub-token-value", "password": "hub-password-value"}}],
+                "users": [{"user": {"token": _FAKE_TOKEN, "password": _FAKE_PASSWORD}}],
                 "clusters": [{"cluster": {"server": "https://api.hub.example.test"}}],
             }
         )
@@ -137,12 +140,9 @@ def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
         raw={},
     )
 
-    text = redactor_for_config(config).text(
-        "admin-token-value hub-token-value hub-password-value api.hub.example.test api.lab.example.test"
-    )
+    text = redactor_for_config(config).text(f"{_FAKE_TOKEN} {_FAKE_PASSWORD} api.hub.example.test api.lab.example.test")
 
-    assert "admin-token-value" not in text
-    assert "hub-token-value" not in text
-    assert "hub-password-value" not in text
+    assert _FAKE_TOKEN not in text
+    assert _FAKE_PASSWORD not in text
     assert "api.hub.example.test" not in text
     assert "api.lab.example.test" not in text

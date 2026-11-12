@@ -54,7 +54,7 @@ export const formatInstanceTypeSizing = (instanceType: InstanceType): string => 
   if (vCpus == null || memoryGib == null) {
     return '—';
   }
-  const sizing = `${vCpus} vCPUs, ${memoryGib} GiB`;
+  const sizing = `${vCpus} vCPUs · ${memoryGib} GiB`;
   const gpu = instanceType.spec?.gpu;
   if (!gpu) {
     return sizing;

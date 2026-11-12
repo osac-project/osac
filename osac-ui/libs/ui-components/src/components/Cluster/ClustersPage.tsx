@@ -16,7 +16,7 @@ import {
 
 import { type Cluster, type ClusterVersion, ClusterVersions, Clusters } from '@osac/types';
 import { type CelFilter } from '@osac/ui-components/api/cel';
-import { useListResource } from '@osac/ui-components/api/use-resource';
+import { useListAllResources } from '@osac/ui-components/api/use-resource';
 import { useClusters } from '@osac/ui-components/api/v1/cluster';
 import { CLUSTER_VERSION_ALL_STATES_LIST_FILTER } from '@osac/ui-components/api/v1/cluster-versions';
 import { buildClusterListFilter } from '@osac/ui-components/components/Cluster/ListPage/cluster-list-filter';
@@ -61,10 +61,10 @@ export const ClustersPage = () => {
   const [viewType] = useViewType(CLUSTERS_LIST_VIEW_KEY);
   const [searchResetKey, setSearchResetKey] = useState(0);
 
-  const { data: clusterVersionReply, error: versionLoadError } = useListResource(ClusterVersions, {
-    filter: CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
-    limit: 1000,
-  });
+  const { data: clusterVersionReply, error: versionLoadError } = useListAllResources(
+    ClusterVersions,
+    CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
+  );
   const clusterVersions = useMemo(() => clusterVersionReply?.items ?? [], [clusterVersionReply]);
   const observedVersions = useMemo(
     () =>

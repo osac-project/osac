@@ -60,7 +60,7 @@ const clusterVersions = [
   }),
 ];
 
-const createTransport = (clusters: Cluster[]) => {
+const createTransport = (clusters: Cluster[], versions = clusterVersions) => {
   let clusterListFilter: string | undefined;
   const capturedVersionFilters: string[] = [];
 
@@ -87,10 +87,13 @@ const createTransport = (clusters: Cluster[]) => {
             req.filter?.includes('this.metadata.name in') ||
             req.filter === CLUSTER_VERSION_ALL_STATES_LIST_FILTER
           ) {
-            return { items: clusterVersions, total: clusterVersions.length };
+            return {
+              items: req.limit ? versions.slice(req.offset, req.offset + req.limit) : versions,
+              total: versions.length,
+            };
           }
           return {
-            items: clusterVersions.filter(
+            items: versions.filter(
               (version) =>
                 version.spec?.state === ClusterVersionState.ACTIVE && version.spec?.enabled,
             ),
@@ -98,7 +101,7 @@ const createTransport = (clusters: Cluster[]) => {
           };
         },
         get: ({ id }) => ({
-          object: clusterVersions.find((version) => version.id === id) ?? clusterVersions[0],
+          object: versions.find((version) => version.id === id) ?? versions[0],
         }),
       });
       router.service(Projects, {
@@ -146,6 +149,30 @@ describe('ClustersPage', () => {
     await waitFor(() => {
       expect(getClusterListFilter()).toBe(expected);
     });
+  });
+
+  it('resolves a selected version beyond the first catalog page', async () => {
+    const versions = Array.from({ length: 101 }, (_, index) =>
+      create(ClusterVersionSchema, {
+        id: `v4.${index}`,
+        metadata: { name: `v4.${index}` },
+        spec: { version: `4.${index}.0`, state: ClusterVersionState.ACTIVE, enabled: true },
+      }),
+    );
+    const { transport, getClusterListFilter, getCapturedVersionFilters } = createTransport(
+      [makeCluster('c-active', 'v4.17')],
+      versions,
+    );
+
+    renderClustersPage(transport, ['/?clusterVersion=v4.100']);
+
+    await waitFor(() => {
+      expect(getClusterListFilter()).toBe('this.status.observed_version in ["4.100.0"]');
+    });
+    expect(getCapturedVersionFilters()).toEqual([
+      CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
+      CLUSTER_VERSION_ALL_STATES_LIST_FILTER,
+    ]);
   });
 
   it('sends a CEL filter when filtering clusters by cluster version', async () => {

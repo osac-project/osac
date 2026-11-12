@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -28,10 +29,11 @@ class DiagnosticsCollector:
         redactor = context.redactor or Redactor()
         kubeconfig = context.config.lab_kubeconfig if context.config is not None else Path("/config/lab-hub.kubeconfig")
         base = ("kubectl", "--kubeconfig", str(kubeconfig))
+        namespace = os.environ.get("OSAC_NAMESPACE", "osac")
         files = {
-            "osac-state.yaml": self._safe(*base, "get", "pods,deployments,events", "-n", "osac", "-o", "yaml"),
+            "osac-state.yaml": self._safe(*base, "get", "pods,deployments,events", "-n", namespace, "-o", "yaml"),
             "pod-logs.txt": self._safe(
-                *base, "logs", "-n", "osac", "-l", "app.kubernetes.io/part-of=osac", "--tail=2000"
+                *base, "logs", "-n", namespace, "-l", "app.kubernetes.io/part-of=osac", "--tail=2000"
             ),
         }
         if tenant:

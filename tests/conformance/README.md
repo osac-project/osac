@@ -13,6 +13,8 @@ python3 -m tests.conformance run
 python3 -m tests.conformance run --plan /results/conformance-plan.yaml
 ```
 
+Set `OSAC_NAMESPACE` when the OSAC namespace is not `osac` (default).
+
 The image builds from the repository root:
 
 ```sh

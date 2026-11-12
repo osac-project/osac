@@ -33,9 +33,9 @@ type catalogPricingInputRow struct {
 	items           map[string]*privatev1.CatalogPricingInputCatalogItem
 }
 
-// aggregateCatalogPricingInputs builds the deterministic, distinct (service, dimension, value) inventory described
-// by OSAC-6889 AC1-AC4, from catalog items already fetched by the caller. It is a pure function: it takes no DAO,
-// billing, or other dependency, so it structurally cannot make a provider call.
+// aggregateCatalogPricingInputs builds the deterministic, distinct (service, dimension, value) inventory from
+// catalog items already fetched by the caller. It is a pure function: it takes no DAO, billing, or other
+// dependency, so it structurally cannot make a provider call.
 func aggregateCatalogPricingInputs(
 	computeItems []*privatev1.ComputeInstanceCatalogItem,
 	clusterItems []*privatev1.ClusterCatalogItem,

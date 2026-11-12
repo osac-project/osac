@@ -345,10 +345,10 @@ for ca_platform in kind openshift; do
     || fail "install-infra (${ca_platform}): the seed-check render omits the OIDC IdP CA input"
 done
 
-# OIDC_IDP_CA_FILE must be a reusable file path. Helm reads
-# "--set-file name=-" from stdin, which the gate renders more than once, so
-# later renders would see an empty caPem. The gate must reject the spelling
-# before the first render, and the diagnostic must not echo the value.
+# OIDC_IDP_CA_FILE must be a reusable source. Helm reads "--set-file name=-"
+# from stdin, and the gate renders the same argument more than once, so later
+# renders would see an empty caPem. The gate must reject the spelling before
+# the first render, and the diagnostic must not echo the value.
 : >"${LOG}"
 ca_stdin_err="${TMP_DIR}/oidc-ca-stdin.err"
 if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
@@ -357,12 +357,34 @@ if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
     >"${TMP_DIR}/oidc-ca-stdin.out" 2>"${ca_stdin_err}"; then
   fail "validate-inputs accepted OIDC_IDP_CA_FILE=- (stdin)"
 fi
-grep -q 'OIDC_IDP_CA_FILE must be a file path' "${ca_stdin_err}" \
+grep -q 'OIDC_IDP_CA_FILE must be a regular file path' "${ca_stdin_err}" \
   || fail "validate-inputs did not name the OIDC IdP CA input requirement"
 grep -q 'no cluster changes were made' "${ca_stdin_err}" \
   || fail "the OIDC IdP CA failure did not state that no cluster changes were made"
 if grep -q 'helm template' "${LOG}"; then
   fail "validate-inputs rendered a chart before rejecting a stdin OIDC IdP CA input"
+fi
+
+# A FIFO is drained like stdin: the first render consumes it and every later
+# render sees an empty caPem. The gate must reject any existing path that is
+# not a regular file before the first render, not only the literal '-'.
+ca_fifo="${TMP_DIR}/oidc-ca.fifo"
+rm -f "${ca_fifo}"
+mkfifo "${ca_fifo}"
+: >"${LOG}"
+ca_fifo_err="${TMP_DIR}/oidc-ca-fifo.err"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac OIDC_IDP_CA_FILE="${ca_fifo}" \
+    >"${TMP_DIR}/oidc-ca-fifo.out" 2>"${ca_fifo_err}"; then
+  fail "validate-inputs accepted a FIFO OIDC_IDP_CA_FILE"
+fi
+grep -q 'OIDC_IDP_CA_FILE must be a regular file path' "${ca_fifo_err}" \
+  || fail "validate-inputs did not reject a FIFO OIDC IdP CA input"
+grep -q 'no cluster changes were made' "${ca_fifo_err}" \
+  || fail "the FIFO OIDC IdP CA failure did not state that no cluster changes were made"
+if grep -q 'helm template' "${LOG}"; then
+  fail "validate-inputs rendered a chart before rejecting a FIFO OIDC IdP CA input"
 fi
 
 # Cluster-lookup output must reach Make only through a validating filter:
@@ -963,6 +985,12 @@ assert_install_osac_order composite install after \
   PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
 assert_install_osac_order standalone install-osac independent \
   PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
+# NETBOX_SEED_WILL_RUN follows the goals, not the execution order: with both
+# targets as goals the gate trusts the seed hook. `make install-osac
+# install-infra` would run install-osac first (and `make -j` beside it), so
+# the upgrade could fail after the namespace and license Secret were written.
+assert_install_osac_order reversed install-osac after \
+  install-infra PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
 
 # install-devstack has the same composite-only ordering requirement: under
 # `make -j install` on dev-full its cluster check and node setup could run

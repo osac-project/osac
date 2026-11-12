@@ -757,12 +757,14 @@ validate-ns:
 	@bash -c 'source scripts/lib.sh && validate_namespace "$${NS:?NS is required}"' \
 	|| { echo "ERROR: invalid NS; no cluster changes were made. NS must be a lowercase DNS label (a-z, 0-9, '-', at most 63 characters)." >&2; exit 1; }
 validate-inputs: validate-ns
-# Helm reads "--set-file name=-" from stdin, but the gate and install-infra
-# render the same argument more than once: the first render consumes the
-# stream and later ones would see an empty caPem. Reject that spelling before
-# any render or cluster change. The value reaches the validator through the
-# exported environment, never through Make expansion into the quoted bash -c
-# string.
+# Helm reads "--set-file name=-" from stdin, and any single-read path (a
+# process substitution, FIFO, or piped /dev/stdin) is drained the same way,
+# but the gate and install-infra render the same argument more than once: the
+# first render consumes the stream and later ones would see an empty caPem.
+# Reject those spellings before any render or cluster change; a regular file
+# and a URL are left to the render's own readability check. The value reaches
+# the validator through the exported environment, never through Make
+# expansion into the quoted bash -c string.
 	@bash -c 'source scripts/lib.sh && validate_oidc_idp_ca_file "$${OIDC_IDP_CA_FILE:-}"' \
 	|| { echo "ERROR: invalid OIDC IdP CA input; no cluster changes were made." >&2; exit 1; }
 # Remote-cluster identifiers are static inputs: the gate rejects an invalid
@@ -988,6 +990,19 @@ install-infra: validate-osac-inputs
 install-osac: install-infra
 install-devstack: install-osac
 endif
+endif
+# NETBOX_SEED_WILL_RUN trusts the seed hook whenever install-infra is a goal,
+# not only when it runs before install-osac. An explicit
+# `make install-osac install-infra` (or `make -j install-infra install-osac`)
+# would otherwise run install-osac first or beside install-infra, so the gate
+# would accept the token the hook has not created yet and the osac upgrade
+# would fail after the namespace and license Secret were written. Order
+# install-osac after install-infra whenever both are goals; the composite
+# `install` goal already has this edge above, and each target alone keeps its
+# standalone behavior. DRY_RUN does not change these targets, so the edge
+# applies under it too.
+ifneq ($(and $(filter install-infra,$(MAKECMDGOALS)),$(filter install-osac,$(MAKECMDGOALS))),)
+install-osac: install-infra
 endif
 
 .PHONY: install-dry-run

@@ -260,17 +260,20 @@ validate_namespace() {
 }
 
 # Helm treats "--set-file name=-" as stdin, and the gate and install-infra
-# render the same argument more than once. A single stdin stream is consumed
-# by the first render, so every later render would see an empty caPem and
-# could drop the OIDC IdP trust Secret. Reject that spelling before the first
-# render; a file path stays reusable, and the render itself validates that it
-# can be read. The value is not echoed, so a rejected input cannot reach the
-# log.
+# render the same argument more than once. A single stream is consumed by the
+# first render, so every later render would see an empty caPem and could drop
+# the OIDC IdP trust Secret. The same holds for any single-read source: a
+# process substitution (/dev/fd/N), a FIFO, or /dev/stdin on a pipe. Reject
+# those before the first render; a regular file stays reusable, and the render
+# itself validates that it can be read. A path that does not exist yet (or a
+# URL) is left to the render, so URL inputs keep working. The value is not
+# echoed, so a rejected input cannot reach the log.
 validate_oidc_idp_ca_file() {
     local ca_file="$1"
 
-    if [ "${ca_file}" = '-' ]; then
-        echo "ERROR: OIDC_IDP_CA_FILE must be a file path, not '-' (stdin): every render applies the same --set-file argument, so the first render would consume stdin and later ones would see an empty caPem." >&2
+    if [ "${ca_file}" = '-' ] \
+        || { [ -e "${ca_file}" ] && [ ! -f "${ca_file}" ]; }; then
+        echo "ERROR: OIDC_IDP_CA_FILE must be a regular file path, not '-' (stdin) or a pipe, FIFO, or process substitution: every render applies the same --set-file argument, so the first render would consume the stream and later ones would see an empty caPem." >&2
         return 1
     fi
 

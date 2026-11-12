@@ -158,7 +158,11 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(tenantListLimit).To(Equal(int32(maxCheckConnectionTenants + 1)))
 		Expect(output.ResourceFamilies).To(ConsistOf(
 			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeClusterCatalogItem,
+			ResourceTypeBareMetalInstanceCatalogItem,
 			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeClusterTemplate,
+			ResourceTypeBareMetalInstanceTemplate,
 			ResourceTypeInstanceType,
 			ResourceTypeDiskImage,
 			ResourceTypeStorageTier,

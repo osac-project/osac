@@ -29,6 +29,10 @@ var expectedMCPServerToolNames = []string{
 	"delete_network_resource",
 	"create_project",
 	"update_project",
+	"create_catalog_offering",
+	"update_catalog_offering",
+	"publish_catalog_offering",
+	"delete_catalog_offering",
 }
 
 func connectMCPTokenSource(

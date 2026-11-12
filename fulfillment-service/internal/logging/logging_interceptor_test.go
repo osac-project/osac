@@ -92,7 +92,203 @@ var _ = Describe("Interceptor", func() {
 		DeferCleanup(conn.Close)
 	})
 
+	Describe("Unary server", func() {
+		It("Does not log catalog request or response bodies when body logging is enabled", func() {
+			method := "/osac.public.v1.ComputeInstanceCatalogItems/Create"
+			request := &testsv1.Object{MyString: "catalog-customer-title"}
+			response := &testsv1.Object{MyString: "catalog-customer-description"}
+
+			result, err := interceptor.UnaryServer(
+				ctx,
+				request,
+				&grpc.UnaryServerInfo{FullMethod: method},
+				func(context.Context, any) (any, error) {
+					return response, nil
+				},
+			)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result).To(BeIdenticalTo(response))
+
+			messages := Parse(buffer)
+			Expect(messages).To(HaveLen(2))
+			Expect(messages[0]).ToNot(HaveKey("request"))
+			Expect(messages[1]).ToNot(HaveKey("response"))
+			Expect(buffer.String()).ToNot(ContainSubstring("catalog-customer-title"))
+			Expect(buffer.String()).ToNot(ContainSubstring("catalog-customer-description"))
+		})
+
+		It("Does not log catalog gRPC error messages or details", func() {
+			method := "/osac.public.v1.ComputeInstanceCatalogItems/Create"
+			customerName := "catalog-customer-name"
+			customerDetail := "catalog-customer-detail"
+			rpcStatus, err := grpcstatus.New(grpccodes.AlreadyExists, customerName).WithDetails(
+				testsv1.Object_builder{MyString: customerDetail}.Build(),
+			)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = interceptor.UnaryServer(
+				ctx,
+				&testsv1.Object{},
+				&grpc.UnaryServerInfo{FullMethod: method},
+				func(context.Context, any) (any, error) {
+					return nil, rpcStatus.Err()
+				},
+			)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
+
+			messages := Parse(buffer)
+			Expect(messages).To(HaveLen(2))
+			Expect(messages[1]).To(HaveKeyWithValue("code", "AlreadyExists"))
+			Expect(messages[1]).ToNot(HaveKey("error"))
+			Expect(buffer.String()).ToNot(ContainSubstring(customerName))
+			Expect(buffer.String()).ToNot(ContainSubstring(customerDetail))
+		})
+
+		It("Logs only the status code for catalog non-gRPC errors", func() {
+			method := "/osac.public.v1.ComputeInstanceCatalogItems/Create"
+			customerName := "catalog-customer-name"
+
+			_, err := interceptor.UnaryServer(
+				ctx,
+				&testsv1.Object{},
+				&grpc.UnaryServerInfo{FullMethod: method},
+				func(context.Context, any) (any, error) {
+					return nil, errors.New(customerName)
+				},
+			)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unknown))
+
+			messages := Parse(buffer)
+			Expect(messages).To(HaveLen(2))
+			Expect(messages[1]).To(HaveKeyWithValue("code", "Unknown"))
+			Expect(messages[1]).ToNot(HaveKey("error"))
+			Expect(buffer.String()).ToNot(ContainSubstring(customerName))
+		})
+	})
+
 	Describe("Unary client", func() {
+		It("Redacts the gRPC target when redaction is enabled", func() {
+			redactingInterceptor, err := NewInterceptor().
+				SetLogger(logger).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			err = redactingInterceptor.UnaryClient(
+				ctx,
+				"/test.Service/TestMethod",
+				&testsv1.Object{},
+				&testsv1.Object{},
+				conn,
+				func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
+					return nil
+				},
+			)
+			Expect(err).ToNot(HaveOccurred())
+
+			messages := Parse(buffer)
+			Expect(messages).To(HaveLen(2))
+			Expect(messages[0]).To(HaveKeyWithValue("target", redactMark))
+			Expect(messages[1]).To(HaveKeyWithValue("target", redactMark))
+			Expect(buffer.String()).ToNot(ContainSubstring(listener.Addr().String()))
+		})
+
+		It("Does not log catalog request or response bodies when body logging is enabled", func() {
+			catalogInterceptor, err := NewInterceptor().
+				SetLogger(logger).
+				SetBodies(true).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			request := &testsv1.Object{MyString: "catalog-customer-title"}
+			response := &testsv1.Object{MyString: "catalog-customer-description"}
+			err = catalogInterceptor.UnaryClient(
+				ctx,
+				"/osac.public.v1.ComputeInstanceCatalogItems/Create",
+				request,
+				response,
+				conn,
+				func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
+					return nil
+				},
+			)
+			Expect(err).ToNot(HaveOccurred())
+
+			messages := Parse(buffer)
+			Expect(messages).To(HaveLen(2))
+			Expect(messages[0]).ToNot(HaveKey("request"))
+			Expect(messages[1]).ToNot(HaveKey("response"))
+			Expect(messages[0]).To(HaveKeyWithValue("target", redactMark))
+			Expect(messages[1]).To(HaveKeyWithValue("target", redactMark))
+			Expect(buffer.String()).ToNot(ContainSubstring("catalog-customer-title"))
+			Expect(buffer.String()).ToNot(ContainSubstring("catalog-customer-description"))
+			Expect(buffer.String()).ToNot(ContainSubstring(listener.Addr().String()))
+		})
+
+		It("Does not log catalog gRPC error messages or details", func() {
+			catalogInterceptor, err := NewInterceptor().
+				SetLogger(logger).
+				SetBodies(true).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			customerName := "catalog-customer-name"
+			customerDetail := "catalog-customer-detail"
+			rpcStatus, err := grpcstatus.New(grpccodes.AlreadyExists, customerName).WithDetails(
+				testsv1.Object_builder{MyString: customerDetail}.Build(),
+			)
+			Expect(err).ToNot(HaveOccurred())
+
+			err = catalogInterceptor.UnaryClient(
+				ctx,
+				"/osac.public.v1.ComputeInstanceCatalogItems/Create",
+				&testsv1.Object{},
+				&testsv1.Object{},
+				conn,
+				func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
+					return rpcStatus.Err()
+				},
+			)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
+
+			messages := Parse(buffer)
+			Expect(messages).To(HaveLen(2))
+			Expect(messages[1]).To(HaveKeyWithValue("code", "AlreadyExists"))
+			Expect(messages[1]).ToNot(HaveKey("message"))
+			Expect(messages[1]).ToNot(HaveKey("details"))
+			Expect(messages[1]).ToNot(HaveKey("error"))
+			Expect(buffer.String()).ToNot(ContainSubstring(customerName))
+			Expect(buffer.String()).ToNot(ContainSubstring(customerDetail))
+		})
+
+		It("Logs only the status code for catalog non-gRPC errors", func() {
+			catalogInterceptor, err := NewInterceptor().
+				SetLogger(logger).
+				SetBodies(true).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			customerName := "catalog-customer-name"
+			err = catalogInterceptor.UnaryClient(
+				ctx,
+				"/osac.public.v1.ComputeInstanceCatalogItems/Create",
+				&testsv1.Object{},
+				&testsv1.Object{},
+				conn,
+				func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
+					return errors.New(customerName)
+				},
+			)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unknown))
+
+			messages := Parse(buffer)
+			Expect(messages).To(HaveLen(2))
+			Expect(messages[1]).To(HaveKeyWithValue("code", "Unknown"))
+			Expect(messages[1]).ToNot(HaveKey("message"))
+			Expect(messages[1]).ToNot(HaveKey("details"))
+			Expect(messages[1]).ToNot(HaveKey("error"))
+			Expect(buffer.String()).ToNot(ContainSubstring(customerName))
+		})
+
 		It("Logs unary client requests and responses", func() {
 			method := "/test.Service/TestMethod"
 

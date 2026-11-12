@@ -60,9 +60,7 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   const latestAttemptInProgress =
     latestUpgrade?.state === ClusterUpgradeState.PENDING ||
     latestUpgrade?.state === ClusterUpgradeState.PROGRESSING;
-  const upgradeDidNotComplete =
-    latestUpgrade?.state === ClusterUpgradeState.TIMED_OUT ||
-    latestUpgrade?.state === ClusterUpgradeState.FAILED;
+  const latestAttemptTimedOut = latestUpgrade?.state === ClusterUpgradeState.TIMED_OUT;
   const configuredVersionQuery = useGetResource(
     ClusterVersions,
     { id: configuredVersionId ?? '' },
@@ -79,12 +77,14 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
     action = { kind: 'hidden' };
   } else if (upgradeInProgress || latestAttemptInProgress) {
     action = { kind: 'in-progress' };
-  } else if (upgradeFailed || upgradeTimedOut || upgradeDidNotComplete) {
+  } else if (upgradeTimedOut || latestAttemptTimedOut) {
     action = {
       kind: 'blocked',
-      reason: latestUpgrade?.message || t('The latest upgrade did not complete.'),
+      reason:
+        (upgradeTimedOut ? latestControlPlaneUpgrade?.message : latestUpgrade?.message) ||
+        t('No definitive result within the timeout.'),
     };
-  } else if (!configuredVersionId) {
+  } else if (!configuredVersionId || (upgradeFailed && !observedVersion)) {
     action = { kind: 'blocked', reason: t('Upgrade eligibility is unavailable.') };
   } else if (
     configuredVersionQuery.isLoading ||
@@ -95,7 +95,12 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   } else if (configuredVersionQuery.isError || catalogQuery.isError) {
     action = { kind: 'blocked', reason: t('Could not load upgrade options.') };
   } else {
-    choices = resolveClusterUpgradeChoices(configuredVersion, catalogQuery.data?.items ?? [], t);
+    choices = resolveClusterUpgradeChoices(
+      configuredVersion,
+      catalogQuery.data?.items ?? [],
+      t,
+      upgradeFailed ? observedVersion : undefined,
+    );
     action = choices.blockedReason
       ? { kind: 'blocked', reason: choices.blockedReason }
       : { kind: 'available' };

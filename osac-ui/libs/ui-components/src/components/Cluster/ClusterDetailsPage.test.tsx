@@ -255,9 +255,10 @@ describe('ClusterDetailsPage upgrade availability', () => {
 
   it('shows a failed control-plane attempt as an error', async () => {
     const failed = clone(ClusterSchema, readyCluster);
-    if (!failed.status) {
-      throw new Error('The cluster fixture needs status');
+    if (!failed.spec || !failed.status) {
+      throw new Error('The cluster fixture needs spec and status');
     }
+    failed.spec.version = create(ClusterVersionReferenceSchema, { id: targetVersion.id });
     failed.status.upgradeHistory = [
       create(ClusterUpgradeHistoryEntrySchema, {
         component: { target: { case: 'controlPlane', value: {} } },

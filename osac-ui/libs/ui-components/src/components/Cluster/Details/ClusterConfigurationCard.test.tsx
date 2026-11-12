@@ -174,6 +174,41 @@ describe('ClusterConfigurationCard', () => {
     expect(screen.queryByText(/→/)).not.toBeInTheDocument();
   });
 
+  it('offers a different target after a failed upgrade', async () => {
+    const failed = clone(ClusterSchema, cluster);
+    if (!failed.spec || !failed.status) {
+      throw new Error('The cluster fixture needs spec and status');
+    }
+    failed.spec.version = create(ClusterVersionReferenceSchema, { id: targetVersion.id });
+    failed.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        sourceVersion: '4.17.0',
+        targetVersion: '4.18.0',
+        state: ClusterUpgradeState.FAILED,
+        message: 'The attempted upgrade failed',
+      }),
+    ];
+    const alternateVersion = create(ClusterVersionSchema, {
+      id: 'version-4-17-1',
+      metadata: { name: 'ocp-4-17-1', tenant: 'shared', project: 'project-a' },
+      spec: { version: '4.17.1', state: ClusterVersionState.ACTIVE, enabled: true },
+    });
+    const { user } = renderWithProviders(<ClusterConfigurationCard cluster={failed} />, {
+      apiFixtures: { clusterVersions: [currentVersion, targetVersion, alternateVersion] },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
+    );
+    expect(screen.getByText('Upgrade failed')).toBeInTheDocument();
+    expect(screen.getByText('The attempted upgrade failed')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Upgrade cluster' }));
+    await user.click(screen.getByLabelText(/^Target version/));
+    expect(screen.getByRole('option', { name: '4.17.1' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '4.18.0' })).not.toBeInTheDocument();
+  });
+
   it('shows control-plane upgrade history with current state, times, and messages', async () => {
     const upgrading = clone(ClusterSchema, cluster);
     if (!upgrading.status) {

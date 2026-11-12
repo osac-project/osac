@@ -1089,7 +1089,6 @@
   "The create wizard for this catalog item type is not available yet.": "The create wizard for this catalog item type is not available yet.",
   "The external IP attachment could not be provisioned.": "The external IP attachment could not be provisioned.",
   "The instance type can be changed when the virtual machine is running, paused, or stopped.": "The instance type can be changed when the virtual machine is running, paused, or stopped.",
-  "The latest upgrade did not complete.": "The latest upgrade did not complete.",
   "The Model service is not enabled on this server.": "The Model service is not enabled on this server.",
   "The service is not enabled on this server.": "The service is not enabled on this server.",
   "The system will auto-create an ExternalIP and ExternalIPAttachment bound to the primary attachment. Auto-created resources are deleted when the instance is deleted.": "The system will auto-create an ExternalIP and ExternalIPAttachment bound to the primary attachment. Auto-created resources are deleted when the instance is deleted.",

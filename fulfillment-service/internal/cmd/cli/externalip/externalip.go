@@ -43,10 +43,21 @@ func Find(ctx context.Context, client publicv1.ExternalIPsClient, ref string) (*
 // metadata name, or eip-<ID> when the IP has no name, plus the
 // "-attachment" suffix. Commands that create an attachment without an
 // explicit name use this so the convention stays in one place.
+//
+// The result is always a valid metadata name: at most 63 characters.
+// When the metadata name plus the suffix would exceed that limit the
+// name falls back to the shorter ID-based form, and if even that is too
+// long it is truncated from the right so the suffix is preserved.
 func AttachmentName(eip *publicv1.ExternalIP) string {
+	const maxLength = 63
+	const suffix = "-attachment"
+
 	name := eip.GetMetadata().GetName()
-	if name == "" {
+	if name == "" || len(name)+len(suffix) > maxLength {
 		name = fmt.Sprintf("eip-%s", eip.GetId())
 	}
-	return name + "-attachment"
+	if remaining := maxLength - len(suffix); len(name) > remaining {
+		name = name[:remaining]
+	}
+	return name + suffix
 }

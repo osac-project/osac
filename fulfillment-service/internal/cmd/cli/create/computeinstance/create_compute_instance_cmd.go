@@ -306,6 +306,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	// address that is not ALLOCATED fails before the instance exists.
 	var attachEIP *publicv1.ExternalIP
 	if c.args.externalIP != "" {
+		if err := c.validateExternalIPFlags(); err != nil {
+			return err
+		}
 		attachEIP, err = c.resolveAttachableExternalIP(ctx)
 		if err != nil {
 			return err
@@ -963,6 +966,18 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 		return nil
 	}
 
+	// The preflight check rejects --run-strategy halted, but the run
+	// strategy can also arrive via --set or server-side defaulting. Fail
+	// fast instead of waiting out the timeout on an instance that will
+	// never run.
+	if ci.GetSpec().GetRunStrategy() == publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED {
+		return fmt.Errorf(
+			"compute instance '%s' (ID: %s) has run strategy HALTED and will never reach RUNNING,"+
+				" so the external IP attachment cannot proceed",
+			ci.GetMetadata().GetName(), ci.GetId(),
+		)
+	}
+
 	// The attachment API wants the instance RUNNING, READY, and with
 	// a network address. RUNNING alone is not enough, the network
 	// can still be coming up.
@@ -1005,7 +1020,13 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 
 	// The API requires a name, build one from the external IP.
 	attachName := externalip.AttachmentName(eip)
-	_, err = c.externalIPAttachmentsClient.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
+
+	// The attachment Create RPC is not covered by the poll above: give it
+	// its own bounded context derived from --timeout instead of the
+	// unbounded command context.
+	createCtx, cancel := context.WithTimeout(ctx, c.args.timeout)
+	defer cancel()
+	_, err = c.externalIPAttachmentsClient.Create(createCtx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
 		Object: publicv1.ExternalIPAttachment_builder{
 			Metadata: metautil.ForCreate(ctx, attachName).Build(),
 			Spec: publicv1.ExternalIPAttachmentSpec_builder{
@@ -1021,7 +1042,10 @@ func (c *runnerContext) maybeAttachExistingExternalIP(ctx context.Context, ci *p
 		)
 	}
 
-	c.console.Infof(ctx, "Attached external IP to compute instance.\n")
+	// The attachment is created in PENDING state and becomes effective
+	// asynchronously; keep the message generic (no names, IDs, or
+	// addresses) per the logging policy.
+	c.console.Infof(ctx, "Created external IP attachment, pending until it becomes ready.\n")
 	return nil
 }
 
@@ -1047,9 +1071,24 @@ func computeInstanceAttachable(ci *publicv1.ComputeInstance) bool {
 	return false
 }
 
+// validateExternalIPFlags rejects flag combinations that cannot work:
+// attaching an external IP requires the instance to reach RUNNING, so a
+// halted run strategy would leave the command waiting until timeout.
+func (c *runnerContext) validateExternalIPFlags() error {
+	if c.args.externalIP != "" && strings.EqualFold(c.args.runStrategy, "halted") {
+		return fmt.Errorf(
+			"--run-strategy halted cannot be combined with --externalip:" +
+				" a halted instance never reaches RUNNING, so the external IP" +
+				" attachment would wait until the command times out",
+		)
+	}
+	return nil
+}
+
 // resolveAttachableExternalIP resolves the --externalip value by name or ID
-// and verifies the address is ALLOCATED. Call it before creating the compute
-// instance so an unusable external IP fails before any resource exists.
+// and verifies the address is ALLOCATED and not already attached (including
+// via a pending attachment). Call it before creating the compute instance so
+// an unusable external IP fails before any resource exists.
 func (c *runnerContext) resolveAttachableExternalIP(ctx context.Context) (*publicv1.ExternalIP, error) {
 	eip, err := externalip.Find(ctx, c.externalIPsClient, c.args.externalIP)
 	if err != nil {
@@ -1061,6 +1100,31 @@ func (c *runnerContext) resolveAttachableExternalIP(ctx context.Context) (*publi
 		return nil, fmt.Errorf(
 			"external IP %q is in state %s, must be ALLOCATED before attaching to a new compute instance",
 			eip.GetMetadata().GetName(), state.String(),
+		)
+	}
+
+	// ALLOCATED alone does not mean unattached: the IP keeps its state
+	// while an attachment holds it, and only one attachment per external
+	// IP is allowed. status.attached covers attachments that reached
+	// READY; a pending attachment also blocks the create, so list them
+	// explicitly.
+	if eip.GetStatus().GetAttached() {
+		return nil, fmt.Errorf(
+			"external IP %q is already attached to another resource, detach it before attaching it to a new compute instance",
+			eip.GetMetadata().GetName(),
+		)
+	}
+	attachments, err := c.externalIPAttachmentsClient.List(ctx, publicv1.ExternalIPAttachmentsListRequest_builder{
+		Filter: proto.String(fmt.Sprintf("this.spec.external_ip.id == %q", eip.GetId())),
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to check existing attachments for external IP %q: %w",
+			eip.GetMetadata().GetName(), err)
+	}
+	if len(attachments.GetItems()) > 0 {
+		return nil, fmt.Errorf(
+			"external IP %q already has a pending attachment, wait for it to complete or delete it first",
+			eip.GetMetadata().GetName(),
 		)
 	}
 	return eip, nil

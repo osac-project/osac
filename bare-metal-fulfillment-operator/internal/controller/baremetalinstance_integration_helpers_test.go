@@ -126,6 +126,7 @@ func markBMHReadyInNS(namespace, name string) {
 	ExpectWithOffset(1, k8sClient.Status().Update(ctx, bmh)).To(Succeed())
 }
 
+// bmhExistsInNS reports whether the BMH exists, failing on read errors.
 func bmhExistsInNS(namespace, name string) bool {
 	err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &metal3api.BareMetalHost{})
 	ExpectWithOffset(1, client.IgnoreNotFound(err)).To(Succeed())
@@ -141,9 +142,15 @@ func driveToAllocatedIn(reconciler *BareMetalInstanceReconciler, namespace, bmiN
 	reconcileInNS(reconciler, namespace, bmiName, 1)
 }
 
+// writeJSON writes a JSON response, reporting encoding failures as 500.
 func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	data, err := json.Marshal(v)
+	if err != nil {
 		http.Error(w, "encode failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(data); err != nil {
+		GinkgoWriter.Printf("writeJSON: writing response: %v\n", err)
 	}
 }

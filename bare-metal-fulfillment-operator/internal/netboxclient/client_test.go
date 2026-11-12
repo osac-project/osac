@@ -749,6 +749,7 @@ var _ = Describe("NetBox client", func() {
 	)
 })
 
+// newClientWithCAFile builds a production client trusting the test server.
 func newClientWithCAFile(server *httptest.Server) *Client {
 	caFile := filepath.Join(GinkgoT().TempDir(), "netbox-ca.pem")
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})

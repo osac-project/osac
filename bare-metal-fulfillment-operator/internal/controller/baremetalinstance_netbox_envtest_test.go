@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -49,8 +50,10 @@ import (
 
 const (
 	netboxTestNS = "netbox-test"
-	// netboxTestToken is a synthetic marker, not a credential.
-	netboxTestToken = "test-netbox-token"
+	// testNetBoxToken is a synthetic fixture marker, not a credential.
+	testNetBoxToken = "fixture-netbox-token"
+	testBMCUsername = "fixture-bmc-user"
+	testBMCPassword = "fixture-bmc-password"
 	netboxDeviceBMC = "redfish-virtualmedia+https://192.168.1.42/redfish/v1/Systems/1"
 	netboxDeviceMAC = "aa:bb:cc:dd:ee:42"
 )
@@ -64,10 +67,12 @@ type mockNetBoxDevice struct {
 	version      int
 }
 
+// etag returns the mock's current ETag for the device.
 func (d *mockNetBoxDevice) etag() string {
 	return fmt.Sprintf(`"v%d"`, d.version)
 }
 
+// response renders the device as the NetBox API response body.
 func (d *mockNetBoxDevice) response() map[string]any {
 	return netboxclient.DevicePayloadForTest(d.ID, d.Name, d.Status, d.CustomFields)
 }
@@ -91,16 +96,19 @@ type mockNetBox struct {
 	requests []recordedRequest
 }
 
+// newMockNetBox starts a mock NetBox HTTPS server.
 func newMockNetBox() *mockNetBox {
 	m := &mockNetBox{devices: map[int]*mockNetBoxDevice{}}
 	m.server = httptest.NewTLSServer(http.HandlerFunc(m.handle))
 	return m
 }
 
+// stop shuts down the mock server.
 func (m *mockNetBox) stop() {
 	m.server.Close()
 }
 
+// addDevice registers a fixture device.
 func (m *mockNetBox) addDevice(id int, status string, fields map[string]any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -116,6 +124,7 @@ func (m *mockNetBox) addDevice(id int, status string, fields map[string]any) {
 	}
 }
 
+// device returns a copy of the fixture device state.
 func (m *mockNetBox) device(id int) mockNetBoxDevice {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -131,6 +140,7 @@ func (m *mockNetBox) device(id int) mockNetBoxDevice {
 	return snapshot
 }
 
+// requestsFor returns recorded calls matching method and path.
 func (m *mockNetBox) requestsFor(method, path string) []recordedRequest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -143,6 +153,7 @@ func (m *mockNetBox) requestsFor(method, path string) []recordedRequest {
 	return result
 }
 
+// handle routes the device API calls used by the adapter.
 func (m *mockNetBox) handle(w http.ResponseWriter, r *http.Request) {
 	defer GinkgoRecover()
 
@@ -168,6 +179,7 @@ func (m *mockNetBox) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// listDevices applies the adapter filters to the device fixtures.
 func (m *mockNetBox) listDevices(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
@@ -193,6 +205,7 @@ func (m *mockNetBox) listDevices(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// deviceMatchesQuery reports whether a device matches the request query.
 func deviceMatchesQuery(device *mockNetBoxDevice, query map[string][]string) bool {
 	for key, values := range query {
 		if len(values) == 0 {
@@ -224,6 +237,7 @@ func deviceMatchesQuery(device *mockNetBoxDevice, query map[string][]string) boo
 	return true
 }
 
+// isEmptyCustomField reports whether a custom field is absent or empty.
 func isEmptyCustomField(value any) bool {
 	if value == nil {
 		return true
@@ -234,6 +248,7 @@ func isEmptyCustomField(value any) bool {
 	return false
 }
 
+// getDevice returns one device with its current ETag.
 func (m *mockNetBox) getDevice(w http.ResponseWriter, r *http.Request) {
 	id, err := deviceIDFromPath(r.URL.Path)
 	if err != nil {
@@ -253,6 +268,7 @@ func (m *mockNetBox) getDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, device.response())
 }
 
+// patchDevice applies a conditional device PATCH.
 func (m *mockNetBox) patchDevice(w http.ResponseWriter, r *http.Request) {
 	id, err := deviceIDFromPath(r.URL.Path)
 	if err != nil {
@@ -296,6 +312,7 @@ func (m *mockNetBox) patchDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, device.response())
 }
 
+// deviceIDFromPath parses the numeric device ID from a request path.
 func deviceIDFromPath(path string) (int, error) {
 	trimmed := strings.TrimSuffix(strings.TrimPrefix(path, "/api/dcim/devices/"), "/")
 	return strconv.Atoi(trimmed)
@@ -307,10 +324,12 @@ type fakeSecretAPI struct {
 	secrets []secretapi.Secret
 }
 
+// List returns the seeded system Secrets.
 func (f *fakeSecretAPI) List(_ context.Context, _ secretapi.Filter, _ int32) (secretapi.ListResult, error) {
 	return secretapi.ListResult{Items: append([]secretapi.Secret(nil), f.secrets...), Total: int32(len(f.secrets))}, nil
 }
 
+// Get returns the seeded Secret with the given ID.
 func (f *fakeSecretAPI) Get(_ context.Context, id string) (secretapi.Secret, error) {
 	for _, secret := range f.secrets {
 		if secret.ID == id {
@@ -320,16 +339,18 @@ func (f *fakeSecretAPI) Get(_ context.Context, id string) (secretapi.Secret, err
 	return secretapi.Secret{}, fmt.Errorf("secret %s not found", id)
 }
 
+// Close satisfies the Secret API client contract.
 func (f *fakeSecretAPI) Close() error { return nil }
 
+// newNetBoxCredentialsReader builds a reader backed by a fixture Secret.
 func newNetBoxCredentialsReader(deviceID int) credentials.Reader {
 	secret := secretapi.Secret{
 		ID:     fmt.Sprintf("secret-%d", deviceID),
 		Tenant: "system",
 		Labels: map[string]string{"osac.openshift.io/netbox-device-" + strconv.Itoa(deviceID): ""},
 		Data: map[string][]byte{
-			"username": []byte("bmc-user"),
-			"password": []byte("bmc-password"),
+			"username": []byte(testBMCUsername),
+			"password": []byte(testBMCPassword),
 		},
 	}
 	return netboxcredentials.NewReader(&fakeSecretAPI{secrets: []secretapi.Secret{secret}})
@@ -340,11 +361,12 @@ func newNetBoxCredentialsReader(deviceID int) credentials.Reader {
 func newNetBoxReconciler(m *mockNetBox, reader credentials.Reader) *BareMetalInstanceReconciler {
 	bmhManager := baremetalhost.NewManager(k8sClient, k8sClient, netboxTestNS)
 	secretWriter := bmh.NewSecretWriter(k8sClient, netboxTestNS)
-	api := netboxclient.NewClientForTest(m.server.Client(), m.server.URL, netboxTestToken)
+	api := netboxclient.NewClientForTest(m.server.Client(), m.server.URL, testNetBoxToken)
 	inventoryClient := inventory.NewNetBoxClient(api, bmhManager, secretWriter, metal3HostClass, reader)
 	return newTestReconciler(inventoryClient, netboxTestNS)
 }
 
+// createNetBoxBMI creates a BareMetalInstance with the given selector.
 func createNetBoxBMI(name string, selector map[string]string) {
 	bmi := &v1alpha1.BareMetalInstance{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: netboxTestNS},
@@ -356,6 +378,7 @@ func createNetBoxBMI(name string, selector map[string]string) {
 	ExpectWithOffset(1, k8sClient.Create(ctx, bmi)).To(Succeed())
 }
 
+// netboxBMH returns the generated BareMetalHost.
 func netboxBMH(name string) *metal3api.BareMetalHost {
 	return getBMHInNS(netboxTestNS, name)
 }
@@ -368,6 +391,7 @@ func cleanupNetBoxHost(bmiName, hostname string) {
 	ExpectWithOffset(1, client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).NotTo(HaveOccurred())
 }
 
+// netboxDeviceFields returns managed-device fields for a fixture.
 func netboxDeviceFields(cpuCores int) map[string]any {
 	return map[string]any{
 		"osac_managed":     true,
@@ -417,7 +441,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(query["cf_osac_managed"]).To(ConsistOf("true"))
 			Expect(query["cf_osac_instance_id__empty"]).To(ConsistOf("true"))
 			Expect(query["cf_cpu_cores"]).To(ConsistOf("16"))
-			Expect(listRequests[0].Authorization).To(HavePrefix("Token "))
+			Expect(strings.HasPrefix(listRequests[0].Authorization, "Token ")).To(BeTrue())
 			Expect(mock.requestsFor(http.MethodPatch, "/api/dcim/devices/42/")).To(BeEmpty())
 
 			// Claim: the device becomes active and owned by the BareMetalInstance UID.
@@ -441,8 +465,10 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: baremetalhost.CredentialsSecretName(hostname), Namespace: netboxTestNS}, secret)).To(Succeed())
-			Expect(secret.Data["username"]).To(Equal([]byte("bmc-user")))
-			Expect(secret.Data["password"]).To(Equal([]byte("bmc-password")))
+			usernameMatches := string(secret.Data["username"]) == testBMCUsername
+			Expect(usernameMatches).To(BeTrue())
+			passwordMatches := subtle.ConstantTimeCompare(secret.Data["password"], []byte(testBMCPassword)) == 1
+			Expect(passwordMatches).To(BeTrue())
 			Expect(secret.Labels["osac.openshift.io/managed-by"]).To(Equal(shared.OsacDefaultManagedByValue))
 			Expect(secret.Labels["osac.openshift.io/bare-metal-instance-uid"]).To(Equal(string(bmi.UID)))
 

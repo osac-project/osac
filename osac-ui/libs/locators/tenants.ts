@@ -3,12 +3,14 @@ type TenantsLocator =
       role: 'link' | 'button' | 'heading' | 'textbox' | 'grid' | 'group' | 'dialog' | 'menuitem',
       options: { name: string; exact: true },
     ]
-  | readonly [label: string];
+  | readonly [label: string]
+  | readonly [selector: string];
 
 export const TenantsMainPage = {
   pageTitle: ['heading', { name: 'Tenants', exact: true }],
   createTenant: ['link', { name: 'Create tenant', exact: true }],
   searchTenants: ['textbox', { name: 'Search tenants', exact: true }],
+  listView: ['#list-view'],
   tenantsTable: ['grid', { name: 'Tenants', exact: true }],
   tenantRows: ['tbody tr'],
   tenantNameCell: ['td[data-label="Tenant"]'],

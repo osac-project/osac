@@ -57,6 +57,7 @@ export const expectStorageBackendReady = async (
   provider: string,
 ): Promise<void> => {
   await openStorageBackendsPage(page);
+  await page.getByRole('button', { name: 'List view', exact: true }).click();
   try {
     const row = storageBackendRow(page, backendName);
     await expect(row.getByText('Ready', { exact: true })).toBeVisible();

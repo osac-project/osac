@@ -947,12 +947,18 @@ endif
 # Under `make -j install` prerequisites with no dependency edge run in
 # parallel, so install-infra's namespace creation and readiness waits could
 # start while validate-osac-inputs is still rejecting a missing AAP license
-# or a non-https remote address. Order only the composite goal: standalone
-# `make install-infra` still needs no license, and DRY_RUN=1 maps install to
-# install-dry-run, which does no cluster change.
+# or a non-https remote address. install-osac has to follow install-infra
+# too: its chart looks up the NetBox token Secret, which the infra seed hook
+# creates before install-infra's own upgrade returns (--wait-for-jobs), so
+# in parallel the osac upgrade could render before the Secret exists and
+# fail after the namespace and license Secret were written. Order only the
+# composite goal: standalone `make install-infra` still needs no license,
+# standalone `make install-osac` keeps no edge to install-infra, and
+# DRY_RUN=1 maps install to install-dry-run, which does no cluster change.
 ifneq ($(DRY_RUN),1)
 ifneq ($(filter install,$(MAKECMDGOALS)),)
 install-infra: validate-osac-inputs
+install-osac: install-infra
 endif
 endif
 

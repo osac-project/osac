@@ -788,6 +788,40 @@ join_continuations <"${standalone_plan}" \
   | grep -q 'export NETBOX_SEED_WILL_RUN=0' \
   || fail "install-osac: the gate must not trust a seed hook that will not run"
 
+# Under `make -j install` prerequisites without a dependency edge run in
+# parallel. install-osac's chart looks up the NetBox token Secret, which the
+# infra seed hook creates before install-infra's own upgrade returns
+# (--wait-for-jobs), so the composite goal must order install-osac after
+# install-infra; otherwise the osac upgrade can render before the Secret
+# exists and fail after the namespace and license Secret were written.
+# A standalone install-osac keeps its independence from install-infra.
+assert_install_osac_order() {
+  local label=$1 target=$2 expect=$3
+  shift 3
+  local db="${TMP_DIR}/order-${label}.db" prereqs
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -p -n "${target}" "$@" \
+    >"${db}" 2>/dev/null \
+    || fail "make -p -n ${target} (${label}) failed"
+  prereqs=$(grep -E '^install-osac:' "${db}" | grep -v ':=' | head -1)
+  [ -n "${prereqs}" ] || fail "${label}: no install-osac rule in the database"
+  case " ${prereqs#install-osac: } " in
+    *" install-infra "*)
+      [ "${expect}" = after ] \
+        || fail "${label}: standalone install-osac must not depend on install-infra"
+      ;;
+    *)
+      [ "${expect}" = independent ] \
+        || fail "${label}: install-osac must be ordered after install-infra"
+      ;;
+  esac
+}
+
+assert_install_osac_order composite install after \
+  PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
+assert_install_osac_order standalone install-osac independent \
+  PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
+
 # install-devstack rejects a wrong profile at parse time, before the gate's
 # cluster lookups or renders, so the user sees the actual mistake.
 if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \

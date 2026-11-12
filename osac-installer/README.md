@@ -802,10 +802,20 @@ The failure names the offending field. Helm's own message is suppressed
 because it can echo the rejected value, so for the constraints these
 schemas add themselves the gate also prints the violated constraint:
 `aap.bootstrap.backoffLimit` and the `bundledVault.podSecurityContext`
-POSIX IDs must be zero or greater, `runAsUser: 0` is rejected unless
-`runAsNonRoot` is explicitly `false`, and `global.fulfillmentTrust`
-rejects unknown keys. Other schema failures name the field only. Fix the
-reported field and retry.
+POSIX IDs must be integers zero or greater, `runAsUser: 0` is rejected
+unless `runAsNonRoot` is explicitly `false`, and `global.fulfillmentTrust`
+rejects unknown keys. A numeric field's text covers both its type and its
+minimum, because the field path alone cannot say which one failed. Other
+schema failures name the field only. Fix the reported field and retry.
+
+The bmaas-netbox-ci profile gets its NetBox token Secret from the infra
+chart's seed hook. The gate trusts that hook only when the same command
+installs the infra chart (`install`, `install-infra`, or
+`install-multicluster`). A standalone `make install-osac` instead requires
+either the token Secret the osac chart reads to already exist in the cluster
+or a token supplied through `bmf.netbox.tokenValue`; without either, the gate
+fails before the namespace and license Secret are created rather than
+letting `helm upgrade` fail later.
 
 These checks reject values earlier releases accepted: a negative
 `aap.bootstrap.backoffLimit` or `bundledVault.podSecurityContext` ID,

@@ -468,11 +468,18 @@ _LIB_OPEN_SCHEMA_MAPS=(
 # use the dotted form Helm 3 prints; the lookup normalizes Helm 4's
 # slash-separated form. Keep in step with the schemas and the input-validation
 # tests.
+#
+# A path alone cannot say which constraint failed on it -- the same field
+# can fail its type or its minimum -- so each text names the complete static
+# requirement, and holds for every failure the field can produce. The
+# numeric fields are integers with minimum 0, so a string value (for
+# example from --set-string) and a negative number report the same accurate
+# text.
 _LIB_SCHEMA_CONSTRAINTS=(
-    "aap.bootstrap.backoffLimit|must be greater than or equal to 0"
-    "bundledVault.podSecurityContext.runAsUser|must be greater than or equal to 0"
-    "bundledVault.podSecurityContext.runAsGroup|must be greater than or equal to 0"
-    "bundledVault.podSecurityContext.fsGroup|must be greater than or equal to 0"
+    "aap.bootstrap.backoffLimit|must be an integer greater than or equal to 0"
+    "bundledVault.podSecurityContext.runAsUser|must be an integer greater than or equal to 0"
+    "bundledVault.podSecurityContext.runAsGroup|must be an integer greater than or equal to 0"
+    "bundledVault.podSecurityContext.fsGroup|must be an integer greater than or equal to 0"
     "bundledVault.podSecurityContext|runAsUser must not be 0 when runAsNonRoot is true"
     "global.fulfillmentTrust|unknown keys are not allowed"
 )
@@ -756,6 +763,14 @@ netbox_seed_identity_matches() {
 # the bridge off so the gate reports the underlying token error rather than
 # bridging an unverifiable identity.
 #
+# The bridge is accepted only when the same make invocation installs the
+# infra chart: NETBOX_SEED_WILL_RUN=1, exported by the Makefile's gate
+# recipes for install, install-infra, and install-multicluster. A
+# standalone `make install-osac` never runs the seed hook, so there the
+# hook counts as not seeded and render_osac_chart_offline falls back to the
+# read-only Secret lookup; otherwise the gate would pass an install that
+# fails only after the namespace and license Secret are written.
+#
 # Usage: netbox_seed_check RELEASE CHART [HELM_ARGS...]
 netbox_seed_check() {
     local render
@@ -763,6 +778,11 @@ netbox_seed_check() {
     NETBOX_SEED_SECRET_NAME=""
     NETBOX_SEED_SECRET_NS=""
     NETBOX_SEED_SECRET_KEY=""
+    if [ "${NETBOX_SEED_WILL_RUN:-0}" != "1" ]; then
+        export NETBOX_TOKEN_SEEDED NETBOX_SEED_SECRET_NAME \
+            NETBOX_SEED_SECRET_NS NETBOX_SEED_SECRET_KEY
+        return 0
+    fi
     if render=$(helm template "$@" 2>/dev/null); then
         case "${render}" in
             *-netbox-token-seed*)

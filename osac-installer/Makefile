@@ -705,6 +705,17 @@ endif
 # distinct from anything a caller could supply.
 NETBOX_OFFLINE_PLACEHOLDER := offline-validation-placeholder-$(shell date +%s)
 
+# The infra seed hook that creates the NetBox token Secret runs only when
+# this make invocation installs the infra chart (install, install-infra, or
+# install-multicluster, which runs install-infra). A standalone install-osac
+# must not trust it: netbox_seed_check then reports not seeded and the gate falls
+# back to its read-only Secret lookup, so a missing token fails before the
+# namespace and license Secret are written instead of passing the gate and
+# failing later at helm upgrade. The gate recipes export it into their own
+# shell before sourcing lib.sh; a recipe line runs in a fresh shell, so the
+# value cannot reach lib.sh any other way.
+NETBOX_SEED_WILL_RUN := $(if $(filter install install-infra install-multicluster,$(MAKECMDGOALS)),1,0)
+
 .PHONY: validate-inputs
 # An OCI-ref install renders the pulled chart, so the local osac chart's
 # dependencies are not built for it (mirrors the install-osac guard below).
@@ -751,7 +762,7 @@ ifeq ($(PLATFORM),kind)
 		$(INFRA_HELM_ARGS) \
 		$(OIDC_IDP_CA_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	@source scripts/lib.sh && split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}" && \
+	@export NETBOX_SEED_WILL_RUN=$(NETBOX_SEED_WILL_RUN); source scripts/lib.sh && split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}" && \
 	netbox_seed_check osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
 		-f $(INFRA_VALUES) $${INFRA_VALUES_EXTRA} \
@@ -799,7 +810,7 @@ else
 		$(INFRA_HELM_ARGS) \
 		$(OIDC_IDP_CA_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
-	@source scripts/lib.sh && split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}" && \
+	@export NETBOX_SEED_WILL_RUN=$(NETBOX_SEED_WILL_RUN); source scripts/lib.sh && split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}" && \
 	netbox_seed_check osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
 		--values $(INFRA_VALUES) $${INFRA_VALUES_EXTRA} \

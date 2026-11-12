@@ -428,12 +428,19 @@ class ValidationDiagnosticsTests(unittest.TestCase):
             "Error: values don't meet the specifications of the schema(s)"
             " in the following chart(s):\n"
         )
-        minimum = "must be greater than or equal to 0"
+        minimum = "must be an integer greater than or equal to 0"
         nonroot = "runAsUser must not be 0 when runAsNonRoot is true"
         cases = (
             # Helm 3.18 prints the dotted path and its own minimum wording.
             (schema + "osac:\n- aap.bootstrap.backoffLimit:"
              " Must be greater than or equal to 0\n",
+             "aap.bootstrap.backoffLimit: violates the values schema: "
+             + minimum),
+            # A rejected type uses the same static text: the field's rule is
+            # "an integer zero or greater", and the path alone cannot say
+            # which half failed.
+            (schema + "osac:\n- aap.bootstrap.backoffLimit:"
+             " Invalid type. Expected: integer, given: string\n",
              "aap.bootstrap.backoffLimit: violates the values schema: "
              + minimum),
             # Helm 3.22 and Helm 4 print a JSON pointer and a minimum.
@@ -490,10 +497,16 @@ class ValidationDiagnosticsTests(unittest.TestCase):
             (INSTALLER / "charts/osac-infra/values.schema.json").read_text())
         backoff = osac["properties"]["aap"]["properties"]["bootstrap"][
             "properties"]["backoffLimit"]
+        # The printed text covers both halves of the field's rule ("an
+        # integer greater than or equal to 0"), so the schema must still
+        # carry both the type and the minimum.
+        self.assertEqual(backoff.get("type"), "integer")
         self.assertEqual(backoff.get("minimum"), 0)
         security = infra["properties"]["bundledVault"]["properties"][
             "podSecurityContext"]
         for field in ("runAsUser", "runAsGroup", "fsGroup"):
+            self.assertEqual(
+                security["properties"][field].get("type"), "integer")
             self.assertEqual(
                 security["properties"][field].get("minimum"), 0)
         # The `not` rule rejects runAsUser 0 with runAsNonRoot true.

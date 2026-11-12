@@ -764,6 +764,30 @@ for seed_override in \
     || fail "validate-inputs: the seed-check render omits ${seed_override}"
 done
 
+# The seed hook runs only when this invocation installs the infra chart, so
+# the gate must trust it for install/install-infra and refuse it for a
+# standalone install-osac, which would otherwise pass and then fail at helm
+# upgrade after the namespace and license Secret were written.
+for seed_goal in install install-infra; do
+  seed_plan="${TMP_DIR}/netbox-seed-${seed_goal}.plan"
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -n "${seed_goal}" \
+      PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac \
+      >"${seed_plan}" 2>/dev/null \
+    || fail "make -n ${seed_goal} (bmaas-netbox-ci) failed"
+  join_continuations <"${seed_plan}" | grep -q 'export NETBOX_SEED_WILL_RUN=1' \
+    || fail "${seed_goal}: the gate must trust the infra seed hook"
+done
+standalone_plan="${TMP_DIR}/netbox-seed-install-osac.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-osac \
+    PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac \
+    >"${standalone_plan}" 2>/dev/null \
+  || fail "make -n install-osac (bmaas-netbox-ci) failed"
+join_continuations <"${standalone_plan}" \
+  | grep -q 'export NETBOX_SEED_WILL_RUN=0' \
+  || fail "install-osac: the gate must not trust a seed hook that will not run"
+
 # install-devstack rejects a wrong profile at parse time, before the gate's
 # cluster lookups or renders, so the user sees the actual mistake.
 if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
@@ -966,14 +990,15 @@ GATE_OSAC_ARGS=("osac" "${OSAC_CHART_DIR}"
 GATE_INFRA_ARGS=("osac-infra" "${INFRA_CHART_DIR}"
   --values "${INSTALLER_DIR}/values/dev/kind-infra.yaml")
 
-# Usage: gate_failure_matching NAME ARRAY_NAME PATTERN [HELM_ARGS...]
+# Usage: gate_failure_matching NAME PATTERN [HELM_ARGS...]
+# The chart's arguments come after the pattern, so the helper needs no
+# nameref (`local -n` is Bash 4.3 only) and stays a plain positional API.
 gate_failure_matching() {
-  local name=$1 args_name=$2 pattern=$3
-  shift 3
-  local -n chart_args=${args_name}
+  local name=$1 pattern=$2
+  shift 2
   local error="${TMP_DIR}/${name}.gate.stderr"
   echo "checking ${name} (gate output matching '${pattern}')"
-  if render_chart_offline "${chart_args[@]}" "$@" >/dev/null 2>"${error}"; then
+  if render_chart_offline "$@" >/dev/null 2>"${error}"; then
     echo "ERROR: ${name}: the gate unexpectedly rendered successfully" >&2
     exit 1
   fi
@@ -989,22 +1014,28 @@ render_chart_offline "${GATE_OSAC_ARGS[@]}" >/dev/null \
   || fail "gate-valid-defaults: the gate rejected the default values"
 
 # Helm 3 prints a dotted path and Helm 4 a slash-separated one; both are
-# accepted because the gate keeps whichever form Helm produced.
-gate_failure_matching backoff-limit-negative-gate GATE_OSAC_ARGS \
-  '^(aap\.bootstrap\.backoffLimit|aap/bootstrap/backoffLimit): violates the values schema: must be greater than or equal to 0$' \
-  --set aap.bootstrap.backoffLimit=-1
+# accepted because the gate keeps whichever form Helm produced. The numeric
+# fields carry a type and a minimum, and the printed text covers both: the
+# gate cannot tell from the field path which one failed.
+gate_failure_matching backoff-limit-negative-gate \
+  '^(aap\.bootstrap\.backoffLimit|aap/bootstrap/backoffLimit): violates the values schema: must be an integer greater than or equal to 0$' \
+  "${GATE_OSAC_ARGS[@]}" --set aap.bootstrap.backoffLimit=-1
 
-gate_failure_matching vault-runasuser-negative-gate GATE_INFRA_ARGS \
-  '^(bundledVault\.podSecurityContext\.runAsUser|bundledVault/podSecurityContext/runAsUser): violates the values schema: must be greater than or equal to 0$' \
-  --set bundledVault.podSecurityContext.runAsUser=-1
+gate_failure_matching backoff-limit-type-gate \
+  '^(aap\.bootstrap\.backoffLimit|aap/bootstrap/backoffLimit): violates the values schema: must be an integer greater than or equal to 0$' \
+  "${GATE_OSAC_ARGS[@]}" --set-string aap.bootstrap.backoffLimit=zero
 
-gate_failure_matching vault-runasuser-zero-nonroot-gate GATE_INFRA_ARGS \
+gate_failure_matching vault-runasuser-negative-gate \
+  '^(bundledVault\.podSecurityContext\.runAsUser|bundledVault/podSecurityContext/runAsUser): violates the values schema: must be an integer greater than or equal to 0$' \
+  "${GATE_INFRA_ARGS[@]}" --set bundledVault.podSecurityContext.runAsUser=-1
+
+gate_failure_matching vault-runasuser-zero-nonroot-gate \
   '^(bundledVault\.podSecurityContext|bundledVault/podSecurityContext): violates the values schema: runAsUser must not be 0 when runAsNonRoot is true$' \
-  --set bundledVault.podSecurityContext.runAsUser=0
+  "${GATE_INFRA_ARGS[@]}" --set bundledVault.podSecurityContext.runAsUser=0
 
-gate_failure_matching fulfillment-trust-unknown-key-gate GATE_OSAC_ARGS \
+gate_failure_matching fulfillment-trust-unknown-key-gate \
   '^(global\.fulfillmentTrust|global/fulfillmentTrust): violates the values schema: unknown keys are not allowed$' \
-  --set global.fulfillmentTrust.unknownKey=1
+  "${GATE_OSAC_ARGS[@]}" --set global.fulfillmentTrust.unknownKey=1
 
 netbox_gate_err="${TMP_DIR}/netbox-gate.err"
 # The render-only placeholder mirrors the Makefile's runtime-generated
@@ -1042,9 +1073,11 @@ STUB
 chmod +x "${netbox_cli_bin}/kubectl" "${netbox_cli_bin}/oc"
 
 # netbox_seed_check decides whether the bridge is legitimate at all: the
-# netbox profile's infra values deploy the seed hook, bmaas-ci's do not.
+# netbox profile's infra values deploy the seed hook, bmaas-ci's do not, and
+# the hook is trusted only when the same invocation installs the infra chart
+# (NETBOX_SEED_WILL_RUN, exported by the gate recipes).
 echo "checking netbox-seed-hook-present (the netbox profile's infra deploys it)"
-netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+NETBOX_SEED_WILL_RUN=1 netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
   --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
   --values "${INSTALLER_DIR}/values/bmaas-netbox-ci/infra.yaml" \
   --set osacNamespace=osac
@@ -1058,11 +1091,22 @@ netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
   || fail "netbox-seed-hook-present: wrong seed Secret key ${NETBOX_SEED_SECRET_KEY}"
 
 echo "checking netbox-seed-hook-absent (bmaas-ci infra deploys none)"
-netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+NETBOX_SEED_WILL_RUN=1 netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
   --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
   --set osacNamespace=osac
 [ "${NETBOX_TOKEN_SEEDED}" = "0" ] \
   || fail "netbox-seed-hook-absent: bmaas-ci infra unexpectedly seeds the token"
+
+# A standalone install-osac does not install the infra chart, so its seed
+# hook never runs: the check must report not seeded even though the values
+# deploy the hook, leaving the read-only Secret lookup as the only bridge.
+echo "checking netbox-seed-hook-not-in-this-invocation (standalone install-osac)"
+netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+  --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
+  --values "${INSTALLER_DIR}/values/bmaas-netbox-ci/infra.yaml" \
+  --set osacNamespace=osac
+[ "${NETBOX_TOKEN_SEEDED}" = "0" ] \
+  || fail "netbox-seed-hook-not-in-this-invocation: the hook was trusted without an infra install"
 
 # The bridge: only the specific lookup failure above is retried with the
 # placeholder, and only for a seeded install whose seed-hook Secret
@@ -1070,7 +1114,7 @@ netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
 # the gate does. The render runs in the osac namespace like the gate's
 # own --namespace $(NS).
 echo "checking netbox-profile-gate-placeholder (bridged render)"
-netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+NETBOX_SEED_WILL_RUN=1 netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
   --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
   --values "${INSTALLER_DIR}/values/bmaas-netbox-ci/infra.yaml" \
   --set osacNamespace=osac

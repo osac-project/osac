@@ -24,10 +24,11 @@ def _valid_data() -> dict[str, object]:
     return {
         "osacRelease": "1.4.0",
         "profiles": ["vm", "netris"],
-        "lab": {
-            "kubeconfig": "/config/lab-hub.kubeconfig",
+        "target": {
+            "namespace": "osac-devel",
+            "kubeconfig": "/config/target-hub.kubeconfig",
             "apiURL": "https://fulfillment.example.test",
-            "tokenFile": "/config/lab-token",
+            "tokenFile": "/config/target-token",
             "caFile": "/config/api-ca.pem",
         },
         "timeouts": {"delete": "30m"},
@@ -40,10 +41,20 @@ def test_loads_common_keys_and_area_sections(tmp_path: Path) -> None:
 
     assert cfg.osac_release == "1.4.0"
     assert cfg.profiles == ("vm", "netris")
-    assert cfg.lab_api_url == "https://fulfillment.example.test"
-    assert cfg.lab_kubeconfig == Path("/config/lab-hub.kubeconfig")
+    assert cfg.target_namespace == "osac-devel"
+    assert cfg.target_api_url == "https://fulfillment.example.test"
+    assert cfg.target_kubeconfig == Path("/config/target-hub.kubeconfig")
     assert cfg.timeouts == {"delete": "30m"}
     assert cfg.areas["networking"] == {"externalIPPoolCIDR": "198.51.100.0/28"}
+
+
+def test_target_namespace_defaults_to_osac(tmp_path: Path) -> None:
+    data = _valid_data()
+    del data["target"]["namespace"]  # type: ignore[index]
+
+    cfg = load_config(_write(tmp_path / "conformance.yaml", data), area_names={"networking"})
+
+    assert cfg.target_namespace == "osac"
 
 
 def test_profiles_are_deduplicated(tmp_path: Path) -> None:
@@ -57,13 +68,13 @@ def test_profiles_are_deduplicated(tmp_path: Path) -> None:
 
 def test_optional_aap_is_parsed(tmp_path: Path) -> None:
     data = _valid_data()
-    data["lab"]["aap"] = {"url": "https://aap.example.test", "tokenFile": "/config/aap-token"}  # type: ignore[index]
+    data["target"]["aap"] = {"url": "https://aap.example.test", "tokenFile": "/config/aap-token"}  # type: ignore[index]
 
     cfg = load_config(_write(tmp_path / "conformance.yaml", data), area_names={"networking"})
 
-    assert cfg.lab_aap is not None
-    assert cfg.lab_aap.url == "https://aap.example.test"
-    assert cfg.lab_aap.token_file == Path("/config/aap-token")
+    assert cfg.target_aap is not None
+    assert cfg.target_aap.url == "https://aap.example.test"
+    assert cfg.target_aap.token_file == Path("/config/aap-token")
 
 
 def test_unknown_top_level_key_is_a_config_error(tmp_path: Path) -> None:
@@ -86,14 +97,14 @@ def test_unknown_area_section_is_a_config_error(tmp_path: Path) -> None:
     assert "storage" in "\n".join(exc.value.checks)
 
 
-def test_missing_required_lab_key_is_a_config_error(tmp_path: Path) -> None:
+def test_missing_required_target_key_is_a_config_error(tmp_path: Path) -> None:
     data = _valid_data()
-    del data["lab"]["apiURL"]  # type: ignore[index]
+    del data["target"]["apiURL"]  # type: ignore[index]
 
     with pytest.raises(ConfigError) as exc:
         load_config(_write(tmp_path / "conformance.yaml", data), area_names={"networking"})
 
-    assert "lab.apiURL" in "\n".join(exc.value.checks)
+    assert "target.apiURL" in "\n".join(exc.value.checks)
 
 
 def test_profiles_must_be_a_list_of_strings(tmp_path: Path) -> None:
@@ -130,19 +141,22 @@ def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
     config = Config(
         osac_release="1.4.0",
         profiles=("generic",),
-        lab_kubeconfig=hub,
-        lab_api_url="https://api.lab.example.test",
-        lab_token_file=token,
-        lab_ca_file=ca,
-        lab_aap=None,
+        target_namespace="osac",
+        target_kubeconfig=hub,
+        target_api_url="https://api.target.example.test",
+        target_token_file=token,
+        target_ca_file=ca,
+        target_aap=None,
         timeouts={},
         areas={},
         raw={},
     )
 
-    text = redactor_for_config(config).text(f"{_FAKE_TOKEN} {_FAKE_PASSWORD} api.hub.example.test api.lab.example.test")
+    text = redactor_for_config(config).text(
+        f"{_FAKE_TOKEN} {_FAKE_PASSWORD} api.hub.example.test api.target.example.test"
+    )
 
     assert _FAKE_TOKEN not in text
     assert _FAKE_PASSWORD not in text
     assert "api.hub.example.test" not in text
-    assert "api.lab.example.test" not in text
+    assert "api.target.example.test" not in text

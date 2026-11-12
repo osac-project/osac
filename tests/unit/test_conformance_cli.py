@@ -48,7 +48,7 @@ def test_config_errors_are_redacted(
         yaml.safe_dump(
             {
                 "osacRelease": "1.4.0",
-                "lab": {
+                "target": {
                     "kubeconfig": str(tmp_path / "hub"),
                     "apiURL": f"https://{fake_host}",
                     "tokenFile": str(token),
@@ -60,7 +60,7 @@ def test_config_errors_are_redacted(
     )
 
     def fail(_args: object) -> None:
-        raise ConfigError([f"lab read failed: {fake_host} rejected {fake_token}"])
+        raise ConfigError([f"target read failed: {fake_host} rejected {fake_token}"])
 
     monkeypatch.setattr(cli, "_build_runtime", fail)
 

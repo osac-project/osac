@@ -1,4 +1,4 @@
-"""End-to-end core smoke test with a fake lab and synthetic pytest tree."""
+"""End-to-end core smoke test with a fake target and synthetic pytest tree."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from tests.conformance.config import load_config
 from tests.conformance.output import OutputSink
 from tests.conformance.profiles import ProfileDefinition
 from tests.conformance.redact import Redactor
-from tests.conformance.testing.fake_lab import FakeLab, FakeLabClient
+from tests.conformance.testing.fake_target import FakeTarget, FakeTargetClient
 from tests.conformance.testtree import PytestTestTree
 
 _FAKE_SECRET = "not-a-real-secret"
@@ -25,9 +25,9 @@ def _config(path: Path, token: Path, ca: Path, hub: Path) -> Path:
             {
                 "osacRelease": "1.4.0",
                 "profiles": ["vm"],
-                "lab": {
+                "target": {
                     "kubeconfig": str(hub),
-                    "apiURL": "http://lab.example.test",
+                    "apiURL": "http://target.example.test",
                     "tokenFile": str(token),
                     "caFile": str(ca),
                 },
@@ -82,7 +82,7 @@ def _tree(path: Path) -> Path:
     return path
 
 
-def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
+def test_list_and_run_the_core_against_a_fake_target(tmp_path: Path) -> None:
     token = tmp_path / "token"
     token.write_text("admin")
     ca = tmp_path / "ca.pem"
@@ -105,7 +105,7 @@ def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
         areas=load_areas(areas_dir),
         profile_catalog=_catalog(),
         tree=PytestTestTree(root=tree_dir),
-        lab=FakeLabClient(FakeLab()),
+        target=FakeTargetClient(FakeTarget()),
         results=results,
         redactor=redactor,
         output=OutputSink(results, redactor),
@@ -134,7 +134,7 @@ def test_list_and_run_the_core_against_a_fake_lab(tmp_path: Path) -> None:
         areas=load_areas(areas_dir),
         profile_catalog=_catalog(),
         tree=PytestTestTree(root=tree_dir),
-        lab=FakeLabClient(FakeLab()),
+        target=FakeTargetClient(FakeTarget()),
         results=focused_results,
         redactor=redactor,
         output=OutputSink(focused_results, redactor),
@@ -180,7 +180,7 @@ def test_missing_podman_socket_and_empty_plan_are_config_errors(
             areas=load_areas(areas_dir),
             profile_catalog=_catalog(),
             tree=PytestTestTree(root=tree_dir),
-            lab=FakeLabClient(FakeLab()),
+            target=FakeTargetClient(FakeTarget()),
             results=path,
             redactor=redactor,
             output=OutputSink(path, redactor),
@@ -219,9 +219,9 @@ def test_unknown_profile_is_a_config_error(tmp_path: Path, capsys: pytest.Captur
             {
                 "osacRelease": "1.4.0",
                 "profiles": ["frobnicate"],
-                "lab": {
+                "target": {
                     "kubeconfig": str(hub),
-                    "apiURL": "http://lab.example.test",
+                    "apiURL": "http://target.example.test",
                     "tokenFile": str(token),
                     "caFile": str(ca),
                 },

@@ -13,7 +13,17 @@ python3 -m tests.conformance run
 python3 -m tests.conformance run --plan /results/conformance-plan.yaml
 ```
 
-Set `OSAC_NAMESPACE` when the OSAC namespace is not `osac` (default).
+The target section names the installation under test. `namespace` defaults
+to `osac` when omitted:
+
+```yaml
+target:
+  namespace: osac
+  kubeconfig: /config/hub.kubeconfig
+  apiURL: https://fulfillment-internal-api-osac.<domain>
+  tokenFile: /config/admin-token
+  caFile: /config/api-ca.pem
+```
 
 The image builds from the repository root:
 

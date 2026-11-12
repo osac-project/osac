@@ -18,12 +18,11 @@ import (
 	"io"
 )
 
-// WritePageNotice writes the table-mode paging hint to w, which must be the error stream of the console so that it
-// never mixes with the table on standard output. label names the entity, offset is the page offset the caller asked
-// for, returned is the number of items the server actually returned, and total is the total number of items across
-// all pages. Nothing is written when there is no more data (an empty collection, or a page that reaches the end);
-// the caller prints the empty-collection message on standard output in the total == 0 case. All arithmetic uses
-// int64 so that a near-MaxInt32 offset cannot overflow. Write failures are wrapped and returned.
+// WritePageNotice writes the table-mode paging hint to w, which must be the console's error stream so it never
+// mixes with standard output. label names the entity; offset is the requested offset, returned the items actually
+// returned, and total the count across all pages. Nothing is written when there is no more data; the caller prints
+// the empty-collection message for total == 0. int64 arithmetic avoids overflow, and write failures are wrapped
+// and returned.
 func WritePageNotice(w io.Writer, label string, offset int32, returned int, total int32) error {
 	if total <= 0 {
 		return nil

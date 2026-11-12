@@ -27,10 +27,8 @@ message TenantBillingAssignmentsListRequest {
   // Index of the first result. If not specified the default value will be zero.
   optional int32 offset = 1;
 
-  // Maximum number of results to be returned by the server. If not specified, or if the value is zero, the server
-  // returns a default page of 100 results; a larger value is clamped to the maximum of 1000. Fewer results may be
-  // returned, so clients should page with `offset` and compare against `total` rather than assume the request was
-  // served in full.
+  // Maximum number of results to return. Zero or unset serves a default page of 100; a larger value is clamped to
+  // 1000. Fewer results may be returned, so page with `offset` and compare against `total`.
   optional int32 limit = 2;
 
   // Filter criteria.
@@ -98,11 +96,10 @@ message TenantBillingAssignmentsSignalResponse {
   option (cleanapi.message).private = true;
 }
 
-// Reads or changes a tenant's time-versioned billing-account assignment. Billing disabled fails every method with
-// FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
-// method on this service; there is no tenant self-service read path. Create and Update resolve
-// billing_account.correlation_id (generate, adopt, or fail on conflict) and validate a unique provider-side
-// match before persisting; see billing.ResolveAccountCorrelationID.
+// Reads or changes a tenant's time-versioned billing-account assignment. With billing disabled every method fails
+// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
+// method; there is no tenant self-service read path. Create and Update resolve billing_account.correlation_id and
+// validate a unique provider-side match before persisting.
 service TenantBillingAssignments {
   // Lists current and historical assignments.
   rpc List(TenantBillingAssignmentsListRequest) returns (TenantBillingAssignmentsListResponse) {
@@ -130,10 +127,8 @@ service TenantBillingAssignments {
   }
 
   // Replaces the tenant's active account, closing the previous interval and opening a new one in the same
-  // transaction. Resubmitting the same tenant and account opens no new interval: it revalidates the current one
-  // in place, re-running correlation resolution against the provider, so it can still fail with
-  // FAILED_PRECONDITION/BILLING_CORRELATION_ID_CONFLICT, ACCOUNT_CORRELATION_CONFLICT, or ACCOUNT_AMBIGUOUS when
-  // the interval is CONNECTED.
+  // transaction. Resubmitting the same tenant and account revalidates the current interval in place instead of
+  // opening a new one, re-running correlation resolution against the provider.
   rpc Update(TenantBillingAssignmentsUpdateRequest) returns (TenantBillingAssignmentsUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/billing/tenant_billing_assignments/{object.id}"
@@ -142,10 +137,10 @@ service TenantBillingAssignments {
     };
   }
 
-  // Synchronously revalidates the current assignment interval, running the same correlation and
-  // account-match validation as Update. An id naming a closed historical interval is rejected. There is
-  // no continuous reconciliation of assignments: revalidation runs only on Create, Update, or this
-  // explicit signal. Controller or global administrator use only; never part of the public API.
+  // Synchronously revalidates the current assignment interval with the same correlation and account-match
+  // validation as Update; an id naming a closed interval is rejected. There is no continuous reconciliation:
+  // revalidation runs only on Create, Update, or this explicit signal. Controller or global administrator use only;
+  // never part of the public API.
   rpc Signal(TenantBillingAssignmentsSignalRequest) returns (TenantBillingAssignmentsSignalResponse) {
     option (cleanapi.method).private = true;
   }

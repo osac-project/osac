@@ -189,11 +189,10 @@ is_tenant_idp_manager if {
   role in tenant_idp_manager_roles
 }
 
-# Cloud Provider Admin realm roles. The role grants only the closed billing
-# method allow-list below (billing design §4.5); it adds no platform-admin
-# permissions and leaves existing client/tenant grants unchanged. Managed service-account candidates resolve
-# their roles from the database and their token realm roles are ignored (see
-# subject_realm_roles), so a forged realm role claim cannot reach this grant.
+# Cloud Provider Admin realm roles. The role grants only the closed billing method allow-list below and adds no
+# platform-admin permissions; existing client/tenant grants are unchanged. Managed service-account candidates
+# resolve roles from the database and ignore token realm roles (see subject_realm_roles), so a forged realm claim
+# cannot reach this grant.
 cloud_provider_admin_roles := {
   "cloud-provider-admin",
 }
@@ -588,11 +587,9 @@ legacy_allow if {
   }
 }
 
-# Billing services use a closed, reviewed method allow-list (billing design
-# §4.5): every billing method must be granted explicitly. To keep unknown or
-# newly added billing methods from silently becoming reachable through the
-# legacy admin catch-all below, the billing service namespaces are excluded
-# from that catch-all and granted only through the sets in this section.
+# Billing services use a closed, reviewed method allow-list: every billing method must be granted explicitly.
+# The billing service namespaces are excluded from the legacy admin catch-all below, so an unknown or newly added
+# method cannot silently become reachable.
 billing_service_namespaces := {
   "/osac.public.v1.BillingAccounts/",
   "/osac.private.v1.BillingAccounts/",
@@ -608,10 +605,9 @@ is_billing_method if {
   startswith(grpc_method, namespace)
 }
 
-# The closed billing method allow-list. Platform admins (is_admin) and
-# cloud-provider-admin realm role holders may use exactly these methods. Any
-# other billing method is denied for everyone, so a new billing method must be
-# reviewed and added here before it becomes reachable.
+# The closed billing method allow-list. Platform admins (is_admin) and cloud-provider-admin realm role holders
+# may use exactly these methods; any other billing method is denied for everyone, so a new one must be reviewed
+# and added here.
 billing_allowed_methods := {
   "/osac.public.v1.BillingAccounts/List",
   "/osac.private.v1.BillingAccounts/List",
@@ -648,9 +644,8 @@ legacy_allow if {
   grpc_method in billing_admin_only_methods
 }
 
-# Allow everything to admins, except the billing services: those are governed
-# by the closed allow-list above so no billing method can bypass review
-# through this catch-all (billing design §4.5).
+# Allow everything to admins, except the billing services, which are governed by the closed allow-list above so
+# no billing method can bypass review through this catch-all.
 legacy_allow if {
   is_admin
   not is_billing_method

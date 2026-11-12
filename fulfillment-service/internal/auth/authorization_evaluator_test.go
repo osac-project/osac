@@ -993,7 +993,7 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			publicAssignmentsCreate = "/osac.public.v1.TenantBillingAssignments/Create"
 			publicAssignmentsUpdate = "/osac.public.v1.TenantBillingAssignments/Update"
 		)
-		DescribeTable("only admins and the cloud-provider-admin role may read or write assignments; design.md has no tenant self-service path",
+		DescribeTable("only admins and the cloud-provider-admin role may read or write assignments; there is no tenant self-service path",
 			func(ctx context.Context, method string, username string, roles []any, groups []any, allowed bool) {
 				evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
 				Expect(err).ToNot(HaveOccurred())
@@ -1042,10 +1042,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 	Describe("cloud provider admin billing authorization", func() {
 		const providerAdminRole = "cloud-provider-admin"
 
-		// The closed billing method allow-list from the billing design (§4.5).
-		// Keep this set explicit so adding a billing method to the policy
-		// cannot silently widen the role's reach without updating the
-		// reviewed contract.
+		// The closed billing method allow-list. Keep this set explicit so a new billing method cannot silently
+		// widen the role's reach without updating the reviewed contract.
 		billingAllowedMethods := []string{
 			"/osac.public.v1.BillingAccounts/List",
 			"/osac.private.v1.BillingAccounts/List",
@@ -1063,9 +1061,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 		const privateSignalMethod = "/osac.private.v1.TenantBillingAssignments/Signal"
 		const publicSignalMethod = "/osac.public.v1.TenantBillingAssignments/Signal"
 
-		// Determine the namespace the evaluator will use, mirroring the logic
-		// in the Evaluate suite above so emergency service account usernames
-		// match the accounts registered in the evaluator.
+		// Determine the namespace the evaluator will use, mirroring the Evaluate suite above so emergency service
+		// account usernames match the registered accounts.
 		testNamespace := grpcAuthzDefaultNamespace
 		if nsBytes, err := os.ReadFile(k8sfiles.ServiceAccountNamespace); err == nil {
 			if ns := strings.TrimSpace(string(nsBytes)); ns != "" {
@@ -1243,9 +1240,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				}).Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			// Forged token claims: the managed candidate carries the provider
-			// admin realm role and the admins group, neither of which may
-			// reach a billing grant.
+			// Forged token claims: the managed candidate carries the provider-admin realm role and the admins
+			// group, neither of which may reach a billing grant.
 			authContext := &AuthContext{
 				AuthMethod:                       "jwt",
 				Username:                         "machine-user",
@@ -1265,9 +1261,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				Expect(decision.Allowed).To(BeFalse(), "forged role on %q", method)
 			}
 
-			// Even a database-resolved provider-admin role grants nothing to a
-			// managed service account: the role is not assignable to managed
-			// accounts and has no managed grant path.
+			// Even a database-resolved provider-admin role grants nothing to a managed service account, which has
+			// no managed grant path.
 			resolvedRoles = []string{providerAdminRole}
 			decision, err := evaluator.Evaluate(ctx, authContext, "/osac.public.v1.BillingAccounts/List")
 			Expect(err).ToNot(HaveOccurred())

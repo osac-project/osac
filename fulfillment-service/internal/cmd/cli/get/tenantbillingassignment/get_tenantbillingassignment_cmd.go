@@ -106,10 +106,9 @@ func render(ctx context.Context, console *terminal.Console, format string, offse
 	return output.Render(ctx, console, format, "tenant billing assignments", response)
 }
 
-// renderTable writes a compact table of assignments. An unset connection state is rendered as UNKNOWN rather
-// than left blank, and the PENDING remediation message (or any other status message) is always shown, never
-// truncated to a placeholder, so an operator can act on it directly from this output. When the page does not
-// reach the total, a continuation hint is written to the console's error stream after the table.
+// renderTable writes a compact table of assignments. An unset connection state is rendered as UNKNOWN rather than
+// left blank, and the status message is always shown in full so an operator can act on it. When the page does not
+// reach the total, a continuation hint follows the table on the error stream.
 func renderTable(console *terminal.Console, offset int32,
 	response *publicv1.TenantBillingAssignmentsListResponse) error {
 	items := response.GetItems()

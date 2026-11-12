@@ -190,8 +190,8 @@ func (p pageData[T]) next() string {
 	return strconv.Itoa(p.Number + 1)
 }
 
-// getAllPages reads every page of a pricing collection, adding extra to each request. The page bound is the
-// shared billing.MaxListPages: every provider-list reader in OSAC stops at the same ceiling.
+// getAllPages reads every page of a pricing collection, adding extra to each request and stopping at the shared
+// billing.MaxListPages bound.
 func getAllPages[T any](ctx context.Context, c *client, op, path string, extra url.Values) ([]T, error) {
 	var all []T
 	token := ""

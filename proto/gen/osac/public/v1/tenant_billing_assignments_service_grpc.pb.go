@@ -42,11 +42,10 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Reads or changes a tenant's time-versioned billing-account assignment. Billing disabled fails every method with
-// FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
-// method on this service; there is no tenant self-service read path. Create and Update resolve
-// billing_account.correlation_id (generate, adopt, or fail on conflict) and validate a unique provider-side
-// match before persisting; see billing.ResolveAccountCorrelationID.
+// Reads or changes a tenant's time-versioned billing-account assignment. With billing disabled every method fails
+// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
+// method; there is no tenant self-service read path. Create and Update resolve billing_account.correlation_id and
+// validate a unique provider-side match before persisting.
 type TenantBillingAssignmentsClient interface {
 	// Lists current and historical assignments.
 	List(ctx context.Context, in *TenantBillingAssignmentsListRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsListResponse, error)
@@ -58,10 +57,8 @@ type TenantBillingAssignmentsClient interface {
 	// FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN.
 	Create(ctx context.Context, in *TenantBillingAssignmentsCreateRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsCreateResponse, error)
 	// Replaces the tenant's active account, closing the previous interval and opening a new one in the same
-	// transaction. Resubmitting the same tenant and account opens no new interval: it revalidates the current one
-	// in place, re-running correlation resolution against the provider, so it can still fail with
-	// FAILED_PRECONDITION/BILLING_CORRELATION_ID_CONFLICT, ACCOUNT_CORRELATION_CONFLICT, or ACCOUNT_AMBIGUOUS when
-	// the interval is CONNECTED.
+	// transaction. Resubmitting the same tenant and account revalidates the current interval in place instead of
+	// opening a new one, re-running correlation resolution against the provider.
 	Update(ctx context.Context, in *TenantBillingAssignmentsUpdateRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsUpdateResponse, error)
 }
 
@@ -117,11 +114,10 @@ func (c *tenantBillingAssignmentsClient) Update(ctx context.Context, in *TenantB
 // All implementations must embed UnimplementedTenantBillingAssignmentsServer
 // for forward compatibility.
 //
-// Reads or changes a tenant's time-versioned billing-account assignment. Billing disabled fails every method with
-// FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
-// method on this service; there is no tenant self-service read path. Create and Update resolve
-// billing_account.correlation_id (generate, adopt, or fail on conflict) and validate a unique provider-side
-// match before persisting; see billing.ResolveAccountCorrelationID.
+// Reads or changes a tenant's time-versioned billing-account assignment. With billing disabled every method fails
+// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
+// method; there is no tenant self-service read path. Create and Update resolve billing_account.correlation_id and
+// validate a unique provider-side match before persisting.
 type TenantBillingAssignmentsServer interface {
 	// Lists current and historical assignments.
 	List(context.Context, *TenantBillingAssignmentsListRequest) (*TenantBillingAssignmentsListResponse, error)
@@ -133,10 +129,8 @@ type TenantBillingAssignmentsServer interface {
 	// FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN.
 	Create(context.Context, *TenantBillingAssignmentsCreateRequest) (*TenantBillingAssignmentsCreateResponse, error)
 	// Replaces the tenant's active account, closing the previous interval and opening a new one in the same
-	// transaction. Resubmitting the same tenant and account opens no new interval: it revalidates the current one
-	// in place, re-running correlation resolution against the provider, so it can still fail with
-	// FAILED_PRECONDITION/BILLING_CORRELATION_ID_CONFLICT, ACCOUNT_CORRELATION_CONFLICT, or ACCOUNT_AMBIGUOUS when
-	// the interval is CONNECTED.
+	// transaction. Resubmitting the same tenant and account revalidates the current interval in place instead of
+	// opening a new one, re-running correlation resolution against the provider.
 	Update(context.Context, *TenantBillingAssignmentsUpdateRequest) (*TenantBillingAssignmentsUpdateResponse, error)
 	mustEmbedUnimplementedTenantBillingAssignmentsServer()
 }

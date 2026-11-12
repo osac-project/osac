@@ -61,20 +61,16 @@ func (a account) normalize(op string) (billing.Account, error) {
 		State:          mapState(rawStatus, approvalStatus),
 		RawStatus:      rawStatus,
 		ApprovalStatus: approvalStatus,
-		// M360's AccountRecord has no currency field: BaseCurrency stays the empty zero value rather than
-		// being invented.
+		// M360's AccountRecord has no currency field, so BaseCurrency stays empty rather than being invented.
 	}, nil
 }
 
-// statusSignal and approvalSignal are the only M360 Status__r/ApprovalStatus__r values this adapter recognizes as
-// carrying an active or inactive signal. Any other value - including empty, null, or a value not in this list -
-// is a neutral/unknown signal. Mapping a provider's native shape onto OSAC's normalized state is this adapter's
-// responsibility (not a shared, externally configured table): see design.md §2.3 Assumptions.
+// statusSignal and approvalSignal are the only M360 Status__r/ApprovalStatus__r values recognized as active or
+// inactive; every other value, including empty or null, is neutral. Mapping the native shape onto OSAC's state is
+// this adapter's responsibility.
 //
-// ASSUMPTION (flagged for review): the exact set of M360 Status/ApprovalStatus string values is not documented
-// anywhere in the OSAC-6883 story, the design doc, or the PRD. The values below reflect only what appears in this
-// adapter's own pre-existing test fixtures ("Active", "Inactive", "Approved"). Verify these literals against the
-// real M360 picklist values before this mapping reaches production.
+// ASSUMPTION (flagged for review): the exact M360 picklist values are undocumented. The literals below come from
+// this adapter's test fixtures and must be verified against the real picklist before production.
 var statusSignal = map[string]billing.AccountState{
 	"Active":   billing.AccountActive,
 	"Inactive": billing.AccountInactive,
@@ -85,9 +81,8 @@ var approvalSignal = map[string]billing.AccountState{
 	"Rejected": billing.AccountInactive,
 }
 
-// mapState normalizes M360's Status and ApprovalStatus to ACTIVE/INACTIVE/UNKNOWN. An account is ACTIVE only
-// when both signals agree it is; either signal reporting INACTIVE wins over the other; every other combination -
-// unmapped, missing, or disagreeing (ambiguous) - is UNKNOWN. ACTIVE is never returned on a partial signal.
+// mapState normalizes M360's Status and ApprovalStatus to ACTIVE, INACTIVE, or UNKNOWN. ACTIVE requires both
+// signals to agree; any INACTIVE signal wins; every other combination is UNKNOWN.
 func mapState(rawStatus, approvalStatus string) billing.AccountState {
 	status := statusSignal[rawStatus]
 	approval := approvalSignal[approvalStatus]
@@ -124,9 +119,8 @@ func (a *adapter) ListAccounts(ctx context.Context, filter billing.AccountFilter
 	if err := a.client.getDiscovery(ctx, op, "/accounts", query, &resp); err != nil {
 		return billing.AccountPage{}, err
 	}
-	// A native page larger than the effective size requested - after the clamp above - is a provider contract
-	// violation, rejected before any item is normalized or filtered: an oversized Content must not hide behind
-	// the exact-match filter, which could narrow it back under the size once OSAC has already buffered it.
+	// A native page larger than the effective requested size violates the provider contract and is rejected before
+	// any item is normalized or filtered, so the exact-match filter cannot hide an already-buffered oversized page.
 	if len(resp.Data.Content) > size {
 		return billing.AccountPage{}, &billing.Error{Reason: billing.ReasonMalformed, Op: op}
 	}

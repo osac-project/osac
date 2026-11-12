@@ -1952,13 +1952,9 @@ override; publish the required templates to Fulfillment separately.
 
 - OpenShift Virtualization is installed.
 - LVM Storage is installed, or another dynamic storage class exists.
-  The OSAC chart does not install a CSI driver. CSI responsibility and timing
-  depend on the selected [ownership model](../../storage/README.md#how-to-read-these-documents)
-  and provider: [OSAC-managed](../../storage/ownership/osac-managed.md)
-  VAST automation installs and operates CSI during tenant provisioning;
-  other integrations may require external preparation. Follow the selected
-  provider's requirements rather than assuming CSI must precede OSAC
-  installation.
+  For storage prerequisites and tenant onboarding, see the
+  [Storage documentation](../../storage/README.md) for your selected provider
+  and ownership model.
 - With provider networking enabled, you have the provider's Fabric Manager,
   with `evpn` in the `network_types` of its registration.
 - With provider networking enabled, you completed

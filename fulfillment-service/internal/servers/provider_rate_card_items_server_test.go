@@ -16,11 +16,13 @@ package servers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -68,6 +70,42 @@ var _ = Describe("Provider rate card items server", func() {
 		_, err := NewPrivateProviderRateCardItemsServer().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 		Expect(err).To(MatchError("provider is mandatory"))
 	})
+
+	It("keeps the compiled-in cache TTLs when none are configured", func() {
+		private, err := NewPrivateProviderRateCardItemsServer().
+			SetLogger(logger).SetProvider(billingfake.New(widgetScenario()).Provider()).SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(private.rateCardCache.ttl).To(Equal(300 * time.Second))
+		Expect(private.rateCardCache.fillBudget).To(Equal(120 * time.Second))
+		Expect(private.inventoryCache.ttl).To(Equal(30 * time.Second))
+		Expect(private.inventoryCache.fillBudget).To(Equal(15 * time.Second))
+	})
+
+	It("uses the configured cache TTLs", func() {
+		private, err := NewPrivateProviderRateCardItemsServer().
+			SetLogger(logger).SetProvider(billingfake.New(widgetScenario()).Provider()).SetTenancyLogic(tenancy).
+			SetRateCardCacheTTL(40 * time.Second).SetInventoryCacheTTL(8 * time.Second).Build()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(private.rateCardCache.ttl).To(Equal(40 * time.Second))
+		Expect(private.rateCardCache.fillBudget).To(Equal(20 * time.Second))
+		Expect(private.inventoryCache.ttl).To(Equal(8 * time.Second))
+		Expect(private.inventoryCache.fillBudget).To(Equal(4 * time.Second))
+	})
+
+	DescribeTable("Fails if a cache TTL is not positive",
+		func(ttl time.Duration, inventoryTTL time.Duration, want string) {
+			server, err := NewPrivateProviderRateCardItemsServer().
+				SetLogger(logger).SetProvider(billingfake.New(widgetScenario()).Provider()).SetTenancyLogic(tenancy).
+				SetRateCardCacheTTL(ttl).SetInventoryCacheTTL(inventoryTTL).Build()
+			Expect(err).To(MatchError(want))
+			Expect(server).To(BeNil())
+		},
+		Entry("zero rate-card TTL", time.Duration(0), 30*time.Second, "cache TTL must be positive"),
+		Entry("negative rate-card TTL", -time.Second, 30*time.Second, "cache TTL must be positive"),
+		Entry("zero inventory TTL", 300*time.Second, time.Duration(0), "inventory cache TTL must be positive"),
+		Entry("negative inventory TTL", 300*time.Second, -time.Second, "inventory cache TTL must be positive"),
+	)
 
 	It("fails with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED and makes no provider call when billing is off", func() {
 		fake := billingfake.New(widgetScenario())
@@ -130,7 +168,7 @@ var _ = Describe("Provider rate card items server", func() {
 		Expect(item.GetCatalogItemMatches()).To(BeEmpty())
 
 		// Never a provider rule id, rate-card id, service id or native account id: the whole message has no such
-		// field to carry one (AC7), so a reflective round trip through the wire type is itself the proof.
+		// field to carry one, so a reflective round trip through the wire type is itself the proof.
 		Expect(proto.Equal(item, &publicv1.ProviderRateCardItem{
 			Service: "widget_service", CurrencyCode: "USD",
 			ResourceConditions: item.GetResourceConditions(), Rate: item.GetRate(),
@@ -270,6 +308,9 @@ var _ = Describe("Provider rate card items server", func() {
 		st, ok := status.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(st.Code()).To(Equal(codes.Unavailable))
+		Expect(st.Message()).To(Equal("billing provider is unavailable"))
+		Expect(st.Details()).To(HaveLen(1))
+		Expect(st.Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal(string(billing.ReasonTimeout)))
 	})
 
 	It("paginates the in-memory row list using offset and limit", func() {

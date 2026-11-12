@@ -20,20 +20,20 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/billing/pricing"
 )
 
-// rateCardCacheTTL is how long one successful provider read of a service's rate card is reused before the next List
-// re-reads it. This is a local server constant; no chart value or environment variable configures it today.
-// Configurable cache tuning is follow-up work under OSAC-6894.
-const rateCardCacheTTL = 5 * time.Minute
-
-// rateCardCacheFillBudget bounds how long one detached provider read may keep running after every List that waited
-// on it has stopped. It is sized for the resolver's per-attempt 10s timeout, its retries, and its pagination across
-// the provider's services, priceable attributes and rate cards, and it stays well below the 5m rateCardCacheTTL.
-// OSAC-6894 owns future tuning.
-const rateCardCacheFillBudget = 120 * time.Second
+// rateCardCacheDefaultTTL is how long one successful provider read of a service's rate card is reused before the next
+// List re-reads it, when the deployment sets no TTL for the rate-card cache. The command package resolves the
+// configured value from the chart's service.tuning.cache.rateCardSeconds and its shared default, and passes it to
+// newRateCardCache.
+const rateCardCacheDefaultTTL = 5 * time.Minute
 
 // rateCardCacheMaxEntries bounds the cache. Keys come from request parameters (service, currency), so without a
 // bound a client cycling through arbitrary names could grow it without limit.
 const rateCardCacheMaxEntries = 1024
+
+// rateCardCacheFillBudget caps how long one detached provider read may run. newTTLCache clamps it to at most half the
+// configured TTL, so a deployment TTL below 240s shrinks it to ttl/2 and a fill that completes within budget is never
+// born expired.
+const rateCardCacheFillBudget = 120 * time.Second
 
 // rateCardKey identifies one provider read: the OSAC service name and the currency its rate card is read in.
 type rateCardKey struct {
@@ -48,11 +48,12 @@ type rateCardEntry struct {
 	skipped map[string]int
 }
 
-// newRateCardCache builds the rate-card cache over the shared ttlCache skeleton, with the default TTL, fill budget,
-// and capacity.
-func newRateCardCache() *ttlCache[rateCardKey, rateCardEntry] {
-	return newTTLCache[rateCardKey, rateCardEntry](rateCardCacheTTL, rateCardCacheFillBudget, rateCardCacheMaxEntries,
-		flightKey)
+// newRateCardCache builds the rate-card cache over the shared ttlCache skeleton for a TTL configured through the
+// service's chart values and environment, with the fixed capacity. The fill budget is a fixed 120s cap that
+// newTTLCache clamps to at most half the configured TTL, so a deployment TTL below 240s shrinks it and a fill that
+// completes within budget is never born expired.
+func newRateCardCache(ttl time.Duration) *ttlCache[rateCardKey, rateCardEntry] {
+	return newTTLCache[rateCardKey, rateCardEntry](ttl, rateCardCacheFillBudget, rateCardCacheMaxEntries, flightKey)
 }
 
 // flightKey encodes key as an injective singleflight string: %q escapes any character that could otherwise let two

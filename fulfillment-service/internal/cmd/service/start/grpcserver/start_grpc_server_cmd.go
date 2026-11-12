@@ -700,6 +700,14 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	// Resolve the billing provider once; this makes no provider call:
 	billingProvider := newBillingProvider(os.Getenv, os.ReadFile, c.logger)
 
+	// Resolve the catalog cache tuning once. The catalog inventory cache serves CatalogPricingInputs.List without a
+	// billing provider, so this is deliberately not part of the billing settings:
+	cacheTTLs := resolveCatalogCacheTTLs(os.Getenv, c.logger)
+	c.logger.InfoContext(ctx, "Catalog cache tuning",
+		slog.Duration("inventory", cacheTTLs.inventory),
+		slog.Duration("rate_card", cacheTTLs.rateCard),
+	)
+
 	// Create the billing provider statuses servers:
 	c.logger.InfoContext(ctx, "Creating billing provider statuses servers")
 	privateBillingProviderStatusesServer, err := servers.NewPrivateBillingProviderStatusesServer().
@@ -729,6 +737,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetLogger(c.logger).
 		SetTenancyLogic(tenancyLogic).
 		SetMetricsRegisterer(metricsRegisterer).
+		SetCacheTTL(cacheTTLs.inventory).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create private catalog pricing inputs server: %w", err)
@@ -756,6 +765,8 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetProvider(billingProvider).
 		SetTenancyLogic(tenancyLogic).
 		SetMetricsRegisterer(metricsRegisterer).
+		SetRateCardCacheTTL(cacheTTLs.rateCard).
+		SetInventoryCacheTTL(cacheTTLs.inventory).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create private provider rate card items server: %w", err)

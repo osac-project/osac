@@ -32,13 +32,14 @@ import (
 // A caller's wait and the fill it triggers have separate lifetimes. A caller that cancels, or whose deadline passes,
 // stops waiting and gets its own context error, while the fill keeps running detached from every caller's
 // cancellation for at most the fill budget, so the callers still waiting — and later gets — still receive the value.
-// A panicking fill is contained and reported to every waiter as an ordinary failed load instead of crashing the
-// process.
+// newTTLCache clamps the fill budget to at most half the TTL, so a fill that completes within its budget is never
+// born expired. A panicking fill is contained and reported to every waiter as an ordinary failed load instead of
+// crashing the process.
 type ttlCache[K comparable, V any] struct {
 	ttl time.Duration
 	// fillBudget bounds how long one fill may run once it has been detached from every caller: the fill context
-	// carries this deadline instead of any caller's. It must stay below the TTL so a fill that completes within
-	// its budget is not born expired.
+	// carries this deadline instead of any caller's. newTTLCache clamps it to at most half the TTL, so a fill that
+	// completes within its budget still leaves at least half the TTL for the entry to be served.
 	fillBudget time.Duration
 	// maxEntries bounds the cache; keys that can come from request parameters would otherwise grow it without limit.
 	maxEntries int
@@ -58,17 +59,38 @@ type ttlEntry[V any] struct {
 }
 
 // newTTLCache builds a cache with the default clock. fillBudget bounds a fill that has been detached from every
-// caller and must stay below ttl, so a fill that completes within its budget is not already expired when stored.
+// caller; it is clamped to at most half of ttl, so a fill that completes within its budget is not already expired
+// when stored and the entry still has at least half its TTL left to be served.
 func newTTLCache[K comparable, V any](ttl, fillBudget time.Duration, maxEntries int,
 	keyString func(K) string) *ttlCache[K, V] {
 	return &ttlCache[K, V]{
 		ttl:        ttl,
-		fillBudget: fillBudget,
+		fillBudget: clampFillBudget(ttl, fillBudget),
 		maxEntries: maxEntries,
 		keyString:  keyString,
 		now:        time.Now,
 		entries:    map[K]ttlEntry[V]{},
 	}
+}
+
+// clampFillBudget enforces the invariant that a fill budget stays below the cache TTL, so a fill can never consume
+// the lifetime of the entry it stores. The bound is half the TTL, which leaves the other half for serving the entry.
+// A TTL shorter than two nanoseconds has no representable half, so the TTL itself, the closest positive bound,
+// applies. A non-positive requested budget yields that positive bound, so a fill always has a positive budget when
+// the TTL is positive. A non-positive TTL makes every entry expired as soon as it is stored, so the requested budget
+// is kept unchanged there.
+func clampFillBudget(ttl, fillBudget time.Duration) time.Duration {
+	limit := ttl / 2
+	if ttl > 0 && limit <= 0 {
+		limit = ttl
+	}
+	if limit <= 0 {
+		return fillBudget
+	}
+	if fillBudget <= 0 {
+		return limit
+	}
+	return min(fillBudget, limit)
 }
 
 // get returns the cached value for key, loading it through load on a miss. Every concurrent caller of one key shares

@@ -332,6 +332,70 @@ var _ = Describe("Billing TTL cache", func() {
 		Expect(loads.Load()).To(Equal(int32(2)))
 	})
 
+	It("clamps a fill budget larger than half the TTL", func() {
+		cache := newTTLCache[string, int](time.Minute, time.Hour, 8, func(key string) string { return key })
+		Expect(cache.fillBudget).To(Equal(30 * time.Second))
+		var remaining time.Duration
+		value, err := cache.get(context.Background(), "key", func(ctx context.Context) (int, error) {
+			deadline, ok := ctx.Deadline()
+			Expect(ok).To(BeTrue())
+			remaining = time.Until(deadline)
+			return 7, nil
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(7))
+		Expect(remaining).To(BeNumerically("<=", 30*time.Second))
+		Expect(remaining).To(BeNumerically(">", 20*time.Second),
+			"the fill must carry the clamped budget, not the caller's hour")
+	})
+
+	It("serves a fill that runs past the clamp instead of storing a born-expired entry", func() {
+		cache := newTTLCache[string, int](time.Minute, time.Hour, 8, func(key string) string { return key })
+		current := time.Unix(0, 0)
+		cache.now = func() time.Time { return current }
+		loads := 0
+		load := func(context.Context) (int, error) {
+			loads++
+			// The fill takes well past the clamped 30s budget, but less than the TTL.
+			current = current.Add(45 * time.Second)
+			return 7, nil
+		}
+		value, err := cache.get(context.Background(), "key", load)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(7))
+		_, cached := cache.snapshot("key")
+		Expect(cached).To(BeTrue(), "a fill past the clamp must not store an already expired entry")
+		value, err = cache.get(context.Background(), "key", load)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(7))
+		Expect(loads).To(Equal(1), "the entry must serve for the full TTL measured from the store")
+		current = current.Add(time.Minute)
+		_, err = cache.get(context.Background(), "key", load)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(loads).To(Equal(2))
+	})
+
+	It("keeps a fill budget below the clamp unchanged", func() {
+		cache := newTTLCache[string, int](time.Minute, 10*time.Second, 8, func(key string) string { return key })
+		Expect(cache.fillBudget).To(Equal(10 * time.Second))
+	})
+
+	It("keeps a positive budget for a TTL too short to halve", func() {
+		cache := newTTLCache[string, int](time.Nanosecond, time.Hour, 8, func(key string) string { return key })
+		Expect(cache.fillBudget).To(Equal(time.Nanosecond))
+	})
+
+	It("replaces a zero requested budget with the positive limit", func() {
+		cache := newTTLCache[string, int](time.Minute, 0, 8, func(key string) string { return key })
+		Expect(cache.fillBudget).To(Equal(30 * time.Second))
+	})
+
+	It("keeps the requested budget when the TTL is not positive", func() {
+		cache := newTTLCache[string, int](0, 10*time.Second, 8, func(key string) string { return key })
+		Expect(cache.fillBudget).To(Equal(10*time.Second),
+			"a non-positive TTL expires every entry on store, so the requested budget is unchanged")
+	})
+
 	It("returns a fill panic as an error and caches nothing", func() {
 		cache, _ := newTestCache(8)
 		var loads atomic.Int32

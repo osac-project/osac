@@ -1038,6 +1038,41 @@
           },
           "additionalProperties": false
         },
+        "tuning": {
+          "type": "object",
+          "description": "Catalog pricing cache tuning for the fulfillment service; applies with or without an external pricing provider",
+          "properties": {
+            "cache": {
+              "type": "object",
+              "description": "Refresh intervals for the catalog-pricing caches, in seconds. defaultSeconds is the shared interval; inventorySeconds and rateCardSeconds are overrides that inherit it when cleared",
+              "properties": {
+                "defaultSeconds": {
+                  "type": "integer",
+                  "description": "Shared refresh interval, and the interval every catalog-pricing cache inherits when its own override is cleared",
+                  "minimum": 1,
+                  "maximum": 86400,
+                  "default": 300
+                },
+                "inventorySeconds": {
+                  "type": ["integer", "null"],
+                  "description": "Override of defaultSeconds for the metered catalog inventory behind CatalogPricingInputs.List. The shipped 30 keeps the admin gap-check view fresh; null or unset inherits defaultSeconds",
+                  "minimum": 1,
+                  "maximum": 86400,
+                  "default": 30
+                },
+                "rateCardSeconds": {
+                  "type": ["integer", "null"],
+                  "description": "Override of defaultSeconds for the priced rate card items of one provider. Shipped equal to defaultSeconds; null or unset inherits defaultSeconds",
+                  "minimum": 1,
+                  "maximum": 86400,
+                  "default": 300
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "vault": {
           "type": "object",
           "description": "Vault-compatible secret store configuration",

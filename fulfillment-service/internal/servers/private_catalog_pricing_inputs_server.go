@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -45,6 +46,9 @@ type PrivateCatalogPricingInputsServerBuilder struct {
 	logger            *slog.Logger
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	// cacheTTL overrides catalogInventoryCacheDefaultTTL. It is nil when the deployment configures no inventory
+	// cache TTL.
+	cacheTTL *time.Duration
 }
 
 var _ privatev1.CatalogPricingInputsServer = (*PrivateCatalogPricingInputsServer)(nil)
@@ -84,7 +88,14 @@ func (b *PrivateCatalogPricingInputsServerBuilder) SetMetricsRegisterer(value pr
 	return b
 }
 
-// Build fails when the logger or tenancy logic is missing.
+// SetCacheTTL sets how long the inventory cache reuses one sweep of both catalog tables. It is optional: an unset
+// value keeps catalogInventoryCacheDefaultTTL, and a non-positive value makes Build fail.
+func (b *PrivateCatalogPricingInputsServerBuilder) SetCacheTTL(value time.Duration) *PrivateCatalogPricingInputsServerBuilder {
+	b.cacheTTL = &value
+	return b
+}
+
+// Build fails when the logger or tenancy logic is missing, or when a configured cache TTL is not positive.
 func (b *PrivateCatalogPricingInputsServerBuilder) Build() (result *PrivateCatalogPricingInputsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -93,6 +104,14 @@ func (b *PrivateCatalogPricingInputsServerBuilder) Build() (result *PrivateCatal
 	if b.tenancyLogic == nil {
 		err = errors.New("tenancy logic is mandatory")
 		return
+	}
+	cacheTTL := catalogInventoryCacheDefaultTTL
+	if b.cacheTTL != nil {
+		if *b.cacheTTL <= 0 {
+			err = errors.New("cache TTL must be positive")
+			return
+		}
+		cacheTTL = *b.cacheTTL
 	}
 	computeInstanceCatalogItemsDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceCatalogItem]().
 		SetLogger(b.logger).
@@ -113,7 +132,7 @@ func (b *PrivateCatalogPricingInputsServerBuilder) Build() (result *PrivateCatal
 	result = &PrivateCatalogPricingInputsServer{
 		computeInstanceCatalogItemsDao: computeInstanceCatalogItemsDao,
 		clusterCatalogItemsDao:         clusterCatalogItemsDao,
-		inventoryCache:                 newCatalogInventoryCache(),
+		inventoryCache:                 newCatalogInventoryCache(cacheTTL),
 	}
 	return
 }

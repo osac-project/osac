@@ -33,6 +33,17 @@ specific language governing permissions and limitations under the License.
 {{- if hasKey $billingBreaker "failureWindowSeconds" }}{{- $billingWindow = $billingBreaker.failureWindowSeconds }}{{- end }}
 {{- $billingOpen := 30 }}
 {{- if hasKey $billingBreaker "openSeconds" }}{{- $billingOpen = $billingBreaker.openSeconds }}{{- end }}
+{{- $serviceTuning := index .Values "tuning" | default dict }}
+{{- $cacheTuning := index $serviceTuning "cache" | default dict }}
+{{- /* The catalog-pricing caches serve requests with or without a pricing provider, so these values are not gated by
+       $billingProvider. Only defaultSeconds is a chart value; the per-cache leaves are optional overrides that inherit
+       it. An absent override, or one cleared to null, must resolve to the shared default rather than to a literal. */}}
+{{- $cacheDefault := 300 }}
+{{- if hasKey $cacheTuning "defaultSeconds" }}{{- $cacheDefault = $cacheTuning.defaultSeconds }}{{- end }}
+{{- $cacheInventory := $cacheDefault }}
+{{- if and (hasKey $cacheTuning "inventorySeconds") (not (kindIs "invalid" $cacheTuning.inventorySeconds)) }}{{- $cacheInventory = $cacheTuning.inventorySeconds }}{{- end }}
+{{- $cacheRateCard := $cacheDefault }}
+{{- if and (hasKey $cacheTuning "rateCardSeconds") (not (kindIs "invalid" $cacheTuning.rateCardSeconds)) }}{{- $cacheRateCard = $cacheTuning.rateCardSeconds }}{{- end }}
 
 apiVersion: apps/v1
 kind: Deployment
@@ -258,9 +269,15 @@ spec:
         - --vault-keycloak-issuer-url={{ $vaultIssuerURL }}
         - --vault-keycloak-client-id={{ $vaultClientID }}
         - --vault-keycloak-client-secret-file=/etc/fulfillment-grpc-server/vault/client-secret
-        {{- if $billingProvider }}
-        # OSAC_BILLING_* contract: see docs/testing/fulfillment-service.md.
         env:
+        - name: OSAC_CATALOG_CACHE_DEFAULT_SECONDS
+          value: {{ $cacheDefault | int64 | quote }}
+        - name: OSAC_CATALOG_CACHE_INVENTORY_SECONDS
+          value: {{ $cacheInventory | int64 | quote }}
+        - name: OSAC_CATALOG_CACHE_RATE_CARD_SECONDS
+          value: {{ $cacheRateCard | int64 | quote }}
+        {{- if $billingProvider }}
+        # OSAC_BILLING_* contract: see docs/guides/admin/metering-and-billing.md.
         - name: OSAC_BILLING_PROVIDER
           value: {{ $billingProvider.key | quote }}
         - name: OSAC_BILLING_BASE_URL

@@ -95,8 +95,11 @@ class TestNetworkingReferences:
         name = f"ref-disabled-eip-{pool_selector}-{ref_test_run_id}"
 
         def snapshot() -> tuple[set[str], tuple[int, int]]:
-            """Read actual private allocation IDs and pool counters, propagating read failures."""
-            ids = {item["id"] for item in private_grpc.list_private_external_ips()}
+            """Read the fixture pool's allocation IDs and counters, propagating read failures."""
+            stored = private_grpc.call(
+                service=f"{PRIVATE_API}.ExternalIPs/List", data={"filter": f'this.spec.pool.id == "{pool["id"]}"'}
+            )
+            ids = {item["id"] for item in stored.get("items", [])}
             status = private_grpc.get_external_ip_pool(pool_id=pool["id"])["object"]["status"]
             return ids, (int(status.get("allocated", 0)), int(status.get("available", 0)))
 

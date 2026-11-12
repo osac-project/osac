@@ -50,8 +50,8 @@ type ProviderRateCardItemsListRequest struct {
 	// Reserved for tenant-to-account assignment support in OSAC-6871. Any nonempty value currently returns
 	// UNIMPLEMENTED; OSAC tenant identifiers are never treated as provider account correlation values.
 	TenantId *string `protobuf:"bytes,5,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`
-	// Exact provider service name. Omission includes every mapped OSAC service (compute_instance and cluster),
-	// even when the catalog inventory is empty. An unknown service returns no rows.
+	// OSAC service name; matched to the provider service of the same name. Omit to list compute_instance and
+	// cluster. An unknown service returns no rows.
 	Service *string `protobuf:"bytes,6,opt,name=service,proto3,oneof" json:"service,omitempty"`
 	// Required three-character ISO-4217 currency code. Callers supply the currency; this method does not resolve
 	// it from an account or discover it from the provider.
@@ -253,8 +253,8 @@ type ProviderRateCardItemsListRequest_builder struct {
 	// Reserved for tenant-to-account assignment support in OSAC-6871. Any nonempty value currently returns
 	// UNIMPLEMENTED; OSAC tenant identifiers are never treated as provider account correlation values.
 	TenantId *string
-	// Exact provider service name. Omission includes every mapped OSAC service (compute_instance and cluster),
-	// even when the catalog inventory is empty. An unknown service returns no rows.
+	// OSAC service name; matched to the provider service of the same name. Omit to list compute_instance and
+	// cluster. An unknown service returns no rows.
 	Service *string
 	// Required three-character ISO-4217 currency code. Callers supply the currency; this method does not resolve
 	// it from an account or discover it from the provider.

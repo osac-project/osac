@@ -757,8 +757,8 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 
-	// 3) Reboot so the OS re-DHCPs on the tenant network (single default route).
-	result, rbErr := r.reconcileNetworkHandoffReboot(ctx, bareMetalInstance)
+	// 3) Power-cycle so the OS re-DHCPs on the tenant network (single default route).
+	result, rbErr := r.reconcileNetworkHandoffPowerCycle(ctx, bareMetalInstance)
 	if rbErr != nil {
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 		return result, rbErr
@@ -766,6 +766,11 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 	if !result.IsZero() {
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return result, nil
+	}
+	handoffCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+	if handoffCond != nil && handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return ctrl.Result{}, nil
 	}
 
 	// 4) Discover the tenant-network DHCP lease (only after handoff reboot).
@@ -780,7 +785,8 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 	}
 	ipCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
 	if ipCond == nil || ipCond.Status != metav1.ConditionTrue {
-		if ipCond != nil && ipCond.Reason == v1alpha1.HostConditionReasonTemplateFailed {
+		if ipCond != nil && (ipCond.Reason == v1alpha1.HostConditionReasonTemplateFailed ||
+			ipCond.Reason == v1alpha1.HostConditionReasonIPDiscoveryFailed) {
 			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 			return ctrl.Result{}, nil
 		}
@@ -881,10 +887,12 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 	return result, nil
 }
 
-// reconcileNetworkHandoffReboot reboots the host once after its fabric port has
-// been moved to the tenant network, so the OS re-DHCPs on the tenant network. It is
-// idempotent: it runs only until HostConditionNetworkHandoffComplete is True.
-func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
+const networkHandoffTimeout = 15 * time.Minute
+
+// reconcileNetworkHandoffPowerCycle powers the host off and back on after its
+// port moves to the tenant network. Both steps are persisted in the handoff
+// condition and complete only after a matching, non-transitioning observation.
+func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -897,66 +905,101 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffReboot(
 	}
 
 	handoffCond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-
-	// Already complete — no-op
 	if handoffCond != nil && handoffCond.Status == metav1.ConditionTrue {
 		return ctrl.Result{}, nil
 	}
-
-	// Reboot already triggered (condition exists but is not True) — poll for completion
-	if handoffCond != nil {
-		completed, err := r.ManagementClient.IsRestartComplete(ctx, bmi.Spec.ExternalHostID)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if completed {
-			// A reboot we previously triggered has finished.
-			bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-				metav1.ConditionTrue, "Succeeded", "Host rebooted onto the tenant network")
-			return ctrl.Result{}, nil
-		}
-		// Still rebooting, keep polling
-		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
-	}
-
-	// Condition doesn't exist yet — check power state before deciding to trigger.
-	// A reboot only helps an already-running OS re-DHCP; an off host will boot fresh
-	// on the tenant network when reconcilePower next powers it on, so no reboot is needed.
-	powerStatus, err := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if powerStatus == nil {
-		return ctrl.Result{}, fmt.Errorf("management backend returned nil power status for host %s", bmi.Spec.ExternalHostID)
-	}
-
-	if powerStatus.IsTransitioning {
-		// Power state is transitioning, requeue without triggering
-		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
-	}
-
-	if powerStatus.State == management.PowerOff {
-		// Host is powered off — skip reboot. It will boot fresh on the tenant network
-		// when reconcilePower next powers it on (if RunStrategy=Always).
-		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionTrue, "SkippedPoweredOff",
-			"Host powered off; will DHCP on the tenant network at next power-on")
-		log.Info("Skipped network-handoff reboot for powered-off host", "host", bmi.Spec.ExternalHostID)
+	if handoffCond != nil && handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
 		return ctrl.Result{}, nil
 	}
 
-	// Host is powered on — trigger the handoff reboot (exactly once)
-	if err := r.ManagementClient.TriggerRestart(ctx, bmi.Spec.ExternalHostID); err != nil {
-		if errors.Is(err, management.ErrTransitioning) {
+	if handoffCond == nil || handoffCond.Status != metav1.ConditionFalse ||
+		(handoffCond.Reason != v1alpha1.HostConditionReasonPoweringOff &&
+			handoffCond.Reason != v1alpha1.HostConditionReasonPoweringOn) {
+		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOff,
+			"Starting the network handoff power cycle")
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	}
+
+	target := management.PowerOff
+	stepReason := v1alpha1.HostConditionReasonPoweringOff
+	if handoffCond.Reason == v1alpha1.HostConditionReasonPoweringOn {
+		target = management.PowerOn
+		stepReason = v1alpha1.HostConditionReasonPoweringOn
+	}
+
+	if r.ManagementClient == nil {
+		r.failNetworkHandoff(bmi, "management client is not configured")
+		return ctrl.Result{}, nil
+	}
+
+	setErr := r.ManagementClient.SetPowerState(ctx, bmi.Spec.ExternalHostID, target)
+	if setErr != nil && !errors.Is(setErr, management.ErrTransitioning) {
+		r.failNetworkHandoff(bmi, fmt.Sprintf("SetPowerState(%s) failed: %v", target, setErr))
+		return ctrl.Result{}, nil
+	}
+
+	powerStatus, getErr := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
+	if getErr == nil && powerStatus != nil && !powerStatus.IsTransitioning && powerStatus.State == target {
+		if target == management.PowerOff {
+			bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+				metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOn,
+				"Host is off; waiting to confirm power on")
 			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 		}
-		return ctrl.Result{}, err
+		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+			metav1.ConditionTrue, "Succeeded", "Host power cycle onto the tenant network completed")
+		return ctrl.Result{}, nil
 	}
-	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-		metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
-		"Rebooting host onto the tenant network")
-	log.Info("Triggered network-handoff reboot", "host", bmi.Spec.ExternalHostID)
+
+	deadline := networkHandoffDeadline(bmi, handoffCond)
+	if !deadline.IsZero() && !time.Now().Before(deadline) {
+		diagnostic := fmt.Sprintf("handoff did not observe %s within 15 minutes", target)
+		if getErr != nil {
+			diagnostic += fmt.Sprintf(": GetPowerState failed: %v", getErr)
+		} else if powerStatus == nil {
+			diagnostic += ": management backend returned no power status"
+		} else {
+			diagnostic += fmt.Sprintf(": observed %s transitioning=%t", powerStatus.State, powerStatus.IsTransitioning)
+		}
+		r.failNetworkHandoff(bmi, diagnostic)
+		return ctrl.Result{}, nil
+	}
+
+	message := fmt.Sprintf("Waiting to observe host power state %s", target)
+	if errors.Is(setErr, management.ErrTransitioning) {
+		message = "Management backend reports a power transition in progress"
+	}
+	if getErr != nil {
+		message = fmt.Sprintf("GetPowerState failed while waiting for %s: %v", target, getErr)
+	} else if powerStatus == nil {
+		message = "Management backend returned no power status"
+	} else if powerStatus.IsTransitioning {
+		message = fmt.Sprintf("Host is transitioning; waiting for %s", target)
+	} else if powerStatus.State != target {
+		message = fmt.Sprintf("Waiting for %s; observed %s", target, powerStatus.State)
+	}
+	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete, metav1.ConditionFalse, stepReason, message)
+	log.V(1).Info("Network handoff power step is pending", "host", bmi.Spec.ExternalHostID, "target", target)
 	return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+}
+
+func networkHandoffDeadline(bmi *v1alpha1.BareMetalInstance, handoffCond *metav1.Condition) time.Time {
+	readyCond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+	if readyCond != nil && !readyCond.LastTransitionTime.IsZero() {
+		return readyCond.LastTransitionTime.Add(networkHandoffTimeout)
+	}
+	if handoffCond != nil && !handoffCond.LastTransitionTime.IsZero() {
+		return handoffCond.LastTransitionTime.Add(networkHandoffTimeout)
+	}
+	return time.Time{}
+}
+
+func (r *BareMetalInstanceReconciler) failNetworkHandoff(bmi *v1alpha1.BareMetalInstance, diagnostic string) {
+	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete, metav1.ConditionFalse,
+		v1alpha1.HostConditionReasonNetworkHandoffFailed, diagnostic)
+	r.recordBMIEvent(bmi, corev1.EventTypeWarning, v1alpha1.HostConditionReasonNetworkHandoffFailed, diagnostic)
 }
 
 // reconcileNetworkOffboardShutdown powers off the host during deletion BEFORE

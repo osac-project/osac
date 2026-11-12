@@ -41,6 +41,17 @@
 #     2.0, requiring the swagger2openapi conversion below, and it ignores google.api.field_behavior,
 #     so output-only and immutable semantics stay in the provider glue.
 #
+#   github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv3
+#     The successor of the plugin above, emitting OpenAPI 3.1 directly with the same correct
+#     `body` and `response_body` handling, string enums and field behavior mapping (OUTPUT_ONLY
+#     to readOnly). Rejected for now for three reasons: it is alpha, with the emitted JSON shape
+#     explicitly not stable yet; it emits the protojson camelCase property names with no option
+#     for the original proto names, which would both break the snake_case Terraform idiom and
+#     desynchronize the schema from the wire format the gateway marshals; and it represents
+#     proto oneofs as OpenAPI oneOf composition, which tfplugingen-openapi doesn't support, so
+#     the whole resource schema is skipped. Worth revisiting once it grows a proto names option
+#     and the mapping of composed schemas.
+#
 # Usage:
 #
 #   ./generate.sh <service>

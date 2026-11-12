@@ -950,7 +950,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		Expect(bmi.GetSpec().GetTemplate().GetTenant()).To(Equal("shared"))
 		Expect(bmi.GetSpec().GetTemplate().GetShared()).To(BeFalse())
 		Expect(bmi.GetSpec().GetInstanceType().GetTenant()).To(Equal("shared"))
-		Expect(bmi.GetSpec().GetInstanceType().GetShared()).To(BeFalse())
+		Expect(bmi.GetSpec().GetInstanceType().GetShared()).To(BeTrue())
 		Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
 	})
 
@@ -978,7 +978,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		Expect(bmi.GetSpec().GetTemplate().GetTenant()).To(Equal("shared"))
 		Expect(bmi.GetSpec().GetTemplate().GetShared()).To(BeFalse())
 		Expect(bmi.GetSpec().GetInstanceType().GetTenant()).To(Equal("shared"))
-		Expect(bmi.GetSpec().GetInstanceType().GetShared()).To(BeFalse())
+		Expect(bmi.GetSpec().GetInstanceType().GetShared()).To(BeTrue())
 		Expect(bmi.GetSpec().GetDiskImage().GetId()).To(Equal(diskImageID))
 		Expect(bmi.GetSpec().GetInstanceType().GetName()).To(Equal("bm-standard"))
 

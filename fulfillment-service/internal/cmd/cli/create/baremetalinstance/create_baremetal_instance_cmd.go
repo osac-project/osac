@@ -214,7 +214,9 @@ func (c *runnerContext) buildSpec(catalogItemID string, externalIPAttachmentSet 
 		spec.DiskImage = &publicv1.DiskImageReference{Name: c.args.diskImage}
 	}
 	if c.args.instanceType != "" {
-		spec.InstanceType = &publicv1.BareMetalInstanceTypeReference{Name: c.args.instanceType, Tenant: auth.SharedTenant}
+		spec.InstanceType = &publicv1.BareMetalInstanceTypeReference{
+			Name: c.args.instanceType, Tenant: auth.SharedTenant, Shared: true,
+		}
 	}
 	if c.args.runStrategy != "" {
 		rs, err := fieldutil.ParseEnum(c.args.runStrategy, runStrategyMap, "run-strategy")

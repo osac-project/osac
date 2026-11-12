@@ -225,6 +225,30 @@ class ValidationDiagnosticsTests(unittest.TestCase):
             "evpn.nodes: duplicate node name at index 2", result.stderr)
         self.assertNotIn("index 9", result.stderr)
 
+    def test_offline_render_error_ignores_caller_words_in_evpn_phrase(self):
+        """Check caller words between the EVPN phrases are never echoed."""
+        # Only letters and spaces are used here: that is the span the old
+        # wildcard pattern accepted, so this canary is reachable through it.
+        caller = "".join(
+            secrets.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(16))
+        message = (
+            "Error: failed parsing --set-file data: open "
+            f"/srv/evpn.nodes: duplicate {caller} index 1: "
+            "no such file or directory\n"
+        )
+        result = subprocess.run(
+            ["bash", "-c", 'source "$1"; offline_render_error "$2"',
+             "bash", str(INSTALLER / "scripts/lib.sh"), message],
+            text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assert_private(result.stdout + result.stderr)
+        self.assertIn("offline chart rendering failed", result.stderr)
+        # A span between "duplicate" and "index" is caller text, not one of
+        # the chart's three fixed phrases, so nothing may be printed for it.
+        self.assertNotIn(caller, result.stdout + result.stderr)
+        self.assertNotIn("evpn.nodes: duplicate", result.stderr)
+
     def test_offline_render_error_ignores_embedded_location(self):
         """Check a path-shaped token in the message is never printed."""
         message = (

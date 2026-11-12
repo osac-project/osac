@@ -552,12 +552,15 @@ offline_render_error() {
         # The EVPN duplicate checks name the rejected entry by its index
         # and never by its node name or addresses, so their fail text is
         # chart-authored and value-free. Echo only the matched phrase, so
-        # caller text on the same error line cannot reach the output.
+        # caller text on the same error line cannot reach the output. The
+        # phrase set is the chart's three fixed messages: a wildcard span
+        # between "duplicate" and "index" would echo any words a caller
+        # placed there, such as a --set-file path fragment.
         *"evpn.nodes: duplicate"*)
             printf '%s\n' "$1" | LC_ALL=C awk '
                 !seen && /^Error: / {
                     seen = 1
-                    if (match($0, /evpn\.nodes: duplicate [A-Za-z ]+index [0-9]+/))
+                    if (match($0, /evpn\.nodes: duplicate (node name at|vtepIP at|peerAddress in uplinks of node) index [0-9]+/))
                         print substr($0, RSTART, RLENGTH)
                     next
                 }' >&2 ;;

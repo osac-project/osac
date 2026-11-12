@@ -46,11 +46,9 @@ func Validate(format string) error {
 	return nil
 }
 
-// Render writes message to console as JSON or YAML per format, encoding through protojson with proto field
-// names. The table format is the caller's: every command owns its table renderer and dispatches Table itself,
-// so Render only sees Json or Yaml. label names the entity in encoding error messages. The console's render
-// methods log write failures but do not return them, so a broken output stream goes unreported here; a shared
-// error-returning output contract is separate work.
+// Render writes message to console as JSON or YAML per format, encoding through protojson with proto field names.
+// Table rendering belongs to the caller. label names the entity in encoding errors; console write failures are
+// logged but not returned, so a broken output stream goes unreported here.
 func Render(ctx context.Context, console *terminal.Console, format string, label string, message proto.Message) error {
 	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(message)
 	if err != nil {
@@ -68,8 +66,8 @@ func Render(ctx context.Context, console *terminal.Console, format string, label
 	return nil
 }
 
-// Infof writes a message to the console's standard output stream and returns the write error. It exists
-// because the console's Infof method logs write failures but does not return them.
+// Infof writes a message to the console's standard output and returns the write error, which the console's own
+// Infof only logs.
 func Infof(console *terminal.Console, format string, args ...any) error {
 	if _, err := fmt.Fprintf(console, format, args...); err != nil {
 		return fmt.Errorf("failed to write info output: %w", err)

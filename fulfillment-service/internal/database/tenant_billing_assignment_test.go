@@ -79,16 +79,14 @@ var _ = Describe("Tenant billing assignments", func() {
 		return manager
 	}
 
-	// runCommitted runs fn in its own transaction and commits it, so the rows it writes are visible to the
-	// independent transactions the concurrency specs below open afterwards. The shared tx cannot be used for
-	// this: its rows stay uncommitted until its DeferCleanup'd End.
+	// runCommitted runs fn in its own transaction and commits it, so rows are visible to the independent
+	// transactions the concurrency specs open. The shared tx keeps its rows uncommitted until End.
 	runCommitted := func(fn func(tx Tx)) {
 		Expect(newManager().Run(ctx, fn)).To(Succeed())
 	}
 
-	// createCommittedTenant inserts a tenant and commits it, so concurrent transactions can reference it. It
-	// deliberately uses names never inserted by the BeforeEach above: inserting 'tenant-a' here would block
-	// on that transaction's uncommitted tenants primary key entry.
+	// createCommittedTenant inserts and commits a tenant so concurrent transactions can reference it. It uses
+	// names the BeforeEach never inserts, which would otherwise block on its uncommitted primary key entry.
 	createCommittedTenant := func(name string) {
 		runCommitted(func(tx Tx) {
 			_, err := tx.Exec(ctx,
@@ -112,10 +110,8 @@ var _ = Describe("Tenant billing assignments", func() {
 		return id
 	}
 
-	// tryAdvisory reports whether the advisory transaction lock for accountID - the exact key
-	// LockBillingAccountForAssignment takes - can be acquired right now, from a fresh independent
-	// transaction. It observes contention without assuming that the production helper itself waits for a
-	// contended lock.
+	// tryAdvisory reports whether the advisory lock for accountID, the exact key LockBillingAccountForAssignment
+	// takes, can be acquired now from a fresh independent transaction.
 	tryAdvisory := func(accountID string) bool {
 		var acquired bool
 		runCommitted(func(tx Tx) {
@@ -284,14 +280,10 @@ var _ = Describe("Tenant billing assignments", func() {
 	})
 
 	Describe("ListTenantBillingAssignments pagination", func() {
-		// seedHistory inserts count closed assignment intervals for tenant-a and one billing account,
-		// all sharing one effective_from - the append-only history shape the list query pages over.
-		// The rows are written with direct SQL rather than
-		// CloseAndInsertTenantBillingAssignment: that helper can only open one interval at a time and
-		// always stamps a fresh now(), while these specs need many rows that tie on effective_from.
-		// effective_to is set on every row, so the partial unique active-tenant/active-account indexes
-		// are never violated. The zero-padded ids keep Go's string ordering and PostgreSQL's text
-		// collation in agreement, so the expected page sequences are exact.
+		// seedHistory inserts count closed intervals for tenant-a and one billing account, all sharing one
+		// effective_from, the append-only shape the list query pages over. It uses direct SQL because the helper
+		// opens one interval at a time and stamps a fresh now(). Every effective_to is set, so the partial unique
+		// active indexes are never violated, and the zero-padded ids order the same in Go and PostgreSQL.
 		seedHistory := func(count int) []string {
 			account := createAccount("")
 			from := time.Now().UTC().Truncate(time.Second)
@@ -323,8 +315,8 @@ var _ = Describe("Tenant billing assignments", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(total).To(Equal(int32(105)))
 			Expect(first).To(HaveLen(100))
-			// Every row ties on effective_from, so the latest-first default order degenerates to the
-			// ascending-id tie-breaker - an arbitrary within-tie order would make the pages unstable.
+			// Every row ties on effective_from, so the latest-first order degenerates to the ascending-id
+			// tie-breaker.
 			Expect(idsOf(first)).To(Equal(ids[:100]))
 
 			second, total, err := ListTenantBillingAssignments(ctx, tx, 100, 0, "", "")
@@ -417,10 +409,9 @@ var _ = Describe("Tenant billing assignments", func() {
 			Expect(txA.QueryRow(ctx, `select pg_backend_pid()`).Scan(&holderPID)).To(Succeed())
 			Expect(LockBillingAccountForAssignment(ctx, txA, accountA)).To(Succeed())
 
-			// The waiter is an independent transaction on a distinct connection, asking for the same lock
-			// with the blocking primitive the helper is built on. The spec uses the raw SQL rather than
-			// LockBillingAccountForAssignment because that helper is allowed to become fail-fast instead
-			// of waiting.
+			// The waiter is an independent transaction asking for the same lock with the blocking primitive the
+			// helper is built on. Raw SQL is used because LockBillingAccountForAssignment may become fail-fast
+			// instead of waiting.
 			txW, err := manager.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(func() { _ = txW.End(ctx) })
@@ -430,14 +421,10 @@ var _ = Describe("Tenant billing assignments", func() {
 
 			waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			acquired := make(chan error, 1)
-			// DeferCleanup runs LIFO, so this runs before the txW.End cleanup registered above: it cancels
-			// the wait and only then waits for the goroutine to leave Exec. Both parts matter. Cancelling
-			// alone does not release txW's checked-out connection, so a failing assertion below would
-			// leave it held and the suite's pool.Close would block forever; and ending txW before the
-			// goroutine has left Exec would use the transaction concurrently, which it does not support.
-			// Receiving is safe on every path because the goroutine sends exactly once into a buffered
-			// channel and then closes it, so a receive after the success path's own receive returns
-			// immediately from the closed channel.
+			// DeferCleanup runs LIFO, so this runs before txW.End: cancel the wait, then wait for the goroutine to
+			// leave Exec. Cancelling alone would leave txW's connection checked out, and ending txW earlier would
+			// use the transaction concurrently. The buffered channel is sent once and closed, so a receive always
+			// returns.
 			DeferCleanup(func() {
 				cancel()
 				<-acquired
@@ -526,11 +513,10 @@ var _ = Describe("Tenant billing assignments", func() {
 	})
 
 	Describe("CloseAndInsertTenantBillingAssignment raced from independent transactions", func() {
-		// raceSecondInsertAgainstHolder opens the winner's active interval on one transaction and connection,
-		// then inserts the loser's from a second, independent transaction. It verifies - through
-		// pg_stat_activity's pg_blocking_pids, not by sleeping - that the raced insert really blocks on the
-		// first transaction's uncommitted unique-index entry, then commits the first transaction and expects
-		// the raced insert to fail on the given partial unique index. It returns the winner's assignment id.
+		// raceSecondInsertAgainstHolder opens the winner's active interval on one transaction, then inserts the
+		// loser's from a second connection. It verifies through pg_stat_activity's pg_blocking_pids, not by
+		// sleeping, that the insert blocks on the uncommitted index entry, then commits the winner and expects the
+		// partial unique index violation.
 		raceSecondInsertAgainstHolder := func(winner, loser TenantBillingAssignmentInsert, uniqueIndex string) string {
 			manager := newManager()
 
@@ -573,8 +559,8 @@ var _ = Describe("Tenant billing assignments", func() {
 			}()
 			DeferCleanup(func() { _ = tx1.End(ctx) })
 
-			// Observe the actual blocking through pg_stat_activity's lock data - the raced insert must be
-			// waiting on the holder's transaction, not merely "not finished yet":
+			// Observe the actual blocking through pg_stat_activity: the raced insert must wait on the holder's
+			// transaction.
 			probe, err := pool.Acquire(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(probe.Release)

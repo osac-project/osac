@@ -42,23 +42,19 @@ const (
 )
 
 // tbaAccountAlreadyBoundReason and tbaTenantAlreadyBoundReason are the stable reasons Create/Update report when
-// the account or the tenant already has an active assignment. Neither appears anywhere in the OSAC-3784 design
-// document; they come from this story's acceptance criteria ("ACCOUNT_ALREADY_BOUND (or the tenant-side
-// equivalent)"), which name only the account-side reason. tbaTenantAlreadyBoundReason is this implementation's
-// choice for the unnamed tenant-side equivalent.
+// the account or the tenant already has an active assignment. The tenant-side reason mirrors the account-side one.
 const (
 	tbaAccountAlreadyBoundReason = "ACCOUNT_ALREADY_BOUND"
 	tbaTenantAlreadyBoundReason  = "TENANT_ALREADY_BOUND"
 	tbaAccountInactiveReason     = "ACCOUNT_INACTIVE"
 	tbaAccountStateUnknownReason = "ACCOUNT_STATE_UNKNOWN"
 
-	// billingOperationRetryReason reports a retryable conflict on a billing operation lease (the concurrency guard a
-	// concurrent assign or discovery holds); the caller retries, it is not a permanent failure.
+	// billingOperationRetryReason reports a retryable conflict on a billing operation lease; the caller retries.
 	billingOperationRetryReason = "BILLING_OPERATION_RETRY"
 )
 
-// Provider I/O is deadline-bounded and runs without a database transaction or
-// pooled connection. OSAC-6894 owns wiring deployment tuning to this default.
+// Provider I/O is deadline-bounded and runs without a database transaction or pooled connection. This is a
+// per-process default; deployment tuning is wired separately.
 const defaultAssignProviderDeadline = time.Minute
 
 // maxConcurrentAssigns bounds provider load. Durable resource guards are acquired
@@ -134,8 +130,8 @@ func (b *PrivateTenantBillingAssignmentsServerBuilder) Build() (
 	return
 }
 
-// List returns every assignment matching the request's filter/order/pagination. Only Cloud Provider Admins reach
-// this method (design.md §4.3/§4.7; enforced by authz.rego's is_admin catch-all, no tenant self-service path).
+// List returns every assignment matching the request's filter, order, and pagination. Only Cloud Provider Admins
+// reach this method (authz.rego's is_admin catch-all; there is no tenant self-service path).
 func (s *PrivateTenantBillingAssignmentsServer) List(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsListRequest) (
 	response *privatev1.TenantBillingAssignmentsListResponse, err error) {
@@ -163,8 +159,8 @@ func (s *PrivateTenantBillingAssignmentsServer) List(ctx context.Context,
 	return buildTenantBillingAssignmentsListResponse(rows, total), nil
 }
 
-// Get returns one assignment interval. Only Cloud Provider Admins reach this method (design.md §4.3/§4.7;
-// enforced by authz.rego's is_admin catch-all, no tenant self-service path).
+// Get returns one assignment interval. Only Cloud Provider Admins reach this method (authz.rego's is_admin
+// catch-all; there is no tenant self-service path).
 func (s *PrivateTenantBillingAssignmentsServer) Get(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsGetRequest) (
 	response *privatev1.TenantBillingAssignmentsGetResponse, err error) {
@@ -228,9 +224,8 @@ type tenantBillingAssignmentSnapshot struct {
 	current database.TenantBillingAssignmentRow
 }
 
-// assignmentSnapshot is called in short preflight and final transactions. The
-// final call locks authoritative rows against deletion/discovery updates until
-// commit. It never calls a provider.
+// assignmentSnapshot is called in short preflight and final transactions; the final call locks authoritative rows
+// until commit. It never calls a provider.
 func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
 	ctx context.Context, accountID, closeID string, in tenantBillingAssignmentAssignInput, lock bool,
 ) (tenantBillingAssignmentSnapshot, error) {
@@ -264,9 +259,9 @@ func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
 			}
 		}
 	}
-	// The tenant FK alone cannot reject a deleted tenant: OSAC-6886's tombstone keeps the row live-but-marked
-	// so assignment history stays queryable, and the FK stays satisfied. Reject it here, before any account or
-	// provider work, with the same contract the FK violation reports for a tenant that never existed.
+	// The tenant FK alone cannot reject a deleted tenant: the deletion tombstone keeps the row live-but-marked so
+	// assignment history stays queryable. Reject it here, before any account or provider work, with the same
+	// contract the FK violation reports for a tenant that never existed.
 	live, err := database.TenantLiveForAssignment(ctx, tx, in.TenantID)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to read tenant", slog.Any("error", err))
@@ -306,8 +301,8 @@ func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
 	return snapshot, nil
 }
 
-// Update replaces the tenant's active account, or fully revalidates the current
-// one without opening a new billing interval.
+// Update replaces the tenant's active account, or revalidates the current one without opening a new billing
+// interval.
 func (s *PrivateTenantBillingAssignmentsServer) Update(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsUpdateRequest) (
 	response *privatev1.TenantBillingAssignmentsUpdateResponse, err error) {
@@ -334,8 +329,8 @@ func (s *PrivateTenantBillingAssignmentsServer) Update(ctx context.Context,
 		return nil, s.mapTenantBillingAssignmentError(ctx, err)
 	}
 
-	// spec.tenant_id is a required, non-empty field (enforced by validator.Validate above), so this is a real
-	// mismatch whenever it triggers, never an "omitted" case.
+	// spec.tenant_id is required and non-empty (validator.Validate above), so a mismatch here is real, never an
+	// omitted field.
 	if object.GetSpec().GetTenantId() != existing.TenantID {
 		return nil, status.Errorf(codes.InvalidArgument, "spec.tenant_id is immutable and cannot be changed by Update")
 	}
@@ -375,8 +370,8 @@ func (s *PrivateTenantBillingAssignmentsServer) currentAssignment(
 	return row, nil
 }
 
-// Signal synchronously revalidates only a current assignment. Authorization is
-// enforced by the controller/admin-only private RPC policy, not in this handler.
+// Signal synchronously revalidates only a current assignment. Authorization is enforced by the
+// controller/admin-only private RPC policy, not in this handler.
 func (s *PrivateTenantBillingAssignmentsServer) Signal(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsSignalRequest,
 ) (*privatev1.TenantBillingAssignmentsSignalResponse, error) {
@@ -402,8 +397,7 @@ func (s *PrivateTenantBillingAssignmentsServer) Signal(ctx context.Context,
 }
 
 // rejectIfAlreadyBound fails with ACCOUNT_ALREADY_BOUND or TENANT_ALREADY_BOUND when tenantID or accountID
-// already has an active assignment. Used only by Create: Update's "account changing" path only needs the
-// account-side check, since the tenant side is the assignment being updated.
+// already has an active assignment. Only Create uses it: Update only needs the account-side check.
 func (s *PrivateTenantBillingAssignmentsServer) rejectIfAlreadyBound(
 	ctx context.Context, tx database.Tx, tenantID, accountID string) error {
 	if _, err := database.GetActiveTenantBillingAssignmentByTenant(ctx, tx, tenantID); err == nil {
@@ -449,8 +443,8 @@ type tenantBillingAssignmentAssignInput struct {
 	Creator  string
 }
 
-// assign holds committed expiring guards, never a transaction, across provider
-// I/O. All local reads and writes use independent short transactions.
+// assign holds committed expiring guards, never a transaction, across provider I/O; local reads and writes use
+// independent short transactions.
 func (s *PrivateTenantBillingAssignmentsServer) assign(
 	ctx context.Context, accountID, closeID string, in tenantBillingAssignmentAssignInput,
 ) (row database.TenantBillingAssignmentRow, err error) {
@@ -459,8 +453,8 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 			err = s.mapTenantBillingAssignmentError(ctx, err)
 		}
 	}()
-	// Do not silently nest underneath an ambient transaction: WithNewTx shadows
-	// but cannot release its connection. Startup config supplies manager-only ctx.
+	// Do not nest under an ambient transaction: WithNewTx shadows but cannot release its connection. Startup
+	// config supplies a manager-only context.
 	if _, txErr := database.TxFromContext(ctx); txErr == nil {
 		return row, errors.New("billing provider operation requires a manager-only context")
 	}
@@ -512,17 +506,15 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 	if err != nil {
 		return database.TenantBillingAssignmentRow{}, err
 	}
-	// The already-consistent resolver branch performs no write and may skip
-	// LocalDuplicate. Reserve that successful value too before local adoption.
+	// The already-consistent resolver branch performs no write and may skip LocalDuplicate; reserve that value too
+	// before local adoption.
 	if err := lease.Reserve(operationCtx, database.BillingOperationKey("correlation", resolution.Value)); err != nil {
 		return row, err
 	}
 
-	// Derive the connection-state count from the resolver's bounded uniqueness
-	// scan: ProviderMatches counted accounts carrying the resolved value before any
-	// write, and a successful write set the value on exactly this account, so the current count is
-	// ProviderMatches plus one when the resolver wrote. This is the same verdict a fresh post-resolution
-	// listing would return, absent out-of-band provider changes during this operation.
+	// Derive the connection-state count from the resolver's bounded uniqueness scan: ProviderMatches counted
+	// accounts carrying the value before the write, and a successful write set it on this account, so the current
+	// count is ProviderMatches plus one.
 	matches := resolution.ProviderMatches
 	if resolution.ProviderWritten {
 		matches++
@@ -559,8 +551,7 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 		if latest != snapshot {
 			return row, errAssignChanged
 		}
-		// Recheck expiry after row-lock waits. These leases fence only this local
-		// commit, not remote writes; provider changes may survive a failed commit.
+		// Recheck expiry after row-lock waits. These leases fence only this local commit, not remote writes.
 		if err := lease.Check(txCtx, tx); err != nil {
 			return row, err
 		}
@@ -625,8 +616,8 @@ func toTenantBillingAssignmentProto(row database.TenantBillingAssignmentRow) *pr
 	}.Build()
 }
 
-// mapTenantBillingAssignmentConnectionState maps a connection_state column value to its proto enum, returning
-// UNSPECIFIED for anything else.
+// mapTenantBillingAssignmentConnectionState maps a connection_state value to its proto enum, returning
+// UNSPECIFIED otherwise.
 func mapTenantBillingAssignmentConnectionState(state string) privatev1.TenantBillingAssignmentConnectionState {
 	switch state {
 	case tbaStatePending:
@@ -640,15 +631,13 @@ func mapTenantBillingAssignmentConnectionState(state string) privatev1.TenantBil
 	}
 }
 
-// failedPreconditionWithReason builds a FAILED_PRECONDITION status carrying reason in its ErrorInfo detail, the
-// shape every billing failure in this story uses.
+// failedPreconditionWithReason builds a FAILED_PRECONDITION status carrying reason in its ErrorInfo detail.
 func failedPreconditionWithReason(reason, format string, args ...any) error {
 	return billingFailure(codes.FailedPrecondition, fmt.Sprintf(format, args...), reason)
 }
 
 // mapBillingProviderBuildError maps a configured-but-unbuildable provider (e.g. an unreadable credential Secret)
-// the same way private_billing_accounts_server.go maps a provider that cannot be reached: UNAVAILABLE, never a
-// silently empty result.
+// to UNAVAILABLE, never a silently empty result.
 func mapBillingProviderBuildError(err error) error {
 	var provErr *billing.Error
 	if errors.As(err, &provErr) {
@@ -657,12 +646,10 @@ func mapBillingProviderBuildError(err error) error {
 	return billingFailure(codes.Unavailable, "billing provider account API is unavailable", billingProviderUnavailableReason)
 }
 
-// mapTenantBillingAssignmentError maps every error assign can return to a gRPC status: a resolution-specific
-// *billing.CorrelationResolutionError, the DAO's correlation-conflict sentinel, a classified provider *billing.Error,
-// a race on the 1:1 partial unique indexes (the early rejectIfAlreadyBound checks are a fast path, not the guard;
-// a concurrent request can still lose the race at this final insert), a reference to a tenant that does not exist,
-// or an infrastructure error. The infrastructure fallback logs the cause server-side and returns a fixed message:
-// pgx error strings can name constraints and schema objects, so echoing the raw error would leak database detail.
+// mapTenantBillingAssignmentError maps an assign error to a gRPC status: a correlation-resolution error, the DAO's
+// correlation-conflict sentinel, a classified provider error, a race on the 1:1 partial unique indexes, a missing
+// tenant, or an infrastructure error. The fallback logs the cause and returns a fixed message, because pgx error
+// strings can leak constraint and schema detail.
 func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(ctx context.Context, err error) error {
 	if errors.Is(err, database.ErrBillingOperationBusy) || errors.Is(err, database.ErrBillingOperationExpired) ||
 		errors.Is(err, errAssignChanged) {

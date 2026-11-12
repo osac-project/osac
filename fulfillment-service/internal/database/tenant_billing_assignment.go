@@ -61,12 +61,10 @@ func scanTenantBillingAssignmentRow(row pgx.Row) (TenantBillingAssignmentRow, er
 	return r, err
 }
 
-// CloseAndInsertTenantBillingAssignment closes closeID's interval (effective_to = now()) and inserts a new one, in
-// the same transaction. now() is constant for the duration of a PostgreSQL transaction, so the closed interval's
-// effective_to and the new interval's effective_from are identical: no gap, no overlap. closeID is "" to open the
-// first interval for a tenant/account with no prior assignment. The partial unique indexes on tenant_id and
-// billing_account_id (where effective_to is null) are the sole guard against two active intervals; this function
-// does not duplicate that check.
+// CloseAndInsertTenantBillingAssignment closes closeID's interval and inserts a new one in the same transaction.
+// PostgreSQL's now() is constant within a transaction, so effective_to and the new effective_from match exactly:
+// no gap, no overlap. closeID is "" to open the first interval. The partial unique indexes are the sole guard
+// against two active intervals.
 func CloseAndInsertTenantBillingAssignment(
 	ctx context.Context, tx Tx, closeID string, in TenantBillingAssignmentInsert,
 ) (id string, err error) {
@@ -148,18 +146,16 @@ var tenantBillingAssignmentOrderColumns = map[string]string{
 // tenantBillingAssignmentEqualityPattern matches one `this.spec.<field> == "<value>"` or
 // `this.status.<field> == "<value>"` clause.
 //
-// shortcut: like billing_account.go's filterClausePattern, this supports only exact-match equality on a known
-// field path and the has()/!has() presence check below, clauses chained with " && " - no full CEL. Upgrade to
-// dao.FilterTranslator if a richer filter is ever needed on this flat table.
+// Like billing_account.go's filterClausePattern, this supports only exact-match equality and the has()/!has()
+// check, chained with " && " - no full CEL. A richer filter needs dao.FilterTranslator.
 var tenantBillingAssignmentEqualityPattern = regexp.MustCompile(`^this\.(spec|status)\.([a-z_]+) == "([^"]*)"$`)
 
 // tenantBillingAssignmentHasPattern matches `has(this.status.effective_to)` (historical only) or
 // `!has(this.status.effective_to)` (current only).
 var tenantBillingAssignmentHasPattern = regexp.MustCompile(`^(!?)has\(this\.status\.effective_to\)$`)
 
-// tenantBillingAssignmentFilterSQL translates a filter expression into a SQL WHERE clause and its args, handling
-// both equality clauses and the has(this.status.effective_to) presence check. Returns "", nil, nil for an empty
-// filter.
+// tenantBillingAssignmentFilterSQL translates a filter expression into a SQL WHERE clause and args, handling
+// equality and the has(this.status.effective_to) check. Returns "", nil, nil for an empty filter.
 func tenantBillingAssignmentFilterSQL(filter string) (string, []any, error) {
 	return translateFlatTableFilter(filter, func(clause string, addArg func(any) string) (string, error) {
 		if m := tenantBillingAssignmentHasPattern.FindStringSubmatch(clause); m != nil {
@@ -182,10 +178,8 @@ func tenantBillingAssignmentFilterSQL(filter string) (string, []any, error) {
 	})
 }
 
-// tenantBillingAssignmentOrderSQL translates an order expression into a SQL ORDER BY column (with optional
-// asc/desc), defaulting to "effective_from desc" for an empty order. withIDTieBreaker then appends an
-// ascending-id tie-breaker so offset/limit pagination stays deterministic across ties on the primary order,
-// preserving latest-first semantics.
+// tenantBillingAssignmentOrderSQL translates an order expression into ORDER BY, defaulting to "effective_from
+// desc". A caller appends withIDTieBreaker for deterministic pagination, preserving latest-first semantics.
 func tenantBillingAssignmentOrderSQL(order string) (string, error) {
 	translated, err := translateFlatTableOrder(order, tenantBillingAssignmentOrderColumns, "effective_from desc")
 	if err != nil {
@@ -194,9 +188,8 @@ func tenantBillingAssignmentOrderSQL(order string) (string, error) {
 	return withIDTieBreaker(translated), nil
 }
 
-// ListTenantBillingAssignments returns the page of tenant_billing_assignments rows matching filter, ordered by
-// order (current-first by default), along with the total count of matching rows ignoring offset/limit. An
-// unset limit serves flatTableDefaultLimit rows and an explicit one is clamped to flatTableMaxLimit.
+// ListTenantBillingAssignments returns the matching page and the total count ignoring offset/limit, ordered
+// current-first by default. An unset limit serves flatTableDefaultLimit rows; an explicit one is clamped.
 func ListTenantBillingAssignments(ctx context.Context, tx Tx, offset, limit int32, filter, order string) (
 	items []TenantBillingAssignmentRow, total int32, err error) {
 	whereSQL, args, err := tenantBillingAssignmentFilterSQL(filter)
@@ -218,10 +211,8 @@ func ListTenantBillingAssignments(ctx context.Context, tx Tx, offset, limit int3
 		})
 }
 
-// LockBillingAccountForAssignment serializes concurrent assignment/correlation-resolution attempts for one
-// billing account, for the lifetime of tx. It does not enforce the 1:1 invariant (the partial unique indexes do);
-// it exists only so two concurrent Create/Update calls for the same account resolve one at a time instead of both
-// reading and writing the provider's correlation value concurrently.
+// LockBillingAccountForAssignment serializes assignment and correlation-resolution attempts for one account for
+// the lifetime of tx. It does not enforce the 1:1 invariant (the partial unique indexes do).
 func LockBillingAccountForAssignment(ctx context.Context, tx Tx, accountID string) error {
 	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtextextended($1, 1))`, accountID); err != nil {
 		return fmt.Errorf("lock billing account for assignment: %w", err)
@@ -241,9 +232,8 @@ func BillingAccountCorrelationConflict(ctx context.Context, tx Tx, value, exclud
 	return conflict, nil
 }
 
-// ErrBillingAccountCorrelationConflict reports that the correlation id being committed hit the unique index on
-// billing_accounts.correlation_id - another account already holds it. Callers map this to
-// FAILED_PRECONDITION/ACCOUNT_CORRELATION_CONFLICT, never a raw SQL error.
+// ErrBillingAccountCorrelationConflict reports that the correlation id hit the unique index on
+// billing_accounts.correlation_id. Callers map it to FAILED_PRECONDITION/ACCOUNT_CORRELATION_CONFLICT.
 var ErrBillingAccountCorrelationConflict = errors.New("billing account correlation id already in use")
 
 // SetBillingAccountCorrelationID commits the resolved correlation value to billing_accounts.correlation_id.
@@ -259,9 +249,8 @@ func SetBillingAccountCorrelationID(ctx context.Context, tx Tx, accountID, value
 	return nil
 }
 
-// BillingAccountForAssignment is the internal view of a billing account needed to resolve and validate a tenant
-// assignment: the provider-native reference, which the API never exposes, and the current correlation id and
-// state.
+// BillingAccountForAssignment holds the internal fields needed to resolve and validate a tenant assignment: the
+// provider-native reference, correlation id, and state.
 type BillingAccountForAssignment struct {
 	ID                       string
 	ProviderAccountReference string
@@ -283,11 +272,9 @@ func GetBillingAccountForAssignment(ctx context.Context, tx Tx, accountID string
 	return row, nil
 }
 
-// TenantLiveForAssignment reports whether a live (never deletion-marked) tenants row exists for name. The
-// tenant_billing_assignments FK to tenants(name) cannot enforce this on its own: OSAC-6886's tombstone
-// deliberately keeps a deleted tenant's row live-but-marked so assignment history stays queryable, so the FK
-// stays satisfied by a tenant the platform has deleted. The assign path rejects such tenants explicitly, with
-// the same contract the FK violation reports for a tenant that never existed.
+// TenantLiveForAssignment reports whether a live, never deletion-marked tenants row exists for name. The
+// tenant_billing_assignments FK alone cannot reject a deleted tenant: a deletion tombstone keeps the row so
+// assignment history stays queryable, so the assign path rejects such tenants explicitly.
 func TenantLiveForAssignment(ctx context.Context, tx Tx, name string) (bool, error) {
 	var live bool
 	err := tx.QueryRow(ctx, `

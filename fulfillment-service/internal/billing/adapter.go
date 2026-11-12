@@ -19,22 +19,16 @@ import (
 	"unicode"
 )
 
-// MaxListPages bounds how many pages of one provider list OSAC reads, whatever the caller: the correlation
-// resolver's uniqueness scans, billing-account discovery, and the M360 transport's own collection reads. Each
-// caller decides what happens at the bound; none of them keeps reading past it, so a provider that never
-// reports a last page cannot loop a caller forever.
+// MaxListPages bounds how many pages of one provider list OSAC reads. A caller that still sees a following page
+// at the bound decides how to fail, but never reads past it, so a provider that never reports a last page cannot
+// loop a caller forever.
 const MaxListPages = 50
 
-// ForEachAccount walks the provider accounts matching filter, starting from page, invoking fn for each account
-// in order. The walk ends when fn returns an error (returned to the caller unchanged), when the provider
-// reports the last page, or - after MaxListPages pages that all report a following page - with a MALFORMED
-// *Error: a provider that never ends a list is misbehaving, not merely large. It is the one owner of the
-// account-walk bound and its MALFORMED terminal, so the walkers over provider accounts cannot drift apart in
-// how they treat a provider that pages forever. A page that holds more accounts than the positive size the walk
-// requested is likewise MALFORMED, rejected before any visitor runs: a caller that bounds a walk's buffering by
-// its page size - discovery reads at most MaxListPages pages of at most the requested size - must not have one
-// oversized provider page widen that buffer, whatever adapter serves the walk. A walk started without a size
-// cannot know the adapter's default, so there the bound is the adapter's own to enforce.
+// ForEachAccount walks the provider accounts matching filter from page, calling fn for each in order. It stops
+// on fn's error, the last page, or MaxListPages pages that all report a following page, which is a MALFORMED
+// *Error. A page larger than the requested positive size is also MALFORMED and rejected before any visitor runs,
+// so one oversized provider page cannot widen a caller's buffer. Without a requested size the adapter enforces
+// its own bound.
 func ForEachAccount(
 	ctx context.Context, adapter Adapter, filter AccountFilter, page Page, fn func(Account) error) error {
 	for range MaxListPages {
@@ -58,10 +52,8 @@ func ForEachAccount(
 	return NewError(ReasonMalformed, "ListAccounts", false, 0)
 }
 
-// CountAccountsWithExternalID counts provider accounts whose correlation value is exactly value, paging through
-// bounded results. It counts every match rather than stopping at two: a provider that never ends the match list
-// is MALFORMED, not merely ambiguous, and that verdict needs the walk to reach the bound. It fails with a
-// MALFORMED *Error once MaxListPages pages all report a following page.
+// CountAccountsWithExternalID counts provider accounts whose correlation value is exactly value. It walks every
+// page so a provider that never ends the match list is MALFORMED rather than merely ambiguous.
 func CountAccountsWithExternalID(ctx context.Context, adapter Adapter, value string) (int, error) {
 	count := 0
 	err := ForEachAccount(ctx, adapter, AccountFilter{ExternalID: value}, Page{}, func(Account) error {
@@ -74,10 +66,8 @@ func CountAccountsWithExternalID(ctx context.Context, adapter Adapter, value str
 	return count, nil
 }
 
-// SanitizeProviderText strips control characters from provider-supplied text. A billing provider is an
-// external system whose account names and correlation values are free-form strings: without this, a
-// compromised or misbehaving provider could plant terminal escape sequences that the CLI renders verbatim into
-// an administrator's terminal. Every printable rune - spaces, punctuation, non-ASCII letters - is kept.
+// SanitizeProviderText strips control characters from provider-supplied text so a compromised provider cannot
+// plant terminal escape sequences in an administrator's terminal. Printable runes, including non-ASCII, are kept.
 func SanitizeProviderText(text string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
@@ -90,8 +80,8 @@ func SanitizeProviderText(text string) string {
 // Adapter is the only boundary through which OSAC talks to a billing provider. It exposes normalized values only.
 type Adapter interface {
 	// ListAccounts pages through accounts that exactly match filter. A page may hold fewer accounts than its size,
-	// or none, while Next is still set, so callers must keep paging until Next is empty. It never holds more
-	// accounts than the positive size the caller requested: ForEachAccount rejects such a page as MALFORMED.
+	// or none, while Next is still set, so callers must keep paging until it is empty. It never holds more accounts
+	// than the requested positive size; ForEachAccount rejects such a page as MALFORMED.
 	ListAccounts(ctx context.Context, filter AccountFilter, page Page) (AccountPage, error)
 	// GetAccount and CorrelationValue fail with a NOT_FOUND *Error when the account does not exist.
 	GetAccount(ctx context.Context, ref AccountRef) (Account, error)

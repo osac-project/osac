@@ -35,11 +35,10 @@ var _ publicv1.TenantBillingAssignmentsServer = (*TenantBillingAssignmentsServer
 
 // TenantBillingAssignmentsServer is the public server; it delegates to the private one.
 //
-// Tenant isolation note: a tenant billing assignment names its tenant only as data - this server applies no
-// scoping by the caller's tenant, so a caller that reaches a method can read every tenant's assignment.
-// authz.rego explicitly grants global admins and cloud-provider-admin role holders deployment-wide billing
-// access; the platform has no per-tenant administrator scope. The authorization evaluator suites pin that boundary.
-// If a future change grants tenant roles access to any method here, add a caller-tenant filter to it first.
+// A tenant billing assignment names its tenant only as data: this server applies no caller-tenant scoping, and
+// authz.rego grants billing access only to global admins and cloud-provider-admin role holders. The authorization
+// evaluator suites pin that boundary. If a future change grants tenant roles access here, add a caller-tenant
+// filter first.
 type TenantBillingAssignmentsServer struct {
 	publicv1.UnimplementedTenantBillingAssignmentsServer
 	logger    *slog.Logger
@@ -65,8 +64,8 @@ func (b *TenantBillingAssignmentsServerBuilder) SetDelegate(
 	return b
 }
 
-// Build validates that SetLogger and SetDelegate were both called, builds the public/private mappers, and
-// returns the configured server.
+// Build validates that SetLogger and SetDelegate were called, builds the public/private mappers, and returns the
+// server.
 func (b *TenantBillingAssignmentsServerBuilder) Build() (result *TenantBillingAssignmentsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")

@@ -182,10 +182,8 @@ type TenantBillingAssignmentsListRequest_builder struct {
 
 	// Index of the first result. If not specified the default value will be zero.
 	Offset *int32
-	// Maximum number of results to be returned by the server. If not specified, or if the value is zero, the server
-	// returns a default page of 100 results; a larger value is clamped to the maximum of 1000. Fewer results may be
-	// returned, so clients should page with `offset` and compare against `total` rather than assume the request was
-	// served in full.
+	// Maximum number of results to return. Zero or unset serves a default page of 100; a larger value is clamped to
+	// 1000. Fewer results may be returned, so page with `offset` and compare against `total`.
 	Limit *int32
 	// Filter criteria.
 	//

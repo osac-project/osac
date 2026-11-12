@@ -29,11 +29,9 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// archiveStubTx simulates the transaction states archive() must handle when the deferred assignment
-// constraint fires: the statements inside the savepoint fail with execErr (the constraint violation),
-// and the recovery probe that checkDeferredArchiveBlockers runs after the savepoint rollback fails with
-// queryErr. Savepoint just runs the function and returns its error, which is what a rolled back
-// savepoint looks like to the caller.
+// archiveStubTx simulates the states archive() handles when the deferred assignment constraint fires: statements
+// inside the savepoint fail with execErr and the post-rollback probe fails with queryErr. Savepoint runs the
+// function and returns its error, as a rolled-back savepoint does.
 type archiveStubTx struct {
 	database.Tx
 	execErr  error

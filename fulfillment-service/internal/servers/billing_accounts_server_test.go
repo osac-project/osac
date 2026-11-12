@@ -124,13 +124,10 @@ var _ = Describe("Billing accounts server", func() {
 		Expect(response.GetTotal()).To(BeZero())
 	})
 
-	// SECURITY: BillingAccount is excluded from the reflection-driven filter-oracle suite in
-	// internal/cmd/service/start/grpcserver/register_servers_test.go because it is registered standalone in
-	// start_grpc_server_cmd.go, not through RegisterResourceServers, and uses its own allowlist-based filter
-	// translator (internal/database/billing_account.go) instead of dao.FilterTranslator. This is the only
-	// regression coverage confirming the public BillingAccountsServer's private delegate still rejects a filter
-	// referencing provider_account_reference, the private-only field (private billing_account_type.proto field 8,
-	// absent from the public BillingAccount message).
+	// SECURITY: BillingAccount is excluded from the reflection-driven filter-oracle suite because it is registered
+	// standalone and uses its own allowlist-based translator. This is the only regression coverage confirming the
+	// public server's private delegate still rejects a filter referencing provider_account_reference, the
+	// private-only field.
 	It("rejects a filter referencing the private-only provider_account_reference field", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "acct-1"}}})
 		_, err := build(fake.Provider()).List(ctx, publicv1.BillingAccountsListRequest_builder{
@@ -162,11 +159,9 @@ var _ = Describe("Billing accounts server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetTotal()).To(Equal(int32(1)))
 
-		// A second server instance over the same storage - a restarted process, or another pod - reads the
-		// rows the first request committed through its own short transaction; nothing waits on the first
-		// instance's request scope. The freshness window itself remains per-process, an existing
-		// limitation: a second pod still re-walks the provider inside the first pod's window, and
-		// cross-pod freshness sharing is not covered here.
+		// A second server instance over the same storage, a restarted process or another pod, reads the rows the
+		// first request committed. The freshness window remains per-process: a second pod still re-walks the
+		// provider inside the first pod's window, and cross-pod freshness sharing is not covered here.
 		second := build(fake.Provider())
 		response, err = second.List(ctx, &publicv1.BillingAccountsListRequest{})
 		Expect(err).ToNot(HaveOccurred())

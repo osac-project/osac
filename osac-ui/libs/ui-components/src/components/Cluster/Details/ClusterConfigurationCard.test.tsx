@@ -272,7 +272,10 @@ describe('ClusterConfigurationCard', () => {
     expect(within(history).getAllByRole('row')).toHaveLength(3);
     expect(within(history).getByText('4.17.0 → 4.18.0')).toBeInTheDocument();
     expect(within(history).getByText('4.16.0 → 4.17.0')).toBeInTheDocument();
-    expect(within(history).getByText('Succeeded')).toBeInTheDocument();
+    const succeededStatus = within(history).getByText('Succeeded');
+    expect(succeededStatus).toBeInTheDocument();
+    expect(succeededStatus.closest('.pf-v6-c-label')).toBeNull();
+    expect(succeededStatus.querySelector('.pf-v6-c-icon')).toBeInTheDocument();
     expect(within(history).getByText('Updating the control plane')).toBeInTheDocument();
     expect(within(history).queryByText('Workers failed')).not.toBeInTheDocument();
     expect(within(history).getAllByRole('time')).toHaveLength(3);

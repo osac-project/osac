@@ -10,6 +10,7 @@ import {
 import UpgradeClusterDialog from './UpgradeClusterDialog';
 import { useGetResource, useListAllResources } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { ResourceStatusLabel } from '../../Resource/ResourceStatusLabel';
 import {
   getActiveControlPlaneUpgradeTarget,
   getControlPlaneUpgradeHistory,
@@ -106,9 +107,9 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
   } else if (upgradeProgressing) {
     upgradeLabel = <Label color="blue">{t('Upgrade in progress')}</Label>;
   } else if (upgradeFailed) {
-    upgradeLabel = <Label status="danger">{t('Upgrade failed')}</Label>;
+    upgradeLabel = <ResourceStatusLabel status="failed" text={t('Upgrade failed')} />;
   } else if (upgradeTimedOut) {
-    upgradeLabel = <Label status="warning">{t('Upgrade timed out')}</Label>;
+    upgradeLabel = <ResourceStatusLabel status="unspecified" text={t('Upgrade timed out')} />;
   } else if (action.kind === 'in-progress') {
     upgradeLabel = <Label color="blue">{t('Upgrade in progress')}</Label>;
   } else if (action.kind === 'available') {

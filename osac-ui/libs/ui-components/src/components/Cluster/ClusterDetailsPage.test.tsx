@@ -214,9 +214,9 @@ describe('ClusterDetailsPage upgrade availability', () => {
 
     await waitFor(() => expect(screen.getByText('Upgrade timed out')).toBeInTheDocument());
     expect(screen.getByText('Still observing the control plane')).toBeInTheDocument();
-    expect(screen.getByText('Upgrade timed out').closest('.pf-v6-c-label')).toHaveClass(
-      'pf-m-warning',
-    );
+    const timeoutLabel = screen.getByText('Upgrade timed out').closest('.pf-v6-c-label');
+    expect(timeoutLabel).toHaveClass('pf-m-compact');
+    expect(timeoutLabel).not.toHaveClass('pf-m-warning', 'pf-m-danger');
     expect(screen.getByText('4.17.0')).toBeInTheDocument();
     expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Upgrade history' }));
@@ -270,7 +270,10 @@ describe('ClusterDetailsPage upgrade availability', () => {
     renderPage(failed, [currentVersion, targetVersion]);
 
     await waitFor(() => expect(screen.getByText('Upgrade failed')).toBeInTheDocument());
-    expect(screen.getByText('Upgrade failed').closest('.pf-v6-c-label')).toHaveClass('pf-m-danger');
+    expect(screen.getByText('Upgrade failed').closest('.pf-v6-c-label')).toHaveClass(
+      'pf-m-red',
+      'pf-m-compact',
+    );
     expect(screen.getByText('4.17.0')).toBeInTheDocument();
     expect(screen.getByText('Control plane could not upgrade')).toBeInTheDocument();
     expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();

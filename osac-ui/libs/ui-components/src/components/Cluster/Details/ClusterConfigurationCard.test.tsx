@@ -165,7 +165,8 @@ describe('ClusterConfigurationCard', () => {
     renderWithProviders(<ClusterConfigurationCard cluster={timedOut} />);
 
     const label = screen.getByText('Upgrade timed out');
-    expect(label.closest('.pf-v6-c-label')).toHaveClass('pf-m-warning');
+    expect(label.closest('.pf-v6-c-label')).toHaveClass('pf-m-compact');
+    expect(label.closest('.pf-v6-c-label')).not.toHaveClass('pf-m-warning', 'pf-m-danger');
     expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
       'Control plane upgrade timed out',

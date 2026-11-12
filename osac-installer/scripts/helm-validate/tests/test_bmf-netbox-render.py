@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
-INSTALLER_DIR = SCRIPT_DIR.parent
+INSTALLER_DIR = SCRIPT_DIR.parents[2]
 REPO_ROOT = INSTALLER_DIR.parent
 BMF_CHART = REPO_ROOT / "bare-metal-fulfillment-operator/charts/operator"
 OSAC_CHART = INSTALLER_DIR / "charts/osac"
@@ -66,6 +66,7 @@ bmf:
   metal3:
     enabled: false
 """
+
 
 def helm_result(release: str, chart: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]:
     command = ["helm", "template", release, str(chart), *args]
@@ -587,9 +588,7 @@ def check_osac_wiring(temp_dir: pathlib.Path) -> None:
     assert "fulfillment-controller-credentials" in str(deployment)
     assert "OSAC_SECRET_API_TOKEN_FILE" not in env
     secret_api_ca = next(
-        volume
-        for volume in deployment["spec"]["template"]["spec"]["volumes"]
-        if volume.get("name") == "secret-api-ca"
+        volume for volume in deployment["spec"]["template"]["spec"]["volumes"] if volume.get("name") == "secret-api-ca"
     )
     assert secret_api_ca["configMap"]["name"] == "ca-bundle"
 
@@ -604,8 +603,7 @@ def check_osac_wiring(temp_dir: pathlib.Path) -> None:
     assert not [
         doc
         for doc in docs
-        if doc.get("kind") == "Job"
-        and doc.get("metadata", {}).get("name") == "osac-pre-install-validate"
+        if doc.get("kind") == "Job" and doc.get("metadata", {}).get("name") == "osac-pre-install-validate"
     ], "the retired pre-install validation Job is rendered again"
 
     check_ids = {result["id"] for result in preflight_report(docs)["results"]}
@@ -650,22 +648,14 @@ def check_infra_metal3_rbac() -> None:
     assert set(provisioning_rules[0]["verbs"]) == {"get", "list", "create", "patch"}
 
 
-def main() -> None:
+def test_main(live_lookup_only: bool = False) -> None:
     """Run BMF render contracts or the explicitly selected live Secret lookup check."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--live-lookup-only",
-        action="store_true",
-        help="exercise NetBox Secret lookup against the current Kubernetes cluster",
-    )
-    args = parser.parse_args()
-
     with tempfile.TemporaryDirectory(prefix="bmf-netbox-render-") as temp:
         temp_dir = pathlib.Path(temp)
         netbox_values = temp_dir / "netbox-values.yaml"
         netbox_values.write_text(BMF_NETBOX_VALUES, encoding="utf-8")
 
-        if args.live_lookup_only:
+        if live_lookup_only:
             check_bmf_netbox_secret_lookup(netbox_values)
             print("BMF NetBox Secret lookup checks passed.")
             return
@@ -687,5 +677,14 @@ def main() -> None:
     print("BMF NetBox Helm render checks passed.")
 
 
+# CI runs this file as a script for the --live-lookup-only Secret check against
+# a deployed cluster; pytest collects test_main() for the offline render checks.
+# Parsing stays in the guard so a pytest run never sees the script's argv.
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--live-lookup-only",
+        action="store_true",
+        help="exercise NetBox Secret lookup against the current Kubernetes cluster",
+    )
+    test_main(live_lookup_only=parser.parse_args().live_lookup_only)

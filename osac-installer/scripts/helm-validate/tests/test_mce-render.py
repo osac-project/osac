@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-INSTALLER = pathlib.Path(__file__).resolve().parents[1]
+INSTALLER = pathlib.Path(__file__).resolve().parents[3]
 DEPS_CHART = INSTALLER / "charts/osac-deps"
 INFRA_CHART = INSTALLER / "charts/osac-infra"
 CAAS_VALUES = INSTALLER / "values/caas-ci/infra.yaml"
@@ -249,7 +249,7 @@ def check_caas_inherits_defaults() -> None:
     assert_infrastructure_contract(caas_infra, configured_mce(INFRA_CHART, CAAS_VALUES))
 
 
-def main() -> None:
+def test_main() -> None:
     check_disabled()
     check_configured_defaults()
     check_arbitrary_configured_values()
@@ -257,7 +257,3 @@ def main() -> None:
     check_absent_overrides()
     check_caas_inherits_defaults()
     print("MCE disabled-default, configured-value, no-override, and CaaS render checks passed.")
-
-
-if __name__ == "__main__":
-    main()

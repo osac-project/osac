@@ -7,6 +7,7 @@ dependencies = [
     "pytest>=8.0",
     "pytest-xdist>=3.0",
     "pyyaml>=6.0",
+    "jsonschema>=4.23.0",
     "websocket-client>=1.6",
 ]
 

@@ -22,7 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
-	"github.com/osac-project/osac/fulfillment-service/internal/testing/golden"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -84,13 +84,38 @@ var _ = Describe("render", func() {
 		Expect(output).To(ContainSubstring(`"catalog_item_matches"`))
 	})
 
-	// Golden files live in testdata/. Regenerate with UPDATE_GOLDEN=1 and review the diff.
-	DescribeTable("matches the golden output",
-		func(format string, name string) {
-			golden.Assert(name, run(format, items()))
+	DescribeTable("renders the expected output",
+		func(format string, assert func(string)) {
+			assert(run(format, items()))
 		},
-		Entry("table", "table", "items.table.golden"),
-		Entry("json", "json", "items.json.golden"),
+		Entry("table", "table", func(output string) {
+			Expect(testing.TableRows(output)).To(Equal([][]string{
+				{"SERVICE", "CURRENCY", "CONDITIONS", "AMOUNT", "UNIT", "CATALOG ITEMS"},
+				{"compute_instance", "USD", "instance_type=small", "0.00125", "second", "vm-fedora-small"},
+				{"widget_service", "USD", "widget_size=ANY", "5", "second", "-"},
+			}))
+		}),
+		Entry("json", "json", func(output string) {
+			Expect(output).To(MatchJSON(`[
+				{
+					"service": "compute_instance",
+					"currency_code": "USD",
+					"resource_conditions": [
+						{"dimension": "instance_type", "operator": "BILLING_RATE_MATCH_OPERATOR_EQUALS", "value": "small"}
+					],
+					"rate": {"amount": "0.00125", "unit": "second"},
+					"catalog_item_matches": ["vm-fedora-small"]
+				},
+				{
+					"service": "widget_service",
+					"currency_code": "USD",
+					"resource_conditions": [
+						{"dimension": "widget_size", "operator": "BILLING_RATE_MATCH_OPERATOR_ANY"}
+					],
+					"rate": {"amount": "5", "unit": "second"}
+				}
+			]`))
+		}),
 	)
 
 	It("returns an error when writing the table fails immediately", func() {

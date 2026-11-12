@@ -270,6 +270,9 @@ need_login=true
 route_host=""
 api_route_host=""
 if command -v oc >/dev/null 2>&1; then
+  oc_route_flags=(--request-timeout=10s)
+  [[ "$IGNORE_HTTPS_ERRORS" == true ]] &&
+    oc_route_flags+=(--insecure-skip-tls-verify=true)
   kubeconfig_candidates=()
   [[ -n "$KUBECONFIG_PATH" ]] && kubeconfig_candidates+=("$KUBECONFIG_PATH")
   kubeconfig_candidates+=(
@@ -282,10 +285,27 @@ if command -v oc >/dev/null 2>&1; then
   route_host=""
   for candidate in "${kubeconfig_candidates[@]}"; do
     [[ -f "$candidate" ]] || continue
-    route_host=$(KUBECONFIG="$candidate" oc --request-timeout=10s \
+    route_host=$(KUBECONFIG="$candidate" oc "${oc_route_flags[@]}" \
       -n osac get route osac-ui -o jsonpath='{.spec.host}' 2>/dev/null || true)
-    api_route_host=$(KUBECONFIG="$candidate" oc --request-timeout=10s \
+    api_route_host=$(KUBECONFIG="$candidate" oc "${oc_route_flags[@]}" \
       -n osac get route fulfillment-api -o jsonpath='{.spec.host}' 2>/dev/null || true)
+    if [[ -z "$route_host" ]]; then
+      api_server=$(KUBECONFIG="$candidate" oc config view --minify \
+        -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)
+      case "$api_server" in
+        https://api.*)
+          cluster_domain="${api_server#https://api.}"
+          cluster_domain="${cluster_domain%%/*}"
+          cluster_domain="${cluster_domain%:6443}"
+          if [[ "$cluster_domain" == *.* ]]; then
+            route_host="osac-ui-osac.apps.${cluster_domain}"
+            [[ -n "$api_route_host" ]] ||
+              api_route_host="fulfillment-api-osac.apps.${cluster_domain}"
+            info "Derived OSAC routes from the kubeconfig API server."
+          fi
+          ;;
+      esac
+    fi
     if [[ -n "$route_host" ]]; then
       KUBECONFIG_PATH="$candidate"
       info "Using a reachable KUBECONFIG with an OSAC UI route."
@@ -298,7 +318,7 @@ if { [[ -z "$OSAC_UI_BASE_URL" ]] || placeholder_url "$OSAC_UI_BASE_URL"; } &&
   [[ -n "$route_host" ]]; then
   OSAC_UI_BASE_URL="https://${route_host}"
 elif { [[ -z "$OSAC_UI_BASE_URL" ]] || placeholder_url "$OSAC_UI_BASE_URL"; }; then
-  fail "Set OSAC_UI_BASE_URL, or provide a kubeconfig that can read the osac-ui route."
+  fail "Set OSAC_UI_BASE_URL, or provide a kubeconfig for a standard OSAC cluster."
 fi
 
 if [[ -z "$OSAC_API_BASE_URL" && -n "$api_route_host" ]]; then

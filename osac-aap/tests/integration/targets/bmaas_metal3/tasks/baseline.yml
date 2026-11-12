@@ -75,7 +75,7 @@
           {{ [] | osac.templates.root_device_hints(
             {'status': {'hardware': {'storage': [
               {'name': '/dev/vda', 'sizeBytes': 17179869184,
-               'serial': 'SER-42', 'wwn': '0x5000c50015ea71ad'}
+               'serialNumber': 'SER-42', 'wwn': '0x5000c50015ea71ad'}
             ]}}}) }}
 
     - name: Build BMH patch using actual role code
@@ -89,7 +89,7 @@
           - bmh_patch.spec.image.url == "https://example.com/image.qcow2"
           - bmh_patch.spec.image.checksum == "deadbeef1234"
           - bmh_patch.spec.image.checksumType == "md5"
-          - "bmh_patch.spec.rootDeviceHints == {'serial': 'SER-42'}"
+          - "bmh_patch.spec.rootDeviceHints == {'serialNumber': 'SER-42'}"
           - bmh_patch.metadata.annotations['osac.openshift.io/fallback-root-device'] == fallback_root_device_hints | to_json
           - bmh_patch.metadata.resourceVersion == "123"
         fail_msg: "Non-OCI image BMH patch must contain checksum and checksumType"

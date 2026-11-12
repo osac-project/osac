@@ -920,7 +920,7 @@ endif
 .PHONY: install-osac
 install-osac: validate-osac-inputs validate-osac-chart-oci-ref ## Install OSAC instance (PLATFORM= PROFILE= NS= required)
 # The gate builds the same dependencies as a prerequisite, and a recursive
-# install that skips the gate (MULTICLUSTER_SKIP_GATE) still needs them.
+# install that skips the gate (VALIDATED_SKIP_GATE) still needs them.
 ifndef OSAC_CHART_OCI_REF
 install-osac: helm-osac-deps
 endif
@@ -992,6 +992,14 @@ endif
 
 ##@ Composite
 
+# A composite goal runs the gate in its first phase, then its phase
+# sub-makes repeat the same renders and chart-dependency builds for the
+# same values. A sub-make that receives these -o flags skips that
+# duplicate work. The flags skip only the gate targets themselves: each
+# phase keeps its own chart-dependency and OCI-ref prerequisites, and the
+# parent gate already made the namespace check for the same NS.
+VALIDATED_SKIP_GATE := -o validate-inputs -o validate-osac-inputs
+
 .PHONY: install
 ifeq ($(DRY_RUN),1)
 install: install-dry-run ## Render full install manifests without cluster changes (DRY_RUN=1)
@@ -999,8 +1007,8 @@ else ifeq ($(PROFILE),dev-full)
 ifeq ($(HOST_IS_MAC_ARM),true)
 install: validate-osac-inputs install-infra ## Full ARM64 Mac install: infra + local images + osac + dev stack
 	$(MAKE) kind-build-load-images PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
-	$(MAKE) install-osac PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
-	$(MAKE) install-devstack PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) $(VALIDATED_SKIP_GATE) install-osac PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) $(VALIDATED_SKIP_GATE) install-devstack PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 else
 install: validate-osac-inputs install-infra install-osac install-devstack ## Full install: infra + osac (+ dev stack for dev-full)
 endif
@@ -1112,12 +1120,11 @@ endif
 # The parse-time guard above pins PLATFORM=openshift PROFILE=vmaas-ci for
 # this goal, and the two phase sub-makes pin the same pair. The gate above
 # therefore already rendered every chart for the same values, input
-# overrides and remote-cluster arguments, so the phases skip their own
-# copies instead of repeating those renders. The namespace check is covered
-# by the parent gate too (both phases receive the same NS it validated),
-# and the phases' other prerequisites (chart dependencies, OCI-ref checks)
-# stay in force.
-MULTICLUSTER_SKIP_GATE := -o validate-inputs -o validate-osac-inputs
+# overrides and remote-cluster arguments, so the phases pass
+# VALIDATED_SKIP_GATE and skip their own copies instead of repeating those
+# renders. The namespace check is covered by the parent gate too (both
+# phases receive the same NS it validated), and the phases' other
+# prerequisites (chart dependencies, OCI-ref checks) stay in force.
 
 .PHONY: install-multicluster
 install-multicluster: validate-inputs validate-remote-cluster-render ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
@@ -1145,10 +1152,10 @@ install-multicluster: validate-inputs validate-remote-cluster-render ## Prepare 
 		REMOTE_KUBECONFIG="$${REMOTE_KUBECONFIG}" \
 		REMOTE_STORAGE_CLASS="$(REMOTE_STORAGE_CLASS)" \
 		EVPN_VALUES="$(INFRA_VALUES)"
-	$(MAKE) $(MULTICLUSTER_SKIP_GATE) install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
+	$(MAKE) $(VALIDATED_SKIP_GATE) install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$${KUBECONFIG}" \
 		INFRA_VALUES_EXTRA="$${INFRA_VALUES_EXTRA}"
-	$(MAKE) $(MULTICLUSTER_SKIP_GATE) install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
+	$(MAKE) $(VALIDATED_SKIP_GATE) install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$${KUBECONFIG}" \
 		REMOTE_KUBECONFIG="$${REMOTE_KUBECONFIG}" \
 		REMOTE_API_ADDRESS="$${REMOTE_API_ADDRESS}" \

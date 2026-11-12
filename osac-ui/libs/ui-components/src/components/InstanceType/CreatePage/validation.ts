@@ -10,12 +10,8 @@ const requiredForGpu = (t: TFunction) => t('Required when configuring a GPU');
 
 type GpuFormValues = InstanceTypeCreateFormValues['spec']['gpu'];
 
-const hasGpuCount = (value: unknown) =>
-  value !== undefined && value !== '' && value !== 0 && value !== '0';
-
-// OSAC-7639: Support the no-GPU sentinel from both numeric and string inputs.
 export const isGpuConfigured = (gpu: GpuFormValues | undefined) =>
-  Boolean(gpu?.pciDeviceSelector || gpu?.resourceName || hasGpuCount(gpu?.count));
+  Boolean(gpu?.pciDeviceSelector || gpu?.resourceName || gpu?.count);
 
 const gpuValidationSchema = (t: TFunction) =>
   Yup.object({

@@ -87,7 +87,7 @@ describe('getInstanceTypeCreateSchema', () => {
           ...validValues,
           spec: {
             ...validValues.spec,
-            gpu: { pciDeviceSelector: '', resourceName: '', count: '0' },
+            gpu: { pciDeviceSelector: '', resourceName: '', count: 0 },
           },
         }),
       ).resolves.toBe(true);

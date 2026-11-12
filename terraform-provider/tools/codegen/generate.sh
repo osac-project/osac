@@ -15,42 +15,37 @@
 # Generates the Terraform plugin framework schema and model code for a public API service from its proto
 # definitions. See README.md in this directory for the full description of the pipeline and its caveats.
 #
-# The first step of the pipeline converts the protos into an OpenAPI document. Three plugins were
-# evaluated for that step, all run with the original proto field names:
+# The first step converts the protos into an OpenAPI document. We need three things
+# from that step:
 #
-#   github.com/google/gnostic/cmd/protoc-gen-openapi
-#     Emits OpenAPI 3 directly, and maps OUTPUT_ONLY field behavior to readOnly. Rejected because it
-#     honors the `body` option of the google.api.http annotations but not `response_body`: the
-#     responses of operations with `response_body: "object"` reference the whole RPC response
-#     message, so the merged Terraform schemas contain the envelope attributes, the generated Go
-#     code has duplicate type names and doesn't compile, and enums are emitted as numbers instead
-#     of strings.
+#   1. `response_body: "object"` honored: responses must be the resource, not the
+#      RPC envelope, or the generated Go types collide and don't compile.
+#   2. Proto field names: snake_case, matching both the Terraform idiom and the
+#      names the gateway puts on the wire.
+#   3. Enums as strings: they become OneOf validators, so bad values fail at plan
+#      time instead of apply time.
 #
-#   connectrpc.com/protoc-gen-connect-openapi
-#     Emits OpenAPI 3.1 directly, honors `response_body`, and maps field behavior (OUTPUT_ONLY to
-#     readOnly, REQUIRED to required). Rejected because it represents optional fields as
-#     `oneOf: [<schema>, null]`, and tfplugingen-openapi doesn't look through that wrapper, so the
-#     enums lose their generated OneOf validators: invalid values would only be rejected by the
-#     server at apply time instead of by the plan. It is the better OpenAPI document for other
-#     consumers (documentation, client generation), so it could be run alongside this pipeline.
+# Four plugins were evaluated. Only openapiv2 passes all three today.
 #
-#   github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2   (used here)
-#     The plugin of the REST gateway itself, so the document matches the contract the gateway
-#     actually serves, including `body` and `response_body`, and enums are emitted as strings with
-#     their values, which become OneOf validators. Its two costs are accepted: it emits Swagger
-#     2.0, requiring the swagger2openapi conversion below, and it ignores google.api.field_behavior,
-#     so output-only and immutable semantics stay in the provider glue.
+#   protoc-gen-openapiv2 (grpc-gateway) — USED
+#     + passes all three
+#     - emits Swagger 2.0, hence the swagger2openapi conversion below
+#     - ignores field_behavior, hence output-only/immutable semantics in the glue
 #
-#   github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv3
-#     The successor of the plugin above, emitting OpenAPI 3.1 directly with the same correct
-#     `body` and `response_body` handling, string enums and field behavior mapping (OUTPUT_ONLY
-#     to readOnly). Rejected for now for three reasons: it is alpha, with the emitted JSON shape
-#     explicitly not stable yet; it emits the protojson camelCase property names with no option
-#     for the original proto names, which would both break the snake_case Terraform idiom and
-#     desynchronize the schema from the wire format the gateway marshals; and it represents
-#     proto oneofs as OpenAPI oneOf composition, which tfplugingen-openapi doesn't support, so
-#     the whole resource schema is skipped. Worth revisiting once it grows a proto names option
-#     and the mapping of composed schemas.
+#   protoc-gen-openapi (gnostic) — REJECTED
+#     x ignores response_body: envelopes leak in, generated code doesn't compile
+#     x enums as numbers
+#
+#   protoc-gen-connect-openapi (connectrpc) — REJECTED
+#     x optional fields become oneOf: [schema, null], and tfplugingen-openapi
+#       doesn't look through it: enum validators are lost
+#     + best raw OpenAPI document (docs, client generation), could run alongside
+#
+#   protoc-gen-openapiv3 (grpc-gateway successor) — REJECTED FOR NOW
+#     x camelCase property names only, no proto-names option
+#     x proto oneofs become oneOf composition, tfplugingen skips the whole schema
+#     x alpha, output unstable
+#     > revisit when it grows a proto-names option and oneofs map
 #
 # Usage:
 #

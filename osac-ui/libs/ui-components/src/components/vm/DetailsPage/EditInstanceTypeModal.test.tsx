@@ -215,12 +215,12 @@ describe('EditInstanceTypeModal wrapper', () => {
     await user.click(await screen.findByRole('combobox'));
     expect(
       await screen.findByRole('option', {
-        name: /GPU small — 4 vCPUs, 16 GiB · 1 GPU · nvidia\.com\/A100/,
+        name: /GPU small — 4 vCPUs · 16 GiB · 1 GPU · nvidia\.com\/A100/,
       }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole('option', {
-        name: /GPU medium — 8 vCPUs, 32 GiB · 1 GPU · nvidia\.com\/A100/,
+        name: /GPU medium — 8 vCPUs · 32 GiB · 1 GPU · nvidia\.com\/A100/,
       }),
     ).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /GPU negative/ })).not.toBeInTheDocument();

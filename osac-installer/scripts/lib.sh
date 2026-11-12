@@ -493,9 +493,9 @@ _LIB_OPEN_SCHEMA_MAPS=(
 # because some versions echo the rejected value, and a bare field path would
 # leave the caller to guess which constraint applies. Only these rules are
 # listed: each text is static and value-free, and the schemas' ordinary
-# constraints (type, pattern, other maxima) keep the generic message. Paths
-# use the dotted form Helm 3 prints; the lookup normalizes Helm 4's
-# slash-separated form. A path under a list carries its entry index, which is
+# constraints (type, pattern, other maxima) keep the generic message. Helm
+# releases spell a path dotted or slash-separated, so the lookup normalizes
+# to the dotted form. A path under a list carries its entry index, which is
 # a position and not caller data: that rule is listed once for the field, the
 # lookup strips the index to match it, and the printed path keeps it. Keep in
 # step with the schemas and the input-validation tests.

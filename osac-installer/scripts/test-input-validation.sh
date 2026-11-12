@@ -1645,9 +1645,9 @@ grep -Fq 'metrics-reader.internal.example.com' "${netbox_gate_err}" \
 # length, so every rejection of the field names all three rather than
 # leaving the caller to guess which one applies.
 metering_reader_gate_err="${TMP_DIR}/metering-reader-gate.err"
-reader_name_rule='metering\.readers\.0\.name: violates the values schema:'
-reader_name_rule+=' must be a string; must be a lowercase DNS name'
-reader_name_rule+=' of at most 253 characters'
+reader_name_rule='^(metering\.readers\.0\.name|metering/readers/0/name):'
+reader_name_rule+=' violates the values schema: must be a string;'
+reader_name_rule+=' must be a lowercase DNS name of at most 253 characters$'
 
 echo "checking metering-reader-dns-name (bad DNS names fail the gate naming the rule)"
 if render_osac_chart_offline "${offline_token}" \

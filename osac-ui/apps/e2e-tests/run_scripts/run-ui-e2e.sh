@@ -276,8 +276,8 @@ if command -v oc >/dev/null 2>&1; then
     /home/kni/clusterconfigs/auth/kubeconfig
     /root/kubeconfig
     /root/dev-scripts/ocp/ostest/auth/kubeconfig
-    /root/.kube/config
   )
+  [[ -n "${HOME:-}" ]] && kubeconfig_candidates+=("${HOME}/.kube/config")
   KUBECONFIG_PATH=""
   route_host=""
   for candidate in "${kubeconfig_candidates[@]}"; do
@@ -286,7 +286,7 @@ if command -v oc >/dev/null 2>&1; then
       -n osac get route osac-ui -o jsonpath='{.spec.host}' 2>/dev/null || true)
     api_route_host=$(KUBECONFIG="$candidate" oc --request-timeout=10s \
       -n osac get route fulfillment-api -o jsonpath='{.spec.host}' 2>/dev/null || true)
-    if [[ -n "$route_host" && ( "$needs_vmaas" != true || -n "$api_route_host" ) ]]; then
+    if [[ -n "$route_host" ]]; then
       KUBECONFIG_PATH="$candidate"
       info "Using a reachable KUBECONFIG with an OSAC UI route."
       break

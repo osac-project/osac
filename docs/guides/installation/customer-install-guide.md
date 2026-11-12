@@ -335,9 +335,17 @@ Notes on individual components:
 - **LVM Storage** uses a channel that tracks the OpenShift Container Platform
   minor version. Another dynamic storage class can satisfy the VMaaS storage
   prerequisite.
-  In production, keep `lvms.enabled: false` and configure the customer-managed
-  LVMS operator and its `LVMCluster` selector; do not rely on dynamic device
-  discovery.
+  Preserve LVMS settings and ownership in existing `osac-deps` and `osac-infra`
+  prerequisite releases. Disabling `lvms.enabled` in an existing `osac-deps`
+  release that owns LVMS removes its `openshift-storage` Namespace and
+  Subscription and can disrupt storage. Before changing that owning release's
+  flag, have administrators plan and complete any required preservation or
+  migration of LVMS resources and dependent workloads; see the
+  [prerequisite ownership and upgrade guidance](helm-deployment-guide.md#when-prerequisites-already-exist).
+  In production, keep `lvms.enabled: false` in the `osac` instance chart,
+  where it controls only the local-storage registration hook. Configure the
+  customer-managed LVMS operator and its `LVMCluster` selector; do not rely on
+  dynamic device discovery.
 - **MetalLB Operator** provides the CaaS API management VIPs on the hub. Ask
   your platform administrators for the reserved, free, routable address range
   and add a covering CIDR to `global.networking.excludedIpv4Cidrs` before
@@ -1996,10 +2004,11 @@ override; publish the required templates to Fulfillment separately.
    The `publishTemplates` hook publishes the compute instance templates that
    VMaaS needs. Disable it only if those templates are supplied separately.
 
-   For production, keep `lvms.enabled: false`, including when the workload
-   cluster uses LVMS. Before requesting VM workloads, have your storage
-   administrators register the StorageBackend and StorageTiers in OSAC and
-   complete [tenant storage onboarding](../../storage/guides/tenant-onboarding.md).
+   For production, keep `lvms.enabled: false` in the `osac` instance values,
+   including when the workload cluster uses LVMS. Before requesting VM
+   workloads, have your storage administrators register the StorageBackend and
+   StorageTiers in OSAC and complete
+   [tenant storage onboarding](../../storage/guides/tenant-onboarding.md).
    A platform default StorageClass alone does not register these offerings.
    Follow the [storage documentation](../../storage/README.md) for your
    provider, ownership, and tenancy model. For CSP-managed NetApp with shared
@@ -2504,10 +2513,11 @@ verified reason shown below. Leave the remaining checks enabled.
 Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
 including the storage registration and networking settings. Select storage
 based on the workload cluster, and put its values in `my-values.yaml` on the
-management cluster. For production, keep `lvms.enabled: false`, including
-when the workload cluster uses LVMS. Complete the storage handoff in
-[Section 6.1](#61-installing-osac-for-vmaas) for the workload cluster before
-requesting VMs; a default StorageClass alone does not register OSAC offerings.
+management cluster. For production, keep `lvms.enabled: false` in the `osac`
+instance values, including when the workload cluster uses LVMS. Complete the
+storage handoff in [Section 6.1](#61-installing-osac-for-vmaas) for the
+workload cluster before requesting VMs; a default StorageClass alone does not
+register OSAC offerings.
 
 The chart still requires a non-empty `fabricManager` value when provider
 networking is disabled, and VMaaS requires `k8sManager: cudn_evpn`. No Fabric
@@ -3352,8 +3362,9 @@ reconciles the `ConfigMap` from those values.
 - Development or CI reference values files and `main`/`latest` image tags.
 
 The automatic LVMS registration hook is for development and CI only, not
-production storage onboarding. Keep `lvms.enabled: false` in production
-and follow the storage handoff in [Section 6.1](#61-installing-osac-for-vmaas).
+production storage onboarding. Keep `lvms.enabled: false` in the `osac`
+instance values in production and follow the storage handoff in
+[Section 6.1](#61-installing-osac-for-vmaas).
 
 ### 9.3 Not covered by this guide
 

@@ -853,7 +853,7 @@ endif
 ifneq ($(PLATFORM),kind)
 	oc create namespace $(NS) --dry-run=client -o yaml | oc apply -f -
 	if [ -n "$${REMOTE_KUBECONFIG}" ]; then \
-		test -r "$${REMOTE_KUBECONFIG}" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $${REMOTE_KUBECONFIG}" >&2; exit 1; }; \
+		test -r "$${REMOTE_KUBECONFIG}" || { echo "ERROR: REMOTE_KUBECONFIG is not readable; check the path you supplied" >&2; exit 1; }; \
 		HUB_KUBECONFIG="$${KUBECONFIG}" \
 		REMOTE_KUBECONFIG="$${REMOTE_KUBECONFIG}" \
 		REMOTE_API_ADDRESS="$${REMOTE_API_ADDRESS}" \
@@ -1001,17 +1001,30 @@ ifeq ($(PROFILE),dev-full)
 		$(DEVSTACK_HELM_ARGS)
 endif
 
+# The parse-time guard above pins PLATFORM=openshift PROFILE=vmaas-ci for
+# this goal, and the two phase sub-makes pin the same pair. The gate above
+# therefore already rendered every chart for the same values, input
+# overrides and remote-cluster arguments, so the phases skip their own
+# copies instead of repeating those renders. The namespace check is covered
+# by the parent gate too (both phases receive the same NS it validated),
+# and the phases' other prerequisites (chart dependencies, OCI-ref checks)
+# stay in force.
+MULTICLUSTER_SKIP_GATE := -o validate-inputs -o validate-osac-inputs
+
 .PHONY: install-multicluster
 install-multicluster: validate-inputs ## Prepare a VMaaS workload cluster, then install OSAC on management in remote mode
-	@test -r "$${KUBECONFIG}" || { echo "ERROR: KUBECONFIG is not readable: $${KUBECONFIG}" >&2; exit 1; }
-	@test -r "$${REMOTE_KUBECONFIG}" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $${REMOTE_KUBECONFIG}" >&2; exit 1; }
+	# Paths stay out of these errors: a local path can carry user or
+	# customer names, and this output reaches terminals and CI logs.
+	@test -r "$${KUBECONFIG}" || { echo "ERROR: KUBECONFIG is not readable; check the path you supplied" >&2; exit 1; }
+	@test -r "$${REMOTE_KUBECONFIG}" || { echo "ERROR: REMOTE_KUBECONFIG is not readable; check the path you supplied" >&2; exit 1; }
 	@test -f "$${AAP_LICENSE_FILE}" || { echo "ERROR: AAP_LICENSE_FILE not found; check the path you supplied" >&2; exit 1; }
 	@if [ -n "$${REMOTE_API_ADDRESS}" ]; then case "$${REMOTE_API_ADDRESS}" in https://*) ;; *) echo "ERROR: REMOTE_API_ADDRESS must use https://" >&2; exit 1 ;; esac; fi
 	@oc --kubeconfig "$${KUBECONFIG}" get clusterversion version >/dev/null
 	@oc --kubeconfig "$${REMOTE_KUBECONFIG}" get clusterversion version >/dev/null
-	@for kubeconfig in "$${KUBECONFIG}" "$${REMOTE_KUBECONFIG}"; do \
+	@for entry in "KUBECONFIG:$${KUBECONFIG}" "REMOTE_KUBECONFIG:$${REMOTE_KUBECONFIG}"; do \
+		var="$${entry%%:*}"; kubeconfig="$${entry#*:}"; \
 		if [ "$$(oc --kubeconfig "$$kubeconfig" auth can-i '*' '*')" != yes ]; then \
-			echo "ERROR: cluster-admin access is required for $$kubeconfig" >&2; exit 1; \
+			echo "ERROR: cluster-admin access is required for the cluster in $${var}" >&2; exit 1; \
 		fi; \
 	done
 	@hub_api="$$(oc --kubeconfig "$${KUBECONFIG}" config view --minify -o jsonpath='{.clusters[0].cluster.server}')"; \
@@ -1023,10 +1036,10 @@ install-multicluster: validate-inputs ## Prepare a VMaaS workload cluster, then 
 		REMOTE_KUBECONFIG="$${REMOTE_KUBECONFIG}" \
 		REMOTE_STORAGE_CLASS="$(REMOTE_STORAGE_CLASS)" \
 		EVPN_VALUES="$(INFRA_VALUES)"
-	$(MAKE) install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
+	$(MAKE) $(MULTICLUSTER_SKIP_GATE) install-infra PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$${KUBECONFIG}" \
 		INFRA_VALUES_EXTRA="$${INFRA_VALUES_EXTRA}"
-	$(MAKE) install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
+	$(MAKE) $(MULTICLUSTER_SKIP_GATE) install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=$(NS) \
 		KUBECONFIG="$${KUBECONFIG}" \
 		REMOTE_KUBECONFIG="$${REMOTE_KUBECONFIG}" \
 		REMOTE_API_ADDRESS="$${REMOTE_API_ADDRESS}" \
@@ -1034,7 +1047,7 @@ install-multicluster: validate-inputs ## Prepare a VMaaS workload cluster, then 
 
 .PHONY: prepare-remote-cluster
 prepare-remote-cluster: validate-ns helm-infra-deps ## Prepare the remote VMaaS workload cluster without changing management
-	@test -r "$${REMOTE_KUBECONFIG}" || { echo "ERROR: REMOTE_KUBECONFIG is not readable: $${REMOTE_KUBECONFIG}" >&2; exit 1; }
+	@test -r "$${REMOTE_KUBECONFIG}" || { echo "ERROR: REMOTE_KUBECONFIG is not readable; check the path you supplied" >&2; exit 1; }
 	@oc --kubeconfig "$${REMOTE_KUBECONFIG}" get clusterversion version >/dev/null
 	REMOTE_KUBECONFIG="$${REMOTE_KUBECONFIG}" \
 	REMOTE_STORAGE_CLASS="$(REMOTE_STORAGE_CLASS)" \

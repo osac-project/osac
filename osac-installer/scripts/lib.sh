@@ -459,6 +459,24 @@ _LIB_OPEN_SCHEMA_MAPS=(
     preflight.skip
 )
 
+# Constraints the installer's own schemas add, so a rejected value names the
+# rule it broke and not only the field. Helm's wording is suppressed wholesale
+# because some versions echo the rejected value, and a bare field path would
+# leave the caller to guess which constraint applies. Only these rules are
+# listed: each text is static and value-free, and the schemas' ordinary
+# constraints (type, pattern, other maxima) keep the generic message. Paths
+# use the dotted form Helm 3 prints; the lookup normalizes Helm 4's
+# slash-separated form. Keep in step with the schemas and the input-validation
+# tests.
+_LIB_SCHEMA_CONSTRAINTS=(
+    "aap.bootstrap.backoffLimit|must be greater than or equal to 0"
+    "bundledVault.podSecurityContext.runAsUser|must be greater than or equal to 0"
+    "bundledVault.podSecurityContext.runAsGroup|must be greater than or equal to 0"
+    "bundledVault.podSecurityContext.fsGroup|must be greater than or equal to 0"
+    "bundledVault.podSecurityContext|runAsUser must not be 0 when runAsNonRoot is true"
+    "global.fulfillmentTrust|unknown keys are not allowed"
+)
+
 # Render a chart offline and report only value-free diagnostics on failure.
 # The arguments pass through to helm template unchanged, so every gate keeps
 # its own release name, values files, and --set inputs. Helm echoes the
@@ -501,10 +519,40 @@ offline_render_error() {
             # serviceMonitor label that is a hostname, for example), and
             # such a key can appear in the path, so the path is printed
             # as the map root without the entry key.
-            local maps="${_LIB_OPEN_SCHEMA_MAPS[*]}"
-            printf '%s\n' "$1" | LC_ALL=C awk -v q="'" -v maps="${maps}" '
+            # A path that matches a rule in _LIB_SCHEMA_CONSTRAINTS also
+            # gets that rule's value-free constraint text.
+            local maps="${_LIB_OPEN_SCHEMA_MAPS[*]}" constraints=''
+            printf -v constraints '%s;' "${_LIB_SCHEMA_CONSTRAINTS[@]}"
+            printf '%s\n' "$1" | LC_ALL=C awk -v q="'" -v maps="${maps}" \
+                -v constraints="${constraints}" '
                 BEGIN {
                     n_maps = split(maps, map_path, " ")
+                    n_rules = split(constraints, rule, ";")
+                    for (i = 1; i <= n_rules; i++) {
+                        sep = index(rule[i], "|")
+                        if (sep > 0) {
+                            r_path[i] = substr(rule[i], 1, sep - 1)
+                            r_text[i] = substr(rule[i], sep + 1)
+                        }
+                    }
+                }
+                # Constraint text for a rejected path, or "" when the path
+                # is not one of the rules listed above.
+                function constraint(path,    dot, i) {
+                    dot = path
+                    gsub(/\//, ".", dot)
+                    for (i = 1; i <= n_rules; i++)
+                        if (dot == r_path[i])
+                            return r_text[i]
+                    return ""
+                }
+                # The field path plus, when known, the violated constraint.
+                function schema_error(path,    text) {
+                    text = constraint(path)
+                    if (text != "")
+                        print path ": violates the values schema: " text
+                    else
+                        print path ": violates the values schema"
                 }
                 # Dotted name of the open values-schema map the path
                 # enters, or "" when it enters none. The segment after the
@@ -551,14 +599,14 @@ offline_render_error() {
                         if (map != "")
                             print map ": violates the values schema"
                         else if (path ~ /^[A-Za-z0-9_.~\/-]+$/)
-                            print path ": violates the values schema"
+                            schema_error(path)
                     } else if (match($0, "^- [A-Za-z0-9_.()-]+: ")) {
                         path = substr($0, RSTART + 2, RLENGTH - 4)
                         map = open_map(path)
                         if (map != "")
                             print map ": violates the values schema"
                         else
-                            print path ": violates the values schema"
+                            schema_error(path)
                     } else if ($0 !~ /^- /) {
                         # Only the chart-name line precedes the first item;
                         # any other non-item line means the schema block

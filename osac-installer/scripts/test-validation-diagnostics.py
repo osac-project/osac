@@ -422,6 +422,89 @@ class ValidationDiagnosticsTests(unittest.TestCase):
         self.assertIn("bmf.netbox.tokenValue: Invalid type; expected string",
                       specific.stderr)
 
+    def test_offline_render_error_reports_added_schema_constraints(self):
+        """Check the constraints this installer adds are named, value-free."""
+        schema = (
+            "Error: values don't meet the specifications of the schema(s)"
+            " in the following chart(s):\n"
+        )
+        minimum = "must be greater than or equal to 0"
+        nonroot = "runAsUser must not be 0 when runAsNonRoot is true"
+        cases = (
+            # Helm 3.18 prints the dotted path and its own minimum wording.
+            (schema + "osac:\n- aap.bootstrap.backoffLimit:"
+             " Must be greater than or equal to 0\n",
+             "aap.bootstrap.backoffLimit: violates the values schema: "
+             + minimum),
+            # Helm 3.22 and Helm 4 print a JSON pointer and a minimum.
+            (schema + "osac:\n- at '/aap/bootstrap/backoffLimit':"
+             " minimum: got -1, want 0\n",
+             "aap/bootstrap/backoffLimit: violates the values schema: "
+             + minimum),
+            (schema + "osac:\n- at '/bundledVault/podSecurityContext/"
+             "runAsUser': minimum: got -1, want 0\n",
+             "bundledVault/podSecurityContext/runAsUser: violates the"
+             " values schema: " + minimum),
+            # The `not` rule: Helm 3.18 and Helm 3.22 wording and paths.
+            (schema + "osac:\n- bundledVault.podSecurityContext:"
+             " Must not validate the schema (not)\n",
+             "bundledVault.podSecurityContext: violates the values schema: "
+             + nonroot),
+            (schema + "osac:\n- at '/bundledVault/podSecurityContext':"
+             " 'not' failed\n",
+             "bundledVault/podSecurityContext: violates the values schema: "
+             + nonroot),
+        )
+        for message, expected in cases:
+            with self.subTest(expected=expected):
+                result = subprocess.run(
+                    ["bash", "-c", 'source "$1"; offline_render_error "$2"',
+                     "bash", str(INSTALLER / "scripts/lib.sh"), message],
+                    text=True, capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assert_private(result.stdout + result.stderr)
+                self.assertIn(expected, result.stderr)
+        # The unknown-key rule hides the caller-supplied key itself, so a
+        # key-shaped canary must not reach the output.
+        message = (
+            schema + "osac:\n- global.fulfillmentTrust: Additional property"
+            f" {self.hostname} is not allowed\n"
+        )
+        result = subprocess.run(
+            ["bash", "-c", 'source "$1"; offline_render_error "$2"',
+             "bash", str(INSTALLER / "scripts/lib.sh"), message],
+            text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assert_private(result.stdout + result.stderr)
+        self.assertIn(
+            "global.fulfillmentTrust: violates the values schema: unknown"
+            " keys are not allowed", result.stderr)
+
+    def test_schema_constraint_texts_match_the_schemas(self):
+        """Check the constraints named in lib.sh still describe the schemas."""
+        osac = json.loads(
+            (INSTALLER / "charts/osac/values.schema.json").read_text())
+        infra = json.loads(
+            (INSTALLER / "charts/osac-infra/values.schema.json").read_text())
+        backoff = osac["properties"]["aap"]["properties"]["bootstrap"][
+            "properties"]["backoffLimit"]
+        self.assertEqual(backoff.get("minimum"), 0)
+        security = infra["properties"]["bundledVault"]["properties"][
+            "podSecurityContext"]
+        for field in ("runAsUser", "runAsGroup", "fsGroup"):
+            self.assertEqual(
+                security["properties"][field].get("minimum"), 0)
+        # The `not` rule rejects runAsUser 0 with runAsNonRoot true.
+        rule = security["not"]["allOf"]
+        self.assertEqual(rule[0]["properties"]["runAsUser"]["const"], 0)
+        self.assertEqual(rule[1]["properties"]["runAsNonRoot"]["const"],
+                         True)
+        trust = osac["properties"]["global"]["properties"][
+            "fulfillmentTrust"]
+        self.assertIs(trust.get("additionalProperties"), False)
+
     def test_schema_paths_of_open_maps_are_masked(self):
         """Check every validating open map in the chart schemas is listed."""
         derived = set()

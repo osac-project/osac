@@ -194,6 +194,15 @@ no Kubernetes resources are changed. The generated manifests are printed to
 the terminal; `EXTRA_HELM_ARGS` still applies to the OSAC chart. Do not include a
 Helm `--dry-run` flag in `EXTRA_HELM_ARGS`; rendering is intrinsic to this mode.
 
+`EXTRA_HELM_ARGS` is parsed as a shell-word list without shell evaluation:
+whitespace separates arguments, and single quotes, double quotes and
+backslashes group or escape characters, but `$(...)`, backticks, `$VAR`
+references and globs stay literal. Let your shell expand them before `make`
+runs (the examples in this file quote values for that reason). Unlike
+`EXTRA_HELM_ARGS`, the `INFRA_VALUES_EXTRA` and `INSTANCE_VALUES_EXTRA` values
+file lists are expanded unquoted by the recipe, so a path containing
+whitespace cannot be passed through them.
+
 #### Two-cluster VMaaS installation (OpenShift)
 
 Use `install-multicluster` when OSAC management services run on one cluster and
@@ -247,7 +256,9 @@ make install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
 management kubeconfig. `install-osac` creates the management Secret after
 confirming the target namespace exists; it also sets the operator and AAP chart
 values for remote-cluster mode. The combined `install-multicluster` target runs
-these steps in order.
+these steps in order and validates the inputs once for the whole flow: the two
+phase targets are invoked with the same values, so their own copies of the
+input-validation gate are skipped instead of repeating every render.
 
 The staged `osac-remote-access` service-account token requests a 365-day
 lifetime (`--duration=8760h`); the workload API server may cap the issued
@@ -787,8 +798,20 @@ section, in both charts: some sections are closed (for example
 `global.fulfillmentTrust`), while others — `osac-infra`'s `keycloak`
 and `topolvm`, or resource blocks like `operator.resources.requests`
 — remain open, so a typo there is accepted rather than rejected.
-The failure names the offending field and the violated constraint;
-fix the reported value and retry.
+The failure names the offending field. Helm's own message is suppressed
+because it can echo the rejected value, so for the constraints these
+schemas add themselves the gate also prints the violated constraint:
+`aap.bootstrap.backoffLimit` and the `bundledVault.podSecurityContext`
+POSIX IDs must be zero or greater, `runAsUser: 0` is rejected unless
+`runAsNonRoot` is explicitly `false`, and `global.fulfillmentTrust`
+rejects unknown keys. Other schema failures name the field only. Fix the
+reported field and retry.
+
+These checks reject values earlier releases accepted: a negative
+`aap.bootstrap.backoffLimit` or `bundledVault.podSecurityContext` ID,
+`runAsUser: 0` with the default `runAsNonRoot: true`, and unknown keys
+under `global.fulfillmentTrust`. Update overlays that set them before
+upgrading.
 
 The gate validates static inputs only. It does not check that the cluster is
 ready for the installation: prerequisites that must already exist (issuers,

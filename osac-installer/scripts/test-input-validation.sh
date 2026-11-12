@@ -954,6 +954,58 @@ render_failure_matching \
 # The gate's osac-chart render goes through render_osac_chart_offline, so
 # the tests below exercise the same code path the gate uses.
 source "${SCRIPT_DIR}/lib.sh"
+
+# The raw messages above are not what the installer prints: the gate
+# suppresses Helm's text (it can echo the rejected value) and reports the
+# field plus the constraint the installer's schemas add. These cases pin
+# the printed text, so a suppression change cannot silently drop the
+# constraint and leave the caller guessing which rule was broken.
+# render_chart_offline takes the arguments after `helm template`.
+GATE_OSAC_ARGS=("osac" "${OSAC_CHART_DIR}"
+  --values "${OSAC_CHART_DIR}/ci/default-values.yaml")
+GATE_INFRA_ARGS=("osac-infra" "${INFRA_CHART_DIR}"
+  --values "${INSTALLER_DIR}/values/dev/kind-infra.yaml")
+
+# Usage: gate_failure_matching NAME ARRAY_NAME PATTERN [HELM_ARGS...]
+gate_failure_matching() {
+  local name=$1 args_name=$2 pattern=$3
+  shift 3
+  local -n chart_args=${args_name}
+  local error="${TMP_DIR}/${name}.gate.stderr"
+  echo "checking ${name} (gate output matching '${pattern}')"
+  if render_chart_offline "${chart_args[@]}" "$@" >/dev/null 2>"${error}"; then
+    echo "ERROR: ${name}: the gate unexpectedly rendered successfully" >&2
+    exit 1
+  fi
+  if ! grep -Eq -- "${pattern}" "${error}"; then
+    echo "ERROR: ${name}: the gate failure omitted the expected text" >&2
+    cat "${error}" >&2
+    exit 1
+  fi
+}
+
+echo "checking gate-valid-defaults (the gate renders the defaults)"
+render_chart_offline "${GATE_OSAC_ARGS[@]}" >/dev/null \
+  || fail "gate-valid-defaults: the gate rejected the default values"
+
+# Helm 3 prints a dotted path and Helm 4 a slash-separated one; both are
+# accepted because the gate keeps whichever form Helm produced.
+gate_failure_matching backoff-limit-negative-gate GATE_OSAC_ARGS \
+  '^(aap\.bootstrap\.backoffLimit|aap/bootstrap/backoffLimit): violates the values schema: must be greater than or equal to 0$' \
+  --set aap.bootstrap.backoffLimit=-1
+
+gate_failure_matching vault-runasuser-negative-gate GATE_INFRA_ARGS \
+  '^(bundledVault\.podSecurityContext\.runAsUser|bundledVault/podSecurityContext/runAsUser): violates the values schema: must be greater than or equal to 0$' \
+  --set bundledVault.podSecurityContext.runAsUser=-1
+
+gate_failure_matching vault-runasuser-zero-nonroot-gate GATE_INFRA_ARGS \
+  '^(bundledVault\.podSecurityContext|bundledVault/podSecurityContext): violates the values schema: runAsUser must not be 0 when runAsNonRoot is true$' \
+  --set bundledVault.podSecurityContext.runAsUser=0
+
+gate_failure_matching fulfillment-trust-unknown-key-gate GATE_OSAC_ARGS \
+  '^(global\.fulfillmentTrust|global/fulfillmentTrust): violates the values schema: unknown keys are not allowed$' \
+  --set global.fulfillmentTrust.unknownKey=1
+
 netbox_gate_err="${TMP_DIR}/netbox-gate.err"
 # The render-only placeholder mirrors the Makefile's runtime-generated
 # NETBOX_OFFLINE_PLACEHOLDER; only its prefix is asserted against the

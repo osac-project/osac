@@ -52,13 +52,16 @@ type TenantBillingAssignmentsClient interface {
 	List(ctx context.Context, in *TenantBillingAssignmentsListRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsListResponse, error)
 	// Gets one assignment interval.
 	Get(ctx context.Context, in *TenantBillingAssignmentsGetRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsGetResponse, error)
-	// Assigns a tenant to a billing account. Rejects a tenant that already has an active assignment or an account
-	// already linked to another tenant with FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN
-	// account with FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN.
+	// Assigns a tenant to a billing account. Rejects a tenant that already has an active assignment with
+	// FAILED_PRECONDITION/TENANT_ALREADY_BOUND, an account already linked to another tenant with
+	// FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN account with
+	// FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN.
 	Create(ctx context.Context, in *TenantBillingAssignmentsCreateRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsCreateResponse, error)
-	// Replaces the tenant's active account. Closes the previous interval and opens a new one in the same
-	// transaction. A resubmission for the same tenant and account re-runs correlation resolution; it is a no-op
-	// when the current interval is already CONNECTED.
+	// Replaces the tenant's active account, closing the previous interval and opening a new one in the same
+	// transaction. Resubmitting the same tenant and account opens no new interval: it revalidates the current one
+	// in place, re-running correlation resolution against the provider, so it can still fail with
+	// FAILED_PRECONDITION/BILLING_CORRELATION_ID_CONFLICT, ACCOUNT_CORRELATION_CONFLICT, or ACCOUNT_AMBIGUOUS when
+	// the interval is CONNECTED.
 	Update(ctx context.Context, in *TenantBillingAssignmentsUpdateRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsUpdateResponse, error)
 }
 
@@ -124,13 +127,16 @@ type TenantBillingAssignmentsServer interface {
 	List(context.Context, *TenantBillingAssignmentsListRequest) (*TenantBillingAssignmentsListResponse, error)
 	// Gets one assignment interval.
 	Get(context.Context, *TenantBillingAssignmentsGetRequest) (*TenantBillingAssignmentsGetResponse, error)
-	// Assigns a tenant to a billing account. Rejects a tenant that already has an active assignment or an account
-	// already linked to another tenant with FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN
-	// account with FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN.
+	// Assigns a tenant to a billing account. Rejects a tenant that already has an active assignment with
+	// FAILED_PRECONDITION/TENANT_ALREADY_BOUND, an account already linked to another tenant with
+	// FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN account with
+	// FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN.
 	Create(context.Context, *TenantBillingAssignmentsCreateRequest) (*TenantBillingAssignmentsCreateResponse, error)
-	// Replaces the tenant's active account. Closes the previous interval and opens a new one in the same
-	// transaction. A resubmission for the same tenant and account re-runs correlation resolution; it is a no-op
-	// when the current interval is already CONNECTED.
+	// Replaces the tenant's active account, closing the previous interval and opening a new one in the same
+	// transaction. Resubmitting the same tenant and account opens no new interval: it revalidates the current one
+	// in place, re-running correlation resolution against the provider, so it can still fail with
+	// FAILED_PRECONDITION/BILLING_CORRELATION_ID_CONFLICT, ACCOUNT_CORRELATION_CONFLICT, or ACCOUNT_AMBIGUOUS when
+	// the interval is CONNECTED.
 	Update(context.Context, *TenantBillingAssignmentsUpdateRequest) (*TenantBillingAssignmentsUpdateResponse, error)
 	mustEmbedUnimplementedTenantBillingAssignmentsServer()
 }

@@ -222,9 +222,14 @@ func (s *PrivateBillingAccountsServer) discoverSync(ctx context.Context) error {
 
 	err := s.discoverFresh(ctx)
 	if err != nil {
-		s.discoverMu.Lock()
-		s.lastDiscoveryFailure = time.Now()
-		s.discoverMu.Unlock()
+		// A caller that cancels its walk or hits its own gRPC deadline says nothing about the provider, so
+		// its failure must not open the server-wide backoff for every other List. A walk cut off by
+		// discoverFresh's child discoverDeadline is still recorded: that child never cancels this context.
+		if ctx.Err() == nil {
+			s.discoverMu.Lock()
+			s.lastDiscoveryFailure = time.Now()
+			s.discoverMu.Unlock()
+		}
 		return err
 	}
 	s.discoverMu.Lock()

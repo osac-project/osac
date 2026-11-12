@@ -39,15 +39,19 @@ type BillingAccountUpsert struct {
 }
 
 // UpsertBillingAccount inserts a new billing_accounts row keyed by (ProviderKey,
-// ProviderAccountReference), or refreshes an existing one. DisplayName and BaseCurrency only
-// overwrite a stored value when the incoming value is non-empty: discovery never clears a known
-// value just because this read of the provider did not carry it. State and StatusObservedAt are
-// always refreshed - this call is itself the fresh observation. CorrelationID is written only
-// when the local value is currently null, the incoming value is non-empty, and no other row
-// already holds it (the partial unique index would otherwise reject the write); any other case -
-// including a local value that already differs from the incoming one - leaves the stored
-// correlation_id unchanged. That disagreement is a conflict for a later resolver to detect
-// (OSAC-6885), not something discovery corrects.
+// ProviderAccountReference), or refreshes an existing one. The stored observation is monotonic in
+// StatusObservedAt: State and StatusObservedAt are refreshed only when the incoming observation is
+// not older than the stored one, and StatusObservedAt can never move backwards. Walks that commit
+// out of order - a rolling update briefly runs two servers - therefore leave the newer observation
+// in place instead of letting the older one restore a stale state. DisplayName and BaseCurrency only
+// overwrite a stored value when the incoming value is non-empty and the observation is not older:
+// discovery never clears a known value just because this read of the provider did not carry it, and a
+// stale walk never reverts a newer one. CorrelationID is written only when the local value is
+// currently null, the incoming value is non-empty, and no other row already holds it (the partial
+// unique index would otherwise reject the write); any other case - including a local value that
+// already differs from the incoming one - leaves the stored correlation_id unchanged. That
+// disagreement is a conflict for a later resolver to detect (OSAC-6885), not something discovery
+// corrects.
 func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (id string, err error) {
 	err = tx.QueryRow(ctx, `
 		insert into billing_accounts (
@@ -66,12 +70,30 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 			end,
 			$7, $8
 		on conflict (provider_key, provider_account_reference) do update set
-			display_name = case when excluded.display_name <> '' then excluded.display_name
-				else billing_accounts.display_name end,
-			base_currency = case when excluded.base_currency <> '' then excluded.base_currency
-				else billing_accounts.base_currency end,
-			state = excluded.state,
-			status_observed_at = excluded.status_observed_at,
+			-- An observation older than the stored one comes from a walk that started before the walk
+			-- that produced the stored row, and may commit after it. It must not restore a stale state
+			-- or move status_observed_at backwards. This guard is a conditional assignment rather than
+			-- a WHERE on the conflict branch: a WHERE would suppress the row, and returning id would
+			-- then yield no row at all.
+			display_name = case
+				when excluded.status_observed_at >= billing_accounts.status_observed_at
+				 and excluded.display_name <> ''
+				then excluded.display_name
+				else billing_accounts.display_name
+			end,
+			base_currency = case
+				when excluded.status_observed_at >= billing_accounts.status_observed_at
+				 and excluded.base_currency <> ''
+				then excluded.base_currency
+				else billing_accounts.base_currency
+			end,
+			state = case
+				when excluded.status_observed_at >= billing_accounts.status_observed_at
+				then excluded.state
+				else billing_accounts.state
+			end,
+			status_observed_at = greatest(
+				billing_accounts.status_observed_at, excluded.status_observed_at),
 			correlation_id = case
 				when billing_accounts.correlation_id is null
 				 and excluded.correlation_id is not null
@@ -92,9 +114,12 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 
 // MarkBillingAccountsUnobserved marks UNKNOWN every billing_accounts row for providerKey whose
 // provider_account_reference is not in seenReferences, i.e. the account disappeared from the
-// provider's current list. The row is retained, never deleted. A nil seenReferences is treated as empty:
-// pgx encodes a nil slice as SQL NULL, and "not (x = any(NULL))" is NULL, which would match no rows and
-// silently skip the sweep for a provider whose list has become empty.
+// provider's current list. The row is retained, never deleted. Only a row whose status_observed_at is
+// not newer than observedAt is marked: a row observed after this walk started was seen by a walk that
+// committed first, and this sweep must not demote an account a newer walk has already discovered. A
+// nil seenReferences is treated as empty: pgx encodes a nil slice as SQL NULL, and "not (x =
+// any(NULL))" is NULL, which would match no rows and silently skip the sweep for a provider whose
+// list has become empty.
 func MarkBillingAccountsUnobserved(
 	ctx context.Context, tx Tx, providerKey string, seenReferences []string, observedAt time.Time,
 ) error {
@@ -106,6 +131,7 @@ func MarkBillingAccountsUnobserved(
 		set state = 'UNKNOWN', status_observed_at = $1
 		where provider_key = $2
 		  and not (provider_account_reference = any($3::text[]))
+		  and status_observed_at <= $1
 		  and state <> 'UNKNOWN'`,
 		observedAt, providerKey, seenReferences)
 	if err != nil {

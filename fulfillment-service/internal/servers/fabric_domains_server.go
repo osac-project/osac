@@ -164,6 +164,13 @@ func (s *FabricDomainsServer) Create(ctx context.Context, request *publicv1.Fabr
 func (s *FabricDomainsServer) Delete(ctx context.Context, request *publicv1.FabricDomainsDeleteRequest) (*publicv1.FabricDomainsDeleteResponse, error) {
 	privateRequest := &privatev1.FabricDomainsDeleteRequest{}
 	privateRequest.SetId(request.GetId())
-	_, err := s.delegate.Delete(ctx, privateRequest)
-	return &publicv1.FabricDomainsDeleteResponse{}, err
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
+	if err != nil {
+		return nil, err
+	}
+	item := &publicv1.FabricDomain{}
+	if err := s.outMapper.Copy(ctx, privateResponse.GetObject(), item); err != nil {
+		return nil, grpcstatus.Error(grpccodes.Internal, "failed to process fabric domain")
+	}
+	return publicv1.FabricDomainsDeleteResponse_builder{Object: item}.Build(), nil
 }

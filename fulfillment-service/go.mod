@@ -187,7 +187,7 @@ require (
 	github.com/DataDog/gostackparse v0.7.0
 	github.com/bits-and-blooms/bitset v1.24.6
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/golang-migrate/migrate/v4 v4.19.1
+	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/cel-go v0.30.0
 	github.com/gorilla/handlers v1.5.2
 	github.com/itchyny/gojq v0.12.19

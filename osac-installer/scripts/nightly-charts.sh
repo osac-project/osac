@@ -47,6 +47,7 @@ readonly NIGHTLY_CI_OVERLAY_VALUES=(
     osac-installer/values/dev/instance.yaml
     osac-installer/values/vmaas-ci/instance.yaml
     osac-installer/values/bmaas-ci/instance.yaml
+    osac-installer/values/caas-ci/instance.yaml
     osac-installer/values/full-ci/instance.yaml
     osac-installer/values/full-ci/netris.yaml
 )

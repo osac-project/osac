@@ -28,6 +28,69 @@ CHART_PIPELINES = sorted((ROOT / ".tekton").glob("*-chart/release.yaml"))
 ENV = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
 
 
+class CaaSImageStamping(unittest.TestCase):
+    def test_caas_built_and_pinned_images_preserve_unrelated_values(self) -> None:
+        step = next(
+            step for step in WORKFLOW["jobs"]["prepare"]["steps"] if step.get("name") == "Stamp charts and values"
+        )
+        script = step["run"].split("needs_build_for()", 1)[1]
+        script = "needs_build_for()" + script
+        for built in (True, False):
+            with self.subTest(built=built), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                shutil.copytree(ROOT / "osac-installer/scripts", root / "osac-installer/scripts")
+                overlay = root / "osac-installer/values/caas-ci/instance.yaml"
+                overlay.parent.mkdir(parents=True)
+                shutil.copyfile(ROOT / "osac-installer/values/caas-ci/instance.yaml", overlay)
+                original = yaml.safe_load(overlay.read_text())
+                components = (
+                    "osac-operator",
+                    "fulfillment-service",
+                    "osac-aap",
+                    "bare-metal-fulfillment-operator",
+                    "osac-metering",
+                    "osac-ui",
+                )
+                versions = dict.fromkeys(components, "0.5.1")
+                result = subprocess.run(
+                    ["bash", "-euc", "source osac-installer/scripts/nightly-charts.sh\n" + script],
+                    cwd=root,
+                    env={
+                        **ENV,
+                        "COMPONENT_VERSIONS": json.dumps(versions),
+                        "COMPONENTS_NEEDING_BUILD": json.dumps(components if built else []),
+                        "PROVISIONAL_TAG": "sha-abcdef0",
+                        "GITHUB_SHA": "abcdef0",
+                        "GITHUB_REPOSITORY": "osac-project/osac",
+                    },
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                actual = yaml.safe_load(overlay.read_text())
+                tag = "sha-abcdef0" if built else "0.5.1"
+                expected = original
+                for path, value in (
+                    (("operator", "image", "tag"), tag),
+                    (("service", "images", "service", "tag"), tag),
+                    (("bmf", "image", "tag"), tag),
+                    (("aap", "bootstrap", "image"), f"ghcr.io/osac-project/osac-aap:{tag}"),
+                    (("aap", "configAsCode", "eeImage"), f"ghcr.io/osac-project/osac-aap:{tag}"),
+                    (("aap", "configAsCode", "projectGitBranch"), "abcdef0"),
+                    (("aap", "configAsCode", "projectGitUri"), "https://github.com/osac-project/osac"),
+                    (("metering", "image", "tag"), tag),
+                    (("metering", "echoAdapter", "image", "tag"), tag),
+                    (("metering", "m360Adapter", "image", "tag"), tag),
+                    (("ui", "images", "ui"), f"ghcr.io/osac-project/osac-ui:{tag}"),
+                ):
+                    parent = expected
+                    for key in path[:-1]:
+                        parent = parent.get(key, {})
+                    if path[-1] in parent and parent[path[-1]] is not None:
+                        parent[path[-1]] = value
+                self.assertEqual(actual, expected)
+
+
 class Repo:
     """A throwaway git repository carrying the real release scripts."""
 

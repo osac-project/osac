@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from tests.e2e.core.runner import run, run_unchecked
+from tests.e2e.core.sanitize import register_endpoint
 
 PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
@@ -27,6 +28,7 @@ class GRPCClient:
     _TOKEN_TTL: float = 60.0
 
     def __init__(self, *, address: str, token: str = "", token_factory: Callable[[], str] | None = None) -> None:
+        register_endpoint(address)
         self.address: str = address
         self._static_token: str = token
         self._token_factory: Callable[[], str] | None = token_factory
@@ -43,16 +45,26 @@ class GRPCClient:
             return self._cached_token
         return self._static_token
 
-    def _build_args(self, *, service: str, data: dict[str, Any] | None = None) -> list[str]:
+    def _build_args(
+        self, *, service: str, data: dict[str, Any] | None = None, emit_defaults: bool = False
+    ) -> list[str]:
+        """Build grpcurl arguments, optionally retaining proto3 defaults in JSON responses."""
         args: list[str] = ["grpcurl", "-insecure", "-H", f"Authorization: Bearer {self.token}"]
+        if emit_defaults:
+            args.append("-emit-defaults")
         if data is not None:
             args.extend(["-d", json.dumps(data)])
         args.extend([self.address, service])
         return args
 
-    def call(self, *, service: str, data: dict[str, Any] | None = None, timeout: int = 300) -> dict[str, Any]:
+    def call(
+        self, *, service: str, data: dict[str, Any] | None = None, timeout: int = 300, emit_defaults: bool = False
+    ) -> dict[str, Any]:
+        """Call an RPC without changing default JSON encoding for existing callers."""
         __tracebackhide__ = True  # the frame's data is the request payload
-        return json.loads(run(*self._build_args(service=service, data=data), timeout=timeout))
+        return json.loads(
+            run(*self._build_args(service=service, data=data, emit_defaults=emit_defaults), timeout=timeout)
+        )
 
     def create_compute_instance(
         self,
@@ -290,6 +302,27 @@ class GRPCClient:
                 if not page or offset >= int(response.get("total", 0)):
                     break
         return str(items[0]["id"]) if items and items[0].get("id") else ""
+
+    def get_tenant_by_name(self, *, name: str) -> dict[str, Any] | None:
+        """Get a private Tenant by its exact metadata name.
+
+        List supports CEL filtering but does not provide a direct name lookup;
+        resolve the ID first, then use Get for the full status conditions.
+        """
+        response: dict[str, Any] = self.call(
+            service=f"{PRIVATE_API}.Tenants/List", data={"filter": f"this.metadata.name == {json.dumps(name)}"}
+        )
+        matches = [tenant for tenant in response.get("items", []) if tenant.get("metadata", {}).get("name") == name]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise RuntimeError(f"Found multiple Fulfillment tenants named '{name}'")
+
+        tenant_id = matches[0].get("id")
+        if not tenant_id:
+            raise RuntimeError(f"Fulfillment tenant '{name}' has no ID")
+        tenant_response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.Tenants/Get", data={"id": tenant_id})
+        return tenant_response.get("object")
 
     # ExternalIPPool operations (private API only)
 

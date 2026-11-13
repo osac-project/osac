@@ -52,7 +52,7 @@ const SecretListPage = () => {
   const { t } = useTranslation();
   const [, setSearchParams] = useSearchParams();
   const [deleteTarget, setDeleteTarget] = useState<Secret>();
-  const { projects, setProjects } = useSession();
+  const { projects, setProjects, role } = useSession();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
   const [type, setType, clearTypeFilter] = useArrayPageFilter<TypeFilterValue>(
     TYPE_PARAM,
@@ -63,10 +63,16 @@ const SecretListPage = () => {
 
   const typeFilter = type.map((t) => TYPE_FILTER_TO_ENUM[t]);
 
+  // show only shared and system secrets for cloud provider admin
+  const projectAndTenantFilter =
+    role === 'admin'
+      ? cel<Secret>((filter) => filter.field('metadata.tenant').isIn(['shared', 'system']))
+      : projectFilter;
+
   const { data, isLoading, error } = useListResource(Secrets, {
     filter: cel<Secret>((filter) =>
       filter.and(
-        projectFilter,
+        projectAndTenantFilter,
         search ? filter.field('metadata.name').contains(search) : undefined,
         type.length
           ? filter.or(...typeFilter.map((f) => filter.field('type').equals(f)))
@@ -76,7 +82,7 @@ const SecretListPage = () => {
   });
 
   const { data: totalsData, error: totalsError } = useListResource(Secrets, {
-    filter: projectFilter,
+    filter: projectAndTenantFilter,
     limit: 0,
   });
 
@@ -87,7 +93,7 @@ const SecretListPage = () => {
   const handleEdit = (secret: Secret) => navigate(`/secrets/${secret.id}/edit`);
   const handleDelete = (secret: Secret) => setDeleteTarget(secret);
 
-  const isFiltered = Boolean(search || projects.length || typeFilter.length);
+  const isFiltered = Boolean(search || (role !== 'admin' && projects.length) || typeFilter.length);
 
   const showEmptyState = !isLoading && !error && items.length === 0;
 
@@ -163,9 +169,11 @@ const SecretListPage = () => {
               <Toolbar>
                 <ToolbarContent>
                   <ToolbarGroup>
-                    <ToolbarItem>
-                      <ProjectFilter />
-                    </ToolbarItem>
+                    {role !== 'admin' && (
+                      <ToolbarItem>
+                        <ProjectFilter />
+                      </ToolbarItem>
+                    )}
                     <TypeFilter type={type} onClear={clearTypeFilter} onToggle={setType} />
                     <ToolbarItem>
                       <SearchInput

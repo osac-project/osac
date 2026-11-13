@@ -988,9 +988,17 @@ metering-auth-render-test: helm-deps ## Check metering service-account auth rend
 event-publisher-render-test: helm-deps ## Check the event publisher and metering topic wiring renders
 	python3 scripts/test-event-publisher-render.py
 
+.PHONY: billing-render-test
+billing-render-test: helm-osac-deps ## Check billing provider config renders and validates
+	uv run --project .. python scripts/test-billing-render.py
+
 .PHONY: mce-render-test
 mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py
+
+.PHONY: lvms-optional-path-render-test
+lvms-optional-path-render-test: ## Check the OSAC-managed LVMS worker allowlist renders
+	uv run --project .. python scripts/test-lvms-optional-path-render.py
 
 .PHONY: evpn-render-test
 evpn-render-test: helm-infra-deps ## Check EVPN host networking renders
@@ -1007,6 +1015,11 @@ dev-full-render-test: helm-deps helm-infra-deps ## Check dev-full TLS and Helm p
 .PHONY: openbao-security-context-test
 openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext renders numeric UID on Kind, omits on OpenShift
 	./scripts/test-openbao-security-context.sh
+
+.PHONY: ensure-inotify
+ensure-inotify: override export _INOTIFY_PROVIDER := $(KIND_RUNTIME_PROVIDER)
+ensure-inotify: ## Opt in to native Linux host inotify preparation (floor 512)
+	@source scripts/lib.sh && ensure_inotify_instances
 
 .PHONY: infra-ready-wait-test
 infra-ready-wait-test: ## Check install-infra waits for the issuer, PostgreSQL and Kafka when the profile creates them (stub kubectl)
@@ -1029,7 +1042,7 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

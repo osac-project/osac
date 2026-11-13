@@ -41,10 +41,14 @@ Complete these before onboarding tenants to the storage service:
 - [ ] Transport between the VMaaS target hosts and the SVM (Fibre Channel
       or iSCSI for block), configured and validated by the CSP
 - [ ] Trident CSI operator installed and operated on the VMaaS target
+- [ ] Worker nodes on the VMaaS target prepared for the block transport:
+      `multipathd` running with `find_multipaths no`. See
+      [providers/netapp.md](../providers/netapp.md#worker-node-preparation)
 - [ ] A shared TridentBackendConfig connecting Trident to the SVM
 - [ ] One StorageClass per offered tier with the
       `osac.openshift.io/tenant=csp-managed` and
-      `osac.openshift.io/storage-tier=<tier>` labels. See
+      `osac.openshift.io/storage-tier=<tier>` labels and a filesystem
+      type (`fsType`) in its parameters. See
       [providers/netapp.md](../providers/netapp.md#storageclass-contract)
 
 **OSAC side**
@@ -69,13 +73,39 @@ oc get csidriver
 # The shared Trident backend is bound
 oc get tridentbackendconfigs -A
 
-# One class per offered tier, with the required labels
-oc get storageclass -l osac.openshift.io/tenant=csp-managed
+# One class per offered tier; the last column is each class's tier label
+oc get storageclass -l osac.openshift.io/tenant=csp-managed \
+  -L osac.openshift.io/storage-tier
+
+# Every class sets a filesystem type: no <none> in the FSTYPE column
+oc get storageclass -l osac.openshift.io/tenant=csp-managed \
+  -o custom-columns=NAME:.metadata.name,FSTYPE:.parameters.fsType
+
+# Each worker that can run tenant VMs: multipathd is active and
+# find_multipaths is "off" (how multipathd reports "no")
+oc debug node/<node> -- chroot /host sh -c \
+  'systemctl is-active multipathd; multipathd show config | grep -w find_multipaths'
 ```
 
-The last command is the same lookup OSAC performs during onboarding, so
-missing or mislabeled classes surface here rather than as a `StorageReady=False`
-condition later.
+OSAC lists the classes by the same tenant label during onboarding, then
+resolves each configured tier by the `osac.openshift.io/storage-tier` label.
+Each configured tier must appear exactly once in the last column. A class
+whose tier label is missing or misspelled is listed but does not count for
+its tier, and two classes with the same tier make that tier ambiguous.
+Either one surfaces later as a `StorageReady=False` condition. See the
+[resolution rules](../concepts/storageclass.md#resolution-rules).
+
+The node check has no OSAC equivalent. An unprepared worker passes
+onboarding and volume provisioning, and first fails when a tenant VM
+attaches a disk there. See
+[Worker node preparation](../providers/netapp.md#worker-node-preparation)
+for the configuration and the failure messages.
+
+The filesystem type check has no OSAC equivalent either. A class without
+a filesystem type passes onboarding and provisions volumes, and VM disk
+imports on it fail. A class that sets `csi.storage.k8s.io/fstype` instead
+of `fsType` shows `<none>` in that check and needs no change. See
+[Filesystem type](../providers/netapp.md#filesystem-type).
 
 ## Configure storage in OSAC
 
@@ -145,9 +175,9 @@ does **not**:
   system, including during tenant teardown.
 - Use backend management credentials, even if they were supplied when the
   backend was registered.
-- Validate the transport (Fibre Channel zoning, iSCSI networking), Trident
-  health, or the TridentBackendConfig. Readiness is StorageClass presence
-  only.
+- Validate the classes' parameters, the transport (Fibre Channel zoning,
+  iSCSI networking, worker node multipath configuration), Trident health,
+  or the TridentBackendConfig. Readiness is StorageClass presence only.
 
 ## Troubleshooting
 
@@ -159,6 +189,8 @@ does **not**:
 | A class exists but the tier still doesn't resolve | The class is labeled for a different tier, or the tier isn't configured in OSAC | Verify both label values; check `osac get storagetier` |
 | Classes exist for tiers OSAC doesn't know about | Extra classes for unconfigured tiers are ignored by design | No action needed; they don't affect readiness |
 | CSP-managed backend for a provider other than NetApp | Not supported in the Dev Preview | CSP-managed runtime support is NetApp-only; tiers from other CSP-managed providers are never dispatched to provider automation |
+| `StorageReady=True`, but the pod mounting a tenant disk stays in `ContainerCreating`; its events show `multipathd is not running` or `unsupported find_multipaths` | The worker node is not prepared for the block transport | Prepare the node. See [Worker node preparation](../providers/netapp.md#worker-node-preparation) |
+| `StorageReady=True`, but a VM disk import fails; its importer pod logs `Could not create '/data/disk.img': Permission denied` | The tier's StorageClass sets no filesystem type, so the volume is mounted with root ownership | Recreate the class with `fsType`, then recreate the ComputeInstance. See [Filesystem type](../providers/netapp.md#filesystem-type) |
 
 Warning events on the Tenant (reason `DuplicateStorageClass`) repeat the
 duplicate details:

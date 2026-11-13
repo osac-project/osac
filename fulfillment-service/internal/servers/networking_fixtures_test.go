@@ -112,9 +112,15 @@ func seedVirtualNetwork(tenant, cidr string, state privatev1.VirtualNetworkState
 	return response.GetObject()
 }
 
-// seedSubnet creates a Subnet of a VirtualNetwork in the given state.
+// seedSubnet creates a Subnet of a VirtualNetwork in the given state, in the tenant's default project.
 func seedSubnet(vn *privatev1.VirtualNetwork, name, cidr string, state privatev1.SubnetState,
 	labels map[string]string) *privatev1.Subnet {
+	return seedSubnetInProject("", vn, name, cidr, state, labels)
+}
+
+// seedSubnetInProject creates a Subnet of a VirtualNetwork in the given project and state.
+func seedSubnetInProject(project string, vn *privatev1.VirtualNetwork, name, cidr string,
+	state privatev1.SubnetState, labels map[string]string) *privatev1.Subnet {
 	if name == "" {
 		name = fmt.Sprintf("subnet-%s", uuid.NewString()[:8])
 	}
@@ -122,6 +128,7 @@ func seedSubnet(vn *privatev1.VirtualNetwork, name, cidr string, state privatev1
 		Metadata: privatev1.Metadata_builder{
 			Name:        name,
 			Tenant:      vn.GetMetadata().GetTenant(),
+			Project:     project,
 			Labels:      labels,
 			Annotations: map[string]string{"osac.openshift.io/owner-reference": vn.GetId()},
 		}.Build(),
@@ -138,9 +145,15 @@ func seedSubnet(vn *privatev1.VirtualNetwork, name, cidr string, state privatev1
 	return response.GetObject()
 }
 
-// seedSecurityGroup creates a SecurityGroup of a VirtualNetwork in the given state.
+// seedSecurityGroup creates a SecurityGroup of a VirtualNetwork in the given state, in the tenant's default project.
 func seedSecurityGroup(vn *privatev1.VirtualNetwork, name string, state privatev1.SecurityGroupState,
 	labels map[string]string) *privatev1.SecurityGroup {
+	return seedSecurityGroupInProject("", vn, name, state, labels)
+}
+
+// seedSecurityGroupInProject creates a SecurityGroup of a VirtualNetwork in the given project and state.
+func seedSecurityGroupInProject(project string, vn *privatev1.VirtualNetwork, name string,
+	state privatev1.SecurityGroupState, labels map[string]string) *privatev1.SecurityGroup {
 	if name == "" {
 		name = fmt.Sprintf("sg-%s", uuid.NewString()[:8])
 	}
@@ -148,6 +161,7 @@ func seedSecurityGroup(vn *privatev1.VirtualNetwork, name string, state privatev
 		Metadata: privatev1.Metadata_builder{
 			Name:        name,
 			Tenant:      vn.GetMetadata().GetTenant(),
+			Project:     project,
 			Labels:      labels,
 			Annotations: map[string]string{"osac.openshift.io/owner-reference": vn.GetId()},
 		}.Build(),
@@ -252,6 +266,24 @@ func seedReadyDefaultNetworking(tenant string, capacity int64) defaultNetworking
 		markDefaultNetworkingReady(tenant)
 	}
 	return seedReadyDefaultNetworkingIDs(tenant, result, vn)
+}
+
+// seedReadyDefaultNetworkingWithNAT adds a READY NATGateway to the tenant's
+// default VirtualNetwork for Cluster creation tests with provider networking enabled.
+func seedReadyDefaultNetworkingWithNAT(tenant string) defaultNetworkingFixture {
+	result := seedReadyDefaultNetworking(tenant, 0)
+	gateways, err := fixtureDAO[*privatev1.NATGateway]().List().SetFilter(fmt.Sprintf(
+		"this.spec.virtual_network.id == %q", result.virtualNetworkID)).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	for _, gateway := range gateways.GetItems() {
+		if !gateway.GetMetadata().HasDeletionTimestamp() &&
+			gateway.GetStatus().GetState() == privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY {
+			result.natGatewayID = gateway.GetId()
+			return result
+		}
+	}
+	result.natGatewayID = seedReadyNATGateway(tenant, result.virtualNetworkID, true)
+	return result
 }
 
 func seedReadyDefaultNetworkingIDs(tenant string, result defaultNetworkingFixture,

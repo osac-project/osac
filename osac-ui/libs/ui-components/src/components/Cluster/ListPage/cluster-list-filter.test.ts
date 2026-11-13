@@ -20,20 +20,26 @@ describe('buildClusterListFilter', () => {
     expect(filter).toBe(`this.status.state == ${ClusterState.READY}`);
   });
 
-  it('builds a cluster version filter', () => {
-    const filter = buildClusterListFilter({ versionNames: ['v4.17', 'v4.15'] });
-    expect(filter).toBe('this.spec.version.name in ["v4.17", "v4.15"]');
+  it('builds a filter for the observed cluster version', () => {
+    const filter = buildClusterListFilter({ observedVersions: ['4.17.0', '4.15.0'] });
+    expect(filter).toBe('this.status.observed_version in ["4.17.0", "4.15.0"]');
+  });
+
+  it('matches no clusters when selected catalog versions cannot be resolved', () => {
+    expect(buildClusterListFilter({ observedVersions: [] })).toBe(
+      'this.status.observed_version in []',
+    );
   });
 
   it('combines search, status, and version filters', () => {
     const filter = buildClusterListFilter({
       search: 'dev',
       status: 'progressing',
-      versionNames: ['v4.17'],
+      observedVersions: ['4.17.0'],
     });
     expect(filter).toContain('this.metadata.name.contains("dev")');
     expect(filter).toContain(`this.status.state == ${ClusterState.PROGRESSING}`);
-    expect(filter).toContain('this.spec.version.name in ["v4.17"]');
+    expect(filter).toContain('this.status.observed_version in ["4.17.0"]');
     expect(filter).toContain(' && ');
   });
 });

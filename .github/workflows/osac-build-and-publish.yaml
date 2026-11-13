@@ -199,17 +199,42 @@ jobs:
           osac-ui
         )
 
+        RELEASE_LINE=$(read_release_line .)
+        echo "release-line=${RELEASE_LINE}" >> "$GITHUB_OUTPUT"
+        echo "Release line of this branch: ${RELEASE_LINE}"
+
+        # Every release version, umbrella or component, must be X.Y.Z or
+        # X.Y.Z-rc.N and belong to this branch's release line -- tags are
+        # not branch-scoped, so this is the only thing that keeps one
+        # branch from minting a version inside another branch's line.
+        require_line_version() {
+          local what="$1" version="$2"
+          local safe_what safe_version
+          safe_what=$(_gha_sanitize_for_message "${what}")
+          safe_version=$(_gha_sanitize_for_message "${version}")
+          if ! is_release_version "${version}"; then
+            echo "::error::Invalid version '${safe_version}' for ${safe_what} -- must be X.Y.Z or X.Y.Z-rc.N" >&2
+            exit 1
+          fi
+          if [[ "$(release_line_of "${version}")" != "${RELEASE_LINE}" ]]; then
+            echo "::error::${safe_what} version ${safe_version} is outside this branch's release line ${RELEASE_LINE}.x (see RELEASE_LINE)" >&2
+            exit 1
+          fi
+        }
+
         if [[ "${MODE}" == "release" ]]; then
           if [[ -z "${RELEASE_VERSION}" ]]; then
             echo "::error::release_version is required when mode=release" >&2
             exit 1
           fi
-          if ! validate_semver "${RELEASE_VERSION}"; then
-            echo "::error::Invalid semver for release_version: ${RELEASE_VERSION}" >&2
-            exit 1
-          fi
+          require_line_version release_version "${RELEASE_VERSION}"
           if real_tag_exists osac "${RELEASE_VERSION}"; then
             echo "::error::osac/v${RELEASE_VERSION} already exists -- refusing to re-release an already-published version" >&2
+            exit 1
+          fi
+          if LATEST_UMBRELLA=$(resolve_line_version . osac "${RELEASE_LINE}") \
+            && ! release_version_gt "${RELEASE_VERSION}" "${LATEST_UMBRELLA}"; then
+            echo "::error::release_version ${RELEASE_VERSION} must be higher than osac/v${LATEST_UMBRELLA}, the latest in line ${RELEASE_LINE}.x" >&2
             exit 1
           fi
         elif [[ -n "${COMPONENT_VERSIONS_OVERRIDE}" ]]; then
@@ -244,11 +269,7 @@ jobs:
               echo "::error::Unknown component '${safe_comp}' in component_versions -- must be one of: ${COMPONENTS[*]}" >&2
               exit 1
             fi
-            if ! validate_semver "${VER}"; then
-              safe_comp=$(_gha_sanitize_for_message "${COMP}")
-              echo "::error::Invalid semver '${VER}' for component_versions entry '${safe_comp}'" >&2
-              exit 1
-            fi
+            require_line_version "${COMP}" "${VER}"
             OVERRIDES["${COMP}"]="${VER}"
           done
         fi
@@ -266,50 +287,63 @@ jobs:
         build_json="[]"
         tag_json="[]"
         for COMPONENT in "${COMPONENTS[@]}"; do
-          # Check for an explicit override *before* requiring an existing
-          # tag: this is the one path that can bootstrap a component's
-          # very first release (resolve_release_tag has nothing to find
-          # yet, but an override says exactly what version to build). Only
-          # possible in release mode -- OVERRIDES is always empty in
-          # nightly mode (component_versions is rejected outside release
-          # mode above), and nightly always needs a real prior tag to
-          # compute its own suffix from, so it still falls through to the
-          # resolve_release_tag branch below unconditionally.
-          if [[ "${MODE}" == "release" && -n "${OVERRIDES[${COMPONENT}]+x}" ]]; then
+          LATEST_IN_LINE=$(resolve_line_version . "${COMPONENT}" "${RELEASE_LINE}" || true)
+
+          if [[ "${MODE}" == "nightly" ]]; then
+            # Always a fresh build from HEAD -- never promoted to a
+            # permanent tag (see promote-and-publish/tag below).
+            TARGET_VERSION="$(nightly_base_version . "${COMPONENT}" "${RELEASE_LINE}")-${NIGHTLY_SUFFIX}"
+            NEEDS_BUILD=true
+            WILL_TAG=false
+            echo "${COMPONENT}: ${TARGET_VERSION} (nightly build)"
+          elif [[ -n "${OVERRIDES[${COMPONENT}]+x}" ]]; then
             TARGET_VERSION="${OVERRIDES[${COMPONENT}]}"
             if real_tag_exists "${COMPONENT}" "${TARGET_VERSION}"; then
+              # The Konflux chart pipelines never see this pin: each one
+              # publishes the highest version its chart has in the line
+              # (resolve-chart-version in .tekton/*-chart/release.yaml).
+              # An older pin would ship one version here and another there.
+              if [[ "${TARGET_VERSION}" != "${LATEST_IN_LINE}" ]]; then
+                echo "::error::${COMPONENT} ${TARGET_VERSION} is not its latest version in line ${RELEASE_LINE}.x (${LATEST_IN_LINE}) -- a release always carries a component's latest version in the line" >&2
+                exit 1
+              fi
               NEEDS_BUILD=false
               WILL_TAG=false
               echo "${COMPONENT}: ${TARGET_VERSION} already released -- pinning, no rebuild"
             else
+              if [[ -n "${LATEST_IN_LINE}" ]] && ! release_version_gt "${TARGET_VERSION}" "${LATEST_IN_LINE}"; then
+                echo "::error::${COMPONENT} ${TARGET_VERSION} must be higher than ${COMPONENT}/v${LATEST_IN_LINE}, its latest in line ${RELEASE_LINE}.x" >&2
+                exit 1
+              fi
+              # A candidate umbrella may only mint candidate components:
+              # a stable-looking X.Y.Z must not exist before it has shipped
+              # inside a stable umbrella.
+              if is_prerelease_version "${RELEASE_VERSION}" && ! is_prerelease_version "${TARGET_VERSION}"; then
+                echo "::error::${COMPONENT} ${TARGET_VERSION} is a stable version but release_version ${RELEASE_VERSION} is a release candidate -- use an -rc.N component version" >&2
+                exit 1
+              fi
               NEEDS_BUILD=true
               WILL_TAG=true
               echo "${COMPONENT}: ${TARGET_VERSION} requested and not yet released -- will build and tag"
             fi
           else
-            if ! BASE_TAG=$(resolve_release_tag . "${COMPONENT}"); then
-              safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
-              echo "::warning::No ${safe_component}/vX.Y.Z release tag found yet -- ${safe_component} will be skipped this run"
-              continue
+            # Default: pin to the component's latest version in this
+            # branch's release line -- the common case for every component
+            # not being bumped in this release.
+            if [[ -z "${LATEST_IN_LINE}" ]]; then
+              echo "::error::${COMPONENT} has no released version in line ${RELEASE_LINE}.x yet -- name it in component_versions" >&2
+              exit 1
             fi
-            LATEST_BASE="${BASE_TAG#"${COMPONENT}"/v}"
+            TARGET_VERSION="${LATEST_IN_LINE}"
+            NEEDS_BUILD=false
+            WILL_TAG=false
+            echo "${COMPONENT}: ${TARGET_VERSION} (pinned, latest in line ${RELEASE_LINE}.x)"
+          fi
 
-            if [[ "${MODE}" == "nightly" ]]; then
-              # Always a fresh build from HEAD -- never promoted to a
-              # permanent tag (see promote-and-publish/tag below).
-              TARGET_VERSION="${LATEST_BASE}-${NIGHTLY_SUFFIX}"
-              NEEDS_BUILD=true
-              WILL_TAG=false
-              echo "${COMPONENT}: ${TARGET_VERSION} (nightly build, from tag ${BASE_TAG})"
-            else
-              # Default: pin to whatever's already the latest real release --
-              # this is the common case for every component not being bumped
-              # in this release.
-              TARGET_VERSION="${LATEST_BASE}"
-              NEEDS_BUILD=false
-              WILL_TAG=false
-              echo "${COMPONENT}: ${TARGET_VERSION} (pinned, latest existing release)"
-            fi
+          if [[ "${MODE}" == "release" ]] && ! is_prerelease_version "${RELEASE_VERSION}" \
+            && is_prerelease_version "${TARGET_VERSION}"; then
+            echo "::error::Stable release ${RELEASE_VERSION} cannot contain ${COMPONENT} ${TARGET_VERSION}, its latest version in line ${RELEASE_LINE}.x -- release a stable version of it in component_versions (an older stable version cannot be pinned)" >&2
+            exit 1
           fi
 
           versions_json=$(jq -c --arg k "${COMPONENT}" --arg v "${TARGET_VERSION}" '. + {($k): $v}' <<<"${versions_json}")
@@ -328,6 +362,7 @@ jobs:
       working-directory: osac-installer
       env:
         NIGHTLY_SUFFIX: ${{ steps.versions.outputs.nightly-suffix }}
+        RELEASE_LINE: ${{ steps.versions.outputs.release-line }}
         MODE: ${{ inputs.mode }}
         RELEASE_VERSION: ${{ inputs.release_version }}
       run: |
@@ -341,14 +376,11 @@ jobs:
           VERSION="${RELEASE_VERSION}"
           BASE_VERSION="${RELEASE_VERSION}"
         else
-          # Use the umbrella chart's own latest real release tag (not the
-          # Chart.yaml placeholder, which is never bumped) so the nightly
-          # version reflects where this build actually sits relative to
-          # real releases. Reuses this same job's own NIGHTLY_SUFFIX so
-          # every artifact from this run shares the same date/sha/run/
-          # attempt suffix.
-          BASE_TAG=$(resolve_release_tag . osac)
-          BASE_VERSION="${BASE_TAG#osac/v}"
+          # Based on this branch's release line, so a nightly reads as a
+          # build on the way to the next version of that line. Reuses this
+          # same job's own NIGHTLY_SUFFIX so every artifact from this run
+          # shares the same date/sha/run/attempt suffix.
+          BASE_VERSION=$(nightly_base_version . osac "${RELEASE_LINE}")
           VERSION="${BASE_VERSION}-${NIGHTLY_SUFFIX}"
         fi
 

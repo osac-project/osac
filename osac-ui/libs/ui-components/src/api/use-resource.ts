@@ -100,7 +100,6 @@ export const useListResource = <
   service: ResourceService<'list', Input, Output>,
   request: MessageInitShape<Input> = create(service.method.list.input),
   options: ResourceQueryOptions<Output, SelectedData> = {},
-  select?: (data: MessageShape<Output>) => SelectedData,
 ) => {
   const client = useApiFetch(service);
   const listRequest = create(service.method.list.input, request);
@@ -109,7 +108,6 @@ export const useListResource = <
     ...options,
     queryKey: [service.typeName, 'list', request],
     queryFn: () => client.list(listRequest),
-    select,
     placeholderData: keepPreviousData,
   });
 };

@@ -47,6 +47,7 @@ respective areas.
 |---|---|---|
 | Shared provider-networking provisioning configuration | Helm contract | `make helm-networking-test` (GATE-CONFIG-01) |
 | MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
+| OSAC-managed LVMS device allowlist | Helm contract | `make lvms-optional-path-render-test`; verifies the worker selector and configured optional paths without cluster access. |
 | Kind runtime selection, sudo authentication, image loading, device-mapper permissions, cluster/storage lifecycle, or devstack Helm apply flags | Unit with command stubs | `make kind-runtime-test` |
 | Deployed dev-full OSAC UI Gateway reachability | Component integration | `./scripts/test-ui-gateway.sh` |
 | TopoLVM chart dependency download, cache reuse, build scoping, or install preparation | Unit with command stubs | `make kind-runtime-test` |
@@ -55,6 +56,7 @@ respective areas.
 | Operator-phase AAP recorder wiring for provider-disabled ComputeInstance coverage (GATE-VM-04) | Unit with expanded Makefile commands | `make kind-runtime-test` |
 | Combined ComputeInstance disk handoff runner and AAP recorder | Unit and component integration | `make kind-runtime-test`; `python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py`; `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage`. Real Fulfillment APIs/PostgreSQL, operator and target StorageClass lookup; AAP execution is a recording double. See [coverage boundaries](../docs/INTEGRATION-TESTING.md#computeinstance-disk-handoff-osac-6685). |
 | Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
+| Billing provider values, Secret mount, or tuning bounds | Helm contract | `make billing-render-test` |
 | Fulfillment token helper or dev-full hook credential wiring | Unit and Helm contract | `make fulfillment-auth-test` and `make dev-full-render-test` |
 | Service-account IDP credential mount and Keycloak management roles | Helm contract | `make service-account-idp-render-test` |
 | Deployed dev-full hook authentication | Component integration | Coverage gap tracked by [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); local `install-devstack` invokes the hooks but does not assert token acceptance. |

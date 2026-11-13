@@ -39,7 +39,8 @@ type networkAttachmentRequest struct {
 
 	// subnetsDao and securityGroupsDao resolve the explicit references. A workload server passes its caller-scoped
 	// DAOs, so a reference resolves only to a record the caller sees in the workload's tenant and project. The CaaS
-	// worker path passes the guard DAOs. Tenant defaults are always found with the guard DAOs.
+	// worker path passes the guard DAOs. Tenant defaults are read with the caller-scoped DAO: the tenant's default
+	// project is always visible for a tenant the caller can access.
 	subnetsDao        *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup]
 
@@ -157,15 +158,17 @@ func resolveAttachmentSubnet(ctx context.Context, guards *networkingGuards, requ
 		}
 		result.usedDefaults = true
 	} else {
-		result.subnet, err = resolveResourceInScope(ctx, request.subnetsDao,
-			referenceScope{tenant: request.tenant, project: request.project},
-			request.subnet.GetId(), request.subnet.GetName(), "Subnet", " in "+request.source+".subnet", grpccodes.NotFound)
+		// Resolve the reference in the workload's tenant and project, or fall back to a tenant default,
+		// which is tenant-wide. The caller-scoped DAO finds the default because the tenant's default
+		// project is always visible for the tenant.
+		result.subnet, err = findInScope(ctx, request.subnetsDao, request.tenant, request.project, "Subnet",
+			request.subnet.GetId(), request.subnet.GetName())
 		if err != nil {
-			if grpcstatus.Code(err) == grpccodes.NotFound {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument,
-					"%s.subnet: Subnet '%s' does not exist", request.source, refKey(request.subnet))
-			}
 			return err
+		}
+		if result.subnet == nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"%s.subnet: Subnet '%s' does not exist", request.source, refKey(request.subnet))
 		}
 	}
 	result.subnet, err = lockRecord(ctx, guards.subnets, result.subnet.GetId())
@@ -225,24 +228,69 @@ func resolveAttachmentSecurityGroups(ctx context.Context, guards *networkingGuar
 			}
 			// The DAO clamps this to its configured maximum (normally 1000).
 			// Never resolve references from a truncated candidate set.
-			response, err := request.securityGroupsDao.List().
+			rows, err := request.securityGroupsDao.List().
 				SetFilter(fmt.Sprintf("this.metadata.tenant == %q && this.metadata.project == %q && "+
-					"(this.id in %s || this.metadata.name in %s)", tenant, request.project, quote(ids), quote(names))).
+					"(this.id in %s || this.metadata.name in %s)",
+					tenant, request.project, quote(ids), quote(names))).
 				SetLimit(math.MaxInt32).
 				Do(ctx)
 			if err != nil {
 				return nil, err
 			}
-			if int(response.GetTotal()) > len(response.GetItems()) {
+			if int(rows.GetTotal()) > len(rows.GetItems()) {
 				return nil, errSecurityGroupLookupTruncated
 			}
-			return response.GetItems(), nil
+			found := rows.GetItems()
+			// Tenant defaults are tenant-wide, so a default SecurityGroup of the tenant resolves from any
+			// project of the tenant. Resolve only the references the scoped lookup missed, with the same
+			// caller-scoped DAO, so project visibility stays enforced.
+			// An exact ID wins over a name match, so a local group named with a default's ID never shadows the
+			// default: look up by ID every key no row has as its ID, and by name only the keys nothing matched.
+			missingIDs, missingNames := missingSecurityGroupKeys(found, ids)
+			if len(missingIDs) == 0 {
+				return found, nil
+			}
+			defaults, err := request.securityGroupsDao.List().
+				SetFilter(fmt.Sprintf("%s && (this.id in %s || this.metadata.name in %s)",
+					tenantDefaultFilter(tenant), quote(missingIDs), quote(missingNames))).
+				SetLimit(math.MaxInt32).
+				Do(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if int(defaults.GetTotal()) > len(defaults.GetItems()) {
+				return nil, errSecurityGroupLookupTruncated
+			}
+			// Deleting defaults stay in the result, so the readiness check reports them as being deleted, as
+			// it does for the workload project's groups.
+			return append(found, defaults.GetItems()...), nil
 		})
 	if err != nil {
 		return err
 	}
 	result.securityGroups = groups
 	return nil
+}
+
+// missingSecurityGroupKeys returns the requested keys that no row has as its ID, and the keys that no row matched by
+// ID or name.
+func missingSecurityGroupKeys(rows []*privatev1.SecurityGroup, keys []string) (missingIDs, missingNames []string) {
+	ids := make(map[string]struct{}, len(rows))
+	names := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		ids[row.GetId()] = struct{}{}
+		names[row.GetMetadata().GetName()] = struct{}{}
+	}
+	for _, key := range keys {
+		if _, ok := ids[key]; ok {
+			continue
+		}
+		missingIDs = append(missingIDs, key)
+		if _, ok := names[key]; !ok {
+			missingNames = append(missingNames, key)
+		}
+	}
+	return missingIDs, missingNames
 }
 
 // securityGroupBatchLookup finds only the requested IDs and names in the tenant. The production callback also
@@ -377,13 +425,18 @@ func requireDefaultNetworkingReady(ctx context.Context, tenants *dao.GenericDAO[
 	return grpcstatus.Error(grpccodes.FailedPrecondition, "tenant default networking is not ready")
 }
 
+// tenantDefaultFilter selects the system-managed defaults of a tenant's default project.
+func tenantDefaultFilter(tenant string) string {
+	return fmt.Sprintf(`this.metadata.tenant == %q && this.metadata.project == "" && `+
+		`this.metadata.labels["%s"] == "true"`, tenant, defaultLabel)
+}
+
 // findTenantDefault returns the tenant's one default-labeled record of a kind that the match function accepts, or nil.
 func findTenantDefault[O lifecycleResource](ctx context.Context, objectDao *dao.GenericDAO[O], tenant string,
 	match func(O) bool) (O, error) {
 	var zero O
 	response, err := objectDao.List().
-		SetFilter(fmt.Sprintf(`this.metadata.tenant == %q && this.metadata.labels["%s"] == "true"`,
-			tenant, defaultLabel)).
+		SetFilter(tenantDefaultFilter(tenant)).
 		Do(ctx)
 	if err != nil {
 		return zero, grpcstatus.Error(grpccodes.Internal, "failed to find the tenant defaults")
@@ -396,23 +449,48 @@ func findTenantDefault[O lifecycleResource](ctx context.Context, objectDao *dao.
 	return zero, nil
 }
 
-// findInScope finds a record of the tenant and project, or a tenant default of any project, by ID, or by name when no
-// record has that ID. It returns nil when there is none, also when the record belongs to another tenant or project or
+// findInScope finds a record of the tenant and project, or a tenant default of the tenant's default project, by ID
+// and optional name. It returns nil when there is none, also when the record belongs to another tenant or project or
 // the DAO doesn't let the caller see it.
-func findInScope[O referenceResource](ctx context.Context, objectDao *dao.GenericDAO[O], tenant, project,
-	key string) (O, error) {
-	var zero O
+func findInScope[O referenceResource](ctx context.Context, objectDao *dao.GenericDAO[O], tenant, project, kind,
+	id, name string) (O, error) {
 	scope := referenceScope{tenant: tenant, project: project}
-	object, err := resolveResourceInScope(ctx, objectDao, scope, key, "", "VirtualNetwork", "", grpccodes.NotFound)
+	object, err := resolveResourceInScope(ctx, objectDao, scope, id, name, kind, "",
+		grpccodes.NotFound)
 	if err == nil || grpcstatus.Code(err) != grpccodes.NotFound {
 		return object, err
 	}
-	object, err = resolveResourceInScope(ctx, objectDao, scope, "", key, "VirtualNetwork", "", grpccodes.NotFound)
-	if grpcstatus.Code(err) != grpccodes.NotFound {
-		return object, err
+	// An exact tenant default ID wins over a name match, so a local resource named with a default's ID never
+	// shadows the default.
+	if id != "" {
+		object, err = findTenantDefault(ctx, objectDao, tenant, func(item O) bool {
+			return item.GetId() == id && (name == "" || item.GetMetadata().GetName() == name)
+		})
+		if err != nil || object.GetId() != "" {
+			return object, err
+		}
 	}
-	// The tenant defaults are tenant-wide, as when the field is omitted: a reference to one resolves in any project.
-	object, err = findTenantDefault(ctx, objectDao, tenant, func(item O) bool {
+	// A local reference may carry a name in its ID field; keep resolving that form by name.
+	if id != "" && name == "" {
+		object, err = resolveResourceInScope(ctx, objectDao, scope, "", id, kind, "",
+			grpccodes.NotFound)
+		if err == nil || grpcstatus.Code(err) != grpccodes.NotFound {
+			return object, err
+		}
+	}
+	return findTenantDefaultInScope(ctx, objectDao, tenant, id, name)
+}
+
+// findTenantDefaultInScope returns the tenant default that the reference identifies, or nil. Tenant defaults are
+// tenant-wide but live in the tenant's default project, so they resolve from any project of the tenant.
+func findTenantDefaultInScope[O referenceResource](ctx context.Context, objectDao *dao.GenericDAO[O], tenant string,
+	id, name string) (O, error) {
+	var zero O
+	object, err := findTenantDefault(ctx, objectDao, tenant, func(item O) bool {
+		if id != "" && name != "" {
+			return item.GetId() == id && item.GetMetadata().GetName() == name
+		}
+		key := referenceIdentifier(id, name)
 		return item.GetId() == key || item.GetMetadata().GetName() == key
 	})
 	if err != nil || object.GetId() == "" {

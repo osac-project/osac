@@ -124,29 +124,6 @@ func deleteProject(ctx context.Context, client privatev1.ProjectsClient, id stri
 	).Should(Succeed())
 }
 
-func deleteSecrets(ctx context.Context, client privatev1.SecretsClient, tenant string) {
-	listFilter := fmt.Sprintf("this.metadata.tenant == %q", tenant)
-	listRequest := privatev1.SecretsListRequest_builder{
-		Filter: &listFilter,
-	}.Build()
-	Eventually(
-		func(g Gomega) {
-			listResponse, err := client.List(ctx, listRequest)
-			g.Expect(err).ToNot(HaveOccurred())
-			for _, item := range listResponse.GetItems() {
-				if item.GetMetadata().GetDeletionTimestamp() == nil {
-					_, err := client.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: item.GetId()}.Build())
-					g.Expect(err).ToNot(HaveOccurred())
-				}
-			}
-			g.Expect(listResponse.GetTotal()).To(BeZero(),
-				"tenant secrets must be fully removed before deleting their project")
-		},
-		time.Minute,
-		time.Second,
-	).Should(Succeed())
-}
-
 func deleteTenantUsers(ctx context.Context, tenant string) {
 	usersClient := privatev1.NewUsersClient(tool.InternalView().AdminConn())
 	listFilter := fmt.Sprintf("this.metadata.tenant == %q", tenant)
@@ -211,7 +188,6 @@ func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, pr
 		Expect(err).ToNot(HaveOccurred())
 	}
 
-	secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
 	Eventually(
 		func(g Gomega) bool {
 			tenant, getErr := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
@@ -230,8 +206,7 @@ func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, pr
 		},
 		3*time.Minute,
 		time.Second,
-	).Should(BeTrue(), "tenant deletion should clear the break-glass secret reference before secret cleanup")
-	deleteSecrets(ctx, secretsClient, name)
+	).Should(BeTrue(), "tenant deletion should clear the break-glass secret reference before project cleanup")
 
 	// Wait on captured root project IDs because List can omit a deleting project
 	// while Get still sees it. The tenant reconciler removes these after networking.
@@ -268,11 +243,9 @@ func deleteTenant(ctx context.Context, tenantsClient privatev1.TenantsClient, pr
 		}
 		listProjectsItems := listProjectsResponse.GetItems()
 		for _, listProjectItem := range listProjectsItems {
-			deleteSecrets(ctx, secretsClient, name)
 			deleteProject(ctx, projectsClient, listProjectItem.GetId())
 		}
 	}
-	deleteSecrets(ctx, secretsClient, name)
 
 	Eventually(
 		func(g Gomega) {
@@ -539,6 +512,59 @@ var _ = Describe("Tenant lifecycle", func() {
 		verifyTenantRemovedFromKeycloak(ctx, name)
 	})
 
+	It("deletes a tenant with a tenant-level User and a root-project Secret", func(ctx context.Context) {
+		name := fmt.Sprintf("test-%s", uuid.New())
+		userName := name + "-user"
+		id := createTenant(ctx, tenantsClient, name)
+
+		By("Waiting for tenant to reach SYNCED state")
+		waitForTenantSynced(ctx, tenantsClient, id)
+
+		By("Creating a tenant-level User in the root project")
+		usersClient := privatev1.NewUsersClient(tool.InternalView().AdminConn())
+		createdUser, err := usersClient.Create(ctx, privatev1.UsersCreateRequest_builder{
+			Object: privatev1.User_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   userName,
+					Tenant: name,
+				}.Build(),
+				Spec: privatev1.UserSpec_builder{
+					Username: userName,
+					Email:    userName + "@example.com",
+					Enabled:  true,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		userID := createdUser.GetObject().GetId()
+		Expect(createdUser.GetObject().GetMetadata().GetProject()).To(BeEmpty())
+
+		By("Creating a Secret in the root project")
+		secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+		createdSecret, err := secretsClient.Create(ctx, privatev1.SecretsCreateRequest_builder{
+			Object: privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   name + "-secret",
+					Tenant: name,
+				}.Build(),
+				Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		secretID := createdSecret.GetObject().GetId()
+
+		By("Deleting the tenant and allowing controllers to remove its scoped resources")
+		deleteTenant(ctx, tenantsClient, projectsClient, id, name)
+
+		By("Verifying the tenant User and project Secret are archived")
+		_, err = usersClient.Get(ctx, privatev1.UsersGetRequest_builder{Id: userID}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		_, err = secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: secretID}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+	})
+
 	It("deletes a tenant with domains configured", func(ctx context.Context) {
 		getOrCreateTenantDefaultNetworkClassFixture(ctx)
 		name := fmt.Sprintf("test-%s", uuid.New())
@@ -661,7 +687,7 @@ var _ = Describe("Tenant lifecycle", func() {
 		Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
 	})
 
-	It("Persists break-glass credentials to a Secret and clears inline status", func(ctx context.Context) {
+	It("Persists the break-glass username without the password and clears inline status", func(ctx context.Context) {
 		// breakGlassSecretName mirrors the unexported constant in the tenant reconciler.
 		const breakGlassSecretName = "break-glass-credentials"
 
@@ -690,39 +716,16 @@ var _ = Describe("Tenant lifecycle", func() {
 			"inline status credentials should be cleared once persisted to a secret")
 		Expect(object.GetStatus().GetBreakGlassUserId()).ToNot(BeEmpty())
 
-		By("Fetching the referenced secret and verifying it carries the credentials")
+		By("Fetching the referenced secret and verifying it omits the password")
 		secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
 		secretResponse, err := secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{
 			Id: ref.GetId(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		data := secretResponse.GetObject().GetData()
-		Expect(data).To(HaveKey("password"))
 		Expect(data).To(HaveKey("username"))
-		Expect(data["password"]).ToNot(BeEmpty())
+		Expect(data).ToNot(HaveKey("password"))
 		Expect(string(data["username"])).To(Equal(fmt.Sprintf("%s-osac-break-glass", name)))
-
-		By("Verifying the persisted password authenticates as the break-glass user")
-		// The credential is created temporary, so the UPDATE_PASSWORD required action must be
-		// cleared before the stored password can be used to obtain a token.
-		code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPut,
-			fmt.Sprintf("/users/%s", object.GetStatus().GetBreakGlassUserId()),
-			map[string]any{
-				"requiredActions": []string{},
-			})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(code).To(Equal(http.StatusNoContent))
-
-		tokenSource, err := tool.makeKeycloakTokenSource(ctx, string(data["username"]), string(data["password"]))
-		Expect(err).ToNot(HaveOccurred())
-
-		// Obtaining an access token from the OIDC password flow proves the persisted password
-		// authenticates as the break-glass user. We deliberately do not exercise a downstream gRPC
-		// call here: that would assert the break-glass user's API authorization, which is out of
-		// scope for this test (and covered separately by the break-glass JWT/role specs).
-		token, err := tokenSource.Token(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(token.Access).ToNot(BeEmpty())
 	})
 
 	It("Duplicate tenant name fails", func(ctx context.Context) {
@@ -946,7 +949,7 @@ var _ = Describe("Tenant authorization boundaries", func() {
 		By("Verifying 'organization' claim contains the org name")
 		orgClaim, ok := claims["organization"]
 		Expect(ok).To(BeTrue(), "JWT should contain 'organization' claim")
-		orgNames, err := ExtractOrganizationNames(orgClaim)
+		orgNames, err := auth.OrganizationNames(orgClaim)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(orgNames).To(ContainElement(name))
 

@@ -6,15 +6,15 @@ import { type ClusterStatusFilter, clusterStatusFilterToState } from './clusterD
 export type ClusterListFilterCriteria = {
   search?: string;
   status?: ClusterStatusFilter;
-  versionNames?: readonly string[];
+  observedVersions?: readonly string[];
 };
 
 export const buildClusterListFilter = (
   criteria: ClusterListFilterCriteria,
 ): CelFilter<Cluster> | undefined => {
   const search = criteria.search?.trim();
-  const versionNames = criteria.versionNames ?? [];
-  const hasCriteria = Boolean(search || criteria.status || versionNames.length > 0);
+  const observedVersions = criteria.observedVersions;
+  const hasCriteria = Boolean(search || criteria.status || observedVersions !== undefined);
 
   if (!hasCriteria) {
     return undefined;
@@ -38,8 +38,8 @@ export const buildClusterListFilter = (
       );
     }
 
-    if (versionNames.length > 0) {
-      clauses.push(filter.field('spec.version.name').isIn([...versionNames]));
+    if (observedVersions !== undefined) {
+      clauses.push(filter.field('status.observedVersion').isIn(observedVersions));
     }
 
     return filter.and(...clauses);

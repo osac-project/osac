@@ -301,15 +301,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			}, time.Minute, time.Second).Should(Succeed())
 		})
 		It("falls through to Template and system values and supports dry-run and direct creation", func(ctx context.Context) {
-			// This spec creates clusters without network attachments before creating its
-			// explicit network fixture, so ensure the deployment Hub is resolvable first.
-			networkClassID, _ := getOrCreateTenantDefaultNetworkClassFixture(ctx)
-			// The dry-run Creates below omit the network attachment, so they resolve the
-			// tenant defaults and require DefaultNetworkingReady. Seed that before the
-			// network and subnet snapshots, as the fixture may create default resources.
-			ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
-
-			By("authoring a tenant offering with Template and catalog defaults")
+			By("authoring a shared offering with Template and catalog defaults")
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 			sshKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
@@ -334,6 +326,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				}.Build(),
 			}.Build())
 			secret := createCatalogItemPullSecretFixture(ctx, usersGroup)
+			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			client := publicv1.NewClustersClient(tool.ExternalView().UserConn())
 			networks := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 			subnets := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
@@ -348,8 +341,9 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						CatalogItem:      publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
-						PullSecretSecret: publicv1.SecretLocalReference_builder{Id: secret}.Build(),
+						CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						PullSecretSecret:  publicv1.SecretLocalReference_builder{Id: secret}.Build(),
+						NetworkAttachment: network.clusterAttachment(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
 							Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
 						}.Build()},
@@ -390,7 +384,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			}.Build())
 			expectCatalogItemStatusCode(e, codes.InvalidArgument)
 			By("creating directly from a Template with its version default")
-			network := createCatalogItemSubnetInClassFixture(ctx, usersGroup, "", networkClassID)
+
 			direct, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
 				Template:          publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				NetworkAttachment: network.clusterAttachment(),

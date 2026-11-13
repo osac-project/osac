@@ -320,7 +320,9 @@ This read-only certificate verification is not an admission probe or proof of AP
 
 Adopt the approved enterprise CA-backed issuer where available. A new OSAC-local CA requires explicit CA-owner approval; never regenerate an existing `default-ca` to clear a readiness failure.
 
-The local reference's unique fields are below. Each fragment belongs to the named resource; these are field references, not a multi-document apply file.
+The [0.0.62 CA template](https://github.com/osac-project/osac/blob/osac/v0.0.62/osac-installer/charts/osac-infra/templates/ca-issuer.yaml) is gated by `caIssuer.enabled`. When enabled, Helm bootstraps the self-signed Issuer, CA Certificate and CA-backed ClusterIssuer shown below; cert-manager creates and reconciles the Certificate's `cert-manager/default-ca` Secret. That Secret holds this deployment's self-signed signing CA and private key, not a Red Hat CA bundle. Its `ca.crt` is the public trust source; `tls.crt` and `tls.key` support signing. The private key must never be distributed in a trust bundle.
+
+These internal-chart resources are source references, not authorization to install `osac-infra` in this disconnected procedure. Each fragment belongs to the named resource; these are field references, not a multi-document apply file. With `caIssuer.enabled=false`, the internal chart creates neither this CA chain nor its Bundle hook; the approved external issuer and public-trust distribution must be supplied separately.
 
 ```yaml
 # Issuer cert-manager/selfsigned-issuer
@@ -365,9 +367,9 @@ oc --request-timeout=30s wait "$ISSUER_RESOURCE" --for=condition=Ready --timeout
 
 Expected: the selected issuer condition is met in its bound namespace or cluster scope. Missing, mismatched or unsupported kind/name blocks progress; do not retry against a same-name issuer in another scope.
 
-The source ConfigMap `cert-manager/osac-source-ca` contains approved **public** CA chains under `bundle.pem`. Include the selected signer and production database, identity, Kafka, Vault/OpenBao and AAP trust anchors; never include a private key.
+The [0.0.62 Bundle hook](https://github.com/osac-project/osac/blob/osac/v0.0.62/osac-installer/charts/osac-infra/files/hooks/apply-ca-bundle.sh), also gated by `caIssuer.enabled` in its [Job template](https://github.com/osac-project/osac/blob/osac/v0.0.62/osac-installer/charts/osac-infra/templates/hooks/apply-ca-bundle.yaml), reads `ca.crt` from the `default-ca` **Secret** in the cert-manager source namespace (here `cert-manager`). Trust-manager publishes the public certificates as `bundle.pem` in the target `ca-bundle` ConfigMaps. It never distributes `tls.key`.
 
-Only approved consumer namespaces receive label `osac.openshift.io/phase1-trust=true`. Existing Bundles/selectors/targets require ownership review before enabling this selector.
+For **0.0.62**, the target selector is `namespaceSelector.matchExpressions` on the standard `kubernetes.io/metadata.name` label, with `operator: In` and values from `RELEASE_NAMESPACE` and `OSAC_NAMESPACE`. Bind these to the approved infrastructure release namespace and OSAC namespace; do not invent a consumer opt-in label. The YAML below illustrates the default `osac`/`osac` bindings, not an additional apply step. The actual approved namespace values and rendered Bundle name remain authoritative.
 
 ```yaml
 apiVersion: trust.cert-manager.io/v1alpha1
@@ -376,20 +378,28 @@ metadata:
   name: ca-bundle
 spec:
   sources:
-    - configMap:
-        name: osac-source-ca
-        key: bundle.pem
+    - secret:
+        name: default-ca
+        key: ca.crt
   target:
     configMap:
       key: bundle.pem
     namespaceSelector:
-      matchLabels:
-        osac.openshift.io/phase1-trust: "true"
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values:
+            - osac
+            - osac
 ```
 
-**Trust ownership gate** — reject a foreign source/target or another Bundle whose selector would compete after labeling.
+The pinned hook can also add `useDefaultCAs: true` when `USE_DEFAULT_CAS=true` (bound to `keycloak.route.publicIngress`); under that same flag, if the OpenShift `router-ca` is accessible and nonempty, it copies the public ingress CA into `cert-manager/ingress-ca` and includes that Secret's `ca.crt`. These are conditional sources, not a general aggregation mechanism for external service roots. Review the effective sources rather than assuming the minimal example is the complete trust set.
 
-Evidence result: `trust-ownership: pass`. Namespace label changes retain their reviewed resourceVersion precondition.
+> **Newer-chart capability, not OSAC 0.0.62:** The [development hook](https://github.com/osac-project/osac/blob/main/osac-installer/charts/osac-infra/files/hooks/apply-ca-bundle.sh) additionally selects Secrets in the cert-manager source namespace labeled `osac.openshift.io/ca-bundle: additional`, reading their public `ca.crt` entries into the same bundle. The pinned 0.0.62 hook has no such selector; labeling a Secret alone does not add its root on this release. Do not silently backport this capability, substitute main's Bundle, or upgrade the chart pin. Any extra root on 0.0.62 requires an explicitly reviewed Bundle-source change and compatibility review. Neither path changes Kafka `osac-kafka-ca-bundle`, Vault `vault-ca-bundle`, or Netris `customer-netris-ca` trust behavior; those remain separate component contracts.
+
+**Trust ownership gate** — reject a foreign source/target or another Bundle whose namespace-name selector would compete for the same target ConfigMaps. Review the actual source namespace, Secret keys, conditional sources and target namespace names before creating or adopting the Bundle.
+
+Evidence result: `trust-ownership: pass`. Do not relabel namespaces to expand the chart's trust distribution scope.
 
 **Bundle gate** — current generation, not a stale `Synced` condition:
 
@@ -403,15 +413,18 @@ Expected: `true`.
 
 A failed set-equality or signer-membership check, or missing or unapproved certificates, blocks the affected consumers. PEM presence alone is not acceptance; retain the separate comparison and signer observations rather than a compound `signer-bundle: pass`.
 
+**Lifecycle and rotation** — Helm bootstraps the CA Certificate and issuers; cert-manager reconciles certificate issuance, renewal and the resulting Secret; trust-manager maintains the published public bundle as its configured sources change. For eligible tenant clusters with fulfillment trust enabled, OSAC's [FulfillmentTrustReconciler](https://github.com/osac-project/osac/blob/osac/v0.0.62/osac-operator/internal/controller/fulfillment_trust_controller.go) reads the management bundle, synchronizes tenant trust and verifies convergence. This is not a blanket update to every tenant's system trust store or to independent component trust.
+
+Automated certificate renewal is not an operational CA-root rollover procedure. Ordinary leaf renewal under an unchanged root does not change the trust set. Replacing a root requires overlapping old and new public roots and verified client convergence before removing the old root; follow the [CA bundle rotation design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-5343-cross-cluster-authentication-and-tls-trust-for-tenant-cluster-workloads/design.md#ca-bundle-rotation). On 0.0.62, retaining an overlap source requires the explicit reviewed Bundle-source change described above, not the newer label selector. This lifecycle description does not authorize rotation as a readiness repair or assign operational rollover ownership.
+
 ### Runtime Secret and ConfigMap contracts
 
 Examples below use release name/namespace `osac`. The actual chart plus approved values render is authoritative, including name overrides and independent credential roles.
 
 | Resource | Keys / value contract | Owner / phase |
 | --- | --- | --- |
-| `cert-manager/default-ca` | Signer `tls.crt` and private `tls.key`; approved local-CA path only | CA owner / cert-manager; never export key |
-| `cert-manager/osac-source-ca` ConfigMap | `bundle.pem`, approved combined public CA chain | Trust owner, Phase 1 |
-| `$NS/ca-bundle` ConfigMap | `bundle.pem`, synchronized approved trust set | Bundle controller, Phase 1 |
+| `cert-manager/default-ca` Secret | Deployment self-signed signing CA: public source `ca.crt`, signer `tls.crt` and private `tls.key`; not a Red Hat CA bundle | cert-manager reconciles `default-ca-cert`; approved local-CA path gated by `caIssuer.enabled`; never distribute key |
+| `$NS/ca-bundle` ConfigMap | `bundle.pem`, synchronized approved public trust set; targets selected by namespace name | trust-manager Bundle controller, Phase 1 |
 | `$NS/fulfillment-controller-credentials` | `client-id=osac-controller`, `client-secret` from identity owner | Required when selected by `service.auth.controllerCredentials[]` |
 | Identity-administration credential source | Actual `service.idp.credentials[]` names/keys; example may share controller credentials | Identity owner; distinct role even if keys match |
 | `$NS/osac-ui-backend-credentials` | `client-secret` for governed `osac-ui-backend`; reference creation also supplies `client-id` | `ui.auth.serviceAccount.credentialsSecret`, Phase 1 |

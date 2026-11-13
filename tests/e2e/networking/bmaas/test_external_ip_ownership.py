@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import pytest
 import yaml
 
 from tests.e2e.core.grpc_client import GRPCClient
@@ -20,37 +19,13 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 
-_ALLOCATED_ADDRESS_ANNOTATION = "osac.openshift.io/allocated-address"
-_IMPLEMENTATION_STRATEGY_ANNOTATION = "osac.openshift.io/implementation-strategy"
-_EXTERNAL_IP_UID_LABEL = "osac.openshift.io/externalip-uid"
-_EXTERNAL_IP_FINALIZER = "osac.openshift.io/externalip-finalizer"
-_METALLB_NAMESPACE = "metallb-system"
+_EXTERNAL_IP_CREATE_TASK = "create_external_ip"
+_FABRIC_MANAGER_TYPE = "fabric"
 
 
 class TestExternalIPOwnership:
-    """Verify UID-owned ExternalIP allocation, retry, and release in each profile."""
+    """Verify Netris BMaaS ExternalIP allocation, retry, and release behavior."""
 
-    @pytest.mark.requires_vmaas
-    def test_vmaas_k8s_only_allocation_retry_and_release(
-        self,
-        grpc: GRPCClient,
-        private_grpc: GRPCClient,
-        k8s_hub_client: K8sClient,
-        external_ip_ownership_pool: dict[str, str],
-        record_property: Callable[[str, str], None],
-    ) -> None:
-        _exercise_external_ip_ownership_lifecycle(
-            profile="vmaas-k8s-only",
-            expected_fabric_manager="",
-            expected_k8s_manager="k8s_only",
-            grpc=grpc,
-            private_grpc=private_grpc,
-            k8s=k8s_hub_client,
-            pool=external_ip_ownership_pool,
-            record_property=record_property,
-        )
-
-    @pytest.mark.requires_bmaas
     def test_bmaas_netris_allocation_retry_and_release(
         self,
         grpc: GRPCClient,
@@ -61,8 +36,6 @@ class TestExternalIPOwnership:
     ) -> None:
         _exercise_external_ip_ownership_lifecycle(
             profile="bmaas-netris",
-            expected_fabric_manager="netris",
-            expected_k8s_manager="",
             grpc=grpc,
             private_grpc=private_grpc,
             k8s=k8s_hub_client,
@@ -74,8 +47,6 @@ class TestExternalIPOwnership:
 def _exercise_external_ip_ownership_lifecycle(
     *,
     profile: str,
-    expected_fabric_manager: str,
-    expected_k8s_manager: str,
     grpc: GRPCClient,
     private_grpc: GRPCClient,
     k8s: K8sClient,
@@ -85,14 +56,10 @@ def _exercise_external_ip_ownership_lifecycle(
     network_class = _active_network_class(private_grpc)
     fabric_manager = _network_class_value(network_class, "fabric_manager", "fabricManager")
     k8s_manager = _network_class_value(network_class, "k8s_manager", "k8sManager")
-    assert fabric_manager == expected_fabric_manager, (
-        f"{profile} expected fabric_manager={expected_fabric_manager!r}, got {fabric_manager!r}"
-    )
-    assert k8s_manager == expected_k8s_manager, (
-        f"{profile} expected k8s_manager={expected_k8s_manager!r}, got {k8s_manager!r}"
-    )
+    assert fabric_manager == "netris", f"{profile} expected fabric_manager='netris', got {fabric_manager!r}"
+    assert k8s_manager == "", f"{profile} expected no Kubernetes Manager, got {k8s_manager!r}"
 
-    manager = expected_fabric_manager or expected_k8s_manager
+    manager = fabric_manager
     collection_versions = _declared_aap_collection_versions(manager)
     network_metadata = network_class.get("metadata", {})
     record_property("osac_profile", profile)
@@ -101,8 +68,8 @@ def _exercise_external_ip_ownership_lifecycle(
     record_property("osac_network_class_id", str(network_class.get("id", "")))
     record_property("osac_fabric_manager", fabric_manager)
     record_property("osac_k8s_manager", k8s_manager)
-    record_property("aap_collection_versions_source", "osac-aap source manifests")
-    record_property("aap_collection_versions", json.dumps(collection_versions, sort_keys=True))
+    record_property("aap_collection_versions_source", "osac-aap source manifests; not deployed runtime")
+    record_property("aap_collection_versions_declared", json.dumps(collection_versions, sort_keys=True))
 
     initial_capacity = _pool_capacity(private_grpc, pool["id"])
     assert initial_capacity["allocated"] == 0, f"New test pool should start empty: {initial_capacity}"
@@ -111,13 +78,12 @@ def _exercise_external_ip_ownership_lifecycle(
     external_ip_id = ""
     external_ip_cr_name = ""
     external_ip_uid = ""
-    service_name = ""
     try:
         external_ip_id = grpc.create_external_ip(name=f"ref-eip-owner-{uuid4().hex[:8]}", pool=pool["id"])
         external_ip_cr_name = wait_for_external_ip_cr(k8s=k8s, uuid=external_ip_id)
         wait_for_external_ip_allocated(k8s=k8s, name=external_ip_cr_name)
 
-        first_job = _wait_for_successful_provision_job(k8s=k8s, external_ip_name=external_ip_cr_name)
+        first_job = _wait_for_successful_create_job(k8s=k8s, external_ip_name=external_ip_cr_name)
         allocated_cr = k8s.get_json(resource="externalip", name=external_ip_cr_name)
         metadata = allocated_cr.get("metadata", {})
         uid = metadata.get("uid", "")
@@ -129,81 +95,57 @@ def _exercise_external_ip_ownership_lifecycle(
         assert tenant == pool["expected_external_ip_tenant"], (
             "Allocated ExternalIP tenant differs from the JWT user's independently resolved tenant"
         )
-        assert (metadata.get("annotations") or {}).get(_IMPLEMENTATION_STRATEGY_ANNOTATION) == manager
         external_ip_uid = uid
 
-        address = _validated_allocated_address(external_ip=allocated_cr, selected_pool_cidr=pool["cidr"])
         cr_status = allocated_cr.get("status", {})
-        assert cr_status.get("state") == "Allocated", f"Expected Allocated CR state, got {cr_status.get('state')!r}"
-        assert cr_status.get("address") == address, "CR status address differs from the manager annotation"
-        api_external_ip = grpc.get_external_ip(external_ip_id=external_ip_id).get("object", {})
-        assert api_external_ip.get("status", {}).get("address") == address, (
-            "Fulfillment API status address differs from the manager annotation"
+        address = _validated_allocated_address(external_ip=allocated_cr, selected_pool_cidr=pool["cidr"])
+        managers = cr_status.get("networkManagers", {}) or {}
+        fabric_ref = managers.get("fabric", {}) or {}
+        assert fabric_ref.get("name") == manager, (
+            f"ExternalIP records Fabric Manager {fabric_ref.get('name')!r}, expected {manager!r}"
         )
+        assert fabric_ref.get("ansibleRole"), "ExternalIP has no recorded Fabric Manager role"
+        _assert_task_input_identity(
+            external_ip=allocated_cr, external_ip_id=external_ip_id, uid=uid, generation=generation
+        )
+        assert first_job["manager"] == _FABRIC_MANAGER_TYPE
+        api_external_ip = _wait_for_api_external_ip_address(grpc=grpc, external_ip_id=external_ip_id, address=address)
+        assert api_external_ip.get("id") == external_ip_id, "Fulfillment returned a different ExternalIP ID"
         after_allocation = _pool_capacity(private_grpc, pool["id"])
         assert after_allocation["allocated"] == 1, f"Expected one reserved address after allocation: {after_allocation}"
         assert after_allocation["available"] == initial_capacity["available"] - 1
-
-        if manager == "k8s_only":
-            service_name = f"osac-eip-{uid}"
-            reservation = _get_metallb_reservation(k8s=k8s, service_name=service_name)
-            assert reservation is not None, f"UID-owned MetalLB Service {service_name} is missing"
-            _assert_metallb_reservation(reservation, uid=uid, tenant=tenant, external_ip_name=external_ip_cr_name)
-            assert _reservation_address(reservation) == address
 
         record_property("external_ip_id", external_ip_id)
         record_property("external_ip_uid", uid)
         record_property("external_ip_generation", str(generation))
         record_property("external_ip_address", address)
-        record_property("external_ip_first_provision_job_id", str(first_job["jobID"]))
+        record_property("external_ip_first_create_job_id", str(first_job["jobID"]))
 
-        _clear_provisioning_history(k8s=k8s, external_ip_name=external_ip_cr_name)
-        retry_job = _wait_for_successful_provision_job(
-            k8s=k8s, external_ip_name=external_ip_cr_name, previous_job_id=str(first_job["jobID"])
+        _request_task_retry(k8s=k8s, external_ip_name=external_ip_cr_name, completed_job=first_job)
+        retry_job = _wait_for_successful_create_job(
+            k8s=k8s, external_ip_name=external_ip_cr_name, previous_attempt=int(first_job["attempt"])
         )
         retried_cr = k8s.get_json(resource="externalip", name=external_ip_cr_name)
         retried_metadata = retried_cr.get("metadata", {})
         assert retried_metadata.get("uid") == uid, "Retry changed the ExternalIP UID"
         assert retried_metadata.get("generation") == generation, "Retry changed the ExternalIP generation"
         assert _validated_allocated_address(external_ip=retried_cr, selected_pool_cidr=pool["cidr"]) == address
-        assert retried_cr.get("status", {}).get("address") == address
-        assert (
-            grpc.get_external_ip(external_ip_id=external_ip_id).get("object", {}).get("status", {}).get("address")
-            == address
+        _assert_task_input_identity(
+            external_ip=retried_cr, external_ip_id=external_ip_id, uid=uid, generation=generation
         )
-        assert _pool_capacity(private_grpc, pool["id"]) == after_allocation, "Same-UID retry changed API pool capacity"
-        assert retry_job["jobID"] != first_job["jobID"], "Retry did not create a new provision job"
+        assert retry_job["manager"] == _FABRIC_MANAGER_TYPE
+        assert int(retry_job["attempt"]) == int(first_job["attempt"]) + 1
+        assert retry_job["jobID"] != first_job["jobID"], "Retry did not create a new AAP job"
+        retried_api_external_ip = _wait_for_api_external_ip_address(
+            grpc=grpc, external_ip_id=external_ip_id, address=address
+        )
+        assert retried_api_external_ip.get("id") == external_ip_id
+        assert _pool_capacity(private_grpc, pool["id"]) == after_allocation, (
+            "Retry of the same ExternalIP resource changed API pool capacity"
+        )
 
-        if manager == "k8s_only":
-            retried_reservation = _get_metallb_reservation(k8s=k8s, service_name=service_name)
-            assert retried_reservation is not None, f"Retry removed UID-owned MetalLB Service {service_name}"
-            _assert_metallb_reservation(
-                retried_reservation, uid=uid, tenant=tenant, external_ip_name=external_ip_cr_name
-            )
-            assert _reservation_address(retried_reservation) == address
-
-        record_property("external_ip_retry_provision_job_id", str(retry_job["jobID"]))
+        record_property("external_ip_retry_create_job_id", str(retry_job["jobID"]))
         grpc.delete_external_ip(external_ip_id=external_ip_id)
-
-        pending_release = poll_until(
-            fn=lambda: _release_pending_observation(
-                k8s=k8s,
-                private_grpc=private_grpc,
-                external_ip_name=external_ip_cr_name,
-                pool_id=pool["id"],
-                manager=manager,
-                service_name=service_name,
-            ),
-            until=lambda observation: observation is not None,
-            retries=300,
-            # Keep a tight cadence to observe the short overlap of release and the finalizer.
-            delay=1,
-            description=f"{profile} release holds the ExternalIP finalizer and pool capacity",
-        )
-        assert pending_release["capacity"]["allocated"] == 1, (
-            f"Pool capacity returned while the ExternalIP finalizer was still present: {pending_release['capacity']}"
-        )
-        assert pending_release["capacity"]["available"] == after_allocation["available"]
 
         wait_for_external_ip_deletion(k8s=k8s, name=external_ip_cr_name)
         poll_until(
@@ -213,11 +155,7 @@ def _exercise_external_ip_ownership_lifecycle(
             delay=2,
             description=f"{profile} ExternalIP release restores pool capacity",
         )
-        if manager == "k8s_only":
-            assert _get_metallb_reservation(k8s=k8s, service_name=service_name) is None, (
-                f"UID-owned MetalLB Service {service_name} remains after ExternalIP release"
-            )
-        record_property("external_ip_release", "finalizer completed; pool capacity returned once")
+        record_property("external_ip_release", "ExternalIP CR removed; API pool capacity returned")
     finally:
         if external_ip_id:
             _cleanup_owned_external_ip(
@@ -243,7 +181,7 @@ def _network_class_value(network_class: dict[str, Any], snake_case: str, camel_c
 
 
 def _declared_aap_collection_versions(manager: str) -> dict[str, str]:
-    repository_root = Path(__file__).resolve().parents[3]
+    repository_root = Path(__file__).resolve().parents[4]
 
     def _yaml(path: str) -> dict[str, Any]:
         value = yaml.safe_load((repository_root / path).read_text(encoding="utf-8"))
@@ -277,10 +215,18 @@ def _pool_capacity(private_grpc: GRPCClient, pool_id: str) -> dict[str, int]:
     }
 
 
+def _assert_task_input_identity(*, external_ip: dict[str, Any], external_ip_id: str, uid: str, generation: int) -> None:
+    task_input = external_ip.get("status", {}).get("taskInput", {}) or {}
+    resource = task_input.get("resource", {}) or {}
+    metadata = resource.get("metadata", {}) or {}
+    assert resource.get("id") == external_ip_id, "Stored Fabric task input does not use the Fulfillment API ID"
+    assert metadata.get("uid") == uid, "Stored Fabric task input does not match the current CR UID"
+    assert metadata.get("generation") == generation, "Stored Fabric task input does not match the current generation"
+
+
 def _validated_allocated_address(*, external_ip: dict[str, Any], selected_pool_cidr: str) -> str:
-    annotations = external_ip.get("metadata", {}).get("annotations", {}) or {}
-    address = annotations.get(_ALLOCATED_ADDRESS_ANNOTATION, "")
-    assert address, "ExternalIP has no manager-written allocated-address annotation"
+    address = external_ip.get("status", {}).get("address", "")
+    assert address, "ExternalIP has no allocated status.address"
     parsed_address = ipaddress.ip_address(address)
     assert isinstance(parsed_address, ipaddress.IPv4Address), f"Expected IPv4 allocation, got {address!r}"
     assert str(parsed_address) == address, f"Allocated address is not canonical IPv4 text: {address!r}"
@@ -290,27 +236,68 @@ def _validated_allocated_address(*, external_ip: dict[str, Any], selected_pool_c
     return address
 
 
-def _wait_for_successful_provision_job(
-    *, k8s: K8sClient, external_ip_name: str, previous_job_id: str = ""
+def _wait_for_api_external_ip_address(*, grpc: GRPCClient, external_ip_id: str, address: str) -> dict[str, Any]:
+    def _get_external_ip() -> dict[str, Any]:
+        return grpc.get_external_ip(external_ip_id=external_ip_id).get("object", {})
+
+    return poll_until(
+        fn=_get_external_ip,
+        until=lambda external_ip: external_ip.get("status", {}).get("address") == address,
+        retries=60,
+        delay=2,
+        description=f"Fulfillment ExternalIP {external_ip_id} status.address feedback",
+    )
+
+
+def _wait_for_successful_create_job(
+    *, k8s: K8sClient, external_ip_name: str, previous_attempt: int = 0
 ) -> dict[str, Any]:
     def _latest() -> dict[str, Any] | None:
         external_ip = k8s.get_json(resource="externalip", name=external_ip_name)
-        jobs = external_ip.get("status", {}).get("provisioningJobs", [])
-        provision_jobs = [job for job in jobs if job.get("type") == "provision"]
-        return provision_jobs[-1] if provision_jobs else None
+        jobs = external_ip.get("status", {}).get("jobs", [])
+        return next(
+            (
+                job
+                for job in jobs
+                if job.get("task") == _EXTERNAL_IP_CREATE_TASK and job.get("manager") == _FABRIC_MANAGER_TYPE
+            ),
+            None,
+        )
 
     return poll_until(
         fn=_latest,
         until=lambda job: bool(
-            job and job.get("jobID") and job.get("jobID") != previous_job_id and job.get("state") == "Succeeded"
+            job
+            and int(job.get("attempt", 0)) > previous_attempt
+            and job.get("jobID")
+            and job.get("state") == "Succeeded"
         ),
         retries=120,
         delay=5,
-        description=f"{external_ip_name} successful provision job after {previous_job_id or 'initial allocation'}",
+        description=f"{external_ip_name} successful {_EXTERNAL_IP_CREATE_TASK} job after attempt {previous_attempt}",
     )
 
 
-def _clear_provisioning_history(*, k8s: K8sClient, external_ip_name: str) -> None:
+def _request_task_retry(*, k8s: K8sClient, external_ip_name: str, completed_job: dict[str, Any]) -> None:
+    external_ip = k8s.get_json(resource="externalip", name=external_ip_name)
+    jobs = external_ip.get("status", {}).get("jobs", [])
+    matching = [
+        (index, job)
+        for index, job in enumerate(jobs)
+        if job.get("task") == _EXTERNAL_IP_CREATE_TASK and job.get("manager") == _FABRIC_MANAGER_TYPE
+    ]
+    assert len(matching) == 1, f"Expected one {_EXTERNAL_IP_CREATE_TASK}/fabric status entry, got {matching!r}"
+    index, job = matching[0]
+    assert job.get("attempt") == completed_job.get("attempt")
+    assert job.get("jobID") == completed_job.get("jobID")
+    assert job.get("state") == "Succeeded", f"Cannot retry a job in state {job.get('state')!r}"
+    patch = [
+        {"op": "test", "path": f"/status/jobs/{index}/task", "value": _EXTERNAL_IP_CREATE_TASK},
+        {"op": "test", "path": f"/status/jobs/{index}/manager", "value": _FABRIC_MANAGER_TYPE},
+        {"op": "test", "path": f"/status/jobs/{index}/attempt", "value": completed_job["attempt"]},
+        {"op": "test", "path": f"/status/jobs/{index}/state", "value": "Succeeded"},
+        {"op": "replace", "path": f"/status/jobs/{index}/state", "value": "Cancelled"},
+    ]
     command = ["kubectl"]
     if k8s.kubeconfig:
         command.extend(["--kubeconfig", k8s.kubeconfig])
@@ -324,58 +311,12 @@ def _clear_provisioning_history(*, k8s: K8sClient, external_ip_name: str) -> Non
             "-n",
             k8s.namespace,
             "--subresource=status",
-            "--type=merge",
+            "--type=json",
             "-p",
-            json.dumps({"status": {"provisioningJobs": []}}),
+            json.dumps(patch),
         ]
     )
     subprocess.run(command, capture_output=True, text=True, check=True)
-
-
-def _get_metallb_reservation(*, k8s: K8sClient, service_name: str) -> dict[str, Any] | None:
-    try:
-        return k8s.get_json(resource="service", name=service_name, namespace=_METALLB_NAMESPACE)
-    except subprocess.CalledProcessError as exc:
-        if _is_not_found(exc):
-            return None
-        raise
-
-
-def _assert_metallb_reservation(service: dict[str, Any], *, uid: str, tenant: str, external_ip_name: str) -> None:
-    metadata = service.get("metadata", {})
-    labels = metadata.get("labels", {}) or {}
-    annotations = metadata.get("annotations", {}) or {}
-    assert labels.get(_EXTERNAL_IP_UID_LABEL) == uid, "MetalLB Service is not owned by the current ExternalIP UID"
-    assert annotations.get("osac.openshift.io/tenant") == tenant, (
-        "MetalLB Service tenant differs from ExternalIP tenant"
-    )
-    assert annotations.get("osac.openshift.io/owner-reference") == f"ExternalIP/{external_ip_name}"
-
-
-def _reservation_address(service: dict[str, Any]) -> str:
-    ingress = service.get("status", {}).get("loadBalancer", {}).get("ingress", [])
-    assert ingress and ingress[0].get("ip"), "MetalLB Service has no assigned IPv4 address"
-    return ingress[0]["ip"]
-
-
-def _release_pending_observation(
-    *, k8s: K8sClient, private_grpc: GRPCClient, external_ip_name: str, pool_id: str, manager: str, service_name: str
-) -> dict[str, Any] | None:
-    try:
-        external_ip = k8s.get_json(resource="externalip", name=external_ip_name)
-    except subprocess.CalledProcessError as exc:
-        if _is_not_found(exc):
-            return None
-        raise
-
-    metadata = external_ip.get("metadata", {})
-    if not metadata.get("deletionTimestamp") or _EXTERNAL_IP_FINALIZER not in metadata.get("finalizers", []):
-        return None
-
-    if manager == "k8s_only" and _get_metallb_reservation(k8s=k8s, service_name=service_name) is not None:
-        return None
-
-    return {"capacity": _pool_capacity(private_grpc, pool_id)}
 
 
 def _is_not_found(exc: subprocess.CalledProcessError) -> bool:

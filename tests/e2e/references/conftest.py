@@ -11,12 +11,6 @@ import pytest
 
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
-    allocate_worker_subnet,
-    fulfillment_users_for_username,
-    wait_for_external_ip_pool_cr,
-    wait_for_external_ip_pool_deletion,
-    wait_for_external_ip_pool_grpc_ready,
-    wait_for_external_ip_pool_ready,
     wait_for_grpc_subnet_ready,
     wait_for_nat_gateway_deletion,
     wait_for_security_group_cr,
@@ -36,90 +30,9 @@ from tests.e2e.core.wait_kinds import WaitResourceKind
 logger = logging.getLogger(__name__)
 
 
-def _teardown_ref_external_ip_pool(
-    private_grpc: GRPCClient, k8s: K8sClient, pool_id: str, pool_cr_name: str | None
-) -> None:
-    errors: list[Exception] = []
-    pool_deleted = False
-    try:
-        # Shared pools can contain foreign tenant allocations; never sweep by pool ID.
-        private_grpc.delete_external_ip_pool(pool_id=pool_id)
-    except subprocess.CalledProcessError as exc:
-        combined = (exc.stderr or "") + (exc.stdout or "")
-        if re.search(r"Code:\s*NotFound", combined):
-            pool_deleted = True
-        else:
-            errors.append(exc)
-    except Exception as exc:
-        errors.append(exc)
-    else:
-        pool_deleted = True
-
-    if pool_deleted and not pool_cr_name:
-        pool_cr_name = k8s.get_external_ip_pool_name(uuid=pool_id, checked=False)
-
-    if pool_deleted and pool_cr_name and k8s.is_present(resource="externalippool", name=pool_cr_name):
-        try:
-            wait_for_external_ip_pool_deletion(k8s=k8s, name=pool_cr_name)
-        except Exception as exc:
-            errors.append(exc)
-
-    if len(errors) == 1:
-        raise errors[0]
-    if errors:
-        raise ExceptionGroup("ExternalIPPool teardown failed", errors)
-
-
-def _create_ref_external_ip_pool(
-    *, private_grpc: GRPCClient, k8s: K8sClient, name: str, cidr: str, expected_external_ip_tenant: str = ""
-) -> Generator[dict[str, str], None, None]:
-    pool_id: str | None = None
-    pool_cr_name: str | None = None
-    try:
-        pool_id = private_grpc.create_external_ip_pool(name=name, cidrs=[cidr])
-        pool_cr_name = wait_for_external_ip_pool_cr(k8s=k8s, uuid=pool_id)
-        wait_for_external_ip_pool_ready(k8s=k8s, name=pool_cr_name)
-        wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
-        yield {
-            "id": pool_id,
-            "name": name,
-            "cr_name": pool_cr_name,
-            "cidr": cidr,
-            "expected_external_ip_tenant": expected_external_ip_tenant,
-        }
-    finally:
-        if pool_id:
-            _teardown_ref_external_ip_pool(private_grpc, k8s, pool_id, pool_cr_name)
-
-
-def _tenant_for_username(private_grpc: GRPCClient, username: str) -> str:
-    users = fulfillment_users_for_username(private_grpc, username=username, limit=2)
-    assert len(users) == 1, f"Expected one Fulfillment user for JWT username {username!r}; found {len(users)}"
-    tenant = users[0].get("metadata", {}).get("tenant", "")
-    assert tenant, f"Fulfillment user {username!r} has no tenant"
-    return tenant
-
-
 @pytest.fixture(scope="session")
 def ref_test_run_id() -> str:
     return uuid4().hex[:8]
-
-
-@pytest.fixture
-def external_ip_ownership_pool(
-    private_grpc: GRPCClient, k8s_hub_client: K8sClient, jwt_username: str
-) -> Generator[dict[str, str], None, None]:
-    """Create a deployment-scoped pool and retain the JWT user's tenant for ownership assertions."""
-    pool_name = f"ref-eip-ownership-{uuid4().hex[:8]}"
-    pool_cidr = str(allocate_worker_subnet(prefix=30))
-    tenant = _tenant_for_username(private_grpc, jwt_username)
-    yield from _create_ref_external_ip_pool(
-        private_grpc=private_grpc,
-        k8s=k8s_hub_client,
-        name=pool_name,
-        cidr=pool_cidr,
-        expected_external_ip_tenant=tenant,
-    )
 
 
 def _create_ref_virtual_network(

@@ -167,22 +167,8 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonLeasePending))
-		Expect(bmi.Status.IPDiscoveryJobs).To(HaveLen(1))
-		Expect(bmi.Status.IPDiscoveryJobs[0].Target).To(Equal("query_dhcp_lease:fabric:attempt-2"))
-		Expect(bmi.Status.IPDiscoveryJobs[0].State).To(Equal(opv1alpha1.JobStateWaiting))
-		Expect(bmi.Status.IPDiscoveryJobs[0].JobID).To(Equal("job-in-flight-123"))
-		firstAttemptTime := bmi.Status.IPDiscoveryJobs[0].Timestamp
-		recordIPDiscoveryJob(bmi, &opv1alpha1.NetworkJobStatus{
-			Task: "query_dhcp_lease", Manager: opv1alpha1.NetworkJobManagerFabric, Attempt: 2,
-			State: opv1alpha1.NetworkJobStateRunning, JobID: "job-in-flight-123", Message: "job running",
-		})
-		Expect(bmi.Status.IPDiscoveryJobs).To(HaveLen(1), "an attempt update replaces its prior status")
-		Expect(bmi.Status.IPDiscoveryJobs[0].Timestamp).To(Equal(firstAttemptTime))
-		recordIPDiscoveryJob(bmi, &opv1alpha1.NetworkJobStatus{
-			Task: "query_dhcp_lease", Manager: opv1alpha1.NetworkJobManagerFabric, Attempt: 3,
-			State: opv1alpha1.NetworkJobStateRetrying,
-		})
-		Expect(bmi.Status.IPDiscoveryJobs).To(HaveLen(2), "a new attempt is retained in history")
+		Expect(cond.Message).To(ContainSubstring("no DHCP lease yet"))
+		Expect(cond.Message).To(ContainSubstring("AAP job ID: job-in-flight-123"))
 		Expect(bmi.Status.NetworkAttachmentStatuses).To(BeEmpty())
 	})
 

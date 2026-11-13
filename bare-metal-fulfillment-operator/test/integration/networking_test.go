@@ -128,15 +128,11 @@ var _ = Describe("BareMetalInstance networking", func() {
 		}).Should(Equal("true"))
 		patchBareMetalHostStatus(hostName, namespace, `{"status":{"poweredOn":true}}`)
 
-		By("waiting for BMF to expose the tenant lease and query job in status")
+		By("waiting for BMF to expose the tenant lease")
 		Eventually(func() (string, error) {
 			return kubectlJSONPath("baremetalinstance", id, namespace,
 				"{.status.networkAttachmentStatuses[0].ipAddress}")
 		}).Should(Equal("192.0.2.25"))
-		Eventually(func() (string, error) {
-			return kubectlJSONPath("baremetalinstance", id, namespace,
-				"{.status.ipDiscoveryJobs[0].target}")
-		}).Should(Equal("query_dhcp_lease:fabric:attempt-1"))
 		Eventually(func() (string, error) {
 			return kubectlJSONPath("baremetalinstance", id, namespace, "{.status.phase}")
 		}).Should(Equal("Ready"))

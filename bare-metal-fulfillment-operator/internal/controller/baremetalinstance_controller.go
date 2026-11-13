@@ -212,10 +212,10 @@ func (r *BareMetalInstanceReconciler) handleUpdate(ctx context.Context, bareMeta
 
 	allocated := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionAllocated)
 	if allocated != nil && allocated.Reason == v1alpha1.HostConditionReasonSelectedPortMACUnavailable {
-		if bareMetalInstance.Spec.ExternalHostID == "" {
-			return ctrl.Result{}, nil
-		}
-		return r.releaseHostWithoutSelectedPortMAC(ctx, bareMetalInstance, allocated.Message)
+		// Keep the allocated host associated with the terminal MAC failure so
+		// operators can identify the affected host. The inventory finalizer
+		// releases it if the BareMetalInstance is deleted.
+		return ctrl.Result{}, nil
 	}
 
 	if bareMetalInstance.Spec.TemplateID != "" && bareMetalInstance.Spec.TemplateID != shared.OsacNoopTemplate && r.ProvisioningProvider == nil {
@@ -252,7 +252,7 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 
 	allocated := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionAllocated)
 	if allocated != nil && allocated.Reason == v1alpha1.HostConditionReasonSelectedPortMACUnavailable {
-		return r.releaseHostWithoutSelectedPortMAC(ctx, bareMetalInstance, allocated.Message)
+		return ctrl.Result{}, nil
 	}
 
 	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseAllocating
@@ -396,10 +396,7 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 				)
 				r.recordBMIEvent(bareMetalInstance, corev1.EventTypeWarning,
 					v1alpha1.HostConditionReasonSelectedPortMACUnavailable, macErr.Error())
-				// Persist the failure before releasing the inventory claim. The next
-				// reconcile performs the owner-checked unassign without holding the
-				// host mutex across backend or API-server I/O.
-				return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+				return ctrl.Result{}, nil
 			}
 			if macErr != nil {
 				return ctrl.Result{}, macErr
@@ -437,38 +434,6 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	)
 
 	log.Info("Successfully fulfilled BareMetalInstance", "InventoryHostID", bareMetalInstance.Spec.ExternalHostID)
-	return ctrl.Result{}, nil
-}
-
-// releaseHostWithoutSelectedPortMAC returns an assigned host to inventory
-// after the selected physical port cannot be used for tenant networking. This
-// runs on a later reconcile after the failure condition is persisted, without
-// holding the allocation mutex across inventory or API-server I/O. Inventory
-// clients must keep UnassignHost owner-checked and safe to retry.
-func (r *BareMetalInstanceReconciler) releaseHostWithoutSelectedPortMAC(
-	ctx context.Context, bmi *v1alpha1.BareMetalInstance, diagnostic string,
-) (ctrl.Result, error) {
-	hostID := bmi.Spec.ExternalHostID
-	if hostID != "" {
-		if r.InventoryClient == nil {
-			return ctrl.Result{}, errors.New("inventory client not configured while releasing host")
-		}
-		if err := r.InventoryClient.UnassignHost(ctx, hostID, string(bmi.UID), inventoryLabelsToRemove(bmi)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("release host %s after selected-port MAC failure: %w", hostID, err)
-		}
-
-		updated := bmi.DeepCopy()
-		updated.Spec.ExternalHostID = ""
-		updated.Spec.ExternalHostName = ""
-		updated.Spec.HostClass = ""
-		if err := r.Update(ctx, updated); err != nil {
-			return ctrl.Result{}, fmt.Errorf("clear host assignment after selected-port MAC failure: %w", err)
-		}
-		bmi.Spec = updated.Spec
-	}
-	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-	bmi.SetStatusCondition(v1alpha1.HostConditionAllocated, metav1.ConditionFalse,
-		v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
 	return ctrl.Result{}, nil
 }
 

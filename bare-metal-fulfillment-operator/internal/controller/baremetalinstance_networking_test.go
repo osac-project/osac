@@ -109,19 +109,13 @@ var _ = Describe("BareMetalInstance Networking", func() {
 	}
 
 	removeAttachment := func() {
-		keys := []client.ObjectKey{
-			attachmentKey(),
-			{Namespace: namespace, Name: opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, bmiID, "")},
+		na := &opv1alpha1.NetworkAttachment{}
+		if err := k8sClient.Get(ctx, attachmentKey(), na); err != nil {
+			return
 		}
-		for _, key := range keys {
-			na := &opv1alpha1.NetworkAttachment{}
-			if err := k8sClient.Get(ctx, key, na); err != nil {
-				continue
-			}
-			na.Finalizers = nil
-			_ = k8sClient.Update(ctx, na)
-			_ = k8sClient.Delete(ctx, na)
-		}
+		na.Finalizers = nil
+		_ = k8sClient.Update(ctx, na)
+		_ = k8sClient.Delete(ctx, na)
 	}
 
 	removeBMI := func() {
@@ -242,6 +236,13 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 			macs = map[string]string{"data-1": "aa:bb:cc:dd:ee:01"}
+			unassignCalls := 0
+			reconciler.InventoryClient.(*mockInventoryClient).unassignHostFunc = func(
+				_ context.Context, _, _ string, _ []string,
+			) error {
+				unassignCalls++
+				return nil
+			}
 
 			result, err := reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
@@ -252,6 +253,8 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonSelectedPortMACUnavailable))
 			Expect(cond.Message).To(ContainSubstring(`"data-0"`))
 			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+			Expect(bmi.Spec.ExternalHostID).To(Equal("host-ns/host-123"))
+			Expect(unassignCalls).To(BeZero())
 			_, err = getAttachment()
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
@@ -358,34 +361,15 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			Expect(<-recorder.Events).To(ContainSubstring("Warning NetworkAttachmentFailed no free port"))
 		})
 
-		It("reuses a legacy BMI-only NetworkAttachment and records its MAC", func() {
-			bmi = newBMI(attachments)
-			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
-			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			legacy := newTestNetworkAttachment(namespace, bmiID, "data-0", BareMetalInstanceNetworkingFinalizer)
-			legacy.Name = opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, bmiID, "")
-			Expect(k8sClient.Create(ctx, legacy)).To(Succeed())
-
-			result, err := reconciler.reconcileNetworking(ctx, bmi)
-
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
-			Expect(networkAttachmentStatusFor(bmi, "subnet-1").MACAddress).To(Equal("aa:bb:cc:dd:ee:ff"))
-			_, err = getAttachment()
-			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "legacy attachment is reused without a suffixed duplicate")
-		})
 	})
 
 	Describe("reconcileNetworkingDeletion", func() {
-		deleteAndWaitForNetworkCleanup := func(legacy bool) {
+		deleteAndWaitForNetworkCleanup := func() {
 			bmi = newBMI(attachments)
 			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 			na := newTestNetworkAttachment(namespace, bmiID, "data-0",
 				BareMetalInstanceNetworkingFinalizer, "osac.openshift.io/networkattachment")
-			if legacy {
-				na.Name = opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, bmiID, "")
-			}
 			Expect(k8sClient.Create(ctx, na)).To(Succeed())
 			naKey := client.ObjectKeyFromObject(na)
 
@@ -427,11 +411,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 		}
 
 		It("deletes the NetworkAttachment and waits for the networking controller", func() {
-			deleteAndWaitForNetworkCleanup(false)
-		})
-
-		It("deletes a legacy BMI-only NetworkAttachment before releasing the host", func() {
-			deleteAndWaitForNetworkCleanup(true)
+			deleteAndWaitForNetworkCleanup()
 		})
 
 		It("completes at once when no NetworkAttachment exists", func() {

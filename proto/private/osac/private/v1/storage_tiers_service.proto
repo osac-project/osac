@@ -114,6 +114,7 @@ message StorageTiersDeleteRequest {
 
 message StorageTiersDeleteResponse {
   option (cleanapi.message).private = true;
+  StorageTier object = 1;
 }
 
 message StorageTiersSignalRequest {
@@ -159,7 +160,7 @@ service StorageTiers {
   // Deletes a storage tier.
   rpc Delete(StorageTiersDeleteRequest) returns (StorageTiersDeleteResponse) {
     option (cleanapi.method).private = true;
-    option (google.api.http) = {delete: "/api/private/v1/storage_tiers/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/storage_tiers/{id}" response_body: "object"};
   }
   // Signal is required by the generic server infrastructure but is not implemented for StorageTier
   // (no reconciler). Calls return UNIMPLEMENTED.

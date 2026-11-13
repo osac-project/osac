@@ -48,7 +48,11 @@ func patchBareMetalHostStatus(name, ns, statusJSON string) {
 	Expect(err).NotTo(HaveOccurred())
 }
 
-func createBareMetalHostYAML(name, ns, hostType string) *strings.Reader {
+func createBareMetalHostYAML(name, ns, hostType, interfaceMACsJSON string) *strings.Reader {
+	annotations := ""
+	if interfaceMACsJSON != "" {
+		annotations = fmt.Sprintf("  annotations:\n    osac.openshift.io/interface-macs: '%s'\n", interfaceMACsJSON)
+	}
 	yaml := fmt.Sprintf(`apiVersion: metal3.io/v1alpha1
 kind: BareMetalHost
 metadata:
@@ -57,9 +61,10 @@ metadata:
   labels:
     osac.openshift.io/host-type: %s
     osac.openshift.io/managed-by: baremetal
+%s
 spec:
   online: false
-`, name, ns, hostType)
+`, name, ns, hostType, annotations)
 	return strings.NewReader(yaml)
 }
 
@@ -67,8 +72,12 @@ spec:
 // operational" state -- the state a real Metal3 BareMetalOperator would reach only
 // after successfully inspecting real hardware.
 func createAvailableBareMetalHost(name, ns, hostType string) {
+	createAvailableBareMetalHostWithInterfaceMACs(name, ns, hostType, "")
+}
+
+func createAvailableBareMetalHostWithInterfaceMACs(name, ns, hostType, interfaceMACsJSON string) {
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
-	cmd.Stdin = createBareMetalHostYAML(name, ns, hostType)
+	cmd.Stdin = createBareMetalHostYAML(name, ns, hostType, interfaceMACsJSON)
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 

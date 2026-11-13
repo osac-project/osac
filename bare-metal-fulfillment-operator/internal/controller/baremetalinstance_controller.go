@@ -396,7 +396,10 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 				)
 				r.recordBMIEvent(bareMetalInstance, corev1.EventTypeWarning,
 					v1alpha1.HostConditionReasonSelectedPortMACUnavailable, macErr.Error())
-				return r.releaseHostWithoutSelectedPortMACLocked(ctx, bareMetalInstance, macErr.Error())
+				// Persist the failure before releasing the inventory claim. The next
+				// reconcile performs the owner-checked unassign without holding the
+				// host mutex across backend or API-server I/O.
+				return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 			}
 			if macErr != nil {
 				return ctrl.Result{}, macErr
@@ -438,52 +441,31 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 }
 
 // releaseHostWithoutSelectedPortMAC returns an assigned host to inventory
-// after the selected physical port cannot be used for tenant networking.
+// after the selected physical port cannot be used for tenant networking. This
+// runs on a later reconcile after the failure condition is persisted, without
+// holding the allocation mutex across inventory or API-server I/O. Inventory
+// clients must keep UnassignHost owner-checked and safe to retry.
 func (r *BareMetalInstanceReconciler) releaseHostWithoutSelectedPortMAC(
 	ctx context.Context, bmi *v1alpha1.BareMetalInstance, diagnostic string,
 ) (ctrl.Result, error) {
 	hostID := bmi.Spec.ExternalHostID
-	if hostID == "" {
-		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-		bmi.SetStatusCondition(v1alpha1.HostConditionAllocated, metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
-		return ctrl.Result{}, nil
-	}
-	if !inventory.TryLock(hostID) {
-		return ctrl.Result{RequeueAfter: r.TryLockFailPollIntervalDuration}, nil
-	}
-	defer inventory.Unlock(hostID)
-	return r.releaseHostWithoutSelectedPortMACLocked(ctx, bmi, diagnostic)
-}
+	if hostID != "" {
+		if r.InventoryClient == nil {
+			return ctrl.Result{}, errors.New("inventory client not configured while releasing host")
+		}
+		if err := r.InventoryClient.UnassignHost(ctx, hostID, string(bmi.UID), inventoryLabelsToRemove(bmi)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("release host %s after selected-port MAC failure: %w", hostID, err)
+		}
 
-// releaseHostWithoutSelectedPortMACLocked releases the host when the caller
-// already holds its inventory lock.
-func (r *BareMetalInstanceReconciler) releaseHostWithoutSelectedPortMACLocked(
-	ctx context.Context, bmi *v1alpha1.BareMetalInstance, diagnostic string,
-) (ctrl.Result, error) {
-	hostID := bmi.Spec.ExternalHostID
-	if hostID == "" {
-		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-		bmi.SetStatusCondition(v1alpha1.HostConditionAllocated, metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
-		return ctrl.Result{}, nil
+		updated := bmi.DeepCopy()
+		updated.Spec.ExternalHostID = ""
+		updated.Spec.ExternalHostName = ""
+		updated.Spec.HostClass = ""
+		if err := r.Update(ctx, updated); err != nil {
+			return ctrl.Result{}, fmt.Errorf("clear host assignment after selected-port MAC failure: %w", err)
+		}
+		bmi.Spec = updated.Spec
 	}
-
-	if r.InventoryClient == nil {
-		return ctrl.Result{}, errors.New("inventory client not configured while releasing host")
-	}
-	if err := r.InventoryClient.UnassignHost(ctx, hostID, string(bmi.UID), inventoryLabelsToRemove(bmi)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("release host %s after selected-port MAC failure: %w", hostID, err)
-	}
-
-	updated := bmi.DeepCopy()
-	updated.Spec.ExternalHostID = ""
-	updated.Spec.ExternalHostName = ""
-	updated.Spec.HostClass = ""
-	if err := r.Update(ctx, updated); err != nil {
-		return ctrl.Result{}, fmt.Errorf("clear host assignment after selected-port MAC failure: %w", err)
-	}
-	bmi.Spec = updated.Spec
 	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 	bmi.SetStatusCondition(v1alpha1.HostConditionAllocated, metav1.ConditionFalse,
 		v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
@@ -889,6 +871,56 @@ func (r *BareMetalInstanceReconciler) reconcileProvisioning(ctx context.Context,
 
 const networkHandoffTimeout = 15 * time.Minute
 
+func networkHandoffPowerStep(reason string) (management.PowerState, string, bool) {
+	switch reason {
+	case v1alpha1.HostConditionReasonPoweringOff:
+		return management.PowerOff, v1alpha1.HostConditionReasonPoweringOff, true
+	case v1alpha1.HostConditionReasonPoweringOn:
+		return management.PowerOn, v1alpha1.HostConditionReasonPoweringOn, true
+	default:
+		return "", "", false
+	}
+}
+
+func networkHandoffPendingMessage(
+	target management.PowerState,
+	setErr error,
+	powerStatus *management.PowerStatus,
+	getErr error,
+) string {
+	if errors.Is(setErr, management.ErrTransitioning) {
+		return "Management backend reports a power transition in progress"
+	}
+	if getErr != nil {
+		return fmt.Sprintf("GetPowerState failed while waiting for %s: %v", target, getErr)
+	}
+	if powerStatus == nil {
+		return "Management backend returned no power status"
+	}
+	if powerStatus.IsTransitioning {
+		return fmt.Sprintf("Host is transitioning; waiting for %s", target)
+	}
+	if powerStatus.State != target {
+		return fmt.Sprintf("Waiting for %s; observed %s", target, powerStatus.State)
+	}
+	return fmt.Sprintf("Waiting to observe host power state %s", target)
+}
+
+func networkHandoffTimeoutDiagnostic(
+	target management.PowerState,
+	powerStatus *management.PowerStatus,
+	getErr error,
+) string {
+	diagnostic := fmt.Sprintf("handoff did not observe %s within 15 minutes", target)
+	if getErr != nil {
+		return diagnostic + fmt.Sprintf(": GetPowerState failed: %v", getErr)
+	}
+	if powerStatus == nil {
+		return diagnostic + ": management backend returned no power status"
+	}
+	return diagnostic + fmt.Sprintf(": observed %s transitioning=%t", powerStatus.State, powerStatus.IsTransitioning)
+}
+
 // reconcileNetworkHandoffPowerCycle powers the host off and back on after its
 // port moves to the tenant network. Both steps are persisted in the handoff
 // condition and complete only after a matching, non-transitioning observation.
@@ -912,20 +944,19 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 		return ctrl.Result{}, nil
 	}
 
-	if handoffCond == nil || handoffCond.Status != metav1.ConditionFalse ||
-		(handoffCond.Reason != v1alpha1.HostConditionReasonPoweringOff &&
-			handoffCond.Reason != v1alpha1.HostConditionReasonPoweringOn) {
+	if handoffCond == nil || handoffCond.Status != metav1.ConditionFalse {
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
 			metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOff,
 			"Starting the network handoff power cycle")
 		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 	}
 
-	target := management.PowerOff
-	stepReason := v1alpha1.HostConditionReasonPoweringOff
-	if handoffCond.Reason == v1alpha1.HostConditionReasonPoweringOn {
-		target = management.PowerOn
-		stepReason = v1alpha1.HostConditionReasonPoweringOn
+	target, stepReason, validStep := networkHandoffPowerStep(handoffCond.Reason)
+	if !validStep {
+		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOff,
+			"Starting the network handoff power cycle")
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 	}
 
 	if r.ManagementClient == nil {
@@ -954,31 +985,11 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 
 	deadline := networkHandoffDeadline(bmi, handoffCond)
 	if !deadline.IsZero() && !time.Now().Before(deadline) {
-		diagnostic := fmt.Sprintf("handoff did not observe %s within 15 minutes", target)
-		if getErr != nil {
-			diagnostic += fmt.Sprintf(": GetPowerState failed: %v", getErr)
-		} else if powerStatus == nil {
-			diagnostic += ": management backend returned no power status"
-		} else {
-			diagnostic += fmt.Sprintf(": observed %s transitioning=%t", powerStatus.State, powerStatus.IsTransitioning)
-		}
-		r.failNetworkHandoff(bmi, diagnostic)
+		r.failNetworkHandoff(bmi, networkHandoffTimeoutDiagnostic(target, powerStatus, getErr))
 		return ctrl.Result{}, nil
 	}
 
-	message := fmt.Sprintf("Waiting to observe host power state %s", target)
-	if errors.Is(setErr, management.ErrTransitioning) {
-		message = "Management backend reports a power transition in progress"
-	}
-	if getErr != nil {
-		message = fmt.Sprintf("GetPowerState failed while waiting for %s: %v", target, getErr)
-	} else if powerStatus == nil {
-		message = "Management backend returned no power status"
-	} else if powerStatus.IsTransitioning {
-		message = fmt.Sprintf("Host is transitioning; waiting for %s", target)
-	} else if powerStatus.State != target {
-		message = fmt.Sprintf("Waiting for %s; observed %s", target, powerStatus.State)
-	}
+	message := networkHandoffPendingMessage(target, setErr, powerStatus, getErr)
 	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete, metav1.ConditionFalse, stepReason, message)
 	log.V(1).Info("Network handoff power step is pending", "host", bmi.Spec.ExternalHostID, "target", target)
 	return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
@@ -1326,19 +1337,7 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 		}
 		defer inventory.Unlock(hostID)
 
-		// Collect non-persistent inventory labels to remove
-		var labelsToRemove []string
-		if bareMetalInstance.Spec.InventoryLabels != nil {
-			labelsToRemove = make([]string, 0, len(bareMetalInstance.Spec.InventoryLabels))
-			for key := range bareMetalInstance.Spec.InventoryLabels {
-				labelsToRemove = append(labelsToRemove, key)
-			}
-		}
-		if _, ok := bareMetalInstance.GetPoolID(); ok {
-			labelsToRemove = append(labelsToRemove, shared.OsacBareMetalPoolIDLabel)
-		}
-
-		err := r.InventoryClient.UnassignHost(ctx, hostID, string(bareMetalInstance.UID), labelsToRemove)
+		err := r.InventoryClient.UnassignHost(ctx, hostID, string(bareMetalInstance.UID), inventoryLabelsToRemove(bareMetalInstance))
 		if err != nil {
 			log.Error(err, "Failed to unassign host in inventory", "InventoryHostID", hostID)
 			return ctrl.Result{}, err

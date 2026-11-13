@@ -124,6 +124,31 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 				condTrue(HostConditionPowerSynced),
 			},
 			ProvisioningProgress{State: StateInProgress, Step: StepProvisioning, Retrying: true}),
+		Entry("NetworkHandoffComplete False+PoweringOff -> handoff pending, not failed",
+			[]metav1.Condition{
+				condTrue(HostConditionAllocated),
+				condTrue(HostConditionProvisionTemplateComplete),
+				condTrue(HostConditionNetworkAttachmentsReady),
+				condFalse(HostConditionNetworkHandoffComplete, HostConditionReasonPoweringOff),
+			},
+			ProvisioningProgress{State: StateInProgress, Step: StepNetworkSetupHandoff}),
+		Entry("NetworkHandoffComplete False+PoweringOn -> handoff pending, not failed",
+			[]metav1.Condition{
+				condTrue(HostConditionAllocated),
+				condTrue(HostConditionProvisionTemplateComplete),
+				condTrue(HostConditionNetworkAttachmentsReady),
+				condFalse(HostConditionNetworkHandoffComplete, HostConditionReasonPoweringOn),
+			},
+			ProvisioningProgress{State: StateInProgress, Step: StepNetworkSetupHandoff}),
+		Entry("IPDiscoveryComplete False+LeasePending -> lease pending, not failed",
+			[]metav1.Condition{
+				condTrue(HostConditionAllocated),
+				condTrue(HostConditionProvisionTemplateComplete),
+				condTrue(HostConditionNetworkAttachmentsReady),
+				condTrue(HostConditionNetworkHandoffComplete),
+				condFalse(HostConditionIPDiscoveryComplete, HostConditionReasonLeasePending),
+			},
+			ProvisioningProgress{State: StateInProgress, Step: StepNetworkSetupIPDiscovery}),
 
 		// --- Terminal states ---
 		Entry("network trio all True -> Provisioned, Ready axis live (power-neutral in-flight step)",
@@ -227,6 +252,13 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 				condTrue(HostConditionAllocated),
 				condTrue(HostConditionProvisionTemplateComplete),
 				condFalse(HostConditionNetworkAttachmentsReady, HostConditionReasonTemplateFailed),
+			},
+			ProvisioningProgress{State: StateFailed, Step: StepNetworkSetupAttachment, Failure: FailureNetworkAttachment}),
+		Entry("PoweringOff on the attachment condition remains a failure",
+			[]metav1.Condition{
+				condTrue(HostConditionAllocated),
+				condTrue(HostConditionProvisionTemplateComplete),
+				condFalse(HostConditionNetworkAttachmentsReady, HostConditionReasonPoweringOff),
 			},
 			ProvisioningProgress{State: StateFailed, Step: StepNetworkSetupAttachment, Failure: FailureNetworkAttachment}),
 		// Forward-compat: the operator has no failure reason for NetworkHandoffComplete

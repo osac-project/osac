@@ -267,13 +267,10 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 
 	// Existing BMI-only attachments are reused through upgrades. Mirror their
 	// recorded port identity into status without changing the NetworkAttachment.
-	if resolvedKey != key {
-		key = resolvedKey
-	}
 	if status := networkAttachmentStatusFor(bareMetalInstance, attachment.SubnetRef); status != nil && status.MACAddress == "" {
 		mac, err := normalizeMAC(na.Spec.Interface.MACAddress)
 		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("existing NetworkAttachment %s has invalid interface MAC: %w", key.Name, err)
+			return ctrl.Result{}, fmt.Errorf("existing NetworkAttachment %s has invalid interface MAC: %w", resolvedKey.Name, err)
 		}
 		status.MACAddress = mac
 	}

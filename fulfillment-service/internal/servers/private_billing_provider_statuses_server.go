@@ -81,8 +81,8 @@ func (b *PrivateBillingProviderStatusesServerBuilder) Build() (result *PrivateBi
 }
 
 // Get never calls the provider when billing is off. Otherwise it makes one HealthCheck, a single smallest-page
-// account-list request with a short timeout. Account and health reads bypass the pricing breaker by design (6878
-// design section 4.6), so an open pricing breaker does not turn the status UNAVAILABLE.
+// account-list request with a short timeout. Account and health reads bypass the pricing breaker by design, so an
+// open pricing breaker does not turn the status UNAVAILABLE.
 func (s *PrivateBillingProviderStatusesServer) Get(ctx context.Context,
 	request *privatev1.BillingProviderStatusesGetRequest) (*privatev1.BillingProviderStatusesGetResponse, error) {
 	status := privatev1.BillingProviderStatus_builder{
@@ -101,7 +101,13 @@ func (s *PrivateBillingProviderStatusesServer) Get(ctx context.Context,
 	})
 	// This server reports the two states instead of failing, so it reads the provider directly.
 	adapter, err := s.provider.Adapter()
-	if err == nil {
+	switch {
+	case err != nil:
+		// Keep the stored classification.
+	case adapter == nil:
+		// A configured provider without an adapter and without a stored error is an invariant failure.
+		err = billing.NewError(billing.ReasonUnavailable, "Adapter", false, 0)
+	default:
 		err = adapter.HealthCheck(ctx)
 	}
 	s.mu.Lock()

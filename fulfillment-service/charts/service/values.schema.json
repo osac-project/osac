@@ -95,6 +95,41 @@
           "additionalProperties": false
         }
       }
+    },
+    "tuning": {
+      "type": "object",
+      "description": "Catalog pricing cache tuning; applies with or without an external pricing provider",
+      "properties": {
+        "cache": {
+          "type": "object",
+          "description": "Refresh intervals for the catalog-pricing caches, in seconds. defaultSeconds is the shared interval; inventorySeconds and rateCardSeconds are optional overrides that inherit it when unset",
+          "properties": {
+            "defaultSeconds": {
+              "type": "integer",
+              "description": "Shared refresh interval, and the interval every catalog-pricing cache inherits when its own override is unset",
+              "minimum": 1,
+              "maximum": 86400,
+              "default": 300
+            },
+            "inventorySeconds": {
+              "type": ["integer", "null"],
+              "description": "Optional override of defaultSeconds for the metered catalog inventory behind CatalogPricingInputs.List. Null or unset inherits defaultSeconds, so this chart renders 300",
+              "minimum": 1,
+              "maximum": 86400,
+              "default": 300
+            },
+            "rateCardSeconds": {
+              "type": ["integer", "null"],
+              "description": "Optional override of defaultSeconds for the priced rate card items of one provider. Null or unset inherits defaultSeconds, so this chart renders 300",
+              "minimum": 1,
+              "maximum": 86400,
+              "default": 300
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

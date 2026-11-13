@@ -255,6 +255,30 @@ service:
     level: info
     headers: false
     bodies: false
+  # Catalog pricing cache tuning, in seconds. Each value bounds how long the
+  # fulfillment service reuses already-computed catalog data before reading it
+  # again. The caches also answer requests while no external pricing provider
+  # is configured, so they apply to every deployment.
+  #
+  # Cascade: defaultSeconds is the shared interval, and each per-cache value
+  # below overrides it. Set an override to null to let that cache inherit
+  # defaultSeconds again; deleting the key does not, because Helm merges this
+  # chart's shipped value back in. The shipped defaultSeconds is 300.
+  tuning:
+    cache:
+      # Shared refresh interval, and the fallback for every catalog-pricing
+      # cache without an override of its own.
+      defaultSeconds: 300
+      # Catalog inventory staleness bound: after an administrator edits a
+      # catalog item, at most this long passes before
+      # CatalogPricingInputs.List reflects the change. The shipped 30 is
+      # deliberate: it keeps the admin gap-check view fresh, and it is an
+      # override of the shared 300, not a second default.
+      inventorySeconds: 30
+      # Provider rate card items. A read fetches the priced items for one
+      # provider; this bounds how long those results are reused. Shipped equal
+      # to defaultSeconds; set it to null to inherit defaultSeconds directly.
+      rateCardSeconds: 300
   vault:
     # Vault API endpoint. Points to the osac-infra namespace by default,
     # where bundled OpenBao is deployed after OSAC-4916. Leave empty to

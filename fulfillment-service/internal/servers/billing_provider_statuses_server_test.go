@@ -131,6 +131,14 @@ var _ = Describe("Billing provider statuses server", func() {
 			Expect(status.GetProviderKey()).To(Equal("m360"))
 		})
 
+	It("is UNAVAILABLE when a configured provider has neither an adapter nor a stored error", func() {
+		status := get(build(billing.NewProvider("m360", nil, nil)))
+		Expect(status.GetState()).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_UNAVAILABLE))
+		Expect(status.GetMessage()).To(Equal("billing provider account API is unavailable"))
+		Expect(status.GetProviderKey()).To(Equal("m360"))
+		Expect(status.HasLastSuccessfulCheck()).To(BeFalse())
+	})
+
 	It("shares the last successful check between the public and private servers", func() {
 		provider := billing.NewProvider("m360", &countingAdapter{}, nil)
 		private, err := NewPrivateBillingProviderStatusesServer().SetLogger(logger).SetProvider(provider).Build()

@@ -99,14 +99,36 @@ type AccountPage struct {
 	Next     string
 }
 
-// PriceableAttribute is a provider charge dimension. Rate rows reference it by ID.
+// PriceableAttribute is a provider charge dimension: something the provider meters and prices. Rate rows refer to
+// it by ID; the resolver and the APIs refer to it by Name.
 type PriceableAttribute struct {
-	ID   string
+	// ID is the provider's own identifier for the dimension, which the M360 adapter reads from the API's id
+	// field. It stays inside the billing boundary: no API response carries it.
+	ID string
+	// Name is the provider's name for the dimension, matched by exact equality against the OSAC dimension names
+	// that key a configuration in ComponentRequest.Values (for example "instance_type"). There is no OSAC-side
+	// dimension mapping, so a provider name that differs from OSAC's vocabulary never resolves.
 	Name string
 }
 
+// AttributeValue is one condition of a rate row: a dimension name and the value a configuration must carry for the
+// row to apply, for example {Name: "instance_type", Value: "large-gpu"} for a row that prices only large GPU
+// instances.
+//
+// Both strings are passed through from the provider as received; the M360 adapter copies its attributeName and
+// attributeValue unchanged. Resolution compares them by exact equality, Name against the OSAC dimension names that
+// key a configuration in ComponentRequest.Values and Value against the configured value, and nothing translates or
+// normalizes either one. A provider name that differs from OSAC's vocabulary therefore yields a condition that can
+// never match. Aligning the provider's names with OSAC's is the administrator's responsibility, so the pass-through
+// is intended, not a translation layer OSAC is missing. Neither field carries an operator: a dimension a row omits is
+// unconstrained (ANY), and empty is reserved for ANY, so an empty Value is invalid.
 type AttributeValue struct {
-	Name  string
+	// Name is the provider's dimension name, matched by exact equality as in PriceableAttribute.Name.
+	Name string
+	// Value is the value a configuration must have for that dimension, compared as a raw string against
+	// ComponentRequest.Values: an instance type name such as "large-gpu", a decimal size such as "100", or a
+	// storage tier name. It must use the same form the caller supplies, so a provider id only matches when the
+	// caller's value is that same id.
 	Value string
 }
 

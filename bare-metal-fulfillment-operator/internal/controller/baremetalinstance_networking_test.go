@@ -377,20 +377,25 @@ var _ = Describe("BareMetalInstance Networking", func() {
 	})
 
 	Describe("reconcileNetworkingDeletion", func() {
-		It("deletes the NetworkAttachment and waits for the networking controller", func() {
+		deleteAndWaitForNetworkCleanup := func(legacy bool) {
 			bmi = newBMI(attachments)
 			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 			na := newTestNetworkAttachment(namespace, bmiID, "data-0",
 				BareMetalInstanceNetworkingFinalizer, "osac.openshift.io/networkattachment")
+			if legacy {
+				na.Name = opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, bmiID, "")
+			}
 			Expect(k8sClient.Create(ctx, na)).To(Succeed())
+			naKey := client.ObjectKeyFromObject(na)
 
 			// The first pass deletes the NetworkAttachment.
 			result, done, err := reconciler.reconcileNetworkingDeletion(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(done).To(BeFalse())
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
-			na, err = getAttachment()
+			na = &opv1alpha1.NetworkAttachment{}
+			err = k8sClient.Get(ctx, naKey, na)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(na.DeletionTimestamp).NotTo(BeNil())
 
@@ -398,7 +403,8 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			_, done, err = reconciler.reconcileNetworkingDeletion(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(done).To(BeFalse())
-			na, err = getAttachment()
+			na = &opv1alpha1.NetworkAttachment{}
+			err = k8sClient.Get(ctx, naKey, na)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(na.Finalizers).To(ContainElement(BareMetalInstanceNetworkingFinalizer))
 
@@ -410,13 +416,22 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			_, done, err = reconciler.reconcileNetworkingDeletion(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(done).To(BeFalse())
-			_, err = getAttachment()
+			na = &opv1alpha1.NetworkAttachment{}
+			err = k8sClient.Get(ctx, naKey, na)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 			_, done, err = reconciler.reconcileNetworkingDeletion(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(done).To(BeTrue())
 			Expect(controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)).To(BeFalse())
+		}
+
+		It("deletes the NetworkAttachment and waits for the networking controller", func() {
+			deleteAndWaitForNetworkCleanup(false)
+		})
+
+		It("deletes a legacy BMI-only NetworkAttachment before releasing the host", func() {
+			deleteAndWaitForNetworkCleanup(true)
 		})
 
 		It("completes at once when no NetworkAttachment exists", func() {

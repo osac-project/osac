@@ -21,6 +21,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 var _ = Describe("Private fabric domains server", func() {
@@ -240,6 +241,27 @@ var _ = Describe("Private fabric domains server", func() {
 			_, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 			Expect(err).To(MatchError(ContainSubstring("does not exist")))
+		})
+
+		It("keeps a deleting domain unchanged on a repeated delete", func() {
+			object.GetMetadata().SetFinalizers([]string{"test/cleanup"})
+			created, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := created.GetObject().GetId()
+
+			first, err := server.Delete(ctx, privatev1.FabricDomainsDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			before, err := server.Get(ctx, privatev1.FabricDomainsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			second, err := server.Delete(ctx, privatev1.FabricDomainsDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(second.GetObject().GetId()).To(Equal(id))
+			Expect(proto.Equal(first.GetObject(), second.GetObject())).To(BeTrue())
+
+			after, err := server.Get(ctx, privatev1.FabricDomainsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(before.GetObject(), after.GetObject())).To(BeTrue())
 		})
 
 		It("rejects an already deleting VN", func() {

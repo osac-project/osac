@@ -45,7 +45,7 @@ message FabricDomainsUpdateRequest {
 
 message FabricDomainsUpdateResponse { FabricDomain object = 1; }
 message FabricDomainsDeleteRequest { string id = 1; }
-message FabricDomainsDeleteResponse {}
+message FabricDomainsDeleteResponse { FabricDomain object = 1; }
 
 service FabricDomains {
   rpc List(FabricDomainsListRequest) returns (FabricDomainsListResponse) {
@@ -58,6 +58,6 @@ service FabricDomains {
     option (google.api.http) = {post: "/api/fulfillment/v1/fabric_domains" body: "object" response_body: "object"};
   }
   rpc Delete(FabricDomainsDeleteRequest) returns (FabricDomainsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/fabric_domains/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/fabric_domains/{id}" response_body: "object"};
   }
 }

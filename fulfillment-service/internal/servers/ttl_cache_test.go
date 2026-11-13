@@ -16,12 +16,47 @@ package servers
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"golang.org/x/sync/semaphore"
 )
+
+// fillTracker records the order in which fills start and finish and the peak number that ran at once, so a spec can
+// assert the ordering and mutual exclusion of two fills without waiting on a clock.
+type fillTracker struct {
+	mu      sync.Mutex
+	events  []string
+	running int
+	peak    int
+}
+
+func (t *fillTracker) start(name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.events = append(t.events, name+":start")
+	t.running++
+	if t.running > t.peak {
+		t.peak = t.running
+	}
+}
+
+func (t *fillTracker) finish(name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.events = append(t.events, name+":finish")
+	t.running--
+}
+
+// snapshot returns the recorded event order and the peak number of fills that ran at once.
+func (t *fillTracker) snapshot() (events []string, peak int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.events...), t.peak
+}
 
 var _ = Describe("Billing TTL cache", func() {
 	// newTestCache returns a string-keyed cache with a one-minute TTL and a fill budget below it, whose clock is the
@@ -414,5 +449,130 @@ var _ = Describe("Billing TTL cache", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(value).To(Equal(7))
 		Expect(loads.Load()).To(Equal(int32(2)))
+	})
+
+	// newSingleSlotCache returns a cache with exactly one fill slot and a short fill budget, so a leaked slot fails a
+	// spec with an ordinary budget error instead of waiting out the default budget.
+	newSingleSlotCache := func() *ttlCache[string, int] {
+		cache := newTTLCache[string, int](time.Minute, 100*time.Millisecond, 8, func(key string) string { return key })
+		cache.fillLimiter = semaphore.NewWeighted(1)
+		return cache
+	}
+
+	It("shares one fill limiter across caches by default", func() {
+		cache, _ := newTestCache(8)
+		Expect(cache.fillLimiter).To(BeIdenticalTo(ttlCacheFillLimiter),
+			"every cache must draw its fill slots from the one process-wide limiter")
+		// The admin guide documents this number, so a change to it must be deliberate.
+		Expect(ttlCacheFillConcurrency).To(Equal(4))
+	})
+
+	It("holds a second key's fill until the running fill releases its only slot", func() {
+		var keyStringCalls atomic.Int32
+		cache := newTTLCache[string, int](time.Minute, 30*time.Second, 8, newCountingKeyString(&keyStringCalls))
+		cache.fillLimiter = semaphore.NewWeighted(1)
+		track := &fillTracker{}
+		releaseFirst := make(chan struct{})
+		firstStarted := make(chan struct{})
+		firstDone := make(chan error, 1)
+		go func() {
+			_, err := cache.get(context.Background(), "one", func(context.Context) (int, error) {
+				track.start("one")
+				defer track.finish("one")
+				close(firstStarted)
+				<-releaseFirst
+				return 1, nil
+			})
+			firstDone <- err
+		}()
+		<-firstStarted
+		secondDone := make(chan error, 1)
+		go func() {
+			_, err := cache.get(context.Background(), "two", func(context.Context) (int, error) {
+				track.start("two")
+				defer track.finish("two")
+				return 2, nil
+			})
+			secondDone <- err
+		}()
+		// A counted second keyString call proves the second get committed to its own flight; with one slot its fill
+		// can only start once the first fill releases the slot below.
+		Eventually(keyStringCalls.Load).Should(Equal(int32(2)))
+		close(releaseFirst)
+		for _, done := range []chan error{firstDone, secondDone} {
+			select {
+			case err := <-done:
+				Expect(err).ToNot(HaveOccurred())
+			case <-time.After(5 * time.Second):
+				Fail("a get did not return")
+			}
+		}
+		events, peak := track.snapshot()
+		Expect(events).To(Equal([]string{"one:start", "one:finish", "two:start", "two:finish"}),
+			"a different key's fill must not run while the running fill holds the only slot")
+		Expect(peak).To(Equal(1), "fills must not overlap when the limiter has one slot")
+		for key, want := range map[string]int{"one": 1, "two": 2} {
+			value, err := cache.get(context.Background(), key, func(context.Context) (int, error) {
+				return 0, errors.New("a cached key must not load again")
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(value).To(Equal(want), "both fills must have cached their values")
+		}
+	})
+
+	It("releases the fill slot when a fill fails", func() {
+		cache := newSingleSlotCache()
+		failure := errors.New("load unavailable")
+		_, err := cache.get(context.Background(), "fails", func(context.Context) (int, error) {
+			return 0, failure
+		})
+		Expect(err).To(MatchError(failure))
+		// The only slot must be free again: a leaked slot makes this fill miss its 100ms budget and fail.
+		value, err := cache.get(context.Background(), "succeeds", func(context.Context) (int, error) { return 7, nil })
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(7))
+	})
+
+	It("releases the fill slot when a fill panics", func() {
+		cache := newSingleSlotCache()
+		_, err := cache.get(context.Background(), "panics", func(context.Context) (int, error) {
+			panic("boom")
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("boom"))
+		// The only slot must be free again: a leaked slot makes this fill miss its 100ms budget and fail.
+		value, err := cache.get(context.Background(), "succeeds", func(context.Context) (int, error) { return 7, nil })
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(7))
+	})
+
+	It("fails a fill that cannot get a slot within its budget and caches nothing", func() {
+		cache := newSingleSlotCache()
+		// Hold the only slot, as a fill that is still running would.
+		Expect(cache.fillLimiter.Acquire(context.Background(), 1)).To(Succeed())
+		var loads atomic.Int32
+		_, err := cache.get(context.Background(), "key", func(context.Context) (int, error) {
+			loads.Add(1)
+			return 7, nil
+		})
+		Expect(err).To(HaveOccurred(), "a fill that never gets a slot must fail its caller")
+		Expect(errors.Is(err, context.DeadlineExceeded)).To(BeTrue(),
+			"the wait is bounded by the fill budget, got: %v", err)
+		Expect(err.Error()).To(ContainSubstring("fill slot"))
+		Expect(loads.Load()).To(BeZero(), "the load must not run without a slot")
+		_, cached := cache.snapshot("key")
+		Expect(cached).To(BeFalse(), "a fill that never ran must cache nothing")
+		cache.fillLimiter.Release(1)
+		// The failed flight must not stay wedged: once a slot is free the next get runs a fresh fill and caches it.
+		value, err := cache.get(context.Background(), "key", func(context.Context) (int, error) {
+			loads.Add(1)
+			return 7, nil
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(7))
+		Expect(loads.Load()).To(Equal(int32(1)))
+		value, cached = cache.snapshot("key")
+		Expect(cached).To(BeTrue(), "the successful fill must cache its value")
+		Expect(value).To(Equal(7))
 	})
 })

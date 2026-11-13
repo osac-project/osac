@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -32,12 +33,17 @@ import (
 // package's unit suite asserts handler-list membership only. These specs drive the deployed gateway's HTTP boundary
 // end to end - route resolution, method mapping, the interceptor chain, the handler - and pin that the REST result
 // matches the gRPC path's.
-var _ = Describe("Billing pricing REST routes", Label("billing"), func() {
+var _ = Describe("Billing pricing REST routes", Label("billing"), Serial, func() {
 	It("lists the catalog pricing inputs over REST identically to the gRPC path", func(ctx context.Context) {
+		// The deployed server reuses one catalog inventory sweep until the cache TTL elapses, so a read right after
+		// seeding can observe a snapshot from before the item existed. Shorten that TTL on the deployed Deployment
+		// first, as the CLI spec does, so the bounded poll below spans several refreshes.
+		catalogPricingShortenInventoryTTL(ctx)
+
 		// Seed one published item offering any instance type, so the spec asserts a real aggregated row through the
 		// deployed routes instead of passing on an empty catalog.
 		template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
-		createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(),
+		item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(),
 			publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
@@ -48,25 +54,37 @@ var _ = Describe("Billing pricing REST routes", Label("billing"), func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
+		itemID := item.GetId()
 
-		grpcList, err := publicv1.NewCatalogPricingInputsClient(tool.ExternalView().AdminConn()).List(ctx,
-			publicv1.CatalogPricingInputsListRequest_builder{}.Build())
-		Expect(err).NotTo(HaveOccurred())
-		Expect(grpcList.GetTotal()).To(BeNumerically(">", 0), "the seeded item must be aggregated")
+		// The patched cache expires after four seconds, so the 20s poll spans several refreshes with margin for a
+		// slow one. The gRPC read, both REST reads and the parity comparison all sit inside the poll: a stale
+		// snapshot retries instead of failing, and both paths must show the seeded item before the spec passes.
+		By("polling the gRPC path and both billing pricing REST routes for the seeded item")
+		Eventually(ctx, func(g Gomega) {
+			// Bound all three reads together to 3s so a hung request cannot stall polling; with the 2s interval,
+			// several attempts still fit in the 20s budget even when each attempt exhausts its deadline.
+			attemptCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
 
-		By("reading the public REST route through the external ingress")
-		body, statusCode, err := getBillingPricingREST(ctx, tool.ExternalView().AdminClient(),
-			"/api/fulfillment/v1/billing/catalog_pricing_inputs")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(statusCode).To(Equal(http.StatusOK))
-		expectCatalogPricingInputsRESTParity(body, grpcList.GetTotal())
+			grpcList, err := publicv1.NewCatalogPricingInputsClient(tool.ExternalView().AdminConn()).List(attemptCtx,
+				publicv1.CatalogPricingInputsListRequest_builder{}.Build())
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(grpcList.GetTotal()).To(BeNumerically(">", 0), "the seeded item must be aggregated")
+			g.Expect(catalogPricingGRPCInputRowListsItem(grpcList, itemID)).To(BeTrue(),
+				"the gRPC instance_type row does not list the seeded catalog item")
 
-		By("reading the private REST route through the internal ingress")
-		body, statusCode, err = getBillingPricingREST(ctx, tool.InternalView().AdminClient(),
-			"/api/private/v1/billing/catalog_pricing_inputs")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(statusCode).To(Equal(http.StatusOK))
-		expectCatalogPricingInputsRESTParity(body, grpcList.GetTotal())
+			body, statusCode, err := getBillingPricingREST(attemptCtx, tool.ExternalView().AdminClient(),
+				"/api/fulfillment/v1/billing/catalog_pricing_inputs")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(statusCode).To(Equal(http.StatusOK))
+			expectCatalogPricingInputsRESTParity(g, body, grpcList.GetTotal(), itemID)
+
+			body, statusCode, err = getBillingPricingREST(attemptCtx, tool.InternalView().AdminClient(),
+				"/api/private/v1/billing/catalog_pricing_inputs")
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(statusCode).To(Equal(http.StatusOK))
+			expectCatalogPricingInputsRESTParity(g, body, grpcList.GetTotal(), itemID)
+		}, 20*time.Second, 2*time.Second).Should(Succeed())
 	})
 
 	It("surfaces the billing-not-configured rejection over the provider rate card items REST routes", func(ctx context.Context) {
@@ -156,21 +174,42 @@ func getBillingPricingREST(ctx context.Context, client *http.Client, target stri
 }
 
 // expectCatalogPricingInputsRESTParity asserts a catalog pricing inputs REST body carries the same inventory the
-// gRPC path returned, including the seeded compute_instance/instance_type row.
-func expectCatalogPricingInputsRESTParity(body []byte, grpcTotal int32) {
+// gRPC path returned, including a compute_instance/instance_type row that lists the seeded catalog item.
+func expectCatalogPricingInputsRESTParity(g Gomega, body []byte, grpcTotal int32, itemID string) {
 	var restList struct {
 		Items []map[string]any `json:"items"`
 		Total int32            `json:"total"`
 	}
-	Expect(json.Unmarshal(body, &restList)).To(Succeed())
-	Expect(restList.Total).To(Equal(grpcTotal), "REST and gRPC must agree on the inventory")
-	found := false
+	g.Expect(json.Unmarshal(body, &restList)).To(Succeed())
+	g.Expect(restList.Total).To(Equal(grpcTotal), "REST and gRPC must agree on the inventory")
+	rowFound := false
+	itemFound := false
 	for _, item := range restList.Items {
-		Expect(item).To(HaveKey("service"))
-		Expect(item).To(HaveKey("dimension"))
+		g.Expect(item).To(HaveKey("service"))
+		g.Expect(item).To(HaveKey("dimension"))
 		if item["service"] == "compute_instance" && item["dimension"] == "instance_type" {
-			found = true
+			rowFound = true
+			if catalogPricingRowListsItem(item, itemID) {
+				itemFound = true
+			}
 		}
 	}
-	Expect(found).To(BeTrue(), "the seeded catalog item's instance_type row is missing")
+	g.Expect(rowFound).To(BeTrue(), "the seeded catalog item's instance_type row is missing")
+	g.Expect(itemFound).To(BeTrue(), "the REST instance_type row does not list the seeded catalog item")
+}
+
+// catalogPricingGRPCInputRowListsItem reports whether a gRPC catalog pricing inputs listing's
+// compute_instance/instance_type row references the given catalog item id.
+func catalogPricingGRPCInputRowListsItem(list *publicv1.CatalogPricingInputsListResponse, id string) bool {
+	for _, row := range list.GetItems() {
+		if row.GetService() != "compute_instance" || row.GetDimension() != "instance_type" {
+			continue
+		}
+		for _, entry := range row.GetCatalogItems() {
+			if entry.GetId() == id {
+				return true
+			}
+		}
+	}
+	return false
 }

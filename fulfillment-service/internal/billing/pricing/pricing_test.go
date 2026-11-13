@@ -140,6 +140,43 @@ var _ = Describe("Resolver", func() {
 		Expect(result.Reason).To(Equal(pricing.ReasonCoverageGap))
 	})
 
+	DescribeTable("reports AMBIGUOUS when more than one distinct provider attribute carries the dimension name",
+		func(rows []billing.RateRow) {
+			scenario := baseScenario()
+			scenario.Services[0].Attributes = []billing.PriceableAttribute{
+				{ID: "dim-1", Name: "cpu_hours"},
+				{ID: "dim-2", Name: "cpu_hours"},
+			}
+			scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{Rows: rows}
+			result := resolveOne(scenario, "USD", baseComponent())
+			Expect(result.State).To(Equal(pricing.StateAmbiguous))
+			Expect(result.Reason).To(Equal(pricing.ReasonRateAmbiguous))
+			// Picking the first attribute that carries the name would price or gap the component on the wrong ID,
+			// so it must never be reported as a coverage gap.
+			Expect(result.State).ToNot(Equal(pricing.StateGap))
+			Expect(result.Reason).ToNot(Equal(pricing.ReasonCoverageGap))
+		},
+		Entry("rate rows keyed to the second attribute ID", []billing.RateRow{
+			{DimensionID: "dim-2", PriceMethod: "QUANTITY", UnitRate: "0.5"},
+		}),
+		Entry("rate rows keyed to both attribute IDs", []billing.RateRow{
+			{DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.25"},
+			{DimensionID: "dim-2", PriceMethod: "QUANTITY", UnitRate: "0.5"},
+		}),
+	)
+
+	It("resolves a name repeated on one attribute ID as one attribute, not a duplicate", func() {
+		scenario := baseScenario()
+		scenario.Services[0].Attributes = []billing.PriceableAttribute{
+			{ID: "dim-1", Name: "cpu_hours"},
+			{ID: "dim-1", Name: "cpu_hours"},
+		}
+		result := resolveOne(scenario, "USD", baseComponent())
+		Expect(result.State).To(Equal(pricing.StateCovered))
+		Expect(result.Reason).To(BeEmpty())
+		Expect(result.PerSecond.Equal(decimal.RequireFromString("0.25"))).To(BeTrue())
+	})
+
 	It("reports a coverage gap when the rate card has no row for the matched dimension", func() {
 		scenario := baseScenario()
 		scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{}
@@ -201,6 +238,73 @@ var _ = Describe("Resolver", func() {
 		Expect(result.State).To(Equal(pricing.StateCovered))
 		Expect(result.PerSecond.Equal(decimal.RequireFromString("0.5"))).To(BeTrue())
 	})
+
+	DescribeTable("scores row specificity by distinct condition names",
+		func(rows []billing.RateRow, wantState pricing.State, wantRate string) {
+			scenario := baseScenario()
+			scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{Rows: rows}
+			component := baseComponent()
+			component.Values["region"] = "us-east"
+			component.Values["zone"] = "z1"
+			result := resolveOne(scenario, "USD", component)
+			Expect(result.State).To(Equal(wantState))
+			if wantState == pricing.StateAmbiguous {
+				Expect(result.Reason).To(Equal(pricing.ReasonRateAmbiguous))
+				Expect(result.PerSecond.IsZero()).To(BeTrue())
+				return
+			}
+			Expect(result.PerSecond.Equal(decimal.RequireFromString(wantRate))).To(BeTrue())
+		},
+		Entry("a repeated condition name ties with a different single name", []billing.RateRow{
+			{
+				DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.25",
+				AttributeValues: []billing.AttributeValue{
+					{Name: "region", Value: "us-east"},
+					{Name: "region", Value: "us-east"},
+				},
+			},
+			{
+				DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.5",
+				AttributeValues: []billing.AttributeValue{{Name: "zone", Value: "z1"}},
+			},
+		}, pricing.StateAmbiguous, ""),
+		Entry("two distinct condition names beat one", []billing.RateRow{
+			{
+				DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.25",
+				AttributeValues: []billing.AttributeValue{{Name: "region", Value: "us-east"}},
+			},
+			{
+				DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.75",
+				AttributeValues: []billing.AttributeValue{
+					{Name: "region", Value: "us-east"},
+					{Name: "zone", Value: "z1"},
+				},
+			},
+		}, pricing.StateCovered, "0.75"),
+	)
+
+	DescribeTable("rejects a row repeating one condition name that does not match the configuration",
+		func(attributeValues []billing.AttributeValue) {
+			scenario := baseScenario()
+			scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{Rows: []billing.RateRow{{
+				DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.5",
+				AttributeValues: attributeValues,
+			}}}
+			component := baseComponent()
+			component.Values["region"] = "us-east"
+			result := resolveOne(scenario, "USD", component)
+			Expect(result.State).To(Equal(pricing.StateGap))
+			Expect(result.Reason).To(Equal(pricing.ReasonCoverageGap))
+		},
+		Entry("second value of a repeated name is not configured", []billing.AttributeValue{
+			{Name: "region", Value: "us-east"},
+			{Name: "region", Value: "eu-west"},
+		}),
+		Entry("repeated name is not configured at all", []billing.AttributeValue{
+			{Name: "region", Value: "eu-west"},
+			{Name: "region", Value: "eu-west"},
+		}),
+	)
 
 	DescribeTable("unsupported rate shapes yield UNAVAILABLE, never a partial price",
 		func(method, unitRate string) {

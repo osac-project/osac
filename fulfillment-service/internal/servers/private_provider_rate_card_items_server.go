@@ -221,6 +221,7 @@ func (s *PrivateProviderRateCardItemsServer) List(ctx context.Context,
 	}
 
 	var allItems []pricing.RateCardItem
+	skipped := map[string]int{}
 	for _, service := range services {
 		// One provider read of a (service, currency) rate card is reused for the cache's TTL, and concurrent Lists
 		// of the same key collapse into a single read; the skipped-row counts are re-applied per response so the
@@ -235,44 +236,58 @@ func (s *PrivateProviderRateCardItemsServer) List(ctx context.Context,
 				return rateCardEntry{items: items, skipped: skipped}, nil
 			})
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, status.FromContextError(ctx.Err()).Err()
+			}
 			return nil, billingFailure(codes.Unavailable, "billing provider is unavailable", string(probeReason(err)))
 		}
 		for reason, count := range entry.skipped {
-			s.unsupportedRowsCounter.WithLabelValues(s.provider.Key(), reason).Add(float64(count))
+			skipped[reason] += count
 		}
 		allItems = append(allItems, entry.items...)
 	}
 
+	objects := make([]*privatev1.ProviderRateCardItem, 0, len(allItems))
 	// Cross-reference every row against all dimensions emitted from catalog field policies, including image and
 	// boot-disk condition dimensions. The inventory is swept once per this server's cache TTL and the snapshot is
 	// shared read-only among this server's Lists; the dimension index is rebuilt per request from that cached snapshot.
 	// The sweep runs in its own transaction: the fill is detached from every caller's request scope, so it must not
 	// borrow the leading caller's request transaction, whose lifetime no longer bounds the sweep. The inventory is
 	// published only after WithNewTx returns — committing — because the cache stores the value after the load returns.
-	inventory, err := s.inventoryCache.get(ctx, catalogInventoryKey{}, func(ctx context.Context) (catalogPricingInventory, error) {
-		return database.WithNewTx(ctx, func(ctx context.Context) (catalogPricingInventory, error) {
-			return sweepProviderRateCardCatalogInventory(ctx, s.computeCatalogItemsDao, s.clusterCatalogItemsDao)
+	//
+	// An unknown provider service has no rows to cross-reference, so catalog availability must not prevent its
+	// documented empty response. Filtering and pagination still run below, so an empty result is validated alike.
+	if len(allItems) > 0 {
+		inventory, err := s.inventoryCache.get(ctx, catalogInventoryKey{}, func(ctx context.Context) (catalogPricingInventory, error) {
+			return database.WithNewTx(ctx, func(ctx context.Context) (catalogPricingInventory, error) {
+				return sweepProviderRateCardCatalogInventory(ctx, s.computeCatalogItemsDao, s.clusterCatalogItemsDao)
+			})
 		})
-	})
-	if err != nil {
-		return nil, err
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, status.FromContextError(ctx.Err()).Err()
+			}
+			return nil, err
+		}
+		catalogIndex := buildCatalogDimensionIndex(inventory)
+		for _, item := range allItems {
+			objects = append(objects, toProtoRateCardItem(item, matchCatalogItems(item, catalogIndex)))
+		}
 	}
-	catalogIndex := buildCatalogDimensionIndex(inventory.inputs, inventory.itemsByService)
 
-	objects := make([]*privatev1.ProviderRateCardItem, 0, len(allItems))
-	for _, item := range allItems {
-		objects = append(objects, toProtoRateCardItem(item, matchCatalogItems(item, catalogIndex)))
-	}
-
-	objects, err = filterItems(providerRateCardItemFilterEnv, objects, request.GetFilter())
+	objects, err = filterItems(ctx, providerRateCardItemFilterEnv, objects, request.GetFilter())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid filter: %s", err)
+		return nil, filterError(err)
 	}
 
 	total := int32(len(objects)) // #nosec G115 -- bounded by the fetched provider rate cards, never a user-controlled count
 	objects, err = paginate(objects, request.GetOffset(), request.GetLimit(), request.HasLimit())
 	if err != nil {
 		return nil, err
+	}
+	// Count omissions only for successful responses, including those served from cached provider reads.
+	for reason, count := range skipped {
+		s.unsupportedRowsCounter.WithLabelValues(s.provider.Key(), reason).Add(float64(count))
 	}
 	return privatev1.ProviderRateCardItemsListResponse_builder{
 		Size:  int32(len(objects)), // #nosec G115 -- bounded by total above
@@ -294,10 +309,7 @@ func sweepProviderRateCardCatalogInventory(ctx context.Context,
 	if err != nil {
 		return catalogPricingInventory{}, err
 	}
-	return catalogPricingInventory{
-		inputs:         aggregateCatalogPricingInputs(computeItems, clusterItems),
-		itemsByService: catalogItemsByService(computeItems, clusterItems),
-	}, nil
+	return aggregateCatalogPricingInventory(computeItems, clusterItems), nil
 }
 
 // toProtoRateCardItem converts one normalized pricing.RateCardItem into its wire shape.

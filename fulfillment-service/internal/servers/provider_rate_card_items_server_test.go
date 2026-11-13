@@ -224,6 +224,52 @@ var _ = Describe("Provider rate card items server", func() {
 		}
 	})
 
+	DescribeTable("counts skipped provider rate card rows only for successful responses",
+		func(filter string, limit *int32) {
+			scenario := billingfake.Scenario{}
+			for _, service := range []string{serviceComputeInstance, serviceCluster} {
+				spec := widgetScenario().Services[0]
+				spec.ID = "svc-" + service
+				spec.Name = service
+				scenario.Services = append(scenario.Services, spec)
+			}
+			fake := billingfake.New(scenario)
+			registry := prometheus.NewRegistry()
+			server := build(fake.Provider(), registry)
+			count := func() float64 {
+				families, err := registry.Gather()
+				Expect(err).ToNot(HaveOccurred())
+				var total float64
+				for _, family := range families {
+					if family.GetName() == unsupportedRateCardItemsMetricName {
+						for _, metric := range family.GetMetric() {
+							total += metric.GetCounter().GetValue()
+						}
+					}
+				}
+				return total
+			}
+			_, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
+				CurrencyCode: proto.String("USD"), Filter: proto.String(filter), Limit: limit,
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(count()).To(BeZero())
+
+			request := publicv1.ProviderRateCardItemsListRequest_builder{CurrencyCode: proto.String("USD")}.Build()
+			for _, want := range []float64{2, 4} {
+				response, err := server.List(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetTotal()).To(Equal(int32(2)))
+				Expect(count()).To(Equal(want))
+			}
+			Expect(fake.Count("GetServiceRateCard")).To(Equal(2))
+		},
+		Entry("invalid syntax", `this.rate.amount ==`, nil),
+		Entry("non-boolean filter", `this.service`, nil),
+		Entry("evaluation error", `int(this.service) > 0`, nil),
+		Entry("negative limit", "", proto.Int32(-1)),
+	)
+
 	DescribeTable("rejects every nonempty tenant_id as unsupported before any provider call",
 		func(tenantID string, state billing.AccountState, configured bool) {
 			scenario := widgetScenario()
@@ -288,16 +334,34 @@ var _ = Describe("Provider rate card items server", func() {
 		Entry("inventory with both services", []string{serviceComputeInstance, serviceCluster}),
 	)
 
-	It("returns an empty list for a service with no matching provider name", func() {
-		fake := billingfake.New(widgetScenario())
-		server := build(fake.Provider(), prometheus.NewRegistry())
-		response, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
-			Service: proto.String("no_such_service"), CurrencyCode: proto.String("USD"),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(response.GetItems()).To(BeEmpty())
-		Expect(response.GetTotal()).To(Equal(int32(0)))
-	})
+	DescribeTable("does not read catalog inventory for empty provider rate cards",
+		func(service, filter string, limit *int32, want codes.Code) {
+			scenario := widgetScenario()
+			scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{}
+			fake := billingfake.New(scenario)
+			server := build(fake.Provider(), prometheus.NewRegistry())
+			response, err := server.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
+				Service: proto.String(service), CurrencyCode: proto.String("USD"), Filter: proto.String(filter), Limit: limit,
+			}.Build())
+			Expect(status.Code(err)).To(Equal(want))
+			if want == codes.OK {
+				Expect(response.GetItems()).To(BeEmpty())
+				Expect(response.GetTotal()).To(BeZero())
+				Expect(response.GetSize()).To(BeZero())
+			} else {
+				Expect(response).To(BeNil())
+			}
+			_, filled := server.private.inventoryCache.snapshot(catalogInventoryKey{})
+			Expect(filled).To(BeFalse())
+		},
+		Entry("unknown service", "no_such_service", "", nil, codes.OK),
+		Entry("all mapped services absent", "", "", nil, codes.OK),
+		Entry("known service without rows", "widget_service", "", nil, codes.OK),
+		Entry("valid filter", "no_such_service", `this.service == "cluster"`, nil, codes.OK),
+		Entry("invalid syntax", "no_such_service", `this.service ==`, nil, codes.InvalidArgument),
+		Entry("non-boolean filter", "no_such_service", `this.service`, nil, codes.InvalidArgument),
+		Entry("negative limit", "no_such_service", "", proto.Int32(-1), codes.InvalidArgument),
+	)
 
 	It("returns UNAVAILABLE, not a guessed row, on a provider failure", func() {
 		scenario := widgetScenario()
@@ -409,6 +473,34 @@ var _ = Describe("Provider rate card items server", func() {
 		Expect(st.Code()).To(Equal(codes.InvalidArgument))
 	})
 
+	DescribeTable("preserves the request context status when filtering provider rate cards",
+		func(warm, expired bool, want codes.Code) {
+			server := build(billingfake.New(widgetScenario()).Provider(), prometheus.NewRegistry())
+			request := publicv1.ProviderRateCardItemsListRequest_builder{
+				Service: proto.String("widget_service"), CurrencyCode: proto.String("USD"),
+				Filter: proto.String(`this.service == "widget_service"`),
+			}.Build()
+			if warm {
+				_, err := server.List(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			doneCtx, cancel := context.WithCancel(ctx)
+			if expired {
+				cancel()
+				doneCtx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+			}
+			defer cancel()
+			cancel()
+			response, err := server.List(doneCtx, request)
+			Expect(status.Code(err)).To(Equal(want))
+			Expect(response).To(BeNil())
+		},
+		Entry("cancelled with warm caches", true, false, codes.Canceled),
+		Entry("expired with warm caches", true, true, codes.DeadlineExceeded),
+		Entry("cancelled with cold caches", false, false, codes.Canceled),
+		Entry("expired with cold caches", false, true, codes.DeadlineExceeded),
+	)
+
 	// 'order' stays an accepted-but-unapplied no-op (OSAC-6891), matching docs/API.md's system-wide statement that
 	// order is "defined in the proto files but not yet implemented"; implementing it would be scope this story
 	// does not cover.
@@ -438,8 +530,7 @@ var _ = Describe("Provider rate card items server", func() {
 var _ = Describe("Provider rate card items server catalog cross-reference", func() {
 	buildIndex := func(computeItems []*privatev1.ComputeInstanceCatalogItem,
 		clusterItems []*privatev1.ClusterCatalogItem) catalogDimensionIndex {
-		return buildCatalogDimensionIndex(aggregateCatalogPricingInputs(computeItems, clusterItems),
-			catalogItemsByService(computeItems, clusterItems))
+		return buildCatalogDimensionIndex(aggregateCatalogPricingInventory(computeItems, clusterItems))
 	}
 
 	It("matches a CaaS row against a cluster catalog item's locked baremetal instance type", func() {
@@ -660,7 +751,7 @@ var _ = Describe("Provider rate card items server catalog cross-reference", func
 			return sweepProviderRateCardCatalogInventory(txCtx, server.computeCatalogItemsDao, server.clusterCatalogItemsDao)
 		})
 		Expect(err).ToNot(HaveOccurred())
-		idx := buildCatalogDimensionIndex(inventory.inputs, inventory.itemsByService)
+		idx := buildCatalogDimensionIndex(inventory)
 		Expect(matchCatalogItems(pricing.RateCardItem{Service: serviceComputeInstance}, idx)).To(
 			ConsistOf("vm-without-pricing-fields", "vm-with-instance-type"))
 
@@ -724,6 +815,80 @@ var _ = Describe("Provider rate card items server catalog cross-reference", func
 			},
 		}
 		Expect(matchCatalogItems(notMatching, idx)).To(BeEmpty())
+	})
+
+	It("cross-references disk pairs through List without combining different disks", func() {
+		disk := func(size int32, tier string) *privatev1.ComputeInstanceDisk {
+			return privatev1.ComputeInstanceDisk_builder{
+				SizeGib: int32Ptr(size), StorageTier: privatev1.StorageTierReference_builder{Name: tier}.Build(),
+			}.Build()
+		}
+		policies := map[string]*privatev1.ComputeInstanceDiskListFieldPolicy{
+			"split-disks": privatev1.ComputeInstanceDiskListFieldPolicy_builder{
+				Locked: privatev1.ComputeInstanceDiskList_builder{
+					Items: []*privatev1.ComputeInstanceDisk{disk(50, "slow"), disk(100, "fast")},
+				}.Build(),
+			}.Build(),
+			"paired-disk": privatev1.ComputeInstanceDiskListFieldPolicy_builder{
+				Locked: privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{disk(50, "fast")}}.Build(),
+			}.Build(),
+			"disks-editable": privatev1.ComputeInstanceDiskListFieldPolicy_builder{
+				Editable: privatev1.EditableComputeInstanceDiskList_builder{}.Build(),
+			}.Build(),
+			"no-dimensions": nil,
+		}
+		// List's detached inventory sweep can only see committed catalog fixtures.
+		seedCommittedCatalogFixtures(func(seedCtx context.Context) {
+			catalogDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceCatalogItem]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			for name, policy := range policies {
+				_, err := catalogDao.Create().SetObject(privatev1.ComputeInstanceCatalogItem_builder{
+					Id: uuid.NewString(), Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
+					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{AdditionalDisks: policy}.Build(),
+				}.Build()).Do(seedCtx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+		})
+		scenario := billingfake.Scenario{Services: []billingfake.ServiceSpec{{
+			ID: "svc-compute", Name: serviceComputeInstance,
+			Attributes: []billing.PriceableAttribute{{ID: "dim-1", Name: dimensionAdditionalDiskSize}},
+			Rates: map[string]billingfake.RateCardSpec{"USD": {Rows: []billing.RateRow{
+				{DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "1", AttributeValues: []billing.AttributeValue{
+					{Name: dimensionAdditionalDiskSize, Value: "50"}, {Name: dimensionAdditionalStorageTier, Value: "fast"},
+				}},
+				{DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "2", AttributeValues: []billing.AttributeValue{
+					{Name: dimensionAdditionalDiskSize, Value: "50"},
+				}},
+			}}},
+		}}}
+		private, err := NewPrivateProviderRateCardItemsServer().
+			SetLogger(logger).SetProvider(billingfake.New(scenario).Provider()).SetTenancyLogic(tenancy).
+			SetMetricsRegisterer(prometheus.NewRegistry()).Build()
+		Expect(err).ToNot(HaveOccurred())
+		public, err := NewProviderRateCardItemsServer().SetLogger(logger).SetDelegate(private).Build()
+		Expect(err).ToNot(HaveOccurred())
+		response, err := public.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
+			Service: proto.String(serviceComputeInstance), CurrencyCode: proto.String("USD"),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(2))
+		var amounts []string
+		for _, row := range response.GetItems() {
+			amounts = append(amounts, row.GetRate().GetAmount())
+			switch row.GetRate().GetAmount() {
+			case "1":
+				Expect(row.GetResourceConditions()).To(HaveLen(2))
+				Expect(row.GetCatalogItemMatches()).ToNot(ContainElement("split-disks"))
+				Expect(row.GetCatalogItemMatches()).To(ConsistOf("paired-disk", "disks-editable"))
+			case "2":
+				Expect(row.GetResourceConditions()).To(HaveLen(1))
+				Expect(row.GetCatalogItemMatches()).To(ConsistOf("paired-disk", "disks-editable", "split-disks"))
+			default:
+				Fail("unexpected rate-card row")
+			}
+		}
+		Expect(amounts).To(ConsistOf("1", "2"))
 	})
 
 	It("cross-references a CaaS row end-to-end through the server's List, using both catalog DAOs", func() {

@@ -51,13 +51,12 @@ on:
   workflow_dispatch:
     inputs:
       test-suite:
-        description: "Suite relative to tests/e2e (vmaas/sanity, vmaas/regression, vmaas/serial, or vmaas for all)"
+        description: "Suite relative to tests/e2e (vmaas/sanity, vmaas/serial, or vmaas for all)"
         required: false
         type: choice
         default: "vmaas/sanity"
         options:
           - "vmaas/sanity"
-          - "vmaas/regression"
           - "vmaas/serial"
           - "vmaas"
       test-filter:

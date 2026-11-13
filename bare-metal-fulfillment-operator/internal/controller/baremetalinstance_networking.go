@@ -84,21 +84,6 @@ func networkAttachmentKey(
 	}, true
 }
 
-// legacyNetworkAttachmentKey returns the BMI-only key used before interface
-// names were included in NetworkAttachment names.
-func legacyNetworkAttachmentKey(
-	bmi *v1alpha1.BareMetalInstance,
-) (client.ObjectKey, bool) {
-	id := bmi.Labels[bareMetalInstanceIDLabel]
-	if id == "" {
-		return client.ObjectKey{}, false
-	}
-	return client.ObjectKey{
-		Namespace: bmi.Namespace,
-		Name:      opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, id, ""),
-	}, true
-}
-
 // getNetworkAttachment reads a NetworkAttachment directly from the API server.
 // It returns nil when the NetworkAttachment does not exist.
 func (r *BareMetalInstanceReconciler) getNetworkAttachment(
@@ -199,7 +184,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 	}
 
 	r.initNetworkAttachmentStatuses(bareMetalInstance)
-	na, resolvedKey, err := r.getExistingNetworkAttachment(ctx, bareMetalInstance, attachment)
+	na, err := r.getNetworkAttachment(ctx, key)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -219,12 +204,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 		if status.MACAddress == "" {
 			mac, err := r.selectedPortMAC(ctx, bareMetalInstance, attachment.Interface)
 			if errors.Is(err, errSelectedPortMACUnavailable) {
-				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-				bareMetalInstance.SetStatusCondition(v1alpha1.HostConditionAllocated, metav1.ConditionFalse,
-					v1alpha1.HostConditionReasonSelectedPortMACUnavailable, err.Error())
-				r.recordBMIEvent(bareMetalInstance, corev1.EventTypeWarning,
-					v1alpha1.HostConditionReasonSelectedPortMACUnavailable, err.Error())
-				return r.releaseHostWithoutSelectedPortMAC(ctx, bareMetalInstance, err.Error())
+				return r.failSelectedPortMAC(bareMetalInstance, err.Error())
 			}
 			if err != nil {
 				return ctrl.Result{}, err
@@ -265,12 +245,12 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 
-	// Existing BMI-only attachments are reused through upgrades. Mirror their
-	// recorded port identity into status without changing the NetworkAttachment.
+	// Mirror the selected port identity from the existing NetworkAttachment into
+	// status without changing the NetworkAttachment.
 	if status := networkAttachmentStatusFor(bareMetalInstance, attachment.SubnetRef); status != nil && status.MACAddress == "" {
 		mac, err := normalizeMAC(na.Spec.Interface.MACAddress)
 		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("existing NetworkAttachment %s has invalid interface MAC: %w", resolvedKey.Name, err)
+			return ctrl.Result{}, fmt.Errorf("existing NetworkAttachment %s has invalid interface MAC: %w", key.Name, err)
 		}
 		status.MACAddress = mac
 	}
@@ -303,31 +283,17 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 	}
 }
 
-func (r *BareMetalInstanceReconciler) getExistingNetworkAttachment(
-	ctx context.Context,
-	bmi *v1alpha1.BareMetalInstance,
-	attachment *v1alpha1.BareMetalNetworkAttachment,
-) (*opv1alpha1.NetworkAttachment, client.ObjectKey, error) {
-	suffixedKey, ok := networkAttachmentKey(bmi, attachment)
-	if !ok {
-		return nil, client.ObjectKey{}, fmt.Errorf("the BareMetalInstance has no %s label", bareMetalInstanceIDLabel)
-	}
-	na, err := r.getNetworkAttachment(ctx, suffixedKey)
-	if err != nil || na != nil {
-		return na, suffixedKey, err
-	}
-	legacyKey, ok := legacyNetworkAttachmentKey(bmi)
-	if !ok || legacyKey == suffixedKey {
-		return nil, suffixedKey, nil
-	}
-	na, err = r.getNetworkAttachment(ctx, legacyKey)
-	if err != nil {
-		return nil, legacyKey, err
-	}
-	if na != nil {
-		return na, legacyKey, nil
-	}
-	return nil, suffixedKey, nil
+// failSelectedPortMAC leaves the assigned host in place and records a terminal
+// failure so operators can identify the host that needs its inventory fixed.
+func (r *BareMetalInstanceReconciler) failSelectedPortMAC(
+	bmi *v1alpha1.BareMetalInstance, diagnostic string,
+) (ctrl.Result, error) {
+	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+	bmi.SetStatusCondition(v1alpha1.HostConditionAllocated, metav1.ConditionFalse,
+		v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
+	r.recordBMIEvent(bmi, corev1.EventTypeWarning,
+		v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
+	return ctrl.Result{}, nil
 }
 
 // reconcileNetworkingDeletion deletes the BareMetalInstance's NetworkAttachment
@@ -346,11 +312,11 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 	}
 
 	if attachment := primaryNetworkAttachment(bareMetalInstance); attachment != nil && r.NetworkingEnabled {
-		_, ok := networkAttachmentKey(bareMetalInstance, attachment)
+		key, ok := networkAttachmentKey(bareMetalInstance, attachment)
 		if !ok {
 			return r.removeNetworkingFinalizer(ctx, bareMetalInstance)
 		}
-		na, key, err := r.getExistingNetworkAttachment(ctx, bareMetalInstance, attachment)
+		na, err := r.getNetworkAttachment(ctx, key)
 		if err != nil {
 			return ctrl.Result{}, false, err
 		}

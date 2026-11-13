@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"slices"
 	"strings"
@@ -36,7 +35,6 @@ import (
 const (
 	leaseNotFoundAfter  = 10 * time.Minute
 	leaseNotFoundMarker = "No DHCP lease was found 10 minutes after handoff; discovery continues."
-	maxIPDiscoveryJobs  = 10
 )
 
 func setIPDiscoveryComplete(bmi *v1alpha1.BareMetalInstance, status metav1.ConditionStatus, reason, message string) {
@@ -77,13 +75,13 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 			"the BareMetalInstance has no primary network attachment")
 		return ctrl.Result{}, nil
 	}
-	_, ok := networkAttachmentKey(bareMetalInstance, attachment)
+	key, ok := networkAttachmentKey(bareMetalInstance, attachment)
 	if !ok {
 		setIPDiscoveryComplete(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonIPDiscoveryFailed,
 			"the BareMetalInstance has no NetworkAttachment")
 		return ctrl.Result{}, nil
 	}
-	na, _, err := r.getExistingNetworkAttachment(ctx, bareMetalInstance, attachment)
+	na, err := r.getNetworkAttachment(ctx, key)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -95,7 +93,6 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 	}
 
 	job := queryDHCPLeaseJob(na)
-	recordIPDiscoveryJob(bareMetalInstance, job)
 
 	if lease := na.Status.DHCPLease; lease != nil && net.ParseIP(lease.IPAddress) != nil {
 		previous := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
@@ -158,52 +155,6 @@ func networkJobDiagnostic(job *opv1alpha1.NetworkJobStatus) string {
 		message += "AAP job ID: " + job.JobID
 	}
 	return message
-}
-
-func recordIPDiscoveryJob(bmi *v1alpha1.BareMetalInstance, job *opv1alpha1.NetworkJobStatus) {
-	if job == nil {
-		return
-	}
-	target := fmt.Sprintf("%s:%s:attempt-%d", job.Task, job.Manager, job.Attempt)
-	status := opv1alpha1.JobStatus{
-		JobID:   job.JobID,
-		Type:    opv1alpha1.JobTypeProvision,
-		State:   ipDiscoveryJobState(job.State),
-		Message: job.Message,
-		Target:  target,
-	}
-	jobs := bmi.Status.IPDiscoveryJobs
-	for i := range jobs {
-		if jobs[i].Target == target {
-			status.Timestamp = jobs[i].Timestamp
-			jobs[i] = status
-			bmi.Status.IPDiscoveryJobs = jobs
-			return
-		}
-	}
-	status.Timestamp = metav1.Now()
-	jobs = append(jobs, status)
-	if len(jobs) > maxIPDiscoveryJobs {
-		jobs = slices.Clone(jobs[len(jobs)-maxIPDiscoveryJobs:])
-	}
-	bmi.Status.IPDiscoveryJobs = jobs
-}
-
-func ipDiscoveryJobState(state opv1alpha1.NetworkJobState) opv1alpha1.JobState {
-	switch state {
-	case opv1alpha1.NetworkJobStateRunning:
-		return opv1alpha1.JobStateRunning
-	case opv1alpha1.NetworkJobStateRetrying:
-		return opv1alpha1.JobStateWaiting
-	case opv1alpha1.NetworkJobStateSucceeded:
-		return opv1alpha1.JobStateSucceeded
-	case opv1alpha1.NetworkJobStateFailed:
-		return opv1alpha1.JobStateFailed
-	case opv1alpha1.NetworkJobStateCancelled:
-		return opv1alpha1.JobStateCanceled
-	default:
-		return opv1alpha1.JobStateUnknown
-	}
 }
 
 // queryDHCPLeaseJob returns the latest query_dhcp_lease job of a NetworkAttachment.

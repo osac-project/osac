@@ -24,6 +24,7 @@ import (
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -548,55 +549,88 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				}))
 			})
 
-			It("releases the selected host and fails when the selected port has no valid MAC", func() {
+			It("keeps the host assigned after a terminal selected-port MAC failure", func() {
 				reconciler.NetworkingEnabled = true
 				bareMetalInstance.Spec.NetworkAttachments = []v1alpha1.BareMetalNetworkAttachment{{
 					SubnetRef: "subnet-1", Interface: "data-0", Primary: true,
 				}}
+				bareMetalInstance.Spec.ExternalHostID = "host-xyz-456"
+				bareMetalInstance.Spec.TemplateID = shared.OsacNoopTemplate
+				bareMetalInstance.Name = ""
+				bareMetalInstance.GenerateName = "selected-mac-failure-"
+				bareMetalInstance.UID = ""
+				Expect(k8sClient.Create(ctx, bareMetalInstance)).To(Succeed())
+				DeferCleanup(func(cleanupCtx context.Context) {
+					latest := &v1alpha1.BareMetalInstance{}
+					if err := k8sClient.Get(cleanupCtx, client.ObjectKeyFromObject(bareMetalInstance), latest); err == nil {
+						latest.Finalizers = nil
+						Expect(k8sClient.Update(cleanupCtx, latest)).To(Succeed())
+						Expect(k8sClient.Delete(cleanupCtx, latest)).To(Succeed())
+					} else {
+						Expect(apierrors.IsNotFound(err)).To(BeTrue())
+					}
+				})
 				mockInvClient.getHostLogicalPortMACsFunc = func(_ context.Context, _ string) (map[string]string, error) {
 					return map[string]string{"data-0": "not-a-mac"}, nil
 				}
-				unassigned := false
-				mockInvClient.unassignHostFunc = func(_ context.Context, hostID, owner string, labels []string) error {
-					unassigned = true
-					Expect(hostID).To(Equal("host-xyz-456"))
-					Expect(owner).To(Equal("test-uid-123"))
-					locked := inventory.TryLock(hostID)
-					Expect(locked).To(BeTrue(), "inventory I/O must not hold the host mutex")
-					if locked {
-						inventory.Unlock(hostID)
-					}
+				unassignCalls := 0
+				mockInvClient.unassignHostFunc = func(_ context.Context, _, _ string, _ []string) error {
+					unassignCalls++
 					return nil
 				}
+				assignCalls := 0
 				mockInvClient.assignHostFunc = func(_ context.Context, _, _ string, _ map[string]string) (*inventory.Host, error) {
+					assignCalls++
 					return &inventory.Host{InventoryHostID: "host-xyz-456", Name: "host-a", HostClass: hostClass, Available: true}, nil
+				}
+				managementCalls := 0
+				mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
+					managementCalls++
+					return &management.PowerStatus{State: management.PowerOff}, nil
+				}
+				mockMgmtClient.setPowerStateFunc = func(_ context.Context, _ string, _ management.PowerState) error {
+					managementCalls++
+					return nil
+				}
+				mockMgmtClient.triggerRestartFunc = func(_ context.Context, _ string) error {
+					managementCalls++
+					return nil
+				}
+				mockMgmtClient.isRestartCompleteFunc = func(_ context.Context, _ string) (bool, error) {
+					managementCalls++
+					return true, nil
 				}
 				recorder := events.NewFakeRecorder(1)
 				reconciler.EventRecorder = recorder
-				mockK8sClient.updateFunc = func(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
-					updated := obj.(*v1alpha1.BareMetalInstance)
-					Expect(updated.Spec.ExternalHostID).To(BeEmpty())
-					return nil
-				}
 
-				result, err := reconciler.reconcileInventory(ctx, bareMetalInstance)
+				request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(bareMetalInstance)}
+				result, err := reconciler.Reconcile(ctx, request)
 
 				Expect(err).NotTo(HaveOccurred())
-				Expect(result.RequeueAfter).To(Equal(reconciler.ProvisionPollIntervalDuration))
-				Expect(unassigned).To(BeFalse(), "persist the failure reason before releasing inventory")
+				Expect(result).To(Equal(ctrl.Result{}), "a terminal MAC error must not retry")
 				Expect(bareMetalInstance.Spec.ExternalHostID).To(Equal("host-xyz-456"))
-				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
 				Expect(<-recorder.Events).To(ContainSubstring("Warning SelectedPortMACUnavailable"))
 
-				_, err = reconciler.reconcileInventory(ctx, bareMetalInstance)
-
-				Expect(err).NotTo(HaveOccurred())
-				Expect(unassigned).To(BeTrue())
-				Expect(bareMetalInstance.Spec.ExternalHostID).To(BeEmpty())
-				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
-				cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionAllocated)
+				persisted := &v1alpha1.BareMetalInstance{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bareMetalInstance), persisted)).To(Succeed())
+				Expect(persisted.Spec.ExternalHostID).To(Equal("host-xyz-456"))
+				Expect(persisted.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+				cond := persisted.GetStatusCondition(v1alpha1.HostConditionAllocated)
 				Expect(cond).NotTo(BeNil())
 				Expect(cond.Reason).To(Equal("SelectedPortMACUnavailable"))
+
+				result, err = reconciler.Reconcile(ctx, request)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrl.Result{}), "the terminal failure must not schedule a retry")
+				Expect(assignCalls).To(Equal(1), "do not retry host assignment")
+				Expect(unassignCalls).To(BeZero())
+				Expect(mockInvClient.getHostLogicalPortMACsCalled).To(Equal(1))
+				Expect(bareMetalInstance.Spec.ExternalHostID).To(Equal("host-xyz-456"))
+				Expect(managementCalls).To(BeZero(), "no power management calls after terminal MAC failure")
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bareMetalInstance), persisted)).To(Succeed())
+				Expect(persisted.Spec.ExternalHostID).To(Equal("host-xyz-456"))
+				Expect(persisted.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
 			})
 
 			It("should requeue without setting HostClass when the host is not ready", func() {

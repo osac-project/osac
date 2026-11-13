@@ -24,7 +24,7 @@ import pytest
 
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, billing_account_id
 from tests.e2e.core.wait_kinds import WaitResourceKind
-from tests.e2e.vmaas.regression import test_compute_instance_creation as creation
+from tests.e2e.vmaas.sanity import test_compute_instance_creation as creation
 from tests.e2e.vmaas.sanity import test_metering_billing as billing
 
 START = datetime(2026, 10, 5, 10, tzinfo=UTC)

@@ -20,7 +20,7 @@ from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
-pytestmark = pytest.mark.regression
+pytestmark = pytest.mark.sanity
 
 
 @pytest.mark.metering

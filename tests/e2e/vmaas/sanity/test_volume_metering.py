@@ -36,7 +36,7 @@ from tests.e2e.core.metering import (
 from tests.e2e.core.runner import poll_until, run
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
-pytestmark = [pytest.mark.regression, pytest.mark.metering]
+pytestmark = [pytest.mark.sanity, pytest.mark.metering]
 
 VOLUME_SIZE_GIB = 5
 HEARTBEAT_TIMEOUT: int = 300

@@ -14,7 +14,7 @@ from tests.e2e.core.wait_kinds import WaitResourceKind
 
 @pytest.mark.parametrize(
     "relative_path",
-    ["bmaas/regression/networking/test_bmaas_networking.py", "vmaas/conftest.py", "vmaas/regression/test_console.py"],
+    ["bmaas/regression/networking/test_bmaas_networking.py", "vmaas/conftest.py", "vmaas/sanity/test_console.py"],
 )
 def test_e2e_progress_prints_do_not_include_runtime_values(relative_path: str) -> None:
     path = Path(__file__).resolve().parents[1] / "e2e" / relative_path

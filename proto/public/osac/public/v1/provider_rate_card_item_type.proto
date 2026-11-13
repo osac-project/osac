@@ -55,8 +55,8 @@ message ProviderRateCardItem {
   // OSAC service this provider rule prices, such as `compute_instance`.
   string service = 1 [(buf.validate.field).string.min_len = 1];
 
-  // ISO-4217 currency of rate.amount.
-  string currency_code = 2 [(buf.validate.field).string.len = 3];
+  // Provider-owned currency value of rate.amount, preserved without case normalization or an OSAC currency list.
+  string currency_code = 2 [(buf.validate.field).string.min_len = 1];
 
   // Match conditions for this rate; all conditions on a row apply together. Empty means the row matches every
   // configuration of the service.

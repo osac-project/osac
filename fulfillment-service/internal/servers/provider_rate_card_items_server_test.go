@@ -121,14 +121,20 @@ var _ = Describe("Provider rate card items server", func() {
 	})
 
 	DescribeTable("validates currency_code before calling the provider", func(currency *string, want codes.Code) {
-		fake := billingfake.New(widgetScenario())
+		scenario := widgetScenario()
+		if currency != nil && *currency != "" {
+			scenario.Services[0].Rates = map[string]billingfake.RateCardSpec{
+				*currency: scenario.Services[0].Rates["USD"],
+			}
+		}
+		fake := billingfake.New(scenario)
 		server := build(fake.Provider(), prometheus.NewRegistry())
 		interceptor, err := validation.NewProtovalidateInterceptor().SetLogger(logger).Build()
 		Expect(err).ToNot(HaveOccurred())
 		request := publicv1.ProviderRateCardItemsListRequest_builder{
 			Service: proto.String("widget_service"), CurrencyCode: currency,
 		}.Build()
-		_, err = interceptor.UnaryServer(ctx, request, &grpc.UnaryServerInfo{},
+		response, err := interceptor.UnaryServer(ctx, request, &grpc.UnaryServerInfo{},
 			func(ctx context.Context, request any) (any, error) {
 				return server.List(ctx, request.(*publicv1.ProviderRateCardItemsListRequest))
 			})
@@ -136,14 +142,25 @@ var _ = Describe("Provider rate card items server", func() {
 		if want == codes.InvalidArgument {
 			Expect(err.Error()).To(ContainSubstring("currency_code"))
 			Expect(fake.Calls()).To(BeEmpty())
+		} else {
+			Expect(fake.Succeeded("GetServiceRateCard")).To(Equal(1))
+			items := response.(*publicv1.ProviderRateCardItemsListResponse).GetItems()
+			Expect(items).To(HaveLen(1), "the provider must receive the exact currency used as the rate-card key")
+			Expect(items[0].GetCurrencyCode()).To(Equal(*currency))
 		}
 	},
 		Entry("omitted", nil, codes.InvalidArgument),
 		Entry("empty", proto.String(""), codes.InvalidArgument),
-		Entry("too short", proto.String("US"), codes.InvalidArgument),
-		Entry("too long", proto.String("USDX"), codes.InvalidArgument),
+		Entry("one character", proto.String("X"), codes.OK),
+		Entry("two characters", proto.String("US"), codes.OK),
+		Entry("four characters", proto.String("USDX"), codes.OK),
+		Entry("provider currency name", proto.String("US Dollar"), codes.OK),
 		Entry("three characters", proto.String("USD"), codes.OK),
 		Entry("no invented uppercase constraint", proto.String("usd"), codes.OK),
+		Entry("no case normalization", proto.String("uSd"), codes.OK),
+		Entry("no OSAC allowlist", proto.String("XYZ"), codes.OK),
+		Entry("no OSAC character policy", proto.String("12!"), codes.OK),
+		Entry("no trimming", proto.String(" USD "), codes.OK),
 	)
 
 	It("returns only the documented fields and omits an unsupported row, counting it by reason", func() {

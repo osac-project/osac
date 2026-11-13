@@ -385,9 +385,10 @@ export ANSIBLE_GALAXY_SERVER_DEFAULT_URL=https://galaxy.ansible.com/
 export ANSIBLE_GALAXY_SERVER_AUTOMATION_HUB_TOKEN=<Get your token from https://console.redhat.com/ansible/automation-hub/token>
 ```
 
-Then re-vendor the collections:
+Then re-vendor the collections and apply OSAC's reviewed dependency floors,
+unused upstream test-dependency exclusions, targeted test/example corrections,
+and credential-example sanitization:
 
 ```
-rm -rf vendor
-ansible-galaxy collection install -r collections/requirements.yml
+make vendor-collections
 ```

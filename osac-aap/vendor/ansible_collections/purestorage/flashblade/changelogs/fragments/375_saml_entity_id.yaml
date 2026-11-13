@@ -1,2 +1,0 @@
-minor_changes:
- - purefb_saml - Added ``entity_id`` parameter

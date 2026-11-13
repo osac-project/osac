@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  author: "VAST Data"
+  description: "Configure VAST protected paths and the supporting native replication objects they depend on"
+  company: "VAST Data"
+  license: Apache-2.0
+  min_ansible_version: "2.16"
+  galaxy_tags:
+    - storage
+    - vast
+    - vms
+
+dependencies: []

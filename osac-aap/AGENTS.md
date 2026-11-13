@@ -106,9 +106,11 @@ provider-boundary validations remain required.
 ## Generated and vendored files
 
 - There is no source-code generator for roles. Do not hand-edit third-party content under `vendor/`.
-- Reinstall vendored collections after dependency changes. Confirm Automation Hub credentials and required environment variables first, then run:
-  `rm -rf vendor && ansible-galaxy collection install -r collections/requirements.yml`.
-- Review the vendor diff and commit it with the requirements change when vendoring is required.
+- Reinstall vendored collections after dependency changes. Confirm Automation Hub credentials and required environment variables first, then run `make vendor-collections`. This installs only the explicitly listed collections and reapplies the maintained dependency floors, unused upstream test-dependency exclusions, targeted test/example corrections, and credential-example sanitization in `scripts/patch_vendor_requirements.py`.
+  This repository intentionally omits the unused transitive `ansible.eda`
+  collection advertised by `infra.aap_configuration`; add any newly required
+  collections directly to `collections/requirements.yml` instead.
+- Review the vendor diff and commit it with the requirements/override change when vendoring is required.
 
 ## Validation
 

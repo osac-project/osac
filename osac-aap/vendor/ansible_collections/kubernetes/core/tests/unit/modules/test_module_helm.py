@@ -10,6 +10,9 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from ansible.module_utils import basic
+from ansible_collections.kubernetes.core.plugins.module_utils.helm import (
+    AnsibleHelmModule,
+)
 from ansible_collections.kubernetes.core.plugins.modules import helm
 from ansible_collections.kubernetes.core.tests.unit.utils.ansible_module_mock import (
     AnsibleExitJson,
@@ -19,6 +22,79 @@ from ansible_collections.kubernetes.core.tests.unit.utils.ansible_module_mock im
     get_bin_path,
     set_module_args,
 )
+
+CHART_INFO = {
+    "apiVersion": "v2",
+    "appVersion": "default",
+    "description": "A chart used in molecule tests",
+    "name": "test-chart",
+    "type": "application",
+    "version": "0.1.0",
+}
+
+
+def patch_ansible_module(test_case):
+    """Patch AnsibleModule's exit/fail/bin-path hooks for the duration of test_case."""
+    mock_module_helper = patch.multiple(
+        basic.AnsibleModule,
+        exit_json=exit_json,
+        fail_json=fail_json,
+        get_bin_path=get_bin_path,
+    )
+    mock_module_helper.start()
+    test_case.addCleanup(mock_module_helper.stop)
+
+
+def deploy_command_for_version(args, helm_version):
+    """Run helm.main() against a mocked helm of helm_version and return its command.
+
+    Only the fresh-install path is mocked, so the caller sees the command built by
+    deploy(). Failures raised by the module (AnsibleFailJson) propagate to the test.
+    """
+    set_module_args(args)
+    helm.get_release_status = MagicMock(return_value=None)
+    helm.fetch_chart_info = MagicMock(return_value=CHART_INFO)
+    with patch.object(
+        helm.AnsibleHelmModule, "get_helm_version", return_value=helm_version
+    ):
+        with patch.object(basic.AnsibleModule, "run_command") as mock_run_command:
+            mock_run_command.return_value = (0, "configuration updated", "")
+            try:
+                helm.main()
+            except AnsibleExitJson as exc:
+                return exc.args[0]["command"]
+    raise AssertionError("helm.main() did not exit successfully")
+
+
+def diff_command_for_version(args, helm_version="3.17.0", helm_diff_version="3.14.0"):
+    """Run helm.main() against an existing release and return the 'helm diff' command.
+
+    The release is reported as deployed and helm diff as installed, so main() takes the
+    idempotency branch. The diff output is empty, so nothing is deployed afterwards and
+    the first command run is the one helmdiff_check() built.
+    """
+    set_module_args(args)
+    helm.get_release_status = MagicMock(
+        return_value={
+            "status": "deployed",
+            "values": {},
+            "release_values": {},
+            "chart": "{0}-{1}".format(CHART_INFO["name"], CHART_INFO["version"]),
+            "app_version": CHART_INFO["appVersion"],
+        }
+    )
+    helm.fetch_chart_info = MagicMock(return_value=CHART_INFO)
+    helm.get_plugin_version = MagicMock(return_value=helm_diff_version)
+    with patch.object(
+        helm.AnsibleHelmModule, "get_helm_version", return_value=helm_version
+    ):
+        with patch.object(basic.AnsibleModule, "run_command") as mock_run_command:
+            mock_run_command.return_value = (0, "", "")
+            try:
+                helm.main()
+            except AnsibleExitJson:
+                return mock_run_command.call_args_list[0][0][0]
+    raise AssertionError("helm.main() did not exit successfully")
 
 
 class TestDependencyUpdateWithoutChartRepoUrlOption(unittest.TestCase):
@@ -547,4 +623,605 @@ class TestDependencyUpdateWithChartRefIsUrl(unittest.TestCase):
         assert (
             result.exception.args[0]["command"]
             == "/usr/bin/helm install --dependency-update --replace test 'http://repo.example/charts/application.tgz'"
+        )
+
+
+class TestForceFlagHelmVersion(unittest.TestCase):
+    def setUp(self):
+        self.mock_module_helper = patch.multiple(
+            basic.AnsibleModule,
+            exit_json=exit_json,
+            fail_json=fail_json,
+            get_bin_path=get_bin_path,
+        )
+        self.mock_module_helper.start()
+        self.addCleanup(self.mock_module_helper.stop)
+
+        self.chart_info = {
+            "apiVersion": "v2",
+            "appVersion": "default",
+            "description": "A chart used in molecule tests",
+            "name": "test-chart",
+            "type": "application",
+            "version": "0.1.0",
+        }
+
+    def _deploy_command(self, params, helm_version, release_status=None):
+        """Run helm.main() with mocked dependencies and return the helm command."""
+        set_module_args(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "/tmp/path",
+                **params,
+            }
+        )
+        helm.get_release_status = MagicMock(return_value=release_status)
+        helm.fetch_chart_info = MagicMock(return_value=self.chart_info)
+        # Force the default (non helm-diff) idempotency check path for upgrades.
+        helm.get_plugin_version = MagicMock(return_value=None)
+        helm.default_check = MagicMock(return_value=False)
+        with patch.object(
+            AnsibleHelmModule, "get_helm_version", return_value=helm_version
+        ):
+            with patch.object(basic.AnsibleModule, "run_command") as mock_run_command:
+                mock_run_command.return_value = (0, "deployed", "")
+                try:
+                    helm.main()
+                except AnsibleExitJson:
+                    pass
+                return mock_run_command.call_args_list[-1][0][0]
+
+    # --- force flag (existing release, so the upgrade path is exercised) ---
+
+    def test_force_uses_force_on_helm_v3(self):
+        cmd = self._deploy_command(
+            {"force": True}, "3.10.0", release_status={"status": "deployed"}
+        )
+        assert " --force" in cmd
+        assert "--force-replace" not in cmd
+
+    def test_force_uses_force_replace_on_helm_v4(self):
+        cmd = self._deploy_command(
+            {"force": True}, "4.0.0", release_status={"status": "deployed"}
+        )
+        assert " --server-side=false --force-replace" in cmd
+        assert " --force " not in cmd
+
+    # --- server_side option (fresh install path) ---
+
+    def test_server_side_on_helm_v4(self):
+        cmd = self._deploy_command({"server_side": "true"}, "4.0.0")
+        assert " --server-side=true" in cmd
+
+    def test_server_side_requires_helm_v4(self):
+        set_module_args(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "/tmp/path",
+                "server_side": "true",
+            }
+        )
+        helm.get_release_status = MagicMock(return_value=None)
+        helm.fetch_chart_info = MagicMock(return_value=self.chart_info)
+        with patch.object(AnsibleHelmModule, "get_helm_version", return_value="3.10.0"):
+            with patch.object(basic.AnsibleModule, "run_command") as mock_run_command:
+                mock_run_command.return_value = (0, "deployed", "")
+                with self.assertRaises(AnsibleFailJson):
+                    helm.main()
+
+    # --- force_conflicts option (fresh install path) ---
+
+    def test_force_conflicts_on_helm_v4(self):
+        cmd = self._deploy_command({"force_conflicts": True}, "4.0.0")
+        assert " --force-conflicts" in cmd
+
+    def test_force_conflicts_with_server_side(self):
+        cmd = self._deploy_command(
+            {"force_conflicts": True, "server_side": "auto"}, "4.0.0"
+        )
+        assert " --server-side=auto --force-conflicts" in cmd
+
+    def test_force_conflicts_requires_helm_v4(self):
+        set_module_args(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "/tmp/path",
+                "force_conflicts": True,
+            }
+        )
+        helm.get_release_status = MagicMock(return_value=None)
+        helm.fetch_chart_info = MagicMock(return_value=self.chart_info)
+        with patch.object(AnsibleHelmModule, "get_helm_version", return_value="3.10.0"):
+            with patch.object(basic.AnsibleModule, "run_command") as mock_run_command:
+                mock_run_command.return_value = (0, "deployed", "")
+                with self.assertRaises(AnsibleFailJson):
+                    helm.main()
+
+    def test_force_conflicts_conflicts_with_server_side_false(self):
+        set_module_args(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "/tmp/path",
+                "force_conflicts": True,
+                "server_side": "false",
+            }
+        )
+        helm.get_release_status = MagicMock(return_value=None)
+        helm.fetch_chart_info = MagicMock(return_value=self.chart_info)
+        with patch.object(AnsibleHelmModule, "get_helm_version", return_value="4.0.0"):
+            with patch.object(basic.AnsibleModule, "run_command") as mock_run_command:
+                mock_run_command.return_value = (0, "deployed", "")
+                with self.assertRaises(AnsibleFailJson):
+                    helm.main()
+
+    # --- mutually exclusive combinations (rejected at module init) ---
+
+    def test_force_and_server_side_are_mutually_exclusive(self):
+        with self.assertRaises(AnsibleFailJson):
+            set_module_args(
+                {
+                    "release_name": "test",
+                    "chart_ref": "/tmp/path",
+                    "force": True,
+                    "server_side": "true",
+                }
+            )
+            helm.main()
+
+    def test_force_and_force_conflicts_are_mutually_exclusive(self):
+        with self.assertRaises(AnsibleFailJson):
+            set_module_args(
+                {
+                    "release_name": "test",
+                    "chart_ref": "/tmp/path",
+                    "force": True,
+                    "force_conflicts": True,
+                }
+            )
+            helm.main()
+
+
+class TestAtomicFlagHelmVersion(unittest.TestCase):
+    """Helm v4 renamed '--atomic' to '--rollback-on-failure' (issue #1143)."""
+
+    def setUp(self):
+        patch_ansible_module(self)
+
+    def test_atomic_uses_atomic_flag_on_helm_v3(self):
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "atomic": True,
+            },
+            "3.17.0",
+        )
+        assert "--atomic" in command
+        assert "--rollback-on-failure" not in command
+
+    def test_atomic_uses_rollback_on_failure_on_helm_v4(self):
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "atomic": True,
+            },
+            "4.0.0",
+        )
+        assert "--rollback-on-failure" in command
+        assert "--atomic" not in command
+
+    def test_atomic_with_replace_uses_rollback_on_failure_on_helm_v4(self):
+        # 'replace' uses 'helm install', where '--atomic' is removed in v4.
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "atomic": True,
+                "replace": True,
+            },
+            "4.0.0",
+        )
+        assert " install " in command
+        assert "--rollback-on-failure" in command
+        assert "--atomic" not in command
+
+
+class TestCleanupOnFail(unittest.TestCase):
+    """'--cleanup-on-fail' is upgrade-only and unchanged in Helm v4 (issue #1198)."""
+
+    def setUp(self):
+        patch_ansible_module(self)
+
+    def test_cleanup_on_fail_not_set_by_default(self):
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+            },
+            "3.17.0",
+        )
+        assert "--cleanup-on-fail" not in command
+
+    def test_cleanup_on_fail_on_helm_v3(self):
+        # '--cleanup-on-fail' exists since helm 3.0.0, the module-wide minimum.
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "cleanup_on_fail": True,
+            },
+            "3.0.0",
+        )
+        assert " upgrade -i" in command
+        assert "--cleanup-on-fail" in command
+
+    def test_cleanup_on_fail_keeps_same_flag_on_helm_v4(self):
+        # Unlike '--atomic', the flag was not renamed in Helm v4.
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "cleanup_on_fail": True,
+            },
+            "4.0.0",
+        )
+        assert "--cleanup-on-fail" in command
+
+    def test_cleanup_on_fail_combines_with_atomic_on_helm_v3(self):
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "atomic": True,
+                "cleanup_on_fail": True,
+            },
+            "3.17.0",
+        )
+        assert "--atomic" in command
+        assert "--rollback-on-failure" not in command
+        assert "--cleanup-on-fail" in command
+
+    def test_cleanup_on_fail_combines_with_atomic_on_helm_v4(self):
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "atomic": True,
+                "cleanup_on_fail": True,
+            },
+            "4.0.0",
+        )
+        assert "--rollback-on-failure" in command
+        assert "--atomic" not in command
+        assert "--cleanup-on-fail" in command
+
+    def test_cleanup_on_fail_with_replace_fails(self):
+        # 'replace' deploys via 'helm install', which has no '--cleanup-on-fail'.
+        with self.assertRaises(AnsibleFailJson):
+            deploy_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "cleanup_on_fail": True,
+                    "replace": True,
+                },
+                "3.17.0",
+            )
+
+
+class TestValueReuseOptions(unittest.TestCase):
+    """reset_values wins over reuse_values, and both are upgrade-only (issue #1229)."""
+
+    def setUp(self):
+        patch_ansible_module(self)
+
+    def test_reuse_values_alone_is_overridden_by_the_reset_values_default(self):
+        # What the pre-fix example in the docs produced: helm ignores '--reuse-values'.
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "reuse_values": True,
+            },
+            "3.17.0",
+        )
+        assert "--reset-values" in command
+        assert "--reuse-values=True" in command
+
+    def test_reuse_values_with_reset_values_disabled(self):
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "reuse_values": True,
+                "reset_values": False,
+            },
+            "3.17.0",
+        )
+        assert "--reset-values" not in command
+        assert "--reuse-values=True" in command
+
+    def test_reset_then_reuse_values_with_reset_values_disabled(self):
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "reset_then_reuse_values": True,
+                "reset_values": False,
+            },
+            "3.17.0",
+        )
+        assert "--reset-values" not in command
+        assert "--reset-then-reuse-values" in command
+
+    def test_reuse_values_with_replace_is_dropped_and_warns(self):
+        # 'replace' deploys via 'helm install', which has no '--reuse-values'.
+        with patch.object(basic.AnsibleModule, "warn") as mock_warn:
+            command = deploy_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reuse_values": True,
+                    "replace": True,
+                },
+                "3.17.0",
+            )
+        assert " install" in command
+        assert "--reuse-values" not in command
+        warnings = [call.args[0] for call in mock_warn.call_args_list]
+        assert any(
+            "reuse_values is ignored because replace=true" in warning
+            for warning in warnings
+        )
+
+    def test_reuse_values_false_with_replace_is_dropped_and_warns(self):
+        # Even 'reuse_values: false' used to emit '--reuse-values=False' on install.
+        with patch.object(basic.AnsibleModule, "warn") as mock_warn:
+            command = deploy_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reuse_values": False,
+                    "replace": True,
+                },
+                "3.17.0",
+            )
+        assert "--reuse-values" not in command
+        warnings = [call.args[0] for call in mock_warn.call_args_list]
+        assert any(
+            "reuse_values is ignored because replace=true" in warning
+            for warning in warnings
+        )
+
+    def test_reset_then_reuse_values_with_replace_is_dropped_and_warns(self):
+        with patch.object(basic.AnsibleModule, "warn") as mock_warn:
+            command = deploy_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reset_then_reuse_values": True,
+                    "replace": True,
+                },
+                "3.17.0",
+            )
+        assert "--reset-then-reuse-values" not in command
+        warnings = [call.args[0] for call in mock_warn.call_args_list]
+        assert any(
+            "reset_then_reuse_values is ignored because replace=true" in warning
+            for warning in warnings
+        )
+
+    def test_replace_alone_keeps_working(self):
+        command = deploy_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "replace": True,
+            },
+            "3.17.0",
+        )
+        assert " install" in command
+        assert "--reuse-values" not in command
+        assert "--reset-values" not in command
+
+    def test_reuse_values_alone_warns(self):
+        with patch.object(basic.AnsibleModule, "warn") as mock_warn:
+            deploy_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reuse_values": True,
+                },
+                "3.17.0",
+            )
+        warnings = [call.args[0] for call in mock_warn.call_args_list]
+        assert any("reuse_values is ignored" in warning for warning in warnings)
+
+    def test_reset_then_reuse_values_alone_warns(self):
+        with patch.object(basic.AnsibleModule, "warn") as mock_warn:
+            deploy_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reset_then_reuse_values": True,
+                },
+                "3.17.0",
+            )
+        warnings = [call.args[0] for call in mock_warn.call_args_list]
+        assert any(
+            "reset_then_reuse_values is ignored" in warning for warning in warnings
+        )
+
+    def test_reset_then_reuse_values_warns_when_reuse_values_wins(self):
+        with patch.object(basic.AnsibleModule, "warn") as mock_warn:
+            deploy_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reuse_values": True,
+                    "reset_then_reuse_values": True,
+                    "reset_values": False,
+                },
+                "3.17.0",
+            )
+        warnings = [call.args[0] for call in mock_warn.call_args_list]
+        assert any(
+            "reset_then_reuse_values is ignored because reuse_values is true" in warning
+            for warning in warnings
+        )
+
+    def test_no_warning_when_options_are_combined_correctly(self):
+        with patch.object(basic.AnsibleModule, "warn") as mock_warn:
+            deploy_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reuse_values": True,
+                    "reset_values": False,
+                },
+                "3.17.0",
+            )
+        assert mock_warn.call_args_list == []
+
+
+class TestValueReuseOptionsWithHelmDiff(unittest.TestCase):
+    """The same options on the idempotency path, where 'helm diff' builds the command."""
+
+    def setUp(self):
+        patch_ansible_module(self)
+
+    def test_reuse_values_alone_is_overridden_by_the_reset_values_default(self):
+        # helm diff is handed both flags and applies helm's precedence, which is why
+        # 'reuse_values' on its own still reports a change (issue #1229).
+        command = diff_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "reuse_values": True,
+            }
+        )
+        assert "--reset-values=True" in command
+        assert "--reuse-values" in command
+
+    def test_reuse_values_with_reset_values_disabled(self):
+        command = diff_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "reuse_values": True,
+                "reset_values": False,
+            }
+        )
+        assert "--reset-values=False" in command
+        assert "--reuse-values" in command
+
+    def test_reset_then_reuse_values_with_reset_values_disabled(self):
+        command = diff_command_for_version(
+            {
+                "release_name": "test",
+                "release_namespace": "test",
+                "chart_ref": "chart1",
+                "reset_then_reuse_values": True,
+                "reset_values": False,
+            }
+        )
+        assert "--reset-values=False" in command
+        assert "--reset-then-reuse-values" in command
+
+    def test_reuse_values_with_replace_is_dropped_and_warns(self):
+        with patch.object(basic.AnsibleModule, "warn") as mock_warn:
+            command = diff_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reuse_values": True,
+                    "replace": True,
+                }
+            )
+        assert "--reuse-values" not in command
+        assert "--reset-values" not in command
+        warnings = [call.args[0] for call in mock_warn.call_args_list]
+        assert any(
+            "reuse_values is ignored because replace=true" in warning
+            for warning in warnings
+        )
+
+    def test_reset_then_reuse_values_with_replace_is_dropped_and_warns(self):
+        with patch.object(basic.AnsibleModule, "warn") as mock_warn:
+            command = diff_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reset_then_reuse_values": True,
+                    "replace": True,
+                }
+            )
+        assert "--reset-then-reuse-values" not in command
+        warnings = [call.args[0] for call in mock_warn.call_args_list]
+        assert any(
+            "reset_then_reuse_values is ignored because replace=true" in warning
+            for warning in warnings
+        )
+
+    def test_reset_then_reuse_values_requires_helm_3_14(self):
+        with self.assertRaises(AnsibleFailJson) as result:
+            diff_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reset_then_reuse_values": True,
+                    "reset_values": False,
+                },
+                helm_version="3.13.0",
+            )
+        assert (
+            "reset_then_reuse_values requires helm >= 3.14.0"
+            in result.exception.args[0]["msg"]
+        )
+
+    def test_reset_then_reuse_values_requires_helm_diff_3_9_12(self):
+        with self.assertRaises(AnsibleFailJson) as result:
+            diff_command_for_version(
+                {
+                    "release_name": "test",
+                    "release_namespace": "test",
+                    "chart_ref": "chart1",
+                    "reset_then_reuse_values": True,
+                    "reset_values": False,
+                },
+                helm_diff_version="3.9.0",
+            )
+        assert (
+            "reset_then_reuse_values requires helm diff >= 3.9.12"
+            in result.exception.args[0]["msg"]
         )

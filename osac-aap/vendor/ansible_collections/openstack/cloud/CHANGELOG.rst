@@ -4,6 +4,65 @@ Ansible OpenStack Collection Release Notes
 
 .. contents:: Topics
 
+v2.6.0
+======
+
+Release Summary
+---------------
+
+New modules for Bare Metal port groups and Neutron network segments, plus image/project enhancements and bugfixes.
+
+
+Minor Changes
+-------------
+
+- Add support for setting the shard key on a baremetal node.
+- image - Add support for image ID reservation and queued image creation
+- project - Support updating extra_specs
+
+Bugfixes
+--------
+
+- Fix Ansible errors
+- Fixed compatability with openstacksdk version 4.15.0
+
+New Modules
+-----------
+
+- openstack.cloud.baremetal_port_group - Create/Delete Bare Metal port group resources from OpenStack
+- openstack.cloud.compute_service - Update OpenStack Compute (Nova) services
+- openstack.cloud.network_segment - Creates/removes network segments from OpenStack
+- openstack.cloud.volume_image_metadata - Manage OpenStack Cinder volume image metadata
+- openstack.cloud.volume_retype - Retype (change the volume type of) a Cinder block storage volume
+
+v2.5.0
+======
+
+Release Summary
+---------------
+
+Bugfixes and minor changes
+
+Major Changes
+-------------
+
+- Add import_method to module
+- Add object_containers_info module
+- Add support for filters in inventory
+- Add volume_manage module
+- Introduce share_type modules
+
+Minor Changes
+-------------
+
+- Allow role_assignment module to work cross domain
+- Don't compare current state for `reboot_*` actions
+- Fix disable_gateway_ip for subnet
+- Fix example in the dns_zone_info module doc
+- Fix router module external IPs when only subnet specified
+- Fix the bug reporting url
+- Let clouds_yaml_path behave as documented (Override path to clouds.yaml file)
+- Shows missing data in `stack_info` module output
 
 v2.4.1
 ======

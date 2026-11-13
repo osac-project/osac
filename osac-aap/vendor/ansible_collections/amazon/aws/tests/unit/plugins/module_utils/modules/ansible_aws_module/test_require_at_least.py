@@ -44,12 +44,6 @@ if not HAS_BOTO3:
 
 class TestRequireAtLeastTestSuite:
     # ========================================================
-    # Prepare some data for use in our testing
-    # ========================================================
-    def setup_method(self):
-        pass
-
-    # ========================================================
     #   Test botocore_at_least
     # ========================================================
     @pytest.mark.parametrize(
@@ -106,7 +100,6 @@ class TestRequireAtLeastTestSuite:
         return_val = json.loads(out)
 
         assert return_val.get("exception") is None
-        assert return_val.get("invocation") is not None
         if at_least:
             assert return_val.get("failed") is None
         else:
@@ -141,7 +134,6 @@ class TestRequireAtLeastTestSuite:
         return_val = json.loads(out)
 
         assert return_val.get("exception") is None
-        assert return_val.get("invocation") is not None
         if at_least:
             assert return_val.get("failed") is None
         else:
@@ -180,7 +172,6 @@ class TestRequireAtLeastTestSuite:
         return_val = json.loads(out)
 
         assert return_val.get("exception") is None
-        assert return_val.get("invocation") is not None
         if at_least:
             assert return_val.get("failed") is None
         else:
@@ -220,7 +211,6 @@ class TestRequireAtLeastTestSuite:
         return_val = json.loads(out)
 
         assert return_val.get("exception") is None
-        assert return_val.get("invocation") is not None
         if at_least:
             assert return_val.get("failed") is None
         else:

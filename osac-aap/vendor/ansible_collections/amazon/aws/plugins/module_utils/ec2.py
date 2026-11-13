@@ -45,7 +45,7 @@ from typing import List
 from typing import Optional
 from typing import Union
 
-import ansible.module_utils.common.warnings as ansible_warnings
+import ansible.module_utils.common.warnings as ansible_warnings  # pylint: disable=unused-import
 from ansible.module_utils.ansible_release import __version__
 
 # Used to live here, moved into ansible.module_utils.common.dict_transformations
@@ -53,8 +53,6 @@ from ansible.module_utils.common.dict_transformations import _camel_to_snake  # 
 from ansible.module_utils.common.dict_transformations import _snake_to_camel  # pylint: disable=unused-import
 from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict  # pylint: disable=unused-import
 from ansible.module_utils.common.dict_transformations import snake_dict_to_camel_dict  # pylint: disable=unused-import
-from ansible.module_utils.six import integer_types
-from ansible.module_utils.six import string_types
 
 # Used to live here, moved into ansible_collections.amazon.aws.plugins.module_utils.arn
 from .arn import is_outpost_arn as is_outposts_arn  # pylint: disable=unused-import
@@ -746,7 +744,7 @@ def detach_volume(client, volume_id: str, **params: Dict[str, Union[str, bool]])
 # EC2 Instance
 EC2_INSTANCE_CATCH_EXTRA_CODES = [
     "IncorrectState",
-    "InsuffienctInstanceCapacity",
+    "InsufficientInstanceCapacity",
     "InvalidInstanceID.NotFound",
 ]
 
@@ -866,6 +864,20 @@ def associate_iam_instance_profile(client, iam_instance_profile: Dict[str, str],
     return client.associate_iam_instance_profile(IamInstanceProfile=iam_instance_profile, InstanceId=instance_id)[
         "IamInstanceProfileAssociation"
     ]
+
+
+# EC2 Instance Types
+class EC2InstanceTypeErrorHandler(AWSErrorHandler):
+    _CUSTOM_EXCEPTION = AnsibleEC2Error
+
+
+@EC2InstanceTypeErrorHandler.list_error_handler("describe instance types", [])
+@AWSRetry.jittered_backoff()
+def describe_instance_types(
+    client, **params: Dict[str, Union[List[str], Dict[str, Union[str, List[str]]]]]
+) -> List[Dict[str, Any]]:
+    paginator = client.get_paginator("describe_instance_types")
+    return paginator.paginate(**params).build_full_result()["InstanceTypes"]
 
 
 # EC2 Key
@@ -1244,6 +1256,26 @@ def authorize_security_group_egress(client, **params: Dict[str, Any]) -> bool:
     return client.authorize_security_group_egress(**params)["Return"]
 
 
+def get_default_security_group_id(client, vpc_id: str) -> str:
+    """
+    Find the default security group for a given VPC.
+
+    :param client: EC2 client
+    :param vpc_id: VPC ID
+    :return: Security group ID of the default security group
+    :raises AnsibleEC2Error: If no default security group is found or multiple are found
+    """
+    filters = ansible_dict_to_boto3_filter_list({"vpc-id": vpc_id, "group-name": "default"})
+    security_groups = describe_security_groups(client, Filters=filters)
+
+    if len(security_groups) == 0:
+        raise AnsibleEC2Error(message=f"No default security group found for VPC {vpc_id}")
+    elif len(security_groups) > 1:
+        raise AnsibleEC2Error(message=f'Multiple security groups named "default" found for VPC {vpc_id}')
+
+    return security_groups[0]["GroupId"]
+
+
 # EC2 Egress only internet Gateway
 class EC2EgressOnlyInternetGatewayErrorHandler(AWSErrorHandler):
     _CUSTOM_EXCEPTION = AnsibleEC2Error
@@ -1522,19 +1554,9 @@ def get_ec2_security_group_ids_from_names(sec_group_list, ec2_connection, vpc_id
     def get_sg_id(sg):
         return str(sg["GroupId"])
 
-    if boto3 is not None:
-        ansible_warnings.deprecate(
-            (
-                "The boto3 parameter for get_ec2_security_group_ids_from_names() has been deprecated."
-                "The parameter has been ignored since release 4.0.0."
-            ),
-            date="2025-05-01",
-            collection_name="amazon.aws",
-        )
-
     sec_group_id_list = []
 
-    if isinstance(sec_group_list, string_types):
+    if isinstance(sec_group_list, str):
         sec_group_list = [sec_group_list]
 
     # Get all security groups
@@ -1763,7 +1785,7 @@ def normalize_ec2_vpc_dhcp_config(option_config: List[Dict[str, Any]]) -> Dict[s
     for config_item in option_config:
         # Handle single value keys
         if config_item["Key"] == "netbios-node-type":
-            if isinstance(config_item["Values"], integer_types):
+            if isinstance(config_item["Values"], int):
                 config_data["netbios-node-type"] = str((config_item["Values"]))
             elif isinstance(config_item["Values"], list):
                 config_data["netbios-node-type"] = str((config_item["Values"][0]["Value"]))
@@ -1849,7 +1871,7 @@ def describe_ec2_mac_dedicated_hosts(
 @AWSRetry.jittered_backoff()
 def release_ec2_dedicated_host(client, host_id: Union[str, List[str]]) -> bool:
     host_ids = host_id
-    if isinstance(host_id, string_types):
+    if isinstance(host_id, str):
         host_ids = [host_id]
     client.release_hosts(HostIds=host_ids)
     return True
@@ -1871,6 +1893,6 @@ def modify_ec2_dedicated_hosts(
     **params: Dict[str, Union[List[str], List[Dict[str, Union[str, List[str]]]]]],
 ) -> Dict[str, Any]:
     host_ids = host_id
-    if isinstance(host_id, string_types):
+    if isinstance(host_id, str):
         host_ids = [host_id]
     return client.modify_hosts(HostIds=host_ids, **params)

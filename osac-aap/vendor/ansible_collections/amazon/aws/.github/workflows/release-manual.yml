@@ -18,9 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Generate Release Log
-        uses: ansible-collections/amazon.aws/.github/actions/ansible_release_log@main
-        with:
-          release: ${{ inputs.release }}
+        uses: $/.github/actions/ansible_release_log
 
   perform-release:
     permissions:
@@ -30,7 +28,7 @@ jobs:
       - generate-release-log
     steps:
       - name: Generate Release
-        uses: ansible-collections/amazon.aws/.github/actions/ansible_release_tag@main
+        uses: $/.github/actions/ansible_release_tag
         with:
           release: ${{ inputs.release }}
           collection-name: amazon.aws

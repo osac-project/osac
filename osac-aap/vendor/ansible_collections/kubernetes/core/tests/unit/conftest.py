@@ -4,12 +4,12 @@ __metaclass__ = type
 
 import json
 import sys
+from collections.abc import MutableMapping
 from io import BytesIO
 
 import ansible.module_utils.basic
 import pytest
-from ansible.module_utils._text import to_bytes
-from ansible.module_utils.common._collections_compat import MutableMapping
+from ansible.module_utils.common.text.converters import to_bytes
 
 
 @pytest.fixture

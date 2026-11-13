@@ -1,0 +1,284 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+# (c) 2024, Simon Dodsley (simon@everpuredata.com)
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+
+from __future__ import absolute_import, division, print_function
+
+__metaclass__ = type
+
+ANSIBLE_METADATA = {
+    "metadata_version": "1.1",
+    "status": ["preview"],
+    "supported_by": "community",
+}
+
+DOCUMENTATION = r"""
+---
+module: purefb_server
+version_added: '1.20.0'
+short_description: Manage FlashBlade servers
+description:
+- Add, update or delete FlashBlade servers
+author:
+- Everpure Ansible Team (@sdodsley) <pure-ansible-team@everpuredata.com>
+options:
+  name:
+    description:
+    - Name of the server
+    type: str
+    required: true
+  state:
+    description:
+    - Define whether the Object Store Virtual Host should be added or deleted
+    default: present
+    choices: [ absent, present ]
+    type: str
+  dns:
+    description:
+    - The DNS configuration to be used for this server
+    type: list
+    elements: str
+  directory_service:
+    description:
+    - The directory service configuration to be used for this server
+    type: list
+    elements: str
+  local_directory_service:
+    description:
+    - The local directory service configuration to be used for this server
+    - Set to an empty string (C("")) to clear a previously assigned local directory
+      service. This only applies on update; on create an empty string is treated the
+      same as omitting the parameter.
+    - Only valid with REST 2.24 or higher
+    type: str
+extends_documentation_fragment:
+- everpure.flashblade.everpure.fb
+"""
+
+EXAMPLES = r"""
+- name: Add server
+  everpure.flashblade.purefb_server:
+    name: myserver
+    dns: mydns
+    fb_url: 10.10.10.2
+    api_token: "replace-me"
+
+- name: Delete server
+  everpure.flashblade.purefb_server:
+    name: myserver
+    state: absent
+    fb_url: 10.10.10.2
+    api_token: "replace-me"
+
+- name: Clear local directory service
+  everpure.flashblade.purefb_server:
+    name: myserver
+    local_directory_service: ""
+    fb_url: 10.10.10.2
+    api_token: "replace-me"
+"""
+
+RETURN = r"""
+"""
+
+HAS_PYPURECLIENT = True
+try:
+    from pypureclient.flashblade import Server, ServerPost, Reference
+except ImportError:
+    HAS_PYPURECLIENT = False
+
+from ansible.module_utils.basic import AnsibleModule
+from ansible_collections.everpure.flashblade.plugins.module_utils.purefb import (
+    get_system,
+    purefb_argument_spec,
+)
+from ansible_collections.everpure.flashblade.plugins.module_utils.common import (
+    get_error_message,
+    get_rest_api_version,
+)
+from ansible_collections.everpure.flashblade.plugins.module_utils.version import (
+    LooseVersion,
+)
+
+MIN_REQUIRED_API_VERSION = "2.16"
+LOCAL_DS_API_VERSION = "2.24"
+
+
+def delete_server(module, blade):
+    """Delete server object"""
+    changed = True
+    if not module.check_mode:
+        res = blade.delete_servers(
+            names=[module.params["name"]], cascade_delete="directory-services"
+        )
+        if res.status_code != 200:
+            module.fail_json(
+                msg="Failed to delete server {0}. Error: {1}".format(
+                    module.params["name"],
+                    get_error_message(res),
+                )
+            )
+    module.exit_json(changed=changed)
+
+
+def update_server(module, blade):
+    """Update server object"""
+    changed = False
+    server_info = list(blade.get_servers(names=[module.params["name"]]).items)[0]
+    if module.params["dns"] is not None:
+        dns_list = server_info.dns
+        current_dns = []
+        for dns in dns_list:
+            current_dns.append(getattr(dns, "name", None))
+        if set(module.params["dns"]) != set(current_dns):
+            changed = True
+            if not module.check_mode:
+                res = blade.patch_servers(
+                    names=[module.params["name"]],
+                    server=Server(
+                        dns=[Reference(name=d) for d in module.params["dns"]]
+                    ),
+                )
+                if res.status_code != 200:
+                    module.fail_json(
+                        msg="Failed to update DNS config for server {0}. Error: {1}".format(
+                            module.params["name"],
+                            get_error_message(res),
+                        )
+                    )
+    if module.params["directory_service"] is not None:
+        ds_list = server_info.directory_services
+        current_ds = []
+        for ds in ds_list:
+            current_ds.append(getattr(ds, "name", None))
+        if set(module.params["directory_service"]) != set(current_ds):
+            changed = True
+            if not module.check_mode:
+                res = blade.patch_servers(
+                    names=[module.params["name"]],
+                    server=Server(
+                        directory_services=[
+                            Reference(name=ds)
+                            for ds in module.params["directory_service"]
+                        ]
+                    ),
+                )
+                if res.status_code != 200:
+                    module.fail_json(
+                        msg="Failed to update directory services for server {0}. Error: {1}".format(
+                            module.params["name"],
+                            get_error_message(res),
+                        )
+                    )
+    if module.params["local_directory_service"] is not None:
+        current_lds = getattr(
+            getattr(server_info, "local_directory_service", None), "name", None
+        )
+        # normalise "" to None so clearing an already-unset field is a no-op
+        if (module.params["local_directory_service"] or None) != current_lds:
+            changed = True
+            if not module.check_mode:
+                res = blade.patch_servers(
+                    names=[module.params["name"]],
+                    server=Server(
+                        local_directory_service=Reference(
+                            name=module.params["local_directory_service"]
+                        )
+                    ),
+                )
+                if res.status_code != 200:
+                    module.fail_json(
+                        msg="Failed to update local directory service for server {0}. Error: {1}".format(
+                            module.params["name"],
+                            get_error_message(res),
+                        )
+                    )
+    module.exit_json(changed=changed)
+
+
+def add_server(module, blade):
+    """Add server object"""
+    changed = True
+    final_dns = []
+    final_dserv = []
+    if not module.check_mode:
+        if module.params["dns"]:
+            for dns in module.params["dns"]:
+                final_dns.append(Reference(name=dns))
+        if module.params["directory_service"]:
+            for dserv in module.params["directory_service"]:
+                final_dserv.append(Reference(name=dserv))
+        server_kwargs = {}
+        if final_dns:
+            server_kwargs["dns"] = final_dns
+        if final_dserv:
+            server_kwargs["directory_services"] = final_dserv
+        if module.params["local_directory_service"]:
+            server_kwargs["local_directory_service"] = Reference(
+                name=module.params["local_directory_service"]
+            )
+        server = ServerPost(**server_kwargs)
+        res = blade.post_servers(
+            names=[module.params["name"]],
+            server=server,
+            create_ds=module.params["name"] + "_nfs",
+        )
+        if res.status_code != 200:
+            module.fail_json(
+                msg="Failed to add server {0}. Error: {1}".format(
+                    module.params["name"],
+                    get_error_message(res),
+                )
+            )
+    module.exit_json(changed=changed)
+
+
+def main():
+    argument_spec = purefb_argument_spec()
+    argument_spec.update(
+        dict(
+            state=dict(type="str", default="present", choices=["absent", "present"]),
+            name=dict(type="str", required=True),
+            dns=dict(type="list", elements="str"),
+            directory_service=dict(type="list", elements="str"),
+            local_directory_service=dict(type="str"),
+        )
+    )
+
+    module = AnsibleModule(argument_spec, supports_check_mode=True)
+    if not HAS_PYPURECLIENT:
+        module.fail_json(msg="py-pure-client sdk is required for this module")
+    blade = get_system(module)
+    api_version = get_rest_api_version(blade)
+    if LooseVersion(MIN_REQUIRED_API_VERSION) > LooseVersion(api_version):
+        module.fail_json(
+            msg="FlashBlade REST version not supported. "
+            "Minimum version required: {0}".format(MIN_REQUIRED_API_VERSION)
+        )
+    if module.params["local_directory_service"] is not None and LooseVersion(
+        LOCAL_DS_API_VERSION
+    ) > LooseVersion(api_version):
+        module.fail_json(
+            msg="FlashBlade REST version {0} does not support "
+            "local_directory_service (requires {1} or higher).".format(
+                api_version, LOCAL_DS_API_VERSION
+            )
+        )
+    state = module.params["state"]
+
+    exists = bool(blade.get_servers(names=[module.params["name"]]).status_code == 200)
+
+    if not exists and state == "present":
+        add_server(module, blade)
+    elif exists and state == "present":
+        update_server(module, blade)
+    elif exists and state == "absent":
+        delete_server(module, blade)
+
+    module.exit_json(changed=False)
+
+
+if __name__ == "__main__":
+    main()

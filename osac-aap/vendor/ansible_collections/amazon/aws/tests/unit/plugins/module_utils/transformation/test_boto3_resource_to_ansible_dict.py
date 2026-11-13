@@ -45,7 +45,7 @@ EXAMPLE_DICT = [
     {"example_nested": {"example_key": "Example Value"}, "tags": {}},
 ]
 
-TEST_DATA = zip(EXAMPLE_BOTO3, EXAMPLE_DICT)
+TEST_DATA = list(zip(EXAMPLE_BOTO3, EXAMPLE_DICT))
 
 NESTED_DATA = {"sentinal": sentinel.MY_VALUE}
 
@@ -55,9 +55,6 @@ def do_transform_nested(resource):
 
 
 class TestBoto3ResourceToAnsibleDict:
-    def setup_method(self):
-        pass
-
     @pytest.mark.parametrize("input_params, output_params", deepcopy(TEST_DATA))
     def test_default_conversion(self, input_params, output_params):
         # Test default behaviour

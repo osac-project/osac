@@ -1,0 +1,106 @@
+---
+- name: Require VMS cluster map
+  ansible.builtin.assert:
+    that:
+      - vms is mapping
+      - (vms | length) > 0
+    fail_msg: "Define vms as a non-empty map of cluster aliases to VMS connection details."
+
+- name: Initialize normalized VMS map
+  ansible.builtin.set_fact:
+    protectedpath_vms: {}
+  no_log: true
+
+- name: Validate VMS connection details
+  ansible.builtin.assert:
+    that:
+      - (_host | length) > 0
+      - (_has_token | bool) or (_has_basic | bool)
+      - not ((_has_token | bool) and (_has_basic | bool))
+    fail_msg: >-
+      VMS cluster "{{ item.key }}" must define host/vms_host and either
+      vms_token/token or vms_username/username plus vms_password/password.
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    _cluster: "{{ item.value }}"
+    _host: "{{ (_cluster.vms_host | default(_cluster.host | default(_cluster.hostname | default('')))) | string | trim }}"
+    _token: "{{ _cluster.vms_token | default(_cluster.token | default('')) }}"
+    _username: "{{ _cluster.vms_username | default(_cluster.username | default('')) }}"
+    _password: "{{ _cluster.vms_password | default(_cluster.password | default('')) }}"
+    _has_token: "{{ (_token | string | length) > 0 }}"
+    _has_basic: "{{ (_username | string | length) > 0 and (_password | string | length) > 0 }}"
+  no_log: true
+
+- name: Build normalized VMS connection map
+  ansible.builtin.set_fact:
+    protectedpath_vms: "{{ protectedpath_vms | combine({item.key: _connection}, recursive=True) }}"
+  loop: "{{ vms | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    _cluster: "{{ item.value }}"
+    _host: "{{ (_cluster.vms_host | default(_cluster.host | default(_cluster.hostname | default('')))) | string | trim }}"
+    _token: "{{ _cluster.vms_token | default(_cluster.token | default('')) }}"
+    _username: "{{ _cluster.vms_username | default(_cluster.username | default('')) }}"
+    _password: "{{ _cluster.vms_password | default(_cluster.password | default('')) }}"
+    _base:
+      host: "{{ _host }}"
+      validate_certs: "{{ _cluster.validate_certs | default(true) }}"
+    _optional: >-
+      {{
+        {}
+        | combine({'api_version': _cluster.api_version} if _cluster.api_version is defined else {})
+        | combine({'timeout': _cluster.timeout} if _cluster.timeout is defined else {})
+        | combine({'tenant': _cluster.tenant} if _cluster.tenant is defined else {})
+        | combine({'debug': _cluster.debug} if _cluster.debug is defined else {})
+      }}
+    _auth: >-
+      {{
+        {'token': _token}
+        if (_token | string | length) > 0
+        else {'username': _username, 'password': _password}
+      }}
+    _connection: "{{ _base | combine(_optional) | combine(_auth) }}"
+  no_log: true
+
+- name: Require VIP pools reference known clusters
+  ansible.builtin.assert:
+    that:
+      - item.cluster is defined
+      - (item.cluster | default('')) in protectedpath_vms
+    fail_msg: "VIP pool '{{ item.name | default('?') }}' references an unknown cluster."
+  loop: "{{ vippools }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Require replication peers reference known clusters
+  ansible.builtin.assert:
+    that:
+      - item.cluster is defined
+      - (item.cluster | default('')) in protectedpath_vms
+    fail_msg: "Replication peer '{{ item.name | default('?') }}' references an unknown cluster."
+  loop: "{{ replicationpeers }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Require protection policies reference known clusters
+  ansible.builtin.assert:
+    that:
+      - item.cluster is defined
+      - (item.cluster | default('')) in protectedpath_vms
+    fail_msg: "Protection policy '{{ item.name | default('?') }}' references an unknown cluster."
+  loop: "{{ protectionpolicies }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Require protected paths reference known clusters
+  ansible.builtin.assert:
+    that:
+      - item.cluster is defined
+      - (item.cluster | default('')) in protectedpath_vms
+    fail_msg: "Protected path '{{ item.name | default('?') }}' references an unknown cluster."
+  loop: "{{ protectedpaths }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"

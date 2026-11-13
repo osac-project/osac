@@ -1,1 +1,6 @@
 openstacksdk>=1.0.0
+
+# OSAC security floors; maintained in scripts/patch_vendor_requirements.py.
+cryptography>=50.0.2
+setuptools>=84.2.1
+urllib3>=2.8.0

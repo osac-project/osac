@@ -51,7 +51,7 @@ def raise_botocore_error(operation="getCloudFront"):
 def test_unsupported_api(cloudfront_facts_service):
     with pytest.raises(CloudFrontFactsServiceManagerFailure) as err:
         cloudfront_facts_service._unsupported_api()
-        assert "Method _unsupported_api is not currently supported" in err
+    assert "Method _unsupported_api is not currently supported" in str(err.value)
 
 
 def test_get_distribution(cloudfront_facts_service):
@@ -69,7 +69,7 @@ def test_get_distribution_failure(cloudfront_facts_service):
 
     with pytest.raises(SystemExit):
         cloudfront_facts_service.get_distribution(id=cloudfront_id)
-        cloudfront_facts_service.client.get_distribution.assert_called_with(Id=cloudfront_id, aws_retry=True)
+    cloudfront_facts_service.client.get_distribution.assert_called_with(Id=cloudfront_id, aws_retry=True)
 
 
 def test_get_distribution_fail_if_error(cloudfront_facts_service):
@@ -78,7 +78,7 @@ def test_get_distribution_fail_if_error(cloudfront_facts_service):
 
     with pytest.raises(botocore.exceptions.ClientError):
         cloudfront_facts_service.get_distribution(id=cloudfront_id, fail_if_error=False)
-        cloudfront_facts_service.client.get_distribution.assert_called_with(Id=cloudfront_id, aws_retry=True)
+    cloudfront_facts_service.client.get_distribution.assert_called_with(Id=cloudfront_id, aws_retry=True)
 
 
 def test_get_invalidation(cloudfront_facts_service):
@@ -225,7 +225,7 @@ def test_get_aliases_from_distribution_id_failure(cloudfront_facts_service):
 
     with pytest.raises(SystemExit):
         cloudfront_facts_service.get_aliases_from_distribution_id(distribution_id)
-        cloudfront_facts_service.get_distribution.assert_called_once_with(id=distribution_id)
+    cloudfront_facts_service.get_distribution.assert_called_once_with(id=distribution_id)
 
 
 @pytest.mark.parametrize(
@@ -412,7 +412,7 @@ def test_summary_get_distribution_list(
 
     cloudfront_facts_service.list_resource_tags = MagicMock()
     cloudfront_facts_service.list_resource_tags.side_effect = lambda arn: {
-        "Tags": x["Tags"] for x in distributions if x["ARN"] == arn
+        "Tags": [x["Tags"] for x in distributions if x["ARN"] == arn][0]
     }
 
     key_name = "streaming_distributions"
@@ -472,8 +472,8 @@ def test_summary_get_origin_access_identity_list(cloudfront_facts_service, origi
     cloudfront_facts_service.list_origin_access_identities = MagicMock()
     cloudfront_facts_service.list_origin_access_identities.return_value = origin_access_identities
     cloudfront_facts_service.get_origin_access_identity = MagicMock()
-    cloudfront_facts_service.get_origin_access_identity.side_effect = lambda x: [
-        o["response"] for o in origin_access_identities if o["Id"] == x
+    cloudfront_facts_service.get_origin_access_identity.side_effect = lambda id: [
+        o["response"] for o in origin_access_identities if o["Id"] == id
     ][0]
 
     assert {"origin_access_identities": expected} == cloudfront_facts_service.summary_get_origin_access_identity_list()

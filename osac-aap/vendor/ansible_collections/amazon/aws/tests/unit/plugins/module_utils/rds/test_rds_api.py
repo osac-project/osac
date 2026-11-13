@@ -1,0 +1,1080 @@
+# (c) 2021 Red Hat Inc.
+#
+# This file is part of Ansible
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+
+from contextlib import nullcontext
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
+
+try:
+    import botocore
+except ImportError:
+    pass
+
+from ansible_collections.amazon.aws.plugins.module_utils.botocore import HAS_BOTO3
+from ansible_collections.amazon.aws.plugins.module_utils.rds import AnsibleRDSError
+from ansible_collections.amazon.aws.plugins.module_utils.rds import Boto3ClientMethod
+from ansible_collections.amazon.aws.plugins.module_utils.rds import call_method
+from ansible_collections.amazon.aws.plugins.module_utils.rds import create_db_cluster_parameter_group
+from ansible_collections.amazon.aws.plugins.module_utils.rds import create_db_parameter_group
+from ansible_collections.amazon.aws.plugins.module_utils.rds import delete_db_cluster_parameter_group
+from ansible_collections.amazon.aws.plugins.module_utils.rds import delete_db_parameter_group
+from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_db_cluster_parameter_groups
+from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_db_cluster_parameters
+from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_db_clusters
+from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_db_engine_versions
+from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_db_instance_parameter_groups
+from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_db_parameters
+from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_db_subnet_groups
+from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_global_clusters
+from ansible_collections.amazon.aws.plugins.module_utils.rds import describe_option_groups
+from ansible_collections.amazon.aws.plugins.module_utils.rds import get_final_identifier
+from ansible_collections.amazon.aws.plugins.module_utils.rds import get_snapshot
+from ansible_collections.amazon.aws.plugins.module_utils.rds import handle_errors
+from ansible_collections.amazon.aws.plugins.module_utils.rds import modify_db_cluster_parameter_group
+from ansible_collections.amazon.aws.plugins.module_utils.rds import modify_db_parameter_group
+from ansible_collections.amazon.aws.plugins.module_utils.rds import update_iam_roles
+
+if not HAS_BOTO3:
+    pytestmark = pytest.mark.skip("test_rds_api.py requires the python modules 'boto3' and 'botocore'")
+
+mod_api = "ansible_collections.amazon.aws.plugins.module_utils._rds.api"
+
+
+def helper_expected(x):
+    return x, nullcontext()
+
+
+def helper_error(*args, **kwargs):
+    return MagicMock(), pytest.raises(*args, **kwargs)
+
+
+def build_exception(operation_name, code=None, message=None, http_status_code=None, error=True):
+    if not HAS_BOTO3:
+        return Exception("MissingBotoCore")
+    response = {}
+    if error or code or message:
+        response["Error"] = {}
+    if code:
+        response["Error"]["Code"] = code
+    if message:
+        response["Error"]["Message"] = message
+    if http_status_code:
+        response["ResponseMetadata"] = {"HTTPStatusCode": http_status_code}
+
+    return botocore.exceptions.ClientError(response, operation_name)
+
+
+@pytest.mark.parametrize(
+    "method_name, params, expected",
+    [
+        ("create_db_snapshot", {"db_snapshot_identifier": "test"}, "test"),
+        (
+            "create_db_snapshot",
+            {"db_snapshot_identifier": "test", "apply_immediately": True},
+            "test",
+        ),
+        (
+            "create_db_instance",
+            {
+                "db_instance_identifier": "test",
+                "new_db_instance_identifier": "test_updated",
+            },
+            "test",
+        ),
+        (
+            "create_db_snapshot",
+            {"db_snapshot_identifier": "test", "apply_immediately": True},
+            "test",
+        ),
+        (
+            "create_db_instance",
+            {
+                "db_instance_identifier": "test",
+                "new_db_instance_identifier": "test_updated",
+                "apply_immediately": True,
+            },
+            "test_updated",
+        ),
+        (
+            "create_db_cluster",
+            {
+                "db_cluster_identifier": "test",
+                "new_db_cluster_identifier": "test_updated",
+            },
+            "test",
+        ),
+        (
+            "create_db_snapshot",
+            {"db_snapshot_identifier": "test", "apply_immediately": True},
+            "test",
+        ),
+        (
+            "create_db_cluster",
+            {
+                "db_cluster_identifier": "test",
+                "new_db_cluster_identifier": "test_updated",
+                "apply_immediately": True,
+            },
+            "test_updated",
+        ),
+    ],
+)
+def test__get_final_identifier(method_name, params, expected):
+    module = MagicMock()
+    module.params = params
+    module.check_mode = False
+
+    assert get_final_identifier(method_name, module) == expected
+
+
+@pytest.mark.parametrize(
+    "method_name, exception, expected",
+    [
+        (
+            "modify_db_instance",
+            build_exception(
+                "modify_db_instance",
+                code="InvalidParameterCombination",
+                message="No modifications were requested",
+            ),
+            False,
+        ),
+        (
+            "promote_read_replica",
+            build_exception(
+                "promote_read_replica",
+                code="InvalidDBInstanceState",
+                message="DB Instance is not a read replica",
+            ),
+            False,
+        ),
+        (
+            "promote_read_replica_db_cluster",
+            build_exception(
+                "promote_read_replica_db_cluster",
+                code="InvalidDBClusterStateFault",
+                message="DB Cluster that is not a read replica",
+            ),
+            False,
+        ),
+    ],
+)
+def test__handle_errors(method_name, exception, expected):
+    assert handle_errors(MagicMock(), exception, method_name, {}) == expected
+
+
+@pytest.mark.parametrize(
+    "method_name, exception, expected, error",
+    [
+        (
+            "modify_db_instance",
+            build_exception(
+                "modify_db_instance",
+                code="InvalidParameterCombination",
+                message="ModifyDbCluster API",
+            ),
+            *helper_expected(
+                "It appears you are trying to modify attributes that are managed at the cluster level. Please see"
+                " rds_cluster"
+            ),
+        ),
+        (
+            "modify_db_instance",
+            build_exception("modify_db_instance", code="InvalidParameterCombination"),
+            *helper_error(
+                NotImplementedError,
+                match=(
+                    "method modify_db_instance hasn't been added to the list of accepted methods to use a waiter in"
+                    " module_utils/rds.py"
+                ),
+            ),
+        ),
+        (
+            "promote_read_replica",
+            build_exception("promote_read_replica", code="InvalidDBInstanceState"),
+            *helper_error(
+                NotImplementedError,
+                match=(
+                    "method promote_read_replica hasn't been added to the list of accepted methods to use a waiter in"
+                    " module_utils/rds.py"
+                ),
+            ),
+        ),
+        (
+            "promote_read_replica_db_cluster",
+            build_exception("promote_read_replica_db_cluster", code="InvalidDBClusterStateFault"),
+            *helper_error(
+                NotImplementedError,
+                match=(
+                    "method promote_read_replica_db_cluster hasn't been added to the list of accepted methods to use a"
+                    " waiter in module_utils/rds.py"
+                ),
+            ),
+        ),
+        (
+            "create_db_cluster",
+            build_exception("create_db_cluster", code="InvalidParameterValue"),
+            *helper_expected(
+                "DB engine fake_engine should be one of ['aurora', 'aurora-mysql', 'aurora-postgresql', 'mysql', 'postgres']"
+            ),
+        ),
+    ],
+)
+def test__handle_errors_failed(method_name, exception, expected, error):
+    module = MagicMock()
+
+    with error:
+        handle_errors(module, exception, method_name, {"Engine": "fake_engine"})
+        module.fail_json_aws.assert_called_once()
+        assert module.fail_json_aws.call_args[1]["msg"] == expected
+
+
+@pytest.mark.parametrize(
+    "snapshots, snapshot_type, convert_tags, expected",
+    [
+        ([], "cluster", False, {}),
+        ([], "instance", True, {}),
+        (
+            [{"DBSnapshotIdentifier": "my-snapshot", "DBInstanceIdentifier": "my-instance", "TagList": []}],
+            "instance",
+            False,
+            {"DBSnapshotIdentifier": "my-snapshot", "DBInstanceIdentifier": "my-instance", "TagList": []},
+        ),
+        (
+            [
+                {
+                    "DBClusterSnapshotIdentifier": "my-cluster-snapshot",
+                    "DBClusterIdentifier": "my-cluster",
+                    "TagList": [],
+                }
+            ],
+            "cluster",
+            True,
+            {"DBClusterSnapshotIdentifier": "my-cluster-snapshot", "DBClusterIdentifier": "my-cluster", "Tags": {}},
+        ),
+        (
+            [
+                {
+                    "DBClusterSnapshotIdentifier": "my-cluster-snapshot",
+                    "DBClusterIdentifier": "my-cluster",
+                    "TagList": [{"Key": "TagOne", "Value": "Value one"}, {"Key": "tag_two", "Value": "Value two"}],
+                }
+            ],
+            "cluster",
+            False,
+            {
+                "DBClusterSnapshotIdentifier": "my-cluster-snapshot",
+                "DBClusterIdentifier": "my-cluster",
+                "TagList": [{"Key": "TagOne", "Value": "Value one"}, {"Key": "tag_two", "Value": "Value two"}],
+            },
+        ),
+        (
+            [
+                {
+                    "DBSnapshotIdentifier": "my-snapshot",
+                    "DBInstanceIdentifier": "my-instance",
+                    "TagList": [{"Key": "TagOne", "Value": "Value one"}, {"Key": "tag_two", "Value": "Value two"}],
+                }
+            ],
+            "instance",
+            True,
+            {
+                "DBSnapshotIdentifier": "my-snapshot",
+                "DBInstanceIdentifier": "my-instance",
+                "Tags": {"TagOne": "Value one", "tag_two": "Value two"},
+            },
+        ),
+    ],
+)
+@patch(mod_api + ".describe_db_snapshots")
+@patch(mod_api + ".describe_db_cluster_snapshots")
+def test_get_snapshot_success(
+    m_describe_db_cluster_snapshots, m_describe_db_snapshots, snapshots, snapshot_type, convert_tags, expected
+):
+    client = MagicMock()
+    sentinel = [{"WRONG_MOCK": True}]
+    if snapshot_type == "cluster":
+        m_describe_db_cluster_snapshots.return_value = snapshots
+        m_describe_db_snapshots.return_value = sentinel
+    else:
+        m_describe_db_snapshots.return_value = snapshots
+        m_describe_db_cluster_snapshots.return_value = sentinel
+    assert get_snapshot(client, "my-snapshot", snapshot_type, convert_tags) == expected
+    if snapshot_type == "cluster":
+        m_describe_db_snapshots.assert_not_called()
+    else:
+        m_describe_db_cluster_snapshots.assert_not_called()
+
+
+def test_get_snapshot_error():
+    client = MagicMock()
+    with pytest.raises(ValueError) as e:
+        get_snapshot(client, "my-snapshot", "bad parameter")
+    assert "Invalid snapshot_type. Expected one of: ('cluster', 'instance')" in str(e)
+
+
+# =============================================================================
+# get_final_identifier — cluster_snapshot path
+# =============================================================================
+
+
+def test__get_final_identifier_cluster_snapshot():
+    module = MagicMock()
+    module.params = {"db_cluster_snapshot_identifier": "my-cluster-snap", "new_db_cluster_identifier": "x"}
+    module.check_mode = False
+
+    assert get_final_identifier("create_db_cluster_snapshot", module) == "my-cluster-snap"
+
+
+def test__get_final_identifier_check_mode_ignores_updated():
+    module = MagicMock()
+    module.params = {
+        "db_instance_identifier": "original",
+        "new_db_instance_identifier": "updated",
+        "apply_immediately": True,
+    }
+    module.check_mode = True
+
+    assert get_final_identifier("create_db_instance", module) == "original"
+
+
+def test__get_final_identifier_unsupported_method():
+    module = MagicMock()
+    module.params = {"wait": False}
+
+    with pytest.raises(NotImplementedError):
+        get_final_identifier("unsupported_method", module)
+
+
+# =============================================================================
+# handle_errors — additional paths
+# =============================================================================
+
+
+def test__handle_errors_botocore_error():
+    module = MagicMock()
+    module.fail_json_aws.side_effect = SystemExit(1)
+    exception = botocore.exceptions.BotoCoreError()
+
+    with pytest.raises(SystemExit):
+        handle_errors(module, exception, "some_method", {"Param": "value"})
+
+    module.fail_json_aws.assert_called_once()
+    assert "Unexpected failure" in module.fail_json_aws.call_args[1]["msg"]
+
+
+def test__handle_errors_modify_db_cluster():
+    exception = build_exception(
+        "modify_db_cluster",
+        code="InvalidParameterCombination",
+        message="No modifications were requested",
+    )
+    assert handle_errors(MagicMock(), exception, "modify_db_cluster", {}) is False
+
+
+def test__handle_errors_generic_error_code():
+    module = MagicMock()
+    module.fail_json_aws.side_effect = SystemExit(1)
+    module.params = {"new_db_instance_identifier": "test"}
+    exception = build_exception("delete_db_instance", code="SomeRandomError")
+
+    with pytest.raises(SystemExit):
+        handle_errors(module, exception, "delete_db_instance", {})
+
+    module.fail_json_aws.assert_called_once()
+    assert "Unable to" in module.fail_json_aws.call_args[1]["msg"]
+
+
+def test__handle_errors_create_cluster_valid_engine():
+    module = MagicMock()
+    module.fail_json_aws.side_effect = SystemExit(1)
+    module.params = {"new_db_cluster_identifier": "test"}
+    exception = build_exception("create_db_cluster", code="InvalidParameterValue")
+
+    with pytest.raises(SystemExit):
+        handle_errors(module, exception, "create_db_cluster", {"Engine": "aurora-mysql"})
+
+    module.fail_json_aws.assert_called_once()
+    assert "Unable to" in module.fail_json_aws.call_args[1]["msg"]
+
+
+# =============================================================================
+# call_method
+# =============================================================================
+
+
+@patch(mod_api + ".get_rds_method_attribute")
+def test__call_method_check_mode(m_get_attr):
+    client = MagicMock()
+    module = MagicMock()
+    module.check_mode = True
+
+    result, changed = call_method(client, module, "create_db_instance", {"DBInstanceIdentifier": "test"})
+
+    assert result == {}
+    assert changed is True
+    m_get_attr.assert_not_called()
+
+
+@patch(mod_api + ".wait_for_status")
+@patch(mod_api + ".get_rds_method_attribute")
+def test__call_method_success_no_wait(m_get_attr, m_wait):
+    m_get_attr.return_value = Boto3ClientMethod("create_db_instance", "", "create DB instance", "instance", [])
+    client = MagicMock()
+    client.create_db_instance.return_value = {"DBInstance": {"DBInstanceIdentifier": "test"}}
+    module = MagicMock()
+    module.check_mode = False
+    module.params = {"wait": False}
+
+    result, changed = call_method(client, module, "create_db_instance", {"DBInstanceIdentifier": "test"})
+
+    assert changed is True
+    m_wait.assert_not_called()
+
+
+@patch(mod_api + ".get_final_identifier")
+@patch(mod_api + ".wait_for_status")
+@patch(mod_api + ".get_rds_method_attribute")
+def test__call_method_success_with_wait(m_get_attr, m_wait, m_get_final):
+    m_get_attr.return_value = Boto3ClientMethod("create_db_instance", "", "create DB instance", "instance", [])
+    m_get_final.return_value = "test"
+    client = MagicMock()
+    client.create_db_instance.return_value = {"DBInstance": {"DBInstanceIdentifier": "test"}}
+    module = MagicMock()
+    module.check_mode = False
+    module.params = {"wait": True}
+
+    result, changed = call_method(client, module, "create_db_instance", {"DBInstanceIdentifier": "test"})
+
+    assert changed is True
+    m_wait.assert_called_once_with(client, module, "test", "create_db_instance")
+
+
+@patch(mod_api + ".handle_errors")
+@patch(mod_api + ".get_rds_method_attribute")
+def test__call_method_error_delegates_to_handle_errors(m_get_attr, m_handle):
+    m_get_attr.return_value = Boto3ClientMethod("modify_db_instance", "", "modify DB instance", "instance", [])
+    m_handle.return_value = False
+    client = MagicMock()
+    client.modify_db_instance.side_effect = botocore.exceptions.ClientError(
+        {"Error": {"Code": "InvalidParameterCombination", "Message": "No modifications were requested"}},
+        "ModifyDBInstance",
+    )
+    module = MagicMock()
+    module.check_mode = False
+    module.params = {"wait": False}
+
+    result, changed = call_method(client, module, "modify_db_instance", {"DBInstanceIdentifier": "test"})
+
+    assert changed is False
+    m_handle.assert_called_once()
+
+
+# =============================================================================
+# update_iam_roles
+# =============================================================================
+
+
+@patch(mod_api + ".call_method")
+def test__update_iam_roles_add_and_remove(m_call_method):
+    m_call_method.return_value = ({}, True)
+    client = MagicMock()
+    module = MagicMock()
+    roles_to_add = [{"role_arn": "arn:aws:iam::123:role/new", "feature_name": "s3Import"}]
+    roles_to_remove = [{"role_arn": "arn:aws:iam::123:role/old", "feature_name": "s3Export"}]
+
+    result = update_iam_roles(client, module, "my-instance", roles_to_add, roles_to_remove)
+
+    assert result is True
+    assert m_call_method.call_count == 2
+    remove_call = m_call_method.call_args_list[0]
+    assert remove_call[1]["method_name"] == "remove_role_from_db_instance"
+    add_call = m_call_method.call_args_list[1]
+    assert add_call[1]["method_name"] == "add_role_to_db_instance"
+
+
+@patch(mod_api + ".call_method")
+def test__update_iam_roles_changed_accumulates(m_call_method):
+    m_call_method.side_effect = [({}, True), ({}, False)]
+    client = MagicMock()
+    module = MagicMock()
+    roles_to_add = [{"role_arn": "arn:aws:iam::123:role/new", "feature_name": "s3Import"}]
+    roles_to_remove = [{"role_arn": "arn:aws:iam::123:role/old", "feature_name": "s3Export"}]
+
+    result = update_iam_roles(client, module, "my-instance", roles_to_add, roles_to_remove)
+
+    assert result is True
+
+
+@patch(mod_api + ".call_method")
+def test__update_iam_roles_no_changes(m_call_method):
+    m_call_method.return_value = ({}, False)
+    client = MagicMock()
+    module = MagicMock()
+
+    result = update_iam_roles(client, module, "my-instance", [], [])
+
+    assert result is False
+    m_call_method.assert_not_called()
+
+
+@patch(mod_api + ".call_method")
+def test__update_iam_roles_add_only(m_call_method):
+    m_call_method.return_value = ({}, True)
+    client = MagicMock()
+    module = MagicMock()
+    roles_to_add = [{"role_arn": "arn:aws:iam::123:role/new", "feature_name": "s3Import"}]
+
+    result = update_iam_roles(client, module, "my-instance", roles_to_add, [])
+
+    assert result is True
+    m_call_method.assert_called_once()
+    assert m_call_method.call_args[1]["method_name"] == "add_role_to_db_instance"
+
+
+# =============================================================================
+# describe_db_clusters
+# =============================================================================
+
+
+class TestDescribeDbClusters:
+    def test_describe_db_clusters_returns_list(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "DBClusters": [
+                {"DBClusterIdentifier": "cluster-1"},
+                {"DBClusterIdentifier": "cluster-2"},
+            ]
+        }
+
+        result = describe_db_clusters(client, DBClusterIdentifier="cluster-1")
+
+        client.get_paginator.assert_called_with("describe_db_clusters")
+        paginator.paginate.assert_called_with(DBClusterIdentifier="cluster-1")
+        assert len(result) == 2
+        assert result[0]["DBClusterIdentifier"] == "cluster-1"
+
+    def test_describe_db_clusters_empty(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {"DBClusters": []}
+
+        result = describe_db_clusters(client)
+
+        assert result == []
+
+    def test_describe_db_clusters_not_found_returns_empty(self):
+        client = MagicMock()
+        client.get_paginator.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "DBClusterNotFoundFault", "Message": "not found"}},
+            "DescribeDBClusters",
+        )
+
+        result = describe_db_clusters(client, DBClusterIdentifier="nonexistent")
+
+        assert result == []
+
+
+# =============================================================================
+# describe_global_clusters
+# =============================================================================
+
+
+class TestDescribeGlobalClusters:
+    def test_describe_global_clusters_returns_list(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "GlobalClusters": [
+                {"GlobalClusterIdentifier": "gc-1"},
+                {"GlobalClusterIdentifier": "gc-2"},
+            ]
+        }
+
+        result = describe_global_clusters(client, GlobalClusterIdentifier="gc-1")
+
+        client.get_paginator.assert_called_with("describe_global_clusters")
+        paginator.paginate.assert_called_with(GlobalClusterIdentifier="gc-1")
+        assert len(result) == 2
+        assert result[0]["GlobalClusterIdentifier"] == "gc-1"
+
+    def test_describe_global_clusters_empty(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {"GlobalClusters": []}
+
+        result = describe_global_clusters(client)
+
+        assert result == []
+
+    def test_describe_global_clusters_not_found_returns_empty(self):
+        client = MagicMock()
+        client.get_paginator.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "GlobalClusterNotFoundFault", "Message": "not found"}},
+            "DescribeGlobalClusters",
+        )
+
+        result = describe_global_clusters(client, GlobalClusterIdentifier="nonexistent")
+
+        assert result == []
+
+
+# =============================================================================
+# describe_option_groups
+# =============================================================================
+
+
+class TestDescribeOptionGroups:
+    def test_describe_option_groups_returns_list(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "OptionGroupsList": [
+                {"OptionGroupName": "og-1"},
+                {"OptionGroupName": "og-2"},
+            ]
+        }
+
+        result = describe_option_groups(client, OptionGroupName="og-1")
+
+        client.get_paginator.assert_called_with("describe_option_groups")
+        paginator.paginate.assert_called_with(OptionGroupName="og-1")
+        assert len(result) == 2
+        assert result[0]["OptionGroupName"] == "og-1"
+
+    def test_describe_option_groups_empty(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {"OptionGroupsList": []}
+
+        result = describe_option_groups(client)
+
+        assert result == []
+
+    def test_describe_option_groups_not_found_returns_empty(self):
+        client = MagicMock()
+        client.get_paginator.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "OptionGroupNotFoundFault", "Message": "not found"}},
+            "DescribeOptionGroups",
+        )
+
+        result = describe_option_groups(client, OptionGroupName="nonexistent")
+
+        assert result == []
+
+
+# =============================================================================
+# describe_db_engine_versions
+# =============================================================================
+
+
+class TestDescribeDbEngineVersions:
+    def test_describe_db_engine_versions_returns_list(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "DBEngineVersions": [
+                {"Engine": "aurora-postgresql", "EngineVersion": "16.1"},
+                {"Engine": "aurora-postgresql", "EngineVersion": "15.5"},
+            ]
+        }
+
+        result = describe_db_engine_versions(client, Engine="aurora-postgresql")
+
+        client.get_paginator.assert_called_with("describe_db_engine_versions")
+        paginator.paginate.assert_called_with(Engine="aurora-postgresql")
+        assert len(result) == 2
+        assert result[0]["Engine"] == "aurora-postgresql"
+
+    def test_describe_db_engine_versions_empty(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {"DBEngineVersions": []}
+
+        result = describe_db_engine_versions(client, DefaultOnly=True)
+
+        assert result == []
+
+    def test_describe_db_engine_versions_with_default_only(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "DBEngineVersions": [
+                {"Engine": "postgres", "EngineVersion": "16.4"},
+            ]
+        }
+
+        result = describe_db_engine_versions(
+            client,
+            Engine="postgres",
+            DefaultOnly=True,
+            DBParameterGroupFamily="postgres16",
+        )
+
+        paginator.paginate.assert_called_with(
+            Engine="postgres",
+            DefaultOnly=True,
+            DBParameterGroupFamily="postgres16",
+        )
+        assert len(result) == 1
+
+
+# =============================================================================
+# describe_db_subnet_groups
+# =============================================================================
+
+
+class TestDescribeDbSubnetGroups:
+    def test_describe_db_subnet_groups_returns_list(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "DBSubnetGroups": [
+                {"DBSubnetGroupName": "sg-1"},
+                {"DBSubnetGroupName": "sg-2"},
+            ]
+        }
+
+        result = describe_db_subnet_groups(client, DBSubnetGroupName="sg-1")
+
+        client.get_paginator.assert_called_with("describe_db_subnet_groups")
+        paginator.paginate.assert_called_with(DBSubnetGroupName="sg-1")
+        assert len(result) == 2
+        assert result[0]["DBSubnetGroupName"] == "sg-1"
+
+    def test_describe_db_subnet_groups_empty(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {"DBSubnetGroups": []}
+
+        result = describe_db_subnet_groups(client)
+
+        assert result == []
+
+    def test_describe_db_subnet_groups_not_found_returns_empty(self):
+        client = MagicMock()
+        client.get_paginator.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "DBSubnetGroupNotFoundFault", "Message": "not found"}},
+            "DescribeDBSubnetGroups",
+        )
+
+        result = describe_db_subnet_groups(client, DBSubnetGroupName="nonexistent")
+
+        assert result == []
+
+
+# =============================================================================
+# describe_db_cluster_parameter_groups / describe_db_cluster_parameters
+# =============================================================================
+
+
+class TestDescribeDbClusterParameterGroups:
+    def test_describe_db_cluster_parameter_groups_returns_list(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "DBClusterParameterGroups": [{"DBClusterParameterGroupName": "pg-1"}]
+        }
+
+        result = describe_db_cluster_parameter_groups(client, DBClusterParameterGroupName="pg-1")
+
+        client.get_paginator.assert_called_with("describe_db_cluster_parameter_groups")
+        paginator.paginate.assert_called_with(DBClusterParameterGroupName="pg-1")
+        assert result == [{"DBClusterParameterGroupName": "pg-1"}]
+
+    def test_describe_db_cluster_parameter_groups_no_filter(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {"DBClusterParameterGroups": []}
+
+        result = describe_db_cluster_parameter_groups(client)
+
+        paginator.paginate.assert_called_with()
+        assert result == []
+
+    def test_describe_db_cluster_parameter_groups_not_found_returns_empty(self):
+        client = MagicMock()
+        client.get_paginator.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "DBParameterGroupNotFound", "Message": "not found"}},
+            "DescribeDBClusterParameterGroups",
+        )
+
+        result = describe_db_cluster_parameter_groups(client, DBClusterParameterGroupName="nonexistent")
+
+        assert result == []
+
+    def test_describe_db_cluster_parameter_groups_raises(self):
+        client = MagicMock()
+        client.get_paginator.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "AccessDenied", "Message": "denied"}},
+            "DescribeDBClusterParameterGroups",
+        )
+
+        with pytest.raises(AnsibleRDSError, match="Failed to describe db cluster parameter groups"):
+            describe_db_cluster_parameter_groups(client, DBClusterParameterGroupName="pg-1")
+
+
+class TestDescribeDbClusterParameters:
+    def test_describe_db_cluster_parameters_returns_list(self):
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "Parameters": [{"ParameterName": "array_nulls", "ParameterValue": "1"}]
+        }
+
+        result = describe_db_cluster_parameters(client, DBClusterParameterGroupName="pg-1", Source="user")
+
+        client.get_paginator.assert_called_with("describe_db_cluster_parameters")
+        paginator.paginate.assert_called_with(DBClusterParameterGroupName="pg-1", Source="user")
+        assert result[0]["ParameterName"] == "array_nulls"
+
+    def test_describe_db_cluster_parameters_not_found_returns_empty(self):
+        client = MagicMock()
+        client.get_paginator.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "DBParameterGroupNotFound", "Message": "not found"}},
+            "DescribeDBClusterParameters",
+        )
+
+        result = describe_db_cluster_parameters(client, DBClusterParameterGroupName="nonexistent")
+
+        assert result == []
+
+
+class TestClusterParameterGroupMutations:
+    def test_create_db_cluster_parameter_group(self):
+        client = MagicMock()
+        client.create_db_cluster_parameter_group.return_value = {"DBClusterParameterGroup": {"a": "b"}}
+
+        result = create_db_cluster_parameter_group(client, DBClusterParameterGroupName="pg-1")
+
+        client.create_db_cluster_parameter_group.assert_called_once_with(
+            aws_retry=True, DBClusterParameterGroupName="pg-1"
+        )
+        assert result == {"DBClusterParameterGroup": {"a": "b"}}
+
+    def test_delete_db_cluster_parameter_group(self):
+        client = MagicMock()
+
+        delete_db_cluster_parameter_group(client, "pg-1")
+
+        client.delete_db_cluster_parameter_group.assert_called_once_with(
+            aws_retry=True, DBClusterParameterGroupName="pg-1"
+        )
+
+    def test_delete_db_cluster_parameter_group_missing_returns_false(self):
+        client = MagicMock()
+        client.delete_db_cluster_parameter_group.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "DBParameterGroupNotFound", "Message": "not found"}},
+            "DeleteDBClusterParameterGroup",
+        )
+
+        assert delete_db_cluster_parameter_group(client, "pg-1") is False
+
+    def test_modify_db_cluster_parameter_group_chunks_parameters(self):
+        client = MagicMock()
+        parameters = [{"ParameterName": f"param{i}"} for i in range(25)]
+
+        modify_db_cluster_parameter_group(client, "pg-1", parameters)
+
+        assert client.modify_db_cluster_parameter_group.call_count == 2
+        first_call, second_call = client.modify_db_cluster_parameter_group.call_args_list
+        assert len(first_call.kwargs["Parameters"]) == 20
+        assert len(second_call.kwargs["Parameters"]) == 5
+        assert second_call.kwargs["DBClusterParameterGroupName"] == "pg-1"
+
+
+# =============================================================================
+# describe_db_instance_parameter_groups
+# =============================================================================
+
+
+class TestDescribeDbInstanceParameterGroups:
+    def test_describe_db_instance_parameter_groups_returns_list(self):
+        """Test successful retrieval of parameter groups"""
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "DBParameterGroups": [
+                {"DBParameterGroupName": "pg-1", "DBParameterGroupFamily": "mysql8.4"},
+                {"DBParameterGroupName": "pg-2", "DBParameterGroupFamily": "postgres18"},
+            ]
+        }
+
+        result = describe_db_instance_parameter_groups(client, "pg-1")
+
+        client.get_paginator.assert_called_with("describe_db_parameter_groups")
+        paginator.paginate.assert_called_with(DBParameterGroupName="pg-1")
+        assert len(result) == 2
+        assert result[0]["DBParameterGroupName"] == "pg-1"
+
+    def test_describe_db_instance_parameter_groups_empty(self):
+        """Test retrieval with None as group_name returns all groups"""
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {"DBParameterGroups": []}
+
+        result = describe_db_instance_parameter_groups(client, None)
+
+        paginator.paginate.assert_called_with()
+        assert result == []
+
+    def test_describe_db_instance_parameter_groups_not_found_returns_empty(self):
+        """Test DBParameterGroupNotFoundFault returns empty list"""
+        client = MagicMock()
+        client.get_paginator.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "DBParameterGroupNotFoundFault", "Message": "not found"}},
+            "DescribeDBParameterGroups",
+        )
+
+        result = describe_db_instance_parameter_groups(client, "nonexistent")
+
+        assert result == []
+
+
+# =============================================================================
+# describe_db_parameters
+# =============================================================================
+
+
+class TestDescribeDbParameters:
+    def test_describe_db_parameters_returns_list(self):
+        """Test successful retrieval of parameters"""
+        client = MagicMock()
+        paginator = MagicMock()
+        client.get_paginator.return_value = paginator
+        paginator.paginate.return_value.build_full_result.return_value = {
+            "Parameters": [
+                {"ParameterName": "max_connections", "ParameterValue": "100"},
+                {"ParameterName": "log_bin_trust_function_creators", "ParameterValue": "1"},
+            ]
+        }
+
+        result = describe_db_parameters(client, "my-pg", source="user")
+
+        client.get_paginator.assert_called_with("describe_db_parameters")
+        paginator.paginate.assert_called_with(DBParameterGroupName="my-pg", Source="user")
+        assert len(result) == 2
+
+    def test_describe_db_parameters_not_found_returns_empty(self):
+        """Test DBParameterGroupNotFoundFault returns empty list via @RDSErrorHandler"""
+        client = MagicMock()
+        client.get_paginator.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "DBParameterGroupNotFoundFault", "Message": "not found"}},
+            "DescribeDBParameters",
+        )
+
+        result = describe_db_parameters(client, "nonexistent")
+
+        assert result == []
+
+
+# =============================================================================
+# create_db_parameter_group
+# =============================================================================
+
+
+class TestCreateDbParameterGroup:
+    def test_create_db_parameter_group_success(self):
+        """Test successful parameter group creation"""
+        client = MagicMock()
+        client.create_db_parameter_group.return_value = {"DBParameterGroup": {"DBParameterGroupName": "my-pg"}}
+
+        result = create_db_parameter_group(
+            client, DBParameterGroupName="my-pg", DBParameterGroupFamily="mysql8.0", Description="Test group"
+        )
+
+        client.create_db_parameter_group.assert_called_once_with(
+            aws_retry=True, DBParameterGroupName="my-pg", DBParameterGroupFamily="mysql8.0", Description="Test group"
+        )
+        assert result["DBParameterGroup"]["DBParameterGroupName"] == "my-pg"
+
+    def test_create_db_parameter_group_error_raises_ansible_rds_error(self):
+        """Test @RDSErrorHandler converts ClientError to AnsibleRDSError"""
+        client = MagicMock()
+        client.create_db_parameter_group.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "DBParameterGroupAlreadyExistsFault", "Message": "exists"}},
+            "CreateDBParameterGroup",
+        )
+
+        with pytest.raises(AnsibleRDSError):
+            create_db_parameter_group(client, DBParameterGroupName="my-pg")
+
+
+# =============================================================================
+# modify_db_parameter_group
+# =============================================================================
+
+
+class TestModifyDbParameterGroup:
+    def test_modify_db_parameter_group_small_list(self):
+        """Test modification with <20 parameters"""
+        client = MagicMock()
+        parameters = [{"ParameterName": f"param{i}", "ParameterValue": str(i)} for i in range(10)]
+
+        modify_db_parameter_group(client, "my-pg", parameters)
+
+        client.modify_db_parameter_group.assert_called_once_with(
+            aws_retry=True, DBParameterGroupName="my-pg", Parameters=parameters
+        )
+
+    def test_modify_db_parameter_group_chunking(self):
+        """Test chunking for >20 parameters (max 20 per request)"""
+        client = MagicMock()
+        parameters = [{"ParameterName": f"param{i}", "ParameterValue": str(i)} for i in range(45)]
+
+        modify_db_parameter_group(client, "my-pg", parameters)
+
+        # Should be called 3 times: 20, 20, 5
+        assert client.modify_db_parameter_group.call_count == 3
+
+        # Verify first call has 20 parameters
+        first_call_params = client.modify_db_parameter_group.call_args_list[0][1]["Parameters"]
+        assert len(first_call_params) == 20
+
+
+# =============================================================================
+# delete_db_parameter_group
+# =============================================================================
+
+
+class TestDeleteDbParameterGroup:
+    def test_delete_db_parameter_group_success(self):
+        """Test successful parameter group deletion"""
+        client = MagicMock()
+        client.delete_db_parameter_group.return_value = {}
+
+        delete_db_parameter_group(client, "my-pg")
+
+        client.delete_db_parameter_group.assert_called_once_with(aws_retry=True, DBParameterGroupName="my-pg")
+
+    def test_delete_db_parameter_group_error_raises_ansible_rds_error(self):
+        """Test @RDSErrorHandler converts ClientError to AnsibleRDSError"""
+        client = MagicMock()
+        client.delete_db_parameter_group.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "InvalidDBParameterGroupStateFault", "Message": "in use"}},
+            "DeleteDBParameterGroup",
+        )
+
+        with pytest.raises(AnsibleRDSError):
+            delete_db_parameter_group(client, "my-pg")

@@ -25,7 +25,7 @@ Requirements
 ------------
 The below requirements are needed on the host that executes this module.
 
-- helm (https://github.com/helm/helm/releases) >= 3.8.0, <4.0.0
+- helm (https://github.com/helm/helm/releases) >= 3.8.0
 
 
 Parameters
@@ -154,6 +154,27 @@ Parameters
             <tr>
                 <td colspan="1">
                     <div class="ansibleOptionAnchor" id="parameter-"></div>
+                    <b>plain_http</b>
+                    <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
+                    <div style="font-size: small">
+                        <span style="color: purple">boolean</span>
+                    </div>
+                    <div style="font-style: italic; font-size: small; color: darkgreen">added in 6.4.0</div>
+                </td>
+                <td>
+                        <ul style="margin: 0; padding: 0"><b>Choices:</b>
+                                    <li><div style="color: blue"><b>no</b>&nbsp;&larr;</div></li>
+                                    <li>yes</li>
+                        </ul>
+                </td>
+                <td>
+                        <div>Use insecure HTTP connections for <code>helm registry login</code>.</div>
+                        <div>Requires Helm &gt;= 3.18.0</div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="1">
+                    <div class="ansibleOptionAnchor" id="parameter-"></div>
                     <b>state</b>
                     <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
                     <div style="font-size: small">
@@ -268,7 +289,9 @@ Common return values are documented `here <https://docs.ansible.com/projects/ans
                 </td>
                 <td>always</td>
                 <td>
-                            <div>Full <code>helm</code> command stderr, in case you want to display it or examine the event log. Please be note that helm binnary may print messages to stderr even if the command is successful.</div>
+                            <div>Full <code>helm</code> command stderr, in case you want to display it or examine the event log.</div>
+                            <div>Please note that the helm binary may print messages to stderr even if the command is successful.</div>
+                            <div>On Helm versions earlier than 4.2.1, success messages such as <code>Login Succeeded</code> are printed here; as of Helm 4.2.1 they are printed to stdout (see <a href='https://github.com/helm/helm/pull/32056'>https://github.com/helm/helm/pull/32056</a>).</div>
                     <br/>
                         <div style="font-size: smaller"><b>Sample:</b></div>
                         <div style="font-size: smaller; color: blue; word-wrap: break-word; word-break: break-all;">Login Succeeded\n</div>
@@ -300,14 +323,17 @@ Common return values are documented `here <https://docs.ansible.com/projects/ans
                 </td>
                 <td>always</td>
                 <td>
-                            <div>Full <code>helm</code> command stdout, in case you want to display it or examine the event log</div>
+                            <div>Full <code>helm</code> command stdout, in case you want to display it or examine the event log.</div>
+                            <div>As of Helm 4.2.1 success messages such as <code>Login Succeeded</code> are printed to stdout (see <a href='https://github.com/helm/helm/pull/32056'>https://github.com/helm/helm/pull/32056</a>). On earlier versions they are printed to stderr.</div>
                     <br/>
+                        <div style="font-size: smaller"><b>Sample:</b></div>
+                        <div style="font-size: smaller; color: blue; word-wrap: break-word; word-break: break-all;">Login Succeeded\n</div>
                 </td>
             </tr>
             <tr>
                 <td colspan="1">
                     <div class="ansibleOptionAnchor" id="return-"></div>
-                    <b>stout_lines</b>
+                    <b>stdout_lines</b>
                     <a class="ansibleOptionLink" href="#return-" title="Permalink to this return value"></a>
                     <div style="font-size: small">
                       <span style="color: purple">list</span>

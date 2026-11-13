@@ -20,7 +20,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "formik": "^2.4.9",
-    "ip-address": "^10.2.0",
+    "ip-address": "^10.5.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "semver": "^7.7.4",
@@ -44,6 +44,6 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-i18next": "^15.0.0",
-    "react-router-dom": "^7.0.0"
+    "react-router-dom": "^7.18.0"
   }
 }

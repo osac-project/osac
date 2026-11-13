@@ -9,7 +9,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 DOCUMENTATION = """
-    author: Nathaniel Case (@Qalthos)
+    author: Katherine Case (@Qalthos)
     name: config
     short_description: Define configurable options for configuration validate plugin
     description:
@@ -51,8 +51,7 @@ import re
 from io import StringIO
 
 from ansible.errors import AnsibleError
-from ansible.module_utils._text import to_text
-from ansible.module_utils.six import string_types
+from ansible.module_utils.common.text.converters import to_text
 
 from ansible_collections.ansible.utils.plugins.module_utils.common.utils import to_list
 from ansible_collections.ansible.utils.plugins.plugin_utils.base.validate import ValidateBase
@@ -88,7 +87,7 @@ class Validate(ValidateBase):
         """
 
         try:
-            if isinstance(self._criteria, string_types):
+            if isinstance(self._criteria, str):
                 self._criteria = yaml.load(StringIO(self._criteria), Loader=SafeLoader)
         except yaml.parser.ParserError as exc:
             msg = (

@@ -92,10 +92,10 @@ RUN mkdir -p /usr/share/ansible
 # ansible-builder's own generated equivalent) -- collections/requirements.yml
 # has no roles, and every collection it lists is already fully present via
 # the two COPY lines above (kept up to date by the documented
-# `rm -rf vendor && ansible-galaxy collection install -r collections/
-# requirements.yml` process in osac-aap/AGENTS.md). ansible-galaxy has no
-# Cachi2/Hermeto prefetch type, so a live install call here would simply
-# fail outright under hermetic: true (no network) -- confirmed live by
+# `rm -rf vendor && ansible-galaxy collection install --no-deps -r
+# collections/requirements.yml` process in osac-aap/AGENTS.md).
+# ansible-galaxy has no Cachi2/Hermeto prefetch type, so a live install call
+# here would fail outright under hermetic: true (no network) -- confirmed live by
 # this exact repo's own earlier hermetic rework, which is why
 # generate-ee-context used to pre-resolve collections outside the
 # hermetic sandbox and strip these lines from the generated Containerfile

@@ -18,6 +18,8 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_deletion,
 )
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.runner import run
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 _EXTERNAL_IP_CREATE_TASK = "create_external_ip"
 _FABRIC_MANAGER_TYPE = "fabric"
@@ -154,6 +156,8 @@ def _exercise_external_ip_ownership_lifecycle(
             retries=60,
             delay=2,
             description=f"{profile} ExternalIP release restores pool capacity",
+            resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
+            resource_id=pool["id"],
         )
         record_property("external_ip_release", "ExternalIP CR removed; API pool capacity returned")
     finally:
@@ -246,6 +250,8 @@ def _wait_for_api_external_ip_address(*, grpc: GRPCClient, external_ip_id: str, 
         retries=60,
         delay=2,
         description=f"Fulfillment ExternalIP {external_ip_id} status.address feedback",
+        resource_kind=WaitResourceKind.EXTERNAL_IP,
+        resource_id=external_ip_id,
     )
 
 
@@ -275,6 +281,8 @@ def _wait_for_successful_create_job(
         retries=120,
         delay=5,
         description=f"{external_ip_name} successful {_EXTERNAL_IP_CREATE_TASK} job after attempt {previous_attempt}",
+        resource_kind=WaitResourceKind.EXTERNAL_IP,
+        resource_id=external_ip_name,
     )
 
 
@@ -316,7 +324,7 @@ def _request_task_retry(*, k8s: K8sClient, external_ip_name: str, completed_job:
             json.dumps(patch),
         ]
     )
-    subprocess.run(command, capture_output=True, text=True, check=True)
+    run(*command)
 
 
 def _is_not_found(exc: subprocess.CalledProcessError) -> bool:

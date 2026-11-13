@@ -1,4 +1,6 @@
 ---
+storage_provider_block_fstype: "{{ lookup('env', 'OSAC_STORAGE_BLOCK_FSTYPE', default='ext4') }}"
+
 # csi-backends Helm chart — deploys vendor CSI controllers on the hub cluster.
 # Shared across all storage providers. Each provider is enabled/disabled
 # based on the tier list passed to the storage_provider role.

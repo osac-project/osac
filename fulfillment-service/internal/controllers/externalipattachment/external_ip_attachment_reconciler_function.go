@@ -297,8 +297,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 			slog.String("name", object.GetName()),
 		)
 	}
-
-	return
+	return controllers.RequeueAfterKubernetesDeletion("external IP attachment")
 }
 
 func (t *task) selectHub(ctx context.Context) error {

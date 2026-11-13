@@ -16,18 +16,34 @@ state_path = Path(sys.argv[1])
 kind = sys.argv[2]
 api_id = sys.argv[3]
 tables = {
-    "network_attachment": ("network_attachments", "NetworkAttachment"),
-    "external_ip_attachment": ("attachments", "ExternalIPAttachment"),
-    "external_ip_pool": ("external_ip_pools", "ExternalIPPool"),
-    "external_ip": ("external_ips", "ExternalIP"),
+    "network_attachment": (
+        "network_attachments",
+        "NetworkAttachment",
+        ("phase", "payload"),
+    ),
+    "external_ip_attachment": (
+        "attachments",
+        "ExternalIPAttachment",
+        ("phase", "payload"),
+    ),
+    "external_ip_pool": (
+        "external_ip_pools",
+        "ExternalIPPool",
+        ("uid", "fulfillment_id", "tenant_id", "ip_family", "ipv4_cidr"),
+    ),
+    "external_ip": (
+        "external_ips",
+        "ExternalIP",
+        ("uid", "fulfillment_id", "tenant_id", "pool_uid", "address"),
+    ),
 }
 if kind not in tables:
     raise SystemExit(f"unknown state kind: {kind}")
 
-table, tombstone_kind = tables[kind]
+table, tombstone_kind, fields = tables[kind]
 with sqlite3.connect(f"file:{state_path}?mode=ro", uri=True) as connection:
     row = connection.execute(
-        f"SELECT phase, payload FROM {table} WHERE uid = ?", (api_id,)
+        f"SELECT {', '.join(fields)} FROM {table} WHERE uid = ?", (api_id,)
     ).fetchone()
     tombstone = connection.execute(
         "SELECT tenant_id FROM deleted_resources WHERE kind = ? AND uid = ?",
@@ -41,10 +57,20 @@ with sqlite3.connect(f"file:{state_path}?mode=ro", uri=True) as connection:
             (api_id,),
         ).fetchall()
 
+if row is None:
+    phase = None
+    entry = None
+elif fields == ("phase", "payload"):
+    phase = row[0]
+    entry = json.loads(row[1])
+else:
+    phase = None
+    entry = dict(zip(fields, row, strict=True))
+
 result = {
     "present": row is not None,
-    "phase": row[0] if row else None,
-    "entry": json.loads(row[1]) if row else None,
+    "phase": phase,
+    "entry": entry,
     "tombstoned": tombstone is not None,
     "claims": claims,
 }

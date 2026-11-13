@@ -1,5 +1,9 @@
 """Verify the CI and legacy-template external-access entry-point contracts."""
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -10,6 +14,8 @@ EXTERNAL_ACCESS = COLLECTIONS / "osac" / "service" / "roles" / "external_access"
 OCP_CI_SMALL = COLLECTIONS / "osac" / "templates" / "roles" / "ocp_ci_small"
 OCP_SMALL = COLLECTIONS / "osac" / "templates" / "roles" / "ocp_small"
 CI_EXTERNAL_ACCESS = COLLECTIONS / "ci" / "steps" / "roles" / "external_access"
+NICO_EXTERNAL_ACCESS = COLLECTIONS / "nico" / "steps" / "roles" / "external_access"
+ANSIBLE_PLAYBOOK = Path(sys.executable).parent / "ansible-playbook"
 
 
 def load_tasks(path: Path) -> list[dict[str, object]]:
@@ -186,6 +192,135 @@ def test_ocp_small_leaves_external_access_to_clusterorder_and_nico_override_is_p
     assert nico_create[1]["ansible.builtin.include_role"]["tasks_from"] == "publish.yaml"
     assert nico_remove[0]["ansible.builtin.include_role"]["name"] == "nico.steps.external_access"
     assert nico_remove[1]["ansible.builtin.include_role"]["tasks_from"] == "clear.yaml"
+
+
+def test_nico_external_access_fails_without_retry_when_range_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    """Run the production allocator with fake Kubernetes modules and a full pool."""
+    fake_collection_root = tmp_path / "fake_collections"
+    fake_modules = (
+        fake_collection_root
+        / "ansible_collections/kubernetes/core/plugins/modules"
+    )
+    fake_modules.mkdir(parents=True)
+    state_path = tmp_path / "registry.json"
+    initial_state = {
+        "registry": {"192.0.2.1": "existing-1", "192.0.2.2": "existing-2"},
+        "operations": [],
+    }
+    state_path.write_text(json.dumps(initial_state), encoding="utf-8")
+
+    (fake_modules / "k8s_info.py").write_text(
+        """
+from ansible.module_utils.basic import AnsibleModule
+import json
+import os
+from pathlib import Path
+
+module = AnsibleModule(argument_spec={
+    "api_version": {"type": "str"},
+    "kind": {"type": "str", "required": True},
+    "namespace": {"type": "str"},
+    "name": {"type": "str"},
+    "kubeconfig": {"type": "raw"},
+})
+state_path = Path(os.environ["NICO_TEST_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8"))
+state["operations"].append({"module": "k8s_info", "name": module.params["name"]})
+state_path.write_text(json.dumps(state), encoding="utf-8")
+module.exit_json(changed=False, resources=[{"data": state["registry"]}])
+""",
+        encoding="utf-8",
+    )
+    (fake_modules / "k8s.py").write_text(
+        """
+from ansible.module_utils.basic import AnsibleModule
+import json
+import os
+from pathlib import Path
+
+module = AnsibleModule(argument_spec={
+    "state": {"type": "str"},
+    "definition": {"type": "dict", "required": True},
+    "kubeconfig": {"type": "raw"},
+})
+state_path = Path(os.environ["NICO_TEST_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8"))
+state["operations"].append({"module": "k8s", "name": module.params["definition"]["metadata"]["name"]})
+state_path.write_text(json.dumps(state), encoding="utf-8")
+module.exit_json(changed=True)
+""",
+        encoding="utf-8",
+    )
+
+    playbook = tmp_path / "allocate_exhausted.yml"
+    playbook.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "name": "Exhausted NICO ingress allocation",
+                    "hosts": "localhost",
+                    "connection": "local",
+                    "gather_facts": False,
+                    "vars": {
+                        "cluster_name": "new-cluster",
+                        "ingress_cidr_range": "192.0.2.0/30",
+                        "nico_ip_registry_namespace": "test",
+                        "nico_ip_allocation_retries": 1,
+                        "nico_ip_allocation_delay": 0,
+                    },
+                    "tasks": [
+                        {
+                            "name": "Run the production allocation task",
+                            "ansible.builtin.include_tasks": str(
+                                NICO_EXTERNAL_ACCESS / "tasks" / "allocate_ip.yml"
+                            ),
+                        }
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "ANSIBLE_CONFIG": str(AAP_ROOT / "ansible.cfg"),
+            "ANSIBLE_COLLECTIONS_PATH": os.pathsep.join(
+                [
+                    str(fake_collection_root),
+                    str(AAP_ROOT / "collections"),
+                    str(AAP_ROOT / "vendor"),
+                    "/usr/share/ansible/collections",
+                ]
+            ),
+            "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
+            "ANSIBLE_LOCALHOST_WARNING": "False",
+            "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
+            "NICO_TEST_STATE_FILE": str(state_path),
+        }
+    )
+    result = subprocess.run(
+        [str(ANSIBLE_PLAYBOOK), "-i", "localhost,", str(playbook)],
+        cwd=AAP_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    output = " ".join(result.stdout.split())
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "no free host addresses remain" in output, output
+
+    final_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert final_state["registry"] == initial_state["registry"]
+    assert final_state["operations"] == [
+        {"module": "k8s_info", "name": "nico-ip-registry"}
+    ]
 
 
 def test_caas_does_not_publish_a_provider_specific_external_access_task_pair() -> None:

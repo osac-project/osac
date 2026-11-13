@@ -21,11 +21,14 @@ import {
 import type { TFunction } from 'i18next';
 
 import { type DiskImage, DiskImageLifecycle, SourceType } from '@osac/types';
+import {
+  architectureLabels,
+  guestOsFamilyLabels,
+} from '@osac/ui-components/components/DiskImage/utils';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import DiskImageDeleteConfirmModal from './DiskImageDeleteConfirmModal';
 import DiskImageLifecycleLabel from './DiskImageLifecycleLabel';
-import { architectureLabels, guestOsFamilyLabels } from './DiskImageTable';
 import {
   type DiskImageLifecycleAction,
   getDiskImageLifecycleActions,

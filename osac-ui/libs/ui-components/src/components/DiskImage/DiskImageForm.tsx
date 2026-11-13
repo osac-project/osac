@@ -15,8 +15,11 @@ import { Formik, type FormikHelpers } from 'formik';
 
 import { SourceType } from '@osac/types';
 import { Tenants } from '@osac/types/private';
+import {
+  architectureLabels,
+  guestOsFamilyLabels,
+} from '@osac/ui-components/components/DiskImage/utils';
 
-import { architectureLabels, guestOsFamilyLabels } from './DiskImageTable';
 import { diskImageFieldIds } from './fieldIds';
 import { getDiskImageCreateSchema } from './validation';
 import { DiskImageFormValues, diskImageCreateValues } from './values';

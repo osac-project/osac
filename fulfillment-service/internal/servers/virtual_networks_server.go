@@ -260,12 +260,25 @@ func (s *VirtualNetworksServer) Delete(ctx context.Context,
 	privateRequest.SetId(request.GetId())
 
 	// Delegate to private server:
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateVirtualNetwork := privateResponse.GetObject()
+	publicVirtualNetwork := &publicv1.VirtualNetwork{}
+	err = s.outMapper.Copy(ctx, privateVirtualNetwork, publicVirtualNetwork)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private virtual network to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process virtual network")
+	}
+
 	// Create the public response:
 	response = &publicv1.VirtualNetworksDeleteResponse{}
+	response.SetObject(publicVirtualNetwork)
 	return
 }

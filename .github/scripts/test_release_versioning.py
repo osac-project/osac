@@ -139,6 +139,65 @@ class ReleaseVersionResolution(TemporaryRepos):
         versions = json.loads(outputs["component-versions"])
         self.assertEqual((versions["osac-ui"], versions["osac-operator"]), ("0.5.2-rc.1", "0.5.1"))
 
+    def test_konflux_releases_only_what_the_run_builds(self) -> None:
+        repo = self.repo()
+        repo.tag_all("0.5.0")
+        cases = {
+            "osac-operator=0.5.1": (["osac-operator"], ["osac-chart", "osac-operator-chart", "osac-operator-crds-chart"]),
+            "osac-metering=0.5.1": (
+                ["metering-service", "metering-m360-adapter", "metering-echo-adapter"],
+                ["osac-chart", "osac-metering-chart"],
+            ),
+            "osac-aap=0.5.1": (["osac-aap"], ["osac-chart", "osac-aap-chart"]),
+            "": ([], ["osac-chart"]),
+        }
+        for components, (images, charts) in cases.items():
+            with self.subTest(components=components):
+                result, outputs = repo.release("0.5.1", components)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(outputs["konflux-images"]), images)
+                self.assertEqual(json.loads(outputs["konflux-charts"]), charts)
+
+    def test_full_release_covers_every_konflux_wait_row(self) -> None:
+        # A name prepare emits with no matrix row would never be waited for.
+        _, outputs = self.repo().release("0.5.0-rc.1", all_at("0.5.0-rc.1"))
+        jobs = WORKFLOW["jobs"]
+        promote = yaml.safe_load((ROOT / ".github/workflows/osac-promote-to-prod.yaml").read_text())["jobs"]
+        image_rows = jobs["wait-for-konflux-build"]["strategy"]["matrix"]["component"]
+        chart_rows = jobs["wait-for-konflux-chart-build"]["strategy"]["matrix"]["component"]
+        self.assertCountEqual(json.loads(outputs["konflux-images"]), image_rows)
+        self.assertCountEqual(json.loads(outputs["konflux-charts"]), chart_rows)
+        self.assertCountEqual(promote["wait-for-prod-chart-build"]["strategy"]["matrix"]["component"], chart_rows)
+        self.assertCountEqual([path.parent.name for path in CHART_PIPELINES], chart_rows)
+
+    def test_konflux_jobs_act_only_on_the_released_set(self) -> None:
+        jobs = WORKFLOW["jobs"]
+        promote = yaml.safe_load((ROOT / ".github/workflows/osac-promote-to-prod.yaml").read_text())["jobs"]
+        gates = {
+            "wait-for-konflux-build": (jobs, "contains(fromJSON(needs.prepare.outputs.konflux-images), matrix.component)"),
+            "wait-for-konflux-chart-build": (jobs, "contains(fromJSON(needs.prepare.outputs.konflux-charts), matrix.component)"),
+            "wait-for-prod-chart-build": (
+                promote,
+                "contains(fromJSON(needs.resolve-and-verify.outputs.chart-components), matrix.component)",
+            ),
+        }
+        for job, (source, gate) in gates.items():
+            with self.subTest(job=job):
+                acting = [step for step in source[job]["steps"] if step["name"].startswith(("Log in", "Wait for", "Upload"))]
+                self.assertEqual(len(acting), 3)
+                for step in acting:
+                    self.assertEqual(step["if"], gate)
+        for step in jobs["trigger-konflux-staging-release"]["steps"][1:]:
+            self.assertEqual(step["if"], "needs.prepare.outputs.konflux-images != '[]'")
+        for job, source, variable in (
+            ("trigger-konflux-staging-release", jobs, "KONFLUX_IMAGES"),
+            ("trigger-konflux-chart-staging-release", jobs, "KONFLUX_CHARTS"),
+            ("release-prod-chart", promote, "CHART_COMPONENTS"),
+        ):
+            script = next(step["run"] for step in source[job]["steps"] if step["name"].startswith("Assemble"))
+            self.assertIn(f'EXPECTED = set(json.loads(os.environ["{variable}"]))', script)
+            self.assertIn(variable, source[job]["env"])
+
     def test_patch_after_ga_moves_one_component(self) -> None:
         repo = self.repo()
         repo.tag_all("0.5.0")

@@ -278,17 +278,29 @@ re-deriving a new branch from the tag.
 ## Staging release (Konflux)
 
 Every release run also triggers a separate, independent build through
-Konflux, Red Hat's internal build/release system. `osac-release.yaml`'s
-final job, `trigger-konflux-staging-release`, waits for a fixed set of
-eight Konflux image components — `fulfillment-service`, `osac-operator`,
-`osac-csi-driver`, `bare-metal-fulfillment-operator`, `osac-ui`,
-`metering-service`, `metering-m360-adapter`, and `metering-echo-adapter`
-— to finish building and pass their policy gates, then releases that
-whole set together to the **staging** registry
+Konflux, Red Hat's internal build/release system. Only what the run itself
+builds is released through it:
+
+- **Images** of the components bumped in this run, out of the nine Konflux
+  image components (`fulfillment-service`, `osac-operator`, `osac-aap`,
+  `osac-csi-driver`, `bare-metal-fulfillment-operator`, `osac-ui`, and
+  `osac-metering`'s `metering-service`, `metering-m360-adapter` and
+  `metering-echo-adapter`).
+- **Charts** of those same components, plus the umbrella chart, which is
+  new in every release.
+
+`trigger-konflux-staging-release` waits for those builds to finish and pass
+their policy gates, then releases them together to the **staging** registry
 (`registry.stage.redhat.io`, under `cloud-extensions/<component>-rhel10`).
-This wait set is fixed regardless of what `component_versions` actually
-bumped this run; `osac-aap` has no Konflux image component yet and is
-never included.
+A release that bumps no component creates no image Snapshot.
+
+A pinned component is not released again: its version is already on the
+registry from the release that built it. Konflux still starts a build for
+every component on the release tag, but a pinned component's rebuild has no
+version of its own and would be published as `dev`, and a pinned chart
+would be pushed again over its released version, so neither is released.
+This means a pinned version is in production only if the release that built
+it was promoted — promote stable releases in order.
 
 A separate, manually-dispatched workflow, `osac-promote-to-prod.yaml`,
 promotes an already-staged release to `registry.redhat.io` once it's

@@ -140,6 +140,8 @@ jobs:
       component-versions: ${{ steps.versions.outputs.component-versions }}
       components-needing-build: ${{ steps.versions.outputs.components-needing-build }}
       components-to-tag: ${{ steps.versions.outputs.components-to-tag }}
+      konflux-images: ${{ steps.versions.outputs.konflux-images }}
+      konflux-charts: ${{ steps.versions.outputs.konflux-charts }}
       version: ${{ steps.umbrella-version.outputs.version }}
       base-version: ${{ steps.umbrella-version.outputs.base-version }}
 
@@ -353,6 +355,47 @@ jobs:
         echo "component-versions=${versions_json}" >> "$GITHUB_OUTPUT"
         echo "components-needing-build=${build_json}" >> "$GITHUB_OUTPUT"
         echo "components-to-tag=${tag_json}" >> "$GITHUB_OUTPUT"
+
+        # What this run releases through Konflux: the images and charts of
+        # the components it builds, plus the umbrella chart. A pinned
+        # component's version is already on the registry from the release
+        # that built it. Konflux still rebuilds every component on the
+        # release tag, but such a rebuild has no stamped version (it would
+        # publish as "dev") and a pinned chart would be re-pushed over its
+        # released version, so neither is waited for or released.
+        declare -A KONFLUX_IMAGES=(
+          ["osac-operator"]="osac-operator"
+          ["fulfillment-service"]="fulfillment-service"
+          ["osac-aap"]="osac-aap"
+          ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator"
+          ["osac-metering"]="metering-service metering-m360-adapter metering-echo-adapter"
+          ["osac-csi-driver"]="osac-csi-driver"
+          ["osac-ui"]="osac-ui"
+        )
+        declare -A KONFLUX_CHARTS=(
+          ["osac-operator"]="osac-operator-chart osac-operator-crds-chart"
+          ["fulfillment-service"]="fulfillment-service-chart"
+          ["osac-aap"]="osac-aap-chart"
+          ["bare-metal-fulfillment-operator"]="bare-metal-fulfillment-operator-chart bare-metal-fulfillment-operator-crds-chart"
+          ["osac-metering"]="osac-metering-chart"
+          ["osac-csi-driver"]="osac-csi-driver-chart osac-csi-backends-chart"
+          ["osac-ui"]="osac-ui-chart"
+        )
+        images_json="[]"
+        charts_json='["osac-chart"]'
+        for COMPONENT in $(jq -r '.[]' <<<"${tag_json}"); do
+          # Intentional word splitting: some entries list several names.
+          for NAME in ${KONFLUX_IMAGES[$COMPONENT]:-}; do
+            images_json=$(jq -c --arg v "${NAME}" '. + [$v]' <<<"${images_json}")
+          done
+          for NAME in ${KONFLUX_CHARTS[$COMPONENT]:-}; do
+            charts_json=$(jq -c --arg v "${NAME}" '. + [$v]' <<<"${charts_json}")
+          done
+        done
+        echo "konflux-images=${images_json}" >> "$GITHUB_OUTPUT"
+        echo "konflux-charts=${charts_json}" >> "$GITHUB_OUTPUT"
+        echo "Konflux images to release: ${images_json}"
+        echo "Konflux charts to release: ${charts_json}"
 
     # The umbrella's own version, resolved here alongside every component's
     # (rather than later, inside promote-and-publish/publish-umbrella) so this job is the one
@@ -2186,6 +2229,14 @@ jobs:
       checks: read
 
     steps:
+    # Only what this run builds is released through Konflux (see prepare's
+    # konflux-images/konflux-charts). A row for anything else does nothing.
+    - name: Not part of this release
+      if: "!contains(fromJSON(needs.prepare.outputs.konflux-images), matrix.component)"
+      env:
+        COMPONENT: ${{ matrix.component }}
+      run: echo "::notice::${COMPONENT} is pinned in this release -- its image is not rebuilt or released through Konflux"
+
     - name: Checkout repository
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       with:
@@ -2196,6 +2247,7 @@ jobs:
       run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
     - name: Log in to Konflux cluster
+      if: contains(fromJSON(needs.prepare.outputs.konflux-images), matrix.component)
       uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
       with:
         openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
@@ -2212,6 +2264,7 @@ jobs:
     # source) to a file for trigger-konflux-staging-release to download
     # and assemble into the one override Snapshot it actually releases.
     - name: Wait for component's Konflux build
+      if: contains(fromJSON(needs.prepare.outputs.konflux-images), matrix.component)
       env:
         COMMIT_SHA: ${{ steps.commit.outputs.sha }}
         COMPONENT: ${{ matrix.component }}
@@ -2438,6 +2491,7 @@ jobs:
         PYEOF
 
     - name: Upload component build fragment
+      if: contains(fromJSON(needs.prepare.outputs.konflux-images), matrix.component)
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       with:
         name: konflux-build-${{ matrix.component }}
@@ -2496,6 +2550,14 @@ jobs:
       checks: read
 
     steps:
+    # Only what this run builds is released through Konflux (see prepare's
+    # konflux-images/konflux-charts). A row for anything else does nothing.
+    - name: Not part of this release
+      if: "!contains(fromJSON(needs.prepare.outputs.konflux-charts), matrix.component)"
+      env:
+        COMPONENT: ${{ matrix.component }}
+      run: echo "::notice::${COMPONENT} is pinned in this release -- its chart is not rebuilt or released through Konflux"
+
     - name: Checkout repository
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       with:
@@ -2506,6 +2568,7 @@ jobs:
       run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
     - name: Log in to Konflux cluster
+      if: contains(fromJSON(needs.prepare.outputs.konflux-charts), matrix.component)
       uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
       with:
         openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
@@ -2519,6 +2582,7 @@ jobs:
     # so this job can be deleted cleanly in one place once charts are
     # folded into the main matrix (see this job's own top comment).
     - name: Wait for chart component's Konflux build
+      if: contains(fromJSON(needs.prepare.outputs.konflux-charts), matrix.component)
       env:
         COMMIT_SHA: ${{ steps.commit.outputs.sha }}
         COMPONENT: ${{ matrix.component }}
@@ -2700,6 +2764,7 @@ jobs:
         PYEOF
 
     - name: Upload chart component build fragment
+      if: contains(fromJSON(needs.prepare.outputs.konflux-charts), matrix.component)
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       with:
         name: konflux-chart-build-${{ matrix.component }}
@@ -2731,42 +2796,49 @@ jobs:
       snapshot-name: ${{ steps.release.outputs.snapshot-name }}
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
+      KONFLUX_IMAGES: ${{ needs.prepare.outputs.konflux-images }}
 
     steps:
-    # One fragment per component, each written by wait-for-konflux-build's
-    # own matrix row -- a job that succeeded (this job's own needs: above
-    # requires it) by construction produced exactly 9.
+    - name: No image to release
+      if: needs.prepare.outputs.konflux-images == '[]'
+      run: echo "::notice::This release builds no Konflux image component -- no image Snapshot or staging Release is created"
+
+    # One fragment per released component (prepare's konflux-images), each
+    # written by wait-for-konflux-build's own matrix row.
     - name: Download component build fragments
+      if: needs.prepare.outputs.konflux-images != '[]'
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
       with:
         pattern: konflux-build-*
         path: konflux-build-fragments
 
     - name: Log in to Konflux cluster
+      if: needs.prepare.outputs.konflux-images != '[]'
       uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
       with:
         openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
         openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
         namespace: osac-tenant
 
-    # Assembles wait-for-konflux-build's 9 per-component fragments into
+    # Assembles wait-for-konflux-build's per-component fragments into
     # one override Snapshot (Konflux's documented mechanism for combining
     # independently-built components -- PR-scoped group-snapshot auto-
     # combining doesn't apply here, this is a tag push, not a PR), waits
     # for that override Snapshot's own integration test to pass, then
     # creates a Release against the cloud-extensions-stage ReleasePlan.
-    # Deliberately still ONE Release of all 9 components, not matrixed:
+    # Deliberately still ONE Release of every released component, not matrixed:
     # a Konflux Release processes its whole referenced Snapshot as a
     # single atomic unit, so splitting this into one Release per
     # component would mean either 9 redundant Releases of the exact same
     # combined Snapshot, or 9 independent releases each from its own
     # single-component build Snapshot -- the latter would drop this
-    # job's whole reason for existing (confirming all 9 components
+    # job's whole reason for existing (confirming the released components
     # actually work together before anything ships) and let a release
     # ship some components while others silently fail. Production is
     # deliberately never touched by this job -- no ReleasePlan exists for
     # cloud-extensions-prod yet, by design.
     - name: Assemble override Snapshot and create staging Release
+      if: needs.prepare.outputs.konflux-images != '[]'
       id: release
       env:
         RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -2813,7 +2885,17 @@ jobs:
                 component = json.load(f)
             found[component["name"]] = component
 
-        print("All components built and passed tests:")
+        # The Snapshot must hold exactly what prepare decided to release:
+        # a missing fragment would ship an incomplete set, and an extra one
+        # would release a component this run never versioned.
+        EXPECTED = set(json.loads(os.environ["KONFLUX_IMAGES"]))
+        missing = EXPECTED - found.keys()
+        unexpected = found.keys() - EXPECTED
+        if missing or unexpected:
+            print(f"::error::Image fragment set mismatch -- missing={sorted(missing)} unexpected={sorted(unexpected)}")
+            sys.exit(1)
+
+        print("All released components built and passed tests:")
         for name, component in found.items():
             print(f"  {name}: {component['containerImage']}")
 
@@ -3565,6 +3647,7 @@ jobs:
       contents: read
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
+      KONFLUX_CHARTS: ${{ needs.prepare.outputs.konflux-charts }}
 
     steps:
     - name: Download chart component build fragments
@@ -3633,13 +3716,7 @@ jobs:
         # other signal here. Without this check, `found` could silently come
         # up short (or carry an unexpected name) and this job would release
         # an incomplete/wrong chart set rather than failing loudly.
-        EXPECTED = {
-            "osac-chart", "osac-operator-chart", "osac-operator-crds-chart",
-            "fulfillment-service-chart", "osac-aap-chart",
-            "bare-metal-fulfillment-operator-chart",
-            "bare-metal-fulfillment-operator-crds-chart", "osac-metering-chart",
-            "osac-csi-driver-chart", "osac-csi-backends-chart", "osac-ui-chart",
-        }
+        EXPECTED = set(json.loads(os.environ["KONFLUX_CHARTS"]))
         missing = EXPECTED - found.keys()
         unexpected = found.keys() - EXPECTED
         if missing or unexpected:
@@ -3895,7 +3972,7 @@ jobs:
               "*Konflux image staging:* " + $image_release + "\n" +
               "*Konflux chart build tag pushed:* " + $chart_tag + "\n" +
               "*Konflux chart staging:* " + $chart_release + "\n" +
-              "*Image Snapshot (for prod promotion):* `" + $image_snapshot + "`\n" +
+              "*Image Snapshot (for prod promotion):* " + (if $image_snapshot == "" then "none, no image released" else "`" + $image_snapshot + "`" end) + "\n" +
               "*Chart Snapshot (for prod promotion):* `" + $chart_snapshot + "`"
             )}},
             {type: "actions", elements: [

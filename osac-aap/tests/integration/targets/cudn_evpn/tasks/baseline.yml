@@ -278,7 +278,22 @@
               spec:
                 nodeSelector: {matchLabels: {kubernetes.io/hostname: node1}}
                 bgp:
-                  routers: [{asn: "{{ ce_frr_asn | int }}"}]
+                  routers: [{asn: 65001}]
+
+        - name: Read the installer's EVPN FRRConfiguration
+          ansible.builtin.include_tasks: read.yaml
+          vars:
+            ce_api: frrk8s.metallb.io/v1beta1
+            ce_kind: FRRConfiguration
+            ce_name: "{{ ce_frr_config }}"
+            ce_ns: "{{ ce_frr_namespace }}"
+
+        - name: Check the installer's EVPN FRRConfiguration keeps a numeric ASN
+          ansible.builtin.assert:
+            that:
+              - ce_obj.spec.bgp.routers[0].asn is number
+              - ce_obj.spec.bgp.routers[0].asn == ce_frr_asn
+            quiet: true
 
         # ----------------------------------------- create_virtual_network
         - name: Create the VirtualNetwork namespace

@@ -138,7 +138,11 @@ def test_ingress_uses_the_reserved_address_and_the_shared_metallb_role() -> None
     assert "local_asn" not in text
 
 
-def test_guest_service_address_must_equal_the_reserved_address() -> None:
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [("192.0.2.11", False), ("192.0.2.10", True)],
+)
+def test_guest_service_address_must_equal_the_reserved_address(address, expected) -> None:
     tasks = load_tasks(TASKS / "caas_ingress_create.yaml")
     service_wait = next(
         task
@@ -149,9 +153,17 @@ def test_guest_service_address_must_equal_the_reserved_address() -> None:
 
     assert service_wait["kubernetes.core.k8s_info"]["namespace"] == "openshift-ingress"
     assert service_wait["kubernetes.core.k8s_info"]["kubeconfig"] == "{{ admin_kubeconfig }}"
-    until = str(service_wait["until"])
-    assert "status.loadBalancer.ingress" in until
-    assert "external_access_metallb_ingress_ip" in until
+    variables = {
+        "external_access_metallb_ingress_ip": "192.0.2.10",
+        "external_access_guest_ingress_service": {"resources": [
+            {"status": {"loadBalancer": {"ingress": [{"ip": address}]}}}
+        ]},
+    }
+    passed = all(
+        bool(render("{{ " + condition + " }}", variables))
+        for condition in service_wait["until"]
+    )
+    assert passed is expected
     assert index_of(tasks, "osac.service.metallb_ingress") < index_of(tasks, "kind: Service")
     assert index_of(tasks, "kind: Service") < index_of(tasks, "kind: EndpointSlice")
 
@@ -207,6 +219,29 @@ def test_reserved_address_is_published_as_the_cluster_ingress_endpoint() -> None
     publish = (TASKS / "publish.yaml").read_text()
 
     assert "external_access_metallb_ingress_ip | default(external_access_ingress_ip, true)" in publish
+
+
+def test_claim_fixture_cleans_result_files_before_namespace_deletion() -> None:
+    fixture = load_tasks(
+        AAP_ROOT / "tests" / "integration" / "targets" / "guest_ingress_vip_claim"
+        / "tasks" / "baseline.yml"
+    )
+    files, namespace = fixture[0]["tasks"][0]["always"]
+    assert files["ansible.builtin.file"]["state"] == "absent"
+    assert files["failed_when"] is False
+    assert namespace["kubernetes.core.k8s"]["kind"] == "Namespace"
+    assert namespace["kubernetes.core.k8s"]["state"] == "absent"
+    assert "failed_when" not in namespace
+    assert render(files["loop"], {}) == []
+    variables = {
+        "vip_concurrent_files": {"results": [
+            {"path": "/tmp/concurrent"}, {"failed": True},
+        ]},
+        "vip_step_files": {"results": [
+            {"failed": True}, {"path": "/tmp/step"},
+        ]},
+    }
+    assert render(files["loop"], variables) == ["/tmp/concurrent", "/tmp/step"]
 
 
 def test_vip_release_happens_after_dns_removal_and_teardown_proof() -> None:
@@ -320,6 +355,10 @@ def test_worker_wait_counts_every_requested_node_set(counts, expected) -> None:
         ([{"endpoints": []}], False),
         ([{"endpoints": [{"conditions": {"ready": False}}]}], False),
         ([{"endpoints": [{"conditions": {"ready": True}}]}], True),
+        ([{"endpoints": [{"conditions": {}}]}], True),
+        ([{"endpoints": [{}]}], True),
+        ([{"endpoints": [{"conditions": {"ready": None}}]}], True),
+        ([{"endpoints": [{"conditions": {"ready": False}}, {"conditions": {}}]}], True),
     ],
 )
 def test_endpoint_feedback_waits_for_a_ready_backend(slices, ready) -> None:
@@ -335,6 +374,20 @@ def test_endpoint_feedback_waits_for_a_ready_backend(slices, ready) -> None:
         "external_access_guest_ingress_endpoints": {"resources": slices}
     })
     assert bool(result) is ready
+
+
+@pytest.mark.parametrize(
+    "task_name",
+    [
+        "Retrieve kubeconfig secret",
+        "Extract and decode kubeconfig",
+        "Set kubeconfig stats for access by other playbooks",
+    ],
+)
+def test_kubeconfig_credentials_are_not_logged(task_name) -> None:
+    tasks = load_tasks(EXTERNAL_ACCESS.parent / "retrieve_kubeconfig" / "tasks" / "main.yaml")
+    task = next(task for task in tasks if task["name"] == task_name)
+    assert task.get("no_log") is True
 
 
 @pytest.mark.parametrize(

@@ -73,8 +73,8 @@
   until: >-
     external_access_guest_ingress_endpoints.resources | default([])
     | map(attribute='endpoints', default=[]) | flatten
-    | selectattr('conditions.ready', 'defined')
-    | selectattr('conditions.ready', 'equalto', true) | list | length > 0
+    | map(attribute='conditions.ready', default=true)
+    | reject('sameas', false) | list | length > 0
   retries: "{{ external_access_resource_wait_retries }}"
   delay: "{{ external_access_resource_wait_delay }}"
   no_log: true

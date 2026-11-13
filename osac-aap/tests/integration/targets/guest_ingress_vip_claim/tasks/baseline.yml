@@ -247,19 +247,20 @@
             label: "{{ item.label }}"
 
       always:
+        - name: Remove the result files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop: >-
+            {{ (vip_concurrent_files.results | default([])
+                | selectattr('path', 'defined') | map(attribute='path') | list)
+               + (vip_step_files.results | default([])
+                  | selectattr('path', 'defined') | map(attribute='path') | list) }}
+          failed_when: false
+
         - name: Remove the fixture namespace
           kubernetes.core.k8s:
             api_version: v1
             kind: Namespace
             name: "{{ fixture_namespace }}"
             state: absent
-          failed_when: false
-
-        - name: Remove the result files
-          ansible.builtin.file:
-            path: "{{ item }}"
-            state: absent
-          loop: >-
-            {{ (vip_concurrent_files.results | default([]) | map(attribute='path') | list)
-               + (vip_step_files.results | default([]) | map(attribute='path') | list) }}
-          failed_when: false

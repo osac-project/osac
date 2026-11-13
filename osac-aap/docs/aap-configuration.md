@@ -1,5 +1,24 @@
 # AAP Configuration
 
+## Block StorageClass filesystem type
+
+The storage provider uses `ext4` for `csi.storage.k8s.io/fstype` on new VAST
+block and LVMS StorageClasses. Set `OSAC_STORAGE_BLOCK_FSTYPE` in the
+storage-operations worker environment to override it, or pass
+`storage_provider_block_fstype` when invoking `osac.service.storage_provider`.
+An explicit Ansible variable takes precedence over the worker environment.
+An explicit override must be nonempty when creating block classes and is
+passed unchanged, without a filesystem allowlist or normalization. Choose a
+value appropriate for your CSI driver. NFS classes and teardown operations do
+not consume this setting.
+
+This setting does not migrate existing StorageClasses or volumes. LVMS skips
+existing class names; VAST skips provisioning when all requested classes
+already exist. If only some requested VAST classes exist, the existing
+provisioning path still submits all requested classes, and immutable parameter
+differences can be rejected by Kubernetes. Changing the setting does not
+update an existing class's filesystem type.
+
 ## Hosted cluster DNS
 
 The CaaS endpoint workflow publishes API and ingress records under

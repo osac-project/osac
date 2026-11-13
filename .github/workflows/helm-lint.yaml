@@ -187,6 +187,10 @@ jobs:
         OSAC_TEST_INFRA: ${{ github.workspace }}/osac-test-infra
       run: uv run --with ansible-core --project .. python scripts/test-networking-provisioning-overlay.py
 
+    - name: Test block filesystem rendering
+      working-directory: osac-installer
+      run: uv run --project .. python scripts/test-storage-fstype-render.py
+
     - name: Test the NetworkClass step
       working-directory: osac-installer
       run: python3 scripts/test-network-class-step.py

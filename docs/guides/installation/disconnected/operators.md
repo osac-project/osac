@@ -402,9 +402,10 @@ The pinned hook can also add `useDefaultCAs: true` when `USE_DEFAULT_CAS=true` (
 Evidence result: `trust-ownership: pass`. Do not relabel namespaces to expand the chart's trust distribution scope.
 
 **Bundle gate** — current generation, not a stale `Synced` condition:
-
+Set `CA_BUNDLE_NAME` to the approved rendered `certs.caBundle.configMap` value before running this check.
 ```bash
-oc --request-timeout=30s get bundle ca-bundle -o json | jq -e '.metadata.generation as $g | any(.status.conditions[]?; .type == "Synced" and .status == "True" and .observedGeneration == $g)'
+: "${CA_BUNDLE_NAME:?Set CA_BUNDLE_NAME to the approved rendered certs.caBundle.configMap value}"
+oc --request-timeout=30s get bundle "$CA_BUNDLE_NAME" -o json | jq -e '.metadata.generation as $g | any(.status.conditions[]?; .type == "Synced" and .status == "True" and .observedGeneration == $g)'
 ```
 
 Expected: `true`.

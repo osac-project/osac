@@ -87,7 +87,7 @@ message SubnetsDeleteRequest {
   string id = 1;
 }
 
-message SubnetsDeleteResponse {}
+message SubnetsDeleteResponse { Subnet object = 1; }
 
 service Subnets {
   // Retrieves the list of subnets.
@@ -114,6 +114,6 @@ service Subnets {
 
   // Deletes a subnet.
   rpc Delete(SubnetsDeleteRequest) returns (SubnetsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/subnets/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/subnets/{id}" response_body: "object"};
   }
 }

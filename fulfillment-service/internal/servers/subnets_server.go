@@ -251,12 +251,25 @@ func (s *SubnetsServer) Delete(ctx context.Context,
 	privateRequest.SetId(request.GetId())
 
 	// Delegate to private server:
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateSubnet := privateResponse.GetObject()
+	publicSubnet := &publicv1.Subnet{}
+	err = s.outMapper.Copy(ctx, privateSubnet, publicSubnet)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private subnet to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process subnet")
+	}
+
 	// Create the public response:
 	response = &publicv1.SubnetsDeleteResponse{}
+	response.SetObject(publicSubnet)
 	return
 }

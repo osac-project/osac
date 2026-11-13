@@ -18,12 +18,14 @@ package computeinstance
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -147,6 +149,81 @@ var _ = Describe("ReconcileDiskRegistrations", func() {
 		Expect(computeClient.object.GetStatus().GetVolumes()[0].GetVolumeId()).To(Equal("volume-original"))
 		Expect(committed.GetSpec().GetTopology().GetSegments()["osac.io/node"]).To(Equal(diskRegistrationPlaceholderNode))
 	})
+
+	DescribeTable("retries a confirmed pre-write failure after a recovery read",
+		func(dataDisk bool) {
+			computeClient, volumesClient := registrationTestClients()
+			diskKey := "boot"
+			if dataDisk {
+				diskKey = "disk-1"
+				computeClient.object.GetSpec().SetAdditionalDisks(privatev1.ComputeInstanceDiskList_builder{
+					Items: []*privatev1.ComputeInstanceDisk{proto.Clone(computeClient.object.GetSpec().GetBootDisk()).(*privatev1.ComputeInstanceDisk)},
+				}.Build())
+				computeClient.object.GetStatus().SetVolumes([]*privatev1.ComputeInstanceVolume{
+					privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "existing-boot"}.Build(),
+				})
+			}
+			createCalls := 0
+			persisted := []*privatev1.Volume{}
+			volumesClient.create = func(_ context.Context, request *privatev1.VolumesCreateRequest) (*privatev1.VolumesCreateResponse, error) {
+				createCalls++
+				if createCalls == 1 {
+					failure, err := status.New(codes.Unavailable, "parent lookup failed").WithDetails(&errdetails.ErrorInfo{
+						Reason: "VOLUME_CREATE_NOT_PERSISTED", Domain: "osac.private.v1.Volumes",
+					})
+					Expect(err).NotTo(HaveOccurred())
+					encoded, err := proto.Marshal(failure.Proto())
+					Expect(err).NotTo(HaveOccurred())
+					decoded := status.New(codes.OK, "").Proto()
+					Expect(proto.Unmarshal(encoded, decoded)).To(Succeed())
+					return nil, status.FromProto(decoded).Err()
+				}
+				volume := registrationTestVolume(request, "volume-persisted", "system")
+				persisted = append(persisted, volume)
+				return privatev1.VolumesCreateResponse_builder{Object: volume}.Build(), nil
+			}
+			volumesClient.list = func(context.Context, *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {
+				return registrationTestListResponse(persisted, int32(len(persisted))), nil
+			}
+			Expect(ReconcileDiskRegistrations(context.Background(), computeClient, volumesClient, diskRegistrationTestID)).To(HaveOccurred())
+			Expect(persisted).To(BeEmpty())
+			Expect(registrationStates(computeClient.object)[diskKey]).To(Equal(
+				privatev1.ComputeInstanceVolumeRegistration_STATE_NON_COMMITTED_FAILURE))
+			recovered, err := volumesClient.List(context.Background(), &privatev1.VolumesListRequest{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(recovered.GetItems()).To(BeEmpty())
+			Expect(ReconcileDiskRegistrations(context.Background(), computeClient, volumesClient, diskRegistrationTestID)).To(Succeed())
+			Expect(createCalls).To(Equal(2))
+			Expect(persisted).To(HaveLen(1))
+			Expect(diskRegistrationCompleteForTest(computeClient.object)).To(BeTrue())
+			Expect(registrationStates(computeClient.object)[diskKey]).To(Equal(
+				privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+			volumes := computeClient.object.GetStatus().GetVolumes()
+			Expect(volumes[len(volumes)-1].GetVolumeId()).To(Equal("volume-persisted"))
+			Expect(volumesClient.listRequests).NotTo(BeEmpty())
+		}, Entry("boot", false), Entry("data", true))
+
+	DescribeTable("keeps unmarked and unrelated failures uncertain",
+		func(createErr error) {
+			computeClient, volumesClient := registrationTestClients()
+			volumesClient.create = func(context.Context, *privatev1.VolumesCreateRequest) (*privatev1.VolumesCreateResponse, error) {
+				return nil, createErr
+			}
+			Expect(ReconcileDiskRegistrations(context.Background(), computeClient, volumesClient, diskRegistrationTestID)).To(HaveOccurred())
+			Expect(ReconcileDiskRegistrations(context.Background(), computeClient, volumesClient, diskRegistrationTestID)).To(Succeed())
+			Expect(volumesClient.createRequests).To(HaveLen(1))
+			Expect(registrationStates(computeClient.object)["boot"]).To(Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN))
+		},
+		Entry("Unknown", status.Error(codes.Unknown, "unknown")),
+		Entry("Internal", status.Error(codes.Internal, "commit uncertain")),
+		Entry("Unavailable", status.Error(codes.Unavailable, "reply lost")),
+		Entry("cancellation", context.Canceled),
+		Entry("plain error", errors.New("lookup failed")),
+		Entry("wrong reason", registrationErrorWithDetails("OTHER", "osac.private.v1.Volumes")),
+		Entry("wrong domain", registrationErrorWithDetails("VOLUME_CREATE_NOT_PERSISTED", "other")),
+		Entry("missing reason", registrationErrorWithDetails("", "osac.private.v1.Volumes")),
+		Entry("missing domain", registrationErrorWithDetails("VOLUME_CREATE_NOT_PERSISTED", "")),
+	)
 
 	It("keeps an uncertain intent after an empty lookup and never retries Create", func() {
 		computeClient, volumesClient := registrationTestClients()
@@ -680,6 +757,12 @@ func (c *registrationVolumesClient) List(
 		return registrationTestListResponse(nil, 0), nil
 	}
 	return c.list(ctx, request)
+}
+
+func registrationErrorWithDetails(reason, domain string) error {
+	failure, err := status.New(codes.Unavailable, "lookup failed").WithDetails(&errdetails.ErrorInfo{Reason: reason, Domain: domain})
+	Expect(err).NotTo(HaveOccurred())
+	return failure.Err()
 }
 
 func registrationTestClients() (*registrationComputeInstancesClient, *registrationVolumesClient) {

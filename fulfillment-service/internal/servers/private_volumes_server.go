@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -214,6 +215,19 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 					err = tx.Savepoint(ctx, func(ctx context.Context) error {
 						return s.computeInstances.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build(), &parent)
 					})
+					if err != nil {
+						failureStatus, ok := grpcstatus.FromError(err)
+						if !ok {
+							failureStatus = grpcstatus.FromContextError(err)
+						}
+						failure, detailErr := failureStatus.WithDetails(&errdetails.ErrorInfo{
+							Reason: computeinstance.VolumeCreateNotPersistedReason,
+							Domain: computeinstance.VolumeCreateErrorDomain,
+						})
+						if detailErr == nil {
+							err = failure.Err()
+						}
+					}
 					return parent.GetObject(), err
 				}, candidate)
 			if err != nil {

@@ -30,9 +30,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 )
 
 var _ = Describe("Private volumes server", func() {
@@ -197,6 +199,76 @@ var _ = Describe("Private volumes server", func() {
 			Expect(obj.GetId()).To(Equal(created.GetId()))
 			Expect(obj.GetSpec().GetStorageTier()).To(Equal("gold"))
 		})
+
+		DescribeTable("signals a pre-write parent lookup failure and subsequently persists one inventory record",
+			func(diskKey string, lookupErr error, expectedCode codes.Code) {
+				disk := privatev1.ComputeInstanceDisk_builder{
+					SizeGib: proto.Int32(100), StorageTier: privatev1.StorageTierReference_builder{Name: "gold"}.Build(),
+				}.Build()
+				parent := privatev1.ComputeInstance_builder{
+					Id:       uuid.NewString(),
+					Metadata: privatev1.Metadata_builder{Name: "inventory-parent", Tenant: testTenant, Creator: "system", Finalizers: []string{finalizers.Controller}}.Build(),
+					Spec:     privatev1.ComputeInstanceSpec_builder{BootDisk: disk}.Build(),
+					Status: privatev1.ComputeInstanceStatus_builder{VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+						privatev1.ComputeInstanceVolumeRegistration_builder{DiskKey: diskKey, State: privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN}.Build(),
+					}}.Build(),
+				}.Build()
+				if diskKey != "boot" {
+					parent.GetSpec().SetAdditionalDisks(privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{proto.Clone(disk).(*privatev1.ComputeInstanceDisk)}}.Build())
+				}
+				_, err := server.computeInstances.dao.Create().SetObject(parent).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(suiteTx.End(ctx)).To(Succeed())
+				suiteTx, err = tm.Begin(context.Background())
+				Expect(err).NotTo(HaveOccurred())
+				ctx = database.TxIntoContext(context.Background(), suiteTx)
+				volume := privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "ci-" + parent.GetId() + "-" + diskKey, Tenant: testTenant}.Build(),
+					Spec: privatev1.VolumeSpec_builder{StorageTier: "gold", SizeGib: 100,
+						AccessMode: privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Topology:   privatev1.VolumeTopology_builder{Segments: map[string]string{"osac.io/node": "osac-volume-registration-pending"}}.Build(),
+					}.Build(),
+				}.Build()
+				failedTx := database.NewMockTx(ctrl)
+				failedTx.EXPECT().Query(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(suiteTx.Query).AnyTimes()
+				failedTx.EXPECT().QueryRow(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(suiteTx.QueryRow).AnyTimes()
+				failedTx.EXPECT().ReportError(gomock.Any()).DoAndReturn(suiteTx.ReportError).AnyTimes()
+				failedTx.EXPECT().Savepoint(gomock.Any(), gomock.Any()).Return(lookupErr)
+				_, err = server.Create(database.TxIntoContext(ctx, failedTx), privatev1.VolumesCreateRequest_builder{Object: volume}.Build())
+				Expect(status.Code(err)).To(Equal(expectedCode))
+				encoded, encodeErr := proto.Marshal(status.Convert(err).Proto())
+				Expect(encodeErr).NotTo(HaveOccurred())
+				decoded := status.New(codes.OK, "").Proto()
+				Expect(proto.Unmarshal(encoded, decoded)).To(Succeed())
+				details := status.FromProto(decoded).Details()
+				Expect(details).To(HaveLen(1))
+				info, ok := details[0].(*errdetails.ErrorInfo)
+				Expect(ok).To(BeTrue())
+				Expect(info.GetReason()).To(Equal("VOLUME_CREATE_NOT_PERSISTED"))
+				Expect(info.GetDomain()).To(Equal("osac.private.v1.Volumes"))
+				Expect(suiteTx.End(ctx)).To(Succeed())
+				suiteTx, err = tm.Begin(context.Background())
+				Expect(err).NotTo(HaveOccurred())
+				ctx = database.TxIntoContext(context.Background(), suiteTx)
+				listed, err := server.List(ctx, &privatev1.VolumesListRequest{})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(listed.GetItems()).To(BeEmpty())
+				created, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{Object: volume}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(created.GetObject().GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+				Expect(suiteTx.End(ctx)).To(Succeed())
+				suiteTx, err = tm.Begin(context.Background())
+				Expect(err).NotTo(HaveOccurred())
+				ctx = database.TxIntoContext(context.Background(), suiteTx)
+				listed, err = server.List(ctx, &privatev1.VolumesListRequest{})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(listed.GetItems()).To(HaveLen(1))
+				Expect(listed.GetItems()[0].GetId()).To(Equal(created.GetObject().GetId()))
+			},
+			Entry("boot", "boot", status.Error(codes.Unavailable, "parent read unavailable"), codes.Unavailable),
+			Entry("data", "disk-1", status.Error(codes.Unavailable, "parent read unavailable"), codes.Unavailable),
+			Entry("canceled parent lookup", "boot", context.Canceled, codes.Canceled),
+			Entry("parent lookup deadline", "boot", context.DeadlineExceeded, codes.DeadlineExceeded))
 
 		DescribeTable("persists registration-only inventory state through private and public reads",
 			func(segments map[string]string, inventory, suppliedStatus bool, diskKey string) {

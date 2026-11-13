@@ -61,7 +61,7 @@ func createCmd() *cobra.Command {
 		Short:                 "Register a Hub-managed workload cluster",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			return runCreate(cmd, args)
 		},
 	}
@@ -97,7 +97,11 @@ func runCreate(cmd *cobra.Command, args *createArgs) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if closeErr := conn.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 	hub, err := findHub(ctx, privatev1.NewHubsClient(conn), args.sourceHub)
 	if err != nil {
 		return err
@@ -147,7 +151,7 @@ func listCmd() *cobra.Command {
 		Short:                 "List registered workload clusters",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			ctx := cmd.Context()
 			cfg := config.SettingsFromContext(ctx)
 			if !cfg.Armed() {
@@ -157,7 +161,11 @@ func listCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to create gRPC connection: %w", err)
 			}
-			defer conn.Close()
+			defer func() {
+				if closeErr := conn.Close(); err == nil {
+					err = closeErr
+				}
+			}()
 			client := privatev1.NewWorkloadClustersClient(conn)
 			items, err := listAll(ctx, client, filter)
 			if err != nil {
@@ -184,7 +192,7 @@ func describeCmd() *cobra.Command {
 		Short:                 "Describe a registered workload cluster",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			ctx := cmd.Context()
 			cfg := config.SettingsFromContext(ctx)
 			if !cfg.Armed() {
@@ -194,7 +202,11 @@ func describeCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to create gRPC connection: %w", err)
 			}
-			defer conn.Close()
+			defer func() {
+				if closeErr := conn.Close(); err == nil {
+					err = closeErr
+				}
+			}()
 			client := privatev1.NewWorkloadClustersClient(conn)
 			object, err := findWorkloadCluster(ctx, client, args[0])
 			if err != nil {
@@ -218,13 +230,13 @@ func updateCmd() *cobra.Command {
 		Short:                 "Update a registered workload cluster",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, positional []string) error {
+		RunE: func(cmd *cobra.Command, positional []string) (err error) {
 			return runUpdate(cmd, positional[0], args)
 		},
 	}
 	flags := result.Flags()
 	flags.StringSliceVar(&args.supportedWorkload, "supported-workloads", nil, "_VALUES_ - Replace supported workloads.")
-	flags.StringSliceVar(&args.labels, "label", nil, "_KEY=VALUE_ - Replace user labels; repeat for multiple labels.")
+	flags.StringArrayVar(&args.labels, "label", nil, "_KEY=VALUE_ - Replace user labels; repeat for multiple labels.")
 	flags.BoolVar(&args.clearLabels, "clear-labels", false, "_[BOOLEAN]_ - Clear all user labels.")
 	return result
 }
@@ -265,7 +277,11 @@ func runUpdate(cmd *cobra.Command, ref string, args *updateArgs) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if closeErr := conn.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 	client := privatev1.NewWorkloadClustersClient(conn)
 	object, err := findWorkloadCluster(ctx, client, ref)
 	if err != nil {
@@ -317,7 +333,7 @@ func listAll(ctx context.Context, client privatev1.WorkloadClustersClient, filte
 			return nil, err
 		}
 		result = append(result, response.GetItems()...)
-		if int32(len(result)) >= response.GetTotal() || len(response.GetItems()) == 0 {
+		if int64(len(result)) >= int64(response.GetTotal()) || len(response.GetItems()) == 0 {
 			return result, nil
 		}
 	}
@@ -332,7 +348,7 @@ func hublistAll(ctx context.Context, client privatev1.HubsClient) ([]*privatev1.
 			return nil, err
 		}
 		result = append(result, response.GetItems()...)
-		if int32(len(result)) >= response.GetTotal() || len(response.GetItems()) == 0 {
+		if int64(len(result)) >= int64(response.GetTotal()) || len(response.GetItems()) == 0 {
 			return result, nil
 		}
 	}

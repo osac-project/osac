@@ -25,6 +25,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/cache"
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
@@ -59,16 +60,20 @@ type FunctionBuilder struct {
 }
 
 type function struct {
-	logger           *slog.Logger
-	grpcClient       *grpc.ClientConn
-	hubCache         controllers.HubCache
-	workloadClusters privatev1.WorkloadClustersClient
-	watchers         map[string]context.CancelFunc
-	watchersLock     sync.Mutex
-	readyHubs        map[string]bool
-	metrics          *osacmetrics.WorkloadClusterMetrics
-	availabilityLock sync.Mutex
-	availability     map[string]string
+	logger             *slog.Logger
+	grpcClient         *grpc.ClientConn
+	hubCache           controllers.HubCache
+	workloadClusters   privatev1.WorkloadClustersClient
+	watchers           map[string]context.CancelFunc
+	watcherCredentials map[string]string
+	watcherGenerations map[string]uint64
+	watchersLock       sync.Mutex
+	readyHubs          map[string]bool
+	managedCaches      map[string]cache.SharedIndexInformer
+	watchEstablished   map[string]bool
+	metrics            *osacmetrics.WorkloadClusterMetrics
+	availabilityLock   sync.Mutex
+	availability       map[string]string
 }
 
 // NewFunction creates a WorkloadCluster observation function.
@@ -106,13 +111,17 @@ func (b *FunctionBuilder) Build() (controllers.ReconcilerFunction[*privatev1.Wor
 		return nil, errors.New("hub cache is mandatory")
 	}
 	r := &function{
-		logger:           b.logger,
-		grpcClient:       b.connection,
-		hubCache:         b.hubCache,
-		workloadClusters: privatev1.NewWorkloadClustersClient(b.connection),
-		watchers:         map[string]context.CancelFunc{},
-		readyHubs:        map[string]bool{},
-		availability:     map[string]string{},
+		logger:             b.logger,
+		grpcClient:         b.connection,
+		hubCache:           b.hubCache,
+		workloadClusters:   privatev1.NewWorkloadClustersClient(b.connection),
+		watchers:           map[string]context.CancelFunc{},
+		watcherCredentials: map[string]string{},
+		watcherGenerations: map[string]uint64{},
+		readyHubs:          map[string]bool{},
+		managedCaches:      map[string]cache.SharedIndexInformer{},
+		watchEstablished:   map[string]bool{},
+		availability:       map[string]string{},
 	}
 	if b.metricsRegisterer != nil {
 		var metricErr error
@@ -130,15 +139,22 @@ func (r *function) run(ctx context.Context, object *privatev1.WorkloadCluster) e
 		return nil
 	}
 	old := proto.Clone(object).(*privatev1.WorkloadCluster)
-	r.ensureWatcher(ctx, object.GetSpec().GetSourceHubId())
 	status := object.GetStatus()
 	if status == nil {
 		status = &privatev1.WorkloadClusterStatus{}
 	}
 	entry, err := r.hubCache.Get(ctx, object.GetSpec().GetSourceHubId())
+	if err == nil {
+		r.ensureWatcher(ctx, object.GetSpec().GetSourceHubId(), entry.CredentialFingerprint)
+	}
 	if err != nil || !r.isHubReady(object.GetSpec().GetSourceHubId()) {
 		setUnavailable(status, reasonHubUnreachable, "Cannot reach hub to validate cluster registration", false)
-		if err == nil {
+		if err != nil {
+			// Do not return the underlying Hub/Kubernetes error: the generic
+			// reconciler logs returned errors and those errors may contain
+			// endpoints or other credential-adjacent details.
+			err = errors.New("hub credential resolution failed")
+		} else {
 			err = errors.New("hub watcher is not ready")
 		}
 	} else {
@@ -146,17 +162,17 @@ func (r *function) run(ctx context.Context, object *privatev1.WorkloadCluster) e
 		err = r.observe(ctx, entry.Client, object, status)
 	}
 	object.SetStatus(status)
-	r.recordConditionTransitions(old.GetStatus(), object.GetStatus())
-	r.updateAvailabilityMetrics(object.GetId(), availableStatus(object.GetStatus()))
 	if !proto.Equal(old.GetStatus(), object.GetStatus()) {
 		_, updateErr := r.workloadClusters.Update(ctx, privatev1.WorkloadClustersUpdateRequest_builder{
 			Object:     object,
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},
 		}.Build())
 		if updateErr != nil {
-			return updateErr
+			return controllers.RequeueAfter(updateErr, time.Second)
 		}
 	}
+	r.recordConditionTransitions(old.GetStatus(), object.GetStatus())
+	r.updateAvailabilityMetrics(object.GetId(), availableStatus(object.GetStatus()))
 	return err
 }
 
@@ -196,14 +212,16 @@ func (r *function) updateAvailabilityMetrics(id, status string) {
 	if previous == status {
 		return
 	}
-	if previous == "True" {
+	switch previous {
+	case "True":
 		r.metrics.Available.Dec()
-	} else if previous == "False" {
+	case "False":
 		r.metrics.Unavailable.Dec()
 	}
-	if status == "True" {
+	switch status {
+	case "True":
 		r.metrics.Available.Inc()
-	} else if status == "False" {
+	case "False":
 		r.metrics.Unavailable.Inc()
 	}
 	if status == "" {
@@ -216,7 +234,21 @@ func (r *function) updateAvailabilityMetrics(id, status string) {
 func (r *function) observe(ctx context.Context, hubClient clnt.Client, object *privatev1.WorkloadCluster, status *privatev1.WorkloadClusterStatus) error {
 	managed := &unstructured.Unstructured{}
 	managed.SetGroupVersionKind(managedClusterGVK)
-	err := hubClient.Get(ctx, clnt.ObjectKey{Name: object.GetSpec().GetManagedClusterName()}, managed)
+	var err error
+	if informer := r.managedClusterInformer(object.GetSpec().GetSourceHubId()); informer != nil {
+		cached, exists, cacheErr := informer.GetStore().GetByKey(object.GetSpec().GetManagedClusterName())
+		if cacheErr != nil {
+			err = cacheErr
+		} else if !exists {
+			err = apierrors.NewNotFound(schema.GroupResource{Group: managedClusterGroup, Resource: managedClusterResource}, object.GetSpec().GetManagedClusterName())
+		} else if cachedObject, ok := cached.(*unstructured.Unstructured); ok {
+			managed = cachedObject.DeepCopy()
+		} else {
+			err = errors.New("hub informer returned an unexpected ManagedCluster object")
+		}
+	} else {
+		err = hubClient.Get(ctx, clnt.ObjectKey{Name: object.GetSpec().GetManagedClusterName()}, managed)
+	}
 	if apierrors.IsNotFound(err) {
 		setUnavailable(status, reasonManagedClusterNotFound, "Referenced managed cluster not found on the hub", true)
 		return nil
@@ -246,8 +278,14 @@ func (r *function) observe(ctx context.Context, hubClient clnt.Client, object *p
 	if status.GetManagedClusterUid() == "" {
 		status.SetManagedClusterUid(claimValue)
 	}
-	setCondition(status, availableCondition, "True", "ManagedClusterAvailable", "Referenced managed cluster is available", true)
+	setCondition(status, availableCondition, "True", "ValidationSucceeded", "Referenced managed cluster is available", true)
 	return nil
+}
+
+func (r *function) managedClusterInformer(hubID string) cache.SharedIndexInformer {
+	r.watchersLock.Lock()
+	defer r.watchersLock.Unlock()
+	return r.managedCaches[hubID]
 }
 
 func clusterIdentity(object *unstructured.Unstructured) string {
@@ -281,9 +319,12 @@ func setUnavailable(status *privatev1.WorkloadClusterStatus, reason, message str
 	if reachable {
 		setCondition(status, hubReachable, "True", "HubReachable", "Hub is reachable and ready", true)
 	} else {
-		setCondition(status, hubReachable, "False", reasonHubUnreachable, "Hub cannot be reached", false)
+		// The failed reachability check is still an observation of the current
+		// Hub state. Refresh its freshness timestamp even though the condition
+		// is False.
+		setCondition(status, hubReachable, "False", reasonHubUnreachable, "Hub cannot be reached", true)
 	}
-	setCondition(status, availableCondition, "False", reason, message, reachable)
+	setCondition(status, availableCondition, "False", reason, message, true)
 }
 
 func boolStatus(value bool) string {
@@ -313,8 +354,7 @@ func setCondition(status *privatev1.WorkloadClusterStatus, conditionType, value,
 	condition.SetStatus(value)
 	condition.SetReason(reason)
 	condition.SetMessage(message)
-	lastObserved := condition.GetLastObservedTime()
-	if observed && (transitioned || lastObserved == nil || now.AsTime().Sub(lastObserved.AsTime()) >= time.Minute) {
+	if observed {
 		condition.SetLastObservedTime(now)
 	}
 }

@@ -17,9 +17,11 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -49,19 +51,28 @@ func TestSignalForHubRecordsReconnectMetadata(t *testing.T) {
 	grpcServer := grpc.NewServer()
 	server := &watcherWorkloadClustersServer{signals: make(chan *privatev1.WorkloadClustersSignalRequest, 1)}
 	privatev1.RegisterWorkloadClustersServer(grpcServer, server)
-	go func() { _ = grpcServer.Serve(listener) }()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- grpcServer.Serve(listener) }()
 	defer grpcServer.Stop()
 
-	connection, err := grpc.DialContext(context.Background(), "bufnet", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+	connection, err := grpc.NewClient("passthrough:///bufnet", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 		return listener.Dial()
-	}), grpc.WithInsecure())
+	}), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	defer connection.Close()
 
 	reconciler := &function{workloadClusters: privatev1.NewWorkloadClustersClient(connection)}
 	reconciler.signalForHub(context.Background(), "hub-1", "HubReconnected", "Normal")
 
-	request := <-server.signals
+	var request *privatev1.WorkloadClustersSignalRequest
+	select {
+	case request = <-server.signals:
+	case err := <-serveErr:
+		require.NoError(t, err)
+		t.Fatal("gRPC server stopped before receiving the signal")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Hub signal")
+	}
 	require.Equal(t, "wc-1", request.GetId())
 	require.Equal(t, "HubReconnected", request.GetReason())
 	require.Equal(t, "Normal", request.GetSeverity())

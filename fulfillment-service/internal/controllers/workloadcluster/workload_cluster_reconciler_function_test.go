@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -23,6 +24,30 @@ func TestObserveAvailableManagedClusterRecordsIdentity(t *testing.T) {
 	status := &privatev1.WorkloadClusterStatus{}
 
 	err := (&function{}).observe(context.Background(), hub, object, status)
+
+	require.NoError(t, err)
+	require.Equal(t, "uid-1", status.GetManagedClusterUid())
+	require.Equal(t, "True", condition(status, availableCondition).GetStatus())
+}
+
+func TestObserveUsesHubInformerCache(t *testing.T) {
+	informer := cache.NewSharedIndexInformer(
+		&cache.ListWatch{},
+		&unstructured.Unstructured{},
+		0,
+		cache.Indexers{},
+	)
+	managed := managedCluster("worker-1", "uid-1", true, true)
+	require.NoError(t, informer.GetStore().Add(managed))
+
+	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{
+		SourceHubId:        "hub-1",
+		ManagedClusterName: "worker-1",
+	}}
+	status := &privatev1.WorkloadClusterStatus{}
+	reconciler := &function{managedCaches: map[string]cache.SharedIndexInformer{"hub-1": informer}}
+
+	err := reconciler.observe(context.Background(), fake.NewClientBuilder().Build(), object, status)
 
 	require.NoError(t, err)
 	require.Equal(t, "uid-1", status.GetManagedClusterUid())
@@ -77,9 +102,11 @@ func TestSetUnavailableReportsUnreachableHub(t *testing.T) {
 	require.Equal(t, "False", hubCondition.GetStatus())
 	require.Equal(t, reasonHubUnreachable, hubCondition.GetReason())
 	require.Equal(t, "Hub cannot be reached", hubCondition.GetMessage())
+	require.NotNil(t, hubCondition.GetLastObservedTime())
+	require.NotNil(t, condition(status, availableCondition).GetLastObservedTime())
 }
 
-func TestSetConditionDoesNotRefreshRecentObservation(t *testing.T) {
+func TestSetConditionRefreshesObservationWithoutTransition(t *testing.T) {
 	observedAt := timestamppb.New(time.Now().Add(-time.Second))
 	status := &privatev1.WorkloadClusterStatus{Conditions: []*privatev1.WorkloadClusterCondition{
 		privatev1.WorkloadClusterCondition_builder{
@@ -93,7 +120,8 @@ func TestSetConditionDoesNotRefreshRecentObservation(t *testing.T) {
 
 	setCondition(status, availableCondition, "True", "ManagedClusterAvailable", "unchanged", true)
 
-	require.Same(t, observedAt, condition(status, availableCondition).GetLastObservedTime())
+	require.NotSame(t, observedAt, condition(status, availableCondition).GetLastObservedTime())
+	require.Equal(t, observedAt, condition(status, availableCondition).GetLastTransitionTime())
 }
 
 func managedCluster(name, uid string, accepted, available bool) *unstructured.Unstructured {

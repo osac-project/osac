@@ -16,6 +16,8 @@ package servers
 import (
 	"testing"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -32,16 +34,20 @@ func TestDecorateWorkloadClusterEvents(t *testing.T) {
 		{name: "available", operation: eventPublisherOpUpdate, status: "True", want: "Available", severity: "Normal"},
 		{name: "unavailable", operation: eventPublisherOpUpdate, status: "False", want: "Unavailable", severity: "Warning"},
 		{name: "identity mismatch", operation: eventPublisherOpUpdate, status: "False", reason: "ClusterIdentityMismatch", want: "IdentityMismatch", severity: "Warning"},
-		{name: "reconnected", operation: eventPublisherOpSignal, want: "HubReconnected", severity: "Normal"},
+		{name: "ordinary signal", operation: eventPublisherOpSignal},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			transitionedAt := timestamppb.Now()
 			event := privatev1.Event_builder{
 				WorkloadCluster: privatev1.WorkloadCluster_builder{
 					Status: privatev1.WorkloadClusterStatus_builder{
 						Conditions: []*privatev1.WorkloadClusterCondition{
-							privatev1.WorkloadClusterCondition_builder{Type: "Available", Status: test.status, Reason: test.reason}.Build(),
+							privatev1.WorkloadClusterCondition_builder{
+								Type: "Available", Status: test.status, Reason: test.reason,
+								LastTransitionTime: transitionedAt, LastObservedTime: transitionedAt,
+							}.Build(),
 						},
 					}.Build(),
 				}.Build(),

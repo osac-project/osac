@@ -15,9 +15,6 @@ package migrations
 
 import (
 	"context"
-	"errors"
-
-	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -53,7 +50,7 @@ var _ = DescribeMigration("Create WorkloadCluster tables", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("tracks active records and enforces the Hub foreign key", func(ctx context.Context) {
+	It("tracks active records and preserves the Hub identity projection", func(ctx context.Context) {
 		_, err := conn.Exec(ctx, `insert into hubs (id, name, tenant, data) values ('hub-a', 'hub-a', 'shared', '{}')`)
 		Expect(err).ToNot(HaveOccurred())
 		_, err = conn.Exec(ctx, `
@@ -75,12 +72,8 @@ var _ = DescribeMigration("Create WorkloadCluster tables", func() {
 		Expect(count).To(BeZero())
 	})
 
-	It("rejects unknown Hubs and prevents referenced Hub deletion", func(ctx context.Context) {
-		_, err := conn.Exec(ctx, `
-			insert into workload_clusters (id, name, tenant, data)
-			values ('wc-a', 'cluster-a', 'shared', '{"spec":{"source_hub_id":"missing","managed_cluster_name":"worker-a"}}')`)
-		Expect(err).To(HaveOccurred())
-
+	It("preserves registrations when a Hub is deleted", func(ctx context.Context) {
+		var err error
 		_, err = conn.Exec(ctx, `insert into hubs (id, name, tenant, data) values ('hub-a', 'hub-a', 'shared', '{}')`)
 		Expect(err).ToNot(HaveOccurred())
 		_, err = conn.Exec(ctx, `
@@ -88,9 +81,13 @@ var _ = DescribeMigration("Create WorkloadCluster tables", func() {
 			values ('wc-b', 'cluster-b', 'shared', '{"spec":{"source_hub_id":"hub-a","managed_cluster_name":"worker-b"}}')`)
 		Expect(err).ToNot(HaveOccurred())
 		_, err = conn.Exec(ctx, `update hubs set deletion_timestamp = now() where id = 'hub-a'`)
-		Expect(err).To(HaveOccurred())
-		var pgErr *pgconn.PgError
-		Expect(errors.As(err, &pgErr)).To(BeTrue())
-		Expect(pgErr.Code).To(Equal("Z0003"))
+		Expect(err).ToNot(HaveOccurred())
+		_, err = conn.Exec(ctx, `delete from hubs where id = 'hub-a'`)
+		Expect(err).ToNot(HaveOccurred())
+		var count int
+		Expect(conn.QueryRow(ctx, `select count(*) from workload_clusters where id = 'wc-b'`).Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(1))
+		Expect(conn.QueryRow(ctx, `select count(*) from workload_cluster_hub_refs where workload_cluster_id = 'wc-b'`).Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(1))
 	})
 })

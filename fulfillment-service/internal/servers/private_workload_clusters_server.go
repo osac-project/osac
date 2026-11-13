@@ -22,6 +22,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -46,6 +47,8 @@ type PrivateWorkloadClustersServer struct {
 	hubsServer privatev1.HubsServer
 	metrics    *osacmetrics.WorkloadClusterMetrics
 }
+
+const supportedWorkloadMaaS = "maas"
 
 func NewPrivateWorkloadClustersServer() *PrivateWorkloadClustersServerBuilder {
 	return &PrivateWorkloadClustersServerBuilder{}
@@ -150,6 +153,9 @@ func (s *PrivateWorkloadClustersServer) Create(ctx context.Context,
 		return nil, setRegistrationResult(grpcstatus.Error(grpccodes.InvalidArgument, "object is required"))
 	}
 	object := request.GetObject()
+	if err := validateSupportedWorkloads(object); err != nil {
+		return nil, setRegistrationResult(err)
+	}
 	if err := s.validateSourceHub(ctx, object.GetSpec().GetSourceHubId()); err != nil {
 		return nil, setRegistrationResult(err)
 	}
@@ -183,6 +189,15 @@ func (s *PrivateWorkloadClustersServer) Update(ctx context.Context,
 		if candidate.GetSpec().GetManagedClusterName() != current.GetSpec().GetManagedClusterName() {
 			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.managed_cluster_name' is immutable")
 		}
+		if err := validateSupportedWorkloads(candidate); err != nil {
+			return err
+		}
+		if current.GetStatus().GetManagedClusterUid() != "" && candidate.GetStatus().GetManagedClusterUid() != current.GetStatus().GetManagedClusterUid() {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'status.managed_cluster_uid' is immutable once established")
+		}
+		if !auth.IsControllerServiceAccount(ctx) && !proto.Equal(candidate.GetStatus(), current.GetStatus()) {
+			return grpcstatus.Error(grpccodes.PermissionDenied, "status is controller-owned")
+		}
 		candidate.GetMetadata().SetTenant(auth.SharedTenant)
 		return nil
 	})
@@ -201,6 +216,27 @@ func (s *PrivateWorkloadClustersServer) Signal(ctx context.Context,
 	return response, err
 }
 
+func validateSupportedWorkloads(object *privatev1.WorkloadCluster) error {
+	values := object.GetSpec().GetSupportedWorkloads()
+	if len(values) == 0 {
+		return grpcstatus.Errorf(
+			grpccodes.InvalidArgument,
+			"field 'spec.supported_workloads' must contain at least one accepted value: %s",
+			supportedWorkloadMaaS,
+		)
+	}
+	for _, value := range values {
+		if value != supportedWorkloadMaaS {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"field 'spec.supported_workloads' contains an unsupported value; accepted values: %s",
+				supportedWorkloadMaaS,
+			)
+		}
+	}
+	return nil
+}
+
 func initialWorkloadClusterStatus() *privatev1.WorkloadClusterStatus {
 	return privatev1.WorkloadClusterStatus_builder{
 		Conditions: []*privatev1.WorkloadClusterCondition{
@@ -214,7 +250,34 @@ func (s *PrivateWorkloadClustersServer) validateSourceHub(ctx context.Context, i
 	if id == "" {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.source_hub_id' is required")
 	}
-	_, err := s.hubsServer.Get(ctx, privatev1.HubsGetRequest_builder{Id: id}.Build())
+	var err error
+	if hubs, ok := s.hubsServer.(*PrivateHubsServer); ok {
+		activeHubFilter := "this.metadata.deletion_timestamp == null"
+		configured, listErr := hubs.generic.dao.List().SetFilter(activeHubFilter).Do(ctx)
+		if listErr != nil {
+			return ConvertDAOErrorToGRPC(listErr, "list", "hubs")
+		}
+		if err := validateExistingWorkloadClusterHub(configured.GetItems(), id); err != nil {
+			return err
+		}
+		activeHubIDs := make(map[string]struct{}, len(configured.GetItems()))
+		for _, hub := range configured.GetItems() {
+			activeHubIDs[hub.GetId()] = struct{}{}
+		}
+		workloadClusters, listErr := s.generic.dao.List().SetFilter(activeHubFilter).Do(ctx)
+		if listErr != nil {
+			return ConvertDAOErrorToGRPC(listErr, "list", "workload clusters")
+		}
+		if err := validateActiveWorkloadClusterHub(workloadClusters.GetItems(), activeHubIDs, id); err != nil {
+			return err
+		}
+		_, err = hubs.generic.dao.Get().SetId(id).SetShareLock(true).Do(ctx)
+		if err != nil {
+			err = ConvertDAOErrorToGRPC(err, "get", id)
+		}
+	} else {
+		_, err = s.hubsServer.Get(ctx, privatev1.HubsGetRequest_builder{Id: id}.Build())
+	}
 	if err != nil {
 		if grpcstatus.Code(err) == grpccodes.NotFound {
 			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.source_hub_id' must reference an existing Hub")
@@ -224,12 +287,38 @@ func (s *PrivateWorkloadClustersServer) validateSourceHub(ctx context.Context, i
 	return nil
 }
 
+func validateExistingWorkloadClusterHub(hubs []*privatev1.Hub, id string) error {
+	if len(hubs) == 0 {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.source_hub_id' must reference an existing active Hub")
+	}
+	for _, hub := range hubs {
+		if hub.GetId() == id {
+			return nil
+		}
+	}
+	return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.source_hub_id' must reference an existing active Hub")
+}
+
+func validateActiveWorkloadClusterHub(workloadClusters []*privatev1.WorkloadCluster, activeHubIDs map[string]struct{}, requestedHubID string) error {
+	for _, workloadCluster := range workloadClusters {
+		sourceHubID := workloadCluster.GetSpec().GetSourceHubId()
+		if sourceHubID == requestedHubID {
+			continue
+		}
+		if _, active := activeHubIDs[sourceHubID]; active {
+			return grpcstatus.Error(grpccodes.FailedPrecondition, "another active Hub already has WorkloadClusters")
+		}
+	}
+	return nil
+}
+
 func (s *PrivateWorkloadClustersServer) rejectDuplicate(ctx context.Context, object *privatev1.WorkloadCluster) error {
 	if object == nil || object.GetSpec() == nil {
 		return nil
 	}
 	filter := "this.spec.source_hub_id == " + strconv.Quote(object.GetSpec().GetSourceHubId()) +
-		" && this.spec.managed_cluster_name == " + strconv.Quote(object.GetSpec().GetManagedClusterName())
+		" && this.spec.managed_cluster_name == " + strconv.Quote(object.GetSpec().GetManagedClusterName()) +
+		" && this.metadata.deletion_timestamp == null"
 	response, err := s.List(ctx, privatev1.WorkloadClustersListRequest_builder{Filter: &filter}.Build())
 	if err != nil {
 		return err

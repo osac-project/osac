@@ -15,6 +15,7 @@ package controllers
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -66,6 +67,10 @@ type hubCache struct {
 type HubEntry struct {
 	Namespace string
 	Client    clnt.Client
+	// CredentialFingerprint changes when the kubeconfig used to construct the
+	// client changes. Consumers that maintain long-lived watches can use it to
+	// rotate those watches when the Hub credential is updated.
+	CredentialFingerprint string
 }
 
 // cachedHubEntry wraps HubEntry with TTL tracking.
@@ -189,8 +194,9 @@ func (r *hubCache) create(ctx context.Context, id string) (result *HubEntry, err
 		return
 	}
 	result = &HubEntry{
-		Namespace: hub.GetSpec().GetNamespace(),
-		Client:    client,
+		Namespace:             hub.GetSpec().GetNamespace(),
+		Client:                client,
+		CredentialFingerprint: fmt.Sprintf("%x", sha256.Sum256(kubeconfig)),
 	}
 	return
 }

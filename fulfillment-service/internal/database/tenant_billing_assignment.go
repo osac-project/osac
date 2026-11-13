@@ -94,10 +94,12 @@ const TenantBillingAssignmentDeletedMessage = "TENANT_DELETED: tenant deleted; a
 
 // CloseTenantBillingAssignmentOnDeletion closes only the tenant's current interval in the caller's deletion
 // transaction. The caller holds the tenant row lock, serializing deletion with assignment finalization.
+// That lock can be acquired after a newer assignment transaction commits, so clamp the transaction timestamp
+// to the interval's start rather than recording a negative interval.
 // Closed history (including an interval closed by an earlier Delete) is never rewritten.
 func CloseTenantBillingAssignmentOnDeletion(ctx context.Context, tx Tx, tenantID string) error {
 	_, err := tx.Exec(ctx, `
-		update tenant_billing_assignments set effective_to = now(), message = $2
+		update tenant_billing_assignments set effective_to = greatest(now(), effective_from), message = $2
 		where tenant_id = $1 and effective_to is null`, tenantID, TenantBillingAssignmentDeletedMessage)
 	if err != nil {
 		return fmt.Errorf("close tenant billing assignment on tenant deletion: %w", err)

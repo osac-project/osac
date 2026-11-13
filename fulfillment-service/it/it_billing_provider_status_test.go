@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -390,8 +391,11 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		old, err := client.Get(ctx, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: assignment.GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(old.GetObject().GetSpec().GetBillingAccountId()).To(Equal(first.GetId()))
-		Expect(old.GetObject().GetStatus().GetEffectiveFrom()).To(Equal(assignment.GetStatus().GetEffectiveFrom()))
-		Expect(old.GetObject().GetStatus().GetEffectiveTo()).To(Equal(updated.GetObject().GetStatus().GetEffectiveFrom()))
+		Expect(proto.Equal(old.GetObject().GetStatus().GetEffectiveFrom(),
+			assignment.GetStatus().GetEffectiveFrom())).To(BeTrue())
+		Expect(old.GetObject().GetStatus().GetEffectiveTo()).ToNot(BeNil())
+		Expect(proto.Equal(old.GetObject().GetStatus().GetEffectiveTo(),
+			updated.GetObject().GetStatus().GetEffectiveFrom())).To(BeTrue())
 		history, err := client.List(ctx, publicv1.TenantBillingAssignmentsListRequest_builder{
 			Filter: new(fmt.Sprintf("this.spec.tenant_id == %q", tenant)),
 		}.Build())
@@ -455,7 +459,8 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(retried.GetObject().GetId()).To(Equal(pending.GetId()))
 		Expect(retried.GetObject().GetStatus().GetConnectionState()).To(Equal(pending.GetStatus().GetConnectionState()))
 		Expect(retried.GetObject().GetStatus().GetMessage()).To(Equal(remediation))
-		Expect(retried.GetObject().GetStatus().GetEffectiveFrom()).To(Equal(pending.GetStatus().GetEffectiveFrom()))
+		Expect(proto.Equal(retried.GetObject().GetStatus().GetEffectiveFrom(),
+			pending.GetStatus().GetEffectiveFrom())).To(BeTrue())
 		Expect(retried.GetObject().GetStatus().GetEffectiveTo()).To(BeNil())
 		expectReadOnlyResolution(accounts[0].ID, account.GetCorrelationId(), beforeRetry)
 		Expect(findAccount(ctx, accounts[0].Name).GetCorrelationId()).To(Equal(account.GetCorrelationId()))
@@ -476,7 +481,8 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(updated.GetObject().GetStatus().GetMessage()).To(BeEmpty())
 		Expect(updated.GetObject().GetId()).To(Equal(pending.GetId()))
 		Expect(updated.GetObject().GetSpec().GetBillingAccountId()).To(Equal(accountID))
-		Expect(updated.GetObject().GetStatus().GetEffectiveFrom()).To(Equal(pending.GetStatus().GetEffectiveFrom()))
+		Expect(proto.Equal(updated.GetObject().GetStatus().GetEffectiveFrom(),
+			pending.GetStatus().GetEffectiveFrom())).To(BeTrue())
 		Expect(updated.GetObject().GetStatus().GetEffectiveTo()).To(BeNil())
 		expectReadOnlyResolution(accounts[0].ID, account.GetCorrelationId(), beforeUpdate)
 		Expect(findAccount(ctx, accounts[0].Name).GetCorrelationId()).To(Equal(account.GetCorrelationId()))

@@ -48,13 +48,17 @@ func listCmd() *cobra.Command {
 		Short:                 "List configured Hubs",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			ctx := cmd.Context()
 			client, conn, err := connect(ctx, cmd)
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			defer func() {
+				if closeErr := conn.Close(); err == nil {
+					err = closeErr
+				}
+			}()
 			hubs, err := listAll(ctx, client)
 			if err != nil {
 				return fmt.Errorf("failed to list hubs: %w", err)
@@ -70,13 +74,17 @@ func describeCmd() *cobra.Command {
 		Short:                 "Describe a configured Hub",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (err error) {
 			ctx := cmd.Context()
 			client, conn, err := connect(ctx, cmd)
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			defer func() {
+				if closeErr := conn.Close(); err == nil {
+					err = closeErr
+				}
+			}()
 			hub, err := lookup.Find(args[0], "hub", func(filter string, limit int32) ([]*privatev1.Hub, error) {
 				response, err := client.List(ctx, privatev1.HubsListRequest_builder{
 					Filter: proto.String(filter),
@@ -116,7 +124,7 @@ func listAll(ctx context.Context, client privatev1.HubsClient) ([]*privatev1.Hub
 			return nil, err
 		}
 		result = append(result, response.GetItems()...)
-		if int32(len(result)) >= response.GetTotal() || len(response.GetItems()) == 0 {
+		if int64(len(result)) >= int64(response.GetTotal()) || len(response.GetItems()) == 0 {
 			return result, nil
 		}
 	}

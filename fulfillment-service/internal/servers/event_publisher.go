@@ -1153,6 +1153,8 @@ func (p *EventPublisher) convertChange(change *eventPublisherChange) (event *pri
 	event.ProtoReflect().Set(field, protoreflect.ValueOfMessage(object.ProtoReflect()))
 	if change.reason != "" {
 		event.SetReason(change.reason)
+	}
+	if change.severity != "" {
 		event.SetSeverity(change.severity)
 	}
 	p.decorateWorkloadClusterEvent(event, change.op)
@@ -1171,12 +1173,16 @@ func (p *EventPublisher) decorateWorkloadClusterEvent(event *privatev1.Event, op
 	case eventPublisherOpInsert:
 		event.SetReason("Registered")
 		event.SetSeverity("Normal")
-	case eventPublisherOpSignal:
-		event.SetReason("HubReconnected")
-		event.SetSeverity("Normal")
 	case eventPublisherOpUpdate:
 		for _, condition := range event.GetWorkloadCluster().GetStatus().GetConditions() {
 			if condition.GetType() != "Available" {
+				continue
+			}
+			// A condition whose transition and observation timestamps differ was
+			// carried through an unrelated update (for example a finalizer or
+			// last_observed_time update), not produced by an availability change.
+			if condition.GetLastTransitionTime() == nil || condition.GetLastObservedTime() == nil ||
+				!condition.GetLastTransitionTime().AsTime().Equal(condition.GetLastObservedTime().AsTime()) {
 				continue
 			}
 			reason := condition.GetReason()

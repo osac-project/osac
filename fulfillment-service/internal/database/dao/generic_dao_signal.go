@@ -88,17 +88,13 @@ func (r *SignalRequest[O]) do(ctx context.Context) (response *SignalResponse, er
 	if err != nil {
 		return
 	}
-	if r.eventReason != "" {
-		_, err = r.exec(ctx, signalOpType, "set local osac.event_reason = $1", r.eventReason)
-		if err != nil {
-			return
-		}
+	_, err = r.exec(ctx, signalOpType, "select set_config('osac.event_reason', $1, true)", r.eventReason)
+	if err != nil {
+		return
 	}
-	if r.eventSeverity != "" {
-		_, err = r.exec(ctx, signalOpType, "set local osac.event_severity = $1", r.eventSeverity)
-		if err != nil {
-			return
-		}
+	_, err = r.exec(ctx, signalOpType, "select set_config('osac.event_severity', $1, true)", r.eventSeverity)
+	if err != nil {
+		return
 	}
 
 	// Assign the version to itself to cause the change trigger to enqueue the signal event without changing the object.

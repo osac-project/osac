@@ -29,6 +29,7 @@ import "osac/public/v1/tenant_type.proto";
 import "osac/public/v1/role_binding_type.proto";
 import "osac/public/v1/role_type.proto";
 import "osac/public/v1/secret_type.proto";
+import "osac/public/v1/workload_cluster_type.proto";
 
 // Represents events delivered by the server.
 message Event {
@@ -66,6 +67,7 @@ message Event {
     RoleBinding role_binding = 14;
     Secret secret = 15;
     Tenant tenant = 16;
+    WorkloadCluster workload_cluster = 41;
   }
 
   reserved 10;

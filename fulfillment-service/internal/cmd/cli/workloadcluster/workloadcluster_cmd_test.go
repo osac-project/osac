@@ -69,6 +69,12 @@ var _ = Describe("WorkloadCluster CLI input", func() {
 		Expect(labels).To(Equal(map[string]string{"environment": "test", "owner": "ai-grid"}))
 	})
 
+	It("preserves commas and equals signs in repeated label values", func() {
+		labels, err := metautil.ParseLabels([]string{"description=region=us-east, gpu", "owner=ai-grid"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(labels).To(Equal(map[string]string{"description": "region=us-east, gpu", "owner": "ai-grid"}))
+	})
+
 	It("rejects malformed labels", func() {
 		_, err := metautil.ParseLabels([]string{"environment"})
 		Expect(err).To(MatchError("invalid label \"environment\": must be in key=value format"))

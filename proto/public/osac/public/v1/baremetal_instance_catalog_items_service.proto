@@ -76,7 +76,7 @@ message BareMetalInstanceCatalogItemsDeleteRequest {
   string id = 1;
 }
 
-message BareMetalInstanceCatalogItemsDeleteResponse {}
+message BareMetalInstanceCatalogItemsDeleteResponse { BareMetalInstanceCatalogItem object = 1; }
 
 service BareMetalInstanceCatalogItems {
   rpc List(BareMetalInstanceCatalogItemsListRequest) returns (BareMetalInstanceCatalogItemsListResponse) {
@@ -103,6 +103,6 @@ service BareMetalInstanceCatalogItems {
     };
   }
   rpc Delete(BareMetalInstanceCatalogItemsDeleteRequest) returns (BareMetalInstanceCatalogItemsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/baremetal_instance_catalog_items/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/baremetal_instance_catalog_items/{id}" response_body: "object"};
   }
 }

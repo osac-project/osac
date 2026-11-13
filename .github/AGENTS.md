@@ -99,5 +99,6 @@ success; a tag existing is not evidence its publish happened.
 | Touched area | Required coverage | Repository-root command | Boundary |
 | --- | --- | --- | --- |
 | Umbrella release notes, package inventory, Latest selection, and Slack publication/staging notifications | [DEV] Unit | `python3 -m unittest discover -s .github/scripts -p test_umbrella_release.py -v` (requires PyYAML 6.0.3, Bash, and jq) | Runs the actual Python helpers and notification shell with synthetic chart archives and captured GitHub/Slack operations; no live publication or Konflux cluster. |
+| Release versions: `RELEASE_LINE`, the version helpers in `osac-installer/scripts/lib.sh`, the `prepare` job's version steps, `resolve-chart-version` in `.tekton/*-chart/release.yaml` | [DEV] Unit | `python3 -m unittest discover -s .github/scripts -p test_release_versioning.py -v` (requires PyYAML 6.0.3, Bash, git, and jq) | Runs the actual workflow steps and Tekton scripts in throwaway git repositories; no Konflux cluster, no registry. |
 
 See [release automation test boundaries](../docs/INTEGRATION-TESTING.md#release-automation).

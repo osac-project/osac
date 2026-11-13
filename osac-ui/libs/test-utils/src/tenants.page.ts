@@ -110,6 +110,16 @@ const getTenantRow = (page: Page, tenantName: string): Locator => {
   );
 };
 
+/** Select the table view so tenant rows are available to list-based helpers. */
+export const selectTenantListView = async (page: Page): Promise<void> => {
+  const listView = page.locator(...TenantsMainPage.listView);
+  await expect(listView).toBeVisible();
+  if ((await listView.getAttribute('aria-pressed')) !== 'true') {
+    await listView.click();
+  }
+  await expect(listView).toHaveAttribute('aria-pressed', 'true');
+};
+
 const getTenantNames = async (page: Page): Promise<string[]> =>
   (
     await page
@@ -136,6 +146,7 @@ export const expectTenantToExist = async (
   tenantName: string,
   timeout = 15_000,
 ): Promise<Locator> => {
+  await selectTenantListView(page);
   const tenantRow = getTenantRow(page, tenantName);
   await expect(tenantRow).toHaveCount(1, { timeout });
   return tenantRow;
@@ -143,6 +154,7 @@ export const expectTenantToExist = async (
 
 /** Verify that the requested tenant is not already present on the Tenants page. */
 export const expectTenantNotToExist = async (page: Page, tenantName: string): Promise<void> => {
+  await selectTenantListView(page);
   await expectRowNotToExist(
     getTenantRow(page, tenantName),
     `Cannot create tenant "${tenantName}": a tenant with this name already exists.`,
@@ -234,6 +246,7 @@ export const expectTenantToBeSynced = async (
 
 /** Verify that the default shared and system tenants are synced. */
 export const expectDefaultTenants = async (page: Page): Promise<void> => {
+  await selectTenantListView(page);
   for (const tenantName of defaultTenantNames) {
     const tenantRow = getTenantRow(page, tenantName);
     await expect(tenantRow).toHaveCount(1);

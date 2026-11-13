@@ -200,9 +200,9 @@ The full-flow projects run in this order:
 5. `tenant-delete` removes the tenant-admin RoleBinding and OSAC User, SSH
    public-key Secret, tenant, generated credential file, and full-flow state.
 
-`vmaas-all-full-flows` is the aggregator for complete VMaaS flows. It currently
-depends on `vmaas_full_happy_basic`; add future full-flow projects to its
-dependencies in `playwright.config.ts`.
+`vmaas-all-full-flows` is the aggregator for complete VMaaS flows. It depends
+on `vmaas_full_happy_basic` and `vmaas-full-resize`; add future full-flow
+projects to its dependencies in `playwright.config.ts`.
 
 Run the complete creation flow, including VM creation, with:
 
@@ -250,6 +250,36 @@ resource already exists, so the remaining flow steps are not started. Use
 ```bash
 pnpm --filter @osac/playwright exec playwright test \
   --project=vm-flow --headed
+```
+
+### VM resize flow tests
+
+The resize flow reuses the existing `vmaas-full-flow-pre-resource` project for
+its base instance type, disk image, storage tier, tenant, and published catalog
+item. The resize spec creates its target and mixed-direction instance types in
+`beforeAll`, creates a fresh, resize-specific VM at the start of each scenario,
+and deletes that VM in `afterEach`. The existing full-flow teardown chain cleans
+up the shared resources after the resize project finishes.
+
+The scenario is in
+`apps/e2e-tests/src/vmaas/resize/resize.vm.spec.ts` and uses the test-plan
+names `TC-NFR1-01` and `TC-FR1-02`. The first verifies that a running VM reports
+`RESTART REQUIRED=True` after Save and applies the new sizing only after
+Restart. The second resizes a stopped VM, starts it, and verifies the new
+mixed-direction sizing for `TC-FR2-02`.
+
+Run it with:
+
+```bash
+bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
+  --osac-ui-dir="$PWD" --tag=vmaas_resize
+```
+
+The same flow can be run directly after the common runner preparation:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-resize
 ```
 
 ### Storage tier flow tests

@@ -2352,6 +2352,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			catIDNoType   string
 			subnetID1     string
 			subnetID2     string
+			subnetName1   string
 		)
 
 		boolPtr := func(v bool) *bool { return &v }
@@ -2497,6 +2498,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				}.Build()).Do(ctx)
 				Expect(createErr).ToNot(HaveOccurred())
 				*idPtr = resp.GetObject().GetId()
+				if i == 0 {
+					subnetName1 = resp.GetObject().GetMetadata().GetName()
+				}
 			}
 
 			// Create catalog items referencing the templates.
@@ -2550,6 +2554,32 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(attachments).To(HaveLen(1))
 			Expect(attachments[0].HasPrimary()).To(BeTrue())
 			Expect(attachments[0].GetPrimary()).To(BeTrue())
+		})
+
+		It("resolves a name-only reference to the tenant default Subnet from another project", func() {
+			seedTenantProject(testTenant, "other-project")
+			resp, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:    fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Project: "other-project",
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Name: subnetName1}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			attachments := resp.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetSubnet().GetId()).To(Equal(subnetID1))
 		})
 
 		It("Accepts single attachment with valid interface and primary true", func() {

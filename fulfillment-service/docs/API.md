@@ -640,6 +640,15 @@ message ThingsDeleteRequest {
 message ThingsDeleteResponse {}
 ```
 
+`Delete` sets `metadata.deletion_timestamp`. If the object has no finalizers, it is archived before
+the call returns. If finalizers remain, the object stays stored and the call can still succeed;
+success means deletion was requested, not that archival is complete. The component responsible for
+each finalizer must finish cleanup and remove it through a private `Update` call. Those updates
+must follow the [finalizer version requirements](#update-when-supported). The
+`EVENT_TYPE_OBJECT_DELETED` event marks the archival boundary. For the controller ordering used
+when deleting tenants and projects, see the
+[cascading deletion codewalk](CODEWALK.md#end-to-end-flow-cascading-deletion-of-a-tenant-and-its-projects).
+
 ### Signal (private API only)
 
 The request contains only the `id`. The response is empty. This method has no REST transcoding

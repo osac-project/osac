@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Sourced by other scripts, all of which already set this themselves before
-# sourcing -- set here too so a function like resolve_release_tag() still
+# sourcing -- set here too so a function like resolve_line_version() still
 # fails loudly instead of silently continuing on an internal error if this
 # is ever sourced by a script that forgot to.
 set -euo pipefail
@@ -587,62 +587,113 @@ except (ValueError, base64.binascii.Error):
     get_fulfillment_access_token "${issuer_url}" "${client_id}" "${client_secret}" "$@"
 }
 
-# Resolve the highest real (non-nightly) component release tag matching
-# "<prefix>/vX.Y.Z" -- scoped by prefix since tags aren't path-scoped.
+# Release-line versioning. Every artifact built from a branch shares the
+# X.Y recorded in that branch's RELEASE_LINE file; each component and the
+# umbrella keep their own Z and their own rc.N inside that line. A release
+# version is X.Y.Z or X.Y.Z-rc.N, nothing else. Each number has at most six
+# digits, which keeps the sort key below and patch arithmetic in range.
 #
-# Name-based (git tag -l), not ancestry-based (git describe --tags):
-# release tags get created on a throwaway temp-branch commit that's never
-# merged back into the default branch, so an ancestry walk from a fresh
-# checkout can never see them -- confirmed live, it left nightly stuck
-# resolving a week-old base version while real releases kept shipping.
-# `git tag -l` lists every tag in the local object database regardless of
-# branch, which is what "latest real release" actually means here.
-#
-# The glob is still not a real anchor, so candidates are re-validated with
-# a regex before being trusted -- fails loudly rather than guessing a
-# version and packaging a chart under a made-up tag.
-# Usage: resolve_release_tag <repo_path> [tag_prefix]
-# tag_prefix defaults to "osac" (umbrella chart tags: osac/vX.Y.Z).
-resolve_release_tag() {
-    local path="$1"
-    local prefix="${2:-osac}"
-    local tag
-    local match_pattern
-    local validate_regex
+# Lookups are name-based (git tag -l), not ancestry-based: release tags sit
+# on throwaway temp-branch commits that are never merged back, so an
+# ancestry walk can never see them. Tags are not branch-scoped either,
+# which is why every lookup filters by line.
+readonly RELEASE_VERSION_RE='^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})(-rc\.([1-9][0-9]{0,5}))?$'
+
+# Usage: read_release_line <repo_root>
+read_release_line() {
+    local file="$1/RELEASE_LINE"
+    local line
+
+    if [[ ! -r "${file}" ]]; then
+        echo "ERROR: ${file} not found — every branch must record its release line (X.Y)" >&2
+        return 1
+    fi
+    line=$(tr -d '[:space:]' < "${file}")
+    if [[ ! "${line}" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]]; then
+        echo "ERROR: ${file} must contain a release line of the form X.Y" >&2
+        return 1
+    fi
+    echo "${line}"
+}
+
+# Usage: is_release_version <version>
+is_release_version() {
+    [[ "$1" =~ ${RELEASE_VERSION_RE} ]]
+}
+
+# Usage: is_prerelease_version <version>
+is_prerelease_version() {
+    [[ "$1" == *-* ]]
+}
+
+# Usage: release_line_of <version>
+release_line_of() {
+    local base="${1%%-*}"
+    echo "${base%.*}"
+}
+
+# Fixed-width key that sorts in semver precedence: a stable version ranks
+# above every rc of the same X.Y.Z, and rc numbers compare numerically.
+_release_version_key() {
+    [[ "$1" =~ ${RELEASE_VERSION_RE} ]] || return 1
+    local rc="${BASH_REMATCH[5]:-}"
+    printf '%010d%010d%010d%d%010d\n' \
+        "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" \
+        "$([[ -z "${rc}" ]] && echo 1 || echo 0)" "${rc:-0}"
+}
+
+# Usage: release_version_gt <a> <b>
+release_version_gt() {
+    local a b
+    a=$(_release_version_key "$1") || return 1
+    b=$(_release_version_key "$2") || return 1
+    [[ "${a}" > "${b}" ]]
+}
+
+# Print the highest <prefix>/v<version> in the given release line, without
+# the prefix. Prints nothing and returns 1 when the line has no version.
+# Nightly tags never match the release grammar, so they are ignored.
+# Usage: resolve_line_version <repo_path> <tag_prefix> <line> [stable-only]
+resolve_line_version() {
+    local path="$1" prefix="$2" line="$3" stable_only="${4:-}"
+    local tag version key best="" best_key=""
 
     if [[ ! "${prefix}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
         echo "ERROR: invalid tag prefix '${prefix}' — must match [a-zA-Z0-9_-]+" >&2
         return 1
     fi
 
-    match_pattern="${prefix}/v[0-9]*.[0-9]*.[0-9]*"
-    validate_regex="^${prefix}/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+    while IFS= read -r tag; do
+        version="${tag#"${prefix}"/v}"
+        is_release_version "${version}" || continue
+        [[ "$(release_line_of "${version}")" == "${line}" ]] || continue
+        if [[ -n "${stable_only}" ]] && is_prerelease_version "${version}"; then
+            continue
+        fi
+        key=$(_release_version_key "${version}")
+        if [[ -z "${best_key}" || "${key}" > "${best_key}" ]]; then
+            best="${version}"
+            best_key="${key}"
+        fi
+    done < <(git -C "${path}" tag -l "${prefix}/v${line}.*")
 
-    tag=$(git -C "${path}" tag -l "${match_pattern}" | { grep -E "${validate_regex}" || true; } | sort -V | tail -1)
-    if [[ -z "${tag}" ]]; then
-        echo "ERROR: no real (non-nightly) ${prefix}/vX.Y.Z release tag found in ${path} — refusing to guess a version" >&2
-        return 1
-    fi
-    echo "${tag}"
+    [[ -n "${best}" ]] || return 1
+    echo "${best}"
 }
 
-# Validate a plain semver.org version string (no leading 'v'). Full
-# semver.org grammar adapted to POSIX ERE for bash's =~: rejects
-# leading-zero numeric identifiers (e.g. "01.2.3", "1.2.3-01") and
-# malformed dot-separated prerelease/build identifiers that a more
-# permissive [a-zA-Z0-9.]+ charset would let through. Shared here so
-# osac-build-and-publish.yaml's release_version/component_versions inputs
-# (see OSAC-5337) don't grow a second hand-copied regex to drift out of
-# sync with, the exact class of bug OSAC-5178 fixed.
-# Usage: validate_semver <version>
-validate_semver() {
-    local version="$1"
-    local semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$'
-    # Reject pathologically long input before it ever reaches the regex engine --
-    # cheap defense-in-depth against the prerelease clause's repeated alternation
-    # groups, independent of how expensive a match against them actually is.
-    # No real semver string needs anywhere near this length.
-    [[ "${#version}" -le 128 ]] && [[ "${version}" =~ ${semver_re} ]]
+# Base for a nightly version: the patch after the line's latest stable
+# release, or X.Y.0 while the line has none, so a nightly never sorts below
+# a stable release it was built after.
+# Usage: nightly_base_version <repo_path> <tag_prefix> <line>
+nightly_base_version() {
+    local path="$1" prefix="$2" line="$3"
+    local latest
+
+    if latest=$(resolve_line_version "${path}" "${prefix}" "${line}" stable-only); then
+        echo "${line}.$(( ${latest##*.} + 1 ))"
+    else
+        echo "${line}.0"
+    fi
 }
 
 # True if <prefix>/v<version> already exists as a tag reachable from this

@@ -55,7 +55,7 @@ func listCmd() *cobra.Command {
 				return err
 			}
 			defer func() {
-				if closeErr := conn.Close(); err == nil {
+				if closeErr := conn.Close(); err == nil && closeErr != nil {
 					err = closeErr
 				}
 			}()
@@ -81,7 +81,7 @@ func describeCmd() *cobra.Command {
 				return err
 			}
 			defer func() {
-				if closeErr := conn.Close(); err == nil {
+				if closeErr := conn.Close(); err == nil && closeErr != nil {
 					err = closeErr
 				}
 			}()

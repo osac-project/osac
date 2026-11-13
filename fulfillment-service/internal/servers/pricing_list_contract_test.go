@@ -40,17 +40,28 @@ var _ = Describe("Pricing list proto contract", func() {
 		}
 	}
 
-	DescribeTable("requires a supplied three-character currency on both request contracts",
+	DescribeTable("requires a supplied nonempty provider-owned currency on both request contracts",
 		func(currency *string, valid bool) {
-			checkBoth(publicv1.ProviderRateCardItemsListRequest_builder{CurrencyCode: currency}.Build(),
-				&privatev1.ProviderRateCardItemsListRequest{}, valid)
+			public := publicv1.ProviderRateCardItemsListRequest_builder{CurrencyCode: currency}.Build()
+			private := &privatev1.ProviderRateCardItemsListRequest{}
+			checkBoth(public, private, valid)
+			if currency != nil {
+				Expect(public.GetCurrencyCode()).To(Equal(*currency))
+				Expect(private.GetCurrencyCode()).To(Equal(*currency))
+			}
 		},
 		Entry("omitted", nil, false),
 		Entry("empty", proto.String(""), false),
-		Entry("short", proto.String("US"), false),
-		Entry("long", proto.String("USDX"), false),
+		Entry("one character", proto.String("X"), true),
+		Entry("short", proto.String("US"), true),
+		Entry("long", proto.String("USDX"), true),
+		Entry("provider currency name", proto.String("US Dollar"), true),
 		Entry("three characters", proto.String("USD"), true),
 		Entry("lowercase is not prohibited", proto.String("usd"), true),
+		Entry("mixed case is not normalized", proto.String("uSd"), true),
+		Entry("no OSAC allowlist", proto.String("XYZ"), true),
+		Entry("no OSAC character policy", proto.String("12!"), true),
+		Entry("no trimming", proto.String(" USD "), true),
 	)
 
 	DescribeTable("validates pagination without prohibiting clamped offsets",
@@ -75,7 +86,7 @@ var _ = Describe("Pricing list proto contract", func() {
 			if operator == publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_EQUALS {
 				value = "small"
 			}
-			checkBoth(publicv1.ProviderRateCardItemsListResponse_builder{
+			public := publicv1.ProviderRateCardItemsListResponse_builder{
 				Items: []*publicv1.ProviderRateCardItem{publicv1.ProviderRateCardItem_builder{
 					Service: service, CurrencyCode: currency, Dimension: "compute_rate",
 					ResourceConditions: []*publicv1.ProviderRateCardItemResourceCondition{
@@ -86,7 +97,11 @@ var _ = Describe("Pricing list proto contract", func() {
 					// Neither an ANY value nor the provider's unit has a nonempty/known-unit requirement.
 					Rate: publicv1.ProviderRateCardItemRate_builder{Amount: "1", Unit: "provider-unit"}.Build(),
 				}.Build()},
-			}.Build(), &privatev1.ProviderRateCardItemsListResponse{}, valid)
+			}.Build()
+			private := &privatev1.ProviderRateCardItemsListResponse{}
+			checkBoth(public, private, valid)
+			Expect(public.GetItems()[0].GetCurrencyCode()).To(Equal(currency))
+			Expect(private.GetItems()[0].GetCurrencyCode()).To(Equal(currency))
 		},
 		Entry("ANY permits empty value", "compute_instance", "USD", "instance_type",
 			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, true),
@@ -98,10 +113,22 @@ var _ = Describe("Pricing list proto contract", func() {
 			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, false),
 		Entry("missing currency", "compute_instance", "", "instance_type",
 			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, false),
+		Entry("one-character currency", "compute_instance", "X", "instance_type",
+			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, true),
 		Entry("short currency", "compute_instance", "US", "instance_type",
-			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, false),
+			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, true),
 		Entry("long currency", "compute_instance", "USDX", "instance_type",
-			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, false),
+			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, true),
+		Entry("provider currency name", "compute_instance", "US Dollar", "instance_type",
+			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, true),
+		Entry("mixed case is not normalized", "compute_instance", "uSd", "instance_type",
+			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, true),
+		Entry("no trimming", "compute_instance", " USD ", "instance_type",
+			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, true),
+		Entry("no OSAC allowlist", "compute_instance", "XYZ", "instance_type",
+			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, true),
+		Entry("no OSAC character policy", "compute_instance", "12!", "instance_type",
+			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, true),
 		Entry("unspecified operator", "compute_instance", "USD", "instance_type",
 			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_UNSPECIFIED, false),
 		Entry("undefined operator", "compute_instance", "USD", "instance_type",

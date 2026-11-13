@@ -69,9 +69,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if err := rendering.ValidateFormat(c.format); err != nil {
 		return err
 	}
-	if len(c.currencyCode) != 3 {
-		return fmt.Errorf("invalid --currency-code %q: must be a 3-letter ISO-4217 currency code, such as USD",
-			c.currencyCode)
+	if c.currencyCode == "" {
+		return fmt.Errorf("--currency-code must not be empty")
 	}
 	cfg := config.SettingsFromContext(ctx)
 	if !cfg.Armed() {
@@ -216,8 +215,9 @@ const shortHelp = `List provider rate-card rows`
 const longHelp = `
 List the billing provider's rate-card rows as currency-specific, provider-neutral rows: service, currency, priced
 dimension, match conditions, rate amount and unit, and the OSAC catalog items each row can price. The {{ bt }}--currency-code{{ bt }}
-flag is required: OSAC never discovers the currency of a billing account, so the 3-letter ISO-4217 code must always
-be given. Only Cloud Provider Admins may run it. Fails when billing is disabled.
+flag is required and must not be empty. Supply a currency value accepted by the billing provider; OSAC passes it
+unchanged, without inferring a currency or normalizing its case. Only Cloud Provider Admins may run it. Fails when
+billing is disabled.
 `
 
 const example = `  # List the rows of one service and currency
@@ -239,8 +239,8 @@ filter until billing account assignment is implemented.`
 
 const serviceFlagHelp = `_SERVICE_ - Limit rows to one OSAC service, such as {{ bt }}compute_instance{{ bt }}.`
 
-const currencyCodeFlagHelp = `_CURRENCY_CODE_ - Required. Limit rows to one ISO-4217 currency, given as its 3-letter code, such as {{ bt }}USD{{ bt }}. OSAC
-does not discover the currency, so the code must always be provided.`
+const currencyCodeFlagHelp = `_CURRENCY_CODE_ - Required, nonempty currency value accepted by the billing provider, such as {{ bt }}USD{{ bt }}.
+OSAC passes the value unchanged and does not infer a currency or normalize its case.`
 
 const filterFlagHelp = `_EXPRESSION_ - CEL expression used for filtering results. The expression is evaluated against each row and only those for
 which it returns true are included in the output.`

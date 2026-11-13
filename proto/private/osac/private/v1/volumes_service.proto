@@ -110,6 +110,7 @@ message VolumesDeleteRequest {
 }
 
 message VolumesDeleteResponse {
+  Volume object = 1;
 }
 
 message VolumesSignalRequest {
@@ -155,7 +156,7 @@ service Volumes {
 
   // Deletes a volume.
   rpc Delete(VolumesDeleteRequest) returns (VolumesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/volumes/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/volumes/{id}" response_body: "object"};
   }
 
   // Signals the volume for re-reconciliation. Called by the operator feedback controller after

@@ -22,8 +22,6 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	gen "github.com/osac-project/osac/terraform-provider/internal/gen/resource_bare_metal_instance"
 )
@@ -93,12 +91,7 @@ func (r *bareMetalInstanceResource) Metadata(ctx context.Context,
 // whose contents never flow through the provider.
 func (r *bareMetalInstanceResource) Schema(ctx context.Context,
 	request resource.SchemaRequest, response *resource.SchemaResponse) {
-	generated := gen.BareMetalInstanceResourceSchema(ctx)
-	if attribute, ok := generated.Attributes["id"].(schema.StringAttribute); ok {
-		attribute.PlanModifiers = append(attribute.PlanModifiers, stringplanmodifier.UseStateForUnknown())
-		generated.Attributes["id"] = attribute
-	}
-	response.Schema = generated
+	response.Schema = useStateForUnknown(gen.BareMetalInstanceResourceSchema(ctx))
 }
 
 // Configure is the implementation of the resource.Resource interface.

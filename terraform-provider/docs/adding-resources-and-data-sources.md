@@ -51,8 +51,9 @@ constructor, and wire it to the client.
 **Resource** (see `resource_secret.go`):
 
 - Schema: start from the generated schema, then add what it can't express
-  (see [adr/0003](adr/0003-keep-schema-glue-hand-written.md)): 
-  `UseStateForUnknown` on `id`, `RequiresReplace` on fields the server
+  (see [adr/0003](adr/0003-keep-schema-glue-hand-written.md)):
+  `useStateForUnknown(...)` on the whole schema (computed attributes the
+  configuration leaves unset), `RequiresReplace` on fields the server
   rejects changing, `markSensitive(...)` on secret material.
 - `Create`: build the request body (metadata name + tenant), `create`,
   store the returned `id`, set the state.

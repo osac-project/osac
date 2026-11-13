@@ -157,10 +157,12 @@ func (a *adapter) CorrelationValue(ctx context.Context, ref billing.AccountRef) 
 	return acct.ExternalID, acct.ExternalID != "", nil
 }
 
-// M360 accepts externalId only when an account is created, so there is nothing to write afterwards.
+// SupportsCorrelationWrite implements billing.Adapter. The merged design approves read-only correlation handling for
+// M360 in this increment, so the adapter advertises no write even though the vendor documents a scalar-field update
+// (see README.md and design §4.1/§4.6). The provider keeps the value the Cloud Provider Admin sets on its side.
 func (a *adapter) SupportsCorrelationWrite() bool { return false }
 
-// SetCorrelationValue implements billing.Adapter and always fails UNSUPPORTED.
+// SetCorrelationValue implements billing.Adapter and always fails UNSUPPORTED without contacting the provider.
 func (a *adapter) SetCorrelationValue(context.Context, billing.AccountRef, string) error {
 	return &billing.Error{Reason: billing.ReasonUnsupported, Op: "SetCorrelationValue"}
 }

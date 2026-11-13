@@ -500,6 +500,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	var tenancyLogic auth.TenancyLogic
 	tenancyLogic, err = auth.NewDefaultTenancyLogic().
 		SetLogger(c.logger).
+		SetTenantResolver(database.ResolveLiveTenantNames).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create default tenancy logic: %w", err)
@@ -509,6 +510,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	evaluator, err := auth.NewEvaluator().
 		AddEmergencyServiceAccounts(c.args.emergencyServiceAccounts).
 		SetManagedServiceAccountResolver(serviceaccounts.ResolveAuthorization).
+		SetTenantResolver(database.ResolveLiveTenantNames).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create authorization evaluator: %w", err)
@@ -665,6 +667,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			metricsInterceptor.StreamServer,
 			loggingInterceptor.StreamServer,
 			validationInterceptor.StreamServer,
+			txInterceptor.StreamServer,
 			authnInterceptor.StreamServer,
 			authzInterceptor.StreamServer,
 			jitProvisioningInterceptor.StreamServer,

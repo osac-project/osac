@@ -149,8 +149,8 @@ func (x *TenantBillingAssignmentSpec) SetBillingAccountId(v string) {
 type TenantBillingAssignmentSpec_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// OSAC tenant billed by this interval. Not an authorization credential: a tenant caller's own identity, not this
-	// field, determines which assignments they may read.
+	// OSAC tenant billed by this interval. Data, not an authorization credential. The caller must be an authorized
+	// administrator whose trusted tenant scope includes this tenant. Tenant callers have no self-service read path.
 	TenantId string
 	// BillingAccount.id assigned to the tenant for this interval.
 	BillingAccountId string
@@ -274,10 +274,11 @@ type TenantBillingAssignmentStatus_builder struct {
 	ConnectionState TenantBillingAssignmentConnectionState
 	// Time this assignment interval became active.
 	EffectiveFrom *timestamppb.Timestamp
-	// Time this assignment interval stopped being active. Unset while it is the current assignment.
+	// Time this assignment interval stopped being active. Unset while it is the current assignment. Tenant deletion
+	// closes the current interval and retains it as a read-only tombstone, releasing the account for another tenant.
 	EffectiveTo *timestamppb.Timestamp
 	// Optional detail, such as the PENDING remediation and its stable reason
-	// (BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED). Empty on success.
+	// (BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED), or the tenant-deletion tombstone. Empty on connected success.
 	Message string
 }
 

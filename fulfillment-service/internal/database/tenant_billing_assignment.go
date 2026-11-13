@@ -22,6 +22,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 )
 
 // TenantBillingAssignmentInsert carries the fields of one new assignment interval.
@@ -84,6 +86,23 @@ func CloseAndInsertTenantBillingAssignment(
 		return "", fmt.Errorf("insert tenant billing assignment: %w", err)
 	}
 	return id, nil
+}
+
+// TenantBillingAssignmentDeletedMessage marks the interval closed by tenant deletion without exposing
+// provider identifiers or changing its last validated connection state.
+const TenantBillingAssignmentDeletedMessage = "TENANT_DELETED: tenant deleted; assignment retained as billing history"
+
+// CloseTenantBillingAssignmentOnDeletion closes only the tenant's current interval in the caller's deletion
+// transaction. The caller holds the tenant row lock, serializing deletion with assignment finalization.
+// Closed history (including an interval closed by an earlier Delete) is never rewritten.
+func CloseTenantBillingAssignmentOnDeletion(ctx context.Context, tx Tx, tenantID string) error {
+	_, err := tx.Exec(ctx, `
+		update tenant_billing_assignments set effective_to = now(), message = $2
+		where tenant_id = $1 and effective_to is null`, tenantID, TenantBillingAssignmentDeletedMessage)
+	if err != nil {
+		return fmt.Errorf("close tenant billing assignment on tenant deletion: %w", err)
+	}
+	return nil
 }
 
 // GetTenantBillingAssignment returns one assignment interval by id, or a pgx.ErrNoRows-wrapping error when it
@@ -192,9 +211,36 @@ func tenantBillingAssignmentOrderSQL(order string) (string, error) {
 // current-first by default. An unset limit serves flatTableDefaultLimit rows; an explicit one is clamped.
 func ListTenantBillingAssignments(ctx context.Context, tx Tx, offset, limit int32, filter, order string) (
 	items []TenantBillingAssignmentRow, total int32, err error) {
+	return ListTenantBillingAssignmentsForTenants(ctx, tx, offset, limit, filter, order,
+		collections.NewUniversalSet[string]())
+}
+
+// ListTenantBillingAssignmentsForTenants intersects the caller's trusted tenant scope with the request filter
+// in SQL, before counting or paginating. An empty (including zero-value) set matches no rows. The scope is not
+// expressed as a client filter: the flat filter grammar cannot represent a multi-tenant OR expression.
+func ListTenantBillingAssignmentsForTenants(ctx context.Context, tx Tx, offset, limit int32, filter, order string,
+	tenants collections.Set[string],
+) (items []TenantBillingAssignmentRow, total int32, err error) {
 	whereSQL, args, err := tenantBillingAssignmentFilterSQL(filter)
 	if err != nil {
 		return nil, 0, err
+	}
+	if !tenants.Universal() {
+		var scopeSQL string
+		switch {
+		case tenants.Empty():
+			scopeSQL = "false"
+		case tenants.Finite():
+			args = append(args, tenants.Inclusions())
+			scopeSQL = fmt.Sprintf("tenant_id = any($%d::text[])", len(args))
+		default:
+			args = append(args, tenants.Exclusions())
+			scopeSQL = fmt.Sprintf("not (tenant_id = any($%d::text[]))", len(args))
+		}
+		if whereSQL != "" {
+			whereSQL += " and "
+		}
+		whereSQL += scopeSQL
 	}
 	orderSQL, err := tenantBillingAssignmentOrderSQL(order)
 	if err != nil {

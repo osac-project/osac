@@ -648,7 +648,38 @@ The authorization policy allows:
    - Service accounts: `Create`, `Get`, `List`, `Update`, `Delete`, `RegenerateSecret`
 
 5. **Admin Users**:
-   - All methods (full access)
+   - All methods (full access), except billing methods that are not on the reviewed
+     allow-list (see below)
+
+**Billing methods:** Billing method grants are restricted to admin subjects
+(`is_admin`), with assignment access additionally limited to the subject's trusted
+tenant scope. Current platform administrators have universal tenant scope. The billing
+service namespaces are excluded from the admin catch-all and
+served by a closed, reviewed allow-list: `BillingAccounts/List`,
+`BillingProviderStatuses/Get`, and `TenantBillingAssignments/List`, `Get`, `Create`, and
+`Update`, on both the public and private APIs. The private
+`TenantBillingAssignments/Signal` method is admin-only. Any other billing method is
+denied for every subject, and no tenant role or other realm role grants billing access.
+No `cloud-provider-admin` realm role is provisioned; a token that claims it grants
+nothing. `tenant_id` on an assignment is data, not an authorization credential, and
+there is no tenant self-service assignment read.
+
+### Tenant deletion and existing tokens
+
+Ordinary Fulfillment tenant scope is checked against PostgreSQL before subject
+construction/JIT, again for resource visibility, and for each Events.Watch
+delivery. Deleted memberships are removed without a time-based cache; managed
+service-account credentials also require a live tenant. Other live memberships,
+shared visibility, and platform administrator/controller cleanup access remain.
+An archived tenant name is not treated as a new JIT onboarding request.
+
+These checks apply at the authorization or delivery lookup, not by invalidating
+the JWT signature or serializing already-authorized in-flight operations against
+deletion. Retained billing history currently prevents reusing the billed tenant's
+name. Explicit same-name recreation of an unbilled tenant remains a separate
+platform identity-policy gap: supported name-only claims cannot distinguish the
+old and new incarnations. This change introduces no token-epoch or permanent
+name-reservation policy and does not claim to resolve that gap.
 
 ### Authorization Levels
 
@@ -663,7 +694,8 @@ The fulfillment service implements a comprehensive authorization model that comb
 
 **Tenancy:** Universal tenant access (`*` - all tenants)
 
-**Permissions:** Full access to all methods (see `is_admin` rule in `authz.rego`)
+**Permissions:** Full access to all methods, except unreviewed billing methods
+(see `is_admin` rule in `authz.rego`)
 
 #### 2. Tenant Admin (`is_tenant_admin`)
 
@@ -933,7 +965,7 @@ reads roles from the `realm_access.roles` claim in JWT tokens.
    - Emergency K8s service accounts (e.g., `system:serviceaccount:<namespace>:admin`)
    - OAuth admin service accounts (e.g., `service-account-osac-admin`, `service-account-osac-controller`)
    - Users in admin groups (e.g., the `admins` group)
-   - Have full access to all operations
+   - Have full access to all reviewed operations, including the billing allow-list
 
 2. **Tenant Admin Users**:
    - Users with the `tenant-admin` realm role

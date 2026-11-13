@@ -102,7 +102,11 @@ matching EP amendment):
   `0:<l2_vni>` / `0:<l3_vni>` and MTU 1500.
 - OVN-Kubernetes creates the network's BGP VRF router itself, writes its raw
   config with priority 10, and publishes the VRF name as
-  `ClusterUserDefinedNetwork.status.vrfName`. `cudn_evpn` applies one
+  `ClusterUserDefinedNetwork.status.vrfName`; OVN-Kubernetes 4.22 publishes
+  only conditions, so `cudn_evpn` derives the name
+  `mp<network-id>-udn-vrf` from the network ID that the cluster manager
+  annotates on the network's NetworkAttachmentDefinition
+  (`k8s.ovn.org/network-id`). `cudn_evpn` applies one
   companion FRRConfiguration per installer node at raw priority 15 that adds
   `bgp bestpath as-path multipath-relax` and `maximum-paths 16` (in address
   family IPv4 unicast) to that router, using the ASN of the source

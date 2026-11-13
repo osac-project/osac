@@ -51,6 +51,15 @@ FRR_COMPANION_MAX_NAME = 253
 FRR_RAW_PRIORITY = 15
 FRR_MAXIMUM_PATHS = 16
 
+# OVN-Kubernetes 4.22 publishes only conditions in the CUDN status. It names
+# the Linux VRF device of a CUDN ``mp<network-id>-udn-vrf`` from the network
+# ID that its cluster manager annotates on the network's
+# NetworkAttachmentDefinition. Newer releases publish ``status.vrfName``.
+NAD_API_VERSION = "k8s.cni.cncf.io/v1"
+NAD_NETWORK_ID_ANNOTATION = "k8s.ovn.org/network-id"
+UDN_VRF_PREFIX = "mp"
+UDN_VRF_SUFFIX = "-udn-vrf"
+
 LABEL_TENANT = "osac.openshift.io/tenant"
 LABEL_VN = "osac.openshift.io/virtualnetwork-id"
 LABEL_OWNER_KIND = "osac.openshift.io/owner-kind"
@@ -511,6 +520,7 @@ def _plan(job: dict) -> dict:
         "frr_namespace": FRR_NAMESPACE,
         "frr_source_selector": FRR_SOURCE_SELECTOR,
         "frr_companion_label": FRR_COMPANION_LABEL,
+        "nad_api_version": NAD_API_VERSION,
     }
 
     if kind == "VirtualNetwork":
@@ -701,9 +711,26 @@ def cudn_evpn_owned(obj: Any, owner_kind: str, owner_id: str, tenant: str) -> bo
 # ---------------------------------------------------------------------------
 
 
-def _vrf_name(cudn: Any) -> str:
+def _nad_network_id(nad_info: Any) -> int | None:
+    """The OVN-Kubernetes network ID annotated on the CUDN's NAD."""
+    for nad in (nad_info or {}).get("resources") or []:
+        annotations = ((nad or {}).get("metadata") or {}).get("annotations") or {}
+        value = annotations.get(NAD_NETWORK_ID_ANNOTATION)
+        if isinstance(value, str) and value.isascii() and value.isdigit():
+            network_id = int(value)
+            # The derived name has to fit the 15-character device-name limit
+            # that makes OVN-Kubernetes use this form for a CUDN.
+            if 1 <= network_id <= 99999:
+                return network_id
+    return None
+
+
+def _vrf_name(cudn: Any, nad_info: Any = None) -> str:
     name = ((cudn or {}).get("status") or {}).get("vrfName")
-    return name if isinstance(name, str) else ""
+    if isinstance(name, str) and name:
+        return name
+    network_id = _nad_network_id(nad_info)
+    return f"{UDN_VRF_PREFIX}{network_id}{UDN_VRF_SUFFIX}" if network_id is not None else ""
 
 
 def _frr_routers(config: dict) -> list:
@@ -724,14 +751,17 @@ def _underlay_router_asn(config: dict) -> int | None:
     return None
 
 
-def cudn_evpn_vrf_bestpath(cudn: Any, frr_info: Any, plan: dict) -> dict:
+def cudn_evpn_vrf_bestpath(cudn: Any, frr_info: Any, plan: dict, nad_info: Any = None) -> dict:
     """The companion FRRConfigurations that add the VRF's multipath policy.
 
-    OVN-Kubernetes generates ``router bgp <asn> vrf <status.vrfName>`` and
+    OVN-Kubernetes generates ``router bgp <asn> vrf <vrf-name>`` and
     appends its own raw config after every raw config of a lower priority.
     FRR-k8s merges the raw configs of every FRRConfiguration whose
     nodeSelector matches a node, so one companion per source configuration
     (one per node in the installer) adds the policy to that VRF router.
+    The VRF name is ``status.vrfName`` when the cluster publishes it; on
+    OVN-Kubernetes 4.22, which only publishes conditions, it is derived from
+    the network ID annotated on the CUDN's NetworkAttachmentDefinition.
 
     Returns ``{ready, retryable, message, manifests}``. A hub that is still
     setting the network up is retryable; a source configuration without an
@@ -739,15 +769,16 @@ def cudn_evpn_vrf_bestpath(cudn: Any, frr_info: Any, plan: dict) -> dict:
     """
     task = plan.get("task")
     cudn_name = plan.get("cudn_name")
-    vrf = _vrf_name(cudn)
+    vrf = _vrf_name(cudn, nad_info)
     if not vrf or len(vrf) > 64 or any(ch.isspace() for ch in vrf):
         return {
             "ready": False,
             "retryable": True,
             "manifests": [],
             "message": (
-                f"cudn_evpn {task}: the hub network {cudn_name} does not report a usable "
-                f"status.vrfName yet; OSAC retries the task."
+                f"cudn_evpn {task}: the hub network {cudn_name} does not publish a usable "
+                f"status.vrfName and has no NetworkAttachmentDefinition network-id yet; "
+                f"OSAC retries the task."
             ),
         }
 

@@ -87,14 +87,19 @@ Every object is named from an API ID and carries
   `TransportAccepted`, `NetworkCreated` and `NetworkAllocationSucceeded` True
   (OVN-Kubernetes 4.22 sets no `Ready` condition).
 - **VRF BGP multipath policy.** OVN-Kubernetes creates
-  `router bgp <asn> vrf <status.vrfName>` from the installer's
-  FRRConfiguration and writes it as raw config with priority 10.
+  `router bgp <asn> vrf <vrf-name>` from the installer's FRRConfiguration and
+  writes it as raw config with priority 10. Newer releases publish the name
+  as `ClusterUserDefinedNetwork.status.vrfName`; OVN-Kubernetes 4.22 publishes
+  only conditions and names the VRF `mp<network-id>-udn-vrf`, with the network
+  ID annotated on the network's NetworkAttachmentDefinition
+  (`k8s.ovn.org/network-id`), which `create_subnet` reads from the namespace
+  the CUDN selects (its own `osac-vn-<id>` namespace).
   `create_subnet` reads the installer's per-node FRRConfigurations (label
   `evpn: "true"`) and applies one companion FRRConfiguration per node at raw
   priority 15, which FRR-k8s appends after the generated one:
 
   ```text
-  router bgp <asn> vrf <status.vrfName>
+  router bgp <asn> vrf <vrf-name>
    bgp bestpath as-path multipath-relax
    address-family ipv4 unicast
     maximum-paths 16
@@ -151,7 +156,7 @@ status/reason; they never contain module arguments or tokens.
 | A hub object with our name but someone else's owner labels | |
 | An owned CUDN whose network spec no longer matches the Subnet | |
 | An installer FRRConfiguration without a BGP router ASN | No FRRConfiguration labeled `evpn: "true"` yet |
-| | A hub network without `status.vrfName` yet |
+| | A hub network without `status.vrfName` and without a NetworkAttachmentDefinition network ID yet |
 
 OSAC retries delete tasks after every failure, whatever `retryable` says.
 

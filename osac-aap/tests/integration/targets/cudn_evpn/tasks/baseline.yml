@@ -121,6 +121,8 @@
       - {group: k8s.ovn.org, version: v1, kind: VTEP, plural: vteps}
       - {group: frrk8s.metallb.io, version: v1beta1, kind: FRRConfiguration, plural: frrconfigurations,
          scope: Namespaced}
+      - {group: k8s.cni.cncf.io, version: v1, kind: NetworkAttachmentDefinition,
+         plural: networkattachments, scope: Namespaced}
     ce_frr_namespace: openshift-frr-k8s
     ce_frr_config: osac-evpn-node1
     ce_frr_asn: 65001
@@ -171,8 +173,9 @@
       ansible.builtin.assert:
         that: _ce_existing_crds.results | map(attribute='resources') | map('length') | sum == 0
         fail_msg: >-
-          One of the CRDs clusteruserdefinednetworks.k8s.ovn.org, vteps.k8s.ovn.org or
-          frrconfigurations.frrk8s.metallb.io already exists on this cluster. This target installs
+          One of the CRDs clusteruserdefinednetworks.k8s.ovn.org, vteps.k8s.ovn.org,
+          frrconfigurations.frrk8s.metallb.io or networkattachments.k8s.cni.cncf.io already exists
+          on this cluster. This target installs
           and then deletes fake versions of them, so it refuses to run against a cluster that has
           real or leftover ones; remove them or use a clean Kind cluster.
         quiet: true
@@ -497,6 +500,83 @@
               - "'maximum-paths 16' in ce_obj.spec.raw.rawConfig"
               - "'router bgp ' ~ ce_frr_asn ~ ' vrf vrf-' ~ ce_hub[-8:] in ce_obj.spec.raw.rawConfig"
             quiet: true
+
+        # OVN-Kubernetes 4.22 publishes only conditions in the CUDN status. It
+        # names the VRF mp<network-id>-udn-vrf from the network ID that its
+        # cluster manager annotates on the CUDN's NetworkAttachmentDefinition.
+        - name: Report the hub network ready as OVN-Kubernetes 4.22 does, without status.vrfName
+          kubernetes.core.k8s:
+            state: patched
+            merge_type: merge
+            definition:
+              apiVersion: k8s.ovn.org/v1
+              kind: ClusterUserDefinedNetwork
+              metadata: {name: "{{ ce_hub }}"}
+              status:
+                vrfName: ""
+                conditions:
+                  - {type: TransportAccepted, status: "True", reason: Accepted}
+                  - {type: NetworkCreated, status: "True", reason: Created}
+                  - {type: NetworkAllocationSucceeded, status: "True", reason: Allocated}
+
+        - name: Give OVN-Kubernetes 4.22's hub network a NetworkAttachmentDefinition
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: k8s.cni.cncf.io/v1
+              kind: NetworkAttachmentDefinition
+              metadata:
+                name: "{{ ce_hub }}"
+                namespace: "{{ ce_hub }}"
+                annotations: {k8s.ovn.org/network-id: "4242"}
+              spec:
+                config: '{"cniVersion": "0.3.1", "name": "{{ ce_hub }}", "type": "ovn"}'
+
+        - name: Give the job an empty discovery cache for the NetworkAttachmentDefinition
+          ansible.builtin.file:
+            path: "{{ sft.root }}/discovery-nad"
+            state: directory
+            mode: "0700"
+
+        - name: Rerun create_subnet on a hub without a published VRF name
+          ansible.builtin.include_tasks: run_task.yaml
+          vars:
+            sft_label: subnet-create-s1-nad-vrf
+            sft_env: {TMPDIR: "{{ sft.root }}/discovery-nad"}
+            sft_expect: success
+            ce_task: create_subnet
+            ce_vn_id: "{{ ce_id.vn1 }}"
+            ce_subnet_id: "{{ ce_id.s1 }}"
+            sft_job: "{{ ce_subnet_job }}"
+
+        - name: Read the VRF multipath FRRConfiguration derived from the network ID
+          ansible.builtin.include_tasks: read.yaml
+          vars:
+            ce_api: frrk8s.metallb.io/v1beta1
+            ce_kind: FRRConfiguration
+            ce_name: "osac-evpn-vrf-{{ ce_id.vn1 }}-{{ ce_frr_config }}"
+            ce_ns: "{{ ce_frr_namespace }}"
+
+        - name: Check the derived VRF name carries the multipath policy
+          ansible.builtin.assert:
+            that:
+              - "'router bgp ' ~ ce_frr_asn ~ ' vrf mp4242-udn-vrf' in ce_obj.spec.raw.rawConfig"
+              - "'bgp bestpath as-path multipath-relax' in ce_obj.spec.raw.rawConfig"
+              - "'maximum-paths 16' in ce_obj.spec.raw.rawConfig"
+            quiet: true
+
+        # The later cases expect the published name in their messages, and it
+        # takes precedence over the NetworkAttachmentDefinition network ID.
+        - name: Publish the VRF name again
+          kubernetes.core.k8s:
+            state: patched
+            merge_type: merge
+            definition:
+              apiVersion: k8s.ovn.org/v1
+              kind: ClusterUserDefinedNetwork
+              metadata: {name: "{{ ce_hub }}"}
+              status:
+                vrfName: "vrf-{{ ce_hub[-8:] }}"
 
         - name: Break the installer's EVPN ASN
           kubernetes.core.k8s:

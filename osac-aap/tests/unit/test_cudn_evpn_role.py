@@ -536,6 +536,18 @@ def vrf_cudn(vrf: str = "vrf-abc123") -> dict:
     return {"status": {"vrfName": vrf}}
 
 
+def vrf_nad(network_id: str = "4242", name: str = "osac-vn-a") -> dict:
+    return {
+        "apiVersion": ce.NAD_API_VERSION,
+        "kind": "NetworkAttachmentDefinition",
+        "metadata": {
+            "name": name,
+            "namespace": name,
+            "annotations": {ce.NAD_NETWORK_ID_ANNOTATION: network_id},
+        },
+    }
+
+
 def test_vrf_bestpath_adds_a_raw_companion_per_source_node() -> None:
     result = ce.cudn_evpn_vrf_bestpath(vrf_cudn(), {"resources": [frr_config()]}, plan("create_subnet"))
     assert result["ready"] is True and result["message"] == ""
@@ -613,6 +625,30 @@ def test_vrf_bestpath_without_a_usable_vrf_name_is_retryable(cudn: dict) -> None
     result = ce.cudn_evpn_vrf_bestpath(cudn, {"resources": [frr_config()]}, plan("create_subnet"))
     assert result["ready"] is False and result["retryable"] is True
     assert result["manifests"] == [] and "status.vrfName" in result["message"]
+
+
+def test_vrf_bestpath_derives_the_vrf_name_from_the_nad_network_id() -> None:
+    result = ce.cudn_evpn_vrf_bestpath(
+        {}, {"resources": [frr_config()]}, plan("create_subnet"), {"resources": [vrf_nad()]}
+    )
+    assert result["ready"] is True and result["message"] == ""
+    assert "router bgp 65001 vrf mp4242-udn-vrf\n" in result["manifests"][0]["spec"]["raw"]["rawConfig"]
+
+
+def test_vrf_bestpath_prefers_the_published_vrf_name() -> None:
+    result = ce.cudn_evpn_vrf_bestpath(
+        vrf_cudn(), {"resources": [frr_config()]}, plan("create_subnet"), {"resources": [vrf_nad()]}
+    )
+    assert "router bgp 65001 vrf vrf-abc123\n" in result["manifests"][0]["spec"]["raw"]["rawConfig"]
+
+
+@pytest.mark.parametrize("network_id", ["", "abc", "0", "-1", "1.5", "100000", "\u00b2"])
+def test_vrf_bestpath_without_a_usable_nad_network_id_is_retryable(network_id: str) -> None:
+    result = ce.cudn_evpn_vrf_bestpath(
+        {}, {"resources": [frr_config()]}, plan("create_subnet"), {"resources": [vrf_nad(network_id)]}
+    )
+    assert result["ready"] is False and result["retryable"] is True
+    assert result["manifests"] == [] and "network-id" in result["message"]
 
 
 @pytest.mark.parametrize(

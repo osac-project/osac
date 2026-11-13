@@ -202,6 +202,8 @@ Your Fabric Manager configures, on the fabric:
 - the hub network VMs use as their primary network
 - VM addresses
 - SecurityGroup policy objects bound to VMs
+- the network VRF's BGP multipath policy (`bestpath as-path multipath-relax`,
+  `maximum-paths 16`)
 
 `cudn_evpn` ships in OSAC's base image ([Build the image](#build-the-execution-environment-image)), and the OSAC installer registers it. It builds a Layer2 OVN-Kubernetes ClusterUserDefinedNetwork with `transport: EVPN`. That network uses the Subnet's `l2_vni` and its VirtualNetwork's `l3_vni`.
 

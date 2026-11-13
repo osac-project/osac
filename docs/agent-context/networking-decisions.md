@@ -100,6 +100,16 @@ matching EP amendment):
   V-Net is also configured to serve it. `cudn_evpn` sets
   `infrastructureSubnets: [gateway/32, network+2/32]`, route targets
   `0:<l2_vni>` / `0:<l3_vni>` and MTU 1500.
+- OVN-Kubernetes creates the network's BGP VRF router itself, writes its raw
+  config with priority 10, and publishes the VRF name as
+  `ClusterUserDefinedNetwork.status.vrfName`. `cudn_evpn` applies one
+  companion FRRConfiguration per installer node at raw priority 15 that adds
+  `bgp bestpath as-path multipath-relax` and `maximum-paths 16` (in address
+  family IPv4 unicast) to that router, using the ASN of the source
+  FRRConfiguration's router for the VRF, or its underlay router. The
+  companions must not carry the `evpn: "true"` selector label, or
+  OVN-Kubernetes adopts them as source configurations and rewrites their raw
+  config.
 - A VM on a `cudn_evpn` network can ping the node that hosts it, and nothing on
   the node serves it. OVN-Kubernetes treats every EVPN network as advertised and
   SNATs traffic toward the cluster node IPs to the network's management-port

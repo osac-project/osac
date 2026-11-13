@@ -1,0 +1,57 @@
+---
+# Add the VRF's BGP multipath policy to the hub network
+# (plugins/filter/cudn_evpn.py, cudn_evpn_vrf_bestpath).
+#
+# OVN-Kubernetes generates `router bgp <asn> vrf <status.vrfName>` from the
+# installer's FRRConfigurations and writes it with raw priority 10. FRR-k8s
+# appends raw configs by ascending priority, so one companion FRRConfiguration
+# per source node, at a higher priority, adds `bgp bestpath as-path
+# multipath-relax` and `maximum-paths 16` to that VRF router. The companions
+# carry no `evpn: "true"` label: OVN-Kubernetes would treat them as source
+# configurations and overwrite their raw config.
+- name: Read the installer's EVPN FRRConfigurations
+  kubernetes.core.k8s_info:
+    api_version: "{{ cudn_evpn.frr_api_version }}"
+    kind: FRRConfiguration
+    namespace: "{{ cudn_evpn.frr_namespace }}"
+    label_selectors: ["{{ cudn_evpn.frr_source_selector }}"]
+  register: _cudn_evpn_frr
+
+- name: Read the hub network's VRF name
+  kubernetes.core.k8s_info:
+    api_version: k8s.ovn.org/v1
+    kind: ClusterUserDefinedNetwork
+    name: "{{ cudn_evpn.cudn_name }}"
+  register: _cudn_evpn_vrf_network
+  until: >-
+    ((_cudn_evpn_vrf_network.resources | default([]) | first | default({})).status | default({})).vrfName
+    | default('') | length > 0
+  retries: "{{ cudn_evpn_ready_retries }}"
+  delay: "{{ cudn_evpn_ready_delay }}"
+  ignore_errors: true
+
+- name: Build the VRF multipath FRRConfigurations
+  ansible.builtin.set_fact:
+    _cudn_evpn_vrf: >-
+      {{ (_cudn_evpn_vrf_network.resources | default([]) | first | default({}))
+         | osac.templates.cudn_evpn_vrf_bestpath(_cudn_evpn_frr, cudn_evpn) }}
+
+- name: Stop when the VRF multipath policy cannot be applied
+  when: not _cudn_evpn_vrf.ready
+  ansible.builtin.include_tasks: _stop.yaml
+  vars:
+    cudn_evpn_stop:
+      message: "{{ _cudn_evpn_vrf.message }}"
+      retryable: "{{ _cudn_evpn_vrf.retryable }}"
+
+- name: Apply the VRF multipath FRRConfigurations
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    server_side_apply:
+      field_manager: "cudn-evpn-vrf-{{ cudn_evpn.subnet_id }}"
+      force_conflicts: false
+    definition: "{{ item }}"
+  loop: "{{ _cudn_evpn_vrf.manifests }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"

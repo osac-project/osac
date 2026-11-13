@@ -10,6 +10,9 @@ tested without a cluster:
   hub network readiness.
 - ``cudn_evpn_cudn_assess``: who owns an existing hub network and whether it
   still matches this Subnet.
+- ``cudn_evpn_vrf_bestpath``: the companion FRRConfigurations that add the
+  VRF's BGP multipath policy (``as-path multipath-relax`` and
+  ``maximum-paths``).
 - ``cudn_evpn_rules_patch`` / ``cudn_evpn_membership_patch``: conditional
   JSON patches for a SecurityGroup's NetworkPolicy.
 
@@ -19,6 +22,7 @@ a final error (``retryable: false``) from a transient one.
 
 from __future__ import annotations
 
+import copy
 import ipaddress
 import re
 from typing import Any
@@ -29,6 +33,23 @@ MTU = 1500
 MAX_RESERVED_SUBNETS = 25
 MAX_INFRASTRUCTURE_SUBNETS = 4
 MAX_VNI = 16777215
+MAX_ASN = 4294967295
+
+# The installer's EVPN host networking (osac-infra evpn values) labels its
+# per-node FRRConfigurations ``evpn: "true"``. OVN-Kubernetes reads its BGP
+# ASN and raw config from them; the companions below must not carry that
+# label, or OVN-Kubernetes would treat them as source configurations and
+# overwrite their raw config.
+FRR_API_VERSION = "frrk8s.metallb.io/v1beta1"
+FRR_NAMESPACE = "openshift-frr-k8s"
+FRR_SOURCE_SELECTOR = "evpn=true"
+FRR_COMPANION_LABEL = "osac.openshift.io/evpn-vrf"
+FRR_COMPANION_PREFIX = "osac-evpn-vrf-"
+FRR_COMPANION_MAX_NAME = 253
+# OVN-Kubernetes writes the generated VRF router with raw priority 10;
+# FRR-k8s appends raw configs by ascending priority.
+FRR_RAW_PRIORITY = 15
+FRR_MAXIMUM_PATHS = 16
 
 LABEL_TENANT = "osac.openshift.io/tenant"
 LABEL_VN = "osac.openshift.io/virtualnetwork-id"
@@ -486,6 +507,10 @@ def _plan(job: dict) -> dict:
             "vm": LABEL_VM,
         },
         "owner_subnet_annotation": ANNOTATION_OWNER_SUBNET,
+        "frr_api_version": FRR_API_VERSION,
+        "frr_namespace": FRR_NAMESPACE,
+        "frr_source_selector": FRR_SOURCE_SELECTOR,
+        "frr_companion_label": FRR_COMPANION_LABEL,
     }
 
     if kind == "VirtualNetwork":
@@ -494,6 +519,7 @@ def _plan(job: dict) -> dict:
 
     elif kind == "Subnet":
         plan["subnet_id"] = resource["id"]
+        plan["subnet_name"] = (resource.get("metadata") or {}).get("name") or resource["id"]
         if creates:
             cidr = _cidr((resource.get("spec") or {}).get("ipv4Cidr"), "resource.spec.ipv4Cidr")
             vn_cidr = (vn.get("spec") or {}).get("ipv4Cidr")
@@ -671,6 +697,164 @@ def cudn_evpn_owned(obj: Any, owner_kind: str, owner_id: str, tenant: str) -> bo
 
 
 # ---------------------------------------------------------------------------
+# VRF BGP multipath policy
+# ---------------------------------------------------------------------------
+
+
+def _vrf_name(cudn: Any) -> str:
+    name = ((cudn or {}).get("status") or {}).get("vrfName")
+    return name if isinstance(name, str) else ""
+
+
+def _frr_routers(config: dict) -> list:
+    routers = (((config or {}).get("spec") or {}).get("bgp") or {}).get("routers") or []
+    return [r for r in routers if isinstance(r, dict)] if isinstance(routers, list) else []
+
+
+def _router_asn(router: dict) -> int | None:
+    asn = (router or {}).get("asn")
+    return asn if isinstance(asn, int) and not isinstance(asn, bool) and 1 <= asn <= MAX_ASN else None
+
+
+def _underlay_router_asn(config: dict) -> int | None:
+    """The ASN of the source configuration's default-VRF router."""
+    for router in _frr_routers(config):
+        if not router.get("vrf"):
+            return _router_asn(router)
+    return None
+
+
+def cudn_evpn_vrf_bestpath(cudn: Any, frr_info: Any, plan: dict) -> dict:
+    """The companion FRRConfigurations that add the VRF's multipath policy.
+
+    OVN-Kubernetes generates ``router bgp <asn> vrf <status.vrfName>`` and
+    appends its own raw config after every raw config of a lower priority.
+    FRR-k8s merges the raw configs of every FRRConfiguration whose
+    nodeSelector matches a node, so one companion per source configuration
+    (one per node in the installer) adds the policy to that VRF router.
+
+    Returns ``{ready, retryable, message, manifests}``. A hub that is still
+    setting the network up is retryable; a source configuration without an
+    ASN is a cluster administrator's problem and final.
+    """
+    task = plan.get("task")
+    cudn_name = plan.get("cudn_name")
+    vrf = _vrf_name(cudn)
+    if not vrf or len(vrf) > 64 or any(ch.isspace() for ch in vrf):
+        return {
+            "ready": False,
+            "retryable": True,
+            "manifests": [],
+            "message": (
+                f"cudn_evpn {task}: the hub network {cudn_name} does not report a usable "
+                f"status.vrfName yet; OSAC retries the task."
+            ),
+        }
+
+    frr_info = frr_info or {}
+    if frr_info.get("api_found") is False:
+        return {
+            "ready": False,
+            "retryable": True,
+            "manifests": [],
+            "message": (
+                f"cudn_evpn {task}: the FRRConfiguration API ({FRR_API_VERSION} "
+                f"FRRConfiguration) is not installed on the hub, so the VRF multipath policy of "
+                f"{cudn_name} cannot be applied. The OSAC installer's EVPN host networking "
+                f"(osac-infra evpn values) installs it; OSAC retries the task."
+            ),
+        }
+
+    configs = frr_info.get("resources") or []
+    if not configs:
+        return {
+            "ready": False,
+            "retryable": True,
+            "manifests": [],
+            "message": (
+                f"cudn_evpn {task}: no FRRConfiguration labeled {FRR_SOURCE_SELECTOR} exists in "
+                f"namespace {FRR_NAMESPACE}, so the VRF multipath policy of {cudn_name} cannot be "
+                f"applied. The OSAC installer's EVPN host networking (osac-infra evpn values) "
+                f"creates it; OSAC retries the task."
+            ),
+        }
+
+    vrf_router_exists = any(
+        router.get("vrf") == vrf for config in configs for router in _frr_routers(config)
+    )
+    manifests = []
+    for config in configs:
+        meta = (config or {}).get("metadata") or {}
+        source_name = meta.get("name") or ""
+        vrf_routers = [r for r in _frr_routers(config) if r.get("vrf") == vrf]
+        if vrf_router_exists and not vrf_routers:
+            # OVN-Kubernetes creates the VRF router only where the source
+            # configuration defines it; this node keeps none.
+            continue
+        # OVN-Kubernetes uses the VRF router's ASN when a source defines one,
+        # and otherwise inherits the default-VRF router's ASN for the VRF.
+        asn = _router_asn(vrf_routers[0]) if vrf_routers else _underlay_router_asn(config)
+        if asn is None:
+            return {
+                "ready": False,
+                "retryable": False,
+                "manifests": [],
+                "message": (
+                    f"cudn_evpn {task}: FRRConfiguration {source_name or '<unnamed>'} in "
+                    f"namespace {FRR_NAMESPACE} has no BGP router ASN for VRF {vrf}, so the VRF "
+                    f"multipath policy of {cudn_name} cannot be applied. A cluster administrator "
+                    f"must fix the installer's EVPN configuration."
+                ),
+            }
+        name = f"{FRR_COMPANION_PREFIX}{plan['vn_id']}-{source_name}"
+        if len(name) > FRR_COMPANION_MAX_NAME:
+            return {
+                "ready": False,
+                "retryable": False,
+                "manifests": [],
+                "message": (
+                    f"cudn_evpn {task}: the companion FRRConfiguration name for "
+                    f"{source_name or '<unnamed>'} is longer than {FRR_COMPANION_MAX_NAME} "
+                    f"characters; a cluster administrator must shorten the installer's "
+                    f"FRRConfiguration name."
+                ),
+            }
+        manifests.append(
+            {
+                "apiVersion": FRR_API_VERSION,
+                "kind": "FRRConfiguration",
+                "metadata": _meta(
+                    name,
+                    {
+                        **_identity(plan["tenant"], plan["vn_id"], "subnet", plan["subnet_id"]),
+                        FRR_COMPANION_LABEL: "true",
+                    },
+                    {
+                        ANNOTATION_TENANT: plan["tenant"],
+                        ANNOTATION_OWNER_REFERENCE: f"Subnet/{plan.get('subnet_name') or plan['subnet_id']}",
+                    },
+                    FRR_NAMESPACE,
+                ),
+                "spec": {
+                    "nodeSelector": copy.deepcopy(((config or {}).get("spec") or {}).get("nodeSelector") or {}),
+                    "raw": {
+                        "priority": FRR_RAW_PRIORITY,
+                        "rawConfig": (
+                            f"router bgp {asn} vrf {vrf}\n"
+                            f" bgp bestpath as-path multipath-relax\n"
+                            f" address-family ipv4 unicast\n"
+                            f"  maximum-paths {FRR_MAXIMUM_PATHS}\n"
+                            f" exit-address-family\n"
+                            f"exit\n"
+                        ),
+                    },
+                },
+            }
+        )
+    return {"ready": True, "retryable": False, "message": "", "manifests": manifests}
+
+
+# ---------------------------------------------------------------------------
 # Conditional NetworkPolicy patches
 # ---------------------------------------------------------------------------
 
@@ -731,6 +915,7 @@ class FilterModule:
             "cudn_evpn_cudn_ready": cudn_evpn_cudn_ready,
             "cudn_evpn_cudn_assess": cudn_evpn_cudn_assess,
             "cudn_evpn_owned": cudn_evpn_owned,
+            "cudn_evpn_vrf_bestpath": cudn_evpn_vrf_bestpath,
             "cudn_evpn_rules_patch": cudn_evpn_rules_patch,
             "cudn_evpn_membership_patch": cudn_evpn_membership_patch,
         }

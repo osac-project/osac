@@ -154,6 +154,10 @@
                 ({{ _ready.pending | join(', ') }}); OSAC retries the task.
               retryable: true
 
+    - name: Apply the hub network's VRF multipath policy
+      when: _cudn_evpn_assess.state in ['absent', 'owner']
+      ansible.builtin.include_tasks: _apply_vrf.yaml
+
     - name: Publish compute eligibility independently of Subnet readiness
       ansible.builtin.set_stats:
         aggregate: false

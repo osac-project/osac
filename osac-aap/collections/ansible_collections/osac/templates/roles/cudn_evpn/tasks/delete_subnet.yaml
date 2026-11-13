@@ -9,6 +9,33 @@
     - name: Plan the task
       ansible.builtin.include_tasks: _plan.yaml
 
+    - name: Remove the hub network's VRF multipath policy
+      block:
+        - name: List the VRF multipath FRRConfigurations of this Subnet
+          kubernetes.core.k8s_info:
+            api_version: "{{ cudn_evpn.frr_api_version }}"
+            kind: FRRConfiguration
+            namespace: "{{ cudn_evpn.frr_namespace }}"
+            label_selectors:
+              - "{{ cudn_evpn.frr_companion_label }}=true"
+              - "{{ cudn_evpn.labels.vn }}={{ cudn_evpn.vn_id }}"
+              - "{{ cudn_evpn.labels.owner_id }}={{ cudn_evpn.subnet_id }}"
+          register: _cudn_evpn_frr_live
+
+        - name: Delete the VRF multipath FRRConfigurations this Subnet owns
+          ansible.builtin.include_tasks: _delete.yaml
+          loop: "{{ _cudn_evpn_frr_live.resources | default([]) }}"
+          loop_control:
+            loop_var: _cudn_evpn_frr
+            label: "{{ _cudn_evpn_frr.metadata.name }}"
+          when: >-
+            _cudn_evpn_frr
+            | osac.templates.cudn_evpn_owned('subnet', cudn_evpn.subnet_id, cudn_evpn.tenant)
+          vars:
+            cudn_evpn_object: >-
+              {{ _cudn_evpn_frr
+                 | combine({'apiVersion': cudn_evpn.frr_api_version, 'kind': 'FRRConfiguration'}) }}
+
     - name: Read the VirtualNetwork's hub network
       kubernetes.core.k8s_info:
         api_version: k8s.ovn.org/v1

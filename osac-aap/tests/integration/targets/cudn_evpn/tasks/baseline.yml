@@ -117,8 +117,13 @@
       ipam: "{{ ce_ipam }}"
       network_segment: {type: evpn, l2_vni: "{{ ce_l2 }}"}
     ce_crds:
-      - {kind: ClusterUserDefinedNetwork, plural: clusteruserdefinednetworks}
-      - {kind: VTEP, plural: vteps}
+      - {group: k8s.ovn.org, version: v1, kind: ClusterUserDefinedNetwork, plural: clusteruserdefinednetworks}
+      - {group: k8s.ovn.org, version: v1, kind: VTEP, plural: vteps}
+      - {group: frrk8s.metallb.io, version: v1beta1, kind: FRRConfiguration, plural: frrconfigurations,
+         scope: Namespaced}
+    ce_frr_namespace: openshift-frr-k8s
+    ce_frr_config: osac-evpn-node1
+    ce_frr_asn: 65001
     ce_ns_policies: /apis/networking.k8s.io/v1/namespaces/*/networkpolicies
     ce_cudns: /apis/k8s.ovn.org/v1/clusteruserdefinednetworks
     # cases_api_faults.yaml: the job, the request that fails and the error.
@@ -158,7 +163,7 @@
       kubernetes.core.k8s_info:
         api_version: apiextensions.k8s.io/v1
         kind: CustomResourceDefinition
-        name: "{{ item.plural }}.k8s.ovn.org"
+        name: "{{ item.plural }}.{{ item.group }}"
       loop: "{{ ce_crds }}"
       register: _ce_existing_crds
 
@@ -166,9 +171,10 @@
       ansible.builtin.assert:
         that: _ce_existing_crds.results | map(attribute='resources') | map('length') | sum == 0
         fail_msg: >-
-          The CRDs clusteruserdefinednetworks.k8s.ovn.org or vteps.k8s.ovn.org already exist on this
-          cluster. This target installs and then deletes fake versions of them, so it refuses to run
-          against a cluster that has real or leftover ones; remove them or use a clean Kind cluster.
+          One of the CRDs clusteruserdefinednetworks.k8s.ovn.org, vteps.k8s.ovn.org or
+          frrconfigurations.frrk8s.metallb.io already exists on this cluster. This target installs
+          and then deletes fake versions of them, so it refuses to run against a cluster that has
+          real or leftover ones; remove them or use a clean Kind cluster.
         quiet: true
 
     - name: Prepare a working directory
@@ -234,13 +240,13 @@
               apiVersion: apiextensions.k8s.io/v1
               kind: CustomResourceDefinition
               metadata:
-                name: "{{ item.plural }}.k8s.ovn.org"
+                name: "{{ item.plural }}.{{ item.group }}"
               spec:
-                group: k8s.ovn.org
-                scope: Cluster
+                group: "{{ item.group }}"
+                scope: "{{ item.scope | default('Cluster') }}"
                 names: {kind: "{{ item.kind }}", plural: "{{ item.plural }}", singular: "{{ item.kind | lower }}"}
                 versions:
-                  - name: v1
+                  - name: "{{ item.version }}"
                     served: true
                     storage: true
                     schema:
@@ -250,6 +256,29 @@
             wait: true
             wait_condition: {type: Established, status: "True"}
           loop: "{{ ce_crds }}"
+
+        - name: Create the installer's EVPN FRR namespace
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata: {name: "{{ ce_frr_namespace }}"}
+
+        - name: Create the installer's EVPN FRRConfiguration
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: frrk8s.metallb.io/v1beta1
+              kind: FRRConfiguration
+              metadata:
+                name: "{{ ce_frr_config }}"
+                namespace: "{{ ce_frr_namespace }}"
+                labels: {evpn: "true"}
+              spec:
+                nodeSelector: {matchLabels: {kubernetes.io/hostname: node1}}
+                bgp:
+                  routers: [{asn: "{{ ce_frr_asn | int }}"}]
 
         # ----------------------------------------- create_virtual_network
         - name: Create the VirtualNetwork namespace
@@ -431,6 +460,27 @@
             that:
               - sft_last.result.compute_instance_supported is sameas true
               - sft_last.result.compute_instance_unsupported_reason == ''
+            quiet: true
+
+        - name: Read the VRF multipath FRRConfiguration
+          ansible.builtin.include_tasks: read.yaml
+          vars:
+            ce_api: frrk8s.metallb.io/v1beta1
+            ce_kind: FRRConfiguration
+            ce_name: "osac-evpn-vrf-{{ ce_id.vn1 }}-{{ ce_frr_config }}"
+            ce_ns: "{{ ce_frr_namespace }}"
+
+        - name: Check the VRF multipath policy
+          ansible.builtin.assert:
+            that:
+              - ce_obj.metadata.labels.evpn is not defined
+              - ce_obj.metadata.labels['osac.openshift.io/evpn-vrf'] == 'true'
+              - ce_obj.metadata.labels['osac.openshift.io/owner-id'] == ce_id.s1
+              - "ce_obj.spec.nodeSelector == {'matchLabels': {'kubernetes.io/hostname': 'node1'}}"
+              - ce_obj.spec.raw.priority > 10
+              - "'bgp bestpath as-path multipath-relax' in ce_obj.spec.raw.rawConfig"
+              - "'maximum-paths 16' in ce_obj.spec.raw.rawConfig"
+              - ("'router bgp ' ~ ce_frr_asn ~ ' vrf vrf-' ~ ce_hub[-8:]) in ce_obj.spec.raw.rawConfig"
             quiet: true
 
         - name: Read the hub network
@@ -883,6 +933,15 @@
           vars: {ce_api: k8s.ovn.org/v1, ce_kind: ClusterUserDefinedNetwork, ce_name: "{{ ce_hub }}"}
         - name: Assert the hub network is gone
           ansible.builtin.assert: {that: ce_obj | length == 0, quiet: true}
+        - name: Read the VRF multipath FRRConfiguration after the owner delete
+          ansible.builtin.include_tasks: read.yaml
+          vars:
+            ce_api: frrk8s.metallb.io/v1beta1
+            ce_kind: FRRConfiguration
+            ce_name: "osac-evpn-vrf-{{ ce_id.vn1 }}-{{ ce_frr_config }}"
+            ce_ns: "{{ ce_frr_namespace }}"
+        - name: Assert the VRF multipath policy is gone
+          ansible.builtin.assert: {that: ce_obj | length == 0, quiet: true}
         - name: Read the namespace
           ansible.builtin.include_tasks: read.yaml
           vars: {ce_api: v1, ce_kind: Namespace, ce_name: "{{ ce_hub }}"}
@@ -975,12 +1034,21 @@
           loop: [vn1, vn2, vn3, vn_h, vn_p, vn_t, vn_n]
           failed_when: false
 
+        - name: Remove the installer's EVPN FRR namespace
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Namespace
+            name: "{{ ce_frr_namespace }}"
+            wait: true
+          failed_when: false
+
         - name: Remove the fake CRDs, which removes their objects
           kubernetes.core.k8s:
             state: absent
             api_version: apiextensions.k8s.io/v1
             kind: CustomResourceDefinition
-            name: "{{ item.plural }}.k8s.ovn.org"
+            name: "{{ item.plural }}.{{ item.group }}"
             wait: true
           loop: "{{ ce_crds }}"
           failed_when: false

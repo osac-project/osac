@@ -56,6 +56,7 @@
           kind: ClusterUserDefinedNetwork
           metadata: {name: "{{ sft_ready_cudn }}"}
           status:
+            vrfName: "vrf-{{ sft_ready_cudn[-8:] }}"
             conditions:
               - {type: TransportAccepted, status: "True", reason: Accepted}
               - {type: NetworkCreated, status: "True", reason: Created}

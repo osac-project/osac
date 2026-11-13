@@ -143,11 +143,33 @@ var _ = Describe("list", func() {
 		Expect(listServer.requests).To(BeEmpty())
 	})
 
-	It("rejects a currency code that is not three letters", func() {
-		listServer, _, err := runCommand(rateCardItems(3), "--currency-code", "US")
-		Expect(err).To(MatchError(ContainSubstring("3-letter ISO-4217")))
+	It("rejects an explicitly empty currency", func() {
+		listServer, _, err := runCommand(rateCardItems(3), "--currency-code", "")
+		Expect(err).To(MatchError(ContainSubstring("--currency-code must not be empty")))
 		Expect(listServer.requests).To(BeEmpty())
 	})
+
+	DescribeTable("passes provider-owned currency values unchanged through request validation and rendering",
+		func(currency string) {
+			items := rateCardItems(3)
+			for _, item := range items {
+				item.SetCurrencyCode(currency)
+			}
+			listServer, output, err := runCommand(items, "--currency-code", currency)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(listServer.requests).To(HaveLen(1))
+			Expect(listServer.requests[0].GetCurrencyCode()).To(Equal(currency))
+			Expect(output).To(ContainSubstring(currency))
+		},
+		Entry("one character", "X"),
+		Entry("two characters", "US"),
+		Entry("four characters", "USDX"),
+		Entry("provider currency name", "US Dollar"),
+		Entry("mixed case", "uSd"),
+		Entry("no OSAC allowlist", "XYZ"),
+		Entry("no OSAC character policy", "12!"),
+		Entry("no trimming", " USD "),
+	)
 
 	It("forwards the service, currency, tenant, filter and order", func() {
 		listServer, _, err := runCommand(rateCardItems(3),
@@ -238,11 +260,11 @@ var _ = Describe("list", func() {
 
 	It("keeps the service, currency and tenant filters on every page when paging", func() {
 		listServer, _, err := runCommand(rateCardItems(150),
-			"--currency-code", "USD", "--service", "compute_instance", "--tenant-id", "tenant-a")
+			"--currency-code", "US Dollar", "--service", "compute_instance", "--tenant-id", "tenant-a")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(listServer.requests).To(HaveLen(2))
 		for _, request := range listServer.requests {
-			Expect(request.GetCurrencyCode()).To(Equal("USD"))
+			Expect(request.GetCurrencyCode()).To(Equal("US Dollar"))
 			Expect(request.GetService()).To(Equal("compute_instance"))
 			Expect(request.GetTenantId()).To(Equal("tenant-a"))
 		}

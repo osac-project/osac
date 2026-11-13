@@ -38,11 +38,11 @@ message ProviderRateCardItemsListRequest {
   // OSAC service name; matched to the provider service of the same name. Omit to list compute_instance and
   // cluster. An unknown service returns no rows.
   optional string service = 6;
-  // Required three-character ISO-4217 currency code. Callers supply the currency; this method does not resolve
-  // it from an account or discover it from the provider.
+  // Required, nonempty currency value accepted by the billing provider. Passed unchanged; this method does not
+  // infer a currency, normalize its case, or restrict it to an OSAC-maintained list.
   optional string currency_code = 7 [
     (buf.validate.field).required = true,
-    (buf.validate.field).string.len = 3
+    (buf.validate.field).string.min_len = 1
   ];
 }
 

@@ -53,7 +53,7 @@ var _ = Describe("ComputeInstance disk registration preparation", func() {
 			Expect(request.GetObject().GetSpec().GetAccessMode()).To(
 				Equal(privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE))
 			Expect(request.GetObject().GetSpec().GetTopology().GetSegments()).To(Equal(map[string]string{
-				"osac.io/node": "osac-volume-registration-pending",
+				"osac.io/node": "osac-volume-registration/pending",
 			}))
 		}
 

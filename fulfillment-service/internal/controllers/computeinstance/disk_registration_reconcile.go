@@ -528,10 +528,17 @@ func findDiskRegistrationVolume(
 }
 
 func diskRegistrationVolumeMatches(volume *privatev1.Volume, request *privatev1.VolumesCreateRequest) bool {
-	if volume == nil || volume.GetId() == "" || volume.GetMetadata() == nil || volume.GetSpec() == nil {
+	return volume.GetId() != "" && diskRegistrationRequestMatches(volume, request)
+}
+
+func diskRegistrationRequestMatches(volume *privatev1.Volume, request *privatev1.VolumesCreateRequest) bool {
+	if volume == nil || volume.GetMetadata() == nil || volume.GetSpec() == nil {
 		return false
 	}
 	expected := request.GetObject()
+	if expected.GetSpec() == nil {
+		return false
+	}
 	metadata := volume.GetMetadata()
 	expectedMetadata := expected.GetMetadata()
 	if metadata.GetName() != expectedMetadata.GetName() ||
@@ -545,7 +552,14 @@ func diskRegistrationVolumeMatches(volume *privatev1.Volume, request *privatev1.
 		volume.GetStatus().GetState() == privatev1.VolumeState_VOLUME_STATE_DELETED {
 		return false
 	}
-	return proto.Equal(volume.GetSpec(), expected.GetSpec())
+	if proto.Equal(volume.GetSpec(), expected.GetSpec()) {
+		return true
+	}
+	legacySpec := proto.Clone(expected.GetSpec()).(*privatev1.VolumeSpec)
+	legacySpec.SetTopology(privatev1.VolumeTopology_builder{
+		Segments: map[string]string{"osac.io/node": legacyDiskRegistrationNode},
+	}.Build())
+	return proto.Equal(volume.GetSpec(), legacySpec)
 }
 
 func diskRegistrationsComplete(instance *privatev1.ComputeInstance, prepared []preparedDiskRegistration) (bool, error) {

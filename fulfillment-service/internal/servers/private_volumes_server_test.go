@@ -21,12 +21,16 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -247,12 +251,97 @@ var _ = Describe("Private volumes server", func() {
 				Expect(public.GetObject().GetStatus().GetState().String()).To(Equal(state.String()))
 				Expect(public.GetObject().GetStatus().GetMessage()).To(Equal(actual.GetStatus().GetMessage()))
 			},
-			Entry("CI inventory", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, true, false),
-			Entry("CI inventory discards stale vendor status", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, true, true),
+			Entry("CI inventory", map[string]string{"osac.io/node": "osac-volume-registration/pending"}, true, false),
+			Entry("CI inventory discards stale vendor status", map[string]string{"osac.io/node": "osac-volume-registration/pending"}, true, true),
+			Entry("ordinary CSI on the legacy marker node", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, false, false),
 			Entry("ordinary CSI", map[string]string{"osac.io/node": "worker-1"}, false, false),
 			Entry("empty topology", nil, false, false),
-			Entry("near match", map[string]string{"osac.io/node": "osac-volume-registration-pending-other"}, false, false),
-			Entry("extra key", map[string]string{"osac.io/node": "osac-volume-registration-pending", "zone": "a"}, false, false),
+			Entry("near match", map[string]string{"osac.io/node": "osac-volume-registration/pending-other"}, false, false),
+			Entry("extra key", map[string]string{"osac.io/node": "osac-volume-registration/pending", "zone": "a"}, false, false),
+		)
+
+		DescribeTable("requires persisted UNKNOWN proof for legacy in-flight Create",
+			func(intent, matchingSpec, persisted bool, scenario string) {
+				parent := privatev1.ComputeInstance_builder{
+					Id:       uuid.NewString(),
+					Metadata: privatev1.Metadata_builder{Name: "legacy-parent", Tenant: testTenant, Creator: "system", Finalizers: []string{finalizers.Controller}}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{BootDisk: privatev1.ComputeInstanceDisk_builder{
+						SizeGib: proto.Int32(100), StorageTier: privatev1.StorageTierReference_builder{Name: "gold"}.Build(),
+					}.Build()}.Build(),
+					Status: &privatev1.ComputeInstanceStatus{},
+				}.Build()
+				if intent {
+					parent.GetStatus().SetVolumeRegistration([]*privatev1.ComputeInstanceVolumeRegistration{
+						privatev1.ComputeInstanceVolumeRegistration_builder{DiskKey: "boot", State: privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN}.Build(),
+					})
+				}
+				switch scenario {
+				case "other project":
+					projects, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+					Expect(err).NotTo(HaveOccurred())
+					_, err = projects.Create().SetObject(privatev1.Project_builder{
+						Metadata: privatev1.Metadata_builder{Name: "other-project", Tenant: testTenant}.Build(),
+					}.Build()).Do(ctx)
+					Expect(err).NotTo(HaveOccurred())
+					parent.GetMetadata().SetProject("other-project")
+				case "other tenant":
+					tenants, err := dao.NewGenericDAO[*privatev1.Tenant]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+					Expect(err).NotTo(HaveOccurred())
+					_, err = tenants.Create().SetObject(privatev1.Tenant_builder{
+						Id: "other-tenant", Metadata: privatev1.Metadata_builder{Name: "other-tenant", Tenant: "other-tenant"}.Build(),
+					}.Build()).Do(ctx)
+					Expect(err).NotTo(HaveOccurred())
+					parent.GetMetadata().SetTenant("other-tenant")
+				case "malformed parent":
+					parent.SetId("not-a-uuid")
+				case "non-system":
+					caller := auth.NewMockAttributionLogic(ctrl)
+					caller.EXPECT().DetermineAssignedCreator(gomock.Any()).Return("ordinary-caller", nil).AnyTimes()
+					var err error
+					server, err = NewPrivateVolumesServer().SetLogger(logger).SetAttributionLogic(caller).
+						SetTenancyLogic(tenancy).SetTierResolver(server.tierResolver).Build()
+					Expect(err).NotTo(HaveOccurred())
+				}
+				if persisted {
+					_, err := server.computeInstances.dao.Create().SetObject(parent).Do(ctx)
+					Expect(err).NotTo(HaveOccurred())
+				}
+				size := int64(100)
+				if !matchingSpec {
+					size++
+				}
+				response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "ci-" + parent.GetId() + "-boot", Tenant: testTenant, Creator: "system"}.Build(),
+					Spec: privatev1.VolumeSpec_builder{StorageTier: "gold", SizeGib: size, AccessMode: privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Topology: privatev1.VolumeTopology_builder{Segments: map[string]string{"osac.io/node": "osac-volume-registration-pending"}}.Build(),
+					}.Build(),
+				}.Build()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				stored, err := server.Get(ctx, privatev1.VolumesGetRequest_builder{Id: response.GetObject().GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(proto.Equal(stored.GetObject(), response.GetObject())).To(BeTrue())
+				state := privatev1.VolumeState_VOLUME_STATE_CREATING
+				if scenario == "non-system" {
+					Expect(stored.GetObject().GetMetadata().GetCreator()).To(Equal("ordinary-caller"))
+				}
+				if intent && matchingSpec && persisted && scenario == "" {
+					state = privatev1.VolumeState_VOLUME_STATE_AVAILABLE
+					Expect(stored.GetObject().GetStatus().GetStateTransitionTime().GetNanos()).To(BeZero())
+				}
+				Expect(stored.GetObject().GetStatus().GetState()).To(Equal(state))
+				Expect(stored.GetObject().GetSpec().GetTopology().GetSegments()["osac.io/node"]).To(Equal("osac-volume-registration-pending"))
+				Expect(stored.GetObject().GetStatus().GetMessage()).To(BeEmpty())
+				Expect(stored.GetObject().GetStatus().GetVendorVolumeId()).To(BeEmpty())
+				Expect(stored.GetObject().GetStatus().GetProvisionedSizeGib()).To(BeZero())
+			},
+			Entry("legacy in-flight system request", true, true, true, ""),
+			Entry("ordinary old-node request without intent", false, true, true, ""),
+			Entry("ordinary old-node request with different spec", true, false, true, ""),
+			Entry("ordinary old-node request with a nonexistent parent", true, true, false, ""),
+			Entry("ordinary old-node request with another project", true, true, true, "other project"),
+			Entry("ordinary old-node request with another tenant", true, true, true, "other tenant"),
+			Entry("ordinary old-node request with malformed parent hint", true, true, false, "malformed parent"),
+			Entry("client cannot spoof system attribution", true, true, true, "non-system"),
 		)
 
 		It("stamps the resolved provider over caller-provided status", func() {

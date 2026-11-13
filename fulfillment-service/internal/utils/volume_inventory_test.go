@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 func TestIsComputeInstanceVolumeInventory(testContext *testing.T) {
@@ -29,12 +30,13 @@ func TestIsComputeInstanceVolumeInventory(testContext *testing.T) {
 	}{
 		{name: "nil segments"},
 		{name: "empty segments", segments: map[string]string{}},
-		{name: "exact", segments: map[string]string{"osac.io/node": "osac-volume-registration-pending"}, inventory: true},
-		{name: "wrong key", segments: map[string]string{"node": "osac-volume-registration-pending"}},
+		{name: "exact", segments: map[string]string{"osac.io/node": "osac-volume-registration/pending"}, inventory: true},
+		{name: "legitimate legacy node", segments: map[string]string{"osac.io/node": "osac-volume-registration-pending"}},
+		{name: "wrong key", segments: map[string]string{"node": "osac-volume-registration/pending"}},
 		{name: "empty value", segments: map[string]string{"osac.io/node": ""}},
 		{name: "ordinary", segments: map[string]string{"osac.io/node": "worker-1"}},
-		{name: "near match", segments: map[string]string{"osac.io/node": "osac-volume-registration-pending-other"}},
-		{name: "extra key", segments: map[string]string{"osac.io/node": "osac-volume-registration-pending", "zone": "a"}},
+		{name: "near match", segments: map[string]string{"osac.io/node": "osac-volume-registration/pending-other"}},
+		{name: "extra key", segments: map[string]string{"osac.io/node": "osac-volume-registration/pending", "zone": "a"}},
 	} {
 		testContext.Run(test.name, func(testContext *testing.T) {
 			volume := privatev1.Volume_builder{Spec: privatev1.VolumeSpec_builder{
@@ -44,5 +46,14 @@ func TestIsComputeInstanceVolumeInventory(testContext *testing.T) {
 				testContext.Fatal("unexpected inventory classification")
 			}
 		})
+	}
+}
+
+func TestInventoryMarkerCannotBeNodeName(testContext *testing.T) {
+	if len(validation.IsDNS1123Subdomain(ComputeInstanceVolumeInventoryNode)) == 0 {
+		testContext.Fatal("inventory marker must not be a valid Kubernetes node name")
+	}
+	if len(validation.IsDNS1123Subdomain("osac-volume-registration-pending")) != 0 {
+		testContext.Fatal("the legacy marker is a legitimate node name")
 	}
 }

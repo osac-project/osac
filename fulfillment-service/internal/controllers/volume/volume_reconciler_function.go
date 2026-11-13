@@ -33,6 +33,7 @@ import (
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/computeinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
@@ -54,11 +55,12 @@ type FunctionBuilder struct {
 
 // function holds long-lived clients shared across all reconcile invocations.
 type function struct {
-	logger         *slog.Logger
-	hubCache       controllers.HubCache
-	volumesClient  privatev1.VolumesClient
-	hubsClient     privatev1.HubsClient
-	maskCalculator *masks.Calculator
+	logger                 *slog.Logger
+	hubCache               controllers.HubCache
+	volumesClient          privatev1.VolumesClient
+	computeInstancesClient privatev1.ComputeInstancesClient
+	hubsClient             privatev1.HubsClient
+	maskCalculator         *masks.Calculator
 }
 
 // task carries per-reconciliation state for a single Volume object.
@@ -111,11 +113,12 @@ func (b *FunctionBuilder) Build() (result controllers.ReconcilerFunction[*privat
 	}
 
 	object := &function{
-		logger:         b.logger,
-		volumesClient:  privatev1.NewVolumesClient(b.connection),
-		hubsClient:     privatev1.NewHubsClient(b.connection),
-		hubCache:       b.hubCache,
-		maskCalculator: masks.NewCalculator().Build(),
+		logger:                 b.logger,
+		volumesClient:          privatev1.NewVolumesClient(b.connection),
+		computeInstancesClient: privatev1.NewComputeInstancesClient(b.connection),
+		hubsClient:             privatev1.NewHubsClient(b.connection),
+		hubCache:               b.hubCache,
+		maskCalculator:         masks.NewCalculator().Build(),
 	}
 	result = object.run
 	return
@@ -170,6 +173,20 @@ func (t *task) update(ctx context.Context) error {
 	// CI disks are inventory while the playbook provisions their DataVolumes.
 	// Remove this bypass when storage provisioning takes over those disks.
 	if utils.IsComputeInstanceVolumeInventory(t.volume) {
+		return nil
+	}
+	legacyInventory, err := computeinstance.IsLegacyComputeInstanceVolumeInventory(ctx,
+		func(ctx context.Context, id string) (*privatev1.ComputeInstance, error) {
+			if t.r.computeInstancesClient == nil {
+				return nil, fmt.Errorf("ComputeInstances client is required for legacy disk inventory proof")
+			}
+			response, err := t.r.computeInstancesClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			return response.GetObject(), err
+		}, t.volume)
+	if err != nil {
+		return err
+	}
+	if legacyInventory {
 		return nil
 	}
 

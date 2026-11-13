@@ -47,7 +47,7 @@ var _ = Describe("ReconcileDiskRegistrations", func() {
 			Expect(request.GetObject().GetSpec().GetStorageTier()).To(Equal("vm-boot"))
 			Expect(request.GetObject().GetSpec().GetSizeGib()).To(Equal(int64(40)))
 			Expect(request.GetObject().GetSpec().GetTopology().GetSegments()).To(Equal(map[string]string{
-				"osac.io/node": "osac-volume-registration-pending",
+				"osac.io/node": "osac-volume-registration/pending",
 			}))
 			volume := registrationTestVolume(request, "volume-boot", "system")
 			return privatev1.VolumesCreateResponse_builder{Object: volume}.Build(), nil
@@ -82,7 +82,7 @@ var _ = Describe("ReconcileDiskRegistrations", func() {
 		volumesClient.create = func(_ context.Context, request *privatev1.VolumesCreateRequest) (*privatev1.VolumesCreateResponse, error) {
 			Expect(request.GetObject().GetMetadata().GetProject()).To(Equal("project-a"))
 			Expect(request.GetObject().GetSpec().GetTopology().GetSegments()).To(Equal(map[string]string{
-				"osac.io/node": "osac-volume-registration-pending",
+				"osac.io/node": "osac-volume-registration/pending",
 			}))
 			switch request.GetObject().GetMetadata().GetName() {
 			case "ci-" + diskRegistrationTestID + "-boot":
@@ -123,6 +123,7 @@ var _ = Describe("ReconcileDiskRegistrations", func() {
 		volumesClient.create = func(_ context.Context, request *privatev1.VolumesCreateRequest) (*privatev1.VolumesCreateResponse, error) {
 			createCalls++
 			committed = registrationTestVolume(request, "volume-original", "system")
+			committed.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": legacyDiskRegistrationNode})
 			return nil, status.Error(codes.Unavailable, "response lost")
 		}
 		volumesClient.list = func(_ context.Context, _ *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {
@@ -145,6 +146,7 @@ var _ = Describe("ReconcileDiskRegistrations", func() {
 		Expect(createCalls).To(Equal(1))
 		Expect(listCalls).To(Equal(2))
 		Expect(computeClient.object.GetStatus().GetVolumes()[0].GetVolumeId()).To(Equal("volume-original"))
+		Expect(committed.GetSpec().GetTopology().GetSegments()["osac.io/node"]).To(Equal(legacyDiskRegistrationNode))
 	})
 
 	It("keeps an uncertain intent after an empty lookup and never retries Create", func() {
@@ -209,9 +211,9 @@ var _ = Describe("ReconcileDiskRegistrations", func() {
 				computeClient.object,
 				preparedDiskRegistrationForTest().request,
 			)))
-			return registrationTestListResponse([]*privatev1.Volume{
-				registrationTestVolume(request, "volume-existing", "system"),
-			}, 1), nil
+			volume := registrationTestVolume(request, "volume-existing", "system")
+			volume.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": legacyDiskRegistrationNode})
+			return registrationTestListResponse([]*privatev1.Volume{volume}, 1), nil
 		}
 
 		err := ReconcileDiskRegistrations(context.Background(), computeClient, volumesClient, diskRegistrationTestID)
@@ -506,6 +508,7 @@ var _ = Describe("ReconcileDiskRegistrations", func() {
 		volumesClient.create = func(_ context.Context, request *privatev1.VolumesCreateRequest) (*privatev1.VolumesCreateResponse, error) {
 			createCalls++
 			committed = registrationTestVolume(request, "volume-committed", "system")
+			committed.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": legacyDiskRegistrationNode})
 			return privatev1.VolumesCreateResponse_builder{Object: committed}.Build(), nil
 		}
 		volumesClient.list = func(_ context.Context, _ *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {

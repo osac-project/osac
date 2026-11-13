@@ -23,6 +23,7 @@ import (
 	"strconv"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 
 	"google.golang.org/grpc/codes"
@@ -33,7 +34,7 @@ import (
 )
 
 const computeInstanceDiskRegistrationUpdateMask = "status.volume_registration"
-const diskRegistrationPlaceholderNode = "osac-volume-registration-pending"
+const diskRegistrationPlaceholderNode = utils.ComputeInstanceVolumeInventoryNode
 
 type preparedDiskRegistration struct {
 	diskKey string

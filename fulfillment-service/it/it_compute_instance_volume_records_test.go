@@ -43,7 +43,7 @@ import (
 
 const (
 	diskRegistrationVolumeHoldFinalizer = "osac-test.osac.io/hold-volume-record-cleanup"
-	diskRegistrationPlaceholderNode     = "osac-volume-registration-pending"
+	diskRegistrationPlaceholderNode     = "osac-volume-registration/pending"
 	diskRegistrationIsolationHubID      = "00000000-0000-4000-8000-000000000000"
 )
 

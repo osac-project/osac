@@ -28,6 +28,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/computeinstance"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -63,9 +65,10 @@ var _ privatev1.VolumesServer = (*PrivateVolumesServer)(nil)
 type PrivateVolumesServer struct {
 	privatev1.UnimplementedVolumesServer
 
-	logger       *slog.Logger
-	generic      *GenericServer[*privatev1.Volume]
-	tierResolver TierResolverFunc
+	logger           *slog.Logger
+	generic          *GenericServer[*privatev1.Volume]
+	computeInstances *GenericServer[*privatev1.ComputeInstance]
+	tierResolver     TierResolverFunc
 }
 
 func NewPrivateVolumesServer() *PrivateVolumesServerBuilder {
@@ -130,10 +133,21 @@ func (b *PrivateVolumesServerBuilder) Build() (result *PrivateVolumesServer, err
 		return
 	}
 
+	computeInstances, err := NewGenericServer[*privatev1.ComputeInstance]().
+		SetLogger(b.logger).
+		SetService(privatev1.ComputeInstances_ServiceDesc.ServiceName).
+		SetAttributionLogic(b.attributionLogic).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
 	result = &PrivateVolumesServer{
-		logger:       b.logger,
-		generic:      generic,
-		tierResolver: b.tierResolver,
+		logger:           b.logger,
+		generic:          generic,
+		computeInstances: computeInstances,
+		tierResolver:     b.tierResolver,
 	}
 	return
 }
@@ -197,7 +211,32 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 
 	vol.SetId("")
 
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _ *privatev1.Volume, candidate *privatev1.Volume) error {
+			legacyInventory, err := computeinstance.IsLegacyComputeInstanceVolumeInventory(ctx,
+				func(ctx context.Context, id string) (*privatev1.ComputeInstance, error) {
+					var parent *privatev1.ComputeInstancesGetResponse
+					tx, err := database.TxFromContext(ctx)
+					if err != nil {
+						return nil, err
+					}
+					err = tx.Savepoint(ctx, func(ctx context.Context) error {
+						return s.computeInstances.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build(), &parent)
+					})
+					return parent.GetObject(), err
+				}, candidate)
+			if err != nil {
+				return err
+			}
+			if legacyInventory {
+				candidate.SetStatus(privatev1.VolumeStatus_builder{
+					State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
+					StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
+					Provider:            resolved.Provider, Protocol: resolved.Protocol,
+				}.Build())
+			}
+			return nil
+		})
 	return
 }
 

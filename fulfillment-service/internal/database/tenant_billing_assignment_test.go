@@ -202,6 +202,86 @@ var _ = Describe("Tenant billing assignments", func() {
 	})
 
 	Describe("CloseTenantBillingAssignmentOnDeletion", func() {
+		It("does not close before an assignment committed after the deletion transaction started", func() {
+			createCommittedTenant("tenant-c")
+			account := createCommittedAccount("")
+			deletionTx, err := newManager().Begin(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			endDeletion := endOnce(deletionTx)
+			DeferCleanup(endDeletion)
+
+			// Materialize the lazy transaction before assignment finalization, without taking the tenant lock.
+			// BEGIN and the first locking query are separate commands in the production transaction manager.
+			var deletionTime time.Time
+			var deletionPID int32
+			Expect(deletionTx.QueryRow(ctx, `select now(), pg_backend_pid()`).
+				Scan(&deletionTime, &deletionPID)).To(Succeed())
+
+			var assigned TenantBillingAssignmentRow
+			runCommitted(func(assignmentTx Tx) {
+				var assignmentPID int32
+				Expect(assignmentTx.QueryRow(ctx, `select pg_backend_pid()`).Scan(&assignmentPID)).To(Succeed())
+				Expect(assignmentPID).ToNot(Equal(deletionPID))
+				var name string
+				Expect(assignmentTx.QueryRow(ctx, `select name from tenants where name = $1
+					and deletion_timestamp = 'epoch' for update`, "tenant-c").Scan(&name)).To(Succeed())
+				id, err := CloseAndInsertTenantBillingAssignment(ctx, assignmentTx, "", TenantBillingAssignmentInsert{
+					ID: uuid.New(), Name: "later-assignment", TenantID: "tenant-c", BillingAccountID: account,
+					ConnectionState: "CONNECTED",
+				})
+				Expect(err).ToNot(HaveOccurred())
+				assigned, err = GetTenantBillingAssignment(ctx, assignmentTx, id)
+				Expect(err).ToNot(HaveOccurred())
+			})
+			Expect(assigned.EffectiveFrom.After(deletionTime)).To(BeTrue(),
+				"the independent assignment must have a later transaction timestamp")
+
+			// Deletion acquires the same tenant lock only after the assignment has committed.
+			var name string
+			Expect(deletionTx.QueryRow(ctx, `select name from tenants where name = $1 for update`, "tenant-c").
+				Scan(&name)).To(Succeed())
+			Expect(CloseTenantBillingAssignmentOnDeletion(ctx, deletionTx, "tenant-c")).To(Succeed())
+			endDeletion()
+
+			runCommitted(func(readTx Tx) {
+				closed, err := GetTenantBillingAssignment(ctx, readTx, assigned.ID)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(closed.EffectiveTo).ToNot(BeNil())
+				Expect(closed.EffectiveTo.Before(closed.EffectiveFrom)).To(BeFalse(),
+					"a deletion transaction predating assignment finalization must not create a negative interval")
+				Expect(closed.EffectiveTo.Equal(closed.EffectiveFrom)).To(BeTrue())
+				Expect(closed.Message).To(Equal(TenantBillingAssignmentDeletedMessage))
+				Expect(closed.ConnectionState).To(Equal(assigned.ConnectionState))
+			})
+		})
+
+		It("preserves the deletion transaction timestamp when the assignment is older", func() {
+			createCommittedTenant("tenant-c")
+			account := createCommittedAccount("")
+			var id string
+			runCommitted(func(assignmentTx Tx) {
+				var err error
+				id, err = CloseAndInsertTenantBillingAssignment(ctx, assignmentTx, "", TenantBillingAssignmentInsert{
+					ID: uuid.New(), Name: "earlier-assignment", TenantID: "tenant-c", BillingAccountID: account,
+					ConnectionState: "CONNECTED",
+				})
+				Expect(err).ToNot(HaveOccurred())
+			})
+			runCommitted(func(deletionTx Tx) {
+				var deletionTime time.Time
+				Expect(deletionTx.QueryRow(ctx, `select now()`).Scan(&deletionTime)).To(Succeed())
+				var name string
+				Expect(deletionTx.QueryRow(ctx, `select name from tenants where name = $1 for update`, "tenant-c").
+					Scan(&name)).To(Succeed())
+				Expect(CloseTenantBillingAssignmentOnDeletion(ctx, deletionTx, "tenant-c")).To(Succeed())
+				closed, err := GetTenantBillingAssignment(ctx, deletionTx, id)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(closed.EffectiveFrom.Before(deletionTime)).To(BeTrue())
+				Expect(closed.EffectiveTo).ToNot(BeNil())
+				Expect(closed.EffectiveTo.Equal(deletionTime)).To(BeTrue())
+			})
+		})
+
 		It("closes only the tenant's active interval, preserves history, and is idempotent", func() {
 			account := createAccount("")
 			first, err := CloseAndInsertTenantBillingAssignment(ctx, tx, "", TenantBillingAssignmentInsert{
@@ -228,6 +308,8 @@ var _ = Describe("Tenant billing assignments", func() {
 			closed, err := GetTenantBillingAssignment(ctx, tx, current)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(closed.EffectiveTo).ToNot(BeNil())
+			Expect(closed.EffectiveTo.Equal(closed.EffectiveFrom)).To(BeTrue(),
+				"an assignment opened and deleted in one transaction has a zero-length interval")
 			Expect(closed.Message).To(Equal(TenantBillingAssignmentDeletedMessage))
 			Expect(closed.ConnectionState).To(Equal("CONNECTED"))
 			_, err = GetActiveTenantBillingAssignmentByTenant(ctx, tx, "tenant-a")

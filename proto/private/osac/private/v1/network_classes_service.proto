@@ -105,7 +105,7 @@ message NetworkClassesDeleteRequest {
   string id = 1;
 }
 
-message NetworkClassesDeleteResponse {}
+message NetworkClassesDeleteResponse { NetworkClass object = 1; }
 
 message NetworkClassesSignalRequest {
   string id = 1;
@@ -147,7 +147,7 @@ service NetworkClasses {
 
   // Deletes a network class.
   rpc Delete(NetworkClassesDeleteRequest) returns (NetworkClassesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/network_classes/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/network_classes/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

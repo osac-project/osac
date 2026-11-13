@@ -36,6 +36,7 @@ type archiveStubTx struct {
 	database.Tx
 	execErr  error
 	queryErr error
+	probeSQL string
 }
 
 func (t *archiveStubTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -43,6 +44,12 @@ func (t *archiveStubTx) Exec(ctx context.Context, sql string, args ...any) (pgco
 }
 
 func (t *archiveStubTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if sql == `select id from tenants where id = $1 for update` {
+		return archiveStubRow{value: "blocked-tenant"}
+	}
+	if t.probeSQL != "" && len(args) == 1 && args[0] == archiveDeferredConstraint {
+		return archiveStubRow{value: t.probeSQL}
+	}
 	return archiveStubRow{err: t.queryErr}
 }
 
@@ -51,12 +58,16 @@ func (t *archiveStubTx) Savepoint(ctx context.Context, fn func(context.Context) 
 	return fn(database.TxIntoContext(ctx, inner))
 }
 
-// archiveStubRow is a pgx.Row whose Scan always returns the given error.
+// archiveStubRow supplies a string result or the given error.
 type archiveStubRow struct {
-	err error
+	err   error
+	value string
 }
 
 func (r archiveStubRow) Scan(dest ...any) error {
+	if r.err == nil {
+		*dest[0].(*string) = r.value
+	}
 	return r.err
 }
 
@@ -67,7 +78,7 @@ var _ = Describe("Archive deferred constraint", func() {
 		ctx = context.Background()
 	})
 
-	It("Fails closed when the projects recovery probe fails after the deferred constraint", func() {
+	DescribeTable("Fails closed when a dependency recovery query fails after the deferred constraint", func(probeSQL string) {
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 
@@ -87,15 +98,19 @@ var _ = Describe("Archive deferred constraint", func() {
 				ConstraintName: archiveDeferredConstraint,
 			},
 			queryErr: probeErr,
+			probeSQL: probeSQL,
 		}
 
 		err = request.archive(ctx, archiveArgs{name: "blocked-tenant", tenant: "blocked-tenant"})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring(
-			"failed to check projects for tenant 'blocked-tenant' after deferred archive",
+			"failed to check dependencies for tenant 'blocked-tenant' after deferred archive",
 		))
 		Expect(errors.Is(err, probeErr)).To(BeTrue())
-	})
+	},
+		Entry("catalog lookup", ""),
+		Entry("dependent lookup", "select 'service_accounts_tenant_fk' as blocker"),
+	)
 
 	It("Fails closed when the deferred constraint is observed for a table other than tenants", func() {
 		ctrl := gomock.NewController(GinkgoT())

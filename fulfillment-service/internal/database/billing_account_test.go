@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
@@ -258,6 +259,50 @@ var _ = Describe("Billing accounts", func() {
 			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(items[0].CorrelationID).To(BeEmpty())
+		})
+	})
+
+	Describe("ObserveBillingAccountState", func() {
+		It("applies a not-older observation and returns the stored one", func() {
+			observed := time.Now().UTC().Truncate(time.Second)
+			id := upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1", DisplayName: "Acme",
+				CorrelationID: "corr", State: "ACTIVE", StatusObservedAt: observed,
+			})
+			state, at, err := ObserveBillingAccountState(ctx, tx, id, "INACTIVE", observed.Add(time.Minute))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(state).To(Equal("INACTIVE"))
+			Expect(at).To(BeTemporally("==", observed.Add(time.Minute)))
+			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(items[0].State).To(Equal("INACTIVE"))
+			Expect(items[0].StatusObservedAt).To(BeTemporally("==", observed.Add(time.Minute)))
+			Expect(items[0].DisplayName).To(Equal("Acme"), "an assignment read must not change account metadata")
+			Expect(items[0].CorrelationID).To(Equal("corr"))
+		})
+
+		It("ignores an older observation and returns the newer stored one", func() {
+			observed := time.Now().UTC().Truncate(time.Second)
+			id := upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1", State: "INACTIVE",
+				StatusObservedAt: observed,
+			})
+			// A concurrent discovery stored a newer state while this read was in flight. The older assignment
+			// read must not move the observation backwards or restore its own state, and the newer state is
+			// what eligibility must evaluate.
+			state, at, err := ObserveBillingAccountState(ctx, tx, id, "ACTIVE", observed.Add(-time.Minute))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(state).To(Equal("INACTIVE"))
+			Expect(at).To(BeTemporally("==", observed))
+			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(items[0].State).To(Equal("INACTIVE"))
+			Expect(items[0].StatusObservedAt).To(BeTemporally("==", observed))
+		})
+
+		It("returns not found for an unknown account", func() {
+			_, _, err := ObserveBillingAccountState(ctx, tx, "missing", "ACTIVE", time.Now().UTC())
+			Expect(errors.Is(err, pgx.ErrNoRows)).To(BeTrue())
 		})
 	})
 

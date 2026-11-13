@@ -15,6 +15,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -99,6 +100,42 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 		return "", fmt.Errorf("upsert billing account: %w", err)
 	}
 	return id, nil
+}
+
+// ObserveBillingAccountState records one provider-observed normalized state for accountID, applying it only when the
+// observation is not older than the stored one, and returns the effective stored observation. That result is the state
+// and time that decide eligibility: this observation when it applied, or a concurrent newer one already stored.
+// Assignment reads the selected account from the provider before resolving correlation, so this keeps
+// billing_accounts.state and status_observed_at converged with that read without letting a slower observation overwrite
+// a newer discovery. It never changes display_name, base_currency or correlation_id. Returns pgx.ErrNoRows when the
+// account does not exist.
+func ObserveBillingAccountState(
+	ctx context.Context, tx Tx, accountID, state string, observedAt time.Time,
+) (effectiveState string, effectiveAt time.Time, err error) {
+	err = tx.QueryRow(ctx, `
+		update billing_accounts
+		set state = $2, status_observed_at = $3
+		where id = $1 and status_observed_at <= $3
+		returning state, status_observed_at`,
+		accountID, state, observedAt).Scan(&effectiveState, &effectiveAt)
+	if err == nil {
+		return effectiveState, effectiveAt, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", time.Time{}, fmt.Errorf("observe billing account state: %w", err)
+	}
+	// The guarded write matched nothing: a concurrent observation is already newer, or the row is gone. Read back the
+	// observation that actually decides eligibility.
+	err = tx.QueryRow(ctx, `
+		select state, status_observed_at from billing_accounts where id = $1`, accountID).
+		Scan(&effectiveState, &effectiveAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", time.Time{}, pgx.ErrNoRows
+	}
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("observe billing account state: %w", err)
+	}
+	return effectiveState, effectiveAt, nil
 }
 
 // MarkBillingAccountsUnobserved marks UNKNOWN every row for providerKey whose reference is not in

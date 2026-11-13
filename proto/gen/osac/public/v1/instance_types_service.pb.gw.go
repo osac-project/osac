@@ -345,7 +345,7 @@ func RegisterInstanceTypesHandlerServer(ctx context.Context, mux *runtime.ServeM
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_InstanceTypes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_InstanceTypes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_InstanceTypes_Delete_0{resp.(*InstanceTypesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterInstanceTypesHandlerClient(ctx context.Context, mux *runtime.ServeM
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_InstanceTypes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_InstanceTypes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_InstanceTypes_Delete_0{resp.(*InstanceTypesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_InstanceTypes_Update_0 struct {
 }
 
 func (m response_InstanceTypes_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_InstanceTypes_Delete_0 struct {
+	*InstanceTypesDeleteResponse
+}
+
+func (m response_InstanceTypes_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

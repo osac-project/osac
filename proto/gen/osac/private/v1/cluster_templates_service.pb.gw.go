@@ -325,7 +325,7 @@ func RegisterClusterTemplatesHandlerServer(ctx context.Context, mux *runtime.Ser
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ClusterTemplates_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ClusterTemplates_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ClusterTemplates_Delete_0{resp.(*ClusterTemplatesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPatch, pattern_ClusterTemplates_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -453,7 +453,7 @@ func RegisterClusterTemplatesHandlerClient(ctx context.Context, mux *runtime.Ser
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ClusterTemplates_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ClusterTemplates_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ClusterTemplates_Delete_0{resp.(*ClusterTemplatesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPatch, pattern_ClusterTemplates_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -488,6 +488,14 @@ type response_ClusterTemplates_Create_0 struct {
 }
 
 func (m response_ClusterTemplates_Create_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_ClusterTemplates_Delete_0 struct {
+	*ClusterTemplatesDeleteResponse
+}
+
+func (m response_ClusterTemplates_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

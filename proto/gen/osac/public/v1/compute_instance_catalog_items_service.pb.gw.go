@@ -345,7 +345,7 @@ func RegisterComputeInstanceCatalogItemsHandlerServer(ctx context.Context, mux *
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ComputeInstanceCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ComputeInstanceCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ComputeInstanceCatalogItems_Delete_0{resp.(*ComputeInstanceCatalogItemsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterComputeInstanceCatalogItemsHandlerClient(ctx context.Context, mux *
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ComputeInstanceCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ComputeInstanceCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ComputeInstanceCatalogItems_Delete_0{resp.(*ComputeInstanceCatalogItemsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_ComputeInstanceCatalogItems_Update_0 struct {
 }
 
 func (m response_ComputeInstanceCatalogItems_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_ComputeInstanceCatalogItems_Delete_0 struct {
+	*ComputeInstanceCatalogItemsDeleteResponse
+}
+
+func (m response_ComputeInstanceCatalogItems_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

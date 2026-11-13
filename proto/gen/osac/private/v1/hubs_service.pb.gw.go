@@ -325,7 +325,7 @@ func RegisterHubsHandlerServer(ctx context.Context, mux *runtime.ServeMux, serve
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Hubs_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Hubs_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Hubs_Delete_0{resp.(*HubsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPatch, pattern_Hubs_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -453,7 +453,7 @@ func RegisterHubsHandlerClient(ctx context.Context, mux *runtime.ServeMux, clien
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Hubs_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Hubs_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Hubs_Delete_0{resp.(*HubsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPatch, pattern_Hubs_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -488,6 +488,14 @@ type response_Hubs_Create_0 struct {
 }
 
 func (m response_Hubs_Create_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_Hubs_Delete_0 struct {
+	*HubsDeleteResponse
+}
+
+func (m response_Hubs_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

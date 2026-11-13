@@ -325,7 +325,7 @@ func RegisterTenantsHandlerServer(ctx context.Context, mux *runtime.ServeMux, se
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Tenants_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Tenants_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Tenants_Delete_0{resp.(*TenantsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPatch, pattern_Tenants_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -453,7 +453,7 @@ func RegisterTenantsHandlerClient(ctx context.Context, mux *runtime.ServeMux, cl
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Tenants_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Tenants_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Tenants_Delete_0{resp.(*TenantsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPatch, pattern_Tenants_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -488,6 +488,14 @@ type response_Tenants_Create_0 struct {
 }
 
 func (m response_Tenants_Create_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_Tenants_Delete_0 struct {
+	*TenantsDeleteResponse
+}
+
+func (m response_Tenants_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

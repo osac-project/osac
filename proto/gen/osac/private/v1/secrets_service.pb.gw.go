@@ -345,7 +345,7 @@ func RegisterSecretsHandlerServer(ctx context.Context, mux *runtime.ServeMux, se
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Secrets_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Secrets_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Secrets_Delete_0{resp.(*SecretsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterSecretsHandlerClient(ctx context.Context, mux *runtime.ServeMux, cl
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Secrets_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Secrets_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Secrets_Delete_0{resp.(*SecretsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_Secrets_Update_0 struct {
 }
 
 func (m response_Secrets_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_Secrets_Delete_0 struct {
+	*SecretsDeleteResponse
+}
+
+func (m response_Secrets_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

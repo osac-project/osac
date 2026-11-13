@@ -345,7 +345,7 @@ func RegisterBareMetalInstanceTypesHandlerServer(ctx context.Context, mux *runti
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_BareMetalInstanceTypes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_BareMetalInstanceTypes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_BareMetalInstanceTypes_Delete_0{resp.(*BareMetalInstanceTypesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterBareMetalInstanceTypesHandlerClient(ctx context.Context, mux *runti
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_BareMetalInstanceTypes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_BareMetalInstanceTypes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_BareMetalInstanceTypes_Delete_0{resp.(*BareMetalInstanceTypesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_BareMetalInstanceTypes_Update_0 struct {
 }
 
 func (m response_BareMetalInstanceTypes_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_BareMetalInstanceTypes_Delete_0 struct {
+	*BareMetalInstanceTypesDeleteResponse
+}
+
+func (m response_BareMetalInstanceTypes_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

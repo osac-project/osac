@@ -126,9 +126,10 @@ func buildCatalogDimensionIndex(inventory catalogPricingInventory) catalogDimens
 // of the catalog items satisfying all of them. A row with no conditions matches every catalog item of its service.
 // Scalar EQUALS conditions match locked/default values; scalar ANY matches any value, open or fixed. Conditions
 // of one component kind must all hold on one disk or node set, unless that item's policy for the kind is editable,
-// which accepts any requested combination. Scalar and component groups intersect. Production rows currently have
-// only EQUALS conditions (or none), but ANY remains supported for documented semantics and tests. A row matching
-// no catalog item returns an empty list, a valid "not in catalog" result, never a guessed one.
+// which accepts any requested combination that is not self-contradictory. Scalar and component groups intersect.
+// Production rows currently have only EQUALS conditions (or none), but ANY remains supported for documented
+// semantics and tests. A row matching no catalog item returns an empty list, a valid "not in catalog" result,
+// never a guessed one.
 func matchCatalogItems(item pricing.RateCardItem, idx catalogDimensionIndex) []string {
 	if len(item.Conditions) == 0 {
 		return catalogItemNames(idx.byService[item.Service])
@@ -178,7 +179,22 @@ func catalogDimensionComponentKind(dimension string) catalogComponentKind {
 	}
 }
 
+// matchCatalogComponents reports whether one disk or node set satisfies every condition of its kind. A component
+// stores at most one scalar value per dimension, so EQUALS conditions on the same dimension must agree; otherwise
+// the conditions are contradictory and no requested combination can satisfy them. That check also guards the
+// editable shortcut, keeping this matcher consistent with the scalar matcher and the pricing resolver.
 func matchCatalogComponents(conditions []pricing.RateCondition, components catalogComponents) bool {
+	equalsValues := map[string]string{}
+	for _, condition := range conditions {
+		if condition.Operator != pricing.OperatorEquals {
+			continue
+		}
+		value, seen := equalsValues[condition.Dimension]
+		if seen && value != condition.Value {
+			return false
+		}
+		equalsValues[condition.Dimension] = condition.Value
+	}
 	if components.editable {
 		return true
 	}

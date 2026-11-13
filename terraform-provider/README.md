@@ -1,7 +1,8 @@
 # terraform-provider-osac
 
 Proof of concept Terraform/OpenTofu provider for [OSAC](https://github.com/osac-project/osac).
-It manages **BareMetalInstance** resources through the fulfillment service public API.
+It manages **BareMetalInstance** and **Secret** resources through the
+fulfillment service public API.
 
 The provider does not have any credentials of its own. It reuses the session
 created by the `osac login` command of the OSAC CLI: the server address, the CA
@@ -17,10 +18,11 @@ share the session.
 
 This is a POC:
 
-- Only `osac_bare_metal_instance` is managed. Creating, reading, updating the
-  in-place updatable fields (`run_strategy`, `restart_trigger`), and deleting
-  are implemented and were verified against a live cluster. Everything else in
-  the spec is immutable and forces replacement, which matches the API.
+- `osac_bare_metal_instance` and `osac_secret` are managed. For instances,
+  creating, reading, updating the in-place updatable fields (`run_strategy`,
+  `restart_trigger`), and deleting are implemented and were verified against
+  a live cluster. Everything else in the spec is immutable and forces
+  replacement, which matches the API.
 - Operations wait for the machine: creation polls until the instance
   reaches `RUNNING` (or `STOPPED` with `run_strategy` `HALTED`, 30 minute
   timeout, failing the apply when provisioning fails); updates poll until
@@ -190,9 +192,6 @@ sensitive. Only the data entries can be updated in place; the type is
 immutable in the server and forces a replacement. The resource supports
 `tofu import` with the secret ID.
 
-Note: the public Secrets service isn't registered in the REST gateway yet
-(OSAC-7381), so the provider uses the private API paths for secrets.
-
 ## Data sources
 
 All data sources accept exactly one of `name` or `id` and return the object
@@ -217,15 +216,22 @@ object (so the name is `metadata.name`), plus the type-specific attributes:
 ```text
 terraform-provider/
 ├── main.go                       Plugin entrypoint
+├── docs/                         Decision records (adr/) and the guide for
+│                                 adding resources and data sources
 ├── internal/osaccli/             Reads what `osac login` wrote: config.json,
 │                                 keyring/secrets.json, CA pool, and the OAuth
 │                                 token renewal used by the CLI
-└── internal/provider/            Provider, gRPC client, resource, data sources
+├── internal/provider/            Provider, REST client, resources, data sources
+└── tools/codegen/                Schema and model generation from the protos
 ```
 
-The API calls use the generated gRPC clients from the
-[`proto`](../proto) module, so the provider tracks the public API definitions
-in the mono-repo. The `internal/osaccli` package mirrors the formats written
-by `fulfillment-service/internal/config` (which can't be imported directly
+The provider calls the REST gateway of the fulfillment service with a plain
+HTTP client, so it has no dependency on the `proto` module. Design decisions
+are recorded in [`docs/adr/`](docs/adr/), and
+[`docs/adding-resources-and-data-sources.md`](docs/adding-resources-and-data-sources.md)
+explains how to add new resources and data sources. The `internal/osaccli`
+package mirrors the formats written by
+`fulfillment-service/internal/config` (which can't be imported directly
 because it is internal to that module): the keyring key is
-`secrets:<config-dir>`, with the older plain `secrets` key used as a fallback.
+`secrets:<config-dir>`, with the older plain `secrets` key used as a
+fallback.

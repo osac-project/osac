@@ -32,11 +32,9 @@ go install github.com/hashicorp/terraform-plugin-codegen-framework/cmd/tfpluging
 tools/codegen/generate.sh baremetal_instances_service
 ```
 
-The generated code is not wired into the provider yet: the resource and data
-source still use the hand-written schemas in `internal/provider`. The
-`generator_config.yml` file maps which REST operations become the Terraform
-resource and data source; it currently covers bare metal instances only and
-must be extended when generating more services.
+The generator configurations in `configs/` map which REST operations of a
+service become the Terraform resource and data sources; add one when
+generating a service that isn't covered yet.
 
 ## What the generated code covers
 
@@ -53,26 +51,21 @@ must be extended when generating more services.
 
 ## Caveats
 
-- Everything generated is `Optional` + `Computed`: nothing is `Required`,
-  there are no cross-field validators (`ExactlyOneOf`, `ConflictsWith`), no
-  `Sensitive` attributes, and no `RequiresReplace` plan modifiers, so the
-  generated schema accepts invalid combinations and can't express that
-  immutable fields force replacement. Those rules are policy, not shape, and
-  stay hand-written. Note that the framework generator itself could emit
-  plan modifiers and custom validators — the intermediate specification
-  supports them, with imports and Go code snippets — but the OpenAPI step
-  can't derive them from the spec, so they never reach it. They could be
-  injected by post-processing the specification, but the glue is
-  deliberately kept in the resource and data source files instead: it is
-  smaller than such a tool would be, it sits next to the CRUD logic that
-  depends on it, it is type-checked, and regeneration never touches it.
+- The generated schema is permissive: everything is `Optional` + `Computed`,
+  nothing is `Required`, and there are no cross-field validators, no
+  `Sensitive` attributes and no `RequiresReplace` plan modifiers. Those rules
+  are policy, not shape; they are applied by hand in the resource and data
+  source files. Why hand-written instead of post-processing the
+  specification: see
+  [`../../docs/adr/0003-keep-schema-glue-hand-written.md`](../../docs/adr/0003-keep-schema-glue-hand-written.md).
 - `protoc-gen-openapiv2` doesn't know about `google.api.field_behavior`, so
   output-only fields such as `status` are generated as plain optional
-  attributes instead of computed ones.
-- The `Any` values of `template_parameters` become an object with only a
-  `type` attribute, and oneofs such as `user_data_source` generate all
-  alternatives as plain optional attributes.
+  attributes instead of computed ones. The `Any` values of
+  `template_parameters` and oneofs such as `user_data_source` generate only
+  partially usable shapes. These are accepted costs of the generator choice:
+  see
+  [`../../docs/adr/0002-generate-schemas-from-protos.md`](../../docs/adr/0002-generate-schemas-from-protos.md).
 - The generated code contains schemas and models only: the CRUD
-  implementations, the gRPC client, the name/identifier reference resolution,
+  implementations, the REST client, the name/identifier reference resolution,
   tenant placement and update masks remain hand-written in
   `internal/provider`.

@@ -13,39 +13,8 @@
 #
 
 # Generates the Terraform plugin framework schema and model code for a public API service from its proto
-# definitions. See README.md in this directory for the full description of the pipeline and its caveats.
-#
-# The first step converts the protos into an OpenAPI document. We need three things
-# from that step:
-#
-#   1. `response_body: "object"` honored: responses must be the resource, not the
-#      RPC envelope, or the generated Go types collide and don't compile.
-#   2. Proto field names: snake_case, matching both the Terraform idiom and the
-#      names the gateway puts on the wire.
-#   3. Enums as strings: they become OneOf validators, so bad values fail at plan
-#      time instead of apply time.
-#
-# Four plugins were evaluated. Only openapiv2 passes all three today.
-#
-#   protoc-gen-openapiv2 (grpc-gateway) — USED
-#     + passes all three
-#     - emits Swagger 2.0, hence the swagger2openapi conversion below
-#     - ignores field_behavior, hence output-only/immutable semantics in the glue
-#
-#   protoc-gen-openapi (gnostic) — REJECTED
-#     x ignores response_body: envelopes leak in, generated code doesn't compile
-#     x enums as numbers
-#
-#   protoc-gen-connect-openapi (connectrpc) — REJECTED
-#     x optional fields become oneOf: [schema, null], and tfplugingen-openapi
-#       doesn't look through it: enum validators are lost
-#     + best raw OpenAPI document (docs, client generation), could run alongside
-#
-#   protoc-gen-openapiv3 (grpc-gateway successor) — REJECTED FOR NOW
-#     x camelCase property names only, no proto-names option
-#     x proto oneofs become oneOf composition, tfplugingen skips the whole schema
-#     x alpha, output unstable
-#     > revisit when it grows a proto-names option and oneofs map
+# definitions, using existing tools instead of hand-writing the schemas. See README.md in this directory for the
+# pipeline, and ../../docs/adr/0002-generate-schemas-from-protos.md for why these tools were chosen.
 #
 # Usage:
 #

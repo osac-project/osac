@@ -44,9 +44,11 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // Reads or changes a tenant's time-versioned billing-account assignment. With billing disabled every method fails
-// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
-// method; there is no tenant self-service read path. Create and Update resolve billing_account.correlation_id and
-// validate a unique provider-side match before persisting.
+// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Administrator method authorization is
+// required, and assignment access is further limited to the caller's trusted tenant scope. Current platform
+// administrators have universal scope. There is no tenant self-service read path.
+// Create and Update resolve billing_account.correlation_id and validate a unique provider-side match before
+// persisting. A provider write is not proof of a match: an exact read-back and the uniqueness check must succeed.
 type TenantBillingAssignmentsClient interface {
 	// Lists current and historical assignments.
 	List(ctx context.Context, in *TenantBillingAssignmentsListRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsListResponse, error)
@@ -55,7 +57,9 @@ type TenantBillingAssignmentsClient interface {
 	// Assigns a tenant to a billing account. Rejects a tenant that already has an active assignment with
 	// FAILED_PRECONDITION/TENANT_ALREADY_BOUND, an account already linked to another tenant with
 	// FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN account with
-	// FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN.
+	// FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN. Reserved shared/system tenants cannot be linked.
+	// An acknowledged correlation write that cannot be
+	// verified fails with FAILED_PRECONDITION/BILLING_CORRELATION_READBACK_MISMATCH rather than becoming CONNECTED.
 	Create(ctx context.Context, in *TenantBillingAssignmentsCreateRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsCreateResponse, error)
 	// Replaces the tenant's active account, closing the previous interval and opening a new one in the same
 	// transaction. Resubmitting the same tenant and account revalidates the current interval in place instead of
@@ -131,9 +135,11 @@ func (c *tenantBillingAssignmentsClient) Signal(ctx context.Context, in *TenantB
 // for forward compatibility.
 //
 // Reads or changes a tenant's time-versioned billing-account assignment. With billing disabled every method fails
-// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
-// method; there is no tenant self-service read path. Create and Update resolve billing_account.correlation_id and
-// validate a unique provider-side match before persisting.
+// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Administrator method authorization is
+// required, and assignment access is further limited to the caller's trusted tenant scope. Current platform
+// administrators have universal scope. There is no tenant self-service read path.
+// Create and Update resolve billing_account.correlation_id and validate a unique provider-side match before
+// persisting. A provider write is not proof of a match: an exact read-back and the uniqueness check must succeed.
 type TenantBillingAssignmentsServer interface {
 	// Lists current and historical assignments.
 	List(context.Context, *TenantBillingAssignmentsListRequest) (*TenantBillingAssignmentsListResponse, error)
@@ -142,7 +148,9 @@ type TenantBillingAssignmentsServer interface {
 	// Assigns a tenant to a billing account. Rejects a tenant that already has an active assignment with
 	// FAILED_PRECONDITION/TENANT_ALREADY_BOUND, an account already linked to another tenant with
 	// FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN account with
-	// FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN.
+	// FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN. Reserved shared/system tenants cannot be linked.
+	// An acknowledged correlation write that cannot be
+	// verified fails with FAILED_PRECONDITION/BILLING_CORRELATION_READBACK_MISMATCH rather than becoming CONNECTED.
 	Create(context.Context, *TenantBillingAssignmentsCreateRequest) (*TenantBillingAssignmentsCreateResponse, error)
 	// Replaces the tenant's active account, closing the previous interval and opening a new one in the same
 	// transaction. Resubmitting the same tenant and account revalidates the current interval in place instead of

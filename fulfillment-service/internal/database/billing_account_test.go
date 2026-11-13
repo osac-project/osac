@@ -80,19 +80,21 @@ var _ = Describe("Billing accounts", func() {
 		})
 
 		It("refreshes display_name, base_currency and state on a second discovery", func() {
+			observed := time.Now().UTC().Truncate(time.Second)
 			first := upsert(BillingAccountUpsert{
 				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				DisplayName: "Acme", State: "ACTIVE",
+				DisplayName: "Acme", BaseCurrency: "USD", State: "ACTIVE", StatusObservedAt: observed,
 			})
 			second := upsert(BillingAccountUpsert{
 				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				DisplayName: "Acme Renamed", BaseCurrency: "USD", State: "INACTIVE",
+				DisplayName: "Acme Renamed", BaseCurrency: "EUR", State: "INACTIVE",
+				StatusObservedAt: observed.Add(time.Minute),
 			})
 			Expect(second).To(Equal(first), "same provider_key+reference must keep the same OSAC id")
 			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(items[0].DisplayName).To(Equal("Acme Renamed"))
-			Expect(items[0].BaseCurrency).To(Equal("USD"))
+			Expect(items[0].BaseCurrency).To(Equal("EUR"), "a newer provider currency must refresh the stored value")
 			Expect(items[0].State).To(Equal("INACTIVE"))
 		})
 
@@ -156,6 +158,58 @@ var _ = Describe("Billing accounts", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(items[0].DisplayName).To(Equal("Acme"))
 			Expect(items[0].BaseCurrency).To(Equal("USD"))
+		})
+
+		DescribeTable("refreshes a nonempty base_currency only from a not-older observation",
+			func(delta time.Duration, currency, expected string) {
+				observed := time.Now().UTC().Truncate(time.Second)
+				upsert(BillingAccountUpsert{
+					ProviderKey: "m360", ProviderAccountReference: "acct-1", BaseCurrency: "USD",
+					StatusObservedAt: observed,
+				})
+				upsert(BillingAccountUpsert{
+					ProviderKey: "m360", ProviderAccountReference: "acct-1", BaseCurrency: currency,
+					StatusObservedAt: observed.Add(delta),
+				})
+				items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(items[0].BaseCurrency).To(Equal(expected))
+			},
+			Entry("equal observation time refreshes", time.Duration(0), "EUR", "EUR"),
+			Entry("newer observation time refreshes", time.Minute, "EUR", "EUR"),
+			Entry("stale observation cannot re-denominate", -time.Minute, "EUR", "USD"),
+			Entry("empty currency never erases a known value", time.Minute, "", "USD"),
+		)
+
+		It("keeps a known currency when the observation carries a zero timestamp", func() {
+			observed := time.Now().UTC().Truncate(time.Second)
+			upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1", BaseCurrency: "USD",
+				StatusObservedAt: observed,
+			})
+			_, err := UpsertBillingAccount(ctx, tx, BillingAccountUpsert{
+				ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: "acct-1",
+				BaseCurrency: "EUR", State: "UNKNOWN",
+			})
+			Expect(err).ToNot(HaveOccurred())
+			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(items[0].BaseCurrency).To(Equal("USD"),
+				"a zero observation time is older than the stored observation and must not overwrite currency")
+		})
+
+		It("does not initialize currency from an older observation", func() {
+			observed := time.Now().UTC().Truncate(time.Second)
+			upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1", StatusObservedAt: observed,
+			})
+			upsert(BillingAccountUpsert{
+				ProviderKey: "m360", ProviderAccountReference: "acct-1", BaseCurrency: "USD",
+				StatusObservedAt: observed.Add(-time.Second),
+			})
+			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(items[0].BaseCurrency).To(BeEmpty())
 		})
 
 		It("copies the provider correlation value only when the local value is null", func() {

@@ -36,7 +36,10 @@ message BillingAccountsListRequest {
   // built-in `this` variable refers to the object being tested. If the expression evaluates to `true` the object
   // is included in the results. For example, to retrieve only active accounts:
   //
-  //     this.state == "BILLING_ACCOUNT_STATE_ACTIVE"
+  //     this.state == "ACTIVE"
+  //
+  // State filters use the normalized storage spellings ACTIVE, INACTIVE, and UNKNOWN, not the type-prefixed
+  // protobuf enum names returned in JSON.
   //
   // If this isn't provided, or if the value is empty, then all the accounts that the caller has permission to see
   // will be returned.
@@ -70,7 +73,7 @@ message BillingAccountsListResponse {
 service BillingAccounts {
   // Reads the configured billing provider's account list, refreshing the local record, then returns the discovered
   // accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled and `UNAVAILABLE` when the provider
-  // cannot be reached; it never serves a stale list unmarked as current.
+  // cannot be reached; it never serves a stale list unmarked as current. Deployment-wide administrator access only.
   rpc List(BillingAccountsListRequest) returns (BillingAccountsListResponse) {
     option (google.api.http) = {get: "/api/private/v1/billing/accounts"};
   }

@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -335,7 +336,7 @@ func (s *PrivateBillingAccountsServer) storeAccounts(
 	return err
 }
 
-// validCurrency returns code unchanged when it is exactly three ASCII letters, and "" otherwise.
+// validCurrency returns code in uppercase when it is exactly three ASCII letters, and "" otherwise.
 func validCurrency(code string) string {
 	if len(code) != 3 {
 		return ""
@@ -345,5 +346,5 @@ func validCurrency(code string) string {
 			return ""
 		}
 	}
-	return code
+	return strings.ToUpper(code)
 }

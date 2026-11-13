@@ -154,3 +154,19 @@ func (i *TxInterceptor) UnaryServer(ctx context.Context, request any, info *grpc
 	response, err = handler(handlerCtx, request)
 	return
 }
+
+// StreamServer supplies only a manager: authorization, JIT and event delivery
+// may open short transactions without pinning a connection for the Watch.
+func (i *TxInterceptor) StreamServer(server any, stream grpc.ServerStream,
+	info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	ctx := TxManagerIntoContext(stream.Context(), i.manager)
+	ctx = context.WithValue(ctx, contextTxKey, struct{}{})
+	return handler(server, &txManagerStream{ServerStream: stream, ctx: ctx})
+}
+
+type txManagerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *txManagerStream) Context() context.Context { return s.ctx }

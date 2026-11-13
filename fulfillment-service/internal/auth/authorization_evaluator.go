@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/open-policy-agent/opa/v1/rego"
@@ -30,7 +31,12 @@ var authzPolicy string
 type EvaluatorBuilder struct {
 	emergencyServiceAccounts []string
 	serviceAccountResolver   ManagedServiceAccountResolver
+	tenantResolver           TenantResolver
 }
+
+// TenantResolver returns the claimed tenants that have not been deleted.
+// Implementations must read authoritative state, not a time-based cache.
+type TenantResolver func(context.Context, []string) ([]string, error)
 
 // ManagedServiceAccountResolver loads current Fulfillment authorization state
 // for a candidate managed service-account token.
@@ -148,6 +154,7 @@ type AuthorizationEvaluator interface {
 type OPAAuthorizationEvaluator struct {
 	query                  rego.PreparedEvalQuery
 	serviceAccountResolver ManagedServiceAccountResolver
+	tenantResolver         TenantResolver
 }
 
 // NewEvaluator creates a new Evaluator that can be used to evaluate authorization decisions.
@@ -164,6 +171,11 @@ func (b *EvaluatorBuilder) SetManagedServiceAccountResolver(
 	value ManagedServiceAccountResolver,
 ) *EvaluatorBuilder {
 	b.serviceAccountResolver = value
+	return b
+}
+
+func (b *EvaluatorBuilder) SetTenantResolver(value TenantResolver) *EvaluatorBuilder {
+	b.tenantResolver = value
 	return b
 }
 
@@ -191,6 +203,7 @@ func (b *EvaluatorBuilder) Build() (*OPAAuthorizationEvaluator, error) {
 	result := &OPAAuthorizationEvaluator{
 		query:                  query,
 		serviceAccountResolver: b.serviceAccountResolver,
+		tenantResolver:         b.tenantResolver,
 	}
 	return result, nil
 }
@@ -323,6 +336,20 @@ func (e *OPAAuthorizationEvaluator) Evaluate(
 		SubjectUser:           subjectUser,
 		SubjectTenants:        subjectTenants,
 		ManagedServiceAccount: managedServiceAccount,
+	}
+	// Universal platform/controller scope must retain cleanup and history access.
+	// Normal scope is resolved before the interceptor constructs its subject and
+	// before JIT provisioning can use stale organization claims.
+	if allow && e.tenantResolver != nil && !slices.Contains(subjectTenants, "*") {
+		live, resolveErr := e.tenantResolver(ctx, subjectTenants)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("failed to resolve tenant authorization: %w", resolveErr)
+		}
+		decision.SubjectTenants = live
+		if authContext.Tenant != "" && slices.Contains(subjectTenants, authContext.Tenant) &&
+			!slices.Contains(live, authContext.Tenant) {
+			decision.Allowed = false
+		}
 	}
 
 	// Note: Current OPA policy does not return a "reason" field.

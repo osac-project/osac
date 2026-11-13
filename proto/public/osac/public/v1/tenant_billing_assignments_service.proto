@@ -34,6 +34,12 @@ message TenantBillingAssignmentsListRequest {
   // one tenant:
   //
   //     this.spec.tenant_id == "tenant-a"
+  //
+  // To select a tenant's current validated assignment:
+  //
+  //     this.spec.tenant_id == "tenant-a" && !has(this.status.effective_to) && this.status.connection_state == "CONNECTED"
+  //
+  // Connection-state filters use PENDING, CONNECTED, or FAILED, not type-prefixed protobuf enum names.
   optional string filter = 3;
 
   // Order criteria.
@@ -84,9 +90,11 @@ message TenantBillingAssignmentsUpdateResponse {
 }
 
 // Reads or changes a tenant's time-versioned billing-account assignment. With billing disabled every method fails
-// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Only Cloud Provider Admins may call any
-// method; there is no tenant self-service read path. Create and Update resolve billing_account.correlation_id and
-// validate a unique provider-side match before persisting.
+// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Administrator method authorization is
+// required, and assignment access is further limited to the caller's trusted tenant scope. Current platform
+// administrators have universal scope. There is no tenant self-service read path.
+// Create and Update resolve billing_account.correlation_id and validate a unique provider-side match before
+// persisting. A provider write is not proof of a match: an exact read-back and the uniqueness check must succeed.
 service TenantBillingAssignments {
   // Lists current and historical assignments.
   rpc List(TenantBillingAssignmentsListRequest) returns (TenantBillingAssignmentsListResponse) {
@@ -104,7 +112,9 @@ service TenantBillingAssignments {
   // Assigns a tenant to a billing account. Rejects a tenant that already has an active assignment with
   // FAILED_PRECONDITION/TENANT_ALREADY_BOUND, an account already linked to another tenant with
   // FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN account with
-  // FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN.
+  // FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN. Reserved shared/system tenants cannot be linked.
+  // An acknowledged correlation write that cannot be
+  // verified fails with FAILED_PRECONDITION/BILLING_CORRELATION_READBACK_MISMATCH rather than becoming CONNECTED.
   rpc Create(TenantBillingAssignmentsCreateRequest) returns (TenantBillingAssignmentsCreateResponse) {
     option (google.api.http) = {
       post: "/api/fulfillment/v1/billing/tenant_billing_assignments"

@@ -36,7 +36,7 @@ var _ publicv1.BillingAccountsServer = (*BillingAccountsServer)(nil)
 // BillingAccountsServer is the public server; it delegates to the private one.
 //
 // Billing accounts are a platform-wide, admin-only surface: this server applies no tenant scoping, and authz.rego
-// keeps these methods out of every allow set so only Cloud Provider Admins reach them. If a future change grants
+// grants these methods only to is_admin callers. If a future change grants
 // tenant roles access here, add a tenant-scoped filter first.
 type BillingAccountsServer struct {
 	publicv1.UnimplementedBillingAccountsServer

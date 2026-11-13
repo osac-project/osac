@@ -250,6 +250,27 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(response.GetItems()[0].GetBaseCurrency()).To(BeEmpty())
 	})
 
+	It("stores an initial lowercase currency in uppercase and refreshes later case variants", func() {
+		accounts := []billingfake.AccountSpec{{ID: "acct-1", BaseCurrency: "usd", State: billing.AccountActive}}
+		var id string
+		for _, currency := range []string{"usd", "USD", "Usd"} {
+			accounts[0].BaseCurrency = currency
+			response, err := list(build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider()), nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(1))
+			item := response.GetItems()[0]
+			Expect(item.GetBaseCurrency()).To(Equal("USD"))
+			if id == "" {
+				id = item.GetId()
+			}
+			Expect(item.GetId()).To(Equal(id))
+			var stored string
+			Expect(testPool.QueryRow(ctx, `select base_currency from billing_accounts where id = $1`, id).
+				Scan(&stored)).To(Succeed())
+			Expect(stored).To(Equal("USD"))
+		}
+	})
+
 	It("maps an unknown or inactive state and never maps a raw provider value to ACTIVE", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
 			{ID: "a1", State: billing.AccountUnknown}, {ID: "a2", State: billing.AccountInactive},

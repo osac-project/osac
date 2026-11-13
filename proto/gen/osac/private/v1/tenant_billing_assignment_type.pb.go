@@ -94,8 +94,8 @@ func (x TenantBillingAssignmentConnectionState) Number() protoreflect.EnumNumber
 // Desired tenant and billing-account association for one assignment interval.
 type TenantBillingAssignmentSpec struct {
 	state protoimpl.MessageState `protogen:"hybrid.v1"`
-	// OSAC tenant billed by this interval. Not an authorization credential: a tenant caller's own identity, not this
-	// field, determines which assignments they may read.
+	// OSAC tenant billed by this interval. Data, not an authorization credential. The caller must be an authorized
+	// administrator whose trusted tenant scope includes this tenant. Tenant callers have no self-service read path.
 	TenantId string `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	// BillingAccount.id assigned to the tenant for this interval.
 	BillingAccountId string `protobuf:"bytes,2,opt,name=billing_account_id,json=billingAccountId,proto3" json:"billing_account_id,omitempty"`
@@ -153,8 +153,8 @@ func (x *TenantBillingAssignmentSpec) SetBillingAccountId(v string) {
 type TenantBillingAssignmentSpec_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// OSAC tenant billed by this interval. Not an authorization credential: a tenant caller's own identity, not this
-	// field, determines which assignments they may read.
+	// OSAC tenant billed by this interval. Data, not an authorization credential. The caller must be an authorized
+	// administrator whose trusted tenant scope includes this tenant. Tenant callers have no self-service read path.
 	TenantId string
 	// BillingAccount.id assigned to the tenant for this interval.
 	BillingAccountId string
@@ -176,10 +176,11 @@ type TenantBillingAssignmentStatus struct {
 	ConnectionState TenantBillingAssignmentConnectionState `protobuf:"varint,1,opt,name=connection_state,json=connectionState,proto3,enum=osac.private.v1.TenantBillingAssignmentConnectionState" json:"connection_state,omitempty"`
 	// Time this assignment interval became active.
 	EffectiveFrom *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=effective_from,json=effectiveFrom,proto3" json:"effective_from,omitempty"`
-	// Time this assignment interval stopped being active. Unset while it is the current assignment.
+	// Time this assignment interval stopped being active. Unset while it is the current assignment. Tenant deletion
+	// closes the current interval and retains it as a read-only tombstone, releasing the account for another tenant.
 	EffectiveTo *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=effective_to,json=effectiveTo,proto3" json:"effective_to,omitempty"`
 	// Optional detail, such as the PENDING remediation and its stable reason
-	// (BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED). Empty on success.
+	// (BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED), or the tenant-deletion tombstone. Empty on connected success.
 	Message       string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -283,10 +284,11 @@ type TenantBillingAssignmentStatus_builder struct {
 	ConnectionState TenantBillingAssignmentConnectionState
 	// Time this assignment interval became active.
 	EffectiveFrom *timestamppb.Timestamp
-	// Time this assignment interval stopped being active. Unset while it is the current assignment.
+	// Time this assignment interval stopped being active. Unset while it is the current assignment. Tenant deletion
+	// closes the current interval and retains it as a read-only tombstone, releasing the account for another tenant.
 	EffectiveTo *timestamppb.Timestamp
 	// Optional detail, such as the PENDING remediation and its stable reason
-	// (BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED). Empty on success.
+	// (BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED), or the tenant-deletion tombstone. Empty on connected success.
 	Message string
 }
 

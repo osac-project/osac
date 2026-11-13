@@ -20,6 +20,46 @@ companion `__r` objects. The adapter reads the readable side only:
 
 A missing or null `Status__r` / `ApprovalStatus__r` reads as the empty string.
 
+## Correlation value (`externalId`)
+
+OSAC's provider-neutral correlation value maps to the M360 account `ExternalId`. The adapter
+reads that field and does not write it: `SupportsCorrelationWrite` returns false, and
+`SetCorrelationValue` returns `UNSUPPORTED` without sending a request.
+
+This is the **approved OSAC capability for this increment**, not a claim about what M360 can
+do. During assignment, the resolution still generates or adopts the value and stores it on the
+OSAC side, but it cannot copy it to M360. The assignment therefore stays `PENDING` with the
+stable reason `BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED` until the Cloud Provider Admin
+sets the matching `externalId` on the M360 account (the value is shown by
+`BillingAccounts.List`) and re-submits `Update`. See the merged design §4.1 note, §4.6, and the
+correlation-id drawback.
+
+### Vendor fact versus OSAC authority
+
+The two statements below are deliberately separate:
+
+- **Current vendor fact.** The vendor's current Accounts documentation (read 2026-11-13)
+  describes `PUT /accounts/{accountId}` as updating scalar fields on an existing account. A
+  disposable-account probe against the supplied M360 UAT host recorded `POST` `201` without
+  `externalId`, an `externalId`-only `PUT` `200` whose value the following `GET` returned, a
+  repeated identical `PUT` `200`, and `DELETE` `204` followed by `GET` `404`. That is evidence
+  about the documented API and one UAT deployment, not a guarantee for the version in use.
+- **OSAC approved capability.** The merged design treats M360 correlation writes as
+  unsupported for this increment: the adapter advertises no write, and the assignment stays
+  `PENDING`. The generic resolver keeps its read-back and uniqueness guard for providers that
+  do advertise a write; it is simply not exercised through this adapter.
+
+The exact M360 version OSAC may be configured against is unknown, so this README does not
+promise that the update endpoint is absent, or that an unsupported route presents a particular
+status: an unknown deployment could answer `404` as readily as `405`. The adapter makes no
+request, so no such assumption is encoded in behavior.
+
+The test stub in `internal/testing/billingstub` still serves the scalar `externalId` PUT. That
+covers the vendor wire contract through raw-HTTP tests, independently of what the OSAC adapter
+advertises.
+
+No host, token, account id or correlation value from the probe is recorded in this repository.
+
 ## Account state mapping
 
 `mapState` in `accounts.go` normalizes the two raw signals into one

@@ -130,8 +130,8 @@ func (b *PrivateTenantBillingAssignmentsServerBuilder) Build() (
 	return
 }
 
-// List returns every assignment matching the request's filter, order, and pagination. Only Cloud Provider Admins
-// reach this method (authz.rego's is_admin catch-all; there is no tenant self-service path).
+// List intersects the request filter with the trusted subject's tenant scope before counting and pagination.
+// Only is_admin callers reach this method; tenant membership does not grant billing method access.
 func (s *PrivateTenantBillingAssignmentsServer) List(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsListRequest) (
 	response *privatev1.TenantBillingAssignmentsListResponse, err error) {
@@ -146,8 +146,9 @@ func (s *PrivateTenantBillingAssignmentsServer) List(ctx context.Context,
 	defer tx.ReportError(&err)
 
 	// An unset limit serves the DAO's default page; an explicit one is clamped to its maximum.
-	rows, total, err := database.ListTenantBillingAssignments(
-		ctx, tx, request.GetOffset(), request.GetLimit(), request.GetFilter(), request.GetOrder())
+	rows, total, err := database.ListTenantBillingAssignmentsForTenants(
+		ctx, tx, request.GetOffset(), request.GetLimit(), request.GetFilter(), request.GetOrder(),
+		auth.SubjectFromContext(ctx).Tenants)
 	if err != nil {
 		var invalid *database.ErrInvalidFlatTableQuery
 		if errors.As(err, &invalid) {
@@ -159,8 +160,8 @@ func (s *PrivateTenantBillingAssignmentsServer) List(ctx context.Context,
 	return buildTenantBillingAssignmentsListResponse(rows, total), nil
 }
 
-// Get returns one assignment interval. Only Cloud Provider Admins reach this method (authz.rego's is_admin
-// catch-all; there is no tenant self-service path).
+// Get returns one assignment interval. Only is_admin callers reach this method (authz.rego's explicit billing
+// allow-list; there is no tenant self-service path).
 func (s *PrivateTenantBillingAssignmentsServer) Get(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsGetRequest) (
 	response *privatev1.TenantBillingAssignmentsGetResponse, err error) {
@@ -181,6 +182,9 @@ func (s *PrivateTenantBillingAssignmentsServer) Get(ctx context.Context,
 		}
 		s.logger.ErrorContext(ctx, "Failed to get tenant billing assignment", slog.Any("error", err))
 		return nil, status.Errorf(codes.Internal, "failed to get tenant billing assignment")
+	}
+	if !auth.SubjectFromContext(ctx).Tenants.Contains(row.TenantID) {
+		return nil, status.Errorf(codes.NotFound, "tenant billing assignment %q not found", request.GetId())
 	}
 
 	return privatev1.TenantBillingAssignmentsGetResponse_builder{
@@ -363,6 +367,11 @@ func (s *PrivateTenantBillingAssignmentsServer) currentAssignment(
 	if err != nil {
 		return row, err
 	}
+	// Check the stored tenant before interval state or caller-supplied spec.tenant_id. Otherwise a spoofed tenant
+	// could authorize a foreign row, including a historical interval.
+	if !auth.SubjectFromContext(ctx).Tenants.Contains(row.TenantID) {
+		return row, status.Errorf(codes.NotFound, "tenant billing assignment %q not found", id)
+	}
 	if row.EffectiveTo != nil {
 		return row, status.Errorf(codes.FailedPrecondition,
 			"tenant billing assignment %q is no longer the current interval", id)
@@ -370,8 +379,8 @@ func (s *PrivateTenantBillingAssignmentsServer) currentAssignment(
 	return row, nil
 }
 
-// Signal synchronously revalidates only a current assignment. Authorization is enforced by the
-// controller/admin-only private RPC policy, not in this handler.
+// Signal synchronously revalidates only a current assignment in the trusted subject's tenant scope. The private
+// RPC policy separately restricts method access to administrators/controllers.
 func (s *PrivateTenantBillingAssignmentsServer) Signal(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsSignalRequest,
 ) (*privatev1.TenantBillingAssignmentsSignalResponse, error) {
@@ -448,6 +457,14 @@ type tenantBillingAssignmentAssignInput struct {
 func (s *PrivateTenantBillingAssignmentsServer) assign(
 	ctx context.Context, accountID, closeID string, in tenantBillingAssignmentAssignInput,
 ) (row database.TenantBillingAssignmentRow, err error) {
+	if !auth.SubjectFromContext(ctx).Tenants.Contains(in.TenantID) {
+		return row, status.Error(codes.PermissionDenied, "tenant is outside the authorized billing assignment scope")
+	}
+	// Reserved platform tenants never have billing accounts or correlation IDs. Reject before acquiring a lease,
+	// generating a correlation ID, or performing any provider I/O, including Update/Signal of a legacy row.
+	if in.TenantID == auth.SharedTenant || in.TenantID == auth.SystemTenant {
+		return row, status.Error(codes.InvalidArgument, "reserved tenants cannot have billing assignments")
+	}
 	defer func() {
 		if err != nil {
 			err = s.mapTenantBillingAssignmentError(ctx, err)
@@ -512,13 +529,9 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 		return row, err
 	}
 
-	// Derive the connection-state count from the resolver's bounded uniqueness scan: ProviderMatches counted
-	// accounts carrying the value before the write, and a successful write set it on this account, so the current
-	// count is ProviderMatches plus one.
+	// The resolver validates writes by reading back the provider value and rechecking uniqueness. A successful
+	// write alone is not evidence of a match.
 	matches := resolution.ProviderMatches
-	if resolution.ProviderWritten {
-		matches++
-	}
 
 	var state, message string
 	switch matches {

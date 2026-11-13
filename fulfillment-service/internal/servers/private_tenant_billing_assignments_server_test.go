@@ -29,6 +29,8 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -39,6 +41,15 @@ import (
 // provider that accepts requests but never answers, so the assign deadline is the only way out.
 type hangingCorrelationAdapter struct {
 	*billingfake.Fake
+}
+
+// acknowledgedWithoutWriteAdapter acknowledges a provider write without persisting it.
+type acknowledgedWithoutWriteAdapter struct {
+	*billingfake.Fake
+}
+
+func (a *acknowledgedWithoutWriteAdapter) SetCorrelationValue(context.Context, billing.AccountRef, string) error {
+	return nil
 }
 
 func (a *hangingCorrelationAdapter) CorrelationValue(ctx context.Context, _ billing.AccountRef) (string, bool, error) {
@@ -215,6 +226,19 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	})
 
 	Describe("Create", func() {
+		It("rejects an acknowledged but unpersisted provider write instead of inferring CONNECTED", func() {
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "", "", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
+			server := build(billing.NewProvider(billingfake.Key, &acknowledgedWithoutWriteAdapter{Fake: fake}, nil))
+			_, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(reason(err)).To(Equal("BILLING_CORRELATION_READBACK_MISMATCH"))
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+		})
+
 		It("generates a correlation id and connects when the provider supports writing it", func() {
 			var accounts []billingfake.AccountSpec
 			account := newAccount(&accounts, "", "", "ACTIVE")
@@ -698,6 +722,77 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	})
 
 	Describe("short transactions and durable guards", func() {
+		It("commits Tenant Delete during gated provider I/O and rejects assignment at the liveness commit fence", func() {
+			const tenantName = "gated-delete-tenant"
+			tenantsServer, err := NewPrivateTenantsServer().SetLogger(logger).
+				SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = database.WithNewTx(adminCtx(), func(txCtx context.Context) (*privatev1.TenantsCreateResponse, error) {
+				return tenantsServer.Create(txCtx, privatev1.TenantsCreateRequest_builder{
+					Object: privatev1.Tenant_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: tenantName, Finalizers: []string{finalizers.TenantLifecycle},
+						}.Build(),
+					}.Build(),
+				}.Build())
+			})
+			Expect(err).ToNot(HaveOccurred())
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "provider-correlation", "", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			adapter := &gatedCorrelationAdapter{Fake: fake, entered: make(chan struct{}), release: make(chan struct{})}
+			server := build(billing.NewProvider(billingfake.Key, adapter, nil))
+
+			// Both RPCs share one connection: deletion cannot commit while provider I/O holds a transaction.
+			config := testPool.Config()
+			config.MaxConns = 1
+			config.MinConns = 0
+			pool, err := pgxpool.NewWithConfig(ctx, config)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(pool.Close)
+			manager, err := database.NewTxManager().SetLogger(logger).SetPool(pool).Build()
+			Expect(err).ToNot(HaveOccurred())
+			rpcCtx := database.TxManagerIntoContext(adminCtx(), manager)
+			var once sync.Once
+			release := func() { once.Do(func() { close(adapter.release) }) }
+			DeferCleanup(release)
+			result := make(chan error, 1)
+			go func() {
+				_, err := server.Create(rpcCtx, createRequest(tenantName, account, "raced-assignment"))
+				result <- err
+			}()
+			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
+
+			deleteCtx, cancel := context.WithTimeout(rpcCtx, 5*time.Second)
+			defer cancel()
+			_, err = database.WithNewTx(deleteCtx, func(txCtx context.Context) (*privatev1.TenantsDeleteResponse, error) {
+				return tenantsServer.Delete(txCtx, privatev1.TenantsDeleteRequest_builder{Id: tenantName}.Build())
+			})
+			Expect(err).ToNot(HaveOccurred(), "Tenant Delete must commit before the provider gate opens")
+			var deletedAt time.Time
+			Expect(testPool.QueryRow(ctx, `select deletion_timestamp from tenants where name = $1`, tenantName).
+				Scan(&deletedAt)).To(Succeed())
+			Expect(deletedAt.After(time.Unix(1, 0))).To(BeTrue(), "an independent connection must see the committed delete")
+			Expect(adapter.release).NotTo(BeClosed())
+			Expect(result).NotTo(Receive())
+
+			release()
+			var finalErr error
+			Eventually(result, 5*time.Second).Should(Receive(&finalErr))
+			Expect(status.Code(finalErr)).To(Equal(codes.InvalidArgument))
+			Expect(status.Convert(finalErr).Message()).To(ContainSubstring("spec.tenant_id does not reference an existing tenant"))
+			Expect(fake.Count("CorrelationValue")).To(Equal(1), "provider resolution completed after the delete")
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+			var correlation string
+			Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+				Scan(&correlation)).To(Succeed())
+			Expect(correlation).To(BeEmpty(), "rejected finalization must not persist provider correlation adoption")
+			Expect(testPool.QueryRow(ctx, `select count(*) from billing_operation_leases`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+		})
+
 		It("rolls back correlation and interval changes together if the final commit fails, not the provider write", func() {
 			var accounts []billingfake.AccountSpec
 			first := newAccount(&accounts, "", "", "ACTIVE")
@@ -989,8 +1084,185 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		})
 	})
 
-	// Only Cloud Provider Admins reach List/Get in production (authz.rego's is_admin catch-all; there is no tenant
-	// self-service read path), so these tests exercise only admin behavior.
+	Describe("trusted tenant scope", func() {
+		scopedCtx := func(tenants collections.Set[string]) context.Context {
+			return auth.ContextWithSubject(adminCtx(), &auth.Subject{User: "admin", Tenants: tenants})
+		}
+		// These contexts stand for already-authorized admin requests, not a tenant self-service grant.
+		readCtx := func(tenants collections.Set[string]) context.Context {
+			return auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: tenants})
+		}
+		seedInterval := func(id, tenantID, accountID string, historical bool) {
+			_, err := testPool.Exec(ctx, `insert into tenant_billing_assignments
+				(id, name, tenant_id, billing_account_id, effective_to, connection_state, creator)
+				values ($1, $1, $2, $3, case when $4 then now() else null end, 'CONNECTED', 'admin')`,
+				id, tenantID, accountID, historical)
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		DescribeTable("scopes list totals and every page, including historical rows",
+			func(tenants collections.Set[string], expected int32) {
+				createOtherTenant()
+				var accounts []billingfake.AccountSpec
+				first := newAccount(&accounts, "", "", "ACTIVE")
+				second := newAccount(&accounts, "", "", "ACTIVE")
+				seedInterval("a-foreign-history", otherTenant, second, true)
+				seedInterval("b-own-history", testTenant, first, true)
+				seedInterval("c-foreign-current", otherTenant, second, false)
+				seedInterval("d-own-current", testTenant, first, false)
+				fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+				server := build(fake.Provider())
+				seen := map[string]bool{}
+				for offset := int32(0); offset <= expected; offset++ {
+					response, err := server.List(readCtx(tenants), privatev1.TenantBillingAssignmentsListRequest_builder{
+						Offset: &offset, Limit: new(int32(1)), Order: new("id"),
+					}.Build())
+					Expect(err).ToNot(HaveOccurred())
+					Expect(response.GetTotal()).To(Equal(expected))
+					if offset == expected {
+						Expect(response.GetSize()).To(BeZero())
+						Expect(response.GetItems()).To(BeEmpty())
+						continue
+					}
+					Expect(response.GetSize()).To(Equal(int32(1)))
+					item := response.GetItems()[0]
+					Expect(tenants.Contains(item.GetSpec().GetTenantId())).To(BeTrue())
+					Expect(seen[item.GetId()]).To(BeFalse())
+					seen[item.GetId()] = true
+				}
+				Expect(seen).To(HaveLen(int(expected)))
+				Expect(fake.Calls()).To(BeEmpty())
+			},
+			Entry("finite single tenant", collections.NewSet(testTenant), int32(2)),
+			Entry("finite multiple tenants", collections.NewSet(testTenant, otherTenant), int32(4)),
+			Entry("universal administrator/controller", auth.AllTenants, int32(4)),
+			Entry("empty tenant set", collections.NewSet[string](), int32(0)),
+			Entry("zero-value tenant set", collections.Set[string]{}, int32(0)),
+		)
+
+		It("cannot widen list scope with caller-supplied tenant filters", func() {
+			createOtherTenant()
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "", "", "ACTIVE")
+			seedInterval("foreign-history", otherTenant, account, true)
+			server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
+			response, err := server.List(readCtx(collections.NewSet(testTenant)),
+				privatev1.TenantBillingAssignmentsListRequest_builder{
+					Filter: new(`this.spec.tenant_id == "other-tenant" && has(this.status.effective_to)`),
+				}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetTotal()).To(BeZero())
+			Expect(response.GetItems()).To(BeEmpty())
+		})
+
+		DescribeTable("hides foreign current and historical rows before disclosing state or doing provider I/O",
+			func(historical, empty bool) {
+				createOtherTenant()
+				var accounts []billingfake.AccountSpec
+				account := newAccount(&accounts, "", "", "ACTIVE")
+				seedInterval("foreign", otherTenant, account, historical)
+				fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
+				server := build(fake.Provider())
+				tenants := collections.NewSet(testTenant)
+				if empty {
+					tenants = collections.NewSet[string]()
+				}
+				_, err := server.Get(readCtx(tenants), privatev1.TenantBillingAssignmentsGetRequest_builder{Id: "foreign"}.Build())
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+				// An authorized tenant in the submitted spec/metadata cannot authorize the foreign stored row.
+				request := updateRequest("foreign", testTenant, account)
+				request.GetObject().SetMetadata(privatev1.Metadata_builder{Name: "foreign", Tenant: testTenant}.Build())
+				_, err = server.Update(scopedCtx(tenants), request)
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+				_, err = server.Signal(scopedCtx(tenants), privatev1.TenantBillingAssignmentsSignalRequest_builder{Id: "foreign"}.Build())
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+				Expect(fake.Calls()).To(BeEmpty())
+				var count int
+				Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+				Expect(count).To(Equal(1))
+				var closed bool
+				Expect(testPool.QueryRow(ctx, `select effective_to is not null from tenant_billing_assignments where id = 'foreign'`).
+					Scan(&closed)).To(Succeed())
+				Expect(closed).To(Equal(historical))
+			},
+			Entry("finite/current", false, false), Entry("finite/history", true, false),
+			Entry("empty/current", false, true), Entry("empty/history", true, true),
+		)
+
+		DescribeTable("rejects unauthorized Create without persisting or calling the provider",
+			func(tenants collections.Set[string]) {
+				createOtherTenant()
+				var accounts []billingfake.AccountSpec
+				account := newAccount(&accounts, "", "", "ACTIVE")
+				fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
+				request := createRequest(otherTenant, account, "spoofed")
+				request.GetObject().GetMetadata().SetTenant(testTenant)
+				_, err := build(fake.Provider()).Create(scopedCtx(tenants), request)
+				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+				Expect(fake.Calls()).To(BeEmpty())
+				var count int
+				Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+				Expect(count).To(BeZero())
+				var correlation string
+				Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+					Scan(&correlation)).To(Succeed())
+				Expect(correlation).To(BeEmpty())
+				Expect(testPool.QueryRow(ctx, `select count(*) from billing_operation_leases`).Scan(&count)).To(Succeed())
+				Expect(count).To(BeZero())
+			},
+			Entry("finite tenant set", collections.NewSet(testTenant)),
+			Entry("empty tenant set", collections.NewSet[string]()),
+		)
+
+		It("allows finite-scope assignment, reassignment, Get and Signal for an authorized tenant", func() {
+			var accounts []billingfake.AccountSpec
+			first := newAccount(&accounts, "", "", "ACTIVE")
+			second := newAccount(&accounts, "", "", "ACTIVE")
+			server := build(billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts}).Provider())
+			tenants := collections.NewSet(testTenant, otherTenant)
+			created, err := server.Create(scopedCtx(tenants), createRequest(testTenant, first, "allowed"))
+			Expect(err).ToNot(HaveOccurred())
+			updated, err := server.Update(scopedCtx(tenants), updateRequest(created.GetObject().GetId(), testTenant, second))
+			Expect(err).ToNot(HaveOccurred())
+			_, err = server.Signal(scopedCtx(tenants), privatev1.TenantBillingAssignmentsSignalRequest_builder{Id: updated.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			got, err := server.Get(readCtx(tenants), privatev1.TenantBillingAssignmentsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got.GetObject().GetStatus().GetEffectiveTo()).ToNot(BeNil())
+		})
+
+		DescribeTable("rejects reserved tenant targets before provider I/O or correlation generation", func(tenantID string) {
+			_, err := testPool.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
+				values ($1, $1, $1, 'system', '{}') on conflict do nothing`, tenantID)
+			Expect(err).ToNot(HaveOccurred())
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "", "", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
+			server := build(fake.Provider())
+			_, err = server.Create(adminCtx(), createRequest(tenantID, account, "reserved"))
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+			// Even a legacy reserved-tenant row must not be revalidated or create a correlation ID.
+			seedInterval("legacy-reserved", tenantID, account, false)
+			_, err = server.Update(adminCtx(), updateRequest("legacy-reserved", tenantID, account))
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			_, err = server.Signal(adminCtx(), privatev1.TenantBillingAssignmentsSignalRequest_builder{Id: "legacy-reserved"}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(fake.Calls()).To(BeEmpty())
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(Equal(1))
+			var correlation string
+			Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+				Scan(&correlation)).To(Succeed())
+			Expect(correlation).To(BeEmpty())
+			Expect(testPool.QueryRow(ctx, `select count(*) from billing_operation_leases`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+		}, Entry("shared", auth.SharedTenant), Entry("system", auth.SystemTenant))
+	})
+
+	// Method authorization remains admin-only; universal administrators retain deployment-wide reads.
 	Describe("List and Get", func() {
 		It("lists every assignment", func() {
 			createOtherTenant()

@@ -24,6 +24,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -93,14 +94,14 @@ var _ = Describe("Tenant billing assignments server", func() {
 		Expect(st.Code()).To(Equal(codes.FailedPrecondition))
 	})
 
-	It("creates, gets, and lists an assignment end to end through the public API", func() {
+	DescribeTable("creates, gets, and lists an assignment end to end through the public API", func(tenants collections.Set[string]) {
 		id := uuid.New()
 		fake := billingfake.New(billingfake.Scenario{
 			CorrelationWrite: true,
 			Accounts:         []billingfake.AccountSpec{{ID: id, State: billing.AccountActive}},
 		})
 		server := build(fake.Provider())
-		adminCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+		adminCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: tenants})
 
 		seedAccounts(id)
 
@@ -129,9 +130,10 @@ var _ = Describe("Tenant billing assignments server", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listed.GetTotal()).To(Equal(int32(1)))
-	})
+	}, Entry("universal", auth.AllTenants), Entry("finite", collections.NewSet(testTenant)),
+		Entry("finite multi-tenant", collections.NewSet(testTenant, "another-tenant")))
 
-	It("updates an assignment to another account through the public API", func() {
+	DescribeTable("updates an assignment to another account through the public API", func(tenants collections.Set[string]) {
 		id1, id2 := uuid.New(), uuid.New()
 		fake := billingfake.New(billingfake.Scenario{
 			CorrelationWrite: true,
@@ -140,7 +142,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			},
 		})
 		server := build(fake.Provider())
-		adminCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+		adminCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: tenants})
 
 		seedAccounts(id1, id2)
 
@@ -179,5 +181,132 @@ var _ = Describe("Tenant billing assignments server", func() {
 			}
 		}
 		Expect(current).To(Equal(1), "exactly one current interval remains after the reassignment")
+	}, Entry("universal", auth.AllTenants), Entry("finite", collections.NewSet(testTenant)))
+
+	Describe("trusted tenant scope through the public delegate", func() {
+		const foreignTenant = "foreign-tenant"
+		var (
+			server  *TenantBillingAssignmentsServer
+			fake    *billingfake.Fake
+			account string
+		)
+		callerCtx := func(tenants collections.Set[string]) context.Context {
+			return auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: tenants})
+		}
+		BeforeEach(func() {
+			_, err := testPool.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
+				values ($1, $1, $1, 'system', '{}')`, foreignTenant)
+			Expect(err).ToNot(HaveOccurred())
+			account = uuid.New()
+			seedAccounts(account)
+			fake = billingfake.New(billingfake.Scenario{
+				CorrelationWrite: true,
+				Accounts:         []billingfake.AccountSpec{{ID: account, State: billing.AccountActive}},
+			})
+			server = build(fake.Provider())
+		})
+		seedHistory := func() {
+			for i, tenantID := range []string{foreignTenant, testTenant, foreignTenant, testTenant} {
+				_, err := testPool.Exec(ctx, `insert into tenant_billing_assignments
+					(id, name, tenant_id, billing_account_id, effective_to, creator)
+					values ($1, $1, $2, $3, now(), 'admin')`, string(rune('a'+i)), tenantID, account)
+				Expect(err).ToNot(HaveOccurred())
+			}
+		}
+		DescribeTable("preserves trusted scope and query totals across public pagination",
+			func(tenants collections.Set[string], expected int32) {
+				seedHistory()
+				seen := map[string]bool{}
+				for offset := int32(0); offset <= expected; offset++ {
+					response, err := database.WithNewTx(callerCtx(tenants), func(txCtx context.Context) (*publicv1.TenantBillingAssignmentsListResponse, error) {
+						return server.List(txCtx, publicv1.TenantBillingAssignmentsListRequest_builder{
+							Offset: &offset, Limit: new(int32(1)), Order: new("id"),
+						}.Build())
+					})
+					Expect(err).ToNot(HaveOccurred())
+					Expect(response.GetTotal()).To(Equal(expected))
+					if offset == expected {
+						Expect(response.GetItems()).To(BeEmpty())
+						Expect(response.GetSize()).To(BeZero())
+						continue
+					}
+					Expect(response.GetSize()).To(Equal(int32(1)))
+					item := response.GetItems()[0]
+					Expect(tenants.Contains(item.GetSpec().GetTenantId())).To(BeTrue())
+					Expect(seen[item.GetId()]).To(BeFalse())
+					seen[item.GetId()] = true
+				}
+				Expect(seen).To(HaveLen(int(expected)))
+				Expect(fake.Calls()).To(BeEmpty())
+			},
+			Entry("finite", collections.NewSet(testTenant), int32(2)),
+			Entry("finite multi-tenant", collections.NewSet(testTenant, foreignTenant), int32(4)),
+			Entry("universal", auth.AllTenants, int32(4)),
+			Entry("empty", collections.NewSet[string](), int32(0)),
+		)
+
+		It("cannot widen trusted scope with a public tenant filter", func() {
+			seedHistory()
+			response, err := database.WithNewTx(callerCtx(collections.NewSet(testTenant)), func(txCtx context.Context) (*publicv1.TenantBillingAssignmentsListResponse, error) {
+				return server.List(txCtx, publicv1.TenantBillingAssignmentsListRequest_builder{
+					Filter: new(`this.spec.tenant_id == "foreign-tenant" && has(this.status.effective_to)`),
+				}.Build())
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetTotal()).To(BeZero())
+			Expect(response.GetItems()).To(BeEmpty())
+		})
+
+		DescribeTable("rejects foreign reads and tenant-spoofed writes without provider calls", func(empty bool) {
+			seedHistory()
+			tenants := collections.NewSet(testTenant)
+			if empty {
+				tenants = collections.NewSet[string]()
+			}
+			_, err := database.WithNewTx(callerCtx(tenants), func(txCtx context.Context) (*publicv1.TenantBillingAssignmentsGetResponse, error) {
+				return server.Get(txCtx, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: "a"}.Build())
+			})
+			Expect(status.Code(err)).To(Equal(codes.NotFound))
+			_, err = server.Update(callerCtx(tenants), publicv1.TenantBillingAssignmentsUpdateRequest_builder{
+				Object: publicv1.TenantBillingAssignment_builder{
+					Id: "a", Metadata: publicv1.Metadata_builder{Name: "a", Tenant: testTenant}.Build(),
+					Spec: publicv1.TenantBillingAssignmentSpec_builder{TenantId: testTenant, BillingAccountId: account}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.NotFound))
+			_, err = server.Create(callerCtx(tenants), publicv1.TenantBillingAssignmentsCreateRequest_builder{
+				Object: publicv1.TenantBillingAssignment_builder{
+					Metadata: publicv1.Metadata_builder{Name: "spoofed", Tenant: testTenant}.Build(),
+					Spec:     publicv1.TenantBillingAssignmentSpec_builder{TenantId: foreignTenant, BillingAccountId: account}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+			Expect(fake.Calls()).To(BeEmpty())
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(Equal(4))
+			var correlation string
+			Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+				Scan(&correlation)).To(Succeed())
+			Expect(correlation).To(BeEmpty())
+		}, Entry("finite", false), Entry("empty", true))
+
+		DescribeTable("rejects reserved targets without provider I/O or persistence", func(tenantID string) {
+			_, err := server.Create(callerCtx(auth.AllTenants), publicv1.TenantBillingAssignmentsCreateRequest_builder{
+				Object: publicv1.TenantBillingAssignment_builder{
+					Metadata: publicv1.Metadata_builder{Name: "reserved"}.Build(),
+					Spec:     publicv1.TenantBillingAssignmentSpec_builder{TenantId: tenantID, BillingAccountId: account}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(fake.Calls()).To(BeEmpty())
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+			var correlation string
+			Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+				Scan(&correlation)).To(Succeed())
+			Expect(correlation).To(BeEmpty())
+		}, Entry("shared", auth.SharedTenant), Entry("system", auth.SystemTenant))
 	})
 })

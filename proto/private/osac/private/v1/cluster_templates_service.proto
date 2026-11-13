@@ -92,7 +92,7 @@ message ClusterTemplatesDeleteRequest {
   string id = 1;
 }
 
-message ClusterTemplatesDeleteResponse {}
+message ClusterTemplatesDeleteResponse { ClusterTemplate object = 1; }
 
 message ClusterTemplatesUpdateRequest {
   ClusterTemplate object = 1;
@@ -142,7 +142,7 @@ service ClusterTemplates {
 
   // Deletes a cluster template.
   rpc Delete(ClusterTemplatesDeleteRequest) returns (ClusterTemplatesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/cluster_templates/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/cluster_templates/{id}" response_body: "object"};
   }
 
   // Updates an existing cluster template.

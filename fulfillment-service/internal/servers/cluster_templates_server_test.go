@@ -294,10 +294,17 @@ var _ = Describe("Cluster templates server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			// Delete the object:
-			_, err = server.Delete(ctx, publicv1.ClusterTemplatesDeleteRequest_builder{
+			deleteResponse, err := server.Delete(ctx, publicv1.ClusterTemplatesDeleteRequest_builder{
 				Id: object.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+
+			// The response contains the deleted object, with its deletion timestamp set because
+			// the finalizer keeps the deletion asynchronous:
+			deleted := deleteResponse.GetObject()
+			Expect(deleted).ToNot(BeNil())
+			Expect(deleted.GetId()).To(Equal(object.GetId()))
+			Expect(deleted.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 
 			// Get and verify:
 			getResponse, err := server.Get(ctx, publicv1.ClusterTemplatesGetRequest_builder{
@@ -306,6 +313,39 @@ var _ = Describe("Cluster templates server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object = getResponse.GetObject()
 			Expect(object.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+		})
+
+		It("Delete object without finalizers", func() {
+			// Create the object:
+			createResponse, err := server.Create(ctx, publicv1.ClusterTemplatesCreateRequest_builder{
+				Object: publicv1.ClusterTemplate_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Id:          "my_template",
+					Title:       "My template",
+					Description: "My template is *nice*",
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			object := createResponse.GetObject()
+
+			// Delete the object. There are no finalizers, so the deletion is immediate, but the
+			// response still contains the deleted object with its deletion timestamp set:
+			deleteResponse, err := server.Delete(ctx, publicv1.ClusterTemplatesDeleteRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			deleted := deleteResponse.GetObject()
+			Expect(deleted).ToNot(BeNil())
+			Expect(deleted.GetId()).To(Equal(object.GetId()))
+			Expect(deleted.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+
+			// The object is gone:
+			_, err = server.Get(ctx, publicv1.ClusterTemplatesGetRequest_builder{
+				Id: object.GetId(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
 		})
 	})
 })

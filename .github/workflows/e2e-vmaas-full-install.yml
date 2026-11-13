@@ -64,7 +64,7 @@ on:
         required: false
         default: ""
       test-marker:
-        description: "pytest -m marker expression (e.g. sanity, regression). Empty runs all."
+        description: "pytest -m marker expression (e.g. sanity). Empty runs all."
         required: false
         default: ""
       test-infra-ref:

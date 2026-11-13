@@ -224,6 +224,12 @@ These tests do not validate hosted GitHub scheduling, real Slack delivery or
 rendering, or Konflux build/policy/staging operations. Those boundaries require
 an authorized hosted run; local mocks do not establish that coverage.
 
+`test_release_versioning.py` (same directory and invocation, with git) runs
+the workflow's real version-resolution steps and every Tekton chart pipeline's
+real `resolve-chart-version` script against synthetic tag histories:
+release-line scoping, the version grammar, forward-only and maturity guards,
+default pinning, and nightly bases.
+
 ## fulfillment-service
 
 Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#integration-tests).

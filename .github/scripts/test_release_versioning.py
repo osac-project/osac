@@ -451,6 +451,13 @@ class StagedVersionRecord(TemporaryRepos):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class ReleaseSerialization(unittest.TestCase):
+    def test_releases_of_a_branch_never_overlap(self) -> None:
+        # Guards and chart pipelines read the line's tags; overlapping releases would read each other's.
+        release = yaml.safe_load((ROOT / ".github/workflows/osac-release.yaml").read_text())
+        self.assertEqual(release["concurrency"], {"group": "osac-release-${{ github.ref }}", "cancel-in-progress": False})
+
+
 class ProdPromotionInputs(unittest.TestCase):
     def test_image_snapshot_must_be_a_name_or_an_explicit_none(self) -> None:
         promote = yaml.safe_load((ROOT / ".github/workflows/osac-promote-to-prod.yaml").read_text())

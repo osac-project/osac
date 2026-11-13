@@ -403,7 +403,7 @@ func (s *PrivateExternalIPAttachmentsServer) Delete(ctx context.Context,
 		return
 	}
 	if deleteAlreadyAccepted(attachment.GetMetadata()) {
-		response = &privatev1.ExternalIPAttachmentsDeleteResponse{}
+		response = &privatev1.ExternalIPAttachmentsDeleteResponse{Object: attachment}
 		return
 	}
 	if isAutomatic(attachment.GetMetadata()) && !auth.IsControllerServiceAccount(ctx) {
@@ -412,9 +412,10 @@ func (s *PrivateExternalIPAttachmentsServer) Delete(ctx context.Context,
 		return
 	}
 
-	err = translateLifecycleError(s.lifecycle.deleteAttachment(ctx, id))
+	deletedAttachment, lifecycleErr := s.lifecycle.deleteAttachment(ctx, id)
+	err = translateLifecycleError(lifecycleErr)
 	if err == nil {
-		response = &privatev1.ExternalIPAttachmentsDeleteResponse{}
+		response = &privatev1.ExternalIPAttachmentsDeleteResponse{Object: deletedAttachment}
 	}
 	return
 }

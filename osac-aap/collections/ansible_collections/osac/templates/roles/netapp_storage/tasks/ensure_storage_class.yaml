@@ -151,8 +151,8 @@
       {% set matching_tbc_names = [] -%}
       {% set matching_csi_names = [] -%}
       {% set conns = _provider_backend_connections | default({}, true) -%}
-      {% set _ca_required = (netapp_storage_validate_certs | default(true) | bool) and (netapp_storage_ca_bundle_path is defined) -%}
-      {% set _ca_b64 = ((lookup('file', netapp_storage_ca_bundle_path, errors='ignore') | default('', true)) | b64encode)
+      {% set _ca_required = (netapp_storage_validate_certs | default(true) | bool) and (storage_provider_ca_bundle_path is defined) -%}
+      {% set _ca_b64 = ((lookup('file', storage_provider_ca_bundle_path, errors='ignore') | default('', true)) | b64encode)
                        if _ca_required
                        else '' -%}
       {% for bid in _netapp_dedicated_backend_ids -%}
@@ -210,7 +210,7 @@
             and (_espec.svm | default('') == _svm)
             and (((_espec.credentials | default({}, true)).name | default('')) == _sec_name)
             and _pools_present.ok
-            and (not (netapp_storage_validate_certs is defined or netapp_storage_ca_bundle_path is defined)
+            and (not (netapp_storage_validate_certs is defined or storage_provider_ca_bundle_path is defined)
                  or (not _ca_required and ((_espec.trustedCACertificate | default('', true)) | length == 0))
                  or (_ca_required and (_ca_b64 | length > 0) and ((_espec.trustedCACertificate | default('', true)) == _ca_b64))) -%}
       {% set _ = matching_tbc_names.append(_tbc_name) -%}

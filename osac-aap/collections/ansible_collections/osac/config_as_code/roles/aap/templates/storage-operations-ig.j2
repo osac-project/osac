@@ -51,8 +51,12 @@ spec:
         - configMapRef:
             name: storage-operations-ig
             optional: true
-{% if remote_cluster_kubeconfig_secret_name %}
       env:
+        - name: SSL_CERT_FILE
+          value: /etc/ca-bundle/bundle.pem
+        - name: REQUESTS_CA_BUNDLE
+          value: /etc/ca-bundle/bundle.pem
+{% if remote_cluster_kubeconfig_secret_name %}
         - name: OSAC_REMOTE_CLUSTER_KUBECONFIG
           value: /etc/osac/remote-cluster-kubeconfig
 {% endif %}

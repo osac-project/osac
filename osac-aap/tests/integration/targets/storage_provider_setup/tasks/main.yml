@@ -13,7 +13,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     tenant_name: "test-setup"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-setup"
@@ -73,7 +73,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     tenant_name: "test-setup"
 
   tasks:

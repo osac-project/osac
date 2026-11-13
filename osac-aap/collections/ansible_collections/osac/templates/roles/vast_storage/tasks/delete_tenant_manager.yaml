@@ -7,7 +7,7 @@
 #   vast_endpoint              — VMS API hostname
 #   vast_username / vast_password — admin credentials
 #   vast_storage_validate_certs — TLS validation flag
-#   vast_storage_api_timeout   — API timeout (seconds)
+#   storage_provider_api_timeout   — API timeout (seconds)
 #   tenant_name                — play-level var
 
 - name: Authenticate to VAST VMS as admin for manager cleanup
@@ -19,7 +19,7 @@
       username: "{{ vast_username }}"
       password: "{{ vast_password }}"
     validate_certs: "{{ vast_storage_validate_certs }}"
-    timeout: "{{ vast_storage_api_timeout | int }}"
+    timeout: "{{ storage_provider_api_timeout | int }}"
     status_code: [200, 201]
   register: _vast_admin_auth
   ignore_errors: true
@@ -47,7 +47,7 @@
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
         validate_certs: "{{ vast_storage_validate_certs }}"
-        timeout: "{{ vast_storage_api_timeout | int }}"
+        timeout: "{{ storage_provider_api_timeout | int }}"
         status_code: [200]
       register: _vast_manager_lookup
       ignore_errors: true
@@ -64,7 +64,7 @@
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
         validate_certs: "{{ vast_storage_validate_certs }}"
-        timeout: "{{ vast_storage_api_timeout | int }}"
+        timeout: "{{ storage_provider_api_timeout | int }}"
         status_code: [200, 204, 404]
       register: _vast_manager_delete_result
       ignore_errors: true
@@ -78,7 +78,7 @@
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
         validate_certs: "{{ vast_storage_validate_certs }}"
-        timeout: "{{ vast_storage_api_timeout | int }}"
+        timeout: "{{ storage_provider_api_timeout | int }}"
         status_code: [200]
       register: _vast_role_lookup
       ignore_errors: true
@@ -94,7 +94,7 @@
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
         validate_certs: "{{ vast_storage_validate_certs }}"
-        timeout: "{{ vast_storage_api_timeout | int }}"
+        timeout: "{{ storage_provider_api_timeout | int }}"
         status_code: [200, 204, 404]
       register: _vast_role_delete_result
       ignore_errors: true

@@ -72,11 +72,21 @@
             (_pod.spec.volumes | selectattr('name', 'equalto', 'ca-bundle')
              | map(attribute='configMap.items') | first | default([]))
             == [{'key': 'bundle.pem', 'path': 'bundle.pem'}]
+          - >-
+            _pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'SSL_CERT_FILE')
+            | selectattr('value', 'equalto', '/etc/ca-bundle/bundle.pem')
+            | list | length == 1
+          - >-
+            _pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'REQUESTS_CA_BUNDLE')
+            | selectattr('value', 'equalto', '/etc/ca-bundle/bundle.pem')
+            | list | length == 1
         fail_msg: >-
           Compute-instance operations run the VM just-in-time storage dispatch,
           so the pod must mount the optional trust-manager ca-bundle ConfigMap
-          read-only at /etc/ca-bundle (bundle.pem), which storage provider
-          roles read to verify storage management endpoints.
+          read-only at /etc/ca-bundle (bundle.pem) and export SSL_CERT_FILE and
+          REQUESTS_CA_BUNDLE for storage management endpoints.
 
 - name: Compute-instance pod spec with remote kubeconfig
   hosts: localhost
@@ -157,10 +167,20 @@
             (_storage_pod.spec.volumes | selectattr('name', 'equalto', 'ca-bundle')
              | map(attribute='configMap.items') | first)
             == [{'key': 'bundle.pem', 'path': 'bundle.pem'}]
+          - >-
+            _storage_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'SSL_CERT_FILE')
+            | selectattr('value', 'equalto', '/etc/ca-bundle/bundle.pem')
+            | list | length == 1
+          - >-
+            _storage_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'REQUESTS_CA_BUNDLE')
+            | selectattr('value', 'equalto', '/etc/ca-bundle/bundle.pem')
+            | list | length == 1
         fail_msg: >-
           Storage operations must mount the optional trust-manager ca-bundle
-          ConfigMap read-only at /etc/ca-bundle (bundle.pem), which storage
-          provider roles read to verify storage management endpoints.
+          ConfigMap read-only at /etc/ca-bundle (bundle.pem) and export
+          SSL_CERT_FILE and REQUESTS_CA_BUNDLE for storage management endpoints.
 
 - name: Storage operations pod spec with remote kubeconfig
   hosts: localhost

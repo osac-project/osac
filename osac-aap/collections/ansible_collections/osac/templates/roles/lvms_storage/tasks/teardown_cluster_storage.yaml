@@ -3,11 +3,6 @@
 # Finds SCs by label selector. The target cluster may be unreachable (being destroyed)
 # so failures are tolerated and reported rather than fatal.
 
-- name: Validate tenant_name is a valid DNS label
-  ansible.builtin.fail:
-    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
-  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
-
 - name: Clean up tenant StorageClasses
   block:
     - name: Find tenant StorageClasses by label

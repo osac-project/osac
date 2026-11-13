@@ -70,7 +70,7 @@ per resource purely through Go generics plus protobuf reflection over the resour
 
 `TxInterceptor.UnaryServer`
 ([`internal/database/database_tx_interceptor.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/database/database_tx_interceptor.go))
-wraps every unary gRPC call: it begins a transaction before the handler runs, injects it into the
+normally wraps unary gRPC calls: it begins a transaction before the handler runs, injects it into the
 context (`TxIntoContext`), and commits or rolls back in a deferred block after the handler returns.
 Any code downstream retrieves the current transaction with
 `database.TxFromContext(ctx)` instead of receiving it as a parameter.
@@ -111,6 +111,10 @@ opens its freshness window only after commit. Assignment operations commit expir
 leases before provider work and revalidate ownership and current state in the final commit transaction.
 The lease fences local finalization, not the external provider: a provider write and PostgreSQL commit
 cannot be atomic, and a paused owner is not remotely fenced after lease expiry.
+
+Streaming RPCs use `TxInterceptor.StreamServer`, which supplies a manager-only context and
+shadows any ambient transaction. Authorization, JIT, and each Watch visibility check can use
+short `WithNewTx` scopes without pinning a connection for the lifetime of the stream.
 
 ### Event delivery and reconciliation recovery
 

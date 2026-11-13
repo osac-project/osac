@@ -29,8 +29,8 @@ type DefaultTenancyLogicBuilder struct {
 	tenantResolver TenantResolver
 }
 
-// DefaultTenancyLogic is the default implementation of TenancyLogic. It reads the tenants directly from the subject,
-// which are expected to have been populated by the external authentication and authorization service.
+// DefaultTenancyLogic starts from the authenticated subject and intersects finite tenant scope with the configured
+// authoritative resolver before assigning tenants or deciding resource visibility.
 type DefaultTenancyLogic struct {
 	logger         *slog.Logger
 	tenantResolver TenantResolver

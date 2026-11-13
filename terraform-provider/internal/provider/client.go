@@ -22,8 +22,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -236,25 +238,65 @@ func (c *Client) delete(ctx context.Context, path, id string) error {
 	return err
 }
 
-// lookupID resolves the identifier of a data source lookup: the identifier itself when given, or the name through
-// a list request, which must match exactly one object.
-func (c *Client) lookupID(ctx context.Context, path, kind, name, id string) (string, error) {
+// lookupID resolves the identifier of a data source lookup: the identifier itself when given, or the single object
+// selected by name or labels through a list request, which must match exactly one object.
+func (c *Client) lookupID(ctx context.Context, path, kind, name, id string,
+	labels map[string]string) (string, error) {
 	if id != "" {
 		return id, nil
 	}
-	items, err := c.list(ctx, path, nameFilter(name))
+	var filter, criteria string
+	switch {
+	case name != "":
+		filter = nameFilter(name)
+		criteria = fmt.Sprintf("named '%s'", name)
+	case len(labels) > 0:
+		filter = labelsFilter(labels)
+		criteria = fmt.Sprintf("labeled '%s'", labelList(labels))
+	default:
+		return "", fmt.Errorf("no lookup criteria: exactly one of name, id or labels must be set")
+	}
+	items, err := c.list(ctx, path, filter)
 	if err != nil {
 		return "", fmt.Errorf("failed to find %s: %w", kind, err)
 	}
 	if len(items) != 1 {
-		return "", fmt.Errorf("expected exactly one %s named '%s', but found %d", kind, name, len(items))
+		return "", fmt.Errorf("expected exactly one %s %s, but found %d", kind, criteria, len(items))
 	}
 	return items[0].Id, nil
 }
 
 // nameFilter builds the CEL filter that the fulfillment service uses to select objects by name.
 func nameFilter(name string) string {
-	return fmt.Sprintf("this.metadata.name == '%s'", name)
+	return fmt.Sprintf("this.metadata.name == %s", celString(name))
+}
+
+// labelsFilter builds the CEL filter that selects the objects carrying all the given labels. The membership check
+// guards the value lookup, so that objects without the label are filtered out instead of failing the evaluation.
+func labelsFilter(labels map[string]string) string {
+	keys := slices.Sorted(maps.Keys(labels))
+	conditions := make([]string, 0, len(keys))
+	for _, key := range keys {
+		conditions = append(conditions, fmt.Sprintf(
+			"%s in this.metadata.labels && this.metadata.labels[%s] == %s",
+			celString(key), celString(key), celString(labels[key])))
+	}
+	return strings.Join(conditions, " && ")
+}
+
+// labelList renders the labels for an error message, in a stable order.
+func labelList(labels map[string]string) string {
+	parts := make([]string, 0, len(labels))
+	for _, key := range slices.Sorted(maps.Keys(labels)) {
+		parts = append(parts, key+"="+labels[key])
+	}
+	return strings.Join(parts, ",")
+}
+
+// celString quotes a value as a CEL string literal, escaping backslashes and quotes so that the value can't break
+// out of the filter.
+func celString(value string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value) + "'"
 }
 
 // resolveReference resolves the name or identifier of a reference to its identifier and whether it lives in the

@@ -163,12 +163,27 @@ func (r *secretResource) Update(ctx context.Context,
 		response.Diagnostics.AddError("Failed to prepare the secret", err.Error())
 		return
 	}
-	// Only the data entries can be updated; the server rejects type changes:
+	// Only the fields that changed are sent: the server rejects 'data' updates for some secret types even when
+	// the entries are identical, and an empty update mask would mean "update everything" server-side.
 	delete(body, "type")
 	body["id"] = state.Id.ValueString()
-	data, err := r.client.update(ctx, secretsPath, state.Id.ValueString(), body,
-		[]string{"data"},
-	)
+	mask := []string{}
+	if !plan.Data.Equal(state.Data) {
+		mask = append(mask, "data")
+	} else {
+		delete(body, "data")
+	}
+	if metadata, ok := body["metadata"].(map[string]any); ok {
+		if _, ok := metadata["labels"]; ok {
+			mask = append(mask, "metadata.labels")
+		}
+	}
+	if len(mask) == 0 {
+		plan.Id = types.StringValue(state.Id.ValueString())
+		response.Diagnostics.Append(response.State.Set(ctx, &plan)...)
+		return
+	}
+	data, err := r.client.update(ctx, secretsPath, state.Id.ValueString(), body, mask)
 	if err != nil {
 		response.Diagnostics.AddError(
 			"Failed to update secret",
@@ -228,6 +243,9 @@ func (r *secretResource) buildBody(ctx context.Context, plan gen.SecretModel) (m
 		metadata["tenant"] = plan.Metadata.Tenant.ValueString()
 	} else if r.client.DefaultTenant != "" {
 		metadata["tenant"] = r.client.DefaultTenant
+	}
+	if !plan.Metadata.Labels.IsNull() && !plan.Metadata.Labels.IsUnknown() {
+		metadata["labels"] = stringMap(plan.Metadata.Labels)
 	}
 	body := map[string]any{
 		"metadata": metadata,

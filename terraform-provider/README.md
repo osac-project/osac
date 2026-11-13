@@ -167,10 +167,10 @@ provider resolves the reference, marking shared-tenant objects correctly.
 `run_strategy` accepts the enum values listed in the plan output, validated by
 a generated `OneOf` validator.
 
-Only `spec.run_strategy` and `spec.restart_trigger` can be updated in place;
-everything else forces the replacement of the instance, which matches the
-immutability of the API. The resource supports `tofu import` with the
-instance ID.
+Only `spec.run_strategy`, `spec.restart_trigger` and `metadata.labels` can
+be updated in place; everything else forces the replacement of the instance,
+which matches the immutability of the API. The resource supports `tofu
+import` with the instance ID.
 
 ### `osac_secret`
 
@@ -188,15 +188,19 @@ resource "osac_secret" "userdata" {
 ```
 
 The `data` entries are base64 encoded, like in the REST API, and marked
-sensitive. Only the data entries can be updated in place; the type is
+sensitive. The metadata labels and the data entries can be updated in place,
+but the server rejects data changes for secrets of type
+`SECRET_TYPE_USER_DATA` — for those, only the labels can change. The type is
 immutable in the server and forces a replacement. The resource supports
 `tofu import` with the secret ID.
 
 ## Data sources
 
-All data sources accept exactly one of `name` or `id` and return the object
-with the schema generated from the API definitions — a nested `metadata`
-object (so the name is `metadata.name`), plus the type-specific attributes:
+All data sources accept exactly one of `name`, `id`, or `labels` and return
+the object with the schema generated from the API definitions — a nested
+`metadata` object (so the name is `metadata.name`), plus the type-specific
+attributes. A `labels` lookup returns the single object carrying all the
+given labels, and fails when several objects match:
 
 - `osac_bare_metal_instance_type` — the `spec` hardware profile (CPU, memory,
   disks, network ports) and `status`.

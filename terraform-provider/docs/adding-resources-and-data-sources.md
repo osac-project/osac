@@ -39,8 +39,8 @@ constructor, and wire it to the client.
 
 **Data source** (see `data_source_secret.go`):
 
-- Schema: wrap the generated schema with `withNameLookup(...)` so the
-  object can be resolved by `name` or `id`.
+- Schema: wrap the generated schema with `withLookup(...)` so the
+  object can be resolved by `name`, `id`, or `labels`.
 - `Read`: `lookupID` to resolve the name, `get` to fetch, then copy the
   response into the state: plain fields directly, nested objects through
   `valueOfJSON`. The generated models can't be `json.Unmarshal` targets —

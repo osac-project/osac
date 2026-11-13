@@ -1,0 +1,37 @@
+---
+# Tells the pull request that a suite which had ended is going again. The suites run as runs of their own (e2e-pr-<suite>.yml),
+# started by the decision of e2e-pr.yml, and a person can run a failed one again with GitHub's "Re-run failed jobs" button.
+# GitHub sends workflow_run `in_progress` for the new attempt and no `requested`, which e2e-pr.yml does not listen to, so
+# without this the suite's line and the `E2E` check say `Failed` (linked to a job of the first attempt) until the new attempt
+# ends. This one shows the line as running, linked to the job of the new attempt, and makes a failed `E2E` check wait for it;
+# the end of the attempt is added up by e2e-pr.yml as before. The first attempt of every suite also sends `in_progress`; the
+# shared workflow ignores it. See osac-ci docs/CALLERS.md.
+#
+# It is a workflow of its own, not a trigger of e2e-pr.yml, because `in_progress` is also sent for every job of CI, and each
+# would wake e2e-pr.yml. Keep the list of workflows in step with the `E2E <Suite> PR suite` workflows of e2e-pr.yml.
+name: E2E suite goes again
+run-name: "${{ github.event.workflow_run.display_title }} · attempt ${{ github.event.workflow_run.run_attempt }} started"
+
+on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out; the suites run the approved commit
+  workflow_run:
+    workflows:
+      - "E2E VMaaS PR suite"
+      - "E2E CaaS PR suite"
+      - "E2E BMaaS PR suite"
+      - "E2E BMaaS Netris PR suite"
+      - "E2E VMaaS Netris PR suite"
+      - "E2E Stretched Netris PR suite"
+    types: [in_progress]
+
+permissions: {}
+
+jobs:
+  restarted:
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-rerun.yml@492acce3715226b06731d3d02dd85e9f4eb52ca7  # v1.3.8
+    with:
+      lines-kind: statuses  # the same as decide, track and finish in e2e-pr.yml
+    permissions:
+      contents: read
+      pull-requests: write
+    secrets:
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

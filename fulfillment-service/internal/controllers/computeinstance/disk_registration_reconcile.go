@@ -552,14 +552,7 @@ func diskRegistrationRequestMatches(volume *privatev1.Volume, request *privatev1
 		volume.GetStatus().GetState() == privatev1.VolumeState_VOLUME_STATE_DELETED {
 		return false
 	}
-	if proto.Equal(volume.GetSpec(), expected.GetSpec()) {
-		return true
-	}
-	legacySpec := proto.Clone(expected.GetSpec()).(*privatev1.VolumeSpec)
-	legacySpec.SetTopology(privatev1.VolumeTopology_builder{
-		Segments: map[string]string{"osac.io/node": legacyDiskRegistrationNode},
-	}.Build())
-	return proto.Equal(volume.GetSpec(), legacySpec)
+	return proto.Equal(volume.GetSpec(), expected.GetSpec())
 }
 
 func diskRegistrationsComplete(instance *privatev1.ComputeInstance, prepared []preparedDiskRegistration) (bool, error) {

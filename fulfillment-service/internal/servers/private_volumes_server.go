@@ -30,7 +30,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/computeinstance"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
-	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -198,14 +197,6 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	// populated only by the operator feedback path after vendor provisioning.
 	vol.GetStatus().SetVendorContext(nil)
 	vol.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
-	// For 0.4 only: ticket - OSAC-7670
-	// AVAILABLE means inventory registration, not disk readiness or vendor provisioning.
-	if utils.IsComputeInstanceVolumeInventory(vol) {
-		vol.SetStatus(privatev1.VolumeStatus_builder{
-			State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
-			StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
-		}.Build())
-	}
 	vol.GetStatus().SetProvider(resolved.Provider)
 	vol.GetStatus().SetProtocol(resolved.Protocol)
 
@@ -213,7 +204,7 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 
 	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
 		func(ctx context.Context, _ *privatev1.Volume, candidate *privatev1.Volume) error {
-			legacyInventory, err := computeinstance.IsLegacyComputeInstanceVolumeInventory(ctx,
+			inventory, err := computeinstance.IsComputeInstanceVolumeInventory(ctx,
 				func(ctx context.Context, id string) (*privatev1.ComputeInstance, error) {
 					var parent *privatev1.ComputeInstancesGetResponse
 					tx, err := database.TxFromContext(ctx)
@@ -228,7 +219,9 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 			if err != nil {
 				return err
 			}
-			if legacyInventory {
+			if inventory {
+				// For 0.4 only: ticket - OSAC-7670
+				// AVAILABLE means inventory registration, not disk readiness or vendor provisioning.
 				candidate.SetStatus(privatev1.VolumeStatus_builder{
 					State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
 					StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),

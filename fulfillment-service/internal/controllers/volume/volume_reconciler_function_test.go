@@ -280,7 +280,7 @@ var _ = Describe("setDefaults", func() {
 })
 
 var _ = Describe("update", func() {
-	DescribeTable("preserves legacy inventory only with persisted parent proof",
+	DescribeTable("preserves inventory only with persisted parent proof",
 		func(scenario string, ordinary, expectError bool) {
 			parent := privatev1.ComputeInstance_builder{
 				Id:       "parent-1",
@@ -293,7 +293,7 @@ var _ = Describe("update", func() {
 				}}.Build(),
 			}.Build()
 			volume := privatev1.Volume_builder{
-				Id:       "legacy-volume",
+				Id:       "inventory-volume",
 				Metadata: privatev1.Metadata_builder{Name: "ci-parent-1-boot", Tenant: "tenant-1", Project: "project-1", Creator: "system", Finalizers: []string{finalizers.Controller}}.Build(),
 				Spec: privatev1.VolumeSpec_builder{StorageTier: "gold", SizeGib: 10, AccessMode: privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
 					Topology: privatev1.VolumeTopology_builder{Segments: map[string]string{"osac.io/node": "osac-volume-registration-pending"}}.Build(),
@@ -304,6 +304,18 @@ var _ = Describe("update", func() {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			switch scenario {
+			case "wrong creator":
+				volume.GetMetadata().SetCreator("caller")
+			case "extra topology":
+				volume.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": "osac-volume-registration-pending", "zone": "a"})
+			case "near topology":
+				volume.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": "osac-volume-registration-pending-other"})
+			case "empty topology":
+				volume.GetSpec().GetTopology().SetSegments(nil)
+			case "never attempted":
+				parent.GetStatus().GetVolumeRegistration()[0].SetState(privatev1.ComputeInstanceVolumeRegistration_STATE_NEVER_ATTEMPTED)
+			case "noncommitted":
+				parent.GetStatus().GetVolumeRegistration()[0].SetState(privatev1.ComputeInstanceVolumeRegistration_STATE_NON_COMMITTED_FAILURE)
 			case "resolved":
 				parent.GetStatus().GetVolumeRegistration()[0].SetState(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED)
 				parent.GetStatus().SetVolumes([]*privatev1.ComputeInstanceVolume{privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: volume.GetId()}.Build()})
@@ -367,7 +379,7 @@ var _ = Describe("update", func() {
 			Expect(hubClient.List(context.Background(), created)).To(Succeed())
 			if ordinary {
 				Expect(created.Items).To(HaveLen(1))
-				Expect(created.Items[0].Spec.Topology.Segments).To(HaveKeyWithValue("osac.io/node", "osac-volume-registration-pending"))
+				Expect(created.Items[0].Spec.Topology.Segments).To(Equal(volume.GetSpec().GetTopology().GetSegments()))
 				Expect(volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_CREATING))
 			} else {
 				Expect(created.Items).To(BeEmpty())
@@ -383,7 +395,13 @@ var _ = Describe("update", func() {
 		Entry("UNKNOWN before ID persistence", "UNKNOWN", false, false),
 		Entry("resolved mapping", "resolved", false, false),
 		Entry("deleting parent", "deleting parent", false, false),
-		Entry("ordinary CSI old node", "ordinary", true, false),
+		Entry("ordinary caller attribution", "wrong creator", true, false),
+		Entry("ordinary extra topology", "extra topology", true, false),
+		Entry("ordinary near topology", "near topology", true, false),
+		Entry("ordinary empty topology", "empty topology", true, false),
+		Entry("ordinary CSI placeholder node", "ordinary", true, false),
+		Entry("ordinary CSI never attempted", "never attempted", true, false),
+		Entry("ordinary CSI noncommitted", "noncommitted", true, false),
 		Entry("ordinary CSI CI-shaped name with unrelated project", "unrelated project", true, false),
 		Entry("ordinary CSI CI-shaped name with unrelated spec", "unrelated spec", true, false),
 		Entry("generated name alone", "missing parent", true, false),
@@ -395,13 +413,11 @@ var _ = Describe("update", func() {
 		Entry("conflicting mapped ID", "conflicting mapping", false, true),
 	)
 
-	DescribeTable("bypasses only the exact inventory topology after defaults and tenant validation",
-		func(segments map[string]string, bypass bool) {
+	DescribeTable("does not bypass candidate topologies without persisted inventory proof",
+		func(segments map[string]string) {
 			ctrl := gomock.NewController(GinkgoT())
 			hubs := controllers.NewMockHubCache(ctrl)
-			if !bypass {
-				hubs.EXPECT().Get(gomock.Any(), "hub-1").Return(nil, errors.New("standalone hub lookup"))
-			}
+			hubs.EXPECT().Get(gomock.Any(), "hub-1").Return(nil, errors.New("standalone hub lookup"))
 			volume := privatev1.Volume_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: "tenant-1", Finalizers: []string{finalizers.Controller}}.Build(),
 				Spec: privatev1.VolumeSpec_builder{
@@ -411,36 +427,42 @@ var _ = Describe("update", func() {
 			}.Build()
 			task := &task{r: &function{logger: logger, hubCache: hubs}, volume: volume}
 			err := task.update(context.Background())
-			if bypass {
-				Expect(err).NotTo(HaveOccurred())
-			} else {
-				Expect(err).To(MatchError("standalone hub lookup"))
-			}
+			Expect(err).To(MatchError("standalone hub lookup"))
 			Expect(volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_CREATING))
 			Expect(volume.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
 		},
-		Entry("CI inventory", map[string]string{"osac.io/node": "osac-volume-registration/pending"}, true),
-		Entry("legitimate legacy node", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, false),
-		Entry("standalone node", map[string]string{"osac.io/node": "worker-1"}, false),
-		Entry("missing topology", nil, false),
-		Entry("empty node", map[string]string{"osac.io/node": ""}, false),
-		Entry("not a prefix", map[string]string{"osac.io/node": "osac-volume-registration/pending-other"}, false),
-		Entry("not a superset", map[string]string{"osac.io/node": "osac-volume-registration/pending", "zone": "a"}, false),
+		Entry("legitimate placeholder node", map[string]string{"osac.io/node": "osac-volume-registration-pending"}),
+		Entry("standalone node", map[string]string{"osac.io/node": "worker-1"}),
+		Entry("missing topology", nil),
+		Entry("empty node", map[string]string{"osac.io/node": ""}),
+		Entry("not a prefix", map[string]string{"osac.io/node": "osac-volume-registration-pending-other"}),
+		Entry("not a superset", map[string]string{"osac.io/node": "osac-volume-registration-pending", "zone": "a"}),
 	)
 
 	It("preserves inventory finalizers, tenant validation and no-hub deletion", func() {
-		volume := privatev1.Volume_builder{
-			Metadata: privatev1.Metadata_builder{Tenant: "tenant-1"}.Build(),
-			Spec: privatev1.VolumeSpec_builder{Topology: privatev1.VolumeTopology_builder{
-				Segments: map[string]string{"osac.io/node": "osac-volume-registration/pending"},
+		parent := privatev1.ComputeInstance_builder{
+			Id:       "parent-1",
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant-1", Finalizers: []string{finalizers.Controller}}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{BootDisk: privatev1.ComputeInstanceDisk_builder{
+				SizeGib: proto.Int32(10), StorageTier: privatev1.StorageTierReference_builder{Name: "gold"}.Build(),
 			}.Build()}.Build(),
+			Status: privatev1.ComputeInstanceStatus_builder{VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+				privatev1.ComputeInstanceVolumeRegistration_builder{DiskKey: "boot", State: privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN}.Build(),
+			}}.Build(),
+		}.Build()
+		volume := privatev1.Volume_builder{
+			Id:       "inventory-volume",
+			Metadata: privatev1.Metadata_builder{Name: "ci-parent-1-boot", Creator: "system", Tenant: "tenant-1"}.Build(),
+			Spec: privatev1.VolumeSpec_builder{StorageTier: "gold", SizeGib: 10, AccessMode: privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+				Topology: privatev1.VolumeTopology_builder{Segments: map[string]string{"osac.io/node": "osac-volume-registration-pending"}}.Build(),
+			}.Build(),
 			Status: privatev1.VolumeStatus_builder{
 				State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
 				StateTransitionTime: controllers.NowTruncated(),
 			}.Build(),
 		}.Build()
 		transitionTime := volume.GetStatus().GetStateTransitionTime()
-		task := &task{r: &function{logger: logger}, volume: volume}
+		task := &task{r: &function{logger: logger, computeInstancesClient: &inventoryParentClient{parent: parent}}, volume: volume}
 		Expect(task.update(context.Background())).To(Succeed())
 		Expect(hasFinalizer(volume)).To(BeTrue())
 		Expect(task.update(context.Background())).To(Succeed())

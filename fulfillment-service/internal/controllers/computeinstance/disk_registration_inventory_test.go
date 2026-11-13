@@ -13,7 +13,13 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-var _ = Describe("Legacy disk inventory proof", func() {
+var _ = Describe("Disk inventory proof", func() {
+	It("does not look up a parent for an absent Volume", func() {
+		matched, err := IsComputeInstanceVolumeInventory(context.Background(), nil, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(matched).To(BeFalse())
+	})
+
 	fixture := func(diskKey string) (*registrationComputeInstancesClient, *privatev1.Volume) {
 		parent := diskRegistrationTestInstance()
 		prepared, err := prepareDiskRegistrations(parent)
@@ -25,12 +31,11 @@ var _ = Describe("Legacy disk inventory proof", func() {
 				DiskKey: diskKey, State: privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
 			}.Build(),
 		})
-		volume := registrationTestVolume(candidate.request, "legacy-volume", "system")
-		volume.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": legacyDiskRegistrationNode})
+		volume := registrationTestVolume(candidate.request, "inventory-volume", "system")
 		return &registrationComputeInstancesClient{object: parent}, volume
 	}
 
-	DescribeTable("keeps proven legacy boot and data records unchanged",
+	DescribeTable("keeps proven boot and data records unchanged",
 		func(diskKey string, resolved, deleting bool) {
 			client, volume := fixture(diskKey)
 			if resolved {
@@ -43,9 +48,10 @@ var _ = Describe("Legacy disk inventory proof", func() {
 				client.object.GetMetadata().SetDeletionTimestamp(timestamppb.Now())
 			}
 			original := proto.Clone(volume)
-			matched, err := IsLegacyComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
+			matched, err := IsComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(matched).To(BeTrue())
+			Expect(client.getCalls).To(Equal(1))
 			Expect(proto.Equal(volume, original)).To(BeTrue())
 			Expect(client.updateRequests).To(BeEmpty())
 		},
@@ -61,7 +67,7 @@ var _ = Describe("Legacy disk inventory proof", func() {
 		func(mutate func(*registrationComputeInstancesClient, *privatev1.Volume)) {
 			client, volume := fixture("boot")
 			mutate(client, volume)
-			matched, err := IsLegacyComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
+			matched, err := IsComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(matched).To(BeFalse())
 		},
@@ -99,8 +105,24 @@ var _ = Describe("Legacy disk inventory proof", func() {
 		Entry("missing intent", func(client *registrationComputeInstancesClient, _ *privatev1.Volume) {
 			client.object.GetStatus().SetVolumeRegistration(nil)
 		}),
+		Entry("missing spec", func(_ *registrationComputeInstancesClient, volume *privatev1.Volume) { volume.SetSpec(nil) }),
+		Entry("missing topology", func(_ *registrationComputeInstancesClient, volume *privatev1.Volume) {
+			volume.GetSpec().SetTopology(nil)
+		}),
+		Entry("empty node", func(_ *registrationComputeInstancesClient, volume *privatev1.Volume) {
+			volume.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": ""})
+		}),
+		Entry("wrong topology key", func(_ *registrationComputeInstancesClient, volume *privatev1.Volume) {
+			volume.GetSpec().GetTopology().SetSegments(map[string]string{"node": diskRegistrationPlaceholderNode})
+		}),
+		Entry("near topology", func(_ *registrationComputeInstancesClient, volume *privatev1.Volume) {
+			volume.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": diskRegistrationPlaceholderNode + "-other"})
+		}),
+		Entry("ordinary node", func(_ *registrationComputeInstancesClient, volume *privatev1.Volume) {
+			volume.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": "worker-1"})
+		}),
 		Entry("extra topology", func(_ *registrationComputeInstancesClient, volume *privatev1.Volume) {
-			volume.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": legacyDiskRegistrationNode, "zone": "a"})
+			volume.GetSpec().GetTopology().SetSegments(map[string]string{"osac.io/node": diskRegistrationPlaceholderNode, "zone": "a"})
 		}),
 	)
 
@@ -115,7 +137,7 @@ var _ = Describe("Legacy disk inventory proof", func() {
 			} else {
 				volume.GetSpec().SetSizeGib(41)
 			}
-			matched, err := IsLegacyComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
+			matched, err := IsComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(matched).To(BeFalse())
 		},
@@ -123,7 +145,7 @@ var _ = Describe("Legacy disk inventory proof", func() {
 		Entry("different disk spec", false),
 	)
 
-	DescribeTable("recovers ambiguous legacy records without changing their spec or status",
+	DescribeTable("recovers ambiguous records without changing their spec or status",
 		func(diskKey string, state privatev1.VolumeState) {
 			client, volume := fixture(diskKey)
 			volume.GetStatus().SetState(state)
@@ -137,7 +159,7 @@ var _ = Describe("Legacy disk inventory proof", func() {
 			Expect(volumes.listRequests).To(HaveLen(1))
 			Expect(client.object.GetStatus().GetVolumes()[0].GetVolumeId()).To(Equal(volume.GetId()))
 			Expect(client.object.GetStatus().GetVolumeRegistration()[0].GetState()).To(Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
-			matched, err := IsLegacyComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
+			matched, err := IsComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(matched).To(BeTrue())
 			Expect(proto.Equal(volume, original)).To(BeTrue())
@@ -147,11 +169,30 @@ var _ = Describe("Legacy disk inventory proof", func() {
 		Entry("data FAILED is not repaired", "disk-2", privatev1.VolumeState_VOLUME_STATE_FAILED),
 	)
 
+	DescribeTable("does not adopt unmapped noncommitted records",
+		func(diskKey string, state privatev1.ComputeInstanceVolumeRegistration_State) {
+			client, volume := fixture(diskKey)
+			client.object.GetStatus().GetVolumeRegistration()[0].SetState(state)
+			originalVolume := proto.Clone(volume)
+			originalParent := proto.Clone(client.object)
+			matched, err := IsComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(matched).To(BeFalse())
+			Expect(proto.Equal(volume, originalVolume)).To(BeTrue())
+			Expect(proto.Equal(client.object, originalParent)).To(BeTrue())
+			Expect(client.updateRequests).To(BeEmpty())
+		},
+		Entry("never attempted boot", "boot", privatev1.ComputeInstanceVolumeRegistration_STATE_NEVER_ATTEMPTED),
+		Entry("never attempted data", "disk-1", privatev1.ComputeInstanceVolumeRegistration_STATE_NEVER_ATTEMPTED),
+		Entry("noncommitted boot", "boot", privatev1.ComputeInstanceVolumeRegistration_STATE_NON_COMMITTED_FAILURE),
+		Entry("noncommitted data", "disk-1", privatev1.ComputeInstanceVolumeRegistration_STATE_NON_COMMITTED_FAILURE),
+	)
+
 	DescribeTable("surfaces inconsistent persisted proof rather than provisioning",
 		func(mutate func(*privatev1.ComputeInstance)) {
 			client, volume := fixture("boot")
 			mutate(client.object)
-			matched, err := IsLegacyComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
+			matched, err := IsComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
 			Expect(err).To(HaveOccurred())
 			Expect(matched).To(BeFalse())
 		},
@@ -161,8 +202,13 @@ var _ = Describe("Legacy disk inventory proof", func() {
 		Entry("resolved without mapping", func(parent *privatev1.ComputeInstance) {
 			parent.GetStatus().GetVolumeRegistration()[0].SetState(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED)
 		}),
-		Entry("never attempted", func(parent *privatev1.ComputeInstance) {
+		Entry("mapped never attempted", func(parent *privatev1.ComputeInstance) {
 			parent.GetStatus().GetVolumeRegistration()[0].SetState(privatev1.ComputeInstanceVolumeRegistration_STATE_NEVER_ATTEMPTED)
+			parent.GetStatus().SetVolumes([]*privatev1.ComputeInstanceVolume{privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "inventory-volume"}.Build()})
+		}),
+		Entry("mapped noncommitted", func(parent *privatev1.ComputeInstance) {
+			parent.GetStatus().GetVolumeRegistration()[0].SetState(privatev1.ComputeInstanceVolumeRegistration_STATE_NON_COMMITTED_FAILURE)
+			parent.GetStatus().SetVolumes([]*privatev1.ComputeInstanceVolume{privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "inventory-volume"}.Build()})
 		}),
 		Entry("invalid state", func(parent *privatev1.ComputeInstance) {
 			parent.GetStatus().GetVolumeRegistration()[0].SetState(privatev1.ComputeInstanceVolumeRegistration_State(99))
@@ -176,14 +222,14 @@ var _ = Describe("Legacy disk inventory proof", func() {
 		}),
 	)
 
-	It("requires persisted UNKNOWN and system attribution even before a legacy Create receives an ID", func() {
+	It("requires persisted UNKNOWN and system attribution even before a Create receives an ID", func() {
 		client, volume := fixture("boot")
 		volume.SetId("")
-		matched, err := IsLegacyComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
+		matched, err := IsComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(matched).To(BeTrue())
 		volume.GetMetadata().SetCreator("caller")
-		matched, err = IsLegacyComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
+		matched, err = IsComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(matched).To(BeFalse())
 		Expect(client.getCalls).To(Equal(1))
@@ -192,12 +238,12 @@ var _ = Describe("Legacy disk inventory proof", func() {
 	It("preserves proof lookup errors and cancellation", func() {
 		client, volume := fixture("boot")
 		client.getErr = status.Error(codes.Unavailable, "parent lookup unavailable")
-		matched, err := IsLegacyComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
+		matched, err := IsComputeInstanceVolumeInventory(context.Background(), client.getInventoryParent, volume)
 		Expect(matched).To(BeFalse())
 		Expect(status.Code(err)).To(Equal(codes.Unavailable))
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		matched, err = IsLegacyComputeInstanceVolumeInventory(ctx, client.getInventoryParent, volume)
+		matched, err = IsComputeInstanceVolumeInventory(ctx, client.getInventoryParent, volume)
 		Expect(matched).To(BeFalse())
 		Expect(err).To(MatchError(context.Canceled))
 	})
@@ -205,7 +251,7 @@ var _ = Describe("Legacy disk inventory proof", func() {
 	It("rejects a lookup response containing a different parent", func() {
 		client, volume := fixture("boot")
 		client.object.SetId("another-parent")
-		matched, err := IsLegacyComputeInstanceVolumeInventory(context.Background(),
+		matched, err := IsComputeInstanceVolumeInventory(context.Background(),
 			func(context.Context, string) (*privatev1.ComputeInstance, error) { return client.object, nil }, volume)
 		Expect(matched).To(BeFalse())
 		Expect(err).To(HaveOccurred())

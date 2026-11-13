@@ -38,7 +38,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
-	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -172,13 +171,10 @@ func (t *task) update(ctx context.Context) error {
 	// For 0.4 only: ticket - OSAC-7670
 	// CI disks are inventory while the playbook provisions their DataVolumes.
 	// Remove this bypass when storage provisioning takes over those disks.
-	if utils.IsComputeInstanceVolumeInventory(t.volume) {
-		return nil
-	}
-	legacyInventory, err := computeinstance.IsLegacyComputeInstanceVolumeInventory(ctx,
+	inventory, err := computeinstance.IsComputeInstanceVolumeInventory(ctx,
 		func(ctx context.Context, id string) (*privatev1.ComputeInstance, error) {
 			if t.r.computeInstancesClient == nil {
-				return nil, fmt.Errorf("ComputeInstances client is required for legacy disk inventory proof")
+				return nil, fmt.Errorf("ComputeInstances client is required for disk inventory proof")
 			}
 			response, err := t.r.computeInstancesClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 			return response.GetObject(), err
@@ -186,7 +182,7 @@ func (t *task) update(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if legacyInventory {
+	if inventory {
 		return nil
 	}
 

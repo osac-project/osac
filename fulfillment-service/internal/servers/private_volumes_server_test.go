@@ -199,9 +199,29 @@ var _ = Describe("Private volumes server", func() {
 		})
 
 		DescribeTable("persists registration-only inventory state through private and public reads",
-			func(segments map[string]string, inventory, suppliedStatus bool) {
+			func(segments map[string]string, inventory, suppliedStatus bool, diskKey string) {
+				name := "registered-disk"
+				if inventory {
+					disk := privatev1.ComputeInstanceDisk_builder{
+						SizeGib: proto.Int32(100), StorageTier: privatev1.StorageTierReference_builder{Name: "gold"}.Build(),
+					}.Build()
+					parent := privatev1.ComputeInstance_builder{
+						Id:       uuid.NewString(),
+						Metadata: privatev1.Metadata_builder{Name: "inventory-parent", Tenant: testTenant, Creator: "system", Finalizers: []string{finalizers.Controller}}.Build(),
+						Spec:     privatev1.ComputeInstanceSpec_builder{BootDisk: disk}.Build(),
+						Status: privatev1.ComputeInstanceStatus_builder{VolumeRegistration: []*privatev1.ComputeInstanceVolumeRegistration{
+							privatev1.ComputeInstanceVolumeRegistration_builder{DiskKey: diskKey, State: privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN}.Build(),
+						}}.Build(),
+					}.Build()
+					if diskKey != "boot" {
+						parent.GetSpec().SetAdditionalDisks(privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{proto.Clone(disk).(*privatev1.ComputeInstanceDisk)}}.Build())
+					}
+					_, err := server.computeInstances.dao.Create().SetObject(parent).Do(ctx)
+					Expect(err).NotTo(HaveOccurred())
+					name = "ci-" + parent.GetId() + "-" + diskKey
+				}
 				volume := privatev1.Volume_builder{
-					Metadata: privatev1.Metadata_builder{Name: "registered-disk", Tenant: testTenant}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: testTenant}.Build(),
 					Spec: privatev1.VolumeSpec_builder{
 						StorageTier: "gold", SizeGib: 100,
 						AccessMode: privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
@@ -251,20 +271,21 @@ var _ = Describe("Private volumes server", func() {
 				Expect(public.GetObject().GetStatus().GetState().String()).To(Equal(state.String()))
 				Expect(public.GetObject().GetStatus().GetMessage()).To(Equal(actual.GetStatus().GetMessage()))
 			},
-			Entry("CI inventory", map[string]string{"osac.io/node": "osac-volume-registration/pending"}, true, false),
-			Entry("CI inventory discards stale vendor status", map[string]string{"osac.io/node": "osac-volume-registration/pending"}, true, true),
-			Entry("ordinary CSI on the legacy marker node", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, false, false),
-			Entry("ordinary CSI", map[string]string{"osac.io/node": "worker-1"}, false, false),
-			Entry("empty topology", nil, false, false),
-			Entry("near match", map[string]string{"osac.io/node": "osac-volume-registration/pending-other"}, false, false),
-			Entry("extra key", map[string]string{"osac.io/node": "osac-volume-registration/pending", "zone": "a"}, false, false),
+			Entry("CI inventory", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, true, false, "boot"),
+			Entry("CI data inventory", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, true, false, "disk-1"),
+			Entry("CI inventory discards stale vendor status", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, true, true, "boot"),
+			Entry("ordinary CSI on the placeholder node", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, false, false, "boot"),
+			Entry("ordinary CSI", map[string]string{"osac.io/node": "worker-1"}, false, false, "boot"),
+			Entry("empty topology", nil, false, false, "boot"),
+			Entry("near match", map[string]string{"osac.io/node": "osac-volume-registration-pending-other"}, false, false, "boot"),
+			Entry("extra key", map[string]string{"osac.io/node": "osac-volume-registration-pending", "zone": "a"}, false, false, "boot"),
 		)
 
-		DescribeTable("requires persisted UNKNOWN proof for legacy in-flight Create",
+		DescribeTable("requires persisted UNKNOWN proof for in-flight Create",
 			func(intent, matchingSpec, persisted bool, scenario string) {
 				parent := privatev1.ComputeInstance_builder{
 					Id:       uuid.NewString(),
-					Metadata: privatev1.Metadata_builder{Name: "legacy-parent", Tenant: testTenant, Creator: "system", Finalizers: []string{finalizers.Controller}}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "inventory-parent", Tenant: testTenant, Creator: "system", Finalizers: []string{finalizers.Controller}}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{BootDisk: privatev1.ComputeInstanceDisk_builder{
 						SizeGib: proto.Int32(100), StorageTier: privatev1.StorageTierReference_builder{Name: "gold"}.Build(),
 					}.Build()}.Build(),
@@ -276,6 +297,10 @@ var _ = Describe("Private volumes server", func() {
 					})
 				}
 				switch scenario {
+				case "never attempted":
+					parent.GetStatus().GetVolumeRegistration()[0].SetState(privatev1.ComputeInstanceVolumeRegistration_STATE_NEVER_ATTEMPTED)
+				case "noncommitted":
+					parent.GetStatus().GetVolumeRegistration()[0].SetState(privatev1.ComputeInstanceVolumeRegistration_STATE_NON_COMMITTED_FAILURE)
 				case "other project":
 					projects, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 					Expect(err).NotTo(HaveOccurred())
@@ -334,7 +359,9 @@ var _ = Describe("Private volumes server", func() {
 				Expect(stored.GetObject().GetStatus().GetVendorVolumeId()).To(BeEmpty())
 				Expect(stored.GetObject().GetStatus().GetProvisionedSizeGib()).To(BeZero())
 			},
-			Entry("legacy in-flight system request", true, true, true, ""),
+			Entry("in-flight system request", true, true, true, ""),
+			Entry("ordinary old-node request never attempted", true, true, true, "never attempted"),
+			Entry("ordinary old-node request noncommitted", true, true, true, "noncommitted"),
 			Entry("ordinary old-node request without intent", false, true, true, ""),
 			Entry("ordinary old-node request with different spec", true, false, true, ""),
 			Entry("ordinary old-node request with a nonexistent parent", true, true, false, ""),

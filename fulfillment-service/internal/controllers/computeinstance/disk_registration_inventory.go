@@ -10,14 +10,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const legacyDiskRegistrationNode = "osac-volume-registration-pending"
-
-func IsLegacyComputeInstanceVolumeInventory(
+// For 0.4 only: ticket - OSAC-7670
+func IsComputeInstanceVolumeInventory(
 	ctx context.Context,
 	getParent func(context.Context, string) (*privatev1.ComputeInstance, error),
 	volume *privatev1.Volume,
 ) (bool, error) {
-	parentID, diskKey := legacyDiskRegistrationLocation(volume)
+	parentID, diskKey := diskRegistrationLocation(volume)
 	if parentID == "" {
 		return false, nil
 	}
@@ -25,7 +24,7 @@ func IsLegacyComputeInstanceVolumeInventory(
 		return false, err
 	}
 	if getParent == nil {
-		return false, fmt.Errorf("ComputeInstances lookup is required for legacy disk inventory proof")
+		return false, fmt.Errorf("ComputeInstances lookup is required for disk inventory proof")
 	}
 	parent, err := getParent(ctx, parentID)
 	if status.Code(err) == codes.NotFound {
@@ -35,10 +34,10 @@ func IsLegacyComputeInstanceVolumeInventory(
 		return false, err
 	}
 	if parent == nil {
-		return false, fmt.Errorf("ComputeInstances lookup returned no parent for legacy disk inventory")
+		return false, fmt.Errorf("ComputeInstances lookup returned no parent for disk inventory")
 	}
 	if parent.GetId() != parentID {
-		return false, fmt.Errorf("ComputeInstances Get returned a different parent for legacy disk inventory")
+		return false, fmt.Errorf("ComputeInstances Get returned a different parent for disk inventory")
 	}
 	if volume.GetMetadata().GetTenant() != parent.GetMetadata().GetTenant() ||
 		volume.GetMetadata().GetProject() != parent.GetMetadata().GetProject() {
@@ -65,34 +64,41 @@ func IsLegacyComputeInstanceVolumeInventory(
 	}
 	mapping := volumes[diskKey]
 	if mapping != nil && mapping.GetVolumeId() == "" {
-		return false, fmt.Errorf("legacy disk inventory has an empty persisted Volume ID")
+		return false, fmt.Errorf("disk inventory has an empty persisted Volume ID")
 	}
 	if mapping != nil && volume.GetId() == "" {
 		return false, nil
 	}
 	if mapping != nil && mapping.GetVolumeId() != volume.GetId() {
-		return false, fmt.Errorf("legacy disk inventory conflicts with persisted Volume ID")
+		return false, fmt.Errorf("disk inventory conflicts with persisted Volume ID")
 	}
 	registration := registrations[diskKey]
 	if registration == nil {
 		if mapping != nil {
-			return false, fmt.Errorf("mapped legacy disk inventory has no registration intent")
+			return false, fmt.Errorf("mapped disk inventory has no registration intent")
 		}
 		return false, nil
 	}
 	if mapping != nil && registration.GetState() == privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED {
 		return true, nil
 	}
-	if mapping == nil && registration.GetState() == privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN &&
-		hasDiskRegistrationFinalizer(parent) {
-		return true, nil
+	if mapping == nil {
+		switch registration.GetState() {
+		case privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN:
+			if hasDiskRegistrationFinalizer(parent) {
+				return true, nil
+			}
+		case privatev1.ComputeInstanceVolumeRegistration_STATE_NEVER_ATTEMPTED,
+			privatev1.ComputeInstanceVolumeRegistration_STATE_NON_COMMITTED_FAILURE:
+			return false, nil
+		}
 	}
-	return false, fmt.Errorf("legacy disk inventory has inconsistent persisted registration state")
+	return false, fmt.Errorf("disk inventory has inconsistent persisted registration state")
 }
 
-func legacyDiskRegistrationLocation(volume *privatev1.Volume) (string, string) {
+func diskRegistrationLocation(volume *privatev1.Volume) (string, string) {
 	segments := volume.GetSpec().GetTopology().GetSegments()
-	if len(segments) != 1 || segments["osac.io/node"] != legacyDiskRegistrationNode ||
+	if len(segments) != 1 || segments["osac.io/node"] != diskRegistrationPlaceholderNode ||
 		volume.GetMetadata().GetCreator() != "system" {
 		return "", ""
 	}

@@ -128,6 +128,10 @@ release_version=<version>`), selecting the branch/ref you want to release
 from GitHub's own "Use workflow from" selector — there is no separate
 ref input.
 
+Only one release runs per branch at a time; a second dispatch waits for the
+first to finish. GitHub keeps a single waiting run per branch, so a third
+dispatch replaces the one already waiting.
+
 **Required input:** `release_version` — `X.Y.Z` or `X.Y.Z-rc.N` in the
 dispatched branch's release line (e.g. `0.5.0-rc.2`, no leading `v`), higher
 than the line's latest umbrella version. The run fails immediately (in the `prepare` job,

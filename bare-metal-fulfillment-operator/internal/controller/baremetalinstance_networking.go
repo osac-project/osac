@@ -346,11 +346,11 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 	}
 
 	if attachment := primaryNetworkAttachment(bareMetalInstance); attachment != nil && r.NetworkingEnabled {
-		key, ok := networkAttachmentKey(bareMetalInstance, attachment)
+		_, ok := networkAttachmentKey(bareMetalInstance, attachment)
 		if !ok {
 			return r.removeNetworkingFinalizer(ctx, bareMetalInstance)
 		}
-		na, err := r.getNetworkAttachment(ctx, key)
+		na, key, err := r.getExistingNetworkAttachment(ctx, bareMetalInstance, attachment)
 		if err != nil {
 			return ctrl.Result{}, false, err
 		}

@@ -29,6 +29,20 @@ in `osac-aap/Makefile`.
 - Storage target-routing scenarios: separate management/workload Kind APIs;
   placement and kubeconfig use are real. Tenant status resolution, VM boot and
   deployed AAP/provider lifecycle are outside the fixture.
+- `netapp_storage` ([OSAC-5813](https://redhat.atlassian.net/browse/OSAC-5813);
+  `tests/unit/test_netapp_storage_role.py` and
+  `tests/integration/targets/netapp_storage_provider/`, also in
+  `STORAGE_TESTS_ENABLED=true make test`): Dedicated-SVM and Shared-TBC
+  validation, virtual-pool merging and StorageClass rendering are evaluated with
+  `Templar`. Real Kind API objects cover the TridentBackendConfig, Secret,
+  StorageClass and PVC lifecycle, the teardown dependency guard, repeated
+  `ensure_storage_class` calls that name some of a tenant's tiers, and the API
+  server's rejection of a write that would replace an unread pool list. The
+  write's re-read and retry runs against stand-in `kubernetes.core` modules.
+  The TridentBackendConfig CRD is a test schema with a stub status binder; no
+  Trident operator, ONTAP cluster, FC/iSCSI data plane or osac-operator payload
+  is run ([OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) /
+  [OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845)).
 - `network_task_playbook`, `netris_fabric`, `cudn_evpn` (also in `make test`):
   Netris is a stateful in-process fake; CUDN/VTEP CRDs are minimal schemas
   with fixture-supplied readiness — no OVN, real CRD validation, data plane or

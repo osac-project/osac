@@ -27,9 +27,37 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/client-go/util/retry"
 )
 
 const computeInstanceTestFinalizer = "integration-test"
+
+// updateComputeInstanceTestStatus keeps the full-status mask exercise safe when
+// a controller writes another status field between Get and Update.
+func updateComputeInstanceTestStatus(
+	ctx context.Context, client privatev1.ComputeInstancesClient, id, mask, address string,
+) error {
+	return retry.OnError(retry.DefaultBackoff, func(err error) bool {
+		return status.Code(err) == codes.Aborted
+	}, func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		response, err := client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+		if err != nil {
+			return err
+		}
+		candidate := response.GetObject()
+		if !candidate.HasStatus() {
+			candidate.SetStatus(&privatev1.ComputeInstanceStatus{})
+		}
+		candidate.GetStatus().SetInternalIpAddress(address)
+		_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+			Object: candidate, UpdateMask: catalogItemUpdateMask(mask), Lock: true,
+		}.Build())
+		return err
+	})
+}
 
 func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.ComputeInstancesClient, id string, add bool) {
 	GinkgoHelper()
@@ -115,14 +143,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 			{mask: "status.internal_ip_address", address: "192.0.2.43"},
 		} {
 			By("writing private status feedback with mask " + update.mask)
-			candidate := proto.Clone(stored.GetObject()).(*privatev1.ComputeInstance)
-			if !candidate.HasStatus() {
-				candidate.SetStatus(&privatev1.ComputeInstanceStatus{})
-			}
-			candidate.GetStatus().SetInternalIpAddress(update.address)
-			_, err = client.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
-				Object: candidate, UpdateMask: catalogItemUpdateMask(update.mask),
-			}.Build())
+			err = updateComputeInstanceTestStatus(ctx, client, instance.GetId(), update.mask, update.address)
 			Expect(err).NotTo(HaveOccurred())
 			stored, err = client.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: instance.GetId()}.Build())
 			Expect(err).NotTo(HaveOccurred())

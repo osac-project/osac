@@ -57,6 +57,16 @@ var _ = Describe("MCP Project administration", func() {
 		Expect(userResponse.GetSize()).To(Equal(int32(1)))
 		userID := userResponse.GetItems()[0].GetId()
 
+		_, err = adminProjects.Signal(ctx, privatev1.ProjectsSignalRequest_builder{Id: created.ID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			response, err := adminProjects.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: created.ID}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+				privatev1.ProjectState_PROJECT_STATE_ACTIVE,
+			))
+		}, time.Minute, time.Second).Should(Succeed())
+
 		initial, err := projects.Get(ctx, publicv1.ProjectsGetRequest_builder{Id: created.ID}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		initialProject := initial.GetObject()
@@ -127,16 +137,6 @@ var _ = Describe("MCP Project administration", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(afterLastWrite.GetObject().GetSpec().GetTitle()).To(Equal("Last-write title"))
 		Expect(afterLastWrite.GetObject().GetSpec().GetDescription()).To(Equal("Updated description"))
-
-		_, err = adminProjects.Signal(ctx, privatev1.ProjectsSignalRequest_builder{Id: created.ID}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Eventually(func(g Gomega) {
-			response, err := adminProjects.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: created.ID}.Build())
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(
-				privatev1.ProjectState_PROJECT_STATE_ACTIVE,
-			))
-		}, time.Minute, time.Second).Should(Succeed())
 
 		versionBeforeUnsupported, err := projects.Get(ctx, publicv1.ProjectsGetRequest_builder{Id: created.ID}.Build())
 		Expect(err).ToNot(HaveOccurred())

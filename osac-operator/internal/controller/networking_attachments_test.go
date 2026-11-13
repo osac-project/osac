@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -120,6 +121,8 @@ var _ = Describe("ExternalIPPool and ExternalIP controllers", func() {
 		Expect(k8sClient.Create(ctx, eip)).To(Succeed())
 		reconcileNet(eips, eip)
 		launch := h.aap.latest(networktask.CreateExternalIP, netFabric)
+		Expect(path(launch.vars, "resource", "id")).To(Equal("eip-1"))
+		Expect(path(launch.vars, "resource", "metadata", "uid")).NotTo(Equal("eip-1"))
 		Expect(path(launch.vars, "resource", "spec")).To(Equal(map[string]any{"pool": "pool-1"}))
 		Expect(path(launch.vars, "external_ip_pool", "spec")).To(Equal(map[string]any{"cidrs": []any{"198.51.100.0/24"}}))
 		Expect(eip.Status.StateTransitionTime).NotTo(BeNil())
@@ -127,6 +130,52 @@ var _ = Describe("ExternalIPPool and ExternalIP controllers", func() {
 		reconcileNet(eips, eip)
 		Expect(eip.Status.Address).To(Equal("198.51.100.19"))
 		expectReady(eip, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
+	})
+
+	It("keeps the ExternalIP and address while release retries, then removes it after success", func() {
+		clock := clocktesting.NewFakeClock(time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC))
+		h.engine.WithClock(clock)
+		h.readyPool("pool-1")
+		eip := &v1alpha1.ExternalIP{ObjectMeta: h.meta(kindExternalIP, "eip-release-retry"),
+			Spec: v1alpha1.ExternalIPSpec{Pool: "pool-1"}}
+		Expect(k8sClient.Create(ctx, eip)).To(Succeed())
+		reconcileNet(eips, eip)
+		h.aap.finish(networktask.CreateExternalIP, netFabric, "successful",
+			`{"osac_result": {"external_ip": {"address": "198.51.100.19"}}}`)
+		reconcileNet(eips, eip)
+		Expect(eip.Status.Address).To(Equal("198.51.100.19"))
+
+		deleteNet(eip)
+		reconcileNet(eips, eip)
+		Expect(h.aap.tasks("eip-release-retry")).To(Equal([]string{
+			networktask.CreateExternalIP + "/" + netFabric,
+			networktask.DeleteExternalIP + "/" + netFabric,
+		}))
+
+		h.aap.finish(networktask.DeleteExternalIP, netFabric, "failed",
+			`{"osac_error": {"message": "release temporarily unavailable", "retryable": false}}`)
+		result, exists := reconcileNet(eips, eip)
+		Expect(exists).To(BeTrue())
+		Expect(result.RequeueAfter).To(Equal(2 * time.Minute))
+		Expect(eip.GetDeletionTimestamp()).NotTo(BeNil())
+		Expect(eip.GetFinalizers()).To(ContainElement(osacExternalIPFinalizer))
+		Expect(eip.Status.Address).To(Equal("198.51.100.19"))
+		Expect(jobState(eip, networktask.DeleteExternalIP, v1alpha1.NetworkJobManagerFabric)).To(
+			Equal(v1alpha1.NetworkJobStateRetrying))
+
+		clock.Step(2 * time.Minute)
+		result, exists = reconcileNet(eips, eip)
+		Expect(exists).To(BeTrue())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(h.aap.tasks("eip-release-retry")).To(Equal([]string{
+			networktask.CreateExternalIP + "/" + netFabric,
+			networktask.DeleteExternalIP + "/" + netFabric,
+			networktask.DeleteExternalIP + "/" + netFabric,
+		}))
+
+		h.aap.succeed(networktask.DeleteExternalIP, netFabric)
+		_, exists = reconcileNet(eips, eip)
+		Expect(exists).To(BeFalse(), "release success allows the finalizer and allocation to be removed")
 	})
 
 	It("rejects the pool's broadcast address", func() {

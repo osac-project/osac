@@ -212,6 +212,9 @@ To install with provider networking, see
 
   For more information, see
   [Changing the default storage class](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/storage/dynamic-provisioning#change-default-storage-class_dynamic-provisioning).
+  This platform prerequisite does not register an OSAC tenant storage
+  offering. Complete the storage handoff in
+  [Section 6.1](#61-installing-osac-for-vmaas) before requesting VM workloads.
 - The cluster pull secret (`openshift-config/pull-secret`) authenticates to
   `registry.redhat.io` and `quay.io`. To download a current pull secret, see
   the pull secret page in the
@@ -277,7 +280,6 @@ Platform 4.22.6 in September 2026 are listed in
 | [Red Hat Ansible Automation Platform Operator](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index) | `stable-2.6-cluster-scoped` | `ansible-aap` | All services |
 | [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | Provider-defined | Fulfillment events and metering; see [Kafka configuration](kafka-configuration.md) for external broker requirements. |
 | [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | VMaaS |
-| [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | VMaaS | `lvms.enabled` | Development/CI VMaaS using OSAC-managed local storage |
 | [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | CaaS |
 | [multicluster engine for Kubernetes Operator](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview) | `stable-2.17` | `multicluster-engine` | CaaS |
 | Kubernetes NMState Operator | `stable` | `openshift-nmstate` | VMaaS with provider networking |
@@ -329,9 +331,11 @@ Notes on individual components:
   are ready with your Kafka administrators.
 - **OpenShift Virtualization** was formerly named Container-native
   Virtualization (CNV).
-- **LVM Storage** uses a channel that tracks the OpenShift Container Platform
-  minor version. Another dynamic storage class can satisfy the VMaaS storage
-  prerequisite.
+- **Storage:** Your environment provides a dynamic storage class for VMaaS.
+  Complete the storage handoff in [Section 6.1](#61-installing-osac-for-vmaas)
+  before requesting VM workloads. In production, keep `lvms.enabled: false`
+  in the `osac` instance chart to disable only automatic local-storage
+  registration.
 - **MetalLB Operator** provides the CaaS API management VIPs on the hub. Ask
   your platform administrators for the reserved, free, routable address range
   and add a covering CIDR to `global.networking.excludedIpv4Cidrs` before
@@ -339,11 +343,6 @@ Notes on individual components:
 - **multicluster engine for Kubernetes Operator** is required for agent-based
   cluster provisioning. An existing standalone installation or Red Hat
   Advanced Cluster Management for Kubernetes (RHACM) can provide it.
-  minor version; the installation sets it. The OSAC-managed LVMS path is for
-  development and CI and uses an explicit `optionalPaths` allowlist; it does
-  not create devices. In production, disable `lvms.enabled` and configure the
-  customer-managed LVMS operator and its `LVMCluster` selector yourself; do not
-  rely on dynamic device discovery.
 - **MetalLB Operator** provides a `LoadBalancer`-class implementation. CaaS
   uses it on the hub to give each hosted cluster's API its management VIP.
   Only CaaS needs it. Any solution that provides one works if you disable
@@ -359,14 +358,6 @@ Notes on individual components:
   again after every infrastructure upgrade, add a CIDR that covers that range
   to `global.networking.excludedIpv4Cidrs`, and check the pool before you
   create Clusters.
-- **multicluster engine for Kubernetes Operator** is required for
-  agent-based cluster provisioning but is disabled by default. Set
-  `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
-  infrastructure profile does so explicitly. Leave it `false` when Red Hat
-  Advanced Cluster Management for Kubernetes (RHACM) or another MCE
-  installation already owns it. The disabled state also prevents the phase-1
-  chart from applying its temporary Assisted image override `ConfigMap` and
-  compatibility RBAC.
 - **Kubernetes NMState Operator** sets the uplink and VTEP addresses of the
   VMaaS nodes. Your platform administrators prepare it for EVPN networking.
 - **EVPN host networking** needs OVN-Kubernetes and OpenShift Container
@@ -502,7 +493,7 @@ networking resources exist is not supported (see
 [Table 4.2](#table-42-settings-fixed-at-installation)).
 
 - **VMaaS** (`global.services.vmaas.enabled`) requires OpenShift Virtualization,
-  LVM Storage or another dynamic storage class, and OSAC's Kubernetes Manager
+  an environment-provided dynamic storage class, and OSAC's Kubernetes Manager
   `cudn_evpn`. With provider networking enabled, it also requires a Fabric
   Manager whose registration lists the `evpn` network type, EVPN host
   networking on the cluster that runs the VMs
@@ -726,7 +717,6 @@ that channel resolved to on OpenShift Container Platform 4.22.6 in September
 | `osac` umbrella chart | Selected in [Section 1.1](#11-what-is-released) | Release-specific |
 | cert-manager Operator for Red Hat OpenShift | `stable-v1` | `v1.20.0` |
 | Red Hat Ansible Automation Platform | `stable-2.6-cluster-scoped` | `v2.6.0` |
-| LVM Storage | `stable-<cluster_minor>` | `v4.22.0` |
 | MetalLB | `stable` | `v4.22.0` |
 | OpenShift Virtualization | `stable` | `v4.22.6` |
 | multicluster engine | `stable-2.17` | `v2.17.2` |
@@ -1942,7 +1932,10 @@ override; publish the required templates to Fulfillment separately.
 **Prerequisites**
 
 - OpenShift Virtualization is installed.
-- LVM Storage is installed, or another dynamic storage class exists.
+- Your environment provides a dynamic storage class.
+  For storage prerequisites and tenant onboarding, see the
+  [Storage documentation](../../storage/README.md) for your selected provider
+  and ownership model.
 - With provider networking enabled, you have the provider's Fabric Manager,
   with `evpn` in the `network_types` of its registration.
 - With provider networking enabled, you completed
@@ -1988,15 +1981,28 @@ override; publish the required templates to Fulfillment separately.
    The `publishTemplates` hook publishes the compute instance templates that
    VMaaS needs. Disable it only if those templates are supplied separately.
 
-   For production, keep `lvms.enabled: false`, including when the workload
-   cluster uses LVMS. Have your storage administrators prepare the appropriate
-   CSI integration, StorageBackend, StorageTier, and tenant storage
-   configuration according to the [storage documentation](../../storage/README.md),
-   especially its [tenant storage onboarding
-   guide](../../storage/guides/tenant-onboarding.md).
-   Installing LVM Storage or another dynamic storage class alone does not
-   register an OSAC storage offering. The automatic LVMS registration hook is
-   for development and CI only; see [Section 9.2](#92-evaluation-only).
+   For production, keep `lvms.enabled: false` in the `osac` instance values,
+   including when the workload cluster uses LVMS. After installing OSAC in
+   step 3 below and before requesting VM workloads, have your storage
+   administrators register the
+   [StorageBackend](../../storage/concepts/storagebackend.md#managing-backends)
+   and [StorageTiers](../../storage/concepts/storagetier.md#managing-tiers)
+   in OSAC and complete
+   [tenant storage onboarding](../../storage/guides/tenant-onboarding.md).
+   A platform default StorageClass alone does not register these offerings.
+   Follow the [storage documentation](../../storage/README.md) for your
+   provider, ownership, and tenancy model. For CSP-managed NetApp with shared
+   tenancy on VMaaS, use the
+   [shared NetApp profile](../../storage/guides/csp-managed-netapp-shared.md)
+   (**Dev Preview**); the CSP prepares and operates Trident and the shared
+   storage resources before onboarding tenants.
+
+   Check the tenant's storage conditions and current `status.storageClasses`
+   mappings for every tier the VM will request. CSP-managed `StorageReady`
+   is a latched milestone, not a guarantee that tiers added later have
+   resolved. Incomplete tier resolution causes disk provisioning to fail;
+   a completed Helm install is not storage readiness. The onboarding guide
+   describes the checks for each ownership model.
 
    For Netris connection settings, see
    [CUDN EVPN with Netris](#cudn-evpn-with-netris).
@@ -2126,8 +2132,8 @@ configure endpoint routes and DNS outside OSAC.
 **Prerequisites**
 
 - multicluster engine is installed (standalone, or provided by RHACM).
-- MetalLB (or another `LoadBalancer`-class implementation) and LVM Storage
-  (or another dynamic storage class) are installed.
+- MetalLB (or another `LoadBalancer`-class implementation) is installed,
+  and your environment provides a dynamic storage class.
 - The BMaaS prerequisites of [Section 6.3](#63-installing-osac-for-bmaas)
   are met.
 - The hub cluster has a default storage class (see
@@ -2487,15 +2493,11 @@ verified reason shown below. Leave the remaining checks enabled.
 Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
 including the storage registration and networking settings. Select storage
 based on the workload cluster, and put its values in `my-values.yaml` on the
-management cluster. For production, keep `lvms.enabled: false` for every
-storage provider, including LVMS. Have your storage administrators prepare
-that provider's StorageBackend, StorageTier, and tenant storage configuration
-as described in Section 6.1 and the [tenant storage onboarding
-guide](../../storage/guides/tenant-onboarding.md). For an overview of storage
-providers and ownership models, see the
-[storage documentation](../../storage/README.md).
-For development or CI with LVMS, see
-[Section 9.2](#92-evaluation-only).
+management cluster. For production, keep `lvms.enabled: false` in the `osac`
+instance values, including when the workload cluster uses LVMS. Complete the
+storage handoff in [Section 6.1](#61-installing-osac-for-vmaas) for the
+workload cluster before requesting VMs; a default StorageClass alone does not
+register OSAC offerings.
 
 The chart still requires a non-empty `fabricManager` value when provider
 networking is disabled, and VMaaS requires `k8sManager: cudn_evpn`. No Fabric
@@ -3339,22 +3341,9 @@ reconciles the `ConfigMap` from those values.
 - Keycloak test fixtures and default administrator credentials.
 - Development or CI reference values files and `main`/`latest` image tags.
 
-**LVMS registration for evaluation**
-
-For a development or CI environment with LVMS already installed on the
-workload cluster, merge this override into `my-values.yaml`:
-
-```yaml
-lvms:
-  enabled: true
-```
-
-This enables the local-storage registration hook, which creates the `local`
-StorageBackend and StorageTier with provider `lvms` in Fulfillment. It does
-not install LVM Storage. For a separate workload cluster, pass the override
-to the OSAC release on the management cluster. Keep `lvms.enabled: false` in
-production and have your storage administrators prepare the StorageBackend,
-StorageTier, and tenant storage configuration as described in
+The automatic LVMS registration hook is for development and CI only, not
+production storage onboarding. Keep `lvms.enabled: false` in the `osac`
+instance values in production and follow the storage handoff in
 [Section 6.1](#61-installing-osac-for-vmaas).
 
 ### 9.3 Not covered by this guide
@@ -3798,6 +3787,9 @@ values and run `helm upgrade` again.
   `oc get sc --show-labels` for the `osac.openshift.io/tenant` and
   `osac.openshift.io/storage-tier` labels and the `status.storageClasses` field
   of the `Tenant`, and align the requested tier with a labeled storage class.
+  Confirm backend/tier registration and tenant onboarding as described in
+  [Section 6.1](#61-installing-osac-for-vmaas); check current mappings even if
+  the CSP-managed `StorageReady` milestone is already `True`.
 - Networking resources stuck in `PENDING`: see
   [Section 11.13](#1113-networking-problems).
 - **CaaS:** watch the AAP `cluster-fulfillment` job for the failing task.

@@ -129,12 +129,7 @@ var _ = Describe("Public clusters", func() {
 		object := createResponse.GetObject()
 
 		// Delete the cluster after the test:
-		DeferCleanup(func() {
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
-				Id: object.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
+		deferClusterDeletion(object.GetId(), tool.ExternalView().UserConn())
 
 		// Get the cluster and verify that the returned data is correct
 		response, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{
@@ -198,10 +193,7 @@ var _ = Describe("Public clusters", func() {
 			original := proto.Clone(request)
 			response, err := adminClient.Create(ctx, request)
 			if response.GetObject().GetId() != "" {
-				DeferCleanup(func() {
-					_, err := adminClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: response.GetObject().GetId()}.Build())
-					Expect(err).ToNot(HaveOccurred())
-				})
+				deferClusterDeletion(response.GetObject().GetId(), tool.ExternalView().AdminConn())
 			}
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
 			Expect(grpcstatus.Convert(err).Message()).To(Equal("objects cannot be placed in the 'shared' tenant"))
@@ -235,12 +227,7 @@ var _ = Describe("Public clusters", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response).ToNot(BeNil())
 		object := response.GetObject()
-		DeferCleanup(func() {
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
-				Id: object.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
+		deferClusterDeletion(object.GetId(), tool.ExternalView().UserConn())
 
 		// Verify that the cluster has been created correctly:
 		Expect(object).ToNot(BeNil())
@@ -389,6 +376,7 @@ var _ = Describe("Public clusters", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		object := createResponse.GetObject()
+		deferClusterDeletion(object.GetId(), tool.ExternalView().UserConn())
 		_, err = clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
 			Id: object.GetId(),
 		}.Build())
@@ -475,10 +463,7 @@ var _ = Describe("Public clusters", func() {
 			}.Build(),
 		}.Build())
 		if response.GetObject().GetId() != "" {
-			DeferCleanup(func() {
-				_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: response.GetObject().GetId()}.Build())
-				Expect(err).NotTo(HaveOccurred())
-			})
+			deferClusterDeletion(response.GetObject().GetId(), tool.ExternalView().UserConn())
 		}
 		expectCatalogItemStatusCode(err, grpccodes.FailedPrecondition)
 		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring(versionName))
@@ -632,12 +617,7 @@ var _ = Describe("Public clusters", func() {
 			if object := createResponse.GetObject(); object != nil && object.GetId() != "" {
 				clusterID := object.GetId()
 				// Clean up an unexpectedly created cluster before asserting the expected error.
-				DeferCleanup(func() {
-					_, cleanupErr := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
-						Id: clusterID,
-					}.Build())
-					Expect(cleanupErr).ToNot(HaveOccurred())
-				})
+				deferClusterDeletion(clusterID, tool.ExternalView().UserConn())
 			}
 		}
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
@@ -680,12 +660,7 @@ var _ = Describe("Public clusters", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response).ToNot(BeNil())
 		object := response.GetObject()
-		DeferCleanup(func() {
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{
-				Id: object.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-		})
+		deferClusterDeletion(object.GetId(), tool.ExternalView().UserConn())
 
 		// Verify that the creator is set to the ID of the authenticated user:
 		Expect(object).ToNot(BeNil())

@@ -99,12 +99,12 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   [OSAC-6375](https://redhat.atlassian.net/browse/OSAC-6375).
 - The billing stub credential and CA mounts, and the shortened catalog cache
   interval one catalog-pricing case needs to observe a refresh inside its poll,
-  are patched directly on the deployed Deployment by the `it/` specs; that run
-  does not verify chart installation of the mounts or the `service.tuning.cache`
-  values ([OSAC-6873](https://redhat.atlassian.net/browse/OSAC-6873)). That
-  shortened-TTL Deployment patch and the CLI refresh path in
-  `it/it_catalog_pricing_inputs_cli_test.go` are exercised only on a deployed
-  cluster, and they were not run for this change.
+  are patched directly on the deployed Deployment by the `it/` specs. Both
+  fixtures wait for Deployment rollout and reads through the public and private
+  API routes after patching and restoring the pod spec. These fixtures do not
+  verify chart installation of the mounts or the `service.tuning.cache` values;
+  chart wiring remains a coverage gap
+  ([OSAC-6873](https://redhat.atlassian.net/browse/OSAC-6873)).
 
 ## Fulfillment integration reports
 

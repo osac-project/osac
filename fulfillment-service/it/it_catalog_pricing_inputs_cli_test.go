@@ -66,20 +66,6 @@ func catalogPricingSetEnv(container *corev1.Container, name, value string) {
 	container.Env = append(container.Env, corev1.EnvVar{Name: name, Value: value})
 }
 
-// catalogPricingWaitForRollout waits until the patched Deployment serves the new pod template everywhere.
-func catalogPricingWaitForRollout(ctx context.Context) {
-	GinkgoHelper()
-	key := crclient.ObjectKey{Namespace: catalogPricingCacheNamespace, Name: catalogPricingCacheDeployment}
-	Eventually(ctx, func(g Gomega) {
-		current := &appsv1.Deployment{}
-		g.Expect(tool.KubeClient().Get(ctx, key, current)).To(Succeed())
-		g.Expect(current.Status.ObservedGeneration).To(BeNumerically(">=", current.Generation))
-		g.Expect(current.Status.UpdatedReplicas).To(Equal(*current.Spec.Replicas))
-		g.Expect(current.Status.Replicas).To(Equal(*current.Spec.Replicas))
-		g.Expect(current.Status.AvailableReplicas).To(Equal(*current.Spec.Replicas))
-	}, 3*time.Minute, time.Second).Should(Succeed())
-}
-
 // catalogPricingShortenInventoryTTL patches the deployed fulfillment Deployment to reuse one catalog inventory sweep
 // for four seconds instead of the shipped 30s, and restores the original pod spec on cleanup. It follows the
 // patch-and-restore pattern the billing provider status specs use for the provider mounts and variables.
@@ -95,7 +81,7 @@ func catalogPricingShortenInventoryTTL(ctx context.Context) {
 		Expect(kube.Get(ctx, key, latest)).To(Succeed())
 		latest.Spec.Template.Spec = *original
 		Expect(kube.Update(ctx, latest)).To(Succeed())
-		catalogPricingWaitForRollout(ctx)
+		waitForFulfillmentRollout(ctx, key)
 	})
 	patched := false
 	for i := range current.Spec.Template.Spec.Containers {
@@ -108,7 +94,7 @@ func catalogPricingShortenInventoryTTL(ctx context.Context) {
 	}
 	Expect(patched).To(BeTrue(), "container %q not found", catalogPricingCacheContainer)
 	Expect(kube.Update(ctx, current)).To(Succeed())
-	catalogPricingWaitForRollout(ctx)
+	waitForFulfillmentRollout(ctx, key)
 }
 
 // The inventory is derived from the catalog alone, so the dev deployment's unconfigured billing is no gap here:

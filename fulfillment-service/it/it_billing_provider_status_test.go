@@ -90,30 +90,6 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 		stubURL string
 	)
 
-	// rollout waits for the current generation and both ingress routes. Deployment availability alone does not
-	// guarantee the proxy has replaced its old upstream connections, including after cleanup restores billing off.
-	rollout := func(ctx context.Context) {
-		GinkgoHelper()
-		Eventually(ctx, func(g Gomega) {
-			current := &appsv1.Deployment{}
-			g.Expect(tool.KubeClient().Get(ctx, crclient.ObjectKey{Namespace: namespace, Name: deployment},
-				current)).To(Succeed())
-			g.Expect(current.Status.ObservedGeneration).To(BeNumerically(">=", current.Generation))
-			g.Expect(current.Status.UpdatedReplicas).To(Equal(*current.Spec.Replicas))
-			g.Expect(current.Status.Replicas).To(Equal(*current.Spec.Replicas))
-			g.Expect(current.Status.AvailableReplicas).To(Equal(*current.Spec.Replicas))
-		}, 3*time.Minute, time.Second).Should(Succeed())
-		// Count-only catalog reads establish API readiness without writes or billing-provider calls.
-		Eventually(ctx, func(g Gomega) {
-			_, err := privatev1.NewInstanceTypesClient(tool.InternalView().AdminConn()).List(ctx,
-				privatev1.InstanceTypesListRequest_builder{Limit: new(int32(0))}.Build())
-			g.Expect(err).ToNot(HaveOccurred())
-			_, err = publicv1.NewInstanceTypesClient(tool.ExternalView().AdminConn()).List(ctx,
-				publicv1.InstanceTypesListRequest_builder{Limit: new(int32(0))}.Build())
-			g.Expect(err).ToNot(HaveOccurred())
-		}, time.Minute, time.Second).Should(Succeed())
-	}
-
 	status := func(ctx context.Context) (*publicv1.BillingProviderStatus, error) {
 		client := publicv1.NewBillingProviderStatusesClient(tool.ExternalView().AdminConn())
 		response, err := client.Get(ctx, publicv1.BillingProviderStatusesGetRequest_builder{}.Build())
@@ -193,7 +169,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 			Expect(kube.Get(ctx, key, latest)).To(Succeed())
 			latest.Spec.Template.Spec = *original
 			Expect(kube.Update(ctx, latest)).To(Succeed())
-			rollout(ctx)
+			waitForFulfillmentRollout(ctx, key)
 		})
 
 		// Hand-patched copies of the chart's mount paths and file names: this mirrors the chart and does not verify it.
@@ -227,7 +203,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 			)
 		}
 		Expect(kube.Update(ctx, current)).To(Succeed())
-		rollout(ctx)
+		waitForFulfillmentRollout(ctx, key)
 	})
 
 	It("is AVAILABLE when the stub provider answers, using reads only", func(ctx context.Context) {

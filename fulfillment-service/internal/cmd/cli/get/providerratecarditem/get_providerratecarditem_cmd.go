@@ -82,11 +82,16 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
 	defer conn.Close()
-	items, err := c.list(ctx, publicv1.NewProviderRateCardItemsClient(conn), cmd.Flags().Changed("limit"))
+	explicitLimit := cmd.Flags().Changed("limit")
+	items, total, err := c.list(ctx, publicv1.NewProviderRateCardItemsClient(conn), explicitLimit)
 	if err != nil {
 		return err
 	}
-	return render(ctx, terminal.ConsoleFromContext(ctx), c.format, items)
+	console := terminal.ConsoleFromContext(ctx)
+	if explicitLimit && c.limit == 0 {
+		return renderTotal(ctx, console, c.format, total)
+	}
+	return render(ctx, console, c.format, items)
 }
 
 // list collects the rate-card rows over gRPC. Without an explicit --limit the server returns pages of its default
@@ -95,7 +100,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 // starting offset is clamped the same way the server clamps it, so the next-page arithmetic stays correct when
 // paging from a negative offset.
 func (c *runnerContext) list(ctx context.Context, client publicv1.ProviderRateCardItemsClient,
-	explicitLimit bool) ([]*publicv1.ProviderRateCardItem, error) {
+	explicitLimit bool) ([]*publicv1.ProviderRateCardItem, int32, error) {
 	offset := c.offset
 	if offset < 0 {
 		offset = 0
@@ -123,17 +128,32 @@ func (c *runnerContext) list(ctx context.Context, client publicv1.ProviderRateCa
 		}
 		response, err := client.List(ctx, builder.Build())
 		if err != nil {
-			return nil, fmt.Errorf("failed to list provider rate card items: %w", err)
+			return nil, 0, fmt.Errorf("failed to list provider rate card items: %w", err)
 		}
 		items = append(items, response.GetItems()...)
 		if explicitLimit {
-			return items, nil
+			return items, response.GetTotal(), nil
 		}
 		offset += response.GetSize()
 		if response.GetSize() == 0 || offset >= response.GetTotal() {
-			return items, nil
+			return items, response.GetTotal(), nil
 		}
 	}
+}
+
+// renderTotal writes only the API total for an explicit --limit 0, including when it is zero.
+func renderTotal(ctx context.Context, console *terminal.Console, format string, total int32) error {
+	if format == rendering.Table {
+		_, err := fmt.Fprintf(console, "TOTAL\n%d\n", total)
+		return err
+	}
+	value := map[string]int32{"total": total}
+	if format == rendering.JSON {
+		console.RenderJson(ctx, value)
+	} else {
+		console.RenderYaml(ctx, value)
+	}
+	return nil
 }
 
 // render writes the rows as a table, JSON or YAML; the JSON and YAML encoding is shared in the rendering package.
@@ -229,5 +249,6 @@ const orderFlagHelp = `_ORDER_ - Sort order of the results. Not implemented by t
 
 const offsetFlagHelp = `_INDEX_ - Index of the first result to return. Defaults to zero. Negative values are treated as zero by the server.`
 
-const limitFlagHelp = `_COUNT_ - Maximum number of results to return. Zero returns only the total count and the server caps the value at 1000.
+const limitFlagHelp = `_COUNT_ - Maximum number of results to return. Zero returns only the total count: a {{ bt }}TOTAL{{ bt }} column in table output,
+or an object with a {{ bt }}total{{ bt }} field in JSON/YAML (no items). The server caps the value at 1000.
 When not set every result is fetched, so the output is never truncated.`

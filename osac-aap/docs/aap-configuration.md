@@ -19,6 +19,22 @@ If only NFS classes are missing, VAST does not validate the block filesystem
 setting or resubmit existing block classes. Changing the setting does not
 update an existing class's immutable filesystem parameters.
 
+For example, if a class was created with `ext4`, changing the override to
+`xfs` leaves that class using `ext4`. New PVCs that name the same existing
+class still provision using its `ext4` parameter, not the current worker
+environment or Ansible override. Only newly created class objects receive
+the new setting. On a partial request, existing block classes retain their
+parameters and only missing block classes receive `xfs`. An existing class
+without an `fstype` parameter remains without it; no parameter is backfilled.
+Existing bound PVCs, PVs, and their data are not modified or migrated.
+
+To use a different filesystem for future claims, plan a separately named or
+versioned StorageClass and explicitly select it in those claims. Moving
+existing workloads requires a separate workload and data migration plan;
+changing this setting does not perform that migration. Do not assume that
+deleting and recreating a class under the same name is safe for all volume
+lifecycle operations.
+
 ## Hosted cluster DNS
 
 The CaaS endpoint workflow publishes API and ingress records under

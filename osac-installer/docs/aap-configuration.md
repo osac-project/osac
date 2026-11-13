@@ -28,6 +28,19 @@ The setting applies to newly created classes, not existing classes or volumes.
 VAST creates only missing block classes, including on partial requests; an
 existing block class does not require a filesystem setting to create a missing
 NFS class. No existing classes or volumes are migrated.
+For example, after changing `ext4` to `xfs`, an existing class retains `ext4`;
+new PVCs naming that same class still use its old parameters, not the new
+worker setting. Only newly created class objects receive `xfs`, including
+missing block classes in a partial request. Existing classes without an
+`fstype` parameter are not backfilled, and bound PVCs, PVs, and their data
+are left unchanged.
+
+Plan a separately named or versioned StorageClass for future claims and a
+separate workload and data migration plan for existing workloads. This
+setting does not automate either rollout or migration. Do not assume that
+same-name class deletion and recreation is safe for all volume lifecycle
+operations.
+
 See the [AAP storage configuration](../../osac-aap/docs/aap-configuration.md#block-storageclass-filesystem-type)
 for existing-class selection and immutable-parameter limitations.
 

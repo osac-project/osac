@@ -173,14 +173,15 @@ func (c *ttlCache[K, V]) get(ctx context.Context, key K,
 		if loadErr != nil {
 			return nil, loadErr
 		}
-		// The budget bounds the fill, not only the load. A load that ignores its context can still return success
-		// after the deadline expired; accepting that value would publish work the deadline already abandoned and
-		// stamp a fresh TTL on it. Such a fill is an ordinary failed load: nothing is stored, every waiter gets the
-		// deadline error, singleflight drops the flight, and the next get starts a fresh fill.
+		c.mu.Lock()
+		// The budget bounds the fill, not only the load, including the wait for the publication mutex. Check under
+		// that mutex so a successful load cannot publish after its deadline expires while waiting to store. Such a
+		// fill is an ordinary failed load: nothing is stored, every waiter gets the deadline error, singleflight
+		// drops the flight, and the next get starts a fresh fill.
 		if err := fillCtx.Err(); err != nil {
+			c.mu.Unlock()
 			return nil, fmt.Errorf("ttl cache fill finished after its budget: %w", err)
 		}
-		c.mu.Lock()
 		c.store(key, value)
 		c.mu.Unlock()
 		return value, nil

@@ -413,6 +413,45 @@ var _ = Describe("Billing TTL cache", func() {
 		Expect(value).To(Equal(9))
 	})
 
+	It("rejects a successful load whose publication waits past the fill deadline", func() {
+		cache := newTTLCache[string, int](time.Minute, 250*time.Millisecond, 8, func(key string) string { return key })
+		release := make(chan struct{})
+		DeferCleanup(func() { close(release) })
+		callerCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		DeferCleanup(cancel)
+		var loads atomic.Int32
+		var loadCtxErr error
+		value, err := cache.get(callerCtx, "key", func(ctx context.Context) (int, error) {
+			loads.Add(1)
+			// Return successfully within budget, but hold the publication mutex until the fill deadline expires.
+			cache.mu.Lock()
+			go func() {
+				select {
+				case <-ctx.Done():
+				case <-release: // release the mutex even if the spec fails before the fill finishes
+				}
+				cache.mu.Unlock()
+			}()
+			loadCtxErr = ctx.Err()
+			return 7, nil
+		})
+		Expect(loadCtxErr).ToNot(HaveOccurred(), "the load must succeed before its fill deadline")
+		Expect(value).To(BeZero(), "a fill that expires waiting to publish must not serve its value")
+		Expect(errors.Is(err, context.DeadlineExceeded)).To(BeTrue(), "got: %v", err)
+		_, cached := cache.snapshot("key")
+		Expect(cached).To(BeFalse(), "a fill that expires waiting to publish must not be cached")
+		value, err = cache.get(callerCtx, "key", func(context.Context) (int, error) {
+			loads.Add(1)
+			return 9, nil
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(9))
+		Expect(loads.Load()).To(Equal(int32(2)), "the next get must retry instead of reusing the expired fill")
+		value, cached = cache.snapshot("key")
+		Expect(cached).To(BeTrue(), "the retried fill must cache its value")
+		Expect(value).To(Equal(9))
+	})
+
 	It("stamps an entry's TTL at store time, not at fill start", func() {
 		cache := newTTLCache[string, int](time.Minute, time.Hour, 8, func(key string) string { return key })
 		current := time.Unix(0, 0)

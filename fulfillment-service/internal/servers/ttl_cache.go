@@ -46,11 +46,12 @@ var ttlCacheFillLimiter = semaphore.NewWeighted(ttlCacheFillConcurrency)
 // A caller's wait and the fill it triggers have separate lifetimes. A caller that cancels, or whose deadline passes,
 // stops waiting and gets its own context error, while the fill keeps running detached from every caller's
 // cancellation with the fill budget as its deadline, so the callers still waiting — and later gets — still receive
-// the value. The budget is a deadline, not a limit on how long a load may work: a load that ignores its context still
-// runs past it, and its value is stored when it returns. An entry's lifetime starts when its value is stored, not
-// when the fill began, so clamping the budget below the TTL bounds detached work rather than an entry's age. A
-// panicking fill is contained and reported to every waiter as an ordinary failed load instead of crashing the
-// process.
+// the value. That budget bounds the fill, not just the load: a load that returns successfully after the budget has
+// expired is rejected like any other failed load, so a value the deadline already abandoned is never published and
+// the next get retries. The check cannot interrupt a load that ignores its context; such a load still runs until it
+// returns, and its result is discarded. An entry's lifetime starts when its value is stored, not when the fill began,
+// so clamping the budget below the TTL bounds detached work rather than an entry's age. A panicking fill is contained
+// and reported to every waiter as an ordinary failed load instead of crashing the process.
 //
 // Detached fills are capped process-wide, not just per key: every cache built by newTTLCache draws from one shared
 // limiter, so at most ttlCacheFillConcurrency fills run at once however many distinct keys callers ask for, and
@@ -130,7 +131,9 @@ func clampFillBudget(ttl, fillBudget time.Duration) time.Duration {
 // context error promptly, while the fill keeps running for the remaining waiters and later gets. The fill runs under
 // a context derived from the leading caller's — its values (transaction manager, auth metadata) are preserved, but
 // its cancellation and deadline are dropped and replaced by the fill budget, so no caller's departure can cancel or
-// truncate the shared fill. A fill that panics is converted to an error and, like any failure, caches nothing.
+// truncate the shared fill. A fill that panics is converted to an error and, like any failure, caches nothing. A
+// load that returns successfully after the fill budget has expired is a failed fill too: its value is discarded
+// rather than stored, so the budget bounds the fill even when the load ignores its context, and the next get retries.
 // Before running, the fill takes one slot from the cache's limiter on that same fill context, so a saturated limiter
 // delays or fails a fill rather than starting it anyway: failing to get a slot within the budget ends the fill with
 // the wait's error, and the slot goes back when the fill returns.
@@ -169,6 +172,13 @@ func (c *ttlCache[K, V]) get(ctx context.Context, key K,
 		value, loadErr := load(fillCtx)
 		if loadErr != nil {
 			return nil, loadErr
+		}
+		// The budget bounds the fill, not only the load. A load that ignores its context can still return success
+		// after the deadline expired; accepting that value would publish work the deadline already abandoned and
+		// stamp a fresh TTL on it. Such a fill is an ordinary failed load: nothing is stored, every waiter gets the
+		// deadline error, singleflight drops the flight, and the next get starts a fresh fill.
+		if err := fillCtx.Err(); err != nil {
+			return nil, fmt.Errorf("ttl cache fill finished after its budget: %w", err)
 		}
 		c.mu.Lock()
 		c.store(key, value)

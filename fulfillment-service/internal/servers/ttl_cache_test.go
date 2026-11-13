@@ -384,14 +384,44 @@ var _ = Describe("Billing TTL cache", func() {
 			"the fill must carry the clamped budget, not the caller's hour")
 	})
 
-	It("serves a fill that runs past the clamp instead of storing a born-expired entry", func() {
+	It("rejects a successful load that returns after the fill budget expired", func() {
+		cache := newTTLCache[string, int](time.Minute, 50*time.Millisecond, 8, func(key string) string { return key })
+		var loads atomic.Int32
+		// A load that ignores its context still finishes successfully after the fill deadline. Returning success
+		// here is deterministic: the load only proceeds once the fill context is already done.
+		lateLoad := func(ctx context.Context) (int, error) {
+			loads.Add(1)
+			<-ctx.Done()
+			return 7, nil
+		}
+		value, err := cache.get(context.Background(), "key", lateLoad)
+		Expect(value).To(BeZero(), "a late success must not be served as a value")
+		Expect(errors.Is(err, context.DeadlineExceeded)).To(BeTrue(), "got: %v", err)
+		Expect(err.Error()).To(ContainSubstring("budget"))
+		_, cached := cache.snapshot("key")
+		Expect(cached).To(BeFalse(), "a load that returns after the fill budget must not be cached")
+		// The rejected flight must not stay wedged: the next get runs a fresh fill and caches its value.
+		value, err = cache.get(context.Background(), "key", func(context.Context) (int, error) {
+			loads.Add(1)
+			return 9, nil
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(9))
+		Expect(loads.Load()).To(Equal(int32(2)), "the next get must retry the load, not reuse the late success")
+		value, cached = cache.snapshot("key")
+		Expect(cached).To(BeTrue(), "the retried fill must cache its value")
+		Expect(value).To(Equal(9))
+	})
+
+	It("stamps an entry's TTL at store time, not at fill start", func() {
 		cache := newTTLCache[string, int](time.Minute, time.Hour, 8, func(key string) string { return key })
 		current := time.Unix(0, 0)
 		cache.now = func() time.Time { return current }
 		loads := 0
 		load := func(context.Context) (int, error) {
 			loads++
-			// The fill takes well past the clamped 30s budget, but less than the TTL.
+			// Only the cache clock moves here, by more than the clamped 30s budget but less than the TTL: the fill's
+			// real deadline stays live, so the load completes within budget and the store stamps a fresh full TTL.
 			current = current.Add(45 * time.Second)
 			return 7, nil
 		}

@@ -313,10 +313,24 @@ func (s *ClusterVersionsServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.ClusterVersionsDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err := s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
-	return &publicv1.ClusterVersionsDeleteResponse{}, nil
+	privateClusterVersion := privateResponse.GetObject()
+	publicClusterVersion := &publicv1.ClusterVersion{}
+	err = s.outMapper.Copy(ctx, privateClusterVersion, publicClusterVersion)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private cluster version to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster version")
+	}
+
+	response := &publicv1.ClusterVersionsDeleteResponse{}
+	response.SetObject(publicClusterVersion)
+	return response, nil
 }

@@ -270,13 +270,12 @@ func (s *PrivateClusterVersionsServer) Delete(ctx context.Context,
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 	}
 
-	var response *privatev1.ClusterVersionsDeleteResponse
-	err := s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
 	if err != nil {
 		return nil, err
 	}
 
-	return response, nil
+	return &privatev1.ClusterVersionsDeleteResponse{Object: object}, nil
 }
 
 func (s *PrivateClusterVersionsServer) Signal(ctx context.Context,

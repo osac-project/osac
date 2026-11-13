@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
@@ -88,6 +89,27 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 	if tenant == "" {
 		err = errors.New("cannot create object with empty tenant")
 		return
+	}
+
+	// Tenants bootstrap their own FK target. Every other create must lock and check the normalized
+	// tenant in this transaction: an FK alone also accepts a retained, deletion-marked billing tombstone.
+	// SHARE permits concurrent creates but conflicts with both deletion-marking UPDATEs and archival's
+	// FOR UPDATE lock. After waiting behind deletion, READ COMMITTED returns the updated deletion state.
+	if r.dao.table != "tenants" || id != name || tenant != name {
+		var deleting bool
+		err = r.queryRow(ctx, getOpType,
+			`select deletion_timestamp <> 'epoch' from tenants where name = $1 for share`, tenant,
+		).Scan(&deleting)
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = &ErrReference{Reason: fmt.Sprintf("tenant '%s' doesn't exist", tenant)}
+		} else if err != nil {
+			err = r.translateError(ctx, id, tenant, project, name, err)
+		} else if deleting {
+			err = &ErrReference{Reason: fmt.Sprintf("tenant '%s' is being deleted", tenant)}
+		}
+		if err != nil {
+			return
+		}
 	}
 
 	// Save the object:

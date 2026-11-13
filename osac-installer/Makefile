@@ -891,9 +891,13 @@ helm-template: helm-infra-deps ## Dry-run render all templates
 	helm template osac-infra $(INFRA_CHART)
 	helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
+.PHONY: storage-fstype-render-test
+storage-fstype-render-test: helm-osac-deps ## Verify block filesystem configuration reaches storage workers
+	uv run --project .. python scripts/test-storage-fstype-render.py
+
 # Schema-error patterns accept Helm 3 dotted paths and Helm 4 JSON pointers.
 .PHONY: csi-render-test
-csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider chart rendering
+csi-render-test: helm-deps helm-infra-deps storage-fstype-render-test ## Verify CSI and storage-provider chart rendering
 	@set -euo pipefail; \
 		caas_render="$$(mktemp)"; \
 		vmaas_render="$$(mktemp)"; \

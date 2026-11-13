@@ -1534,6 +1534,11 @@
                     "STORAGE_SNAPSHOTS_ENABLED": {
                       "type": "string",
                       "description": "Enable storage snapshots"
+                    },
+                    "OSAC_STORAGE_BLOCK_FSTYPE": {
+                      "type": "string",
+                      "default": "ext4",
+                      "description": "Filesystem type for new AAP block StorageClasses. Passed unchanged; must be nonempty when creating block classes."
                     }
                   },
                   "additionalProperties": false

@@ -43,18 +43,15 @@ export const useDiskImageLifecycleAction = () => {
   const updateDiskImage = useUpdateResource(DiskImages);
 
   const runLifecycleAction = (diskImageId: string, action: DiskImageLifecycleAction) => {
-    updateDiskImage.mutate(
-      { object: { id: diskImageId, spec: { lifecycle: action } } },
-      {
-        onError: (error) => {
-          addToast({
-            variant: 'danger',
-            title: getLifecycleErrorTitle(t, action),
-            description: getErrorMessage(error),
-          });
-        },
-      },
-    );
+    void updateDiskImage
+      .mutateAsync({ object: { id: diskImageId, spec: { lifecycle: action } } })
+      .catch((error) => {
+        addToast({
+          variant: 'danger',
+          title: getLifecycleErrorTitle(t, action),
+          description: getErrorMessage(error),
+        });
+      });
   };
 
   return { runLifecycleAction };

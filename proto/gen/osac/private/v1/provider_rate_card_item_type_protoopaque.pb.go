@@ -376,8 +376,9 @@ type ProviderRateCardItem_builder struct {
 	// configuration of the service.
 	ResourceConditions []*ProviderRateCardItemResourceCondition
 	Rate               *ProviderRateCardItemRate
-	// OSAC catalog item names whose default configuration this rule can price. Empty means the row is not in the
-	// catalog; that is still a valid row.
+	// OSAC catalog item names this rule can price for at least one configuration a tenant can request from that
+	// item. The rule's conditions alone decide this list; its `dimension` does not narrow it. Empty means no catalog
+	// item offers a configuration the conditions accept, which is still a valid row.
 	CatalogItemMatches []string
 	// Metered dimension this row prices, using the same names as CatalogPricingInputs and
 	// resource_conditions[].dimension (for example `instance_type`). Always set: rows whose priced attribute has no

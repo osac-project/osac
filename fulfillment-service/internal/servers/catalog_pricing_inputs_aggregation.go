@@ -40,7 +40,20 @@ func aggregateCatalogPricingInputs(
 	computeItems []*privatev1.ComputeInstanceCatalogItem,
 	clusterItems []*privatev1.ClusterCatalogItem,
 ) []*privatev1.CatalogPricingInput {
+	return aggregateCatalogPricingInventory(computeItems, clusterItems).inputs
+}
+
+// aggregateCatalogPricingInventory keeps repeated-field entries alongside the public rows so conditions cannot
+// accidentally combine values from different disks or node sets. Public row emission and ordering stay unchanged.
+func aggregateCatalogPricingInventory(
+	computeItems []*privatev1.ComputeInstanceCatalogItem,
+	clusterItems []*privatev1.ClusterCatalogItem,
+) catalogPricingInventory {
 	rows := map[[3]string]*catalogPricingInputRow{}
+	inventory := catalogPricingInventory{
+		itemsByService:   catalogItemsByService(computeItems, clusterItems),
+		componentsByItem: map[[2]string]map[catalogComponentKind]catalogComponents{},
+	}
 
 	for _, item := range computeItems {
 		info := catalogItemInfo(item.GetId(), item.GetMetadata().GetName(), item.GetTitle(), item.GetPublished())
@@ -54,7 +67,9 @@ func aggregateCatalogPricingInputs(
 		emitDiskImage(rows, fields.GetDiskImage(), info)
 		emitBootDisk(rows, fields.GetBootDisk(), info)
 		emitInstanceType(rows, fields.GetInstanceType(), info)
-		emitAdditionalDisks(rows, fields.GetAdditionalDisks(), info)
+		inventory.componentsByItem[[2]string{serviceComputeInstance, item.GetId()}] = map[catalogComponentKind]catalogComponents{
+			catalogComponentAdditionalDisk: emitAdditionalDisks(rows, fields.GetAdditionalDisks(), info),
+		}
 	}
 
 	for _, item := range clusterItems {
@@ -63,10 +78,13 @@ func aggregateCatalogPricingInputs(
 		if fields == nil {
 			continue
 		}
-		emitNodeSets(rows, fields.GetNodeSets(), info)
+		inventory.componentsByItem[[2]string{serviceCluster, item.GetId()}] = map[catalogComponentKind]catalogComponents{
+			catalogComponentNodeSet: emitNodeSets(rows, fields.GetNodeSets(), info),
+		}
 	}
 
-	return sortedCatalogPricingInputs(rows)
+	inventory.inputs = sortedCatalogPricingInputs(rows)
+	return inventory
 }
 
 func catalogItemInfo(id, name, title string, published bool) *privatev1.CatalogPricingInputCatalogItem {
@@ -209,9 +227,10 @@ func emitInstanceType(rows map[[3]string]*catalogPricingInputRow, policy *privat
 }
 
 func emitAdditionalDisks(rows map[[3]string]*catalogPricingInputRow, policy *privatev1.ComputeInstanceDiskListFieldPolicy,
-	item *privatev1.CatalogPricingInputCatalogItem) {
+	item *privatev1.CatalogPricingInputCatalogItem) catalogComponents {
+	components := catalogComponents{}
 	if policy == nil {
-		return
+		return components
 	}
 	var disks []*privatev1.ComputeInstanceDisk
 	anyValue := false
@@ -222,24 +241,32 @@ func emitAdditionalDisks(rows map[[3]string]*catalogPricingInputRow, policy *pri
 		disks = policy.GetEditable().GetDefaultValue().GetItems()
 		anyValue = true
 	}
+	components.editable = anyValue
 	for _, disk := range disks {
+		values := map[string]string{}
 		if disk.GetSizeGib() != 0 {
-			emit(rows, serviceComputeInstance, dimensionAdditionalDiskSize, strconv.Itoa(int(disk.GetSizeGib())), false, item)
+			value := strconv.Itoa(int(disk.GetSizeGib()))
+			emit(rows, serviceComputeInstance, dimensionAdditionalDiskSize, value, false, item)
+			values[dimensionAdditionalDiskSize] = value
 		}
 		if tier := disk.GetStorageTier(); tier != nil && tier.GetName() != "" {
 			emit(rows, serviceComputeInstance, dimensionAdditionalStorageTier, tier.GetName(), false, item)
+			values[dimensionAdditionalStorageTier] = tier.GetName()
 		}
+		components.values = append(components.values, values)
 	}
 	if anyValue {
 		emit(rows, serviceComputeInstance, dimensionAdditionalDiskSize, "", true, item)
 		emit(rows, serviceComputeInstance, dimensionAdditionalStorageTier, "", true, item)
 	}
+	return components
 }
 
 func emitNodeSets(rows map[[3]string]*catalogPricingInputRow, policy *privatev1.ClusterNodeSetMapPolicy,
-	item *privatev1.CatalogPricingInputCatalogItem) {
+	item *privatev1.CatalogPricingInputCatalogItem) catalogComponents {
+	components := catalogComponents{}
 	if policy == nil {
-		return
+		return components
 	}
 	var nodeSets map[string]*privatev1.ClusterCatalogNodeSet
 	anyValue := false
@@ -250,19 +277,26 @@ func emitNodeSets(rows map[[3]string]*catalogPricingInputRow, policy *privatev1.
 		nodeSets = policy.GetEditable().GetDefaultValue().GetItems()
 		anyValue = true
 	}
+	components.editable = anyValue
 	for _, key := range sortedNodeSetKeys(nodeSets) {
 		nodeSet := nodeSets[key]
+		values := map[string]string{}
 		if nodeSet.GetSize() != 0 {
-			emit(rows, serviceCluster, dimensionNodeCount, strconv.Itoa(int(nodeSet.GetSize())), false, item)
+			value := strconv.Itoa(int(nodeSet.GetSize()))
+			emit(rows, serviceCluster, dimensionNodeCount, value, false, item)
+			values[dimensionNodeCount] = value
 		}
 		if ref := nodeSet.GetBaremetalInstanceType(); ref != nil && ref.GetName() != "" {
 			emit(rows, serviceCluster, dimensionBaremetalInstanceType, ref.GetName(), false, item)
+			values[dimensionBaremetalInstanceType] = ref.GetName()
 		}
+		components.values = append(components.values, values)
 	}
 	if anyValue {
 		emit(rows, serviceCluster, dimensionNodeCount, "", true, item)
 		emit(rows, serviceCluster, dimensionBaremetalInstanceType, "", true, item)
 	}
+	return components
 }
 
 // sortedNodeSetKeys returns the node-set map's keys in ascending order, for deterministic iteration.

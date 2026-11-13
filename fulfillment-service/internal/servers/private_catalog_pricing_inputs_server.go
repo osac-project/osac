@@ -20,8 +20,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	grpccodes "google.golang.org/grpc/codes"
-	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
@@ -154,12 +153,15 @@ func (s *PrivateCatalogPricingInputsServer) List(ctx context.Context,
 		})
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
 		return nil, err
 	}
 
-	all, err = filterItems(catalogPricingInputFilterEnv, all, request.GetFilter())
+	all, err = filterItems(ctx, catalogPricingInputFilterEnv, all, request.GetFilter())
 	if err != nil {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %s", err)
+		return nil, filterError(err)
 	}
 
 	total := len(all)

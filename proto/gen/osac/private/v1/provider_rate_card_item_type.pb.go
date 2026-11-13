@@ -264,8 +264,9 @@ type ProviderRateCardItem struct {
 	// configuration of the service.
 	ResourceConditions []*ProviderRateCardItemResourceCondition `protobuf:"bytes,3,rep,name=resource_conditions,json=resourceConditions,proto3" json:"resource_conditions,omitempty"`
 	Rate               *ProviderRateCardItemRate                `protobuf:"bytes,4,opt,name=rate,proto3" json:"rate,omitempty"`
-	// OSAC catalog item names whose default configuration this rule can price. Empty means the row is not in the
-	// catalog; that is still a valid row.
+	// OSAC catalog item names this rule can price for at least one configuration a tenant can request from that
+	// item. The rule's conditions alone decide this list; its `dimension` does not narrow it. Empty means no catalog
+	// item offers a configuration the conditions accept, which is still a valid row.
 	CatalogItemMatches []string `protobuf:"bytes,5,rep,name=catalog_item_matches,json=catalogItemMatches,proto3" json:"catalog_item_matches,omitempty"`
 	// Metered dimension this row prices, using the same names as CatalogPricingInputs and
 	// resource_conditions[].dimension (for example `instance_type`). Always set: rows whose priced attribute has no
@@ -388,8 +389,9 @@ type ProviderRateCardItem_builder struct {
 	// configuration of the service.
 	ResourceConditions []*ProviderRateCardItemResourceCondition
 	Rate               *ProviderRateCardItemRate
-	// OSAC catalog item names whose default configuration this rule can price. Empty means the row is not in the
-	// catalog; that is still a valid row.
+	// OSAC catalog item names this rule can price for at least one configuration a tenant can request from that
+	// item. The rule's conditions alone decide this list; its `dimension` does not narrow it. Empty means no catalog
+	// item offers a configuration the conditions accept, which is still a valid row.
 	CatalogItemMatches []string
 	// Metered dimension this row prices, using the same names as CatalogPricingInputs and
 	// resource_conditions[].dimension (for example `instance_type`). Always set: rows whose priced attribute has no

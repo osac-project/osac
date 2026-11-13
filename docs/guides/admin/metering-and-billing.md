@@ -317,11 +317,16 @@ misses starts a fill that keeps running even when every waiting request has
 gone away. That fill gets half the configured interval, capped at 15 seconds
 for the catalog inventory cache and 120 seconds for the provider rate card. A
 fill that needs longer fails, so the read that started it fails with it and the
-next read starts a new one. Keep each interval at least twice the time a normal
-catalog sweep or provider call takes; for the rate card the 120-second cap
-binds once the interval exceeds 240 seconds. Raise an interval while you
-investigate a slow catalog or provider; lower one only for a change that must
-appear sooner than the default.
+next read starts a new one. The service also bounds how many of these refreshes
+run at once: at most four detached refreshes are in flight at once in each
+fulfillment service process, however many distinct services and currencies
+requests ask for. A refresh that cannot take one of those slots before its
+budget runs out fails like one that ran too long, so the read that started it
+fails and the next read starts a new one. Keep each interval at least twice the
+time a normal catalog sweep or provider call takes; for the rate card the
+120-second cap binds once the interval exceeds 240 seconds. Raise an interval
+while you investigate a slow catalog or provider; lower one only for a change
+that must appear sooner than the default.
 
 ## Provider rate cards and the catalog
 
@@ -333,8 +338,17 @@ your catalog.
 
 The dimension names are the pairing key, and they must match exactly: a row's
 `dimension` and its conditions use the same names your catalog uses, such as
-`instance_type`, and OSAC translates one vocabulary into the other only if the
-names already agree. A provider name that differs fails nothing: the row comes
-back with an empty `catalog_item_matches`, and a configuration priced on that
-dimension gets a `BILLING_COVERAGE_GAP` result, with no error. Aligning the
-provider's names with your catalog is part of configuring the provider.
+`instance_type`, and OSAC compares them verbatim, without translating one
+vocabulary into the other. A condition that names a dimension your catalog never
+reports matches nothing, so the row comes back with an empty
+`catalog_item_matches`. The dimension a row prices is reported separately and
+does not narrow that list: a row whose `dimension` is a name your catalog never
+uses still lists the catalog items its conditions accept, and comparing the two
+lists is what shows the mismatch. Aligning the provider's names with your
+catalog is part of configuring the provider.
+
+`catalog_item_matches` names the catalog items a row applies to. A row with
+several conditions on one repeated field, such as `additional_disk_size_gib` and
+`additional_storage_tier`, must have all of them on the same disk, and likewise
+on the same node set. An item whose policy lets a tenant add any disk or node set
+matches anyway, because every such combination is requestable.

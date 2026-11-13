@@ -20,6 +20,8 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -203,12 +205,46 @@ var _ = Describe("Private catalog pricing inputs server", func() {
 			}
 		})
 
-		It("rejects an invalid filter", func() {
-			_, err := server.List(ctx, privatev1.CatalogPricingInputsListRequest_builder{
-				Filter: proto.String(`this.service ==`),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-		})
+		DescribeTable("rejects invalid catalog pricing filters",
+			func(filter string) {
+				seedCommittedCatalogFixtures(func(seedCtx context.Context) {
+					createComputeItem(seedCtx, uuid.NewString(), "vmaas-filter", true)
+				})
+				_, err := server.List(ctx, privatev1.CatalogPricingInputsListRequest_builder{
+					Filter: proto.String(filter),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			},
+			Entry("syntax error", `this.service ==`),
+			Entry("non-boolean result", `this.service`),
+			Entry("evaluation error", `int(this.service) > 0`),
+		)
+
+		DescribeTable("preserves the request context status when filtering catalog pricing inputs",
+			func(warm, expired bool, want codes.Code) {
+				request := privatev1.CatalogPricingInputsListRequest_builder{
+					Filter: proto.String(`this.service == "compute_instance"`),
+				}.Build()
+				if warm {
+					_, err := server.List(ctx, request)
+					Expect(err).ToNot(HaveOccurred())
+				}
+				doneCtx, cancel := context.WithCancel(ctx)
+				if expired {
+					cancel()
+					doneCtx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+				}
+				defer cancel()
+				cancel()
+				response, err := server.List(doneCtx, request)
+				Expect(status.Code(err)).To(Equal(want))
+				Expect(response).To(BeNil())
+			},
+			Entry("cancelled with a warm cache", true, false, codes.Canceled),
+			Entry("expired with a warm cache", true, true, codes.DeadlineExceeded),
+			Entry("cancelled with a cold cache", false, false, codes.Canceled),
+			Entry("expired with a cold cache", false, true, codes.DeadlineExceeded),
+		)
 
 		// This server never imports the billing package, so it structurally cannot make a provider call.
 		// This is proven once, at package scope, by ../catalog_pricing_inputs_aggregation_test.go and by the

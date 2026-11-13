@@ -14,11 +14,15 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/ast"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -60,24 +64,45 @@ func newTypedFilterEnv[T proto.Message]() *cel.Env {
 // filterItems returns the subset of items for which the CEL filter expression evaluates to true against 'this'.
 // An empty filter matches every item. env comes from newTypedFilterEnv for the items' message type. It is the
 // single in-memory filter pipeline shared by every server that filters a derived, non-DAO-backed list.
-func filterItems[T proto.Message](env *cel.Env, items []T, filter string) ([]T, error) {
+func filterItems[T proto.Message](ctx context.Context, env *cel.Env, items []T, filter string) ([]T, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if filter == "" {
 		return items, nil
 	}
 	tree, issues := env.Compile(filter)
+	// Compilation does not observe the context, so a compile or type error may belong to a request that finished
+	// while it ran. Reporting the request's own status keeps the caller's cancellation from being blamed on the
+	// filter it sent.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if issues != nil && issues.Err() != nil {
 		return nil, issues.Err()
 	}
 	if !tree.OutputType().IsExactType(cel.BoolType) {
 		return nil, fmt.Errorf("filter result must be a boolean, but it is of type '%v'", tree.OutputType())
 	}
-	program, err := env.Program(tree)
+	// ContextEval needs an interrupt frequency to observe cancellation inside CEL comprehensions.
+	program, err := env.Program(tree, cel.InterruptCheckFrequency(100))
+	// Building the program is context-blind as well, and the loop below runs zero times for an empty input, so
+	// without this check a finished request would be reported as a successful empty result.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err != nil {
 		return nil, err
 	}
 	result := make([]T, 0, len(items))
 	for _, item := range items {
-		value, _, err := program.Eval(map[string]any{"this": item})
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		value, _, err := program.ContextEval(ctx, map[string]any{"this": item})
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -90,6 +115,16 @@ func filterItems[T proto.Message](env *cel.Env, items []T, filter string) ([]T, 
 		}
 	}
 	return result, nil
+}
+
+// filterError reports a failed filter compilation or evaluation. A cancelled or expired request keeps its own
+// transport status instead of being reported as an invalid filter, which would blame the caller's input for the
+// caller's own cancellation.
+func filterError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err).Err()
+	}
+	return status.Errorf(codes.InvalidArgument, "invalid filter: %s", err)
 }
 
 // filterReferencedFields parses a CEL filter and returns the set of all dotted field paths

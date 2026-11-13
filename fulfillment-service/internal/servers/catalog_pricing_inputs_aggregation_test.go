@@ -18,6 +18,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/proto"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -261,6 +262,115 @@ var _ = Describe("Catalog pricing inputs aggregation", func() {
 		)).To(BeTrue())
 		Expect(rows1[0].GetDimension()).To(Equal("additional_disk_size_gib"))
 		Expect(rows1[1].GetDimension()).To(Equal("instance_type"))
+	})
+
+	It("retains component pairs and editable policies without changing public row bytes", func() {
+		disks := privatev1.ComputeInstanceDiskList_builder{Items: []*privatev1.ComputeInstanceDisk{
+			privatev1.ComputeInstanceDisk_builder{
+				SizeGib: int32Ptr(50), StorageTier: privatev1.StorageTierReference_builder{Name: "slow"}.Build(),
+			}.Build(),
+			privatev1.ComputeInstanceDisk_builder{
+				SizeGib: int32Ptr(100), StorageTier: privatev1.StorageTierReference_builder{Name: "fast"}.Build(),
+			}.Build(),
+		}}.Build()
+		nodeSets := privatev1.ClusterNodeSetMap_builder{Items: map[string]*privatev1.ClusterCatalogNodeSet{
+			"workers": privatev1.ClusterCatalogNodeSet_builder{
+				Size: 5, BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "type-b"}.Build(),
+			}.Build(),
+			"control": privatev1.ClusterCatalogNodeSet_builder{
+				Size: 3, BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Name: "type-a"}.Build(),
+			}.Build(),
+		}}.Build()
+		computeItems := []*privatev1.ComputeInstanceCatalogItem{
+			computeItem("c2", "locked", true, privatev1.ComputeInstanceCatalogItemFields_builder{
+				AdditionalDisks: privatev1.ComputeInstanceDiskListFieldPolicy_builder{Locked: disks}.Build(),
+			}.Build()),
+			computeItem("c1", "editable", false, privatev1.ComputeInstanceCatalogItemFields_builder{
+				AdditionalDisks: privatev1.ComputeInstanceDiskListFieldPolicy_builder{
+					Editable: privatev1.EditableComputeInstanceDiskList_builder{DefaultValue: disks}.Build(),
+				}.Build(),
+			}.Build()),
+		}
+		clusterItems := []*privatev1.ClusterCatalogItem{
+			clusterItem("k2", "locked", true, privatev1.ClusterCatalogItemFields_builder{
+				NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{Locked: nodeSets}.Build(),
+			}.Build()),
+			clusterItem("k1", "editable", false, privatev1.ClusterCatalogItemFields_builder{
+				NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
+					Editable: privatev1.EditableClusterNodeSetMap_builder{DefaultValue: nodeSets}.Build(),
+				}.Build(),
+			}.Build()),
+		}
+		inventory := aggregateCatalogPricingInventory(computeItems, clusterItems)
+		for _, id := range []string{"c1", "c2"} {
+			components := inventory.componentsByItem[[2]string{serviceComputeInstance, id}][catalogComponentAdditionalDisk]
+			Expect(components.editable).To(Equal(id == "c1"))
+			Expect(components.values).To(Equal([]map[string]string{
+				{dimensionAdditionalDiskSize: "50", dimensionAdditionalStorageTier: "slow"},
+				{dimensionAdditionalDiskSize: "100", dimensionAdditionalStorageTier: "fast"},
+			}))
+		}
+		for _, id := range []string{"k1", "k2"} {
+			components := inventory.componentsByItem[[2]string{serviceCluster, id}][catalogComponentNodeSet]
+			Expect(components.editable).To(Equal(id == "k1"))
+			Expect(components.values).To(Equal([]map[string]string{
+				{dimensionNodeCount: "3", dimensionBaremetalInstanceType: "type-a"},
+				{dimensionNodeCount: "5", dimensionBaremetalInstanceType: "type-b"},
+			}))
+		}
+
+		// Explicit wire expectations guard the flattened public contract, including open rows and item ordering.
+		var expected []*privatev1.CatalogPricingInput
+		for _, dimension := range []struct {
+			service, name, prefix string
+			values                []string
+		}{
+			{serviceCluster, dimensionBaremetalInstanceType, "k", []string{"", "type-a", "type-b"}},
+			{serviceCluster, dimensionNodeCount, "k", []string{"", "3", "5"}},
+			{serviceComputeInstance, dimensionAdditionalDiskSize, "c", []string{"", "100", "50"}},
+			{serviceComputeInstance, dimensionAdditionalStorageTier, "c", []string{"", "fast", "slow"}},
+		} {
+			for _, value := range dimension.values {
+				items := []*privatev1.CatalogPricingInputCatalogItem{catalogItemInfo(dimension.prefix+"1", "editable", "title-editable", false)}
+				if value != "" {
+					items = append(items, catalogItemInfo(dimension.prefix+"2", "locked", "title-locked", true))
+				}
+				expected = append(expected, privatev1.CatalogPricingInput_builder{
+					Service: dimension.service, Dimension: dimension.name, Value: value,
+					AcceptsAnyValue: value == "", CatalogItems: items,
+				}.Build())
+			}
+		}
+		publicRows := aggregateCatalogPricingInputs(computeItems, clusterItems)
+		Expect(inventory.inputs).To(HaveLen(len(expected)))
+		Expect(publicRows).To(HaveLen(len(expected)))
+		for i, row := range expected {
+			bytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(row)
+			Expect(err).ToNot(HaveOccurred())
+			inventoryBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(inventory.inputs[i])
+			Expect(err).ToNot(HaveOccurred())
+			publicBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(publicRows[i])
+			Expect(err).ToNot(HaveOccurred())
+			Expect(inventoryBytes).To(Equal(bytes))
+			Expect(publicBytes).To(Equal(bytes))
+		}
+	})
+
+	It("records editable node sets even without defaults", func() {
+		item := clusterItem("k1", "editable", true, privatev1.ClusterCatalogItemFields_builder{
+			NodeSets: privatev1.ClusterNodeSetMapPolicy_builder{
+				Editable: privatev1.EditableClusterNodeSetMap_builder{}.Build(),
+			}.Build(),
+		}.Build())
+		inventory := aggregateCatalogPricingInventory(nil, []*privatev1.ClusterCatalogItem{item})
+		components := inventory.componentsByItem[[2]string{serviceCluster, "k1"}][catalogComponentNodeSet]
+		Expect(components.editable).To(BeTrue())
+		Expect(components.values).To(BeEmpty())
+		Expect(inventory.inputs).To(HaveLen(2))
+		for _, row := range inventory.inputs {
+			Expect(row.GetValue()).To(BeEmpty())
+			Expect(row.GetAcceptsAnyValue()).To(BeTrue())
+		}
 	})
 
 	It("takes no billing or provider dependency: aggregateCatalogPricingInputs only accepts catalog item slices", func() {

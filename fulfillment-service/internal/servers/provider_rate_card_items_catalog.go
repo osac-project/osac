@@ -25,26 +25,42 @@ import (
 // design's own rate-card example (§4.3) and the service name osac-metering already sends for this dimension.
 const computeInstanceServiceName = "compute_instance"
 
-// catalogDimensionIndex groups OSAC-6889's aggregated (service, dimension, value) catalog pricing inventory so a
-// rate-card row's conditions can be matched against it without re-deriving the field-policy walk
-// aggregateCatalogPricingInputs already performs over the VMaaS/CaaS catalog item DAOs.
+// catalogDimensionIndex retains scalar values and repeated-component boundaries so matching does not need to
+// repeat the field-policy walk over the VMaaS/CaaS catalog item DAOs.
 type catalogDimensionIndex struct {
 	// byService includes every catalog item, including items that emit no pricing dimensions. A row with no
 	// conditions matches every item in its service.
 	byService map[string]map[string]*privatev1.CatalogPricingInputCatalogItem
 	// byValue maps (service, dimension, value) to the catalog items locked to, or defaulted to, exactly that
-	// value.
+	// value. Only scalar conditions use this flattened index; component conditions instead use one component
+	// satisfying the whole group, or an editable policy for that kind that accepts any requested combination.
 	byValue map[[3]string]map[string]*privatev1.CatalogPricingInputCatalogItem
 	// anyByDimension maps (service, dimension) to every catalog item that has any value for that dimension, open
-	// or fixed: the union of catalog items across all of that dimension's rows.
-	anyByDimension map[[2]string]map[string]*privatev1.CatalogPricingInputCatalogItem
+	// or fixed: the union of catalog items across all of that dimension's rows. This serves scalar ANY conditions;
+	// component ANY conditions require the dimension on the same component, unless the kind's policy is editable.
+	anyByDimension   map[[2]string]map[string]*privatev1.CatalogPricingInputCatalogItem
+	componentsByItem map[[2]string]map[catalogComponentKind]catalogComponents
 }
 
-// catalogPricingInventory keeps the public comparison rows and the complete catalog-item set used by
-// conditionless provider rows together in the rate-card server's inventory cache.
+type catalogComponentKind string
+
+const (
+	catalogComponentAdditionalDisk catalogComponentKind = "additional_disk"
+	catalogComponentNodeSet        catalogComponentKind = "node_set"
+)
+
+type catalogComponents struct {
+	values   []map[string]string
+	editable bool
+}
+
+// catalogPricingInventory caches the unchanged public comparison rows, all items for conditionless rows, and
+// components keyed by (service, item ID) and kind. Each component keeps one disk's or node set's dimension/value
+// pairs together. An editable list/map policy accepts any requested combination for that kind, even without defaults.
 type catalogPricingInventory struct {
-	inputs         []*privatev1.CatalogPricingInput
-	itemsByService map[string]map[string]*privatev1.CatalogPricingInputCatalogItem
+	inputs           []*privatev1.CatalogPricingInput
+	itemsByService   map[string]map[string]*privatev1.CatalogPricingInputCatalogItem
+	componentsByItem map[[2]string]map[catalogComponentKind]catalogComponents
 }
 
 // newCatalogPricingInventoryCache builds the rate-card server's inventory cache for the same configurable inventory
@@ -80,16 +96,16 @@ func catalogItemsByService(computeItems []*privatev1.ComputeInstanceCatalogItem,
 	return result
 }
 
-// buildCatalogDimensionIndex indexes every emitted (service, dimension, value) row for conditional cross-reference,
-// plus the complete per-service catalog item set for conditionless rows.
-func buildCatalogDimensionIndex(inputs []*privatev1.CatalogPricingInput,
-	itemsByService map[string]map[string]*privatev1.CatalogPricingInputCatalogItem) catalogDimensionIndex {
+// buildCatalogDimensionIndex indexes comparison rows for scalar conditions while retaining component boundaries
+// and editable policies for component groups, plus the complete per-service catalog item set for conditionless rows.
+func buildCatalogDimensionIndex(inventory catalogPricingInventory) catalogDimensionIndex {
 	idx := catalogDimensionIndex{
-		byService:      itemsByService,
-		byValue:        map[[3]string]map[string]*privatev1.CatalogPricingInputCatalogItem{},
-		anyByDimension: map[[2]string]map[string]*privatev1.CatalogPricingInputCatalogItem{},
+		byService:        inventory.itemsByService,
+		byValue:          map[[3]string]map[string]*privatev1.CatalogPricingInputCatalogItem{},
+		anyByDimension:   map[[2]string]map[string]*privatev1.CatalogPricingInputCatalogItem{},
+		componentsByItem: inventory.componentsByItem,
 	}
-	for _, input := range inputs {
+	for _, input := range inventory.inputs {
 		dimKey := [2]string{input.GetService(), input.GetDimension()}
 		valKey := [3]string{input.GetService(), input.GetDimension(), input.GetValue()}
 		if idx.anyByDimension[dimKey] == nil {
@@ -108,31 +124,78 @@ func buildCatalogDimensionIndex(inputs []*privatev1.CatalogPricingInput,
 
 // matchCatalogItems evaluates every one of a rate-card row's conditions together against idx, returning the names
 // of the catalog items satisfying all of them. A row with no conditions matches every catalog item of its service.
-// An EQUALS condition matches catalog items locked or defaulted to that exact value; an ANY condition matches
-// catalog items that have any value for that dimension, open or fixed. A row matching no catalog item returns an
-// empty list, which is itself a valid "not in catalog" result, never a guessed one.
+// Scalar EQUALS conditions match locked/default values; scalar ANY matches any value, open or fixed. Conditions
+// of one component kind must all hold on one disk or node set, unless that item's policy for the kind is editable,
+// which accepts any requested combination. Scalar and component groups intersect. Production rows currently have
+// only EQUALS conditions (or none), but ANY remains supported for documented semantics and tests. A row matching
+// no catalog item returns an empty list, a valid "not in catalog" result, never a guessed one.
 func matchCatalogItems(item pricing.RateCardItem, idx catalogDimensionIndex) []string {
 	if len(item.Conditions) == 0 {
 		return catalogItemNames(idx.byService[item.Service])
 	}
-	var matches map[string]*privatev1.CatalogPricingInputCatalogItem
-	for i, condition := range item.Conditions {
+	matches := idx.byService[item.Service]
+	groups := map[catalogComponentKind][]pricing.RateCondition{}
+	for _, condition := range item.Conditions {
+		if kind := catalogDimensionComponentKind(condition.Dimension); kind != "" {
+			groups[kind] = append(groups[kind], condition)
+			continue
+		}
 		var candidates map[string]*privatev1.CatalogPricingInputCatalogItem
 		if condition.Operator == pricing.OperatorEquals {
 			candidates = idx.byValue[[3]string{item.Service, condition.Dimension, condition.Value}]
 		} else {
 			candidates = idx.anyByDimension[[2]string{item.Service, condition.Dimension}]
 		}
-		if i == 0 {
-			matches = candidates
-		} else {
-			matches = intersectCatalogItems(matches, candidates)
+		matches = intersectCatalogItems(matches, candidates)
+		if len(matches) == 0 {
+			return nil
 		}
+	}
+	for kind, conditions := range groups {
+		candidates := map[string]*privatev1.CatalogPricingInputCatalogItem{}
+		for id, info := range matches {
+			components := idx.componentsByItem[[2]string{item.Service, id}][kind]
+			if matchCatalogComponents(conditions, components) {
+				candidates[id] = info
+			}
+		}
+		matches = candidates
 		if len(matches) == 0 {
 			return nil
 		}
 	}
 	return catalogItemNames(matches)
+}
+
+func catalogDimensionComponentKind(dimension string) catalogComponentKind {
+	switch dimension {
+	case dimensionAdditionalDiskSize, dimensionAdditionalStorageTier:
+		return catalogComponentAdditionalDisk
+	case dimensionNodeCount, dimensionBaremetalInstanceType:
+		return catalogComponentNodeSet
+	default:
+		return ""
+	}
+}
+
+func matchCatalogComponents(conditions []pricing.RateCondition, components catalogComponents) bool {
+	if components.editable {
+		return true
+	}
+	for _, component := range components.values {
+		matches := true
+		for _, condition := range conditions {
+			value, present := component[condition.Dimension]
+			if !present || (condition.Operator == pricing.OperatorEquals && value != condition.Value) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
 }
 
 func catalogItemNames(items map[string]*privatev1.CatalogPricingInputCatalogItem) []string {

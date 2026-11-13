@@ -24,6 +24,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
@@ -78,11 +80,28 @@ func (m *blockingTxManager) releaseFill() {
 // beginParkedFillRequest starts a real request transaction with the suite manager — forced real with a
 // trivial statement, because the manager's transactions are lazy — and wraps it, together with the
 // blocking manager, in a cancelable request context carrying both.
+//
+// The transaction's lifetime belongs to the spec cleanup, not the spec body: a spec that fails before
+// ending it would leave it holding a pooled connection, and the suite's pool close would then block on it.
+// The returned poison ends the transaction once and reports the same error the explicit end did; the
+// cleanup shares that guard, so poisoning early is safe and the cleanup becomes a no-op.
 func beginParkedFillRequest(blocking *blockingTxManager) (requestCtx context.Context,
-	cancel context.CancelFunc, requestTx database.Tx) {
-	var err error
-	requestTx, err = tm.Begin(ctx)
+	cancel context.CancelFunc, poison func() error) {
+	requestTx, err := tm.Begin(ctx)
 	Expect(err).ToNot(HaveOccurred())
+	// The cleanup is registered before the next fallible step: the manager does not end a transaction by
+	// itself, so a failure in that step would otherwise leave this one holding a pooled connection.
+	poisoned := false
+	poison = func() error {
+		if poisoned {
+			return nil
+		}
+		poisoned = true
+		return requestTx.End(ctx)
+	}
+	DeferCleanup(func() {
+		Expect(poison()).To(Succeed())
+	})
 	_, err = requestTx.Exec(ctx, "SELECT 1")
 	Expect(err).ToNot(HaveOccurred())
 	requestCtx, cancel = context.WithCancel(database.TxIntoContext(
@@ -98,6 +117,12 @@ func waitFillStarted(blocking *blockingTxManager) {
 	case <-time.After(10 * time.Second):
 		Fail("the inventory fill never started its sweep transaction")
 	}
+}
+
+// canceledRequest reports whether a List call returned because its request context was canceled. Handlers
+// may surface the cancellation directly or, as gRPC handlers should, as the transport's Canceled status.
+func canceledRequest(err error) bool {
+	return errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled
 }
 
 var _ = Describe("Inventory cache transaction ownership", func() {
@@ -130,7 +155,7 @@ var _ = Describe("Inventory cache transaction ownership", func() {
 
 		blocking := newBlockingTxManager(tm)
 		defer blocking.releaseFill()
-		requestCtx, cancel, requestTx := beginParkedFillRequest(blocking)
+		requestCtx, cancel, poison := beginParkedFillRequest(blocking)
 		defer cancel()
 
 		type listResult struct {
@@ -148,12 +173,12 @@ var _ = Describe("Inventory cache transaction ownership", func() {
 		// Cancel the leading request and finish — poisoning — its transaction while the fill is parked
 		// inside its own Begin.
 		cancel()
-		Expect(requestTx.End(ctx)).To(Succeed())
+		Expect(poison()).To(Succeed())
 
 		select {
 		case first := <-results:
 			Expect(first.err).To(HaveOccurred())
-			Expect(errors.Is(first.err, context.Canceled)).To(BeTrue())
+			Expect(canceledRequest(first.err)).To(BeTrue())
 		case <-time.After(10 * time.Second):
 			Fail("the canceled leading List never returned")
 		}
@@ -226,7 +251,7 @@ var _ = Describe("Inventory cache transaction ownership", func() {
 
 		blocking := newBlockingTxManager(tm)
 		defer blocking.releaseFill()
-		requestCtx, cancel, requestTx := beginParkedFillRequest(blocking)
+		requestCtx, cancel, poison := beginParkedFillRequest(blocking)
 		defer cancel()
 
 		type listResult struct {
@@ -246,12 +271,12 @@ var _ = Describe("Inventory cache transaction ownership", func() {
 		// Cancel the leading request and finish — poisoning — its transaction while the fill is parked
 		// inside its own Begin.
 		cancel()
-		Expect(requestTx.End(ctx)).To(Succeed())
+		Expect(poison()).To(Succeed())
 
 		select {
 		case first := <-results:
 			Expect(first.err).To(HaveOccurred())
-			Expect(errors.Is(first.err, context.Canceled)).To(BeTrue())
+			Expect(canceledRequest(first.err)).To(BeTrue())
 		case <-time.After(10 * time.Second):
 			Fail("the canceled leading List never returned")
 		}

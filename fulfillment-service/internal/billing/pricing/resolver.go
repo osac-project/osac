@@ -97,9 +97,15 @@ func (r *Resolver) resolveComponent(ctx context.Context, req Request, c Componen
 		result.State, result.Reason = res.serviceOutcome.state, res.serviceOutcome.reason
 		return result
 	}
-	attrID, ok := attributeID(res.attrs, c.Dimension)
-	if !ok {
+	attrID, attrMatch := attributeID(res.attrs, c.Dimension)
+	switch attrMatch {
+	case attributeMissing:
 		result.State, result.Reason = StateGap, ReasonCoverageGap
+		return result
+	case attributeAmbiguous:
+		// The provider's own attribute data is ambiguous, the same state classifyServiceLookup reports for a
+		// duplicate provider service name: no attribute ID is guessed, so no rate row is priced.
+		result.State, result.Reason = StateAmbiguous, ReasonRateAmbiguous
 		return result
 	}
 
@@ -199,19 +205,46 @@ func (r *Resolver) resolveCard(ctx context.Context, req Request, res *resolution
 	return card, res.cardOutcome
 }
 
-func attributeID(attrs []billing.PriceableAttribute, name string) (string, bool) {
+// attributeMatch is how a dimension name resolved to a provider's priceable attributes. Only attributeUnique
+// identifies a single attribute ID, the only case a rate row can be priced from.
+type attributeMatch int
+
+const (
+	// attributeMissing means no priceable attribute carries the name.
+	attributeMissing attributeMatch = iota
+	// attributeUnique means exactly one distinct attribute ID carries the name.
+	attributeUnique
+	// attributeAmbiguous means two or more distinct attribute IDs carry the name.
+	attributeAmbiguous
+)
+
+// attributeID resolves a dimension name to the one provider attribute ID that prices it, matching by exact name as
+// service lookup does. A provider may list two attributes sharing one name; that is ambiguous provider data, so it
+// reports attributeAmbiguous and no ID rather than the first of the two: guessing would price the component against
+// rows keyed to one ID and report a false coverage gap when the rate rows are keyed to the other. A repeated name on
+// the same attribute ID is not a duplicate, since it still identifies one attribute.
+func attributeID(attrs []billing.PriceableAttribute, name string) (string, attributeMatch) {
+	id := ""
+	match := attributeMissing
 	for _, a := range attrs {
-		if a.Name == name {
-			return a.ID, true
+		if a.Name != name {
+			continue
+		}
+		if match == attributeMissing {
+			id, match = a.ID, attributeUnique
+			continue
+		}
+		if a.ID != id {
+			return "", attributeAmbiguous
 		}
 	}
-	return "", false
+	return id, match
 }
 
 // matchRow finds the rate row that prices attrID under the ANY/EQUALS predicate: a row with no AttributeValues
 // entry for a name is unconstrained on it (ANY), while a present entry must equal the configured value (EQUALS).
-// A more-specific matching row wins over less-specific rows; two or more matching rows tied at the highest
-// specificity are AMBIGUOUS.
+// A row constraining more distinct attribute names is more specific and wins over less specific rows; two or more
+// matching rows tied at the highest specificity are AMBIGUOUS.
 func matchRow(rows []billing.RateRow, attrID string, values map[string]string) (billing.RateRow, State, string) {
 	var best []billing.RateRow
 	bestSpecificity := -1
@@ -219,7 +252,7 @@ func matchRow(rows []billing.RateRow, attrID string, values map[string]string) (
 		if row.DimensionID != attrID || !rowMatches(row, values) {
 			continue
 		}
-		specificity := len(row.AttributeValues)
+		specificity := distinctConditionNames(row)
 		switch {
 		case specificity > bestSpecificity:
 			best = []billing.RateRow{row}
@@ -236,6 +269,17 @@ func matchRow(rows []billing.RateRow, attrID string, values map[string]string) (
 	default:
 		return billing.RateRow{}, StateAmbiguous, ReasonRateAmbiguous
 	}
+}
+
+// distinctConditionNames counts the distinct attribute names a row constrains: its specificity. Counting entries
+// instead would let a row that repeats one name, with the same or a different value, outscore a row constraining a
+// genuinely different name and so win the match on data that is not more specific.
+func distinctConditionNames(row billing.RateRow) int {
+	names := make(map[string]struct{}, len(row.AttributeValues))
+	for _, av := range row.AttributeValues {
+		names[av.Name] = struct{}{}
+	}
+	return len(names)
 }
 
 func rowMatches(row billing.RateRow, values map[string]string) bool {

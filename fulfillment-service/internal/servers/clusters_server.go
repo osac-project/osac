@@ -381,12 +381,25 @@ func (s *ClustersServer) Delete(ctx context.Context,
 	privateRequest.SetId(request.GetId())
 
 	// Delegate to private server:
-	_, err = s.private.Delete(ctx, privateRequest)
+	privateResponse, err := s.private.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateCluster := privateResponse.GetObject()
+	publicCluster := &publicv1.Cluster{}
+	err = s.outMapper.Copy(ctx, privateCluster, publicCluster)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private cluster to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process cluster")
+	}
+
 	// Create the public response:
 	response = &publicv1.ClustersDeleteResponse{}
+	response.SetObject(publicCluster)
 	return
 }

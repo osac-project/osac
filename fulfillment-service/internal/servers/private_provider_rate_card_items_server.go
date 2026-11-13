@@ -317,6 +317,7 @@ func toProtoRateCardItem(item pricing.RateCardItem, catalogMatches []string) *pr
 	return privatev1.ProviderRateCardItem_builder{
 		Service:            item.Service,
 		CurrencyCode:       item.Currency,
+		Dimension:          item.Dimension,
 		ResourceConditions: conditions,
 		Rate:               privatev1.ProviderRateCardItemRate_builder{Amount: item.Amount.String(), Unit: item.Unit}.Build(),
 		CatalogItemMatches: catalogMatches,

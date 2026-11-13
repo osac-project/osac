@@ -70,6 +70,7 @@ func rateCardItems(count int) []*publicv1.ProviderRateCardItem {
 		items = append(items, publicv1.ProviderRateCardItem_builder{
 			Service:      "compute_instance",
 			CurrencyCode: "USD",
+			Dimension:    "compute_rate",
 			ResourceConditions: []*publicv1.ProviderRateCardItemResourceCondition{
 				publicv1.ProviderRateCardItemResourceCondition_builder{
 					Dimension: "instance_type",

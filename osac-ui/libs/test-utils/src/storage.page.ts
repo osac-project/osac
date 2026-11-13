@@ -50,6 +50,16 @@ const waitForStorageTierList = async (page: Page): Promise<void> => {
     .toBe(true);
 };
 
+/** Select the table view so backend rows are available to the Ready check. */
+const selectStorageBackendListView = async (page: Page): Promise<void> => {
+  const listView = page.locator(...StorageBackendsPage.listView);
+  await expect(listView).toBeVisible();
+  if ((await listView.getAttribute('aria-pressed')) !== 'true') {
+    await listView.click();
+  }
+  await expect(listView).toHaveAttribute('aria-pressed', 'true');
+};
+
 /** Verify the configured backend is Ready and uses the expected provider. */
 export const expectStorageBackendReady = async (
   page: Page,
@@ -58,6 +68,7 @@ export const expectStorageBackendReady = async (
 ): Promise<void> => {
   await openStorageBackendsPage(page);
   try {
+    await selectStorageBackendListView(page);
     const row = storageBackendRow(page, backendName);
     await expect(row.getByText('Ready', { exact: true })).toBeVisible();
     await expect(row.getByText(provider, { exact: true })).toBeVisible();

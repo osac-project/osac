@@ -613,10 +613,10 @@ func buildExternalIPAttribution(attachment *privatev1.ExternalIPAttachment) (*pr
 	}
 }
 
-func (l *externalIPLifecycle) deleteAttachment(ctx context.Context, id string) error {
+func (l *externalIPLifecycle) deleteAttachment(ctx context.Context, id string) (*privatev1.ExternalIPAttachment, error) {
 	parent, attachment, _, err := l.lockAttachment(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if attachment.GetStatus().GetState() != privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_DELETING {
 		before := proto.Clone(attachment).(*privatev1.ExternalIPAttachment)
@@ -627,14 +627,17 @@ func (l *externalIPLifecycle) deleteAttachment(ctx context.Context, id string) e
 		after.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_DELETING)
 		after.GetStatus().SetStateTransitionTime(timestamppb.Now())
 		if _, err = l.externalIPAttachmentDao.Update().SetObject(after).Do(ctx); err != nil {
-			return err
+			return nil, err
 		}
 		if err = l.settleAttachmentParent(ctx, parent, before, after); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	_, err = l.externalIPAttachmentDao.Delete().SetId(id).Do(ctx)
-	return err
+	deleteResponse, err := l.externalIPAttachmentDao.Delete().SetId(id).Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return deleteResponse.GetObject(), nil
 }
 
 func (l *externalIPLifecycle) deleteAttachmentAndExternalIP(ctx context.Context, attachmentID, externalIPID string) error {
@@ -681,7 +684,8 @@ func (l *externalIPLifecycle) deleteAttachmentAndExternalIP(ctx context.Context,
 	); err != nil {
 		return err
 	}
-	return l.deleteLockedExternalIP(ctx, parent)
+	_, err = l.deleteLockedExternalIP(ctx, parent)
+	return err
 }
 
 func (l *externalIPLifecycle) deleteAutoCreatedExternalIPs(ctx context.Context, ownerID string) error {
@@ -721,7 +725,7 @@ func (l *externalIPLifecycle) deleteAutoCreatedExternalIPs(ctx context.Context, 
 				continue
 			}
 		}
-		if err := l.deleteExternalIP(ctx, externalIP.GetId()); err != nil {
+		if _, err := l.deleteExternalIP(ctx, externalIP.GetId()); err != nil {
 			return err
 		}
 	}
@@ -773,17 +777,17 @@ func (l *externalIPLifecycle) rejectManualAttachmentDelete(
 		})
 }
 
-func (l *externalIPLifecycle) deleteExternalIP(ctx context.Context, id string) error {
+func (l *externalIPLifecycle) deleteExternalIP(ctx context.Context, id string) (*privatev1.ExternalIP, error) {
 	parentResponse, err := l.externalIPDao.Get().SetId(id).SetLock(true).Do(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err = l.lockExternalIPConsumers(ctx, parentResponse.GetObject()); err != nil {
-		return err
+		return nil, err
 	}
 	externalIP := parentResponse.GetObject()
 	if err = l.ensureExternalIPAvailable(ctx, id, externalIP.GetMetadata().GetName()); err != nil {
-		return err
+		return nil, err
 	}
 	return l.deleteLockedExternalIP(ctx, externalIP)
 }
@@ -792,15 +796,21 @@ func (l *externalIPLifecycle) deleteExternalIP(ctx context.Context, id string) e
 // time the delete is accepted, as the design requires, and later feedback does not move that time. The allocation
 // meter bills through DELETING until the physical deletion. Every delete path (the API, the workload cascades and the
 // attachment cascades) ends here, after its guards passed.
-func (l *externalIPLifecycle) deleteLockedExternalIP(ctx context.Context, externalIP *privatev1.ExternalIP) error {
+func (l *externalIPLifecycle) deleteLockedExternalIP(ctx context.Context, externalIP *privatev1.ExternalIP) (*privatev1.ExternalIP, error) {
 	if err := markDeleting(ctx, l.externalIPDao, externalIP); err != nil {
-		return err
+		return nil, err
 	}
-	_, err := l.externalIPDao.Delete().SetId(externalIP.GetId()).Do(ctx)
-	return err
+	deleteResponse, err := l.externalIPDao.Delete().SetId(externalIP.GetId()).Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return deleteResponse.GetObject(), nil
 }
 
-func (l *externalIPLifecycle) deleteLockedNATGateway(ctx context.Context, natGateway *privatev1.NATGateway) error {
-	_, err := l.natGatewayDao.Delete().SetId(natGateway.GetId()).Do(ctx)
-	return err
+func (l *externalIPLifecycle) deleteLockedNATGateway(ctx context.Context, natGateway *privatev1.NATGateway) (*privatev1.NATGateway, error) {
+	deleteResponse, err := l.natGatewayDao.Delete().SetId(natGateway.GetId()).Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return deleteResponse.GetObject(), nil
 }

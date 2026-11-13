@@ -296,12 +296,15 @@ A release that bumps no component creates no image Snapshot; the Slack
 message then gives `none` as the image Snapshot, which is what
 `osac-promote-to-prod.yaml`'s `image_snapshot` input expects in that case.
 
-One exception keeps this safe: chart staging can fail without the release
-being rolled back, so a version tag alone does not prove a chart reached
-staging. When a chart staging release succeeds, the run records it with a
-`konflux-staged/<chart>-v<version>` tag. A pinned chart with no such record
-is published again with the next release, which is also how a failed chart
-staging is recovered: dispatch the next release, no extra bump needed.
+A version is never built twice, so a pinned version must already be on the
+registry, and its tag alone does not prove that: a Konflux build or a
+staging release can fail and leave the version tags behind. Each staging job
+therefore records what it released with a `konflux-staged/<name>-v<version>`
+tag (image and chart component names). A release that pins a version with no
+such record stops in `prepare` and lists it. Either release a new version of
+that component, or, if the version is confirmed on the staging registry,
+push the missing `konflux-staged/` tag by hand. Versions released before
+this record existed need that tag pushed once.
 
 A pinned component is not released again: its version is already on the
 registry from the release that built it. Konflux still starts a build for

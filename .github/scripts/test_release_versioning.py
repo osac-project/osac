@@ -24,6 +24,17 @@ COMPONENTS = (
 )
 CHART_PIPELINES = sorted((ROOT / ".tekton").glob("*-chart/release.yaml"))
 CHARTS = [path.parent.name for path in CHART_PIPELINES]
+IMAGES = WORKFLOW["jobs"]["wait-for-konflux-build"]["strategy"]["matrix"]["component"]
+METERING = ("metering-service", "metering-m360-adapter", "metering-echo-adapter", "osac-metering-chart")
+CSI = ("osac-csi-driver", "osac-csi-driver-chart", "osac-csi-backends-chart")
+
+
+def konflux_names(component: str) -> tuple[str, ...]:
+    if component == "osac-metering":
+        return METERING
+    if component == "osac-csi-driver":
+        return CSI
+    return (component, *(chart for chart in CHARTS if chart in (f"{component}-chart", f"{component}-crds-chart")))
 # Git honors GIT_DIR and friends over -C and the working directory; inherited
 # from a hook, they would point these commands at the real repository.
 ENV = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
@@ -42,17 +53,17 @@ class Repo:
     def git(self, *arguments: str) -> None:
         subprocess.run(["git", "-C", str(self.path), *arguments], check=True, capture_output=True, env=ENV)
 
-    def tag(self, *tags: str) -> None:
+    def tag(self, *tags: str, staged: bool = True) -> None:
+        """Create tags; a component version also gets its staging records unless staged is False."""
         for tag in tags:
             self.git("tag", tag)
+            component, _, version = tag.partition("/v")
+            if staged and component in COMPONENTS:
+                for name in konflux_names(component):
+                    self.git("tag", f"konflux-staged/{name}-v{version}")
 
     def tag_all(self, version: str, staged: bool = True) -> None:
-        """Tag a full release as the pipeline does: versions, chart tags and, once staged, the staging record."""
-        self.tag(f"osac/v{version}", *(f"{component}/v{version}" for component in COMPONENTS))
-        charts = [f"{chart}-v{version}" for chart in CHARTS]
-        self.tag(*charts)
-        if staged:
-            self.tag(*(f"konflux-staged/{chart}" for chart in charts))
+        self.tag(f"osac/v{version}", *(f"{component}/v{version}" for component in COMPONENTS), staged=staged)
 
     def run_step(self, step_id: str, cwd: str = ".", **env: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
         output = self.path / f"{step_id}.out"
@@ -163,31 +174,40 @@ class ReleaseVersionResolution(TemporaryRepos):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(json.loads(outputs["konflux-images"]), images)
                 self.assertEqual(json.loads(outputs["konflux-charts"]), charts)
-                versions = json.loads(outputs["konflux-chart-versions"])
-                self.assertEqual(versions, {chart: "0.5.1" for chart in charts})
+                self.assertEqual(json.loads(outputs["konflux-chart-versions"]), {chart: "0.5.1" for chart in charts})
+                self.assertEqual(json.loads(outputs["konflux-image-versions"]), {image: "0.5.1" for image in images})
 
-    def test_pinned_chart_without_a_staging_record_is_published_again(self) -> None:
-        # Chart staging can fail without rolling the release back.
+    def test_pinned_version_needs_a_staging_record(self) -> None:
+        # A failed Konflux build or staging release leaves the version tags
+        # behind; nothing is rebuilt under an existing version to make up for it.
         repo = self.repo()
         repo.tag_all("0.5.0")
-        repo.tag("osac-operator/v0.5.1", "osac-operator-chart-v0.5.1", "osac-operator-crds-chart-v0.5.1")
-        repo.tag("konflux-staged/osac-operator-crds-chart-v0.5.1")
+        repo.tag("osac-operator/v0.5.1", staged=False)
+        repo.tag("konflux-staged/osac-operator-v0.5.1", "konflux-staged/osac-operator-crds-chart-v0.5.1")
+        result, _ = repo.release("0.5.2", "osac-ui=0.5.1")
+        self.assert_rejected(result, "have no konflux-staged/ record")
+        self.assertIn("  osac-operator-chart 0.5.1 (osac-operator)\n", result.stderr)
+        self.assertNotIn("  osac-operator 0.5.1", result.stderr)
+        self.assertNotIn("osac-operator-crds-chart", result.stderr)
+        self.assertIn("push the tag konflux-staged/<name>-v<version>", result.stderr)
+
+        repo.tag("konflux-staged/osac-operator-chart-v0.5.1")
         result, outputs = repo.release("0.5.2", "osac-ui=0.5.1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(outputs["konflux-images"]), ["osac-ui"])
-        self.assertEqual(
-            json.loads(outputs["konflux-chart-versions"]),
-            {"osac-chart": "0.5.2", "osac-operator-chart": "0.5.1", "osac-ui-chart": "0.5.1"},
-        )
-        self.assertCountEqual(
-            json.loads(outputs["konflux-charts"]), ["osac-chart", "osac-operator-chart", "osac-ui-chart"]
-        )
-        self.assertIn("osac-operator-chart 0.5.1 is pinned but has no confirmed staging release", result.stdout)
+        self.assertEqual(json.loads(outputs["konflux-charts"]), ["osac-chart", "osac-ui-chart"])
+
+        # Releasing a new version of the component is the other way out.
+        unstaged = self.repo()
+        unstaged.tag_all("0.5.0", staged=False)
+        self.assert_rejected(unstaged.release("0.5.1", "osac-ui=0.5.1")[0], "osac-operator 0.5.0 (osac-operator)")
+        self.assertEqual(unstaged.release("0.5.1", all_at("0.5.1"))[0].returncode, 0)
 
     def test_nightly_has_no_konflux_release_set(self) -> None:
         outputs = self.repo().nightly()[1]
         self.assertEqual(json.loads(outputs["konflux-images"]), [])
         self.assertEqual(json.loads(outputs["konflux-chart-versions"]), {})
+        self.assertEqual(json.loads(outputs["konflux-image-versions"]), {})
 
     def test_full_release_covers_every_konflux_wait_row(self) -> None:
         # A name prepare emits with no matrix row would never be waited for.
@@ -219,7 +239,8 @@ class ReleaseVersionResolution(TemporaryRepos):
                 self.assertEqual(len(acting), 3)
                 for step in acting:
                     self.assertEqual(step["if"], gate)
-        for step in jobs["trigger-konflux-staging-release"]["steps"][1:]:
+        acting = [step for step in jobs["trigger-konflux-staging-release"]["steps"] if step.get("id") != "staged-token" and "staged" not in step["name"]]
+        for step in acting[1:]:
             self.assertEqual(step["if"], "needs.prepare.outputs.konflux-images != '[]'")
         for job, source, variable in (
             ("trigger-konflux-staging-release", jobs, "KONFLUX_IMAGES"),
@@ -354,13 +375,23 @@ print(code, end="")
 """
 
 
-class StagedChartRecord(TemporaryRepos):
-    """The step that records which chart versions reached staging, against a fake GitHub API."""
+class StagedVersionRecord(TemporaryRepos):
+    """The steps that record which versions reached staging, against a fake GitHub API."""
 
-    def record(self, versions: dict[str, str], refs: dict[str, str]) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
-        steps = WORKFLOW["jobs"]["trigger-konflux-chart-staging-release"]["steps"]
-        step = next(step for step in steps if step["name"] == "Record staged chart versions")
+    JOBS = {
+        "trigger-konflux-staging-release": ("Record staged image versions", "konflux-image-versions"),
+        "trigger-konflux-chart-staging-release": ("Record staged chart versions", "konflux-chart-versions"),
+    }
+
+    def record(self, job: str, versions: dict[str, str], refs: dict[str, str]) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+        name, output = self.JOBS[job]
+        steps = WORKFLOW["jobs"][job]["steps"]
+        step = next(step for step in steps if step["name"] == name)
+        token = steps[steps.index(step) - 1]
+        self.assertEqual(token["if"], "steps.release.outcome == 'success'")
         self.assertEqual(step["if"], "steps.release.outcome == 'success' && steps.staged-token.outcome == 'success'")
+        self.assertEqual(step["env"]["STAGED_VERSIONS"], f"${{{{ needs.prepare.outputs.{output} }}}}")
+        self.assertTrue(token["continue-on-error"] and step["continue-on-error"])
         work = self.directory()
         (work / "curl").write_text(FAKE_CURL)
         (work / "curl").chmod(0o755)
@@ -374,7 +405,8 @@ class StagedChartRecord(TemporaryRepos):
                 "GITHUB_API_URL": "https://api.example",
                 "GITHUB_REPOSITORY": "osac-project/osac",
                 "GH_APP_TOKEN": "app-token",
-                "KONFLUX_CHART_VERSIONS": json.dumps(versions),
+                "VERSION": "0.5.2",
+                "STAGED_VERSIONS": json.dumps(versions),
             },
             capture_output=True,
             text=True,
@@ -382,20 +414,41 @@ class StagedChartRecord(TemporaryRepos):
         )
         return result, json.loads((work / "refs.json").read_text())
 
-    def test_records_each_released_chart_at_its_version_tag(self) -> None:
-        refs = {"refs/tags/osac-chart-v0.5.2": "aaa", "refs/tags/osac-ui-chart-v0.5.1": "bbb"}
-        result, state = self.record({"osac-chart": "0.5.2", "osac-ui-chart": "0.5.1"}, refs)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(state["refs/tags/konflux-staged/osac-chart-v0.5.2"], "aaa")
-        self.assertEqual(state["refs/tags/konflux-staged/osac-ui-chart-v0.5.1"], "bbb")
+    def test_records_each_released_version_at_the_release_commit(self) -> None:
+        for job in self.JOBS:
+            with self.subTest(job=job):
+                versions = {"osac-chart": "0.5.2", "osac-ui": "0.5.1"}
+                result, state = self.record(job, versions, {"refs/tags/osac/v0.5.2": "aaa"})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(state["refs/tags/konflux-staged/osac-chart-v0.5.2"], "aaa")
+                self.assertEqual(state["refs/tags/konflux-staged/osac-ui-v0.5.1"], "aaa")
 
-    def test_existing_record_and_missing_tag_do_not_fail_the_step(self) -> None:
-        refs = {"refs/tags/osac-chart-v0.5.2": "aaa", "refs/tags/konflux-staged/osac-chart-v0.5.2": "aaa"}
-        result, state = self.record({"osac-chart": "0.5.2", "osac-ui-chart": "0.5.1"}, refs)
+    def test_existing_record_or_missing_release_tag_does_not_fail_the_step(self) -> None:
+        for job in self.JOBS:
+            with self.subTest(job=job):
+                refs = {"refs/tags/osac/v0.5.2": "aaa", "refs/tags/konflux-staged/osac-chart-v0.5.2": "old"}
+                result, state = self.record(job, {"osac-chart": "0.5.2"}, refs)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("already recorded", result.stdout)
+                self.assertEqual(state["refs/tags/konflux-staged/osac-chart-v0.5.2"], "old")
+                result, state = self.record(job, {"osac-chart": "0.5.2"}, {})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("::warning::Cannot read tag osac/v0.5.2", result.stdout)
+                self.assertEqual(state, {})
+
+    def test_recorded_names_are_what_prepare_requires_for_a_pin(self) -> None:
+        # End to end: what one release records is exactly what lets the next one pin it.
+        repo = self.repo()
+        first, outputs = repo.release("0.5.0-rc.1", all_at("0.5.0-rc.1"))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        repo.tag_all("0.5.0-rc.1", staged=False)
+        recorded: dict[str, str] = {}
+        for job, (_, output) in self.JOBS.items():
+            _, state = self.record(job, json.loads(outputs[output]), {"refs/tags/osac/v0.5.2": "aaa"})
+            recorded |= state
+        repo.tag(*(ref.removeprefix("refs/tags/") for ref in recorded if "konflux-staged/" in ref))
+        result, _ = repo.release("0.5.0-rc.2", "osac-ui=0.5.0-rc.2")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("already recorded", result.stdout)
-        self.assertIn("::warning::Cannot read tag osac-ui-chart-v0.5.1", result.stdout)
-        self.assertNotIn("refs/tags/konflux-staged/osac-ui-chart-v0.5.1", state)
 
 
 class ProdPromotionInputs(unittest.TestCase):

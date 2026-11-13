@@ -177,6 +177,7 @@ jobs:
       id: verify
       env:
         IMAGE_SNAPSHOT: ${{ steps.validate.outputs.image-snapshot }}
+        IMAGE_OMITTED: ${{ steps.validate.outputs.image-omitted }}
         CHART_SNAPSHOT: ${{ steps.validate.outputs.chart-snapshot }}
       run: |
         set -euo pipefail
@@ -319,6 +320,13 @@ jobs:
             echo "::error::chart Snapshot '${CHART_SNAPSHOT}' does not contain the umbrella chart (osac-chart)" >&2
             exit 1
           fi
+        fi
+        # Every component has an image, so a staged chart set with more
+        # than the umbrella means that release built images too.
+        if [[ "${IMAGE_OMITTED}" == "true" && "${chart_ready}" == "true" \
+          && "${chart_components}" != '["osac-chart"]' ]]; then
+          echo "::error::image_snapshot is \"none\", but chart Snapshot '${CHART_SNAPSHOT}' holds component charts (${chart_components}) -- that release built images. Enter its image Snapshot name." >&2
+          exit 1
         fi
         echo "chart-components=${chart_components}" >> "$GITHUB_OUTPUT"
         echo "Charts to promote: ${chart_components}"

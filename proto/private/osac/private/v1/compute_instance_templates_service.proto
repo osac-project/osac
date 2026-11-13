@@ -112,7 +112,7 @@ message ComputeInstanceTemplatesDeleteRequest {
   string id = 1;
 }
 
-message ComputeInstanceTemplatesDeleteResponse {}
+message ComputeInstanceTemplatesDeleteResponse { ComputeInstanceTemplate object = 1; }
 
 message ComputeInstanceTemplatesSignalRequest {
   option (cleanapi.message).private = true;
@@ -157,7 +157,7 @@ service ComputeInstanceTemplates {
 
   // Deletes a compute instance template.
   rpc Delete(ComputeInstanceTemplatesDeleteRequest) returns (ComputeInstanceTemplatesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/compute_instance_templates/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/compute_instance_templates/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

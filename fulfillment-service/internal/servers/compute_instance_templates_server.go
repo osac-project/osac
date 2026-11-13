@@ -321,12 +321,25 @@ func (s *ComputeInstanceTemplatesServer) Delete(ctx context.Context,
 	privateRequest.SetId(request.GetId())
 
 	// Delegate to private server:
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateComputeInstanceTemplate := privateResponse.GetObject()
+	publicComputeInstanceTemplate := &publicv1.ComputeInstanceTemplate{}
+	err = s.outMapper.Copy(ctx, privateComputeInstanceTemplate, publicComputeInstanceTemplate)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private compute instance template to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance template")
+	}
+
 	// Create the public response:
 	response = &publicv1.ComputeInstanceTemplatesDeleteResponse{}
+	response.SetObject(publicComputeInstanceTemplate)
 	return
 }

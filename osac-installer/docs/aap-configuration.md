@@ -25,6 +25,9 @@ environment variable or Ansible override is rejected when a block class needs
 to be created.
 
 The setting applies to newly created classes, not existing classes or volumes.
+VAST creates only missing block classes, including on partial requests; an
+existing block class does not require a filesystem setting to create a missing
+NFS class. No existing classes or volumes are migrated.
 See the [AAP storage configuration](../../osac-aap/docs/aap-configuration.md#block-storageclass-filesystem-type)
 for existing-class selection and immutable-parameter limitations.
 

@@ -207,7 +207,17 @@ func (s *PrivateProjectsServer) Delete(ctx context.Context,
 	if err = s.deleteQuotaOutbox(ctx, request.GetId()); err != nil {
 		return
 	}
-	err = s.generic.Delete(ctx, request, &response)
+
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.ProjectsDeleteResponse{Object: object}
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.ProjectsDeleteResponse{Object: object}
 	return
 }
 

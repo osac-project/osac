@@ -21,12 +21,15 @@ import (
 	"log/slog"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -88,12 +91,14 @@ var _ = Describe("list", func() {
 	// runCommand starts a fake server holding the given items, runs the command with the given arguments and
 	// returns the fake server, the rendered output and the command error.
 	runCommand := func(items []*publicv1.ProviderRateCardItem, args ...string) (*providerRateCardItemsListServer, string, error) {
-		server := testing.NewServer()
+		commandLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		interceptor, err := validation.NewProtovalidateInterceptor().SetLogger(commandLogger).Build()
+		Expect(err).NotTo(HaveOccurred())
+		server := testing.NewServer(grpc.UnaryInterceptor(interceptor.UnaryServer))
 		DeferCleanup(server.Stop)
 		listServer := &providerRateCardItemsListServer{items: items}
 		publicv1.RegisterProviderRateCardItemsServer(server.Registrar(), listServer)
 		server.Start()
-		commandLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 		settings, err := config.NewSettings().SetLogger(commandLogger).SetDir(GinkgoT().TempDir()).Build()
 		Expect(err).NotTo(HaveOccurred())
 		settings.SetAddress(server.Address())
@@ -185,13 +190,51 @@ var _ = Describe("list", func() {
 		Expect(output).ToNot(ContainSubstring("type-015"))
 	})
 
-	It("preserves the count-only response of an explicit zero limit", func() {
-		listServer, output, err := runCommand(rateCardItems(3), "--currency-code", "USD", "--limit", "0")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(listServer.requests).To(HaveLen(1))
-		Expect(listServer.requests[0].GetLimit()).To(Equal(int32(0)))
-		Expect(output).ToNot(ContainSubstring("type-"))
-	})
+	DescribeTable("prints only the API total for an explicit zero limit",
+		func(format string, total int, expected string) {
+			listServer, output, err := runCommand(rateCardItems(total),
+				"--currency-code", "USD", "--limit", "0", "--output", format)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(listServer.requests).To(HaveLen(1))
+			Expect(listServer.requests[0].HasLimit()).To(BeTrue())
+			Expect(listServer.requests[0].GetLimit()).To(Equal(int32(0)))
+			// Exact output also rules out item rows, item arrays and ordinary list headers.
+			Expect(output).To(Equal(expected))
+		},
+		Entry("table", "table", 42, "TOTAL\n42\n"),
+		Entry("JSON", "json", 42, "{\n  \"total\": 42\n}\n"),
+		Entry("YAML", "yaml", 42, "total: 42\n"),
+		Entry("table, zero total", "table", 0, "TOTAL\n0\n"),
+		Entry("JSON, zero total", "json", 0, "{\n  \"total\": 0\n}\n"),
+		Entry("YAML, zero total", "yaml", 0, "total: 0\n"),
+	)
+
+	DescribeTable("keeps ordinary list output byte-compatible with the item renderer",
+		func(format string) {
+			for _, count := range []int{0, 3} {
+				for _, explicitLimit := range []bool{false, true} {
+					items := rateCardItems(count)
+					args := []string{"--currency-code", "USD", "--output", format}
+					if explicitLimit {
+						args = append(args, "--limit", "1")
+					}
+					_, output, err := runCommand(items, args...)
+					Expect(err).NotTo(HaveOccurred())
+					if explicitLimit && count > 0 {
+						items = items[:1]
+					}
+					expected := &bytes.Buffer{}
+					console, err := terminal.NewConsole().SetLogger(logger).SetStdout(expected).Build()
+					Expect(err).NotTo(HaveOccurred())
+					Expect(render(ctx, console, format, items)).To(Succeed())
+					Expect(output).To(Equal(expected.String()))
+				}
+			}
+		},
+		Entry("table", "table"),
+		Entry("JSON", "json"),
+		Entry("YAML", "yaml"),
+	)
 
 	It("keeps the service, currency and tenant filters on every page when paging", func() {
 		listServer, _, err := runCommand(rateCardItems(150),

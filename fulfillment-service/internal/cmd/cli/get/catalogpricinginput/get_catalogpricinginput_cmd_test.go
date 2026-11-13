@@ -27,6 +27,20 @@ import (
 )
 
 var _ = Describe("render", func() {
+	It("documents the count-only output in limit flag help", func() {
+		usage := Cmd().Flags().Lookup("limit").Usage
+		Expect(usage).To(ContainSubstring("TOTAL"))
+		Expect(usage).To(ContainSubstring("total"))
+		Expect(usage).To(ContainSubstring("JSON/YAML (no items)"))
+	})
+
+	It("returns an error when writing the count-only table fails", func() {
+		err := errors.New("write failed")
+		console, buildErr := terminal.NewConsole().SetLogger(logger).SetStdout(failingWriter{err: err}).Build()
+		Expect(buildErr).NotTo(HaveOccurred())
+		Expect(renderTotal(ctx, console, "table", 42)).To(MatchError(err))
+	})
+
 	items := func() []*publicv1.CatalogPricingInput {
 		return []*publicv1.CatalogPricingInput{
 			publicv1.CatalogPricingInput_builder{

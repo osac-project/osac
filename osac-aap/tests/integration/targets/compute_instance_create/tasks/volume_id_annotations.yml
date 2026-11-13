@@ -82,6 +82,21 @@
             namespace: test-subnet
           register: disk_2_data_volume
 
+        - name: Read VirtualMachine
+          kubernetes.core.k8s_info:
+            api_version: kubevirt.io/v1
+            kind: VirtualMachine
+            name: test-vm
+            namespace: test-subnet
+          register: virtual_machine
+
+        - name: Verify VM and VMI template tenant annotations
+          ansible.builtin.assert:
+            that:
+              - virtual_machine.resources | length == 1
+              - virtual_machine.resources[0].metadata.annotations['osac.openshift.io/tenant'] == 'test-tenant'
+              - virtual_machine.resources[0].spec.template.metadata.annotations['osac.openshift.io/tenant'] == 'test-tenant'
+
         - name: Verify the root DataVolume fields
           ansible.builtin.assert:
             that:
@@ -89,8 +104,9 @@
               - root_data_volume.resources[0].metadata.namespace == 'test-subnet'
               - root_data_volume.resources[0].metadata.labels[compute_instance_label] == 'test-vm'
               - root_data_volume.resources[0].metadata.labels['osac.openshift.io/compute-instance-id'] == '3c0b9d2e-1111-4a5b-9c7d-2e4f6a8b0c12'
-              - root_data_volume.resources[0].metadata.annotations | length == 1
+              - root_data_volume.resources[0].metadata.annotations | length == 2
               - root_data_volume.resources[0].metadata.annotations['osac.openshift.io/storage-volume-id'] == 'volume-boot'
+              - root_data_volume.resources[0].metadata.annotations['osac.openshift.io/tenant'] == 'test-tenant'
               - root_data_volume.resources[0].spec.source.registry.url == 'docker://quay.io/containerdisks/fedora:latest'
               - root_data_volume.resources[0].spec.pvc.storageClassName == 'test-storage-class'
               - root_data_volume.resources[0].spec.pvc.resources.requests.storage == '20Gi'
@@ -104,7 +120,7 @@
               - disk_1_data_volume.resources[0].metadata.labels[compute_instance_label] == 'test-vm'
               - disk_1_data_volume.resources[0].metadata.labels['osac.openshift.io/compute-instance-id'] == '3c0b9d2e-1111-4a5b-9c7d-2e4f6a8b0c12'
               - disk_1_data_volume.resources[0].metadata.annotations['osac.openshift.io/storage-volume-id'] == 'volume-data-1'
-              - "'osac.openshift.io/tenant' not in disk_1_data_volume.resources[0].metadata.annotations"
+              - disk_1_data_volume.resources[0].metadata.annotations['osac.openshift.io/tenant'] == 'test-tenant'
               - "'osac.openshift.io/owner-reference' not in disk_1_data_volume.resources[0].metadata.annotations"
               - disk_1_data_volume.resources[0].spec.source.blank == {}
               - disk_1_data_volume.resources[0].spec.pvc.storageClassName == 'test-storage-class'
@@ -119,7 +135,7 @@
               - disk_2_data_volume.resources[0].metadata.labels[compute_instance_label] == 'test-vm'
               - disk_2_data_volume.resources[0].metadata.labels['osac.openshift.io/compute-instance-id'] == '3c0b9d2e-1111-4a5b-9c7d-2e4f6a8b0c12'
               - disk_2_data_volume.resources[0].metadata.annotations['osac.openshift.io/storage-volume-id'] == 'volume-data-2'
-              - "'osac.openshift.io/tenant' not in disk_2_data_volume.resources[0].metadata.annotations"
+              - disk_2_data_volume.resources[0].metadata.annotations['osac.openshift.io/tenant'] == 'test-tenant'
               - "'osac.openshift.io/owner-reference' not in disk_2_data_volume.resources[0].metadata.annotations"
               - disk_2_data_volume.resources[0].spec.source.blank == {}
               - disk_2_data_volume.resources[0].spec.pvc.storageClassName == 'test-storage-class'

@@ -247,7 +247,7 @@ func RegisterExternalIPAttachmentsHandlerServer(ctx context.Context, mux *runtim
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ExternalIPAttachments_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ExternalIPAttachments_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ExternalIPAttachments_Delete_0{resp.(*ExternalIPAttachmentsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -355,7 +355,7 @@ func RegisterExternalIPAttachmentsHandlerClient(ctx context.Context, mux *runtim
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ExternalIPAttachments_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ExternalIPAttachments_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ExternalIPAttachments_Delete_0{resp.(*ExternalIPAttachmentsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -373,6 +373,14 @@ type response_ExternalIPAttachments_Create_0 struct {
 }
 
 func (m response_ExternalIPAttachments_Create_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_ExternalIPAttachments_Delete_0 struct {
+	*ExternalIPAttachmentsDeleteResponse
+}
+
+func (m response_ExternalIPAttachments_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

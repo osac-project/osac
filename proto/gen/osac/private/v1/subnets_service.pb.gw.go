@@ -345,7 +345,7 @@ func RegisterSubnetsHandlerServer(ctx context.Context, mux *runtime.ServeMux, se
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Subnets_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Subnets_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Subnets_Delete_0{resp.(*SubnetsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterSubnetsHandlerClient(ctx context.Context, mux *runtime.ServeMux, cl
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Subnets_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Subnets_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Subnets_Delete_0{resp.(*SubnetsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_Subnets_Update_0 struct {
 }
 
 func (m response_Subnets_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_Subnets_Delete_0 struct {
+	*SubnetsDeleteResponse
+}
+
+func (m response_Subnets_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

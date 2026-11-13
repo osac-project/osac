@@ -331,11 +331,21 @@ func (s *BareMetalInstancesServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.BareMetalInstancesDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	publicBMI := &publicv1.BareMetalInstance{}
+	err = s.outMapper.Copy(ctx, privateResponse.GetObject(), publicBMI)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map private bare metal instance to public",
+			slog.Any("error", err))
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance")
+	}
+
+	// Create the public response:
 	response = &publicv1.BareMetalInstancesDeleteResponse{}
+	response.SetObject(publicBMI)
 	return
 }

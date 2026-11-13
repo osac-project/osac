@@ -637,6 +637,14 @@ def test_vrf_bestpath_source_without_an_asn_is_final(routers: list) -> None:
     assert result["manifests"] == [] and "osac-evpn-node1" in result["message"]
 
 
+def test_vrf_bestpath_refuses_a_companion_name_longer_than_the_api_limit() -> None:
+    config = frr_config(name="n" * ce.FRR_COMPANION_MAX_NAME)
+    result = ce.cudn_evpn_vrf_bestpath(vrf_cudn(), {"resources": [config]}, plan("create_subnet"))
+    assert result["ready"] is False and result["retryable"] is False
+    assert result["manifests"] == []
+    assert "longer than" in result["message"] and str(ce.FRR_COMPANION_MAX_NAME) in result["message"]
+
+
 def test_create_and_delete_subnet_wire_the_vrf_bestpath_policy() -> None:
     create = _tasks(ROLE / "tasks/create_subnet.yaml")
     apply_task = next(t for t in create if t["name"] == "Apply the hub network's VRF multipath policy")

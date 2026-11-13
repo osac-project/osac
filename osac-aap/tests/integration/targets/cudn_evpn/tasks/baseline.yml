@@ -498,6 +498,42 @@
               - "'router bgp ' ~ ce_frr_asn ~ ' vrf vrf-' ~ ce_hub[-8:] in ce_obj.spec.raw.rawConfig"
             quiet: true
 
+        - name: Break the installer's EVPN ASN
+          kubernetes.core.k8s:
+            state: patched
+            merge_type: merge
+            definition:
+              apiVersion: frrk8s.metallb.io/v1beta1
+              kind: FRRConfiguration
+              metadata: {name: "{{ ce_frr_config }}", namespace: "{{ ce_frr_namespace }}"}
+              spec:
+                bgp:
+                  routers: [{}]
+
+        - name: Fail a create_subnet rerun without the installer's EVPN ASN
+          ansible.builtin.include_tasks: run_task.yaml
+          vars:
+            sft_label: subnet-create-no-frr-asn
+            sft_expect: final
+            sft_message_search: "has no BGP router ASN for VRF vrf-"
+            sft_ready_cudn: "{{ ce_hub }}"
+            ce_task: create_subnet
+            ce_vn_id: "{{ ce_id.vn1 }}"
+            ce_subnet_id: "{{ ce_id.s1 }}"
+            sft_job: "{{ ce_subnet_job }}"
+
+        - name: Restore the installer's EVPN ASN
+          kubernetes.core.k8s:
+            state: patched
+            merge_type: merge
+            definition:
+              apiVersion: frrk8s.metallb.io/v1beta1
+              kind: FRRConfiguration
+              metadata: {name: "{{ ce_frr_config }}", namespace: "{{ ce_frr_namespace }}"}
+              spec:
+                bgp:
+                  routers: [{asn: 65001}]
+
         - name: Read the hub network
           ansible.builtin.include_tasks: read.yaml
           vars: {ce_api: k8s.ovn.org/v1, ce_kind: ClusterUserDefinedNetwork, ce_name: "{{ ce_hub }}"}
@@ -933,6 +969,24 @@
             that: ce_obj | length > 0 and ce_obj.metadata.uid == ce_cudn_before.metadata.uid
             quiet: true
 
+        - name: Create another tenant's companion with this Subnet's labels
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: frrk8s.metallb.io/v1beta1
+              kind: FRRConfiguration
+              metadata:
+                name: "osac-evpn-vrf-{{ ce_id.vn1 }}-foreign-node"
+                namespace: "{{ ce_frr_namespace }}"
+                labels:
+                  osac.openshift.io/evpn-vrf: "true"
+                  osac.openshift.io/virtualnetwork-id: "{{ ce_id.vn1 }}"
+                  osac.openshift.io/owner-kind: subnet
+                  osac.openshift.io/owner-id: "{{ ce_id.s1 }}"
+                  osac.openshift.io/tenant: "00000000-0000-0000-0000-000000000000"
+              spec:
+                raw: {priority: 15, rawConfig: "router bgp 65001\n"}
+
         - name: Delete the owner Subnet, twice
           ansible.builtin.include_tasks: run_task.yaml
           loop: [subnet-delete-s1, subnet-delete-s1-again]
@@ -957,6 +1011,22 @@
             ce_ns: "{{ ce_frr_namespace }}"
         - name: Assert the VRF multipath policy is gone
           ansible.builtin.assert: {that: ce_obj | length == 0, quiet: true}
+        - name: Read the foreign companion
+          ansible.builtin.include_tasks: read.yaml
+          vars:
+            ce_api: frrk8s.metallb.io/v1beta1
+            ce_kind: FRRConfiguration
+            ce_name: "osac-evpn-vrf-{{ ce_id.vn1 }}-foreign-node"
+            ce_ns: "{{ ce_frr_namespace }}"
+        - name: Assert delete_subnet kept another tenant's companion
+          ansible.builtin.assert: {that: ce_obj | length > 0, quiet: true}
+        - name: Remove the foreign companion
+          kubernetes.core.k8s:
+            state: absent
+            api_version: frrk8s.metallb.io/v1beta1
+            kind: FRRConfiguration
+            name: "osac-evpn-vrf-{{ ce_id.vn1 }}-foreign-node"
+            namespace: "{{ ce_frr_namespace }}"
         - name: Read the namespace
           ansible.builtin.include_tasks: read.yaml
           vars: {ce_api: v1, ce_kind: Namespace, ce_name: "{{ ce_hub }}"}

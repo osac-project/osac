@@ -495,7 +495,7 @@
               - ce_obj.spec.raw.priority > 10
               - "'bgp bestpath as-path multipath-relax' in ce_obj.spec.raw.rawConfig"
               - "'maximum-paths 16' in ce_obj.spec.raw.rawConfig"
-              - ("'router bgp ' ~ ce_frr_asn ~ ' vrf vrf-' ~ ce_hub[-8:]) in ce_obj.spec.raw.rawConfig"
+              - "'router bgp ' ~ ce_frr_asn ~ ' vrf vrf-' ~ ce_hub[-8:] in ce_obj.spec.raw.rawConfig"
             quiet: true
 
         - name: Read the hub network

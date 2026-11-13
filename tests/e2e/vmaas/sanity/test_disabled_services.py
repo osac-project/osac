@@ -25,8 +25,20 @@ def test_disabled_service_absent_from_reflection(fulfillment_address: str, grpc:
     env = os.environ.copy()
     env["REFLECTION_JWT"] = grpc.token
     result = subprocess.run(
-        ["grpcurl", "-insecure", "-expand-headers", "-H", "Authorization: Bearer ${REFLECTION_JWT}", fulfillment_address, "list"],
-        capture_output=True, text=True, timeout=30, check=True, env=env,
+        [
+            "grpcurl",
+            "-insecure",
+            "-expand-headers",
+            "-H",
+            "Authorization: Bearer ${REFLECTION_JWT}",
+            fulfillment_address,
+            "list",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+        env=env,
     )
     services = result.stdout.strip().splitlines()
     assert f"{PUBLIC_API}.BareMetalInstances" not in services, (

@@ -261,8 +261,9 @@ service:
   # is configured, so they apply to every deployment.
   #
   # Cascade: defaultSeconds is the shared interval, and each per-cache value
-  # below overrides it. Clear an override (or set it to null) to let that cache
-  # inherit defaultSeconds again. The shipped defaultSeconds is 300.
+  # below overrides it. Set an override to null to let that cache inherit
+  # defaultSeconds again; deleting the key does not, because Helm merges this
+  # chart's shipped value back in. The shipped defaultSeconds is 300.
   tuning:
     cache:
       # Shared refresh interval, and the fallback for every catalog-pricing
@@ -276,7 +277,7 @@ service:
       inventorySeconds: 30
       # Provider rate card items. A read fetches the priced items for one
       # provider; this bounds how long those results are reused. Shipped equal
-      # to defaultSeconds; clear it to inherit defaultSeconds directly.
+      # to defaultSeconds; set it to null to inherit defaultSeconds directly.
       rateCardSeconds: 300
   vault:
     # Vault API endpoint. Points to the osac-infra namespace by default,

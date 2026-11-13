@@ -142,6 +142,7 @@ jobs:
       components-to-tag: ${{ steps.versions.outputs.components-to-tag }}
       konflux-images: ${{ steps.versions.outputs.konflux-images }}
       konflux-charts: ${{ steps.versions.outputs.konflux-charts }}
+      konflux-chart-versions: ${{ steps.versions.outputs.konflux-chart-versions }}
       version: ${{ steps.umbrella-version.outputs.version }}
       base-version: ${{ steps.umbrella-version.outputs.base-version }}
 
@@ -357,7 +358,8 @@ jobs:
         echo "components-to-tag=${tag_json}" >> "$GITHUB_OUTPUT"
 
         # What this run releases through Konflux: the images and charts of
-        # the components it builds, plus the umbrella chart. A pinned
+        # the components it builds, plus the umbrella chart, plus any pinned
+        # chart whose staging release was never confirmed. A pinned
         # component's version is already on the registry from the release
         # that built it. Konflux still rebuilds every component on the
         # release tag, but such a rebuild has no stamped version (it would
@@ -383,15 +385,43 @@ jobs:
         )
         images_json="[]"
         charts_json='["osac-chart"]'
-        for COMPONENT in $(jq -r '.[]' <<<"${tag_json}"); do
-          # Intentional word splitting: some entries list several names.
-          for NAME in ${KONFLUX_IMAGES[$COMPONENT]:-}; do
-            images_json=$(jq -c --arg v "${NAME}" '. + [$v]' <<<"${images_json}")
+        chart_versions_json="{}"
+        if [[ "${MODE}" == "release" ]]; then
+          chart_versions_json=$(jq -cn --arg v "${RELEASE_VERSION}" '{"osac-chart": $v}')
+          for COMPONENT in "${COMPONENTS[@]}"; do
+            # A component missing from either map would silently never be
+            # released through Konflux.
+            if [[ -z "${KONFLUX_IMAGES[${COMPONENT}]+x}" || -z "${KONFLUX_CHARTS[${COMPONENT}]+x}" ]]; then
+              echo "::error::${COMPONENT} has no Konflux image/chart mapping in prepare" >&2
+              exit 1
+            fi
+            COMPONENT_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k]' <<<"${versions_json}")
+            BUILT=$(jq -r --arg c "${COMPONENT}" 'any(.[]; . == $c)' <<<"${tag_json}")
+            # Intentional word splitting: some entries list several names.
+            if [[ "${BUILT}" == "true" ]]; then
+              for NAME in ${KONFLUX_IMAGES[$COMPONENT]}; do
+                images_json=$(jq -c --arg v "${NAME}" '. + [$v]' <<<"${images_json}")
+              done
+            fi
+            for NAME in ${KONFLUX_CHARTS[$COMPONENT]}; do
+              if [[ "${BUILT}" != "true" ]]; then
+                # A pinned chart is only left out once its staging release
+                # is confirmed (the konflux-staged/ tag pushed by
+                # trigger-konflux-chart-staging-release). Chart staging can
+                # fail without rolling the release back, and the version
+                # tag alone does not prove the chart ever reached staging.
+                git rev-parse -q --verify "refs/tags/${NAME}-v${COMPONENT_VERSION}" >/dev/null || continue
+                if git rev-parse -q --verify "refs/tags/konflux-staged/${NAME}-v${COMPONENT_VERSION}" >/dev/null; then
+                  continue
+                fi
+                echo "::notice::${NAME} ${COMPONENT_VERSION} is pinned but has no confirmed staging release -- publishing it with this release"
+              fi
+              charts_json=$(jq -c --arg v "${NAME}" '. + [$v]' <<<"${charts_json}")
+              chart_versions_json=$(jq -c --arg k "${NAME}" --arg v "${COMPONENT_VERSION}" '. + {($k): $v}' <<<"${chart_versions_json}")
+            done
           done
-          for NAME in ${KONFLUX_CHARTS[$COMPONENT]:-}; do
-            charts_json=$(jq -c --arg v "${NAME}" '. + [$v]' <<<"${charts_json}")
-          done
-        done
+        fi
+        echo "konflux-chart-versions=${chart_versions_json}" >> "$GITHUB_OUTPUT"
         echo "konflux-images=${images_json}" >> "$GITHUB_OUTPUT"
         echo "konflux-charts=${charts_json}" >> "$GITHUB_OUTPUT"
         echo "Konflux images to release: ${images_json}"
@@ -3892,6 +3922,50 @@ jobs:
             print(f"snapshot-name={resource_name}", file=f)
         PYEOF
 
+    # Durable record that these chart versions reached staging: prepare
+    # leaves a pinned chart out of a later release only when this tag
+    # exists. A failure here is harmless -- the chart is simply published
+    # again by the next release.
+    - name: Generate osac-ci app token
+      id: staged-token
+      if: steps.release.outcome == 'success'
+      continue-on-error: true
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+      with:
+        app-id: "4966101"
+        private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+        permission-contents: write
+
+    - name: Record staged chart versions
+      if: steps.release.outcome == 'success' && steps.staged-token.outcome == 'success'
+      continue-on-error: true
+      env:
+        GH_APP_TOKEN: ${{ steps.staged-token.outputs.token }}
+        KONFLUX_CHART_VERSIONS: ${{ needs.prepare.outputs.konflux-chart-versions }}
+      run: |
+        set -uo pipefail
+        API="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/git"
+        call() {
+          curl -sS --max-time 30 -o /tmp/staged-response.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_APP_TOKEN}" \
+            -H "Accept: application/vnd.github+json" "$@"
+        }
+        while IFS= read -r TAG; do
+          STATUS=$(call "${API}/ref/tags/${TAG}")
+          SHA=$(jq -r '.object.sha // empty' /tmp/staged-response.json 2>/dev/null)
+          if [[ "${STATUS}" != "200" || -z "${SHA}" ]]; then
+            echo "::warning::Cannot read tag ${TAG} (HTTP ${STATUS}) -- not recording it as staged"
+            continue
+          fi
+          STATUS=$(call -X POST "${API}/refs" \
+            -d "$(jq -cn --arg ref "refs/tags/konflux-staged/${TAG}" --arg sha "${SHA}" '{ref: $ref, sha: $sha}')")
+          case "${STATUS}" in
+            201) echo "Recorded konflux-staged/${TAG}" ;;
+            422) echo "konflux-staged/${TAG} already recorded" ;;
+            *) echo "::warning::Could not record konflux-staged/${TAG} (HTTP ${STATUS})" ;;
+          esac
+        done < <(jq -r 'to_entries[] | "\(.key)-v\(.value)"' <<<"${KONFLUX_CHART_VERSIONS}")
+
   # Report Konflux only after all image/chart jobs finish, including failures
   # and skips. Nightly builds do not run Konflux and send no second message.
   notify-konflux:
@@ -3937,6 +4011,7 @@ jobs:
         # than the one trigger-konflux-staging-release/-chart actually
         # used, if those jobs themselves didn't need to re-run.
         IMAGE_SNAPSHOT: ${{ needs.trigger-konflux-staging-release.outputs.snapshot-name }}
+        KONFLUX_IMAGES: ${{ needs.prepare.outputs.konflux-images }}
         CHART_SNAPSHOT: ${{ needs.trigger-konflux-chart-staging-release.outputs.snapshot-name }}
         CHART_TAG_PUSHED: ${{ needs.stamp-and-release-charts.outputs.tag-pushed }}
         CHART_RELEASE: ${{ needs.trigger-konflux-chart-staging-release.outputs.release-outcome || 'not completed' }}
@@ -3953,6 +4028,17 @@ jobs:
           HEADER_TEXT=":x: Release ${VERSION} - Konflux staging failed"
         fi
 
+        # "none" is what osac-promote-to-prod.yaml's image_snapshot input
+        # expects for a release that built no image. An empty name for any
+        # other reason (the staging job failed or never ran) is not that.
+        if [[ "${KONFLUX_IMAGES}" == '[]' ]]; then
+          IMAGE_SNAPSHOT_TEXT='`none` (this release built no image)'
+        elif [[ -n "${IMAGE_SNAPSHOT}" ]]; then
+          IMAGE_SNAPSHOT_TEXT="\`${IMAGE_SNAPSHOT}\`"
+        else
+          IMAGE_SNAPSHOT_TEXT="not available"
+        fi
+
         PAYLOAD=$(mktemp)
         trap 'rm -f "$PAYLOAD"' EXIT
         jq -n \
@@ -3961,7 +4047,7 @@ jobs:
           --arg image_release "${IMAGE_RELEASE}" \
           --arg chart_tag "${CHART_TAG_PUSHED:-false}" \
           --arg chart_release "${CHART_RELEASE}" \
-          --arg image_snapshot "${IMAGE_SNAPSHOT}" \
+          --arg image_snapshot "${IMAGE_SNAPSHOT_TEXT}" \
           --arg chart_snapshot "${CHART_SNAPSHOT}" \
           --arg workflow_url "${WORKFLOW_URL}" \
           '{blocks: [
@@ -3972,7 +4058,7 @@ jobs:
               "*Konflux image staging:* " + $image_release + "\n" +
               "*Konflux chart build tag pushed:* " + $chart_tag + "\n" +
               "*Konflux chart staging:* " + $chart_release + "\n" +
-              "*Image Snapshot (for prod promotion):* " + (if $image_snapshot == "" then "none, no image released" else "`" + $image_snapshot + "`" end) + "\n" +
+              "*Image Snapshot (for prod promotion):* " + $image_snapshot + "\n" +
               "*Chart Snapshot (for prod promotion):* `" + $chart_snapshot + "`"
             )}},
             {type: "actions", elements: [

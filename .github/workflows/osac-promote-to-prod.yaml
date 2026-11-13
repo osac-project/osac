@@ -74,11 +74,10 @@ on:
           The exact image Snapshot name to promote (e.g.
           osac-release-v0-4-0-attempt1) -- copy this verbatim from the
           "Image Snapshot (for prod promotion)" line in the Slack message
-          osac-release.yaml posted for this release. Leave empty when
-          that line says no image was released.
+          osac-release.yaml posted for this release. Enter "none" when
+          that line says the release built no image.
         type: string
-        required: false
-        default: ""
+        required: true
       chart_snapshot:
         description: >-
           The exact chart Snapshot name to promote (e.g.
@@ -109,6 +108,7 @@ jobs:
       image-snapshot: ${{ steps.validate.outputs.image-snapshot }}
       chart-snapshot: ${{ steps.validate.outputs.chart-snapshot }}
       image-ready: ${{ steps.verify.outputs.image-ready }}
+      image-omitted: ${{ steps.validate.outputs.image-omitted }}
       chart-components: ${{ steps.verify.outputs.chart-components }}
       chart-ready: ${{ steps.verify.outputs.chart-ready }}
     env:
@@ -151,10 +151,17 @@ jobs:
             exit 1
           fi
         }
-        # A release that built no Konflux image has no image Snapshot.
-        if [[ -n "${IMAGE_SNAPSHOT_INPUT}" ]]; then
+        # A release that built no Konflux image has no image Snapshot. That
+        # must be stated explicitly: an input left empty by mistake would
+        # otherwise promote charts with no images behind them.
+        IMAGE_OMITTED=false
+        if [[ "${IMAGE_SNAPSHOT_INPUT}" == "none" ]]; then
+          IMAGE_OMITTED=true
+          IMAGE_SNAPSHOT_INPUT=""
+        else
           validate_name "${IMAGE_SNAPSHOT_INPUT}" "image" "osac-release"
         fi
+        echo "image-omitted=${IMAGE_OMITTED}" >> "$GITHUB_OUTPUT"
         validate_name "${CHART_SNAPSHOT_INPUT}" "chart" "osac-charts-release"
         echo "image-snapshot=${IMAGE_SNAPSHOT_INPUT}" >> "$GITHUB_OUTPUT"
         echo "chart-snapshot=${CHART_SNAPSHOT_INPUT}" >> "$GITHUB_OUTPUT"
@@ -276,7 +283,7 @@ jobs:
         if [[ -n "${IMAGE_SNAPSHOT}" ]]; then
           image_snapshot_ok=$(check_snapshot "${IMAGE_SNAPSHOT}" "image" "cloud-extensions-stage")
         else
-          echo "::notice::No image_snapshot given -- image promotion is skipped" >&2
+          echo "::notice::image_snapshot is \"none\" -- this release built no image, image promotion is skipped" >&2
           image_snapshot_ok=false
         fi
         chart_snapshot_ok=$(check_snapshot "${CHART_SNAPSHOT}" "chart" "osac-charts-stage")
@@ -1219,6 +1226,7 @@ jobs:
         SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
         VERSION: ${{ github.event.inputs.release_version }}
         IMAGE_READY: ${{ needs.resolve-and-verify.outputs.image-ready }}
+        IMAGE_OMITTED: ${{ needs.resolve-and-verify.outputs.image-omitted }}
         CHART_READY: ${{ needs.resolve-and-verify.outputs.chart-ready }}
         IMAGE_RESULT: ${{ needs.promote-image.result }}
         ALREADY_RELEASED: ${{ needs.stamp-prod-chart.outputs.already-released }}
@@ -1237,6 +1245,14 @@ jobs:
         set -euo pipefail
         IMAGE_TEXT="${IMAGE_RESULT}"
         [[ "${IMAGE_READY}" != "true" ]] && IMAGE_TEXT="skipped (Snapshot or ReleasePlan not found)"
+        # A release that built no image has nothing to promote on this
+        # side; that is not an incomplete promotion.
+        IMAGE_SUCCESS=false
+        [[ "${IMAGE_TEXT}" == "success" ]] && IMAGE_SUCCESS=true
+        if [[ "${IMAGE_OMITTED}" == "true" ]]; then
+          IMAGE_TEXT="not required (this release built no image)"
+          IMAGE_SUCCESS=true
+        fi
         CHART_TEXT="${CHART_RESULT}"
         [[ "${CHART_READY}" != "true" ]] && CHART_TEXT="skipped (Snapshot or ReleasePlan not found)"
         # stamp-prod-chart has continue-on-error: true, so its own
@@ -1263,7 +1279,7 @@ jobs:
         fi
 
         HEADER_TEXT=":warning: ${VERSION} - Production promotion incomplete"
-        if [[ "${IMAGE_TEXT}" == "success" && "${CHART_SUCCESS}" == "true" ]]; then
+        if [[ "${IMAGE_SUCCESS}" == "true" && "${CHART_SUCCESS}" == "true" ]]; then
           HEADER_TEXT=":white_check_mark: ${VERSION} - Promoted to production"
         elif [[ "${IMAGE_TEXT}" == "failure" ]]; then
           HEADER_TEXT=":x: ${VERSION} - Production promotion failed"

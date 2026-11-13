@@ -23,6 +23,7 @@ COMPONENTS = (
     "osac-ui",
 )
 CHART_PIPELINES = sorted((ROOT / ".tekton").glob("*-chart/release.yaml"))
+CHARTS = [path.parent.name for path in CHART_PIPELINES]
 # Git honors GIT_DIR and friends over -C and the working directory; inherited
 # from a hook, they would point these commands at the real repository.
 ENV = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
@@ -45,8 +46,13 @@ class Repo:
         for tag in tags:
             self.git("tag", tag)
 
-    def tag_all(self, version: str) -> None:
+    def tag_all(self, version: str, staged: bool = True) -> None:
+        """Tag a full release as the pipeline does: versions, chart tags and, once staged, the staging record."""
         self.tag(f"osac/v{version}", *(f"{component}/v{version}" for component in COMPONENTS))
+        charts = [f"{chart}-v{version}" for chart in CHARTS]
+        self.tag(*charts)
+        if staged:
+            self.tag(*(f"konflux-staged/{chart}" for chart in charts))
 
     def run_step(self, step_id: str, cwd: str = ".", **env: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
         output = self.path / f"{step_id}.out"
@@ -157,6 +163,31 @@ class ReleaseVersionResolution(TemporaryRepos):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(json.loads(outputs["konflux-images"]), images)
                 self.assertEqual(json.loads(outputs["konflux-charts"]), charts)
+                versions = json.loads(outputs["konflux-chart-versions"])
+                self.assertEqual(versions, {chart: "0.5.1" for chart in charts})
+
+    def test_pinned_chart_without_a_staging_record_is_published_again(self) -> None:
+        # Chart staging can fail without rolling the release back.
+        repo = self.repo()
+        repo.tag_all("0.5.0")
+        repo.tag("osac-operator/v0.5.1", "osac-operator-chart-v0.5.1", "osac-operator-crds-chart-v0.5.1")
+        repo.tag("konflux-staged/osac-operator-crds-chart-v0.5.1")
+        result, outputs = repo.release("0.5.2", "osac-ui=0.5.1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(outputs["konflux-images"]), ["osac-ui"])
+        self.assertEqual(
+            json.loads(outputs["konflux-chart-versions"]),
+            {"osac-chart": "0.5.2", "osac-operator-chart": "0.5.1", "osac-ui-chart": "0.5.1"},
+        )
+        self.assertCountEqual(
+            json.loads(outputs["konflux-charts"]), ["osac-chart", "osac-operator-chart", "osac-ui-chart"]
+        )
+        self.assertIn("osac-operator-chart 0.5.1 is pinned but has no confirmed staging release", result.stdout)
+
+    def test_nightly_has_no_konflux_release_set(self) -> None:
+        outputs = self.repo().nightly()[1]
+        self.assertEqual(json.loads(outputs["konflux-images"]), [])
+        self.assertEqual(json.loads(outputs["konflux-chart-versions"]), {})
 
     def test_full_release_covers_every_konflux_wait_row(self) -> None:
         # A name prepare emits with no matrix row would never be waited for.
@@ -168,7 +199,8 @@ class ReleaseVersionResolution(TemporaryRepos):
         self.assertCountEqual(json.loads(outputs["konflux-images"]), image_rows)
         self.assertCountEqual(json.loads(outputs["konflux-charts"]), chart_rows)
         self.assertCountEqual(promote["wait-for-prod-chart-build"]["strategy"]["matrix"]["component"], chart_rows)
-        self.assertCountEqual([path.parent.name for path in CHART_PIPELINES], chart_rows)
+        self.assertCountEqual(CHARTS, chart_rows)
+        self.assertEqual(json.loads(outputs["konflux-chart-versions"]), {chart: "0.5.0-rc.1" for chart in chart_rows})
 
     def test_konflux_jobs_act_only_on_the_released_set(self) -> None:
         jobs = WORKFLOW["jobs"]
@@ -293,6 +325,107 @@ class ReleaseVersionResolution(TemporaryRepos):
         versions = json.loads(repo.nightly()[1]["component-versions"])
         self.assertTrue(versions["osac-operator"].startswith("0.5.2-nightly."))
         self.assertTrue(versions["osac-ui"].startswith("0.5.1-nightly."))
+
+
+FAKE_CURL = r"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+output = arguments[arguments.index("-o") + 1]
+url = next(argument for argument in arguments if argument.startswith("http"))
+state = json.loads(Path("refs.json").read_text())
+if "-X" in arguments:
+    body = json.loads(arguments[arguments.index("-d") + 1])
+    assert "Authorization: Bearer app-token" in arguments
+    if body["ref"] in state:
+        code = 422
+    else:
+        state[body["ref"]] = body["sha"]
+        code = 201
+    Path("refs.json").write_text(json.dumps(state))
+    Path(output).write_text("{}")
+else:
+    ref = "refs/" + url.split("/git/ref/", 1)[1]
+    code = 200 if ref in state else 404
+    Path(output).write_text(json.dumps({"object": {"sha": state.get(ref)}} if code == 200 else {}))
+print(code, end="")
+"""
+
+
+class StagedChartRecord(TemporaryRepos):
+    """The step that records which chart versions reached staging, against a fake GitHub API."""
+
+    def record(self, versions: dict[str, str], refs: dict[str, str]) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+        steps = WORKFLOW["jobs"]["trigger-konflux-chart-staging-release"]["steps"]
+        step = next(step for step in steps if step["name"] == "Record staged chart versions")
+        self.assertEqual(step["if"], "steps.release.outcome == 'success' && steps.staged-token.outcome == 'success'")
+        work = self.directory()
+        (work / "curl").write_text(FAKE_CURL)
+        (work / "curl").chmod(0o755)
+        (work / "refs.json").write_text(json.dumps(refs))
+        result = subprocess.run(
+            ["bash", "-c", step["run"]],
+            cwd=work,
+            env={
+                **ENV,
+                "PATH": f"{work}:{os.environ['PATH']}",
+                "GITHUB_API_URL": "https://api.example",
+                "GITHUB_REPOSITORY": "osac-project/osac",
+                "GH_APP_TOKEN": "app-token",
+                "KONFLUX_CHART_VERSIONS": json.dumps(versions),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result, json.loads((work / "refs.json").read_text())
+
+    def test_records_each_released_chart_at_its_version_tag(self) -> None:
+        refs = {"refs/tags/osac-chart-v0.5.2": "aaa", "refs/tags/osac-ui-chart-v0.5.1": "bbb"}
+        result, state = self.record({"osac-chart": "0.5.2", "osac-ui-chart": "0.5.1"}, refs)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(state["refs/tags/konflux-staged/osac-chart-v0.5.2"], "aaa")
+        self.assertEqual(state["refs/tags/konflux-staged/osac-ui-chart-v0.5.1"], "bbb")
+
+    def test_existing_record_and_missing_tag_do_not_fail_the_step(self) -> None:
+        refs = {"refs/tags/osac-chart-v0.5.2": "aaa", "refs/tags/konflux-staged/osac-chart-v0.5.2": "aaa"}
+        result, state = self.record({"osac-chart": "0.5.2", "osac-ui-chart": "0.5.1"}, refs)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already recorded", result.stdout)
+        self.assertIn("::warning::Cannot read tag osac-ui-chart-v0.5.1", result.stdout)
+        self.assertNotIn("refs/tags/konflux-staged/osac-ui-chart-v0.5.1", state)
+
+
+class ProdPromotionInputs(unittest.TestCase):
+    def test_image_snapshot_must_be_a_name_or_an_explicit_none(self) -> None:
+        promote = yaml.safe_load((ROOT / ".github/workflows/osac-promote-to-prod.yaml").read_text())
+        self.assertTrue(promote[True]["workflow_dispatch"]["inputs"]["image_snapshot"]["required"])
+        script = next(step["run"] for step in promote["jobs"]["resolve-and-verify"]["steps"] if step.get("id") == "validate")
+        cases = {"none": (0, "true"), "osac-release-v0-5-1-attempt1": (0, "false"), "": (1, None), "None": (1, None)}
+        for value, (code, omitted) in cases.items():
+            with self.subTest(image_snapshot=value), tempfile.TemporaryDirectory() as work:
+                output = Path(work) / "out"
+                output.write_text("")
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    env={
+                        **ENV,
+                        "GITHUB_OUTPUT": str(output),
+                        "RELEASE_VERSION": "0.5.1",
+                        "IMAGE_SNAPSHOT_INPUT": value,
+                        "CHART_SNAPSHOT_INPUT": "osac-charts-release-v0-5-1-attempt1",
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, code, result.stderr)
+                if omitted is not None:
+                    outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                    self.assertEqual(outputs["image-omitted"], omitted)
+                    self.assertEqual(outputs["image-snapshot"], "" if value == "none" else value)
 
 
 class ChartVersionResolution(TemporaryRepos):

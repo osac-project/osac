@@ -235,7 +235,7 @@
       provisioner: "{{ lvms_storage_provisioner }}"
       parameters:
         "topolvm.io/device-class": "{{ lvms_storage_device_class }}"
-        "csi.storage.k8s.io/fstype": "{{ storage_provider_block_fstype }}"
+        "csi.storage.k8s.io/fstype": "{{ storage_provider_block_fstype | string }}"
       reclaimPolicy: Delete
       volumeBindingMode: WaitForFirstConsumer
   loop: "{{ _lvms_expected_sc_entries | selectattr('name', 'in', _lvms_missing_sc_names) | list }}"

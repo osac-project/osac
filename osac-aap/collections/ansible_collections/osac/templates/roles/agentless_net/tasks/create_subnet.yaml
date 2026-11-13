@@ -1,36 +1,52 @@
 ---
-- name: Provision AgentlessNet Subnet VLAN and DHCP state
+- name: Create AgentlessNet Subnet
   block:
-    - name: Load the AgentlessNet node and required Cumulus switch inventory
+    - name: Validate the Subnet task input
+      ansible.builtin.include_tasks: _validate_task_input.yaml
+      vars:
+        agentless_net_expected_kind: Subnet
+        agentless_net_expected_tasks: [create_subnet]
+
+    - name: Require the recorded parent snapshot and IPAM plan
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars.virtual_network is mapping
+          - osac_job_vars.ipam is mapping
+          - osac_job_vars.resource.spec.ipv4Cidr is string
+      no_log: true
+
+    - name: Classify provider failures as retryable
+      ansible.builtin.set_fact:
+        _agentless_net_failure_retryable: true
+
+    - name: Load the AgentlessNet node and Cumulus switch inventory
       ansible.builtin.include_tasks: _load_network_node_inventory.yaml
       vars:
         agentless_net_require_switches: true
 
-    - name: Resolve the Ready parent VirtualNetwork by Fulfillment UUID
-      ansible.builtin.include_tasks: _resolve_subnet_parent.yaml
-
-    - name: Look up an existing Subnet allocation before discovery
+    - name: Read an existing API-ID-owned Subnet allocation
       osac.templates.agentless_net_state:
         action: get_subnet
         state_file: "{{ agentless_net_network_state_file }}"
-        uid: "{{ _agentless_net_subnet_uid }}"
-        tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
       register: _agentless_net_existing_subnet
       no_log: true
 
-    - name: Select and preflight the managed node DHCP service manager
+    - name: Select and preflight the managed node DHCP supervisor
       osac.templates.agentless_net_state:
         action: preflight_dhcp_supervisor
         state_file: "{{ agentless_net_network_state_file }}"
-        uid: "{{ _agentless_net_subnet_parent_uid }}"
-        tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
+        uid: "{{ osac_job_vars.virtual_network.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
+      register: _agentless_net_dhcp_supervisor
       no_log: true
 
-    - name: Discover existing and reserved VLAN IDs before new allocation
+    - name: Discover switch VLANs before allocating a new VLAN
       ansible.builtin.include_tasks: _discover_subnet_switch.yaml
       loop: "{{ groups['agentless_net_subnet_switches'] }}"
       loop_control:
@@ -38,23 +54,23 @@
         label: "{{ _agentless_net_switch_name }}"
       when: not _agentless_net_existing_subnet.found | bool
 
-    - name: Reserve the stable Subnet VLAN before provider mutation
+    - name: Reserve the stable VLAN and the supplied address plan
       osac.templates.agentless_net_state:
         action: reserve_subnet
         state_file: "{{ agentless_net_network_state_file }}"
-        uid: "{{ _agentless_net_subnet_uid }}"
-        tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
-        virtual_network_uid: "{{ _agentless_net_subnet_parent_uid }}"
-        subnet_cidr: "{{ _agentless_net_subnet_cidr }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
+        virtual_network_uid: "{{ osac_job_vars.virtual_network.id }}"
+        subnet_cidr: "{{ osac_job_vars.resource.spec.ipv4Cidr }}"
         trunk_interface: "{{ agentless_net_trunk_interface }}"
         observed_switch_vlan_state: "{{ _agentless_net_subnet_switch_vlan_state | default([]) }}"
-        vip_cidr: "{{ _agentless_net_subnet_vip_cidr }}"
+        ipam: "{{ osac_job_vars.ipam }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
       register: _agentless_net_subnet_reservation
       no_log: true
 
-    - name: Reconcile the reserved VLAN and every declared trunk on each switch
+    - name: Reconcile the saved VLAN and declared trunks
       ansible.builtin.include_tasks: _reconcile_subnet_switch.yaml
       loop: "{{ groups['agentless_net_subnet_switches'] }}"
       loop_control:
@@ -64,15 +80,19 @@
         _agentless_net_subnet: "{{ _agentless_net_subnet_reservation.subnet }}"
         _agentless_net_subnet_action: create
 
-    - name: Reconcile parent namespace interfaces and supervised DHCP scopes
+    - name: Reconcile the parent namespace interface and physical DHCP scopes
       osac.templates.agentless_net_state:
         action: ensure_subnet
         state_file: "{{ agentless_net_network_state_file }}"
-        uid: "{{ _agentless_net_subnet_uid }}"
-        tenant_id: "{{ _agentless_net_subnet_tenant_id }}"
+        uid: "{{ osac_job_vars.resource.id }}"
+        tenant_id: "{{ osac_job_vars.tenant }}"
+        dhcp_supervisor: "{{ _agentless_net_dhcp_supervisor.dhcp_supervisor }}"
       delegate_to: "{{ groups['agentless_net_vn_network_node'][0] }}"
       become: true
       no_log: true
+  rescue:
+    - name: Publish a sanitized Subnet create error
+      ansible.builtin.include_tasks: _report_task_error.yaml
   always:
-    - name: Remove the temporary AgentlessNet SSH key file
+    - name: Remove temporary AgentlessNet SSH credentials
       ansible.builtin.include_tasks: _cleanup_network_node_inventory.yaml

@@ -27,6 +27,16 @@ The OSAC platform provides:
 This installer uses Helm to manage deployments via an umbrella chart (`charts/osac/`)
 with per-environment values files under `values/`.
 
+### Podman Kind node PID limits
+
+On creation and reuse, the installer raises configured Podman node PID limits
+below `65536` to `65536`, preserving higher and unlimited settings on every node.
+It verifies updates before installing infrastructure and stops on runtime errors.
+Plain `dev` honors `KIND_EXPERIMENTAL_PROVIDER`; when unset, it selects Podman if
+available, using the invoking user's existing connection. The dev-full/Mac wrapper
+retains its existing runtime and connection handling. Docker and other providers
+receive no PID-limit changes. Host and ancestor cgroup limits are not checked.
+
 ## OSAC Components
 
 The OSAC platform relies on five core components to deliver governed self-service:
@@ -301,46 +311,37 @@ prepares TopoLVM, starts those nodes through the selected container runtime, and
 waits for the Kubernetes API before proceeding with Helm. Running nodes are
 left running, and existing kubelet credentials are retained.
 
-To use source-built images, use the existing component build targets and then
-load the resulting image tags into Kind. Use the same `CONTAINER_TOOL` value for
-building and loading; the image names must remain registry-qualified so they
-match the dev-full Helm values:
+On Apple Silicon, `make install` builds and loads the dev-full OSAC images
+natively after installing infrastructure and before deploying the charts. This
+keeps the chart image references unchanged while avoiding registry architecture
+gaps. The build covers operator, fulfillment, metering, AAP execution
+environment, and UI images. It also builds the ARM64 OpenShift CLI dependency
+used by the AAP image. Set `CONTAINER_TOOL=docker` when using Colima so the
+build and Kind cluster use the same Docker context:
 
 ```bash
-make install-infra PLATFORM=kind PROFILE=dev-full NS=osac
-
-export CONTAINER_TOOL=podman  # Use docker consistently instead if preferred.
-make -C ../fulfillment-service image-build \
-  IMG=ghcr.io/osac-project/fulfillment-service:latest \
-  CONTAINER_TOOL="$CONTAINER_TOOL"
-make -C ../osac-operator image-build \
-  IMG=ghcr.io/osac-project/osac-operator:latest \
-  CONTAINER_TOOL="$CONTAINER_TOOL"
-make -C ../osac-aap execution-environment-build \
-  IMG=ghcr.io/osac-project/osac-aap:latest \
-  CONTAINER_TOOL="$CONTAINER_TOOL"
-"$CONTAINER_TOOL" build -t ghcr.io/osac-project/osac-ui:latest \
-  -f ../osac-ui/Containerfile ../osac-ui
-
-make kind-load-images PLATFORM=kind PROFILE=dev-full NS=osac \
-  CONTAINER_TOOL="$CONTAINER_TOOL"
-make install-osac PLATFORM=kind PROFILE=dev-full NS=osac
-make install-devstack PLATFORM=kind PROFILE=dev-full NS=osac
+make install PLATFORM=kind PROFILE=dev-full NS=osac CONTAINER_TOOL=docker
 ```
 
-`kind-load-images` only loads already-built images; it does not rebuild them.
-On Apple Silicon, the OSAC AAP execution environment builds natively as
-`linux/arm64`; use `EE_CONTAINER_PLATFORM=linux/amd64,linux/arm64` when a
-multi-architecture image is required. Kubernetes images remain Linux images;
-Kind selects the image matching the node architecture.
-After changing source code, rerun the relevant component `image-build` target
-and then `kind-load-images`. Loaded images are restarted only for workloads that
-use one of the local image references. Each Go component also exposes a
-single-image `kind-load-image` target when loading only that component is useful.
-Component image-load targets default to `PROFILE=dev-full`; use `PROFILE=dev`
-for an ordinary Kind cluster. Image loading checks the required tools and
-cluster availability without requiring KVM or the virtualization install tools.
-`CONTAINER_TOOL` selects the runtime unless `KIND_EXPERIMENTAL_PROVIDER` is set.
+The `kind-build-load-images` target runs the same native builds and loads when a
+dev-full cluster already exists and only the local images need refreshing:
+
+```bash
+make kind-build-load-images PLATFORM=kind PROFILE=dev-full NS=osac \
+  CONTAINER_TOOL=docker
+```
+
+`kind-load-images` remains available to load already-built images without
+rebuilding. On Apple Silicon, the AAP execution environment builds natively as
+`linux/arm64`; no multi-architecture build is needed for a local Kind cluster.
+After changing a component, use its `image-build` target followed by
+`kind-load-images`, or rebuild and load all five images with
+`kind-build-load-images`. Loaded images are restarted only for workloads that
+use one of the local image references. Component image-load targets default to
+`PROFILE=dev-full`; use `PROFILE=dev` for an ordinary Kind cluster. Image
+loading checks the required tools and cluster availability without requiring
+KVM or the virtualization install tools. `CONTAINER_TOOL` selects the runtime
+unless `KIND_EXPERIMENTAL_PROVIDER` is set.
 
 #### Netris + CUDN EVPN CI overlays
 
@@ -442,10 +443,13 @@ the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
   its default VirtualNetwork + Subnet + SecurityGroup via tenant onboarding, so those are
   ready without manual seeding.
 
-The standard Kind profile sets `global.networking.provisioningEnabled: false`,
-so networking resources reconcile to READY without a real fabric. The `dev-full`
-profile enables provisioning so AAP can create each tenant's target namespace;
-Kind's CUDN API placeholder accepts those objects without an OVN dataplane.
+Both Kind profiles set `global.networking.provisioningEnabled: false`, so
+networking resources reconcile as `ProvisioningDisabled` without a fabric
+provider or Netris credentials. In this mode, KubeVirt VMs run in the Tenant
+namespace on Kind's default pod network with masquerade. The dev-full hook does
+not wait for provider-created Subnet namespaces or CUDNs. This supports local
+UI-to-VM development; fabric networking, ExternalIP routing, and NAT require a
+provider-enabled cluster and are not exercised by Kind dev-full.
 
 **Prerequisites** (beyond the base tools) — enforced by `scripts/dev-full/kind-runtime.sh check`:
 
@@ -458,6 +462,9 @@ Kind's CUDN API placeholder accepts those objects without an OVN dataplane.
     and volume group used by this profile.
   - **macOS** — Docker Desktop or Podman Desktop. For Podman, start its machine and
     verify `podman info` succeeds before installing.
+- **Apple Silicon image builds** — `uv`, required to build the local AAP
+  execution environment. The dev-full preflight checks for it before creating
+  the Kind cluster.
 - **`/dev/kvm`** present (Linux), **`fs.inotify.max_user_instances >= 256`**, and
   `kind`, `helm`, `kubectl`, `jq`, `curl`, `openssl`, and `python3` on `PATH`
 - Override runtime detection with `KIND_EXPERIMENTAL_PROVIDER=docker|podman`.
@@ -695,6 +702,52 @@ make uninstall
 
 #### Makefile Targets
 
+Native Linux container-engine hosts can opt in to temporary inotify preparation
+before creating clusters or running workloads with many filesystem watchers:
+
+```bash
+make ensure-inotify
+```
+
+This raises only `fs.inotify.max_user_instances` to a floor of 512 and verifies
+the result. Equal or higher values are preserved. The change is not persisted
+to `/etc/sysctl.d/`; repeat preparation after a host restart if needed. Raising
+the limit requires root or already-authorized passwordless `sudo -n`; a host
+that already meets the floor needs neither. This is general host preparation,
+not an installation prerequisite: normal install and test targets do not run
+it automatically.
+
+Run this command on the actual native Linux container-engine host. Automated
+tuning refuses non-Linux systems, remote engine endpoints, named Podman
+connections and Docker contexts, because local procfs cannot establish their
+host's readiness. Prepare the Linux engine host manually in those cases. The
+helper follows the Kind runtime's selection: `KIND_EXPERIMENTAL_PROVIDER`
+overrides Podman-first auto-detection (Docker otherwise). For a Docker target,
+it checks `docker context show` before reading or changing the limit, including
+the context persisted by `docker context use`. A local Unix `DOCKER_HOST`
+overrides that persisted context; an explicit `DOCKER_CONTEXT` is still refused.
+For Podman, `podman info` must report a recognized client transport mode.
+Native local mode ignores unused saved connections. API mode requires a
+resolved local Unix URI: an explicit `CONTAINER_HOST` takes precedence over
+the saved default connection. SSH/TCP transports, failed metadata queries,
+and unknown or unresolved transport metadata are refused before checking
+even an already-sufficient limit. Unix API sockets are supported; API mode
+alone does not imply a remote host. Persisted connection names, URIs and
+metadata-query diagnostics are never printed. Docker selection never queries
+Podman, and Podman selection never queries Docker.
+For example,
+`make ensure-inotify KIND_EXPERIMENTAL_PROVIDER=docker` selects Docker even
+when Podman is also installed. The target passes the selected provider through
+an exported environment value, not shell-source interpolation; only `docker`
+and `podman` are accepted. Context names and context-query diagnostics are not
+printed. The helper reports an error if the value cannot be read, raised or
+verified. Write-command stdout is suppressed and arbitrary stderr is never
+printed. Fixed diagnostic categories distinguish read-only filesystem,
+invalid argument, permission denied, sudo policy plugin failure and sudo
+authorization denial; unrecognized errors report a generic write failure.
+A passwordless-sudo hint appears only for a recognized password-required
+diagnostic. Other write errors are not assumed to be authorization failures.
+
 ```bash
 make install       PLATFORM=... PROFILE=... NS=...  # Full install (infra + osac)
 make install-infra PLATFORM=... PROFILE=... NS=...  # Infrastructure only
@@ -702,6 +755,7 @@ make install-osac  PLATFORM=... PROFILE=... NS=...  # OSAC application only
 make kind-load-images PLATFORM=kind PROFILE=dev-full NS=... # Load existing images
 make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
+make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage # API/operator disk handoff
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
 make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
@@ -710,6 +764,13 @@ make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm d
 ```
 
 ### Monitor Progress
+
+`SUITE=compute-storage` builds and deploys the current Fulfillment and operator
+images against an existing Kind infrastructure install. It checks disk Volume
+IDs and StorageClass mappings through the API, database, real controllers and
+an AAP HTTP recorder. It runs no playbooks or storage provisioning. This phase
+also runs as part of `SUITE=fulfillment`; see the
+[coverage and prerequisites](../docs/INTEGRATION-TESTING.md#computeinstance-disk-handoff-osac-6685).
 
 ```bash
 # Monitor pod creation and startup

@@ -43,6 +43,7 @@ type mockBareMetalInstancesClient struct {
 	signalCount  int
 	signalID     string
 	signalError  error
+	getCount     int
 	// onSignal, when set, is invoked at the moment Signal is called. Tests use it
 	// to observe hub state (e.g. whether the CR still exists) at signal time so
 	// ordering between finalizer removal and signaling is directly asserted.
@@ -54,6 +55,7 @@ func (m *mockBareMetalInstancesClient) List(_ context.Context, _ *privatev1.Bare
 }
 
 func (m *mockBareMetalInstancesClient) Get(_ context.Context, _ *privatev1.BareMetalInstancesGetRequest, _ ...grpc.CallOption) (*privatev1.BareMetalInstancesGetResponse, error) {
+	m.getCount++
 	return nil, errors.New("not implemented")
 }
 

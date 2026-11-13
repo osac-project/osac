@@ -129,9 +129,24 @@ status entry; KubeVirt feedback population is tracked by
 [OSAC-2479](https://redhat.atlassian.net/browse/OSAC-2479).
 
 An omitted attachment requests tenant defaults; a supplied attachment resolves
-missing fields individually. Consult the unified/default designs for validation
-of tenant ownership, subnet/security-group VirtualNetwork alignment, readiness,
-and BMaaS interface selection. Do not interchange these message types.
+missing fields individually. When required defaults are unavailable, Create
+returns `InvalidArgument` rather than persisting without an attachment (Cluster
+`network_attachment`, BareMetalInstance/ComputeInstance `network_attachments`).
+Because tenant defaults are tenant-wide, attachment resolution finds a supplied
+reference to the tenant's default Subnet or SecurityGroup from any project of
+the tenant; other cross-project references do not resolve. An exact ID of a
+default wins over a local resource with that name, and a local resource wins
+over a default with the same name. This extends the OSAC-1433 default-networking
+omitted-attachment rule to supplied references (OSAC-6312). ID references always
+reach this resolution. For ComputeInstance and Cluster create, a name-only
+reference reaches it only when the request omits `metadata.tenant`: with the
+tenant set, the request validator looks the name up only in `metadata.project`
+and rejects a default of another project.
+The `DefaultNetworkingReady` gate applies only to fields filled from tenant
+defaults, not to a supplied reference to a default. Consult the unified/default
+designs for validation of tenant ownership, subnet/security-group
+VirtualNetwork alignment, readiness, and BMaaS interface selection. Do not
+interchange these message types.
 
 ## Auto-created resource deletion
 
@@ -189,6 +204,12 @@ as follows:
   internet needs no DNS reachability. The settings `CUDN_EVPN_DNS_RESOLVERS`,
   `NETRIS_DNS_RESOLVERS`, `NETRIS_DNS_SNAT_CIDR` and the Netris per-VN DNS SNAT
   are removed.
+- **ExternalIPPool tenant:** as the unified design says, every ExternalIPPool
+  is shared by all tenants and lives in the `shared` tenant. A create that
+  omits the tenant gets `shared`; a create or update that names another tenant
+  is rejected with `PERMISSION_DENIED`. Automatic ExternalIP pool selection
+  does not check the pool's tenant, so it relies on this rule. Pools stored in
+  a tenant before this rule keep it, because the tenant is immutable.
 - **NetworkClass and NetworkAttachment CRDs:** the fulfillment reconciler
   creates the single NetworkClass CR, which resolves its managers from the
   registrations. BMaaS (BMF) and VMaaS create a NetworkAttachment per
@@ -209,13 +230,83 @@ as follows:
   manager names remain part of the NetworkClass spec but are not resolved;
   VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool and FabricDomain
   become Ready with reason `ProvisioningDisabled`; workloads create no
-  NetworkAttachment, and ExternalIP, ExternalIPAttachment and NATGateway are
-  not offered. The fulfillment service refuses to start when the stored value
-  changes.
+  NetworkAttachment. The networking APIs remain registered; registration does
+  not mean that every create operation is available. ExternalIP create fails
+  with `FailedPrecondition`, exact message `provider networking is disabled`,
+  before persistence or pool accounting changes. ExternalIPAttachment and
+  NATGateway need an ALLOCATED ExternalIP, so disabled provisioning cannot
+  establish their provider-backed paths. The fulfillment service refuses to
+  start when the stored value changes.
+- **CaaS endpoint lifecycle:** CaaS ClusterOrders using this shared lifecycle
+  discover the management API and guest ingress endpoints, request automatic
+  ExternalIPAttachments after each target is ready and its ExternalIP is
+  allocated, and own DNS publication/removal. Ingress reservation and release
+  use the generic Fabric Manager task contract selected from the Subnet; the
+  selected manager role is not hardcoded. The selected ClusterTemplate declares
+  the `supports_automatic_caas_endpoints` capability; Fulfillment stores that
+  resolved capability on the Cluster and projects it to the ClusterOrder, whose
+  controller uses it to select this lifecycle instead of matching template IDs.
+  With provider networking disabled,
+  ClusterOrder creates no endpoint jobs, reservations, DNS, or automatic
+  ExternalIP resources and reports `ProvisioningDisabled`. Templates that do
+  not declare the capability, including CI and NICo, keep their existing
+  endpoint flows. Neither flow uses a generic Fabric-Manager external-access
+  dispatcher.
+  DNS publication uses the HostedCluster's base domain and rejects it if it is
+  not in the configured supported-domain list before contacting
+  the DNS provider. DNS cleanup fails retryably when its domain is no longer
+  configured as supported, so automatic endpoint IPs remain held until record
+  removal succeeds for DNS backends that manage their records. `dns.noop.dns`
+  does not remove manually managed records; when it is used, operators must
+  remove manual endpoint records before deleting the Cluster or its automatic
+  ExternalIP attachments. Operational endpoint-task failures use the retryable
+  task path.
+  Retry-safe persistence and orphan cleanup remain tracked by
+  [OSAC-6655](https://redhat.atlassian.net/browse/OSAC-6655).
 - **CaaS workers:** worker BareMetalInstances live in tenant `system` and
   record their Cluster in status. The agent registration timeout (30 minutes)
   starts at the latest of the attempt start, the BMI network-ready time and
   the management publication, so network setup time does not count against it.
+
+## Networking reference coverage boundaries
+
+The [provider-networking control design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-unified-networking/design.md#provider-networking-control)
+distinguishes disabled registration/readiness from real provider operations.
+The BMaaS CI values no longer contain `externalIPContractVersion: ""`
+([removal in #2051](https://github.com/osac-project/osac/pull/2051)); do not
+restore it to make allocation-dependent tests run in a disabled profile.
+
+- **Disabled [QE] E2E:** `tests/e2e/references/test_networking_references.py`
+  selects shared pool ID/name rejection cases with `reference_networking`.
+  Each requires the exact error, no object under the unique name, unchanged
+  observed private ExternalIP ID set, and unchanged pool allocated/available
+  counters. It uses real APIs, database and operator readiness, not synthetic
+  ALLOCATED feedback. The fixture creates and deletes its own shared pool;
+  private API pool creation/read/deletion and ExternalIP observation/cleanup
+  permissions are required, not an existing ready pool. Run without concurrent
+  allocators; a read failure fails
+  the case rather than supplying a default snapshot.
+- **Enabled [QE] E2E:** the complete ordered
+  `tests/e2e/networking/vmaas/test_vmaas_networking.py` module tests eight
+  pool/VirtualNetwork/ExternalIP ID/name NAT combinations and eight
+  pool/ExternalIP/ComputeInstance ID/name attachment combinations. Every row
+  requires real API and CR allocation, canonical stored IDs, consumer readiness
+  and actual egress or SSH ingress with the intended guest's host key. Natural
+  release separates rows; the final row stays for subsequent lifecycle tests.
+  Netris, `cudn_evpn`, AAP, a routed pool and real KubeVirt guests are required.
+- **[DEV] helper units and Helm contracts:** exact-error parsing, request
+  selection and cleanup sequencing use fakes; default rendering and manager
+  registration checks do not prove provider allocation, routing or traffic.
+
+These are test contracts, not a claim of a successful deployed run. Keep
+exact-head BMaaS Full Install and enabled Netris execution evidence separate
+from collection/unit evidence. Service-specific BMaaS/CaaS attachment target
+permutations and attaching immediately after a VM becomes Ready are not
+established by the ComputeInstance reference rows. No new follow-up ticket or
+individual owner is assigned here; runner authorization and evidence remain
+with the responsible QE/CI operators. See
+[E2E suite boundaries](../testing/e2e.md#suite-boundaries)
+for selections and execution prerequisites.
 
 ## AgentlessNet NATGateway implementation status
 
@@ -242,3 +333,18 @@ The other AgentlessNet tasks (VirtualNetwork, Subnet, ExternalIPPool, ExternalIP
 ExternalIPAttachment) still read the per-kind playbook inputs, and AgentlessNet
 has no valid manager registration. NATGateway therefore cannot run on a deployed
 AgentlessNet until the role adopts the contract.
+
+## Subnet compute eligibility
+
+The Kubernetes `create_subnet` result additionally accepts optional
+`compute_instance_supported` (boolean) and
+`compute_instance_unsupported_reason` (string). The operator persists these
+with the successful task and reports them through Subnet status to the API
+and VM wizard. `cudn_evpn` reports true for the CUDN owner and false with a
+reason for a fabric-only sibling; both Subnets remain Ready. A manager returning
+no output defaults to supported. A Subnet without a Kubernetes manager is
+unsupported. With provider networking disabled, VMs use the cluster default
+pod network and the Subnet is supported. The `apply_network_attachment` task still validates current
+ownership before VM provisioning, including after the owner is removed.
+This is a local extension to the manager result contract; the matching
+accepted-design amendment remains to be published.

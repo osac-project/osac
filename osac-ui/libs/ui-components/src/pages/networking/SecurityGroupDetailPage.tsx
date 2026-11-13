@@ -30,7 +30,6 @@ import {
 } from '../../api/v1/networking';
 import { SecurityGroupRuleModal } from '../../components/networking/SecurityGroupRuleModal';
 import { SecurityGroupRulesTable } from '../../components/networking/SecurityGroupRulesTable';
-import { toPlainRule } from '../../components/networking/securityGroupRuleUtils';
 import { SecurityGroupStatusLabel } from '../../components/networking/SecurityGroupStatusLabel';
 import ListPage from '../../components/Page/ListPage';
 import ListPageBody from '../../components/Page/ListPageBody';
@@ -43,18 +42,17 @@ const securityGroupWithoutRule = (
   sg: SecurityGroup,
   target: Required<RuleTarget>,
 ): MessageInitShape<typeof SecurityGroupSchema> => {
-  const newIngress = (sg.spec?.ingress ?? []).map(toPlainRule);
-  const newEgress = (sg.spec?.egress ?? []).map(toPlainRule);
-  const targetList = target.direction === 'ingress' ? newIngress : newEgress;
+  const spec = {
+    egress: [...(sg.spec?.egress || [])],
+    ingress: [...(sg.spec?.ingress || [])],
+  };
+
+  const targetList = target.direction === 'ingress' ? spec.ingress : spec.egress;
   targetList.splice(target.ruleIndex, 1);
+
   return {
     id: sg.id,
-    metadata: { name: sg.metadata?.name ?? '' },
-    spec: {
-      virtualNetwork: sg.spec?.virtualNetwork,
-      ingress: newIngress,
-      egress: newEgress,
-    },
+    spec,
   };
 };
 

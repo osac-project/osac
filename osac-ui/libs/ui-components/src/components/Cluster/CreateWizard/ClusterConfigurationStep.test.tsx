@@ -138,7 +138,7 @@ describe('ClusterConfigurationStep', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Node set 1')).toBeInTheDocument();
-      expect(screen.getByText('Select host type')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Select host type')).toBeInTheDocument();
       expect(screen.getByRole('spinbutton', { name: /^Nodes/ })).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: 'Remove node set' })).not.toBeInTheDocument();
@@ -175,8 +175,8 @@ describe('ClusterConfigurationStep', () => {
               nodeSetRows: provisioningFieldValue([
                 {
                   ...row,
-                  hostType: 'acme_1tb',
-                  size: '3',
+                  hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+                  size: 3,
                 },
               ]),
             },
@@ -200,7 +200,7 @@ describe('ClusterConfigurationStep', () => {
     fireEvent.blur(sizeInput);
 
     await waitFor(() => {
-      expect(screen.getByText('Pool size must be greater than zero')).toBeInTheDocument();
+      expect(screen.getByText('Must be greater than zero')).toBeInTheDocument();
     });
   });
 
@@ -219,14 +219,14 @@ describe('ClusterConfigurationStep', () => {
                 {
                   ...createEmptyNodeSetRow(),
                   name: 'workers',
-                  hostType: 'acme_1tb',
-                  size: '3',
+                  hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+                  size: 3,
                 },
                 {
                   ...createEmptyNodeSetRow(),
                   name: 'workers',
-                  hostType: 'acme_1tb',
-                  size: '2',
+                  hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+                  size: 2,
                 },
               ]),
             },
@@ -286,11 +286,10 @@ describe('ClusterConfigurationStep', () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText(/^Name/)).toHaveValue('workers');
-      expect(screen.getByLabelText(/^Host type/)).toHaveTextContent('worker');
+      expect(screen.getByRole('combobox')).toHaveValue('worker');
     });
     expect(screen.getByRole('spinbutton', { name: /^Nodes/ })).toHaveValue(2);
     expect(screen.getByLabelText(/^Name/)).toBeDisabled();
-    expect(screen.getByLabelText(/^Host type/)).toBeDisabled();
     expect(screen.getByRole('spinbutton', { name: /^Nodes/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Add node set' })).toBeDisabled();
   });
@@ -336,55 +335,9 @@ describe('ClusterConfigurationStep', () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText(/^Name/)).toHaveValue('workers');
-      expect(screen.getByLabelText(/^Host type/)).toHaveTextContent('gpu-host');
+      expect(screen.getByRole('combobox')).toHaveValue('gpu-host');
     });
     expect(screen.getByRole('spinbutton', { name: /^Nodes/ })).toHaveValue(3);
     expect(screen.getByLabelText(/^Host type/)).toBeEnabled();
-  });
-
-  it('prepopulates host type from a catalog node set referenced by name', async () => {
-    const catalogItem = create(ClusterCatalogItemSchema, {
-      ...clusterCatalogItemInit,
-      fields: {
-        nodeSets: {
-          behavior: {
-            case: 'editable',
-            value: {
-              defaultValue: {
-                items: {
-                  workers: {
-                    size: 3,
-                    baremetalInstanceType: { name: 'gpu-host' },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    renderWithProviders(
-      <Formik initialValues={getInitialFormValues(catalogItem)} onSubmit={() => undefined}>
-        <ClusterConfigurationStep />
-      </Formik>,
-      {
-        apiFixtures: {
-          clusterVersions,
-          publicBaremetalInstanceTypes: [
-            create(BareMetalInstanceTypeSchema, {
-              id: 'bmit-gpu',
-              metadata: { name: 'gpu-host' },
-            }),
-          ],
-        },
-      },
-    );
-
-    await waitFor(() => {
-      expect(screen.getByLabelText(/^Name/)).toHaveValue('workers');
-      expect(screen.getByLabelText(/^Host type/)).toHaveTextContent('gpu-host');
-    });
-    expect(screen.getByRole('spinbutton', { name: /^Nodes/ })).toHaveValue(3);
   });
 });

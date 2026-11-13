@@ -1,30 +1,14 @@
 import { Route, Routes } from 'react-router-dom';
-import { screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Code, ConnectError } from '@connectrpc/connect';
+import { screen, within } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 
 import type { StorageBackend } from '@osac/types/private';
 import { StorageBackendState } from '@osac/types/private';
 
 import { StorageBackendDetailsPage } from './StorageBackendDetailsPage';
-import * as storageBackendsApi from '../../api/v1/private/storage-backends';
+import type { MockTransportOverrides } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
-
-vi.mock('../../api/v1/private/storage-backends', async (importOriginal) => {
-  const actual = await importOriginal<typeof storageBackendsApi>();
-  return {
-    ...actual,
-    usePrivateStorageBackend: vi.fn(),
-  };
-});
-
-const mockNavigate = vi.fn();
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>();
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-  };
-});
 
 const mockBackend = {
   id: 'backend-1',
@@ -38,65 +22,59 @@ const mockBackend = {
   status: { state: StorageBackendState.READY, message: 'Reachable' },
 } as StorageBackend;
 
-const mockUsePrivateStorageBackend = (
-  overrides: Partial<ReturnType<typeof storageBackendsApi.usePrivateStorageBackend>>,
+const renderPage = (
+  backends: StorageBackend[] = [mockBackend],
+  transportOverrides?: MockTransportOverrides,
 ) =>
-  vi.mocked(storageBackendsApi.usePrivateStorageBackend).mockReturnValue({
-    data: undefined,
-    isLoading: false,
-    isError: false,
-    error: null,
-    refetch: vi.fn(),
-    ...overrides,
-  } as unknown as ReturnType<typeof storageBackendsApi.usePrivateStorageBackend>);
-
-const renderPage = () =>
   renderWithProviders(
     <Routes>
       <Route
         path="/admin/infrastructure/storage/backends/:id"
         element={<StorageBackendDetailsPage />}
       />
+      <Route
+        path="/admin/infrastructure/storage/backends/:id/edit"
+        element={<div>navigated-to-edit</div>}
+      />
+      <Route path="/admin/infrastructure/storage/backends" element={<div>navigated-to-list</div>} />
     </Routes>,
-    { routerEntries: ['/admin/infrastructure/storage/backends/backend-1'] },
+    {
+      apiFixtures: { storageBackends: backends },
+      routerEntries: ['/admin/infrastructure/storage/backends/backend-1'],
+      transportOverrides,
+    },
   );
 
 describe('StorageBackendDetailsPage', () => {
-  beforeEach(() => {
-    mockNavigate.mockReset();
-  });
-
   it('renders a loading state while the backend is being fetched', () => {
-    mockUsePrivateStorageBackend({ isLoading: true });
+    renderPage([], {
+      onStorageBackendGet: () => new Promise(() => undefined),
+    });
 
-    renderPage();
-
-    expect(screen.getByText('Storage Backends')).toBeInTheDocument();
+    expect(screen.getByText('Loading resource title')).toBeInTheDocument();
   });
 
-  it('renders an error state when the fetch fails', () => {
-    mockUsePrivateStorageBackend({ isError: true, error: new Error('boom') });
+  it('renders an error state when the fetch fails', async () => {
+    renderPage([], {
+      onStorageBackendGet: () => {
+        throw new ConnectError('backend service unavailable', Code.Unavailable);
+      },
+    });
 
-    renderPage();
-
-    expect(screen.getByText('Could not load storage backend')).toBeInTheDocument();
+    expect(await screen.findByText('Could not load storage backend')).toBeInTheDocument();
   });
 
-  it('renders a not-found state when the backend does not exist', () => {
-    mockUsePrivateStorageBackend({});
+  it('renders a not-found state when the backend does not exist', async () => {
+    renderPage([]);
 
-    renderPage();
-
-    expect(screen.getByText('Storage backend not found')).toBeInTheDocument();
+    expect(await screen.findByText('Storage backend not found')).toBeInTheDocument();
   });
 
-  it('renders backend details and never renders credentials', () => {
-    mockUsePrivateStorageBackend({ data: mockBackend });
-
+  it('renders backend details and never renders credentials', async () => {
     renderPage();
 
-    expect(screen.getByRole('heading', { name: 'vast-prod' })).toBeInTheDocument();
-    expect(screen.getByText('vast')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'vast-prod' })).toBeInTheDocument();
+    expect(screen.getByText('VAST Data')).toBeInTheDocument();
     expect(screen.getByText('Ownership mode')).toBeInTheDocument();
     expect(screen.getByText('OSAC-managed')).toBeInTheDocument();
     expect(screen.getByText('vast.example.com:443')).toBeInTheDocument();
@@ -107,42 +85,34 @@ describe('StorageBackendDetailsPage', () => {
     expect(screen.queryByText('test-secret')).not.toBeInTheDocument();
   });
 
-  it('identifies a NetApp backend as CSP-managed', () => {
-    mockUsePrivateStorageBackend({
-      data: {
+  it('identifies a NetApp backend as CSP-managed', async () => {
+    renderPage([
+      {
         ...mockBackend,
         spec: { ...mockBackend.spec, provider: 'netapp', cspManaged: true, endpoint: '' },
       } as StorageBackend,
-    });
+    ]);
 
-    renderPage();
-
-    expect(screen.getByText('netapp')).toBeInTheDocument();
+    expect(await screen.findByText('NetApp ONTAP')).toBeInTheDocument();
     expect(screen.getByText('CSP-managed')).toBeInTheDocument();
   });
 
   it('navigates to the edit route when Edit is clicked', async () => {
-    mockUsePrivateStorageBackend({ data: mockBackend });
-
     const { user } = renderPage();
 
+    await screen.findByRole('heading', { name: 'vast-prod' });
     await user.click(screen.getByRole('button', { name: /^Edit$/i }));
 
-    expect(mockNavigate).toHaveBeenCalledWith(
-      '/admin/infrastructure/storage/backends/backend-1/edit',
-    );
+    expect(await screen.findByText('navigated-to-edit')).toBeInTheDocument();
   });
 
   it('navigates to the list after a successful delete', async () => {
-    mockUsePrivateStorageBackend({ data: mockBackend });
-
     const { user } = renderPage();
 
+    await screen.findByRole('heading', { name: 'vast-prod' });
     await user.click(screen.getByRole('button', { name: /^Delete$/i }));
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^Delete$/i }));
 
-    await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/admin/infrastructure/storage/backends');
-    });
+    expect(await screen.findByText('navigated-to-list')).toBeInTheDocument();
   });
 });

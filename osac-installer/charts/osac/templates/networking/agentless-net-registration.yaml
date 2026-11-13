@@ -1,0 +1,17 @@
+{{- if eq (.Values.global.networking.fabricManager | default "") "agentless_net" }}
+{{/* AgentlessNet is a provider-owned Fabric Manager, registered in the same
+format as Netris under the network manager contract. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-network-fabric-manager-agentless-net
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+    osac.openshift.io/network-fabric-manager: "true"
+immutable: true
+data:
+  name: agentless_net
+  ansible_role: osac.templates.agentless_net
+  capabilities: security_group_icmp
+{{- end }}

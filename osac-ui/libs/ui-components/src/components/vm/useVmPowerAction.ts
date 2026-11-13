@@ -1,25 +1,51 @@
-import { getPowerActionErrorTitle, getPowerActionSuccessTitle } from './powerActionErrorTitle';
+import { type MessageInitShape } from '@bufbuild/protobuf';
+import { timestampNow } from '@bufbuild/protobuf/wkt';
+
+import { ComputeInstanceRunStrategy, ComputeInstanceSchema, ComputeInstances } from '@osac/types';
+
 import {
   type ComputeInstancePowerAction,
-  usePatchComputeInstance,
-} from '../../api/v1/compute-instance';
+  getPowerActionErrorTitle,
+  getPowerActionSuccessTitle,
+} from './powerActionErrorTitle';
+import { useUpdateResource } from '../../api/use-resource';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { useToast } from '../Toast/useToast';
+
+const buildPowerActionBody = (
+  powerAction: ComputeInstancePowerAction,
+): MessageInitShape<typeof ComputeInstanceSchema> => {
+  switch (powerAction) {
+    case 'stop':
+      return {
+        spec: { runStrategy: ComputeInstanceRunStrategy.COMPUTE_INSTANCE_RUN_STRATEGY_HALTED },
+      };
+    case 'start':
+      return {
+        spec: { runStrategy: ComputeInstanceRunStrategy.COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS },
+      };
+    case 'restart':
+      return { spec: { restartRequestedAt: timestampNow() } };
+  }
+};
 
 /** Runs a VM lifecycle power action and surfaces a toast on success or failure. */
 export const useVmPowerAction = () => {
   const { t } = useTranslation();
   const { addToast } = useToast();
-  const patchVm = usePatchComputeInstance();
+  const updateVm = useUpdateResource(ComputeInstances);
 
   const runPowerAction = (
     vmId: string,
     vmName: string,
     powerAction: ComputeInstancePowerAction,
   ) => {
-    patchVm.mutate(
-      { id: vmId, powerAction },
+    const body = buildPowerActionBody(powerAction);
+    updateVm.mutate(
+      {
+        object: { id: vmId, ...body },
+      },
       {
         onSuccess: () => {
           addToast({

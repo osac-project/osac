@@ -1,3 +1,13 @@
 ---
-- fail:
-    msg: Get Port Conf is not implimented for cumulus
+- name: "cumulus: read the bridge state of {{ port_name }}"
+  raw: "bridge -j vlan show dev {{ port_name }}"
+  register: _cumulus_bridge_port
+  changed_when: false
+  no_log: true
+
+- name: "cumulus: normalize the port state"
+  ansible.builtin.set_fact:
+    network_runner_port: >-
+      {{ _cumulus_bridge_port.stdout
+         | ansible_network.network_runner.cumulus_port(port_name) }}
+  no_log: true

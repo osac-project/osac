@@ -14,6 +14,11 @@ describe('ProvisioningFieldGroup', () => {
     );
 
     expect(screen.getByText('Disk 1')).toBeInTheDocument();
+    expect(screen.getByRole('group')).toHaveAttribute('aria-labelledby', 'disk-1');
+    expect(screen.getByRole('heading', { name: 'Disk 1', level: 2 })).toHaveAttribute(
+      'id',
+      'disk-1',
+    );
     expect(screen.getByText('Size control')).toBeInTheDocument();
   });
 

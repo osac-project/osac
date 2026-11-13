@@ -2,14 +2,21 @@ import { Route, Routes } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import type { StorageBackend, StorageTier, StorageTiersCreateResponse } from '@osac/types/private';
+import type {
+  StorageBackend,
+  StorageTier,
+  StorageTiersCreateRequest,
+  StorageTiersCreateResponse,
+  StorageTiersUpdateRequest,
+} from '@osac/types/private';
 import {
   StorageBackendState,
   StorageProtocol,
   StorageTierState,
   StorageTiersCreateResponseSchema,
+  StorageTiersUpdateResponseSchema,
 } from '@osac/types/private';
 
 import StorageTierCreatePage from './StorageTierCreatePage';
@@ -17,20 +24,6 @@ import {
   type RenderWithProvidersOptions,
   renderWithProviders,
 } from '../../test-utils/TestProviders';
-
-const mockNavigate = vi.fn();
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>();
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-    // useBlocker requires a data router; this test harness renders under a plain
-    // MemoryRouter, so LeaveFormConfirmation's blocking behavior is stubbed out
-    // rather than exercised here (see StorageBackendCreatePage.test.tsx for the
-    // same pattern).
-    useBlocker: () => ({ state: 'unblocked' as const }),
-  };
-});
 
 const readyBackend = {
   id: 'backend-1',
@@ -46,8 +39,18 @@ const notReadyBackend = {
   status: { state: StorageBackendState.UNSPECIFIED },
 } as StorageBackend;
 
+const CREATE_ROUTE_PATH = '/admin/infrastructure/storage/tiers/create';
+const TIERS_LIST_PATH = '/admin/infrastructure/storage/tiers';
+
 const renderCreatePage = (options: RenderWithProvidersOptions = {}) =>
-  renderWithProviders(<StorageTierCreatePage />, options);
+  renderWithProviders(
+    <Routes>
+      <Route path={CREATE_ROUTE_PATH} element={<StorageTierCreatePage />} />
+      <Route path={`${TIERS_LIST_PATH}/:id`} element={<div>navigated-to-tier-details</div>} />
+      <Route path={TIERS_LIST_PATH} element={<div>navigated-to-tiers</div>} />
+    </Routes>,
+    { routerEntries: [CREATE_ROUTE_PATH], ...options },
+  );
 
 const fillValidForm = async (user: ReturnType<typeof renderCreatePage>['user']) => {
   await user.type(screen.getByRole('textbox', { name: 'Name' }), 'fast-tier');
@@ -88,6 +91,7 @@ const renderEditPage = (options: RenderWithProvidersOptions = {}) =>
   renderWithProviders(
     <Routes>
       <Route path={EDIT_ROUTE_PATH} element={<StorageTierCreatePage />} />
+      <Route path={TIERS_LIST_PATH} element={<div>navigated-to-tiers</div>} />
     </Routes>,
     {
       routerEntries: [EDIT_PATH],
@@ -100,10 +104,6 @@ const renderEditPage = (options: RenderWithProvidersOptions = {}) =>
   );
 
 describe('StorageTierCreatePage', () => {
-  beforeEach(() => {
-    mockNavigate.mockReset();
-  });
-
   describe('create mode', () => {
     it('renders the page title, fields, and actions', () => {
       renderCreatePage({ apiFixtures: { storageBackends: [readyBackend] } });
@@ -173,49 +173,37 @@ describe('StorageTierCreatePage', () => {
     });
 
     it('submits the protocol and backend association, navigating to the created tier details page on success', async () => {
-      const onStorageTierCreate = vi.fn(
-        (req: { object?: { metadata?: unknown; spec?: unknown } }) => ({
-          object: {
-            id: 'new-tier-1',
-            metadata: req.object?.metadata,
-            spec: req.object?.spec,
-            status: { state: 0 },
-          },
-        }),
-      );
+      let createRequest: StorageTiersCreateRequest | undefined;
 
       const { user } = renderCreatePage({
         apiFixtures: { storageBackends: [readyBackend] },
-        transportOverrides: { onStorageTierCreate: onStorageTierCreate as never },
+        transportOverrides: {
+          onStorageTierCreate: (request) => {
+            createRequest = request;
+            return create(StorageTiersCreateResponseSchema, {
+              object: {
+                id: 'new-tier-1',
+                metadata: request.object?.metadata,
+                spec: request.object?.spec,
+                status: { state: StorageTierState.ACTIVE },
+              },
+            });
+          },
+        },
       });
 
       await fillValidForm(user);
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
-      await waitFor(() => {
-        expect(onStorageTierCreate).toHaveBeenCalledTimes(1);
-      });
+      expect(await screen.findByText('navigated-to-tier-details')).toBeInTheDocument();
 
-      const request = onStorageTierCreate.mock.calls[0][0];
-      expect(request.object?.metadata).toMatchObject({ name: 'fast-tier' });
-      const spec = request.object?.spec as {
-        protocol?: StorageProtocol;
-        backends?: unknown[];
-      };
-      expect(spec).toMatchObject({
+      expect(createRequest?.object?.metadata).toMatchObject({ name: 'fast-tier' });
+      expect(createRequest?.object?.spec).toMatchObject({
         protocol: StorageProtocol.NFS,
+        backends: [{ backendId: 'backend-1' }],
       });
-      expect(Array.isArray(spec.backends)).toBe(true);
-      expect(spec.backends).toHaveLength(1);
-      expect(spec.backends?.[0]).toMatchObject({
-        backendId: 'backend-1',
-      });
-      expect(spec.backends?.[0]).not.toHaveProperty('protocol');
-      expect(spec.backends?.[0]).not.toHaveProperty('quotaGib');
-
-      await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('/admin/infrastructure/storage/tiers/new-tier-1');
-      });
+      expect(createRequest?.object?.spec?.backends[0]).not.toHaveProperty('protocol');
+      expect(createRequest?.object?.spec?.backends[0]).not.toHaveProperty('quotaGib');
     });
 
     it('disables Create while the submission is pending, to prevent duplicate submissions', async () => {
@@ -244,9 +232,7 @@ describe('StorageTierCreatePage', () => {
 
       resolveCreate?.();
 
-      await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('/admin/infrastructure/storage/tiers/new-tier-1');
-      });
+      expect(await screen.findByText('navigated-to-tier-details')).toBeInTheDocument();
     }, 15000);
 
     it('shows the ALREADY_EXISTS error as a form-level error without navigating away', async () => {
@@ -265,7 +251,7 @@ describe('StorageTierCreatePage', () => {
       await waitFor(() => {
         expect(screen.getByText('Storage tier name already exists')).toBeInTheDocument();
       });
-      expect(mockNavigate).not.toHaveBeenCalled();
+      expect(screen.getByRole('heading', { name: 'Create storage tier' })).toBeInTheDocument();
     });
 
     it('shows the NOT_FOUND error as a form-level error without navigating away', async () => {
@@ -284,7 +270,7 @@ describe('StorageTierCreatePage', () => {
       await waitFor(() => {
         expect(screen.getByText('Storage backend backend-1 not found')).toBeInTheDocument();
       });
-      expect(mockNavigate).not.toHaveBeenCalled();
+      expect(screen.getByRole('heading', { name: 'Create storage tier' })).toBeInTheDocument();
     });
   });
 
@@ -337,16 +323,14 @@ describe('StorageTierCreatePage', () => {
     });
 
     it('submits spec.backends and spec.description together when the description changes', async () => {
-      const onStorageTierUpdate = vi.fn(
-        (req: { object?: { metadata?: unknown; spec?: unknown } }) => ({
-          object: {
-            ...existingTier,
-            spec: { ...existingTier.spec, ...(req.object?.spec as object) },
-          },
-        }),
-      );
+      let updateRequest: StorageTiersUpdateRequest | undefined;
       const { user } = renderEditPage({
-        transportOverrides: { onStorageTierUpdate: onStorageTierUpdate as never },
+        transportOverrides: {
+          onStorageTierUpdate: (request) => {
+            updateRequest = request;
+            return create(StorageTiersUpdateResponseSchema, { object: existingTier });
+          },
+        },
       });
 
       const descriptionInput = await screen.findByRole('textbox', { name: 'Description' });
@@ -354,57 +338,45 @@ describe('StorageTierCreatePage', () => {
       await user.type(descriptionInput, 'updated description');
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
-      await waitFor(() => expect(onStorageTierUpdate).toHaveBeenCalledTimes(1));
-      const request = onStorageTierUpdate.mock.calls[0][0] as {
-        object?: {
-          spec?: { description?: string; backends?: unknown; protocol?: unknown };
-          metadata?: unknown;
-        };
-        updateMask?: { paths?: string[] };
-        lock?: boolean;
-      };
-      expect(request.object?.spec?.description).toBe('updated description');
-      expect(request.object?.spec?.backends).toMatchObject([{ backendId: 'backend-2' }]);
-      expect(request.updateMask?.paths).toEqual([
+      expect(await screen.findByText('navigated-to-tiers')).toBeInTheDocument();
+
+      expect(updateRequest?.object?.spec?.description).toBe('updated description');
+      expect(updateRequest?.object?.spec?.backends).toMatchObject([{ backendId: 'backend-2' }]);
+      expect(updateRequest?.updateMask?.paths).toEqual([
+        'metadata.version',
         'spec.protocol',
         'spec.backends',
         'spec.description',
       ]);
-      expect(request.lock).toBe(true);
-      expect(request.object?.metadata).toMatchObject({ version: 5 });
-
-      await waitFor(() =>
-        expect(mockNavigate).toHaveBeenCalledWith('/admin/infrastructure/storage/tiers'),
-      );
+      expect(updateRequest?.object?.metadata).toMatchObject({ version: 5 });
     });
 
     it('submits protocol and spec.backends together, masked accordingly, when the protocol changes', async () => {
-      const onStorageTierUpdate = vi.fn((_req: { object?: unknown; updateMask?: unknown }) => ({
-        object: { ...existingTier },
-      }));
+      let updateRequest: StorageTiersUpdateRequest | undefined;
       const { user } = renderEditPage({
-        transportOverrides: { onStorageTierUpdate: onStorageTierUpdate as never },
+        transportOverrides: {
+          onStorageTierUpdate: (request) => {
+            updateRequest = request;
+            return create(StorageTiersUpdateResponseSchema, { object: existingTier });
+          },
+        },
       });
 
       await screen.findByRole('radio', { name: 'NFS' });
       await user.click(screen.getByRole('radio', { name: 'Block' }));
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
-      await waitFor(() => expect(onStorageTierUpdate).toHaveBeenCalledTimes(1));
-      const request = onStorageTierUpdate.mock.calls[0][0] as {
-        object?: {
-          spec?: {
-            protocol?: StorageProtocol;
-            backends?: unknown;
-          };
-        };
-        updateMask?: { paths?: string[] };
-      };
-      expect(request.updateMask?.paths).toEqual(['spec.protocol', 'spec.backends']);
-      expect(request.object?.spec).toMatchObject({
+      expect(await screen.findByText('navigated-to-tiers')).toBeInTheDocument();
+
+      expect(updateRequest?.updateMask?.paths).toEqual([
+        'metadata.version',
+        'spec.protocol',
+        'spec.backends',
+      ]);
+      expect(updateRequest?.object?.spec).toMatchObject({
         protocol: StorageProtocol.BLOCK,
       });
-      expect(request.object?.spec?.backends).toMatchObject([
+      expect(updateRequest?.object?.spec?.backends).toMatchObject([
         {
           backendId: 'backend-2',
         },
@@ -412,23 +384,27 @@ describe('StorageTierCreatePage', () => {
     });
 
     it('submits protocol and spec.backends with the same update_mask even when nothing changed', async () => {
-      const onStorageTierUpdate = vi.fn((_req: { object?: unknown; updateMask?: unknown }) => ({
-        object: { ...existingTier },
-      }));
+      let updateRequest: StorageTiersUpdateRequest | undefined;
       const { user } = renderEditPage({
-        transportOverrides: { onStorageTierUpdate: onStorageTierUpdate as never },
+        transportOverrides: {
+          onStorageTierUpdate: (request) => {
+            updateRequest = request;
+            return create(StorageTiersUpdateResponseSchema, { object: existingTier });
+          },
+        },
       });
 
       await screen.findByRole('textbox', { name: 'Description' });
       await user.click(screen.getByRole('button', { name: 'Save' }));
 
-      await waitFor(() => expect(onStorageTierUpdate).toHaveBeenCalledTimes(1));
-      const request = onStorageTierUpdate.mock.calls[0][0] as {
-        object?: { spec?: { backends?: unknown; description?: unknown } };
-        updateMask?: { paths?: string[] };
-      };
-      expect(request.updateMask?.paths).toEqual(['spec.protocol', 'spec.backends']);
-      expect(request.object?.spec?.backends).toMatchObject([{ backendId: 'backend-2' }]);
+      expect(await screen.findByText('navigated-to-tiers')).toBeInTheDocument();
+
+      expect(updateRequest?.updateMask?.paths).toEqual([
+        'metadata.version',
+        'spec.protocol',
+        'spec.backends',
+      ]);
+      expect(updateRequest?.object?.spec?.backends).toMatchObject([{ backendId: 'backend-2' }]);
     });
 
     it('shows a stale-version conflict as a submission error without navigating', async () => {
@@ -453,7 +429,7 @@ describe('StorageTierCreatePage', () => {
           screen.getByText('Storage tier has been modified since it was read'),
         ).toBeInTheDocument();
       });
-      expect(mockNavigate).not.toHaveBeenCalled();
+      expect(screen.queryByText('navigated-to-tiers')).not.toBeInTheDocument();
     });
 
     it('navigates back to the tiers list on cancel', async () => {
@@ -462,7 +438,7 @@ describe('StorageTierCreatePage', () => {
       await screen.findByRole('button', { name: 'Cancel' });
       await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
-      expect(mockNavigate).toHaveBeenCalledWith('/admin/infrastructure/storage/tiers');
+      expect(await screen.findByText('navigated-to-tiers')).toBeInTheDocument();
     });
   });
 });

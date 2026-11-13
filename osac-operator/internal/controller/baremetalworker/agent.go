@@ -17,10 +17,11 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
 )
 
 const (
-	agentInstallAPIVersion = "v1beta1"
+	agentInstallAPIVersion = assistedservice.AgentInstallAPIVersion
 
 	agentBareMetalRoleLabel = "agentBareMetal"
 	workerNameLabel         = "osac.openshift.io/worker-name"
@@ -37,7 +38,7 @@ const (
 )
 
 var agentGVK = schema.GroupVersionKind{
-	Group: "agent-install.openshift.io", Version: agentInstallAPIVersion, Kind: "Agent",
+	Group: assistedservice.AgentInstallAPIGroup, Version: agentInstallAPIVersion, Kind: "Agent",
 }
 
 // reconcileObservedAgents performs Agent actions against the invocation snapshot:

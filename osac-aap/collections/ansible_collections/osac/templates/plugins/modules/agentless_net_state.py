@@ -6,6 +6,8 @@ from __future__ import annotations
 from ansible.module_utils.basic import AnsibleModule
 
 from ansible_collections.osac.templates.plugins.module_utils.agentless_net_state import (
+    PublicStateError,
+    RetryableStateError,
     StateError,
     StateStore,
 )
@@ -21,9 +23,9 @@ DOCUMENTATION = r"""
 module: agentless_net_state
 short_description: Provision or remove AgentlessNet network state
 description:
-  - Reserves a tenant-owned UID-keyed VirtualNetwork mapping before applying network state.
-  - Registers ExternalIPPools by Kubernetes UID, Fulfillment UUID, tenant, family, and CIDR.
-  - Uses SQLite indexes and per-UID operation locks for state updates.
+  - Reserves API-ID-owned VirtualNetwork and Subnet provider state.
+  - Registers shared ExternalIPPools and tenant-owned ExternalIPs by API ID.
+  - Uses SQLite indexes and per-resource operation locks for state updates.
   - Retains an allocation until provider cleanup has completed.
 options:
   action:
@@ -53,7 +55,7 @@ options:
     type: path
     required: true
   uid:
-    description: Stable VirtualNetwork UID.
+    description: Stable OSAC resource API ID.
     type: str
     required: true
   tenant_id:
@@ -61,7 +63,7 @@ options:
     type: str
     required: true
   fulfillment_id:
-    description: Fulfillment UUID label on an ExternalIPPool.
+    description: API ID retained in existing indexed state columns.
     type: str
   ip_family:
     description: ExternalIPPool address family; only IPv4 is supported.
@@ -71,7 +73,7 @@ options:
     type: list
     elements: str
   pool_uid:
-    description: Kubernetes UID of the registered ExternalIPPool.
+    description: API ID of the registered ExternalIPPool.
     type: str
   pool_fulfillment_id:
     description: Fulfillment UUID of the registered ExternalIPPool.
@@ -86,7 +88,10 @@ options:
     description: VirtualNetwork IPv4 supernet.
     type: str
   virtual_network_uid:
-    description: Stable Kubernetes UID of the parent VirtualNetwork.
+    description: API ID of the parent VirtualNetwork.
+    type: str
+  subnet_uid:
+    description: API ID of the attached Subnet.
     type: str
   subnet_cidr:
     description: Canonical IPv4 CIDR requested for this Subnet.
@@ -98,8 +103,21 @@ options:
     description: Raw bridge VLAN membership and NVUE reserved-range output from every configured switch.
     type: list
     elements: dict
-  vip_cidr:
-    description: Optional upper-end VIP block excluded from the DHCP range.
+  ipam:
+    description: OSAC-recorded Subnet address plan.
+    type: dict
+  host_name:
+    description: Bare-metal inventory host name from the attachment target.
+    type: str
+  interface_name:
+    description: Bare-metal host interface name from the attachment.
+    type: str
+  ports:
+    description: Saved Cumulus switch ports owned by the NetworkAttachment.
+    type: list
+    elements: dict
+  dhcp_supervisor:
+    description: Preflighted DHCP service supervisor for the VirtualNetwork.
     type: str
   attachment_context:
     description: Controller-resolved ExternalIPAttachment dependency snapshot.
@@ -137,8 +155,8 @@ EXAMPLES = r"""
 
 RETURN = r"""
 backend_network_id:
-  description: Stable provider identifier, equal to the OSAC resource UID.
-  returned: for VirtualNetwork and ExternalIPPool actions
+  description: Stable provider identifier, equal to the OSAC resource API ID.
+  returned: Internal module output; networking tasks set only contract results.
   type: str
 found:
   description: Whether a saved Subnet reservation was found.
@@ -157,7 +175,7 @@ pool:
   returned: for ExternalIPPool actions when the pool exists or would be registered
   type: dict
 external_ip:
-  description: UID-owned ExternalIP reservation.
+  description: API-ID-owned ExternalIP reservation.
   returned: for ExternalIP reservation actions when one exists or would be allocated
   type: dict
 """
@@ -197,6 +215,11 @@ def main() -> None:
                     "delete_external_ip_attachment",
                     "ensure_nat_gateway",
                     "delete_nat_gateway",
+                    "prepare_network_attachment",
+                    "mark_network_attachment_ready",
+                    "begin_delete_network_attachment",
+                    "finish_delete_network_attachment",
+                    "get_network_attachment",
                 ],
             },
             "state_file": {"type": "path", "required": True},
@@ -211,6 +234,7 @@ def main() -> None:
             "pool_cidr": {"type": "str"},
             "virtual_network_cidr": {"type": "str"},
             "virtual_network_uid": {"type": "str"},
+            "subnet_uid": {"type": "str"},
             "subnet_cidr": {"type": "str"},
             "trunk_interface": {"type": "str"},
             "observed_switch_vlan_state": {
@@ -218,8 +242,12 @@ def main() -> None:
                 "elements": "dict",
                 "default": [],
             },
-            "vip_cidr": {"type": "str", "default": ""},
+            "ipam": {"type": "dict"},
             "mac_address": {"type": "str"},
+            "host_name": {"type": "str"},
+            "interface_name": {"type": "str"},
+            "ports": {"type": "list", "elements": "dict"},
+            "dhcp_supervisor": {"type": "str"},
             "attachment_context": {"type": "dict"},
             "nat_gateway_context": {"type": "dict"},
             "external_interface": {"type": "str"},
@@ -238,9 +266,9 @@ def main() -> None:
                     "subnet_cidr",
                     "trunk_interface",
                     "observed_switch_vlan_state",
+                    "ipam",
                 ],
             ),
-            ("action", "query_dhcp_lease", ["mac_address"]),
             (
                 "action",
                 "ensure_external_ip_pool",
@@ -266,13 +294,19 @@ def main() -> None:
                 "ensure_external_ip_attachment",
                 ["fulfillment_id", "attachment_context", "external_interface"],
             ),
-            ("action", "delete_external_ip_attachment", ["fulfillment_id"]),
+            ("action", "delete_external_ip_attachment", ["fulfillment_id", "attachment_context"]),
             (
                 "action",
                 "ensure_nat_gateway",
                 ["fulfillment_id", "nat_gateway_context", "external_interface"],
             ),
-            ("action", "delete_nat_gateway", ["fulfillment_id"]),
+            ("action", "delete_nat_gateway", ["fulfillment_id", "nat_gateway_context"]),
+            (
+                "action",
+                "prepare_network_attachment",
+                ["virtual_network_uid", "subnet_uid", "host_name", "interface_name", "mac_address", "ports"],
+            ),
+            ("action", "begin_delete_network_attachment", ["virtual_network_uid"]),
         ],
         supports_check_mode=True,
     )
@@ -352,6 +386,7 @@ def main() -> None:
                     params["uid"],
                     params["fulfillment_id"],
                     params["tenant_id"],
+                    params["attachment_context"],
                     check_mode=module.check_mode,
                 )
             module.exit_json(changed=changed, backend_network_id=params["uid"])
@@ -376,6 +411,7 @@ def main() -> None:
                     params["uid"],
                     params["fulfillment_id"],
                     params["tenant_id"],
+                    params["nat_gateway_context"],
                     check_mode=module.check_mode,
                 )
                 module.exit_json(changed=changed, backend_network_id=params["uid"])
@@ -410,13 +446,64 @@ def main() -> None:
             lease = store.query_dhcp_lease(
                 params["uid"],
                 params["tenant_id"],
-                params["mac_address"],
             )
             module.exit_json(
                 changed=False,
                 found=lease is not None,
                 **({"lease": lease} if lease is not None else {}),
             )
+
+        if params["action"] == "get_network_attachment":
+            attachment = store.get_network_attachment(
+                params["uid"], params["tenant_id"]
+            )
+            module.exit_json(
+                changed=False,
+                found=attachment is not None,
+                attachment=attachment or {},
+            )
+
+        if params["action"] == "prepare_network_attachment":
+            entry, state_changed, dhcp_changed = store.prepare_network_attachment(
+                params["uid"],
+                params["tenant_id"],
+                params["virtual_network_uid"],
+                params["subnet_uid"],
+                params["host_name"],
+                params["interface_name"],
+                params["mac_address"],
+                params["ports"],
+                params.get("dhcp_supervisor"),
+                check_mode=module.check_mode,
+            )
+            module.exit_json(
+                changed=state_changed or dhcp_changed,
+                attachment=entry,
+            )
+
+        if params["action"] == "mark_network_attachment_ready":
+            entry, changed = store.mark_network_attachment_ready(
+                params["uid"], params["tenant_id"], check_mode=module.check_mode
+            )
+            module.exit_json(changed=changed, attachment=entry or {})
+
+        if params["action"] == "begin_delete_network_attachment":
+            entry = store.begin_delete_network_attachment(
+                params["uid"],
+                params["tenant_id"],
+                params["virtual_network_uid"],
+                check_mode=module.check_mode,
+            )
+            module.exit_json(changed=entry is not None, found=entry is not None, attachment=entry or {})
+
+        if params["action"] == "finish_delete_network_attachment":
+            entry, state_changed, dhcp_changed = store.finish_delete_network_attachment(
+                params["uid"],
+                params["tenant_id"],
+                params.get("dhcp_supervisor"),
+                check_mode=module.check_mode,
+            )
+            module.exit_json(changed=state_changed or dhcp_changed, found=entry is not None)
 
         if params["action"] == "preflight_dhcp_supervisor":
             module.exit_json(
@@ -430,19 +517,11 @@ def main() -> None:
             )
             switch_state = params["observed_switch_vlan_state"]
             if existing is None and not switch_state:
-                raise StateError("Cumulus VLAN discovery is required before Subnet allocation")
+                raise StateError("Switch VLAN discovery is required before Subnet allocation")
             observed_vlan_ids: set[int] = set()
             try:
                 for switch in switch_state:
-                    if not isinstance(switch, dict):
-                        raise SubnetProviderError("Cumulus VLAN discovery result is malformed")
-                    observed_vlan_ids.update(
-                        parse_switch_vlan_exclusions(
-                            switch.get("bridge_vlan_output"),
-                            switch.get("reserved_vlan_output"),
-                            switch.get("switchd_reserved_vlan_output"),
-                        )
-                    )
+                    observed_vlan_ids.update(parse_switch_vlan_exclusions(switch))
             except SubnetProviderError as error:
                 raise StateError(str(error)) from error
             subnet, changed = store.reserve_subnet(
@@ -451,8 +530,8 @@ def main() -> None:
                 params["tenant_id"],
                 params["subnet_cidr"],
                 params["trunk_interface"],
+                params["ipam"],
                 observed_vlan_ids=observed_vlan_ids,
-                vip_cidr=params["vip_cidr"],
                 check_mode=module.check_mode,
             )
             module.exit_json(changed=changed, found=True, subnet=subnet)
@@ -473,6 +552,7 @@ def main() -> None:
             subnet, changed = store.prepare_delete_subnet(
                 params["uid"],
                 params["tenant_id"],
+                params.get("virtual_network_uid"),
                 check_mode=module.check_mode,
             )
             module.exit_json(
@@ -505,18 +585,30 @@ def main() -> None:
             )
         )
     except (StateError, SubnetProviderError) as error:
-        if params["action"] in EXTERNAL_IP_ATTACHMENT_ACTIONS:
+        retryable = bool(getattr(error, "retryable", isinstance(error, SubnetProviderError)))
+        if isinstance(error, PublicStateError):
             module.fail_json(
-                msg="AgentlessNet ExternalIPAttachment operation failed; inspect the network node and retry."
+                msg=error.public_message,
+                public_message=error.public_message,
+                retryable=retryable,
             )
             return
+        if params["action"] in EXTERNAL_IP_ATTACHMENT_ACTIONS:
+            module.fail_json(
+                msg="AgentlessNet ExternalIPAttachment operation failed; inspect the network node and retry.",
+                retryable=retryable,
+            )
+            return
+
         if params["action"] in EXTERNAL_IP_POOL_ACTIONS:
             module.fail_json(
-                msg="AgentlessNet ExternalIPPool operation failed; inspect the network node and retry."
+                msg="AgentlessNet ExternalIPPool operation failed; inspect the network node and retry.",
+                retryable=retryable,
             )
             return
         if params["action"] in {
             "get_subnet",
+            "get_network_attachment",
             "query_dhcp_lease",
             "preflight_dhcp_supervisor",
             "reserve_subnet",
@@ -524,9 +616,10 @@ def main() -> None:
             "prepare_delete_subnet",
             "release_subnet",
         }:
-            module.fail_json(msg=str(error))
+            module.fail_json(msg=str(error), retryable=retryable)
         module.fail_json(
-            msg="AgentlessNet VirtualNetwork operation failed; inspect the network node and retry."
+            msg="AgentlessNet VirtualNetwork operation failed; inspect the network node and retry.",
+            retryable=retryable,
         )
 
 

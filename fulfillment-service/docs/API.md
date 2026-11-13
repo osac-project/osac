@@ -161,8 +161,6 @@ The `Metadata` message is shared by all object types and contains the following 
 | `labels`               | `map<string, string>`        | Indexed key-value pairs for organizing objects. Public API responses omit administrator-only reserved keys; see [Administrator-only metadata](#administrator-only-metadata). |
 | `annotations`          | `map<string, string>`        | Arbitrary user-controlled metadata, plus administrator-only reserved keys on the private API. Public API responses omit reserved keys; see [Administrator-only metadata](#administrator-only-metadata). |
 | `version`              | `int32`                      | Auto-incremented on every change.                |
-| `display_name`         | `string`                     | Optional friendly label (max 63, not unique, not DNS-constrained). |
-| `description`          | `string`                     | Optional description (max 256, not unique).      |
 
 The private API adds a `finalizers` field (`repeated string`) that is not exposed in the public API.
 
@@ -290,7 +288,7 @@ do not necessarily follow them.
   metadata fields. Omitted fields stay unchanged; clearing a scalar or an empty
   map requires an explicit mask path.
 - **Explicit mask selects writable fields only.** Permitted metadata paths are
-  `labels`, `annotations`, `display_name`, and `description`; spec paths are
+  `labels` and `annotations`; spec paths are
   accepted and validated by the field-path compiler. Any other root — including
   `name`, `tenant`, and `project`, which are server-assigned and immutable once
   the object is created, and private metadata such as `version`, timestamps,
@@ -606,7 +604,23 @@ message ThingsUpdateResponse {
 - `lock` enables optimistic locking. When set to `true`, the server rejects the update if the
   current `metadata.version` of the stored object does not match the version in the submitted
   object. A stale locked update returns `Aborted`; read the object again, reapply the intended
-  change, and retry. Locking is optional and does not change when `false` or omitted.
+  change, and retry. Locking is optional.
+- A private update that changes `metadata.finalizers` must carry the current `metadata.version`,
+  whether or not `lock` is set, or it returns `Aborted` (HTTP 409). Finalizers are compared as a
+  set, so order and duplicates don't count as changes. A request without `metadata` that would
+  change them has no version to carry, so it returns `InvalidArgument` (HTTP 400) at any stored
+  version. Public updates keep the stored finalizers.
+  - An update without a mask replaces the whole object, so omitting `finalizers` changes them if the
+    object has any. Send a mask when changing other fields. DiskImages, InstanceTypes, and
+    BareMetalInstanceTypes merge a maskless request into the stored object instead, and
+    ServiceAccounts update only `metadata.labels` and `metadata.name`.
+  - The stale-finalizer check runs before validation, so an invalid stale request returns `Aborted`
+    first.
+  - Candidate preparation hooks may not change finalizers; doing so fails with `Internal`.
+  - The reconciler loop retries an `Aborted` from a reconciler function after 1 second, backing off
+    to 1 minute. Conflict-only failures log at DEBUG, then WARN once the backoff is capped; a
+    conflict joined with another failure logs at ERROR and follows that failure's retry interval,
+    if it has one.
 
 For the `metadata.labels` and `metadata.annotations` map rules, including reserved-entry handling,
 see [Administrator-only metadata](#administrator-only-metadata). The REST gateway normally builds
@@ -625,6 +639,15 @@ message ThingsDeleteRequest {
 
 message ThingsDeleteResponse {}
 ```
+
+`Delete` sets `metadata.deletion_timestamp`. If the object has no finalizers, it is archived before
+the call returns. If finalizers remain, the object stays stored and the call can still succeed;
+success means deletion was requested, not that archival is complete. The component responsible for
+each finalizer must finish cleanup and remove it through a private `Update` call. Those updates
+must follow the [finalizer version requirements](#update-when-supported). The
+`EVENT_TYPE_OBJECT_DELETED` event marks the archival boundary. For the controller ordering used
+when deleting tenants and projects, see the
+[cascading deletion codewalk](CODEWALK.md#end-to-end-flow-cascading-deletion-of-a-tenant-and-its-projects).
 
 ### Signal (private API only)
 
@@ -649,11 +672,16 @@ not supported for service accounts. Projects are not supported.
 `Create` returns the account in `PENDING` before its Keycloak client is provisioned. The controller
 provisions the client asynchronously and creates a tenant-scoped Secret containing both `client_id`
 and `client_secret`. `status.client_secret` references that Secret, and `status.state` becomes
-`READY` only after the Secret is available. Clients can read it with `Secrets/Get`; Secret data is
-omitted from list and mutation responses. Dry-run creation creates no account, client, or Secret.
-`status.message` explains a `FAILED` state, including when a Keycloak client exists without
-recoverable registration credentials. Remove that client from Keycloak; the controller then retries
-provisioning or completes deletion.
+`READY` only after the Secret is available. Tenant administrators can read the Secret with
+`Secrets/Get`; ordinary client users receive `PERMISSION_DENIED`. Secret data is omitted from list
+and mutation responses. Dry-run creation creates no account, client, or Secret.
+`status.message` explains a `FAILED` provisioning state and reports rotation errors while automatic
+retry is in progress. A rotation failure leaves the account `READY` while its existing credential
+remains usable. If the Keycloak update may have applied but the replacement credential could not be
+published, or Keycloak reports that the client is missing, the controller marks the account
+`FAILED` until it is usable again. If a Keycloak client exists without recoverable registration
+credentials, remove that client from Keycloak; the controller then retries provisioning or completes
+deletion.
 
 Role assignments are managed through tenant-scoped RoleBindings; service accounts do not accept
 role references. A binding can include service-account IDs in `spec.service_accounts`. Fulfillment
@@ -664,8 +692,88 @@ The shared Role catalog includes `tenant-admin`, `tenant-automation`, and `tenan
 Migration 139 seeds `tenant-idp-manager`; migration 145 seeds `tenant-automation` and
 `osac-csi-driver`. Migration 141 creates the ServiceAccount tables.
 
-Secret rotation is tracked separately by
-[OSAC-6555](https://redhat.atlassian.net/browse/OSAC-6555).
+Tenant admins can request secret rotation with `RegenerateSecret`. The action records a pending
+rotation and returns an empty response. Callers can watch the referenced Secret or poll `Secrets/Get`
+until its `client_secret` changes. Before updating Keycloak,
+the controller stores a generated replacement client secret and the current registration token in the
+system-scoped registration Secret. It uses that token to authorize the Keycloak client-secret update,
+persists any returned registration token, and then publishes the replacement through the tenant-scoped
+credential Secret. The controller records rotation progress privately and marks rotation complete
+only after publication. The installer configures a Keycloak Client Policy to disable
+registration-token rotation for these updates, so retries can reuse the stored token and staged
+secret. Repeated requests while a rotation is pending or retrying return that rotation instead of
+starting another one. Rotation has no grace period: the old secret stops working when the Keycloak
+update applies, while already-issued tokens retain their normal expiry.
+
+`RegenerateSecret` is available to tenant admins for accounts in their tenant. Its REST route is
+`POST /api/fulfillment/v1/service_accounts/{id}/regenerate_secret`; the private route is
+`POST /api/private/v1/service_accounts/{id}/regenerate_secret`.
+
+### CLI
+
+Service-account create, get, list, edit, and delete use the generic `osac` commands. Edit opens the
+resource in the configured editor. Secret rotation uses `osac regenerate`:
+
+```shell
+osac create -f service-account.json
+osac get serviceaccounts batch-worker -o json
+osac get serviceaccounts --filter "this.metadata.labels['team'] == 'data'" -o json
+osac edit serviceaccounts batch-worker
+osac delete serviceaccounts batch-worker
+osac regenerate serviceaccount batch-worker
+```
+
+For administrator and workload procedures, see the
+[Tenant Service Accounts guide](../../docs/guides/tenant-service-accounts.md).
+
+The create file uses the public type URL and tenant-owned fields:
+
+```json
+{
+  "@type": "type.googleapis.com/osac.public.v1.ServiceAccount",
+  "metadata": {
+    "name": "batch-worker",
+    "labels": { "team": "data" }
+  }
+}
+```
+
+Generic `osac create` reports the created account; provisioning then completes asynchronously.
+After the account is `READY`, tenant admins can read the credential Secret by following the ID in
+`status.client_secret`, for example with `osac get secrets <client-secret-id> -o json`; the
+Secret's byte values are base64-encoded in JSON. The API Create and RegenerateSecret responses do not
+return secret bytes. `osac regenerate serviceaccount`
+waits for rotation to complete, reads the replacement through `Secrets/Get`, and emits the new
+`client_id` and `client_secret` once as JSON. Treat that output as a credential and keep it out of
+source files, shell history, and logs.
+
+Get and list output the account and its tenant-scoped Secret reference, never credential bytes.
+Updates may change `metadata.labels`. `ServiceAccountSpec` has no role grants. To grant API
+access, create a RoleBinding whose `spec.role.id` is a catalog role ID and whose
+`spec.service_accounts` includes the service-account ID. To revoke that grant, delete its
+RoleBinding. Use a separate binding per account when you want revocation to be a single
+non-interactive delete:
+
+```json
+{
+  "@type": "type.googleapis.com/osac.public.v1.RoleBinding",
+  "metadata": { "name": "batch-worker-automation" },
+  "spec": {
+    "role": { "id": "<tenant-automation-role-id>" },
+    "service_accounts": [{ "id": "<service-account-id>" }]
+  }
+}
+```
+
+```shell
+osac create -f service-account-role-binding.json
+osac delete rolebindings batch-worker-automation
+```
+
+An ordinary service-account user cannot read raw Secrets or watch managed Events. Its API calls
+are limited to the role on its active tenant RoleBinding. A tenant admin can retrieve the
+service-account credential through the authorized `Secrets/Get` API; do not expose that operation
+or the CLI's one-time credential output to the service-account workload itself.
 
 ## REST transcoding
 
@@ -760,8 +868,8 @@ There are two kinds of references:
 
 ### Full references
 
-Full references can point to objects in a different project or in the shared tenant. They have
-four fields:
+Full references can point to objects in another project or a caller-visible tenant. During the
+compatibility period they contain both the new `tenant` selector and the legacy `shared` selector:
 
 ```protobuf
 message ClusterTemplateReference {
@@ -769,6 +877,7 @@ message ClusterTemplateReference {
   string name = 2;
   string project = 3;
   bool shared = 4;
+  string tenant = 5;
 }
 ```
 
@@ -776,8 +885,9 @@ message ClusterTemplateReference {
 |-----------|-------------|
 | `id`      | Unique identifier of the referenced object. |
 | `name`    | Human-readable name of the referenced object. |
-| `project` | Project where the referenced object lives. Defaults to the caller's project when omitted. |
-| `shared`  | When `true`, the lookup targets the `shared` tenant (overrides the caller's tenant). |
+| `project` | Project used for name lookups. When omitted, the tenant's default project is used. |
+| `shared`  | Legacy selector. When `tenant` is empty, `true` selects `shared` for name lookups. ID lookups retain their existing owner/shared validation during the compatibility period. |
+| `tenant`  | Tenant where the referenced object lives. When non-empty, ID and name lookups require that tenant. When omitted, legacy scope rules apply. The caller must be allowed to see the selected tenant. |
 
 Callers may supply `id`, `name`, or both. When both are provided they must refer to the same
 object; otherwise the server returns `InvalidArgument`. The server auto-populates whichever field
@@ -785,6 +895,12 @@ is missing after a successful lookup.
 
 Full references are used when the target object may live outside the caller's project — for
 example, cluster templates, catalog items, host types, instance types, IP pools, roles, and users.
+Public responses retain the reference field for system-tenant objects but omit its `id`, `name`,
+`project`, `tenant`, and `shared` values.
+
+ExternalIPPools live in the `shared` tenant. Because pools are platform-scoped, a name reference can
+omit the tenant selector. To select the tenant explicitly, set `tenant: "shared"` (or the legacy
+`shared: true` during the compatibility period). An ID reference needs neither selector.
 
 ### Local references
 
@@ -824,7 +940,7 @@ In the JSON representation used by the REST gateway, reference fields are nested
 }
 ```
 
-For local references the format is identical but without `project` and `shared`:
+For local references the format is identical but without `project`, `tenant`, and `shared`:
 
 ```json
 {
@@ -858,24 +974,38 @@ To reference an object by name in a different project within the same tenant, se
 }
 ```
 
-To reference an object by name in the shared tenant (e.g., a globally available template), set
-`shared` to `true`:
+To reference an object by name in another caller-visible tenant, set `tenant`. For example:
 
 ```json
 {
   "spec": {
-    "template": { "name": "sandbox", "shared": true }
+    "template": { "name": "tenant-template", "tenant": "development", "project": "templates" }
   }
 }
 ```
+
+To reference an object in the shared tenant, set `tenant` to `shared`:
+
+```json
+{
+  "spec": {
+    "template": { "name": "sandbox", "tenant": "shared" }
+  }
+}
+```
+
+During the compatibility period, `shared: true` remains accepted when `tenant` is empty. If both
+selectors are set, `shared: true` is valid only with `tenant: "shared"`.
 
 ### Server-side validation and resolution
 
 The server validates references on `Create` and `Update`. A gRPC interceptor handles most
 reference fields. For each field it handles, the interceptor:
 
-1. Determines the lookup scope from the object's tenant and project. For a full reference by
-   name, the `project` and `shared` fields can select another scope.
+1. Determines the lookup scope from the reference and its owner. A non-empty `tenant` selects the
+   target tenant for both ID and name lookups. Without it, name lookups use the owner tenant unless
+   the legacy `shared` selector is true; ID lookups retain their existing owner/shared checks. For
+   name lookups, `project` selects the target project.
 2. Looks up the referenced object by `id` or `name`.
 3. If both `id` and `name` are provided, verifies they refer to the same object.
 4. Fills in whichever of `id` or `name` the caller omitted.

@@ -1,0 +1,41 @@
+{{- if and .Values.kafka.enabled .Values.kafka.exporter.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}
+{{- /*
+Alert on any consumer group that falls behind on a heartbeat topic. The
+exporter reports one lag series per group and topic, so the rule covers the
+external readers and the metering adapters without naming them.
+
+The rule lives in the Kafka namespace because OpenShift user workload
+monitoring evaluates a rule against the series in its own namespace, and the
+exporter PodMonitor is in that namespace. The delta term keeps a consumer that
+is working through retained history from paging: lag that falls is progress,
+while lag that stays high or grows is not.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: osac-kafka-exporter
+  namespace: osac-kafka
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: osac-metering-consumers
+      rules:
+        - alert: MeteringConsumerLag
+          expr: >-
+            kafka_consumergroup_lag{topic=~"osac[.]metering[.]heartbeat[.].*"} >
+            {{ .Values.kafka.exporter.lagThreshold }} and
+            delta(kafka_consumergroup_lag{topic=~"osac[.]metering[.]heartbeat[.].*"}[15m]) >= 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Metering consumer {{`{{ $labels.consumergroup }}`}} is behind
+            description: >-
+              Consumer group {{`{{ $labels.consumergroup }}`}} is more than
+              {{ .Values.kafka.exporter.lagThreshold }} usage events behind on
+              {{`{{ $labels.topic }}`}}, and its lag has not fallen in 15
+              minutes. Check that the consumer is running and that its
+              credentials are still granted. A consumer that has never consumed
+              has no lag series.
+{{- end }}

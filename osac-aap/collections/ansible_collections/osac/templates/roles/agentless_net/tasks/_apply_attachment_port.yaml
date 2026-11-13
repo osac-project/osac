@@ -1,0 +1,56 @@
+---
+- name: Set or remove one saved AgentlessNet access port
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: >-
+      {{ 'delete_port' if _agentless_net_attachment_port_action == 'remove'
+         else 'conf_access_port' }}
+    apply:
+      delegate_to: "{{ _agentless_net_attachment_port.switch_name }}"
+      become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_port | default(22) }}"
+    ansible_network_os: "{{ hostvars[_agentless_net_attachment_port.switch_name].ansible_network_os }}"
+    port_name: "{{ _agentless_net_attachment_port.port_name }}"
+    port_description: "OSAC NetworkAttachment {{ osac_job_vars.resource.id[:12] }}"
+    vlan_id: "{{ _agentless_net_attachment_target_vlan }}"
+    vlan_name: "agentless-net-{{ _agentless_net_attachment_target_vlan }}"
+    guard_scope: >-
+      {{ _agentless_net_deletion_guard_scope
+         if _agentless_net_attachment_port_action != 'delete' else '' }}
+    guard_key: >-
+      {{ ('network-attachment-' ~ osac_job_vars.resource.id)
+         if _agentless_net_attachment_port_action != 'delete' else '' }}
+  when: _agentless_net_attachment_port_action in ['apply', 'delete', 'remove']
+  no_log: true
+
+- name: Initialize the access-port convergence check
+  ansible.builtin.set_fact:
+    _agentless_net_attachment_port_expected_vlans: >-
+      {{ [_agentless_net_attachment_target_vlan | int]
+         if _agentless_net_attachment_port_action in ['apply', 'delete'] else [] }}
+    _agentless_net_attachment_port_converged: false
+  no_log: true
+
+- name: Read the access port until it reports the expected VLAN
+  ansible.builtin.include_tasks: _read_attachment_port.yaml
+  loop: "{{ range(0, 31) | list }}"
+  loop_control:
+    loop_var: _agentless_net_attachment_port_attempt
+  when: not _agentless_net_attachment_port_converged | bool
+
+- name: Verify the access port's PVID and untagged state
+  ansible.builtin.assert:
+    that:
+      - _agentless_net_attachment_port_converged | bool
+      - >-
+        _agentless_net_attachment_port_action == 'remove'
+        or network_runner_port.pvid == _agentless_net_attachment_port_expected_vlans[0]
+      - >-
+        _agentless_net_attachment_port_action == 'remove'
+        or _agentless_net_attachment_port_expected_vlans[0] in network_runner_port.untagged_vlan_ids
+    fail_msg: AgentlessNet did not converge the switch port to the expected access state.
+  no_log: true

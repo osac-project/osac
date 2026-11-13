@@ -1,10 +1,6 @@
 import { type Locator, type Page, expect } from '@playwright/test';
 
-import {
-  confirmRowDeletion,
-  expectRowNotToExist,
-  getTableRowByCellText,
-} from './general/row_assertions';
+import { confirmRowDeletion, expectRowNotToExist } from './general/row_assertions';
 import type { LifecycleAction } from './lifecycle';
 import {
   InstanceTypesActionsMenu,
@@ -51,8 +47,8 @@ const expectedMenuActions = (lifecycleState: InstanceTypeLifecycleState) => {
   return instanceTypeLifecycleActionsByState[lifecycleState];
 };
 
-const setNumberWithPlusButton = async (
-  plusButton: Locator,
+const setNumberInputValue = async (
+  numberInput: Locator,
   value: number,
   fieldName: string,
 ): Promise<void> => {
@@ -60,9 +56,8 @@ const setNumberWithPlusButton = async (
     throw new Error(`${fieldName} must be a positive integer.`);
   }
 
-  for (let click = 0; click < value; click += 1) {
-    await plusButton.click();
-  }
+  await numberInput.fill(String(value));
+  await numberInput.blur();
 };
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -85,12 +80,48 @@ const expectDetailValue = async (
 };
 
 const getInstanceTypeRow = (page: Page, name: string): Locator => {
-  return getTableRowByCellText(
-    page.getByRole(...InstanceTypesMainPage.instanceTypesTable),
-    InstanceTypesMainPage.instanceTypeRows,
-    InstanceTypesMainPage.instanceTypeNameCell,
-    exactText(name),
-  );
+  const table = page.getByRole(...InstanceTypesMainPage.instanceTypesTable);
+  const nameLink = page.getByRole('link', { name, exact: true });
+  return table.locator(...InstanceTypesMainPage.instanceTypeRows).filter({ has: nameLink });
+};
+
+const selectInstanceTypeListView = async (page: Page): Promise<void> => {
+  const listView = page.locator(...InstanceTypesMainPage.listView);
+  await expect(listView).toBeVisible();
+  if ((await listView.getAttribute('aria-pressed')) !== 'true') {
+    await listView.click();
+  }
+  await expect(listView).toHaveAttribute('aria-pressed', 'true');
+};
+
+/** Wait for the instance-type list request to finish before reading its rows. */
+const waitForInstanceTypeListReady = async (page: Page): Promise<void> => {
+  await selectInstanceTypeListView(page);
+  const table = page.getByRole(...InstanceTypesMainPage.instanceTypesTable);
+  const emptyState = page.getByRole('heading', { name: /No instance types/ });
+  const loadingState = page.getByRole('progressbar', { name: 'Contents', exact: true });
+
+  await expect
+    .poll(
+      async () => {
+        if (await loadingState.isVisible().catch(() => false)) {
+          return '';
+        }
+        if (await table.isVisible().catch(() => false)) {
+          return 'table';
+        }
+        if (await emptyState.isVisible().catch(() => false)) {
+          return 'empty';
+        }
+        return '';
+      },
+      {
+        message: 'Wait for the instance-type list contents to finish loading',
+        timeout: 120_000,
+        intervals: [1_000, 2_000, 5_000],
+      },
+    )
+    .toBeTruthy();
 };
 
 const getMenuItem = (page: Page, action: InstanceTypeMenuAction): Locator => {
@@ -141,6 +172,8 @@ export const openCreateInstanceTypePage = async (page: Page): Promise<void> => {
 
 /** Verify that the requested instance type is not already present in the list. */
 export const expectInstanceTypeNotToExist = async (page: Page, name: string): Promise<void> => {
+  await page.reload();
+  await waitForInstanceTypeListReady(page);
   await expectRowNotToExist(
     getInstanceTypeRow(page, name),
     `Cannot create instance type "${name}": an instance type with this name already exists.`,
@@ -149,7 +182,10 @@ export const expectInstanceTypeNotToExist = async (page: Page, name: string): Pr
 
 /** Verify that the requested instance type is present in the list. */
 export const expectInstanceTypeToExist = async (page: Page, name: string): Promise<void> => {
-  await expect(getInstanceTypeRow(page, name)).toHaveCount(1);
+  await waitForInstanceTypeListReady(page);
+  await expect(getInstanceTypeRow(page, name)).toHaveCount(1, {
+    timeout: 30_000,
+  });
 };
 
 /** Fill and submit the instance type creation form. */
@@ -165,10 +201,10 @@ export const createInstanceType = async (
   await page.locator(...InstanceTypesCreatePage.name).fill(name);
   await page.locator(...InstanceTypesCreatePage.description).fill(description);
 
-  // Set vCPUs and memory by clicking each field's Plus button.
-  await setNumberWithPlusButton(page.locator(...InstanceTypesCreatePage.vcpusPlus), vcpus, 'vCPUs');
-  await setNumberWithPlusButton(
-    page.locator(...InstanceTypesCreatePage.memoryGibPlus),
+  // Set vCPUs and memory through the numeric inputs used by the current UI.
+  await setNumberInputValue(page.locator(...InstanceTypesCreatePage.vcpus), vcpus, 'vCPUs');
+  await setNumberInputValue(
+    page.locator(...InstanceTypesCreatePage.memoryGib),
     memoryGib,
     'Memory (GiB)',
   );
@@ -177,8 +213,8 @@ export const createInstanceType = async (
 
   if (gpu) {
     // Fill all GPU fields when GPU data is supplied.
-    await setNumberWithPlusButton(
-      page.locator(...InstanceTypesCreatePage.gpuCountPlus),
+    await setNumberInputValue(
+      page.locator(...InstanceTypesCreatePage.gpuCount),
       gpu.count,
       'GPU count',
     );
@@ -206,6 +242,8 @@ export const ensureInstanceTypeExists = async (
   memoryGib: number,
   gpu?: InstanceTypeGpu,
 ): Promise<void> => {
+  await page.reload();
+  await waitForInstanceTypeListReady(page);
   const instanceTypeRow = getInstanceTypeRow(page, name);
 
   try {
@@ -276,15 +314,14 @@ export const expectInstanceTypeListed = async (
   // Click the Instance types breadcrumb on the detail page, not the sidebar menu item.
   await page.getByRole(...InstanceTypesDetailPage.instanceTypesBreadcrumb).click();
   await expect(page.getByRole(...InstanceTypesMainPage.pageTitle)).toBeVisible();
+  await expectInstanceTypeToExist(page, name);
 
-  // Locate the created row by its exact name.
+  // Locate the created row by its visible name.
   const instanceTypeRow = getInstanceTypeRow(page, name);
-  await expect(instanceTypeRow).toHaveCount(1);
 
   // Verify the created row's lifecycle state and resource values.
-  await expect(instanceTypeRow.locator(...InstanceTypesMainPage.instanceTypeNameCell)).toHaveText(
-    exactText(name),
-  );
+  await expect(instanceTypeRow).toBeVisible();
+  await expect(instanceTypeRow).toContainText(name);
   await expect(
     instanceTypeRow.locator(...InstanceTypesMainPage.instanceTypeLifecycleCell),
   ).toHaveText(exactText('Active'));
@@ -299,12 +336,29 @@ export const expectInstanceTypeListed = async (
   );
 };
 
+/** Delete an instance type only when it appears in the list. */
+export const deleteInstanceTypeIfPresent = async (page: Page, name: string): Promise<boolean> => {
+  await waitForInstanceTypeListReady(page);
+  const instanceTypeRow = getInstanceTypeRow(page, name);
+  const rowCount = await instanceTypeRow.count();
+  if (rowCount === 0) {
+    return false;
+  }
+  if (rowCount !== 1) {
+    throw new Error(`Expected exactly one instance type row for "${name}", but found ${rowCount}.`);
+  }
+
+  await deleteInstanceType(page, name);
+  return true;
+};
+
 /** Change an instance type to Deprecated or Obsolete and verify its action menu. */
 export const changeInstanceTypeLifecycle = async (
   page: Page,
   name: string,
   action: InstanceTypeLifecycleAction,
 ): Promise<void> => {
+  await selectInstanceTypeListView(page);
   // Locate the requested instance type and read its current lifecycle state.
   const instanceTypeRow = getInstanceTypeRow(page, name);
   await expect(instanceTypeRow).toHaveCount(1);
@@ -329,6 +383,7 @@ export const changeInstanceTypeLifecycle = async (
 
 /** Make an instance type Obsolete when needed, delete it, and wait for its row to disappear. */
 export const deleteInstanceType = async (page: Page, name: string): Promise<void> => {
+  await selectInstanceTypeListView(page);
   // Locate the requested instance type and read its current lifecycle state.
   const instanceTypeRow = getInstanceTypeRow(page, name);
   await expect(instanceTypeRow).toHaveCount(1);

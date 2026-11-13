@@ -15,8 +15,6 @@ const clusterCatalogItem: ClusterCatalogItem = {
   id: 'catalog-openshift-4',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: 'catalog-openshift-4',
     annotations: {},
     creator: 'foo',
@@ -185,7 +183,7 @@ describe('buildClusterStepSchema', () => {
         pullSecretSecret: provisioningFieldValue('foo'),
         versionName: provisioningFieldValue(''),
         nodeSetRows: provisioningFieldValue([
-          { ...row, name: 'workers', hostType: 'acme_1tb', size: '3' },
+          { ...row, name: 'workers', hostType: { id: 'acme_1tb', name: 'acme_1tb' }, size: 3 },
         ]),
       },
     });
@@ -225,15 +223,42 @@ describe('buildClusterStepSchema', () => {
           {
             ...row,
             name: 'workers',
-            hostType: 'acme_1tb',
-            size: '0',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: 0,
           },
         ]),
       },
     });
     expect(errors).toEqual({
       spec: {
-        nodeSetRows: { 'value[0]': { size: 'Pool size must be greater than zero' } },
+        nodeSetRows: { 'value[0]': { size: 'Must be greater than zero' } },
+      },
+    });
+  });
+
+  it('rejects fractional pool sizes on configuration step', async () => {
+    const row = createEmptyNodeSetRow();
+    const errors = await validateStep('configuration', {
+      ...emptyValues,
+      catalogItemReference: { name: clusterCatalogItem.title, id: clusterCatalogItem.id },
+      metadata: { name: 'my-cluster', project: '' },
+      spec: {
+        ...emptyValues.spec,
+        pullSecretSecret: provisioningFieldValue('foo'),
+        versionName: provisioningFieldValue('4-17-0'),
+        nodeSetRows: provisioningFieldValue([
+          {
+            ...row,
+            name: 'workers',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: 1.5,
+          },
+        ]),
+      },
+    });
+    expect(errors).toEqual({
+      spec: {
+        nodeSetRows: { 'value[0]': { size: 'Must be a whole number' } },
       },
     });
   });
@@ -253,15 +278,15 @@ describe('buildClusterStepSchema', () => {
             ...row,
             rowId: 'row-1',
             name: 'production',
-            hostType: 'acme_1tb',
-            size: '3',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: 3,
           },
           {
             ...row,
             rowId: 'row-2',
             name: 'development',
-            hostType: 'acme_1tb',
-            size: '2',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: 2,
           },
         ]),
       },
@@ -284,15 +309,15 @@ describe('buildClusterStepSchema', () => {
             ...row,
             rowId: 'row-1',
             name: 'production',
-            hostType: 'acme_1tb',
-            size: '3',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: 3,
           },
           {
             ...row,
             rowId: 'row-2',
             name: 'production',
-            hostType: 'acme_1tb',
-            size: '2',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: 2,
           },
         ]),
       },
@@ -316,7 +341,12 @@ describe('buildClusterStepSchema', () => {
         pullSecretSecret: provisioningFieldValue('foo'),
         versionName: provisioningFieldValue('4-17-0'),
         nodeSetRows: provisioningFieldValue([
-          { ...row, name: '', hostType: 'acme_1tb', size: '3' },
+          {
+            ...row,
+            name: '',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: 3,
+          },
         ]),
       },
     });
@@ -339,7 +369,12 @@ describe('buildClusterStepSchema', () => {
         pullSecretSecret: provisioningFieldValue('foo'),
         versionName: provisioningFieldValue('4-17-0'),
         nodeSetRows: provisioningFieldValue([
-          { ...row, name: 'Workers_1', hostType: 'acme_1tb', size: '3' },
+          {
+            ...row,
+            name: 'Workers_1',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: 3,
+          },
         ]),
       },
     });

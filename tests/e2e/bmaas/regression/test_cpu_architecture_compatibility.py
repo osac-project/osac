@@ -48,7 +48,7 @@ def test_compatible_direct_template_provisions(
     bmi_instance_type: str,
     bmi_disk_image: str,
     bmh_namespace: str,
-    ssh_public_key: str,
+    ssh_key_secret: str,
 ) -> None:
     response = jwt_grpc_tenant1.call(
         service=f"{PUBLIC_API}.BareMetalInstances/Create",
@@ -59,7 +59,7 @@ def test_compatible_direct_template_provisions(
                     "template": {"name": bmi_template, "shared": True},
                     "instance_type": {"name": bmi_instance_type, "shared": True},
                     "disk_image": {"name": bmi_disk_image, "shared": True},
-                    "ssh_public_key": ssh_public_key,
+                    "ssh_key": {"name": ssh_key_secret},
                     "run_strategy": "BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS",
                 },
             }
@@ -97,7 +97,7 @@ def test_architecture_mismatch_has_no_side_effects(
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     bmh_namespace: str,
-    ssh_public_key: str,
+    ssh_key_secret: str,
 ) -> None:
     image_name = unique_name("e2e-bmi-arm64-image")
     try:
@@ -120,14 +120,14 @@ def test_architecture_mismatch_has_no_side_effects(
         if request_path == "cli":
             with pytest.raises(subprocess.CalledProcessError) as rejected:
                 jwt_cli_user.create_baremetal_instance(
-                    name=name, catalog_item=catalog_item, disk_image=image_name, ssh_key=ssh_public_key
+                    name=name, catalog_item=catalog_item, disk_image=image_name, ssh_key=ssh_key_secret
                 )
             output = (rejected.value.stdout or "") + (rejected.value.stderr or "")
         else:
             spec: dict[str, Any] = {
                 "disk_image": {"id": image_id},
                 "instance_type": {"name": bmi_instance_type, "shared": True},
-                "ssh_public_key": ssh_public_key,
+                "ssh_key": {"name": ssh_key_secret},
                 "run_strategy": "BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS",
             }
             metadata = {"name": name}

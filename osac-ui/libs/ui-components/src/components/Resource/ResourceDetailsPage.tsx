@@ -11,6 +11,7 @@ interface ResourceDetailsPageProps {
   tabLabels?: string[];
   cardCount?: number;
   resourceLabel?: string;
+  sectionClassName?: string;
 }
 
 const ResourceDetailsPage = ({
@@ -23,6 +24,7 @@ const ResourceDetailsPage = ({
   tabLabels,
   cardCount,
   resourceLabel,
+  sectionClassName,
   children,
 }: React.PropsWithChildren<ResourceDetailsPageProps>) => {
   if (isLoading) {
@@ -32,6 +34,7 @@ const ResourceDetailsPage = ({
         parentLabel={parentLabel}
         tabLabels={tabLabels}
         cardCount={cardCount}
+        sectionClassName={sectionClassName}
       />
     );
   }
@@ -44,6 +47,7 @@ const ResourceDetailsPage = ({
         resourceLabel={resourceLabel}
         error={error}
         onRetry={() => void refetch()}
+        sectionClassName={sectionClassName}
       />
     );
   }
@@ -55,6 +59,7 @@ const ResourceDetailsPage = ({
         parentLabel={parentLabel}
         resourceLabel={resourceLabel}
         variant="not-found"
+        sectionClassName={sectionClassName}
       />
     );
   }

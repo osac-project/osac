@@ -383,6 +383,36 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		Expect(err.Error()).ToNot(ContainSubstring("private project details"))
 	})
 
+	It("Returns missing-Secret guidance from the create handler", func() {
+		rawBearerValue := "raw-bearer-value"
+		mockSecretValue := "mock-user-data-secret-value"
+		instances := &mockComputeInstancesClient{
+			createFunc: func(
+				_ context.Context, _ *publicv1.ComputeInstancesCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesCreateResponse, error) {
+				return nil, status.Error(
+					codes.InvalidArgument,
+					"there is no secret with identifier or name 'missing-user-data'",
+				)
+			},
+		}
+
+		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken(rawBearerValue), CreateComputeInstanceInput{
+			Name: "demo-vm", CatalogItem: "catalog-item-1",
+		})
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(envelope.Category).To(Equal("not_found"))
+		Expect(envelope.GRPCCode).To(Equal("NotFound"))
+		Expect(envelope.Retryable).To(BeFalse())
+		Expect(envelope.Message).To(ContainSubstring("/secrets/create"))
+		Expect(envelope.Details).To(ConsistOf("Secret reference missing-user-data is missing"))
+		Expect(err.Error()).ToNot(ContainSubstring("there is no secret"))
+		Expect(err.Error()).ToNot(ContainSubstring(rawBearerValue))
+		Expect(err.Error()).ToNot(ContainSubstring(mockSecretValue))
+	})
+
 	It("Names an unauthorized prerequisite boundary and stops before the dependent create", func() {
 		instances := &mockComputeInstancesClient{
 			createFunc: func(
@@ -510,6 +540,31 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		}))
 	})
 
+	It("Uses the requested ID when the public update response omits it", func() {
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			return publicv1.ComputeInstancesUpdateResponse_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Metadata: publicv1.Metadata_builder{Version: 8}.Build(),
+					Status: publicv1.ComputeInstanceStatus_builder{
+						State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil
+		}
+
+		handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+			ID: "instance-1", Version: 7, RunStrategy: "HALTED",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output).To(Equal(UpdateComputeInstanceOutput{
+			ID: "instance-1", Version: 8, State: "COMPUTE_INSTANCE_STATE_RUNNING",
+		}))
+	})
+
 	It("Rejects a stale version before the public update", func() {
 		instances := instancesWithCurrent(7)
 		instances.updateFunc = func(
@@ -527,6 +582,56 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		Expect(envelope.Category).To(Equal("conflict"))
 		Expect(envelope.GRPCCode).To(Equal("Aborted"))
 		Expect(envelope.Message).To(Equal("The resource version is stale. Retrieve the current version and retry."))
+	})
+
+	It("Keeps an observed version stale while a next version can become current", func() {
+		const testToken = "raw-bearer-value"
+		currentVersion := int32(7)
+		instances := instancesWithCurrent(currentVersion)
+		instances.getFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesGetRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesGetResponse, error) {
+			return publicv1.ComputeInstancesGetResponse_builder{Object: currentInstance(currentVersion)}.Build(), nil
+		}
+		instances.updateFunc = func(
+			_ context.Context, request *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			Expect(request.GetLock()).To(BeTrue())
+			Expect(request.GetObject().GetMetadata().GetVersion()).To(Equal(currentVersion))
+			currentVersion++
+			return publicv1.ComputeInstancesUpdateResponse_builder{Object: currentInstance(currentVersion)}.Build(), nil
+		}
+		handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
+		response, err := instances.Get(context.Background(), publicv1.ComputeInstancesGetRequest_builder{
+			Id: "instance-1",
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		observedVersion := response.GetObject().GetMetadata().GetVersion()
+
+		_, advanced, err := handler(context.Background(), requestWithToken(testToken), UpdateComputeInstanceInput{
+			ID: "instance-1", Version: observedVersion, RunStrategy: "HALTED",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(advanced.Version).To(BeNumerically(">", observedVersion))
+
+		_, accepted, err := handler(context.Background(), requestWithToken(testToken), UpdateComputeInstanceInput{
+			ID: "instance-1", Version: observedVersion + 1, RunStrategy: "HALTED",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(accepted.Version).To(BeNumerically(">", advanced.Version))
+
+		for range 2 {
+			versionBeforeRejected := currentVersion
+			_, output, err := handler(context.Background(), requestWithToken(testToken), UpdateComputeInstanceInput{
+				ID: "instance-1", Version: observedVersion, RunStrategy: "HALTED",
+			})
+			Expect(output).To(BeZero())
+			envelope := decodeToolError(err)
+			Expect(envelope.Category).To(Equal("conflict"))
+			Expect(envelope.GRPCCode).To(Equal("Aborted"))
+			Expect(currentVersion).To(Equal(versionBeforeRejected))
+			currentVersion++
+		}
 	})
 
 	It("Maps a public optimistic-lock conflict to a stale version error", func() {

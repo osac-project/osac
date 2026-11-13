@@ -50,6 +50,10 @@ func ExtractAuthContext(token *jwt.Token) (*AuthContext, error) {
 		if username == "" {
 			username, _ = claims["username"].(string)
 		}
+		tenant, _ := claims["osac_tenant"].(string)
+		if username == "" && tenant != "" {
+			username, _ = claims["client_id"].(string)
+		}
 		authContext.Username = username
 		authContext.Groups = claimAsAnySlice(claims, "groups")
 
@@ -60,6 +64,9 @@ func ExtractAuthContext(token *jwt.Token) (*AuthContext, error) {
 			} else if orgObj, ok := orgValue.(map[string]any); ok {
 				authContext.Organization = orgObj
 			}
+		}
+		if authContext.Organization == nil && tenant != "" {
+			authContext.Organization = []any{tenant}
 		}
 
 		authContext.Organizations = claimAsAnySlice(claims, "organizations")
@@ -89,6 +96,27 @@ func (authContext *AuthContext) extractManagedServiceAccountClaims(claims jwt.Ma
 	authContext.ManagedServiceAccountClaimsValid = azpPresent && azpIsString &&
 		strings.HasPrefix(clientID, serviceaccounts.ManagedClientIDPrefix) &&
 		tenantPresent && tenantIsString && tenant != ""
+}
+
+func OrganizationNames(organizationClaim any) ([]string, error) {
+	switch organization := organizationClaim.(type) {
+	case []any:
+		names := make([]string, 0, len(organization))
+		for _, name := range organization {
+			if value, ok := name.(string); ok {
+				names = append(names, value)
+			}
+		}
+		return names, nil
+	case map[string]any:
+		names := make([]string, 0, len(organization))
+		for name := range organization {
+			names = append(names, name)
+		}
+		return names, nil
+	default:
+		return nil, fmt.Errorf("organization claim should be an array or object, got %T", organizationClaim)
+	}
 }
 
 // claimAsAnySlice extracts a JWT claim as a slice of any. Returns nil if the claim doesn't exist or isn't a slice.

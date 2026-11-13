@@ -78,6 +78,10 @@ var _ = Describe("Networking tenant isolation", func() {
 		tenantBID := createTenant(ctx, tenantsClient, tenantBName)
 		waitForTenantSynced(ctx, tenantsClient, tenantAID)
 		waitForTenantSynced(ctx, tenantsClient, tenantBID)
+		// Cluster creates resolve omitted attachments to each tenant's default
+		// Subnet and SecurityGroup; seed one per fresh tenant.
+		ensureTenantDefaultNetworkingFixture(ctx, tenantAName, "")
+		ensureTenantDefaultNetworkingFixture(ctx, tenantBName, "")
 		projectsClient := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
 		DeferCleanup(func(cleanupCtx context.Context) {
 			deleteTenant(cleanupCtx, tenantsClient, projectsClient, tenantBID, tenantBName)
@@ -142,18 +146,15 @@ var _ = Describe("Networking tenant isolation", func() {
 		return vnID
 	}
 
-	createReadyPool := func(tenant string) string {
+	// createReadyPool creates a READY ExternalIPPool. Pools always live in the shared tenant.
+	createReadyPool := func() string {
 		poolID := fmt.Sprintf("pool-%s", uuid.New())
-		metadata := privatev1.Metadata_builder{
-			Name: fmt.Sprintf("pool-%s", uuid.New()[24:32]),
-		}
-		if tenant != "" {
-			metadata.Tenant = tenant
-		}
 		_, err := poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 			Object: privatev1.ExternalIPPool_builder{
-				Id:       poolID,
-				Metadata: metadata.Build(),
+				Id: poolID,
+				Metadata: privatev1.Metadata_builder{
+					Name: fmt.Sprintf("pool-%s", uuid.New()[24:32]),
+				}.Build(),
 				Spec: privatev1.ExternalIPPoolSpec_builder{
 					Cidrs:    []string{uniqueCIDR()},
 					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
@@ -179,9 +180,7 @@ var _ = Describe("Networking tenant isolation", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		pool := poolGetResp.GetObject()
-		if tenant == "" {
-			Expect(pool.GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
-		}
+		Expect(pool.GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
 		pool.GetStatus().SetState(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY)
 		_, err = poolsClient.Update(ctx, privatev1.ExternalIPPoolsUpdateRequest_builder{
 			Object:     pool,
@@ -284,6 +283,7 @@ var _ = Describe("Networking tenant isolation", func() {
 		})
 
 		clusterID := fmt.Sprintf("cluster-%s", uuid.New())
+		network := createCatalogItemNetworkInClassFixture(ctx, tenant, "", networkClassId)
 		_, err = clustersClient.Create(ctx, privatev1.ClustersCreateRequest_builder{
 			Object: privatev1.Cluster_builder{
 				Id: clusterID,
@@ -292,7 +292,8 @@ var _ = Describe("Networking tenant isolation", func() {
 					Tenant: tenant,
 				}.Build(),
 				Spec: privatev1.ClusterSpec_builder{
-					Template: privatev1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+					Template:          privatev1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+					NetworkAttachment: network.privateClusterAttachment(),
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
 							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceTypeName, Shared: true}.Build(),
@@ -369,40 +370,44 @@ var _ = Describe("Networking tenant isolation", func() {
 	})
 
 	It("accepts ExternalIP referencing a shared ExternalIPPool", func() {
-		poolID := createReadyPool("")
+		poolID := createReadyPool()
 		_ = createExternalIP(tenantAName, poolID)
 	})
 
-	It("rejects ExternalIP referencing ExternalIPPool from an unrelated tenant", func() {
-		ndSkipUnlessProviderNetworkingEnabled(ctx, "ExternalIP tenant isolation")
-		poolID := createReadyPool(tenantBName)
-
-		_, err := externalIPsClient.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{
-			Object: privatev1.ExternalIP_builder{
+	It("rejects creating an ExternalIPPool in a tenant and stores nothing", func() {
+		poolID := fmt.Sprintf("pool-%s", uuid.New())
+		_, err := poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
+			Object: privatev1.ExternalIPPool_builder{
+				Id: poolID,
 				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("eip-%s", uuid.New()[24:32]),
-					Tenant: tenantAName,
+					Name:   fmt.Sprintf("pool-%s", uuid.New()[24:32]),
+					Tenant: tenantBName,
 				}.Build(),
-				Spec: privatev1.ExternalIPSpec_builder{
-					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
+				Spec: privatev1.ExternalIPPoolSpec_builder{
+					Cidrs:    []string{uniqueCIDR()},
+					IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
 				}.Build(),
 			}.Build(),
 		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+		Expect(err).To(MatchError(ContainSubstring(
+			fmt.Sprintf("objects cannot be placed in the '%s' tenant", tenantBName))))
+
+		_, err = poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 	})
 
-	It("resolves an ExternalIPPool by name for a tenant user and hides an unrelated tenant's pool", func() {
+	It("resolves a shared ExternalIPPool by name for a tenant user", func() {
 		// With provider networking disabled the handler rejects every ExternalIP create. A shared pool that the
 		// reference interceptor resolved therefore reaches the handler and fails there with FAILED_PRECONDITION,
-		// while an unresolved reference fails earlier with INVALID_ARGUMENT.
+		// rather than earlier with INVALID_ARGUMENT, as an unresolved reference would.
 		ndSkipIfProviderNetworkingEnabled(ctx, "the tenant user ExternalIPPool name reference")
 		poolName := func(poolID string) string {
 			response, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: poolID}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			return response.GetObject().GetMetadata().GetName()
 		}
-		sharedName := poolName(createReadyPool(""))
-		unrelatedName := poolName(createReadyPool(tenantBName))
+		sharedName := poolName(createReadyPool())
 		createByName := func(name string) error {
 			_, err := newNDClients().publicExternalIPs.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
 				Object: publicv1.ExternalIP_builder{
@@ -416,12 +421,11 @@ var _ = Describe("Networking tenant isolation", func() {
 		}
 
 		ndExpectCode(createByName(sharedName), grpccodes.FailedPrecondition, "provider networking is disabled")
-		ndExpectCode(createByName(unrelatedName), grpccodes.InvalidArgument)
 	})
 
 	It("rejects NATGateway referencing VirtualNetwork from a different tenant", func() {
 		vnID := createReadyVirtualNetwork(tenantAName, "10.113.0.0/16")
-		poolID := createReadyPool("")
+		poolID := createReadyPool()
 		eipID := createExternalIP(tenantBName, poolID)
 		promoteExternalIPAllocated(eipID)
 
@@ -442,7 +446,7 @@ var _ = Describe("Networking tenant isolation", func() {
 
 	It("rejects NATGateway referencing ExternalIP from a different tenant", func() {
 		vnID := createReadyVirtualNetwork(tenantAName, "10.114.0.0/16")
-		poolID := createReadyPool("")
+		poolID := createReadyPool()
 		eipID := createExternalIP(tenantBName, poolID)
 		promoteExternalIPAllocated(eipID)
 
@@ -462,7 +466,7 @@ var _ = Describe("Networking tenant isolation", func() {
 	})
 
 	It("rejects ExternalIPAttachment referencing ExternalIP from a different tenant", func() {
-		poolID := createReadyPool("")
+		poolID := createReadyPool()
 		eipID := createExternalIP(tenantAName, poolID)
 		promoteExternalIPAllocated(eipID)
 		Eventually(func(g Gomega) {

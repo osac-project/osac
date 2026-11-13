@@ -30,6 +30,8 @@ interface RawInstanceType {
   gpu?: RawInstanceTypeGpu;
 }
 
+type RawResizeInstanceType = Omit<RawInstanceType, 'gpu'>;
+
 interface RawDiskImage {
   name?: string;
   source_type: 'Registry';
@@ -41,9 +43,6 @@ interface RawDiskImage {
 
 interface RawCatalogInstanceTypeField {
   name: string;
-  shared: boolean;
-  vcpus: number;
-  memory_gib: number;
 }
 
 interface RawCatalogFields {
@@ -53,14 +52,12 @@ interface RawCatalogFields {
   };
   disk_image: {
     name: string;
-    shared: boolean;
   };
 }
 
 interface RawCatalog {
   name: string;
   template: string;
-  title: string;
   description: string;
   type: string;
   status: string;
@@ -78,25 +75,24 @@ interface RawStorageTier {
 interface RawExtravars {
   catalog: RawCatalog;
   instance_type: RawInstanceType;
+  resize_instance_type: RawResizeInstanceType;
+  resize_cpu_up_memory_down_instance_type: RawResizeInstanceType;
   disk_image: RawDiskImage;
   storage_tier: RawStorageTier;
   lifecycle_actions: LifecycleAction[];
   tenant_name?: string;
+  tenant_password?: string;
 }
 
 export interface CatalogFieldsTestData {
   instanceType: {
     name: string;
-    shared: boolean;
-    vcpus: number;
-    memoryGib: number;
   };
   bootDisk: {
     sizeGib: number;
   };
   diskImage: {
     name: string;
-    shared: boolean;
   };
 }
 
@@ -106,7 +102,6 @@ export interface CatalogTestData {
   name: string;
   status: string;
   template: string;
-  title: string;
   type: string;
   usage: string;
 }
@@ -119,6 +114,8 @@ export interface InstanceTypeTestData {
   gpu?: InstanceTypeGpu;
   lifecycleActions: LifecycleAction[];
 }
+
+export type ResizeInstanceTypeTestData = Omit<InstanceTypeTestData, 'lifecycleActions' | 'gpu'>;
 
 export interface DiskImageTestData extends DiskImageCreateParams {
   lifecycleActions: LifecycleAction[];
@@ -137,14 +134,6 @@ const asRecord = (value: unknown, field: string): Record<string, unknown> => {
 const requiredString = (value: unknown, field: string): string => {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new Error(`Invalid e2e extravars: ${field} must be a non-empty string.`);
-  }
-
-  return value;
-};
-
-const requiredBoolean = (value: unknown, field: string): boolean => {
-  if (typeof value !== 'boolean') {
-    throw new Error(`Invalid e2e extravars: ${field} must be a boolean.`);
   }
 
   return value;
@@ -221,6 +210,11 @@ const parseExtravars = (value: unknown): RawExtravars => {
   const catalogBootDisk = asRecord(catalogFields.boot_disk, 'catalog.fields.boot_disk');
   const catalogDiskImage = asRecord(catalogFields.disk_image, 'catalog.fields.disk_image');
   const instanceType = asRecord(root.instance_type, 'instance_type');
+  const resizeInstanceType = asRecord(root.resize_instance_type, 'resize_instance_type');
+  const resizeCpuUpMemoryDownInstanceType = asRecord(
+    root.resize_cpu_up_memory_down_instance_type,
+    'resize_cpu_up_memory_down_instance_type',
+  );
   const diskImage = asRecord(root.disk_image, 'disk_image');
   const storageTier = asRecord(root.storage_tier, 'storage_tier');
   const gpu =
@@ -230,7 +224,6 @@ const parseExtravars = (value: unknown): RawExtravars => {
     catalog: {
       name: requiredString(catalog.name, 'catalog.name'),
       template: requiredString(catalog.template, 'catalog.template'),
-      title: requiredString(catalog.title, 'catalog.title'),
       description: requiredString(catalog.description, 'catalog.description'),
       type: requiredString(catalog.type, 'catalog.type'),
       status: requiredString(catalog.status, 'catalog.status'),
@@ -238,26 +231,17 @@ const parseExtravars = (value: unknown): RawExtravars => {
       fields: {
         instance_type: {
           name: requiredString(catalogInstanceType.name, 'catalog.fields.instance_type.name'),
-          shared: requiredBoolean(
-            catalogInstanceType.shared,
-            'catalog.fields.instance_type.shared',
-          ),
-          vcpus: positiveInteger(catalogInstanceType.vcpus, 'catalog.fields.instance_type.vcpus'),
-          memory_gib: positiveInteger(
-            catalogInstanceType.memory_gib,
-            'catalog.fields.instance_type.memory_gib',
-          ),
         },
         boot_disk: {
           size_gib: positiveInteger(catalogBootDisk.size_gib, 'catalog.fields.boot_disk.size_gib'),
         },
         disk_image: {
           name: requiredString(catalogDiskImage.name, 'catalog.fields.disk_image.name'),
-          shared: requiredBoolean(catalogDiskImage.shared, 'catalog.fields.disk_image.shared'),
         },
       },
     },
     tenant_name: optionalString(root.tenant_name, 'tenant_name'),
+    tenant_password: optionalString(root.tenant_password, 'tenant_password'),
     instance_type: {
       name: optionalString(instanceType.name, 'instance_type.name'),
       description: requiredString(instanceType.description, 'instance_type.description'),
@@ -275,6 +259,33 @@ const parseExtravars = (value: unknown): RawExtravars => {
             },
           }
         : {}),
+    },
+    resize_instance_type: {
+      name: requiredString(resizeInstanceType.name, 'resize_instance_type.name'),
+      description: requiredString(
+        resizeInstanceType.description,
+        'resize_instance_type.description',
+      ),
+      vcpus: positiveInteger(resizeInstanceType.vcpus, 'resize_instance_type.vcpus'),
+      memory_gib: positiveInteger(resizeInstanceType.memory_gib, 'resize_instance_type.memory_gib'),
+    },
+    resize_cpu_up_memory_down_instance_type: {
+      name: requiredString(
+        resizeCpuUpMemoryDownInstanceType.name,
+        'resize_cpu_up_memory_down_instance_type.name',
+      ),
+      description: requiredString(
+        resizeCpuUpMemoryDownInstanceType.description,
+        'resize_cpu_up_memory_down_instance_type.description',
+      ),
+      vcpus: positiveInteger(
+        resizeCpuUpMemoryDownInstanceType.vcpus,
+        'resize_cpu_up_memory_down_instance_type.vcpus',
+      ),
+      memory_gib: positiveInteger(
+        resizeCpuUpMemoryDownInstanceType.memory_gib,
+        'resize_cpu_up_memory_down_instance_type.memory_gib',
+      ),
     },
     disk_image: {
       name: optionalString(diskImage.name, 'disk_image.name'),
@@ -304,10 +315,13 @@ const rawExtravars = parseExtravars(parse(readFileSync(extravarsPath, 'utf8')));
 const {
   catalog: rawCatalog,
   instance_type: rawInstanceType,
+  resize_instance_type: rawResizeInstanceType,
+  resize_cpu_up_memory_down_instance_type: rawResizeCpuUpMemoryDownInstanceType,
   disk_image: rawDiskImage,
   storage_tier: rawStorageTier,
   lifecycle_actions: rawLifecycleActions,
   tenant_name: rawTenantName,
+  tenant_password: rawTenantPassword,
 } = rawExtravars;
 const diskImageTestRunId = requiredString(
   process.env.OSAC_DISK_IMAGE_TEST_RUN_ID,
@@ -317,7 +331,7 @@ const storageTierTestRunId = requiredString(
   process.env.OSAC_STORAGE_TIER_TEST_RUN_ID,
   'OSAC_STORAGE_TIER_TEST_RUN_ID',
 );
-const catalogTestRunId = requiredString(
+export const catalogTestRunId = requiredString(
   process.env.OSAC_CATALOG_TEST_RUN_ID,
   'OSAC_CATALOG_TEST_RUN_ID',
 );
@@ -327,8 +341,13 @@ const diskImageTestName = rawDiskImage.name
 const storageTierTestName = rawStorageTier.name
   ? `${rawStorageTier.name}-${storageTierTestRunId}`
   : undefined;
+const catalogDiskImageName =
+  diskImageTestName !== undefined && rawCatalog.fields.disk_image.name === rawDiskImage.name
+    ? diskImageTestName
+    : rawCatalog.fields.disk_image.name;
 
 export const tenantName: string | undefined = rawTenantName;
+export const tenantPassword: string | undefined = rawTenantPassword;
 
 export const tenantNameOrSkip = (): string | undefined => {
   if (tenantName !== undefined) {
@@ -376,22 +395,17 @@ export const catalogTestData: CatalogTestData = {
   fields: {
     instanceType: {
       name: rawCatalog.fields.instance_type.name,
-      shared: rawCatalog.fields.instance_type.shared,
-      vcpus: rawCatalog.fields.instance_type.vcpus,
-      memoryGib: rawCatalog.fields.instance_type.memory_gib,
     },
     bootDisk: {
       sizeGib: rawCatalog.fields.boot_disk.size_gib,
     },
     diskImage: {
-      name: rawCatalog.fields.disk_image.name,
-      shared: rawCatalog.fields.disk_image.shared,
+      name: catalogDiskImageName,
     },
   },
   name: catalogName,
   status: rawCatalog.status,
   template: rawCatalog.template,
-  title: rawCatalog.title,
   type: rawCatalog.type,
   usage: rawCatalog.usage,
 };
@@ -401,6 +415,9 @@ const safeCatalogName = (name: string): string =>
 
 export const catalogOwnershipFilePath = (name: string): string =>
   path.join(tmpdir(), `osac-catalog-${safeCatalogName(name)}-${catalogTestRunId}.created`);
+
+export const vmTestName = `vm-e2e-${catalogTestRunId}`;
+export const resizeVmTestName = `vm-e2e-resize-${catalogTestRunId}`;
 
 export const instanceTypeTestData: InstanceTypeTestData = {
   name: rawInstanceType.name ?? '',
@@ -415,6 +432,20 @@ export const instanceTypeTestData: InstanceTypeTestData = {
       }
     : undefined,
   lifecycleActions: rawLifecycleActions,
+};
+
+export const resizeInstanceTypeTestData: ResizeInstanceTypeTestData = {
+  name: rawResizeInstanceType.name ?? '',
+  description: rawResizeInstanceType.description,
+  vcpus: rawResizeInstanceType.vcpus,
+  memoryGib: rawResizeInstanceType.memory_gib,
+};
+
+export const resizeCpuUpMemoryDownInstanceTypeTestData: ResizeInstanceTypeTestData = {
+  name: rawResizeCpuUpMemoryDownInstanceType.name ?? '',
+  description: rawResizeCpuUpMemoryDownInstanceType.description,
+  vcpus: rawResizeCpuUpMemoryDownInstanceType.vcpus,
+  memoryGib: rawResizeCpuUpMemoryDownInstanceType.memory_gib,
 };
 
 export const diskImagesTestData: DiskImageTestData = {

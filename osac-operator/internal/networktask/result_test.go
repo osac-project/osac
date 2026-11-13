@@ -256,8 +256,14 @@ func TestParseClusterIngress(t *testing.T) {
 	}
 	_, err := ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.255"}}`), "10.0.1.0/24", ipam, "")
 	expectReject(t, err, "cluster_ingress.address is the Subnet's broadcast address")
+	networkIPAM := &v1alpha1.SubnetIPAM{LBVIPIPv4CIDRs: []string{"10.0.1.0/26"}}
+	_, err = ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.0"}}`), "10.0.1.0/24", networkIPAM, "")
+	expectReject(t, err, "cluster_ingress.address is the Subnet's network address")
 	_, err = ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.10"}}`), "10.0.1.0/24", ipam, "")
 	expectReject(t, err, "cluster_ingress.address is not in lb_vip_ipv4_cidrs")
+	gatewayIPAM := &v1alpha1.SubnetIPAM{GatewayIPv4: "10.0.1.193", LBVIPIPv4CIDRs: []string{"10.0.1.192/26"}}
+	_, err = ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.193"}}`), "10.0.1.0/24", gatewayIPAM, "")
+	expectReject(t, err, "cluster_ingress.address is the Subnet's gateway address")
 	_, err = ParseClusterIngress(result(t, `{"cluster_ingress":{"address":"10.0.1.194"}}`), "10.0.1.0/24", ipam, "10.0.1.193")
 	expectReject(t, err, "cluster_ingress.address differs from the address already accepted for the cluster")
 }
@@ -336,5 +342,44 @@ func TestSnapshotAndInput(t *testing.T) {
 	vars := WithLaunchKeys(loaded, map[string]any{"network_type": "evpn"})
 	if vars["network_type"] != "evpn" || loaded["network_type"] != nil {
 		t.Fatal("launch keys leaked into the stored input")
+	}
+}
+
+func TestAcceptSubnetEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		supported bool
+		reason    string
+		invalid   bool
+	}{
+		{"older manager", `{}`, true, "", false},
+		{"owner", `{"compute_instance_supported":true,"compute_instance_unsupported_reason":""}`, true, "", false},
+		{"sibling", `{"compute_instance_supported":false,"compute_instance_unsupported_reason":"owner only"}`, false, "owner only", false},
+		{"string boolean", `{"compute_instance_supported":"false"}`, false, "", true},
+		{"null boolean", `{"compute_instance_supported":null}`, false, "", true},
+		{"wrong reason type", `{"compute_instance_supported":false,"compute_instance_unsupported_reason":5}`, false, "", true},
+		{"inconsistent reason", `{"compute_instance_supported":true,"compute_instance_unsupported_reason":"owner only"}`, false, "", true},
+		{"unknown output", `{"unknown":true}`, false, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sn := &v1alpha1.Subnet{}
+			err := AcceptSubnetEligibility(sn, result(t, tc.raw))
+			if tc.invalid {
+				var rejected *RejectError
+				if !errors.As(err, &rejected) {
+					t.Fatalf("expected rejection, got %v", err)
+				}
+				if sn.Status.ComputeInstanceSupported != nil {
+					t.Fatal("rejected output changed eligibility")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sn.Status.ComputeInstanceSupported == nil || *sn.Status.ComputeInstanceSupported != tc.supported || sn.Status.ComputeInstanceUnsupportedReason != tc.reason {
+				t.Fatalf("incorrect eligibility: %+v", sn.Status)
+			}
+		})
 	}
 }

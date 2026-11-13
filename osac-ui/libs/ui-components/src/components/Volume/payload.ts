@@ -9,11 +9,10 @@ export const buildVolumeCreatePayload = (
 ): MessageInitShape<typeof VolumeSchema> => ({
   metadata: {
     name: values.metadata.name,
-    description: values.metadata.description,
   },
   spec: {
     storageTier: values.spec.storageTier.name,
-    sizeGib: BigInt(values.spec.sizeGib),
+    sizeGib: values.spec.sizeGib,
     accessMode: values.spec.accessMode,
   },
 });

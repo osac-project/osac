@@ -9,6 +9,10 @@ aapOperator:
   enabled: true
 lvms:
   enabled: true
+  # The stretched-Netris OCP VM attaches its LVM disk as vdb.
+  deviceSelector:
+    optionalPaths:
+      - /dev/vdb
 metallb:
   enabled: true
 cnv:
@@ -32,6 +36,8 @@ keycloak:
     enabled: true
 kafka:
   enabled: true
+  exporter:
+    enabled: true
 
 # Activate Ironic for the BMF Metal3 inventory backend (cluster-wide
 # BareMetalHost discovery, no provisioning network).

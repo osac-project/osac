@@ -52,7 +52,7 @@ const selectConfigurationValues = async (user: UserEvent) => {
   const tierToggle = await screen.findByLabelText(/^Storage tier/);
   await user.click(tierToggle);
   await user.click(screen.getByRole('option', { name: 'block-tier' }));
-  await user.type(screen.getByRole('spinbutton', { name: 'Size (GiB)' }), '64');
+  await user.type(screen.getByRole('textbox', { name: 'Size (GiB)' }), '64');
   await user.click(screen.getByRole('button', { name: 'Access Mode' }));
   await user.click(screen.getByRole('option', { name: 'ReadWriteOnce' }));
 };
@@ -73,7 +73,6 @@ describe('VolumeWizard', () => {
     expect(screen.getByRole('button', { name: 'Review' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Name' })).toBeEnabled();
-    expect(screen.getByRole('textbox', { name: 'Description' })).toBeEnabled();
     expect(
       screen.queryByRole('button', {
         name: (_name, element) => element.id === 'metadata.project',
@@ -115,7 +114,7 @@ describe('VolumeWizard', () => {
     await clickNext(user);
     expect(await screen.findByRole('heading', { name: 'Configuration' })).toBeInTheDocument();
     expect(await screen.findByLabelText(/^Storage tier/)).toBeEnabled();
-    expect(screen.getByRole('spinbutton', { name: 'Size (GiB)' })).toBeEnabled();
+    expect(screen.getByRole('textbox', { name: 'Size (GiB)' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Access Mode' })).toBeEnabled();
   });
 

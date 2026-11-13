@@ -5,6 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { AUTH_FILE } from './src/auth-file';
+import {
+  readVmaasFullFlowRunState,
+  writeVmaasFullFlowRunState,
+} from '../e2e-tests/src/vmaas/run_state';
 
 const baseURL = process.env.OSAC_UI_BASE_URL;
 if (!baseURL) {
@@ -29,9 +33,37 @@ if (parsedBaseURL.username || parsedBaseURL.password) {
   throw invalidBaseURLError;
 }
 
-// Share one unique ID across Playwright projects so teardown only targets this run's image.
+const flowMode = process.env.OSAC_VM_FLOW_MODE ?? 'full';
+if (flowMode !== 'create' && flowMode !== 'delete' && flowMode !== 'full') {
+  throw new Error('OSAC_VM_FLOW_MODE must be create, delete, or full.');
+}
+
+const allFullFlowsProjectRequested = process.argv.some((argument) =>
+  argument.includes('vmaas-all-full-flows'),
+);
+const fullHappyFlowProjectRequested = process.argv.some(
+  (argument) => argument.includes('vmaas_full_happy_basic') || allFullFlowsProjectRequested,
+);
+const fullFlowProjectRequested = process.argv.some(
+  (argument) =>
+    argument.includes('vmaas-full-flow') ||
+    fullHappyFlowProjectRequested ||
+    argument.includes('vm-flow'),
+);
+const fullFlowDeletionRequested = flowMode === 'delete' && fullFlowProjectRequested;
+
+const hasExplicitRunState =
+  Boolean(process.env.OSAC_CATALOG_TEST_RUN_ID) &&
+  Boolean(process.env.OSAC_DISK_IMAGE_TEST_RUN_ID) &&
+  Boolean(process.env.OSAC_STORAGE_TIER_TEST_RUN_ID);
+const persistedRunState =
+  fullFlowDeletionRequested && !hasExplicitRunState ? readVmaasFullFlowRunState() : undefined;
+
+// Share one unique ID across Playwright projects so deletion only targets this run's image.
 const diskImageTestRunId =
-  process.env.OSAC_DISK_IMAGE_TEST_RUN_ID ?? randomUUID().replace(/-/g, '').slice(0, 12);
+  process.env.OSAC_DISK_IMAGE_TEST_RUN_ID ??
+  persistedRunState?.diskImageTestRunId ??
+  randomUUID().replace(/-/g, '').slice(0, 12);
 if (!/^[a-z0-9]{1,32}$/i.test(diskImageTestRunId)) {
   throw new Error('OSAC_DISK_IMAGE_TEST_RUN_ID must contain 1-32 letters or digits.');
 }
@@ -39,7 +71,9 @@ process.env.OSAC_DISK_IMAGE_TEST_RUN_ID = diskImageTestRunId.toLowerCase();
 
 // Share a unique ID across Storage tier projects so teardown only targets this run's tier.
 const storageTierTestRunId =
-  process.env.OSAC_STORAGE_TIER_TEST_RUN_ID ?? randomUUID().replace(/-/g, '').slice(0, 12);
+  process.env.OSAC_STORAGE_TIER_TEST_RUN_ID ??
+  persistedRunState?.storageTierTestRunId ??
+  randomUUID().replace(/-/g, '').slice(0, 12);
 if (!/^[a-z0-9]{1,32}$/i.test(storageTierTestRunId)) {
   throw new Error('OSAC_STORAGE_TIER_TEST_RUN_ID must contain 1-32 letters or digits.');
 }
@@ -47,11 +81,21 @@ process.env.OSAC_STORAGE_TIER_TEST_RUN_ID = storageTierTestRunId.toLowerCase();
 
 // Share a unique ID across catalog projects so teardown only targets this run's item.
 const catalogTestRunId =
-  process.env.OSAC_CATALOG_TEST_RUN_ID ?? randomUUID().replace(/-/g, '').slice(0, 12);
+  process.env.OSAC_CATALOG_TEST_RUN_ID ??
+  persistedRunState?.catalogTestRunId ??
+  randomUUID().replace(/-/g, '').slice(0, 12);
 if (!/^[a-z0-9]{1,32}$/i.test(catalogTestRunId)) {
   throw new Error('OSAC_CATALOG_TEST_RUN_ID must contain 1-32 letters or digits.');
 }
 process.env.OSAC_CATALOG_TEST_RUN_ID = catalogTestRunId.toLowerCase();
+
+if (flowMode !== 'delete' && fullFlowProjectRequested && !process.argv.includes('--list')) {
+  writeVmaasFullFlowRunState({
+    catalogTestRunId: catalogTestRunId.toLowerCase(),
+    diskImageTestRunId: diskImageTestRunId.toLowerCase(),
+    storageTierTestRunId: storageTierTestRunId.toLowerCase(),
+  });
+}
 
 // Ad hoc specs (typically written by an AI agent to manually verify a change)
 // live in this gitignored scratch directory, never under src/ — that keeps
@@ -60,6 +104,23 @@ process.env.OSAC_CATALOG_TEST_RUN_ID = catalogTestRunId.toLowerCase();
 const scratchDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'scratch');
 fs.mkdirSync(scratchDir, { recursive: true });
 const vmaasDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../e2e-tests/src/vmaas');
+const preResourceBaseCreateTestMatch =
+  /create\.(instance_type|disk_images|storage_tier|tenant)\.spec\.ts/;
+const preResourceCatalogCreateTestMatch = /create\.catalog\.spec\.ts/;
+const preResourceDeleteTestMatch =
+  /delete\.(catalog|disk_images|instance_type|storage_tier)\.spec\.ts/;
+const preResourceTestMatch =
+  flowMode === 'delete' ? preResourceDeleteTestMatch : preResourceCatalogCreateTestMatch;
+const diskImageTestMatch =
+  flowMode === 'delete' ? /delete\.disk_images\.spec\.ts/ : /create\.disk_images\.spec\.ts/;
+const instanceTypeTestMatch =
+  flowMode === 'delete' ? /delete\.instance_type\.spec\.ts/ : /create\.instance_type\.spec\.ts/;
+const storageTierTestMatch =
+  flowMode === 'delete' ? /delete\.storage_tier\.spec\.ts/ : /create\.storage_tier\.spec\.ts/;
+const tenantTestMatch =
+  flowMode === 'delete' ? /delete\.tenant\.spec\.ts/ : /create\.tenant\.spec\.ts/;
+const catalogTestMatch =
+  flowMode === 'delete' ? /delete\.catalog\.spec\.ts/ : /create\.catalog\.spec\.ts/;
 
 // Video recording is opt-in via PW_VIDEO=on (default off) — handy for debugging
 // a flow by watching the recording afterwards. PW_SLOW_MO adds a per-action
@@ -73,6 +134,9 @@ const slowMo = Number(process.env.PW_SLOW_MO) || 0;
 export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
+  // These tests mutate shared live resources. Stop after the first failure so
+  // duplicate-resource failures do not allow the rest of the flow to proceed.
+  maxFailures: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: 'html',
   expect: {
@@ -113,80 +177,160 @@ export default defineConfig({
       dependencies: ['setup'],
     },
     {
-      name: 'vmaas',
+      name: 'tenant',
       testDir: vmaasDir,
-      testMatch: /create\.tenant\.spec\.ts/,
+      testMatch: tenantTestMatch,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: flowMode === 'full' ? 'tenant-delete' : undefined,
+    },
+    {
+      name: 'vmaas-full-flow-pre-resource-base',
+      testDir: vmaasDir,
+      testMatch: preResourceBaseCreateTestMatch,
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: flowMode === 'full' ? 'tenant-delete' : undefined,
+    },
+    {
+      name: 'vmaas-full-flow-pre-resource',
+      testDir: vmaasDir,
+      testMatch: preResourceTestMatch,
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: flowMode === 'delete' ? ['vm-flow'] : ['vmaas-full-flow-pre-resource-base'],
+      teardown:
+        flowMode === 'full'
+          ? 'vmaas-full-flow-pre-resource-delete'
+          : flowMode === 'delete'
+            ? 'tenant-delete'
+            : undefined,
+    },
+    {
+      name: 'vm-flow',
+      testDir: vmaasDir,
+      testMatch: flowMode === 'delete' ? /delete\.vm\.spec\.ts/ : /create\.vm\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: flowMode === 'delete' ? [] : ['vmaas-full-flow-pre-resource'],
+      // Keep the fallback reachable when the happy-flow dependency is skipped
+      // after VM creation fails. A successful happy-flow deletion makes this
+      // idempotent teardown a no-op because the VM is already absent.
+      teardown: flowMode === 'full' ? 'vm-flow-teardown' : undefined,
+    },
+    {
+      name: 'vm-flow-teardown',
+      testDir: vmaasDir,
+      testMatch: /delete\.vm\.spec\.ts/,
+      fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-storage-tier',
+      name: 'vmaas_full_happy_basic',
       testDir: vmaasDir,
-      testMatch: /create\.storage_tier\.spec\.ts/,
+      testMatch: /delete\.vm\.spec\.ts/,
+      fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: 'vmaas-storage-tier-delete',
+      dependencies: flowMode === 'full' ? ['vm-flow'] : [],
     },
     {
-      name: 'vmaas-storage-tier-delete',
+      name: 'vmaas-resize',
+      testDir: vmaasDir,
+      testMatch: /resize\/resize\.vm\.spec\.ts/,
+      fullyParallel: false,
+      workers: 1,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-full-flow-pre-resource'],
+    },
+    {
+      name: 'vmaas-full-resize',
+      testDir: vmaasDir,
+      testMatch: /$^/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vmaas-resize'],
+    },
+    {
+      name: 'vmaas-all-full-flows',
+      testDir: vmaasDir,
+      testMatch: /$^/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      // Add future complete VMaaS flows here as they become available.
+      dependencies: ['vmaas_full_happy_basic', 'vmaas-full-resize'],
+    },
+    {
+      name: 'vmaas-full-flow-pre-resource-delete',
+      testDir: vmaasDir,
+      testMatch: preResourceDeleteTestMatch,
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
+      name: 'storage-tier',
+      testDir: vmaasDir,
+      testMatch: storageTierTestMatch,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: flowMode === 'full' ? 'storage-tier-delete' : undefined,
+    },
+    {
+      name: 'storage-tier-delete',
       testDir: vmaasDir,
       testMatch: /delete\.storage_tier\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-instance-type',
+      name: 'instance-type',
       testDir: vmaasDir,
-      testMatch: /create\.instance_type\.spec\.ts/,
+      testMatch: instanceTypeTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: 'vmaas-instance-type-delete',
+      teardown: flowMode === 'full' ? 'instance-type-delete' : undefined,
     },
     {
-      name: 'vmaas-instance-type-lifecycle',
+      name: 'instance-type-lifecycle',
       testDir: vmaasDir,
       testMatch: /lifecycle\.instance_type\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: ['vmaas-instance-type'],
+      dependencies: ['instance-type'],
     },
     {
-      name: 'vmaas-instance-type-delete',
+      name: 'instance-type-delete',
       testDir: vmaasDir,
       testMatch: /delete\.instance_type\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-delete',
+      name: 'tenant-delete',
       testDir: vmaasDir,
       testMatch: /delete\.tenant\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: ['vmaas'],
     },
     {
-      name: 'vmaas-disk-image',
+      name: 'disk-image',
       testDir: vmaasDir,
-      testMatch: /create\.disk_images\.spec\.ts/,
+      testMatch: diskImageTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: 'vmaas-disk-image-delete',
+      teardown: flowMode === 'full' ? 'disk-image-delete' : undefined,
     },
     {
-      name: 'vmaas-disk-image-lifecycle',
+      name: 'disk-image-lifecycle',
       testDir: vmaasDir,
       testMatch: /lifecycle\.disk_images\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      dependencies: ['vmaas-disk-image'],
+      dependencies: ['disk-image'],
     },
     {
-      name: 'vmaas-disk-image-delete',
+      name: 'disk-image-delete',
       testDir: vmaasDir,
       testMatch: /delete\.disk_images\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      name: 'vmaas-catalog',
+      name: 'catalog',
       testDir: vmaasDir,
-      testMatch: /create\.catalog\.spec\.ts/,
+      testMatch: catalogTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
-      teardown: 'vmaas-catalog-delete',
+      dependencies: flowMode === 'delete' ? [] : ['disk-image', 'instance-type'],
+      teardown: flowMode === 'full' ? 'catalog-delete' : undefined,
     },
     {
-      name: 'vmaas-catalog-delete',
+      name: 'catalog-delete',
       testDir: vmaasDir,
       testMatch: /delete\.catalog\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },

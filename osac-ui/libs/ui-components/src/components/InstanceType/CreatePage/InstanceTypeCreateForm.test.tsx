@@ -53,8 +53,6 @@ describe('InstanceTypeCreateForm', () => {
     expect(screen.getByRole('textbox', { name: 'PCI device selector' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Resource name' })).toBeInTheDocument();
     expect(getNumericInput('GPU count')).toHaveAttribute('type', 'number');
-    expect(screen.getAllByRole('button', { name: 'Minus' })).toHaveLength(3);
-    expect(screen.getAllByRole('button', { name: 'Plus' })).toHaveLength(3);
     expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
   });
@@ -78,9 +76,7 @@ describe('InstanceTypeCreateForm', () => {
 
   it.each([
     ['blank', '', 'vCPUs are required'],
-    ['decimal', '1.5', 'Must be a whole number'],
     ['zero', '0', 'Must be greater than zero'],
-    ['negative', '-1', 'Must be greater than zero'],
   ])('shows a validation error for %s vcpus', async (_label, vcpus, expectedMessage) => {
     const { user } = renderForm();
 
@@ -100,9 +96,7 @@ describe('InstanceTypeCreateForm', () => {
 
   it.each([
     ['blank', '', 'Memory is required'],
-    ['decimal', '1.5', 'Must be a whole number'],
     ['zero', '0', 'Must be greater than zero'],
-    ['negative', '-1', 'Must be greater than zero'],
   ])('shows a validation error for %s Memory (GiB)', async (_label, memoryGib, expectedMessage) => {
     const { user } = renderForm();
 
@@ -122,9 +116,7 @@ describe('InstanceTypeCreateForm', () => {
 
   it.each([
     ['blank', '', 'Required when configuring a GPU'],
-    ['decimal', '1.5', 'Must be a whole number'],
     ['zero', '0', 'Must be greater than zero'],
-    ['negative', '-1', 'Must be greater than zero'],
   ])('shows a validation error for %s GPU count', async (_label, count, expectedMessage) => {
     const { user } = renderForm();
 
@@ -152,6 +144,22 @@ describe('InstanceTypeCreateForm', () => {
       expect(input).toHaveValue(null);
     },
   );
+
+  it.each([
+    ['vCPUs', '1.5'],
+    ['vCPUs', '-1'],
+    ['Memory (GiB)', '1.5'],
+    ['Memory (GiB)', '-1'],
+    ['GPU count', '1.5'],
+    ['GPU count', '-1'],
+  ])('rejects invalid numeric input for %s: %s', (fieldLabel, value) => {
+    renderForm();
+
+    const input = getNumericInput(fieldLabel);
+    fireEvent.change(input, { target: { value } });
+
+    expect(input).toHaveValue(null);
+  });
 
   it.each([
     ['GPU count', 'PCI device selector', '10DE:20B0'],
@@ -219,6 +227,30 @@ describe('InstanceTypeCreateForm', () => {
       });
 
       await fillValidForm(user);
+      await user.click(screen.getByRole('button', { name: 'Create' }));
+
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith(`${LIST_ROUTE}/${CREATED_ID}`);
+      });
+      const spec = captured?.object as { spec?: { gpu?: unknown } };
+      expect(spec?.spec?.gpu).toBeUndefined();
+    });
+
+    it('omits gpu from the request when the GPU count is zero and metadata is blank', async () => {
+      let captured: Record<string, unknown> | undefined;
+      const { user } = renderForm({
+        onInstanceTypeCreate: (req) => {
+          captured = req as unknown as Record<string, unknown>;
+          return create(InstanceTypesCreateResponseSchema, {
+            object: { ...req.object, id: CREATED_ID },
+          });
+        },
+      });
+
+      await fillValidForm(user);
+      fireEvent.change(getNumericInput('GPU count'), {
+        target: { value: '0' },
+      });
       await user.click(screen.getByRole('button', { name: 'Create' }));
 
       await waitFor(() => {

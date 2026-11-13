@@ -6,7 +6,12 @@ import type {
   ComputeInstanceCatalogItem,
 } from '@osac/types';
 
-import { catalogItemDetailsPath, filterCatalogItemsBySearch } from './catalogItemDisplay';
+import {
+  catalogItemDetailsPath,
+  catalogItemEditPath,
+  filterCatalogItemsBySearch,
+  getCatalogItemKind,
+} from './catalogItemDisplay';
 describe('filterCatalogItemsBySearch', () => {
   const items: ClusterCatalogItem[] = [
     {
@@ -19,8 +24,6 @@ describe('filterCatalogItemsBySearch', () => {
       template: undefined,
       metadata: {
         $typeName: 'osac.public.v1.Metadata',
-        displayName: '',
-        description: '',
         name: 'alpha-vm',
         creator: '',
         annotations: {},
@@ -40,8 +43,6 @@ describe('filterCatalogItemsBySearch', () => {
       template: undefined,
       metadata: {
         $typeName: 'osac.public.v1.Metadata',
-        displayName: '',
-        description: '',
         name: 'beta-cluster',
         creator: '',
         annotations: {},
@@ -79,5 +80,51 @@ describe('catalogItemDetailsPath', () => {
         id: 'cluster-1',
       } as ClusterCatalogItem),
     ).toBe('/catalog/cluster/cluster-1');
+  });
+});
+
+describe('getCatalogItemKind', () => {
+  it('resolves the kind for each catalog item type', () => {
+    expect(
+      getCatalogItemKind({
+        $typeName: 'osac.public.v1.ComputeInstanceCatalogItem',
+        id: 'vm-1',
+      } as ComputeInstanceCatalogItem),
+    ).toBe('vm');
+    expect(
+      getCatalogItemKind({
+        $typeName: 'osac.public.v1.BareMetalInstanceCatalogItem',
+        id: 'bm-1',
+      } as BareMetalInstanceCatalogItem),
+    ).toBe('bm');
+    expect(
+      getCatalogItemKind({
+        $typeName: 'osac.public.v1.ClusterCatalogItem',
+        id: 'cluster-1',
+      } as ClusterCatalogItem),
+    ).toBe('cluster');
+  });
+});
+
+describe('catalogItemEditPath', () => {
+  it('builds the edit path for each catalog item type', () => {
+    expect(
+      catalogItemEditPath({
+        $typeName: 'osac.public.v1.ComputeInstanceCatalogItem',
+        id: 'vm-1',
+      } as ComputeInstanceCatalogItem),
+    ).toBe('/catalog/vm/vm-1/edit');
+    expect(
+      catalogItemEditPath({
+        $typeName: 'osac.public.v1.BareMetalInstanceCatalogItem',
+        id: 'bm-1',
+      } as BareMetalInstanceCatalogItem),
+    ).toBe('/catalog/bm/bm-1/edit');
+    expect(
+      catalogItemEditPath({
+        $typeName: 'osac.public.v1.ClusterCatalogItem',
+        id: 'cluster-1',
+      } as ClusterCatalogItem),
+    ).toBe('/catalog/cluster/cluster-1/edit');
   });
 });

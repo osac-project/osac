@@ -150,9 +150,9 @@ const tokenExpirationLeeway = 5 * time.Second
 // serverInstructions guide MCP hosts toward the deployment API rather than local, bypassing interfaces.
 // Keep the first 512 characters self-contained because some MCP hosts use only that portion when selecting tools.
 const serverInstructions = "Treat this server's tools as the authoritative interface for supported tenant-facing OSAC deployment operations. " +
-	"Do not run the osac CLI, oc, kubectl, call APIs directly, or inspect Kubernetes resources for those requests. " +
-	"If an operation is unavailable, explain the limitation and ask before using another interface. Before creating a compute instance, " +
-	"list or get its catalog item and selectable resources, use only permitted overrides, and get confirmation. " +
+	"Do not run the osac CLI, oc, or kubectl, call APIs directly, or inspect Kubernetes for those requests. " +
+	"If an operation is unavailable, explain the limitation and ask before using another interface. Before creating a compute instance " +
+	"or network prerequisite, inspect eligible resources and use IDs. Network tools accept canonical IPv4 only and reject edits. " +
 	"Delete only when explicitly requested."
 
 // run runs the `start mcp-server` command.
@@ -216,6 +216,13 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	jwtValidator, err := newMCPJWTValidator(c.logger, jwksCache, c.args.oauthResourceURL)
 	if err != nil {
 		return fmt.Errorf("failed to create JWT validator: %w", err)
+	}
+	if c.args.oauthAuthorizationServer != "" {
+		if err := validateOAuthAuthorizationServerURL(
+			c.args.oauthAuthorizationServer, c.args.trustedTokenIssuers,
+		); err != nil {
+			return fmt.Errorf("'--oauth-authorization-server': %w", err)
+		}
 	}
 	apiValidator, err := auth.NewJwtValidator().
 		SetLogger(c.logger).
@@ -335,6 +342,25 @@ func canonicalMCPResourceURL(resourceURL string) (string, error) {
 	return strings.TrimSuffix(resourceURL, "/") + "/", nil
 }
 
+func canonicalOAuthAuthorizationServerURL(authorizationServer string) (string, error) {
+	parsed, err := url.Parse(authorizationServer)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("OAuth authorization server must be an HTTPS issuer URL without a query or fragment")
+	}
+	return authorizationServer, nil
+}
+
+func validateOAuthAuthorizationServerURL(authorizationServer string, trustedIssuers []string) error {
+	if _, err := canonicalOAuthAuthorizationServerURL(authorizationServer); err != nil {
+		return err
+	}
+	if !slices.Contains(trustedIssuers, authorizationServer) {
+		return errors.New("OAuth authorization server must be a configured trusted token issuer")
+	}
+	return nil
+}
+
 // newServer creates the MCP server and registers its tools.
 func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 	resources := newResourceRegistry(deps)
@@ -359,7 +385,9 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		},
 		InputSchema:  compatibleToolSchema[CheckConnectionInput](),
 		OutputSchema: compatibleToolSchema[CheckConnectionOutput](),
-	}, handleCheckConnection(endpoint, resources, registry, deps.TenantsClient, deps.SelfSubjectAccessReviewsClient))
+	}, handleCheckConnection(
+		endpoint, resources, registry, deps.TenantsClient, deps.SelfSubjectAccessReviewsClient,
+	))
 	registerReadTool(registry, &mcp.Tool{
 		Name: "list_resources",
 		Description: "Use this tool to discover or compare tenant-visible OSAC deployment options and existing compute instances. " +
@@ -391,6 +419,40 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		OutputSchema: compatibleToolSchema[GetResourceOutput](),
 	}
 	registerGetResourceTool(registry, getResourceTool, resources)
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "create_network_resource",
+		Description: "Use this tool only after the user confirms the requested resource. Create a virtual_network with ipv4_cidr, " +
+			"a subnet with virtual_network_id and ipv4_cidr, or a security_group with virtual_network_id and optional typed rules. " +
+			"Use IDs from list_resources, canonical IPv4 CIDRs only, and snake_case fields. Supplying id requests an unsupported " +
+			"in-place edit. Creation is asynchronous and acceptance does not mean the resource is ready.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Create OSAC network resource",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(false),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  networkCreateToolSchema(),
+		OutputSchema: compatibleToolSchema[CreateNetworkResourceOutput](),
+	}, writeToolContract{Destructive: false, Idempotent: false}, handleCreateNetworkResource(
+		deps.VirtualNetworksClient, deps.SubnetsClient, deps.SecurityGroupsClient,
+	))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "delete_network_resource",
+		Description: "Use this tool only when the user explicitly requests deletion or cleanup. Deletes exactly one named " +
+			"virtual_network, subnet, or security_group by ID. Dependencies must be removed first; this tool never cascades.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Delete OSAC network resource",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  compatibleToolSchema[DeleteNetworkResourceInput](),
+		OutputSchema: compatibleToolSchema[DeleteNetworkResourceOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleDeleteNetworkResource(
+		deps.VirtualNetworksClient, deps.SubnetsClient, deps.SecurityGroupsClient,
+	))
 	registerWriteTool(registry, &mcp.Tool{
 		Name: "create_compute_instance",
 		Description: "Use this tool only after the user confirms the requested VM and you have inspected the catalog item and any selected " +
@@ -442,6 +504,36 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		InputSchema:  compatibleToolSchema[DeleteComputeInstanceInput](),
 		OutputSchema: compatibleToolSchema[DeleteComputeInstanceOutput](),
 	}, writeToolContract{Destructive: true, Idempotent: false}, handleDeleteComputeInstance(deps.ComputeInstancesClient))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "create_project",
+		Description: "Use this tool only after the user confirms the requested Project. The signed-in caller's existing tenant " +
+			"and permissions are used; this tool does not accept tenant, identity, hierarchy, or membership fields.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Create OSAC project",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(false),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  compatibleToolSchema[CreateProjectInput](),
+		OutputSchema: compatibleToolSchema[ProjectOutput](),
+	}, writeToolContract{Destructive: false, Idempotent: false}, handleCreateProject(deps.ProjectsClient))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "update_project",
+		Description: "Use this tool only after the user confirms the requested Project changes. Supported fields are title and " +
+			"description; identity, tenant, hierarchy, membership, status, and all other fields are rejected. Each field is " +
+			"updated independently and the public API uses last-write-wins for a later update to the same field; this tool " +
+			"does not provide a stale-version conflict guarantee.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Update OSAC project",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  compatibleToolSchema[UpdateProjectInput](),
+		OutputSchema: compatibleToolSchema[ProjectOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleUpdateProject(deps.ProjectsClient))
 	return server
 }
 
@@ -572,56 +664,75 @@ func compatibleToolSchema[T any]() json.RawMessage {
 }
 
 func resourceToolSchema[T any](supportedResourceTypes []ResourceType) json.RawMessage {
-	schema := compatibleToolSchema[T]()
-	var document map[string]any
-	if err := json.Unmarshal(schema, &document); err != nil {
-		panic(fmt.Errorf("decode resource tool schema: %w", err))
-	}
-	properties, ok := document["properties"].(map[string]any)
-	if !ok {
-		panic("resource tool schema has no properties")
-	}
-	resourceType, ok := properties["resource_type"].(map[string]any)
-	if !ok {
-		panic("resource tool schema has no resource_type property")
-	}
-	resourceTypes := make([]string, len(supportedResourceTypes))
-	for i, resourceType := range supportedResourceTypes {
-		resourceTypes[i] = string(resourceType)
-	}
-	resourceType["enum"] = resourceTypes
-	if offset, ok := properties["offset"].(map[string]any); ok {
-		offset["minimum"] = 0
-	}
-	if pageSize, ok := properties["page_size"].(map[string]any); ok {
-		pageSize["minimum"] = 0 // Zero selects the default page size.
-		pageSize["maximum"] = maxResourcePageSize
-	}
-	encoded, err := json.Marshal(document)
-	if err != nil {
-		panic(fmt.Errorf("encode resource tool schema: %w", err))
-	}
-	return encoded
+	return withToolSchemaProperties(
+		compatibleToolSchema[T](),
+		"resource",
+		func(properties map[string]any) {
+			resourceType, ok := properties["resource_type"].(map[string]any)
+			if !ok {
+				panic("resource tool schema has no resource_type property")
+			}
+			resourceTypes := make([]string, len(supportedResourceTypes))
+			for index, resourceType := range supportedResourceTypes {
+				resourceTypes[index] = string(resourceType)
+			}
+			resourceType["enum"] = resourceTypes
+			if offset, ok := properties["offset"].(map[string]any); ok {
+				offset["minimum"] = 0
+			}
+			if pageSize, ok := properties["page_size"].(map[string]any); ok {
+				pageSize["minimum"] = 0 // Zero selects the default page size.
+				pageSize["maximum"] = maxResourcePageSize
+			}
+		},
+	)
 }
 
 func computeInstanceUpdateToolSchema() json.RawMessage {
-	schema := compatibleToolSchema[UpdateComputeInstanceInput]()
+	return withToolSchemaProperties(
+		compatibleToolSchema[UpdateComputeInstanceInput](),
+		"compute instance update",
+		func(properties map[string]any) {
+			version, ok := properties["version"].(map[string]any)
+			if !ok {
+				panic("compute instance update tool schema has no version property")
+			}
+			version["minimum"] = 1
+		},
+	)
+}
+
+func networkCreateToolSchema() json.RawMessage {
+	return withToolSchemaProperties(
+		compatibleToolSchema[CreateNetworkResourceInput](),
+		"network create",
+		func(properties map[string]any) {
+			for _, name := range []string{"ingress_rules", "egress_rules"} {
+				property, ok := properties[name].(map[string]any)
+				if !ok {
+					panic(fmt.Sprintf("network create tool schema has no %s property", name))
+				}
+				property["maxItems"] = maxNetworkSecurityRules
+			}
+		},
+	)
+}
+
+func withToolSchemaProperties(
+	schema json.RawMessage, toolName string, mutate func(properties map[string]any),
+) json.RawMessage {
 	var document map[string]any
 	if err := json.Unmarshal(schema, &document); err != nil {
-		panic(fmt.Errorf("decode compute instance update tool schema: %w", err))
+		panic(fmt.Errorf("decode %s tool schema: %w", toolName, err))
 	}
 	properties, ok := document["properties"].(map[string]any)
 	if !ok {
-		panic("compute instance update tool schema has no properties")
+		panic(fmt.Sprintf("%s tool schema has no properties", toolName))
 	}
-	version, ok := properties["version"].(map[string]any)
-	if !ok {
-		panic("compute instance update tool schema has no version property")
-	}
-	version["minimum"] = 1
+	mutate(properties)
 	encoded, err := json.Marshal(document)
 	if err != nil {
-		panic(fmt.Errorf("encode compute instance update tool schema: %w", err))
+		panic(fmt.Errorf("encode %s tool schema: %w", toolName, err))
 	}
 	return encoded
 }
@@ -662,6 +773,9 @@ func NewHandler(
 	if exchanger == nil {
 		return nil, errors.New("MCP token exchanger is required")
 	}
+	if expiringExchanger, ok := exchanger.(expiringTokenExchanger); ok {
+		exchanger = newCachingTokenExchanger(expiringExchanger)
+	}
 	if (oauthAuthorizationServer == "") != (oauthResourceURL == "") {
 		return nil, errors.New(
 			"'--oauth-authorization-server' and '--oauth-resource-url' must be set together, or not at all",
@@ -672,6 +786,11 @@ func NewHandler(
 		oauthResourceURL, err = canonicalMCPResourceURL(oauthResourceURL)
 		if err != nil {
 			return nil, fmt.Errorf("'--oauth-resource-url': %w", err)
+		}
+	}
+	if oauthAuthorizationServer != "" {
+		if _, err := canonicalOAuthAuthorizationServerURL(oauthAuthorizationServer); err != nil {
+			return nil, fmt.Errorf("'--oauth-authorization-server': %w", err)
 		}
 	}
 	server := newServer(deps, oauthResourceURL)
@@ -744,9 +863,7 @@ func forwardAPIToken(ctx context.Context, req *mcp.CallToolRequest) (context.Con
 	}
 	source, ok := req.Extra.TokenInfo.Extra[exchangeTokenExtraKey].(apiTokenSource)
 	if !ok || source == nil {
-		return nil, safeTokenExchangeError(fmt.Errorf(
-			"%w: MCP caller token exchange is unavailable", errOAuthTokenExchangeUnavailable,
-		))
+		return nil, safeTokenExchangeError(errors.New("MCP caller token exchange is unavailable"))
 	}
 	apiToken, err := source(ctx)
 	if err != nil {

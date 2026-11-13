@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/controller/assistedservice"
 	"github.com/osac-project/osac/osac-operator/internal/controller/baremetalworker"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -35,13 +36,13 @@ import (
 const testNamespace = "default"
 
 var (
-	infraEnvGVK = schema.GroupVersionKind{Group: "agent-install.openshift.io", Version: "v1beta1", Kind: "InfraEnv"}
-	agentGVK    = schema.GroupVersionKind{Group: "agent-install.openshift.io", Version: "v1beta1", Kind: "Agent"}
+	agentGVK = schema.GroupVersionKind{
+		Group: assistedservice.AgentInstallAPIGroup, Version: assistedservice.AgentInstallAPIVersion, Kind: "Agent",
+	}
 )
 
 func newInfraEnv(name string) *unstructured.Unstructured {
-	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(infraEnvGVK)
+	u := assistedservice.NewInfraEnvObject()
 	u.SetName(name)
 	u.SetNamespace(testNamespace)
 	return u
@@ -53,7 +54,7 @@ func newInfraEnv(name string) *unstructured.Unstructured {
 // this ClusterOrder does not control is rejected as foreign evidence.
 func newOwnedInfraEnv(co *osacv1alpha1.ClusterOrder) *unstructured.Unstructured {
 	GinkgoHelper()
-	u := newInfraEnv(co.Name + "-infraenv")
+	u := newInfraEnv(assistedservice.InfraEnvName(co.Name))
 	Expect(controllerutil.SetControllerReference(co, u, scheme.Scheme)).To(Succeed())
 	return u
 }
@@ -128,9 +129,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				Annotations: map[string]string{"osac.openshift.io/tenant": "tenant1"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   2,
 					FabricInterface: "data-0",
@@ -321,9 +321,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 				Finalizers:  []string{"baremetalworker.osac.openshift.io/finalizer"},
 			},
 			Spec: osacv1alpha1.ClusterOrderSpec{
-				TemplateID:   "test",
-				PullSecret:   "{\"auths\":{}}",
-				SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5",
+				TemplateID: "test",
+				PullSecret: "{\"auths\":{}}",
 				NodeRequests: []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard",
 					NumberOfNodes:   2,
 					FabricInterface: "data-0",

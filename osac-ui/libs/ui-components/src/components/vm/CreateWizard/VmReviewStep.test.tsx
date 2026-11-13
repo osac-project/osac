@@ -25,11 +25,11 @@ describe('VmReviewStep — Storage section', () => {
   it('lists the boot disk and each additional disk with size and resolved tier', async () => {
     renderReviewStep({
       bootDisk: {
-        sizeGib: provisioningFieldValue('40'),
+        sizeGib: provisioningFieldValue(40),
         storageTier: provisioningFieldValue({ id: 'id-balanced', name: 'balanced' }),
       },
       additionalDisks: provisioningFieldValue([
-        { sizeGib: '100', storageTier: { id: 'id-fast', name: 'fast' } },
+        { sizeGib: 100, storageTier: { id: 'id-fast', name: 'fast' } },
       ]),
     });
 
@@ -41,7 +41,7 @@ describe('VmReviewStep — Storage section', () => {
   it('falls back to the raw tier value when no tier matches', async () => {
     renderReviewStep({
       bootDisk: {
-        sizeGib: provisioningFieldValue('40'),
+        sizeGib: provisioningFieldValue(40),
         storageTier: provisioningFieldValue({ id: '', name: 'unknown-tier' }),
       },
     });
@@ -52,7 +52,7 @@ describe('VmReviewStep — Storage section', () => {
   it('no longer lists the boot disk under the Configuration section', async () => {
     renderReviewStep({
       bootDisk: {
-        sizeGib: provisioningFieldValue('40'),
+        sizeGib: provisioningFieldValue(40),
         storageTier: provisioningFieldValue({ id: 'id-balanced', name: 'balanced' }),
       },
     });
@@ -76,14 +76,37 @@ describe('VmReviewStep — disk image', () => {
 });
 
 describe('VmReviewStep — user data source', () => {
-  it('shows the selected Secret reference instead of inline user data', async () => {
+  it('shows Provided (hidden) for inline Cloud-init data', async () => {
     renderReviewStep({
-      userDataSource: provisioningFieldValue('secret'),
-      userData: provisioningFieldValue('stale inline data'),
-      userDataSecret: provisioningFieldValue('user-data-secret'),
+      userData: provisioningFieldValue({
+        source: 'inline',
+        inline: '#cloud-config\nusers: []',
+        secret: 'stale secret reference',
+      }),
+    });
+
+    expect(await screen.findByText('Provided (hidden)')).toBeInTheDocument();
+    expect(screen.queryByText(/#cloud-config/)).not.toBeInTheDocument();
+  });
+
+  it('shows the secret name for a selected Secret reference', async () => {
+    renderReviewStep({
+      userData: provisioningFieldValue({
+        source: 'secret',
+        inline: 'stale inline data',
+        secret: 'user-data-secret',
+      }),
     });
 
     expect(await screen.findByText('user-data-secret')).toBeInTheDocument();
     expect(screen.queryByText('stale inline data')).not.toBeInTheDocument();
+  });
+
+  it('shows Not configured when user data is empty', async () => {
+    renderReviewStep({
+      userData: provisioningFieldValue({ source: 'inline', inline: '', secret: '' }),
+    });
+
+    expect(await screen.findByText('Not configured')).toBeInTheDocument();
   });
 });

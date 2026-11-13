@@ -37,9 +37,19 @@ osac_render=$(helm template osac charts/osac --namespace osac \
   --values values/dev/kind-instance.yaml \
   --values values/dev/kind-instance-devfull.yaml \
   --set-string global.osacDeploymentId=osac/osac)
-if ! awk '/name: OSAC_ENABLE_NETWORKING_PROVISIONING/ { getline; if ($0 ~ /value: "true"/) found = 1 } END { exit !found }' \
+if ! awk 'BEGIN { RS = "---" } /metering-service:latest/ && /imagePullPolicy: IfNotPresent/ { found = 1 } END { exit !found }' \
   <<<"$osac_render"; then
-  echo "Kind dev-full must enable provider networking so AAP creates each tenant's target namespace" >&2
+  echo "Kind dev-full must use the locally loaded metering image without pulling it" >&2
+  exit 1
+fi
+if ! awk '/name: OSAC_AAP_ORGANIZATION/ { getline; if ($0 ~ /value: "Default"/) found = 1 } END { exit !found }' \
+  <<<"$osac_render"; then
+  echo "dev-full must use the AWX Default organization that configure-awx.sh assigns OSAC resources to" >&2
+  exit 1
+fi
+if ! awk '/name: OSAC_ENABLE_NETWORKING_PROVISIONING/ { getline; if ($0 ~ /value: "false"/) found = 1 } END { exit !found }' \
+  <<<"$osac_render"; then
+  echo "Kind dev-full must disable provider networking so it does not require Netris" >&2
   exit 1
 fi
 if awk 'BEGIN { RS = "---" } /kind: Deployment/ && /name: osac-ui/ { found = 1 } END { exit found ? 0 : 1 }' \
@@ -277,10 +287,10 @@ if ! grep -Fq 'fulfillment_token="$(get_fulfillment_access_token)"' <<<"$provisi
   echo "dev-full tenant provisioning must pass its Keycloak token to grpcurl through the temporary Secret" >&2
   exit 1
 fi
-if ! grep -Fq 'kubectl get clusteruserdefinednetwork' <<<"$provision_tenant_script" \
-  || ! grep -Fq 'timed out waiting for Subnet AAP' <<<"$provision_tenant_script" \
+if grep -Fq 'kubectl get clusteruserdefinednetwork' <<<"$provision_tenant_script" \
+  || grep -Fq 'get subnets' <<<"$provision_tenant_script" \
   || grep -Fq 'kubectl create namespace' <<<"$provision_tenant_script"; then
-  echo "dev-full tenant hook must verify AAP-created namespace/CUDN resources instead of masking failures" >&2
+  echo "dev-full tenant hook must not wait for provider networking resources on Kind" >&2
   exit 1
 fi
 

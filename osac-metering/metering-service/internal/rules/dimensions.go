@@ -45,12 +45,13 @@ var dimensionFields = map[string]map[string]string{
 }
 
 // computedDimensions names the dimensions whose value the calculator derives from another
-// tracked field instead of reading it from history. Conditions evaluate raw stored fields,
-// so a condition on one of them compares the underlying value and never matches. Keep this
-// list in sync with the derivation in internal/usage: ip_family parses the tracked address
-// (ipFamilyOf in engine.go).
-var computedDimensions = map[string]bool{
-	"ip_family": true,
+// tracked field instead of reading it from history, with the description the published
+// reference uses. Conditions evaluate raw stored fields, so a condition on one of them
+// compares the underlying value and never matches. Keep the value in sync with the
+// derivation in internal/usage: ip_family parses the tracked address (ipFamilyOf in
+// engine.go).
+var computedDimensions = map[string]string{
+	"ip_family": "derived by metering from the tracked value: `ipv4` or `ipv6`",
 }
 
 // DimensionPath resolves a dimension name to its history field for a resource.
@@ -63,10 +64,60 @@ func DimensionPath(resource, name string) (string, bool) {
 	return path, known
 }
 
-// IdentityFields are the identity facts the fold records for every resource. Every meter sends
-// them as dimensions.
-var IdentityFields = []string{
-	"metadata.project",
-	"spec.catalog_item",
-	"spec.template",
+// Identity dimension names shared by the engine and the published reference.
+const (
+	// IdentityDeployment names the installation that wrote the event.
+	IdentityDeployment = "deployment"
+
+	// IdentityTenant names the tenant the usage belongs to.
+	IdentityTenant = "tenant"
+
+	// IdentityMeterType names the meter's unit.
+	IdentityMeterType = "meter_type"
+)
+
+// IdentityDimension is a billing dimension every usage event carries, and the tracked field
+// its value comes from. An empty Field means metering fills the value itself.
+type IdentityDimension struct {
+	// Name is the dimension name the event carries.
+	Name string
+
+	// Field is the tracked field the value comes from. Empty when metering supplies the
+	// value.
+	Field string
+
+	// Description is how the published reference explains the value.
+	Description string
+}
+
+// IdentityDimensions are the dimensions every usage event carries besides its meter's own.
+// The order is the order the published reference lists them in.
+var IdentityDimensions = []IdentityDimension{
+	{Name: IdentityDeployment, Description: "Id of the installation that wrote the event"},
+	{Name: IdentityTenant, Description: "Tenant the usage belongs to"},
+	{Name: IdentityMeterType, Description: "The meter's unit"},
+	{
+		Name: "project", Field: "metadata.project",
+		Description: "Value of the resource's `metadata.project`",
+	},
+	{
+		Name: "catalog", Field: "spec.catalog_item",
+		Description: "The `spec.catalog_item` reference's `name` when set, else its `id`",
+	},
+	{
+		Name: "template", Field: "spec.template",
+		Description: "The `spec.template` reference's `name` when set, else its `id`",
+	},
+}
+
+// Computed reports whether the calculator derives a dimension's value from another tracked
+// field instead of reading its stored value. Conditions and the reference both need to know.
+func Computed(dimension string) bool {
+	_, computed := computedDimensions[dimension]
+	return computed
+}
+
+// ComputedDescription explains a derived dimension's value for the published reference.
+func ComputedDescription(dimension string) string {
+	return computedDimensions[dimension]
 }

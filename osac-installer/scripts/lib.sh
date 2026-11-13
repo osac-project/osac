@@ -1,10 +1,218 @@
 #!/usr/bin/env bash
 
 # Sourced by other scripts, all of which already set this themselves before
-# sourcing -- set here too so a function like resolve_release_tag() still
+# sourcing -- set here too so a function like resolve_line_version() still
 # fails loudly instead of silently continuing on an internal error if this
 # is ever sourced by a script that forgot to.
 set -euo pipefail
+
+# Prepare only a verified local Linux engine host; never persist sysctl changes.
+ensure_inotify_instances() {
+    local floor=512
+    local instances_file="${_INOTIFY_INSTANCES_FILE:-/proc/sys/fs/inotify/max_user_instances}"
+
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        echo "ERROR: inotify tuning requires a native Linux host." >&2
+        echo "Ensure fs.inotify.max_user_instances >= ${floor} on" >&2
+        echo "the actual Linux engine host before creating Kind" >&2
+        echo "clusters.  Temporary: sudo sysctl -w" >&2
+        echo "fs.inotify.max_user_instances=${floor}" >&2
+        return 1
+    fi
+
+    if [[ -n "${CONTAINER_HOST:-}" && "${CONTAINER_HOST}" != unix://* ]]; then
+        echo "ERROR: CONTAINER_HOST indicates a remote" >&2
+        echo "container engine.  Local sysctl cannot tune" >&2
+        echo "the engine host.  Ensure" >&2
+        echo "fs.inotify.max_user_instances >= ${floor}" >&2
+        echo "on the actual engine host." >&2
+        return 1
+    fi
+    if [[ -n "${DOCKER_HOST:-}" && "${DOCKER_HOST}" != unix://* ]]; then
+        echo "ERROR: DOCKER_HOST indicates a remote" >&2
+        echo "container engine.  Local sysctl cannot tune" >&2
+        echo "the engine host.  Ensure" >&2
+        echo "fs.inotify.max_user_instances >= ${floor}" >&2
+        echo "on the actual engine host." >&2
+        return 1
+    fi
+    if [[ -n "${CONTAINER_CONNECTION:-}" ]]; then
+        echo "ERROR: a named Podman connection is active" >&2
+        echo "(CONTAINER_CONNECTION).  Cannot verify the" >&2
+        echo "local inotify setting applies to the engine" >&2
+        echo "host.  Ensure" >&2
+        echo "fs.inotify.max_user_instances >= ${floor}" >&2
+        echo "on the actual engine host." >&2
+        return 1
+    fi
+    if [[ -n "${DOCKER_CONTEXT:-}" ]]; then
+        echo "ERROR: a named Docker context is active" >&2
+        echo "(DOCKER_CONTEXT).  Cannot verify the local" >&2
+        echo "inotify setting applies to the engine host." >&2
+        echo "Ensure fs.inotify.max_user_instances >=" >&2
+        echo "${floor} on the actual engine host." >&2
+        return 1
+    fi
+
+    local provider="${1:-${_INOTIFY_PROVIDER:-${KIND_EXPERIMENTAL_PROVIDER:-}}}"
+    if [[ -z "${provider}" ]]; then
+        if command -v podman >/dev/null 2>&1; then
+            provider=podman
+        else
+            provider=docker
+        fi
+    fi
+    case "${provider}" in
+        docker|podman) ;;
+        *)
+            echo "ERROR: unsupported inotify provider; use docker or podman." >&2
+            return 1
+            ;;
+    esac
+    if [[ "${provider}" == docker ]]; then
+        local docker_context
+        if ! docker_context=$(docker context show 2>/dev/null); then
+            echo "ERROR: cannot determine the active Docker context." >&2
+            echo "Prepare the actual Linux engine host manually." >&2
+            return 1
+        fi
+        if [[ "${docker_context}" != default ]]; then
+            echo "ERROR: a non-default Docker context is active." >&2
+            echo "Cannot verify the local inotify setting applies" >&2
+            echo "to the engine host. Ensure" >&2
+            echo "fs.inotify.max_user_instances >= ${floor}" >&2
+            echo "on the actual engine host." >&2
+            return 1
+        fi
+    else
+        local podman_remote podman_uri
+        if ! podman_remote=$(podman info --format '{{.Host.ServiceIsRemote}}' 2>/dev/null); then
+            echo "ERROR: cannot determine Podman transport; prepare the engine host manually." >&2
+            return 1
+        fi
+        case "${podman_remote}" in
+            false) ;;
+            true)
+                podman_uri="${CONTAINER_HOST:-}"
+                if [[ -z "${podman_uri}" ]]; then
+                    if ! podman_uri=$(podman system connection list --format \
+                        '{{range .}}{{if .Default}}{{.URI}}{{end}}{{end}}' 2>/dev/null); then
+                        echo "ERROR: cannot resolve Podman connection; prepare the engine host manually." >&2
+                        return 1
+                    fi
+                fi
+                if [[ "${podman_uri}" != unix:///* || "${podman_uri}" == *$'\n'* ]]; then
+                    echo "ERROR: Podman transport is non-local or unresolved." >&2
+                    echo "Prepare inotify on the actual Linux engine host manually." >&2
+                    return 1
+                fi
+                ;;
+            *)
+                echo "ERROR: unsupported Podman transport metadata; prepare the engine host manually." >&2
+                return 1
+                ;;
+        esac
+    fi
+
+    if [[ ! -f "${instances_file}" ]]; then
+        echo "ERROR: ${instances_file} not found — cannot" >&2
+        echo "verify inotify capacity." >&2
+        return 1
+    fi
+
+    local current
+    if ! current=$(cat "${instances_file}" 2>/dev/null) || \
+       [[ ! "${current}" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: could not read a numeric value from" >&2
+        echo "${instances_file}." >&2
+        return 1
+    fi
+
+    if (( 10#${current} >= floor )); then
+        echo "ensure_inotify_instances: current ${current}" >&2
+        echo ">= ${floor}, no change needed" >&2
+        return 0
+    fi
+
+    echo "ensure_inotify_instances: current ${current}" >&2
+    echo "< ${floor}, raising to ${floor}" >&2
+
+    local diagnostic write_failed=false use_sudo=false
+    if [[ "$(id -u)" == "0" ]]; then
+        diagnostic=$(LC_ALL=C sysctl -w "fs.inotify.max_user_instances=${floor}" \
+             2>&1 >/dev/null) || write_failed=true
+    else
+        use_sudo=true
+        diagnostic=$(LC_ALL=C sudo -n sysctl -w \
+             "fs.inotify.max_user_instances=${floor}" \
+             2>&1 >/dev/null) || write_failed=true
+    fi
+    if [[ "${write_failed}" == true ]]; then
+        local normalized="${diagnostic,,}" category="write command failed"
+        if [[ "${use_sudo}" == true && "${normalized}" == *"sudo: a password is required"* ]]; then
+            category="passwordless sudo required; prepare the host manually if not authorized"
+        elif [[ "${use_sudo}" == true && "${normalized}" == *"unable to initialize policy plugin"* ]]; then
+            category="sudo policy plugin failure"
+        elif [[ "${use_sudo}" == true && "${normalized}" == *"sudo:"* && \
+            ( "${normalized}" == *"not allowed"* || "${normalized}" == *"authentication fail"* ) ]]; then
+            category="sudo authorization denied"
+        else
+            case "${normalized}" in
+                *"read-only file system"*) category="read-only filesystem" ;;
+                *"invalid argument"*) category="invalid argument" ;;
+                *"permission denied"*) category="permission denied" ;;
+            esac
+        fi
+        echo "ERROR: inotify write failed: ${category}." >&2
+        return 1
+    fi
+
+    local verified
+    if ! verified=$(cat "${instances_file}" 2>/dev/null) || \
+       [[ ! "${verified}" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: could not verify" >&2
+        echo "fs.inotify.max_user_instances after write." >&2
+        return 1
+    fi
+    if (( 10#${verified} < floor )); then
+        echo "ERROR: fs.inotify.max_user_instances is" >&2
+        echo "${verified} after write, expected" >&2
+        echo ">= ${floor}." >&2
+        return 1
+    fi
+
+    echo "ensure_inotify_instances: verified ${verified}" >&2
+    echo ">= ${floor}" >&2
+    return 0
+}
+
+ensure_podman_pid_limits() {
+    local cluster="$1" kind_command="$2" podman_command="$3" nodes node limit
+    if ! nodes=$("${kind_command}" get nodes --name "${cluster}") || [[ -z "${nodes}" ]]; then
+        echo "ERROR: Could not list Podman Kind nodes for '${cluster}'; check the selected connection." >&2
+        return 1
+    fi
+    while IFS= read -r node; do
+        [[ -n "${node}" ]] || continue
+        if ! limit=$("${podman_command}" inspect --format '{{.HostConfig.PidsLimit}}' "${node}") ||
+           [[ ! "${limit}" =~ ^(-1|0|[1-9][0-9]*)$ ]]; then
+            echo "ERROR: Could not inspect configured Podman PID limit for '${node}'; check the selected connection." >&2
+            return 1
+        fi
+        if [[ "${limit}" != -1 && "${limit}" != 0 ]] && (( limit < 65536 )); then
+            if ! "${podman_command}" update --pids-limit 65536 "${node}"; then
+                echo "ERROR: Could not raise Podman PID limit for '${node}' from ${limit} to 65536; check runtime permissions." >&2
+                return 1
+            fi
+            if ! limit=$("${podman_command}" inspect --format '{{.HostConfig.PidsLimit}}' "${node}") ||
+               [[ ! "${limit}" =~ ^(-1|0|[1-9][0-9]*)$ ]] ||
+               { [[ "${limit}" != -1 && "${limit}" != 0 ]] && (( limit < 65536 )); }; then
+                echo "ERROR: Podman PID limit verification failed for '${node}' (reported '${limit}'); expected at least 65536 or unlimited." >&2
+                return 1
+            fi
+        fi
+    done <<< "${nodes}"
+}
 
 # Validate the Kubernetes Secret metadata.name and data key used for the
 # remote-cluster kubeconfig before either value reaches a command or manifest.
@@ -104,6 +312,52 @@ wait_for_resource() {
     }
 
     oc wait --for="${condition}" "${resource}" ${ns_args[@]+"${ns_args[@]}"} --timeout="${timeout}s"
+}
+
+# Wait for what the osac-infra release leaves starting when its
+# `helm upgrade --install --wait-for-jobs` returns. That flag waits for hook
+# Jobs, not for Deployments, so the bundled PostgreSQL pod (it needs its server
+# certificate first) and the default CA issuer can still be coming up when the
+# next step starts. Each resource is waited for only if the profile created it.
+# Usage: wait_for_infra_ready <cli> [timeout_seconds]
+wait_for_infra_ready() {
+    local cli="$1"
+    local timeout="${2:-300}"
+    local entry resource namespace condition found rc message lookup_err
+    local -a ns_args
+    local -a targets=(
+        "clusterissuer/default-ca||condition=Ready"
+        "deployment/postgres|osac-infra|condition=Available"
+        "kafka/osac-kafka|osac-kafka|condition=Ready"
+    )
+
+    for entry in "${targets[@]}"; do
+        IFS='|' read -r resource namespace condition <<<"${entry}"
+        ns_args=()
+        [[ -n "${namespace}" ]] && ns_args=(-n "${namespace}")
+
+        # A resource the profile did not create is skipped: the object is absent
+        # (empty output) or its CRD is not installed. Any other failure (API
+        # unreachable, forbidden, timed out) is an error and not "absent".
+        lookup_err="$(mktemp)"
+        rc=0
+        found="$("${cli}" get "${resource}" "${ns_args[@]+"${ns_args[@]}"}" --ignore-not-found -o name --request-timeout=15s 2>"${lookup_err}")" || rc=$?
+        message="$(<"${lookup_err}")"
+        rm -f "${lookup_err}"
+        if (( rc != 0 )); then
+            if [[ "${message}" == *"the server doesn't have a resource type"* ]]; then
+                continue
+            fi
+            echo "ERROR: could not look up ${resource}: ${message}" >&2
+            return 1
+        fi
+        [[ -n "${found}" ]] || continue
+        echo "Waiting for ${resource} (${condition}, up to ${timeout}s)..."
+        "${cli}" wait --for="${condition}" "${resource}" "${ns_args[@]+"${ns_args[@]}"}" --timeout="${timeout}s" || {
+            echo "ERROR: ${resource} did not reach ${condition} within ${timeout}s" >&2
+            return 1
+        }
+    done
 }
 
 # Retry a command until it succeeds or times out.
@@ -333,62 +587,113 @@ except (ValueError, base64.binascii.Error):
     get_fulfillment_access_token "${issuer_url}" "${client_id}" "${client_secret}" "$@"
 }
 
-# Resolve the highest real (non-nightly) component release tag matching
-# "<prefix>/vX.Y.Z" -- scoped by prefix since tags aren't path-scoped.
+# Release-line versioning. Every artifact built from a branch shares the
+# X.Y recorded in that branch's RELEASE_LINE file; each component and the
+# umbrella keep their own Z and their own rc.N inside that line. A release
+# version is X.Y.Z or X.Y.Z-rc.N, nothing else. Each number has at most six
+# digits, which keeps the sort key below and patch arithmetic in range.
 #
-# Name-based (git tag -l), not ancestry-based (git describe --tags):
-# release tags get created on a throwaway temp-branch commit that's never
-# merged back into the default branch, so an ancestry walk from a fresh
-# checkout can never see them -- confirmed live, it left nightly stuck
-# resolving a week-old base version while real releases kept shipping.
-# `git tag -l` lists every tag in the local object database regardless of
-# branch, which is what "latest real release" actually means here.
-#
-# The glob is still not a real anchor, so candidates are re-validated with
-# a regex before being trusted -- fails loudly rather than guessing a
-# version and packaging a chart under a made-up tag.
-# Usage: resolve_release_tag <repo_path> [tag_prefix]
-# tag_prefix defaults to "osac" (umbrella chart tags: osac/vX.Y.Z).
-resolve_release_tag() {
-    local path="$1"
-    local prefix="${2:-osac}"
-    local tag
-    local match_pattern
-    local validate_regex
+# Lookups are name-based (git tag -l), not ancestry-based: release tags sit
+# on throwaway temp-branch commits that are never merged back, so an
+# ancestry walk can never see them. Tags are not branch-scoped either,
+# which is why every lookup filters by line.
+readonly RELEASE_VERSION_RE='^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})(-rc\.([1-9][0-9]{0,5}))?$'
+
+# Usage: read_release_line <repo_root>
+read_release_line() {
+    local file="$1/RELEASE_LINE"
+    local line
+
+    if [[ ! -r "${file}" ]]; then
+        echo "ERROR: ${file} not found — every branch must record its release line (X.Y)" >&2
+        return 1
+    fi
+    line=$(tr -d '[:space:]' < "${file}")
+    if [[ ! "${line}" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]]; then
+        echo "ERROR: ${file} must contain a release line of the form X.Y" >&2
+        return 1
+    fi
+    echo "${line}"
+}
+
+# Usage: is_release_version <version>
+is_release_version() {
+    [[ "$1" =~ ${RELEASE_VERSION_RE} ]]
+}
+
+# Usage: is_prerelease_version <version>
+is_prerelease_version() {
+    [[ "$1" == *-* ]]
+}
+
+# Usage: release_line_of <version>
+release_line_of() {
+    local base="${1%%-*}"
+    echo "${base%.*}"
+}
+
+# Fixed-width key that sorts in semver precedence: a stable version ranks
+# above every rc of the same X.Y.Z, and rc numbers compare numerically.
+_release_version_key() {
+    [[ "$1" =~ ${RELEASE_VERSION_RE} ]] || return 1
+    local rc="${BASH_REMATCH[5]:-}"
+    printf '%010d%010d%010d%d%010d\n' \
+        "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" \
+        "$([[ -z "${rc}" ]] && echo 1 || echo 0)" "${rc:-0}"
+}
+
+# Usage: release_version_gt <a> <b>
+release_version_gt() {
+    local a b
+    a=$(_release_version_key "$1") || return 1
+    b=$(_release_version_key "$2") || return 1
+    [[ "${a}" > "${b}" ]]
+}
+
+# Print the highest <prefix>/v<version> in the given release line, without
+# the prefix. Prints nothing and returns 1 when the line has no version.
+# Nightly tags never match the release grammar, so they are ignored.
+# Usage: resolve_line_version <repo_path> <tag_prefix> <line> [stable-only]
+resolve_line_version() {
+    local path="$1" prefix="$2" line="$3" stable_only="${4:-}"
+    local tag version key best="" best_key=""
 
     if [[ ! "${prefix}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
         echo "ERROR: invalid tag prefix '${prefix}' — must match [a-zA-Z0-9_-]+" >&2
         return 1
     fi
 
-    match_pattern="${prefix}/v[0-9]*.[0-9]*.[0-9]*"
-    validate_regex="^${prefix}/v[0-9]+\\.[0-9]+\\.[0-9]+$"
+    while IFS= read -r tag; do
+        version="${tag#"${prefix}"/v}"
+        is_release_version "${version}" || continue
+        [[ "$(release_line_of "${version}")" == "${line}" ]] || continue
+        if [[ -n "${stable_only}" ]] && is_prerelease_version "${version}"; then
+            continue
+        fi
+        key=$(_release_version_key "${version}")
+        if [[ -z "${best_key}" || "${key}" > "${best_key}" ]]; then
+            best="${version}"
+            best_key="${key}"
+        fi
+    done < <(git -C "${path}" tag -l "${prefix}/v${line}.*")
 
-    tag=$(git -C "${path}" tag -l "${match_pattern}" | { grep -E "${validate_regex}" || true; } | sort -V | tail -1)
-    if [[ -z "${tag}" ]]; then
-        echo "ERROR: no real (non-nightly) ${prefix}/vX.Y.Z release tag found in ${path} — refusing to guess a version" >&2
-        return 1
-    fi
-    echo "${tag}"
+    [[ -n "${best}" ]] || return 1
+    echo "${best}"
 }
 
-# Validate a plain semver.org version string (no leading 'v'). Full
-# semver.org grammar adapted to POSIX ERE for bash's =~: rejects
-# leading-zero numeric identifiers (e.g. "01.2.3", "1.2.3-01") and
-# malformed dot-separated prerelease/build identifiers that a more
-# permissive [a-zA-Z0-9.]+ charset would let through. Shared here so
-# osac-build-and-publish.yaml's release_version/component_versions inputs
-# (see OSAC-5337) don't grow a second hand-copied regex to drift out of
-# sync with, the exact class of bug OSAC-5178 fixed.
-# Usage: validate_semver <version>
-validate_semver() {
-    local version="$1"
-    local semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$'
-    # Reject pathologically long input before it ever reaches the regex engine --
-    # cheap defense-in-depth against the prerelease clause's repeated alternation
-    # groups, independent of how expensive a match against them actually is.
-    # No real semver string needs anywhere near this length.
-    [[ "${#version}" -le 128 ]] && [[ "${version}" =~ ${semver_re} ]]
+# Base for a nightly version: the patch after the line's latest stable
+# release, or X.Y.0 while the line has none, so a nightly never sorts below
+# a stable release it was built after.
+# Usage: nightly_base_version <repo_path> <tag_prefix> <line>
+nightly_base_version() {
+    local path="$1" prefix="$2" line="$3"
+    local latest
+
+    if latest=$(resolve_line_version "${path}" "${prefix}" "${line}" stable-only); then
+        echo "${line}.$(( ${latest##*.} + 1 ))"
+    else
+        echo "${line}.0"
+    fi
 }
 
 # True if <prefix>/v<version> already exists as a tag reachable from this

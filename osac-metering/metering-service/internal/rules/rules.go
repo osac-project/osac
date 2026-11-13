@@ -222,7 +222,7 @@ func (r Revision) validate() error {
 			)
 		}
 		for _, condition := range slices.Sorted(maps.Keys(meter.Billable.Fields)) {
-			if computedDimensions[condition] {
+			if _, computed := computedDimensions[condition]; computed {
 				return fmt.Errorf(
 					"%s conditions on field %q, which is computed and cannot be a condition",
 					where, condition,

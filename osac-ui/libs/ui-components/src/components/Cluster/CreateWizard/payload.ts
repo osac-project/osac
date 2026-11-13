@@ -6,7 +6,6 @@ import type { ClusterWizardValues } from './fields';
 
 export const buildClusterCreatePayload = (
   values: ClusterWizardValues,
-  _catalogItem?: unknown,
 ): MessageInitShape<typeof ClusterSchema> => {
   const spec: MessageInitShape<typeof ClusterSchema>['spec'] = {
     catalogItem: {
@@ -29,23 +28,13 @@ export const buildClusterCreatePayload = (
     spec.version = { name: values.spec.versionName.value };
   }
 
-  if (!values.spec.nodeSetRows.locked) {
-    const nodeSets = Object.create(null) as Record<
-      string,
-      { baremetalInstanceType: { id: string }; size: number }
-    >;
-    for (const row of values.spec.nodeSetRows.value) {
-      const nodeSetId = row.name.trim();
-      const hostTypeId = row.hostType;
-      const size = Number(row.size);
-      if (!nodeSetId || !hostTypeId || !Number.isFinite(size) || size <= 0) {
-        continue;
-      }
-      nodeSets[nodeSetId] = { baremetalInstanceType: { id: hostTypeId }, size };
-    }
-    if (Object.keys(nodeSets).length > 0) {
-      spec.nodeSets = nodeSets;
-    }
+  if (!values.spec.nodeSetRows.locked && !!values.spec.nodeSetRows.value.length) {
+    spec.nodeSets = Object.fromEntries(
+      values.spec.nodeSetRows.value.map((row) => [
+        row.name,
+        { baremetalInstanceType: { id: row.hostType.id }, size: row.size },
+      ]),
+    );
   }
 
   const podCidr = values.spec.network.podCidr.locked

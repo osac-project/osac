@@ -1,5 +1,5 @@
 import type { ComponentType, SVGProps } from 'react';
-import { Label } from '@patternfly/react-core';
+import { Icon, Label } from '@patternfly/react-core';
 import CheckCircleIcon from '@patternfly/react-icons/dist/esm/icons/check-circle-icon';
 import ExclamationCircleIcon from '@patternfly/react-icons/dist/esm/icons/exclamation-circle-icon';
 import InProgressIcon from '@patternfly/react-icons/dist/esm/icons/in-progress-icon';
@@ -9,10 +9,12 @@ export type StatusKind = 'ready' | 'failed' | 'progressing' | 'unspecified';
 
 export type LabelColor = 'green' | 'red' | 'blue' | 'grey';
 
+type IconStatus = 'success' | 'danger' | 'info' | 'warning' | 'custom';
+
 type StatusStyle = {
   color: LabelColor;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
-  iconStatus: 'success' | 'danger' | 'info' | 'custom';
+  iconStatus: IconStatus;
 };
 
 const STATUS_STYLE: Record<StatusKind, StatusStyle> = {
@@ -29,6 +31,8 @@ export interface StatusLabelProps {
   icon?: ComponentType<SVGProps<SVGSVGElement>>;
   noIcon?: boolean;
   isCompact?: boolean;
+  isPlain?: boolean;
+  iconStatus?: IconStatus;
 }
 
 export const ResourceStatusLabel = ({
@@ -38,10 +42,29 @@ export const ResourceStatusLabel = ({
   icon,
   noIcon = true,
   isCompact = true,
+  isPlain = false,
+  iconStatus,
 }: StatusLabelProps) => {
   const style = STATUS_STYLE[status];
   const labelColor = color ?? style.color;
   const StatusIcon = icon ?? style.icon;
+  if (isPlain) {
+    return (
+      <span>
+        {!noIcon && (
+          <Icon
+            status={iconStatus ?? style.iconStatus}
+            isInline
+            className="pf-v6-u-mr-xs"
+            aria-hidden
+          >
+            <StatusIcon />
+          </Icon>
+        )}
+        {text}
+      </span>
+    );
+  }
   return (
     <Label
       color={labelColor}

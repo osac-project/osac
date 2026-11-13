@@ -81,7 +81,7 @@ message Metadata {
 
   // Version is a numeric field that is automatically incremented with every change to the object. Set `lock` to true
   // on an Update request to require this version to match the stored version; a stale version is rejected with
-  // Aborted. If `lock` is omitted or false, the Update proceeds without an optimistic version check.
+  // Aborted. If `lock` is omitted or false, only changes to `finalizers` are version-checked.
   int32 version = 8;
 
   // Full name of the project that the object is assigned to. It can be empty, which means the object belongs to
@@ -103,15 +103,6 @@ message Metadata {
   // For organization objects this field is always empty, as organizations don't belong to a project.
   string project = 9;
 
-  // Human-friendly display name. Optional, not unique, mutable.
-  // Not constrained to DNS-label format.
-  string display_name = 10 [(buf.validate.field).string = {
-    max_len: 63
-  }];
-
-  // Optional human-friendly description. Opaque string; clients may
-  // treat content as Markdown. Not unique, mutable.
-  string description = 11 [(buf.validate.field).string = {
-    max_len: 256
-  }];
+  reserved 10, 11;
+  reserved "display_name", "description";
 }

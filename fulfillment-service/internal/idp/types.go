@@ -13,6 +13,8 @@ language governing permissions and limitations under the License.
 
 package idp
 
+import "maps"
+
 // Tenant represents a Keycloak Organization - a logical grouping of users, groups, and applications.
 // This type provides a Go-idiomatic API over the raw Keycloak JSON representation.
 type Tenant struct {
@@ -308,13 +310,20 @@ func toKeycloakIdentityProvider(idpProvider *IdentityProvider) *keycloakIdentity
 	if idpProvider == nil {
 		return nil
 	}
+	config := maps.Clone(idpProvider.Config)
+	if config == nil {
+		config = make(map[string]string)
+	}
+	// Keycloak defaults this to false, exposing the provider before its
+	// organization can be resolved from the user's email domain.
+	config[keycloakHideIdPWhenOrganizationUnknown] = "true"
 
 	return &keycloakIdentityProvider{
 		Alias:       idpProvider.Alias,
 		DisplayName: idpProvider.DisplayName,
 		ProviderID:  idpProvider.Type,
 		Enabled:     idpProvider.Enabled,
-		Config:      idpProvider.Config,
+		Config:      config,
 	}
 }
 
@@ -322,12 +331,14 @@ func fromKeycloakIdentityProvider(kcIdp *keycloakIdentityProvider) *IdentityProv
 	if kcIdp == nil {
 		return nil
 	}
+	config := maps.Clone(kcIdp.Config)
+	delete(config, keycloakHideIdPWhenOrganizationUnknown)
 
 	return &IdentityProvider{
 		Alias:       kcIdp.Alias,
 		DisplayName: kcIdp.DisplayName,
 		Type:        kcIdp.ProviderID,
 		Enabled:     kcIdp.Enabled,
-		Config:      kcIdp.Config,
+		Config:      config,
 	}
 }

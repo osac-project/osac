@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   Alert,
   Divider,
@@ -7,30 +6,18 @@ import {
   PageSection,
   Stack,
   StackItem,
-  Tab,
-  TabContent,
-  TabContentBody,
-  TabTitleText,
-  Tabs,
 } from '@patternfly/react-core';
 
-import type { ComputeInstance } from '@osac/types';
+import { type ComputeInstance, InstanceTypes } from '@osac/types';
+import { useGetResource } from '@osac/ui-components/api/use-resource';
 
 import VmDetailsActionButtons from './VmDetailsActionButtons';
-import VmDetailsOverviewTab from './VmDetailsOverviewTab';
-import VmDetailsSummary from './VmDetailsSummary';
-import VmNetworkingTab from './VmNetworkingTab';
-import { useInstanceType } from '../../../api/v1/instance-types';
+import VmDetailsSections from './VmDetailsSections';
+import { useDiskImage } from '../../../api/v1/disk-image';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import { VmStatusLabel } from '../../../VmStatusLabel';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
-import VmConsoleTab from '../console/VmConsoleTab';
-import {
-  VM_DETAIL_CONSOLE_TAB_ID,
-  VM_DETAIL_NETWORKING_TAB_ID,
-  VM_DETAIL_OVERVIEW_TAB_ID,
-} from '../vm-detail-tabs';
 
 interface Props {
   vm: ComputeInstance;
@@ -38,12 +25,20 @@ interface Props {
 
 const VmDetails = ({ vm }: Props) => {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState(0);
+  const id = vm.spec?.instanceType?.id;
   const {
     data: instanceType,
     isLoading: isInstanceTypeLoading,
     error: instanceTypeError,
-  } = useInstanceType(vm.spec?.instanceType?.id);
+  } = useGetResource(InstanceTypes, { id }, { enabled: !!id });
+  const {
+    data: diskImage,
+    isLoading: isDiskImageLoading,
+    error: diskImageError,
+  } = useDiskImage(vm.spec?.diskImage?.id);
+  const openConsole = () => {
+    window.open(`/vms/${encodeURIComponent(vm.id)}/console`, '_blank', 'noopener,noreferrer');
+  };
 
   return (
     <>
@@ -53,6 +48,13 @@ const VmDetails = ({ vm }: Props) => {
             <StackItem>
               <Alert variant="danger" title={t('Could not load instance types')} isInline>
                 {getErrorMessage(instanceTypeError)}
+              </Alert>
+            </StackItem>
+          ) : null}
+          {diskImageError ? (
+            <StackItem>
+              <Alert variant="danger" title={t('Could not load disk image')} isInline>
+                {getErrorMessage(diskImageError)}
               </Alert>
             </StackItem>
           ) : null}
@@ -72,79 +74,30 @@ const VmDetails = ({ vm }: Props) => {
                     },
                   ]}
                   resourceName={vm.metadata?.name ?? vm.id}
+                  description={t(
+                    'Review configuration, networking, storage, and utilization for this virtual machine.',
+                  )}
                   titleAddon={<VmStatusLabel state={vm.status?.state} />}
                 />
               </FlexItem>
               <FlexItem>
-                <VmDetailsActionButtons vm={vm} />
+                <VmDetailsActionButtons vm={vm} onOpenConsole={openConsole} />
               </FlexItem>
             </Flex>
           </StackItem>
           <StackItem>
-            <VmDetailsSummary
-              vm={vm}
-              instanceType={instanceType}
-              isInstanceTypeLoading={isInstanceTypeLoading}
-            />
-          </StackItem>
-          <StackItem>
             <Divider />
-          </StackItem>
-          <StackItem>
-            <Tabs
-              id="vm-detail-tabs"
-              activeKey={activeTab}
-              onSelect={(_e, key) => setActiveTab(Number(key))}
-            >
-              <Tab
-                eventKey={0}
-                title={<TabTitleText>{t('Overview')}</TabTitleText>}
-                tabContentId={VM_DETAIL_OVERVIEW_TAB_ID}
-              />
-              <Tab
-                eventKey={1}
-                title={<TabTitleText>{t('Networking')}</TabTitleText>}
-                tabContentId={VM_DETAIL_NETWORKING_TAB_ID}
-              />
-              <Tab
-                eventKey={2}
-                title={<TabTitleText>{t('Console')}</TabTitleText>}
-                tabContentId={VM_DETAIL_CONSOLE_TAB_ID}
-              />
-            </Tabs>
           </StackItem>
         </Stack>
       </PageSection>
 
-      <PageSection hasBodyWrapper={false}>
-        <TabContent
-          eventKey={0}
-          id={VM_DETAIL_OVERVIEW_TAB_ID}
-          activeKey={activeTab}
-          hidden={activeTab !== 0}
-        >
-          <TabContentBody>
-            <VmDetailsOverviewTab vm={vm} />
-          </TabContentBody>
-        </TabContent>
-        <TabContent
-          eventKey={1}
-          id={VM_DETAIL_NETWORKING_TAB_ID}
-          activeKey={activeTab}
-          hidden={activeTab !== 1}
-        >
-          <TabContentBody>
-            <VmNetworkingTab vm={vm} />
-          </TabContentBody>
-        </TabContent>
-        {activeTab === 2 ? (
-          <TabContent eventKey={2} id={VM_DETAIL_CONSOLE_TAB_ID} activeKey={activeTab}>
-            <TabContentBody>
-              <VmConsoleTab vm={vm} />
-            </TabContentBody>
-          </TabContent>
-        ) : null}
-      </PageSection>
+      <VmDetailsSections
+        vm={vm}
+        instanceType={instanceType?.object}
+        isInstanceTypeLoading={isInstanceTypeLoading}
+        diskImage={diskImage}
+        isDiskImageLoading={isDiskImageLoading}
+      />
     </>
   );
 };

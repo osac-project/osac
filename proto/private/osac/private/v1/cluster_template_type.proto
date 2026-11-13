@@ -55,6 +55,14 @@ message ClusterTemplate {
   //
   // User-provided spec field values always override these defaults.
   ClusterTemplateSpecDefaults spec_defaults = 7;
+
+  // Capabilities supported by this template, keyed by their stable capability
+  // name. Consumers can use these declarations to discover supported behavior
+  // without depending on template IDs. A missing or false capability is not
+  // supported.
+  // `supports_automatic_caas_endpoints` indicates that clusters created from
+  // this template use the automatic API and ingress ExternalIP lifecycle.
+  map<string, bool> capabilities = 8;
 }
 
 // Contains type and documentation of a template parameter.
@@ -112,8 +120,16 @@ message ClusterTemplateSpecDefaults {
   reserved 1;
   reserved "pull_secret";
 
-  // Default SSH public key installed on cluster worker nodes.
-  optional string ssh_public_key = 2;
+  // Reserved field number and name for the removed inline SSH-key default.
+  // Callers must use `ssh_key` with a Secret reference instead.
+  reserved 2;
+  reserved "ssh_public_key";
+
+  // Default Secret reference for the cluster's registered SSH public key.
+  //
+  // When set, clusters created from this template will use this key unless the
+  // user provides an explicit `ssh_key` reference.
+  SecretReference ssh_key = 7;
 
   // Default cluster networking configuration.
   optional ClusterNetwork network = 4;
@@ -137,4 +153,7 @@ message ClusterTemplateReference {
   string name = 2;
   string project = 3;
   bool shared = 4;
+  // Tenant where the referenced object lives. If omitted, the owner tenant is used;
+  // the legacy shared selector can select the shared tenant.
+  string tenant = 5;
 }

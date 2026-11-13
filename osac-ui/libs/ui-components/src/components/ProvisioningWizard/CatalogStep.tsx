@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { DescMessage, Message } from '@bufbuild/protobuf';
-import type { GenMessage } from '@bufbuild/protobuf/codegenv2';
+import type { DescMessage } from '@bufbuild/protobuf';
 import {
   Alert,
   Bullseye,
@@ -18,6 +17,8 @@ import {
 import { useFormikContext } from 'formik';
 
 import { type ResourceService, useListResource } from '../../api/use-resource';
+import { buildCatalogListFilter } from '../../api/v1/catalog-item-list-filter';
+import { useSession } from '../../hooks/use-session';
 import { useTranslation } from '../../hooks/useTranslation';
 import CatalogItemCard from '../catalog/CatalogItemCard';
 import { CatalogItem, filterCatalogItemsBySearch } from '../catalog/catalogItemDisplay';
@@ -30,8 +31,11 @@ interface CatalogFormValues {
   catalogItemReference: { id?: string; name?: string };
 }
 
+const isCatalogItemList = <T extends CatalogItem>(value: unknown): value is { items: T[] } =>
+  value !== null && typeof value === 'object' && 'items' in value && Array.isArray(value.items);
+
 interface Props<T extends CatalogItem, V extends CatalogFormValues> {
-  catalogService: ResourceService<'list', DescMessage, GenMessage<Message & { items: T[] }>>;
+  catalogService: ResourceService<'list', DescMessage, DescMessage>;
   isInitializing?: boolean;
   getInitialFormValues: (item: T) => V;
   onCatalogItemSelected?: (item: T) => void;
@@ -44,16 +48,26 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
   onCatalogItemSelected,
 }: Props<T, V>) => {
   const { t } = useTranslation();
+  const { role } = useSession();
   const [search, setSearch] = useState('');
   const formik = useFormikContext<V>();
   const { values } = formik;
-  const catalogQuery = useListResource(catalogService, {}, {}, (data) => data.items);
+  const catalogFilter =
+    role === 'tenant-user' ? buildCatalogListFilter({ published: 'published' }) : undefined;
+  const catalogQuery = useListResource<DescMessage, DescMessage>(
+    catalogService,
+    catalogFilter ? { filter: catalogFilter } : {},
+  );
   const loading = isInitializing || catalogQuery.isPending;
   const error = catalogQuery.isError;
   const retry = () => void catalogQuery.refetch();
 
   const filtered = useMemo(
-    () => filterCatalogItemsBySearch(catalogQuery.data ?? [], search),
+    () =>
+      filterCatalogItemsBySearch(
+        isCatalogItemList<T>(catalogQuery.data) ? catalogQuery.data.items : [],
+        search,
+      ),
     [catalogQuery.data, search],
   );
 

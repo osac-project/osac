@@ -27,6 +27,7 @@ class KindRuntimeTests(unittest.TestCase):
         self.bin.mkdir()
         self.log = self.directory / "commands.log"
         self.cache = self.directory / "sudo-cache"
+        self.cluster_name = "osac-dev"
         self.env = {
             **os.environ,
             "PATH": f"{self.bin}:/usr/bin:/bin",
@@ -40,7 +41,7 @@ class KindRuntimeTests(unittest.TestCase):
             "MOCK_AUTH_DENIED": "0",
             "MOCK_NOPASSWD": "0",
             "MOCK_FORCE_ROOTLESS": "0",
-            "MOCK_KIND_NODES": "osac-dev-control-plane",
+            "MOCK_KIND_NODES": f"{self.cluster_name}-control-plane",
             "MOCK_KIND_NODES_FAILURE": "0",
             "MOCK_KIND_DELETE_FAILURE": "0",
             "MOCK_KIND_CREATED": str(self.directory / "kind-created"),
@@ -52,12 +53,43 @@ class KindRuntimeTests(unittest.TestCase):
             "MOCK_READY_FAILURES": "0",
             "MOCK_READY_COUNT": str(self.directory / "ready-count"),
             "MOCK_DOCKER_INFO_FAILURE": "0",
+            "MOCK_PID_DIR": str(self.directory),
+            "MOCK_PID_LIMIT": "65536",
+            "MOCK_PID_INSPECT_FAILURE": "0",
+            "MOCK_PID_UPDATE_FAILURE": "0",
+            "MOCK_PID_UPDATE_NOOP": "0",
+            "MOCK_PID_VERIFY_FAILURE": "0",
+            "MOCK_SYSCTL_FAILURE": "0",
+            "MOCK_SYSCTL_NOOP": "0",
+            "MOCK_SYSCTL_ERROR": "sysctl: setting key: Read-only file system",
+            "MOCK_DOCKER_CONTEXT": "default",
+            "MOCK_CONTEXT_FAILURE": "0",
+            "MOCK_SUDO_ERROR": "sudo: a password is required",
+            "MOCK_PODMAN_REMOTE": "false",
+            "MOCK_PODMAN_URI": "unix:///run/podman/podman.sock",
+            "MOCK_PODMAN_METADATA_FAILURE": "0",
             "GOTOOLCHAIN": "local",
         }
-        for name in ("CONTAINER_HOST", "MOCK_AS_ROOT", "PROFILE"):
+        for name in (
+            "CONTAINER_HOST", "CONTAINER_CONNECTION", "DOCKER_HOST", "DOCKER_CONTEXT",
+            "MOCK_AS_ROOT", "PROFILE",
+        ):
             self.env.pop(name, None)
         self.write_command("uname", 'if [[ "${1:-}" == -m ]]; then echo x86_64; else echo "$MOCK_OS"; fi')
         self.write_command("id", 'echo "$MOCK_UID"')
+        self.write_command("sysctl", """
+printf 'sysctl %s\\n' "$*" >> "$MOCK_LOG"
+echo 'sysctl stdout must stay suppressed'
+if [[ "$MOCK_SYSCTL_FAILURE" != 0 ]]; then
+  echo "$MOCK_SYSCTL_ERROR" >&2
+  exit 1
+fi
+[[ "${1:-}" == -w && "${2:-}" == fs.inotify.max_user_instances=512 ]] || exit 1
+[[ -n "${_INOTIFY_INSTANCES_FILE:-}" ]] || exit 1
+if [[ "$MOCK_SYSCTL_NOOP" == 0 ]]; then
+  echo 512 > "$_INOTIFY_INSTANCES_FILE"
+fi
+""")
         self.write_command("go", 'echo /tmp/osac-test-go')
         self.write_command("helm", 'echo v3.0.0')
         self.write_command("jq", 'exit 0')
@@ -77,7 +109,10 @@ exit 1
 printf 'sudo %s\n' "$*" >> "$MOCK_LOG"
 if [[ "${1:-}" == -n ]]; then
   shift
-  if [[ ! -f "$MOCK_CACHE" && "$MOCK_NOPASSWD" != 1 ]]; then exit 1; fi
+  if [[ ! -f "$MOCK_CACHE" && "$MOCK_NOPASSWD" != 1 ]]; then
+    echo "$MOCK_SUDO_ERROR" >&2
+    exit 1
+  fi
 elif [[ ! -f "$MOCK_CACHE" && "$MOCK_NOPASSWD" != 1 ]]; then
   echo 'sudo prompt' >> "$MOCK_LOG"
   if [[ "$MOCK_AUTH_DENIED" == 1 ]]; then
@@ -97,7 +132,30 @@ elif [[ "${MOCK_AS_ROOT:-0}" == 1 || "$MOCK_UID" == 0 ]]; then
   mode=root
 fi
 printf 'podman %s %s\n' "$mode" "$*" >> "$MOCK_LOG"
-if [[ "${1:-}" == info ]]; then
+if [[ "$*" == 'info --format {{.Host.ServiceIsRemote}}' ]]; then
+  if [[ "$MOCK_PODMAN_METADATA_FAILURE" == 1 ]]; then
+    echo 'sentinel-private-metadata' >&2
+    exit 1
+  fi
+  echo "$MOCK_PODMAN_REMOTE"
+elif [[ "$*" == 'system connection list --format {{range .}}{{if .Default}}{{.URI}}{{end}}{{end}}' ]]; then
+  if [[ "$MOCK_PODMAN_METADATA_FAILURE" == 2 ]]; then
+    echo 'sentinel-private-connection' >&2
+    exit 1
+  fi
+  echo "$MOCK_PODMAN_URI"
+elif [[ "${1:-}" == inspect && "${3:-}" == '{{.HostConfig.PidsLimit}}' ]]; then
+  [[ "$MOCK_PID_INSPECT_FAILURE" == 0 ]] || exit 1
+  if [[ -f "$MOCK_PID_DIR/$4.pids" ]]; then
+    [[ "$MOCK_PID_VERIFY_FAILURE" == 0 ]] || exit 1
+    cat "$MOCK_PID_DIR/$4.pids"
+  else
+    echo "$MOCK_PID_LIMIT"
+  fi
+elif [[ "${1:-}" == update && "${2:-}" == --pids-limit ]]; then
+  [[ "$MOCK_PID_UPDATE_FAILURE" == 0 ]] || exit 1
+  if [[ "$MOCK_PID_UPDATE_NOOP" == 0 ]]; then echo "$3" > "$MOCK_PID_DIR/$4.pids"; fi
+elif [[ "${1:-}" == info ]]; then
   if [[ "$mode" != user && "$MOCK_FORCE_ROOTLESS" != 1 ]]; then echo false; else echo true; fi
 elif [[ "${1:-}" == load && -n "${MOCK_LOAD_PATH:-}" ]]; then
   cat > "$MOCK_LOAD_PATH"
@@ -114,21 +172,43 @@ fi
 """)
         self.write_command("kind", """
 printf 'kind %s %s\n' "${MOCK_AS_ROOT:-0}" "$*" >> "$MOCK_LOG"
-if [[ "$*" == 'get nodes --name osac-dev' ]]; then
+printf 'kind context provider=%s host=%s connection=%s\n' "${KIND_EXPERIMENTAL_PROVIDER:-unset}" "${CONTAINER_HOST:-unset}" "${CONTAINER_CONNECTION:-unset}" >> "$MOCK_LOG"
+cluster_name=kind
+previous=
+for argument in "$@"; do
+  if [[ "$previous" == --name ]]; then cluster_name="$argument"; fi
+  previous="$argument"
+done
+if [[ "${MOCK_PROVIDER_STATE:-0}" == 1 ]]; then
+  provider="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
+  state="$MOCK_PID_DIR/cluster-$provider-$cluster_name"
+  printf 'provider=%s %s\\n' "$provider" "$*" >> "$MOCK_LOG"
+  case "$1 $2" in
+    'create cluster') touch "$state" ;;
+    'get nodes') if [[ -f "$state" ]]; then echo "$cluster_name-control-plane"; fi ;;
+    'load docker-image')
+      docker image inspect "$3"
+      [[ -f "$state" ]] || { echo 'ERROR: no nodes found for cluster' >&2; exit 1; }
+      docker save "$3" >/dev/null ;;
+    'delete cluster') rm -f "$state" ;;
+  esac
+  exit 0
+fi
+if [[ "$1 $2" == 'get nodes' ]]; then
   if [[ "$MOCK_KIND_NODES_FAILURE" == 1 ]]; then
     printf '%s\n' "$MOCK_KIND_NODES"
     exit 1
   fi
   if [[ -f "$MOCK_KIND_CREATED" ]]; then
-    echo osac-dev-control-plane
+    if [[ "$(cat "$MOCK_KIND_CREATED")" == "$cluster_name" ]]; then echo "$cluster_name-control-plane"; fi
   else
     printf '%s\n' "$MOCK_KIND_NODES"
   fi
 elif [[ "${1:-}" == create ]]; then
-  touch "$MOCK_KIND_CREATED"
-elif [[ "$*" == 'get kubeconfig --name osac-dev' ]]; then
+  printf '%s\n' "$cluster_name" > "$MOCK_KIND_CREATED"
+elif [[ "$1 $2" == 'get kubeconfig' ]]; then
   echo 'stub kubeconfig'
-elif [[ "$*" == 'delete cluster --name osac-dev' && "$MOCK_KIND_DELETE_FAILURE" == 1 ]]; then
+elif [[ "$1 $2" == 'delete cluster' && "$MOCK_KIND_DELETE_FAILURE" == 1 ]]; then
   exit 1
 elif [[ "${1:-}" == load ]]; then
   [[ "$(cat "$3")" == 'stub archive' ]]
@@ -136,7 +216,13 @@ fi
 """)
         self.write_command("docker", """
 printf 'docker %s\n' "$*" >> "$MOCK_LOG"
-if [[ "${1:-}" == info && "$MOCK_DOCKER_INFO_FAILURE" == 1 ]]; then
+if [[ "$*" == 'context show' ]]; then
+  if [[ "$MOCK_CONTEXT_FAILURE" == 1 ]]; then
+    echo 'sentinel-private-context diagnostic' >&2
+    exit 1
+  fi
+  if [[ -n "${DOCKER_HOST:-}" ]]; then echo default; else echo "$MOCK_DOCKER_CONTEXT"; fi
+elif [[ "${1:-}" == info && "$MOCK_DOCKER_INFO_FAILURE" == 1 ]]; then
   echo 'installation preflight must not run while loading an image' >&2
   exit 1
 elif [[ "${1:-}" == save ]]; then
@@ -436,6 +522,214 @@ check_topolvm_cluster_mounts() {{
 create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
 ''')
 
+    def run_direct_infra(self, cluster_name=None):
+        self.write_command("helm", '''
+if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >> "$MOCK_LOG"; fi
+''')
+        self.write_command("kubectl", 'printf "kubectl %s\\n" "$*" >> "$MOCK_LOG"')
+        return subprocess.run(
+            ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER), "-o", "helm-infra-deps",
+             "install-infra", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
+             f"KIND_CLUSTER_NAME={cluster_name or self.cluster_name}",
+             f"KIND_KUBECONFIG={self.directory / 'cluster.kubeconfig'}"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+
+    def test_direct_podman_create_and_reuse_raise_and_verify_pid_limits(self):
+        self.assert_direct_podman_create_and_reuse()
+
+    def assert_direct_podman_create_and_reuse(self):
+        for existing in ("", f"{self.cluster_name}-control-plane\n{self.cluster_name}-worker"):
+            with self.subTest(existing=bool(existing)):
+                self.log.unlink(missing_ok=True)
+                (self.directory / "kind-created").unlink(missing_ok=True)
+                for state in self.directory.glob("*.pids"):
+                    state.unlink()
+                self.env["MOCK_KIND_NODES"] = existing
+                self.env["MOCK_PID_LIMIT"] = "2048"
+                self.env["CONTAINER_CONNECTION"] = "test-connection"
+                self.assert_success(self.run_direct_infra())
+                commands = self.commands()
+                self.assertEqual(any(cmd.startswith("kind 0 create cluster") for cmd in commands), not bool(existing))
+                if not existing:
+                    self.assertTrue(any(cmd.startswith(f"kind 0 create cluster --name {self.cluster_name} ") for cmd in commands))
+                nodes = existing.splitlines() or [f"{self.cluster_name}-control-plane"]
+                for node in nodes:
+                    inspect = f"podman user inspect --format {{{{.HostConfig.PidsLimit}}}} {node}"
+                    update = f"podman user update --pids-limit 65536 {node}"
+                    self.assertEqual(commands.count(inspect), 2)
+                    self.assertLess(commands.index(inspect), commands.index(update))
+                    self.assertGreater(len(commands) - 1 - commands[::-1].index(inspect), commands.index(update))
+                self.assertIn("kind context provider=podman host=unset connection=test-connection", commands)
+                self.assertFalse(any(cmd.startswith("sudo ") or "podman user info" in cmd for cmd in commands))
+                self.assertTrue(any(cmd.startswith("helm upgrade") for cmd in commands))
+
+    def test_direct_nondefault_cluster_create_and_reuse(self):
+        self.cluster_name = "review-cluster"
+        self.assert_direct_podman_create_and_reuse()
+        self.assertNotIn("create cluster", "\n".join(self.commands()))
+        self.assertIn(f"kind 0 get nodes --name {self.cluster_name}", self.commands())
+        self.assertTrue(any(cmd.startswith(f"kind 0 export kubeconfig --name {self.cluster_name} ")
+                            for cmd in self.commands()))
+        self.assertNotIn("osac-dev", "\n".join(self.commands()))
+
+    def test_direct_auto_podman_pins_kind_without_changing_connection(self):
+        self.cluster_name = "socket-cluster"
+        self.env["MOCK_KIND_NODES"] = f"{self.cluster_name}-control-plane"
+        self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+        self.env["CONTAINER_HOST"] = "unix:///test-podman.sock"
+        self.env["MOCK_PID_LIMIT"] = "2048"
+        self.assert_success(self.run_direct_infra())
+        self.assertIn("kind context provider=podman host=unix:///test-podman.sock connection=unset", self.commands())
+        self.assertIn(f"podman socket update --pids-limit 65536 {self.cluster_name}-control-plane", self.commands())
+
+    def test_direct_provider_survives_separate_load_and_delete_invocations(self):
+        self.cluster_name = "provider-cluster"
+        self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+        self.env["MOCK_PROVIDER_STATE"] = "1"
+        self.env["CONTAINER_TOOL"] = "docker"
+        self.write_command("ginkgo", 'echo "application test stub" >> "$MOCK_LOG"')
+        self.assert_success(self.run_direct_infra())
+        cluster = self.directory / f"cluster-podman-{self.cluster_name}"
+        self.assertTrue(cluster.exists())
+        args = ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER),
+                f"OSAC_CHART={self.directory / 'chart'}", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
+                f"KIND_CLUSTER_NAME={self.cluster_name}"]
+        result = subprocess.run(args + ["test", "SUITE=operator"], env=self.env,
+                                text=True, capture_output=True, timeout=15)
+        self.assert_success(result)
+        self.assertIn(f"provider=podman load docker-image localhost/osac-operator:it --name {self.cluster_name}",
+                      self.commands())
+        self.assertIn("docker image inspect localhost/osac-operator:it", self.commands())
+        self.assertIn("docker save localhost/osac-operator:it", self.commands())
+        self.assertEqual(self.commands().count("application test stub"), 2)
+        result = subprocess.run(args + ["uninstall-infra"], env=self.env,
+                                text=True, capture_output=True, timeout=15)
+        self.assert_success(result)
+        self.assertFalse(cluster.exists())
+        self.assertFalse(any(cmd.startswith("provider=docker ") for cmd in self.commands()))
+
+    def test_direct_provider_export_reaches_recursive_make_and_honors_overrides(self):
+        self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+        probe = self.directory / "provider.mk"
+        probe.write_text("parent:\n\t$(MAKE) -f Makefile -f " + str(probe)
+                         + " child\nchild:\n\t@echo provider=$${KIND_EXPERIMENTAL_PROVIDER-unset}\n")
+        for selection, expected in ((None, "podman"), ("", "podman"),
+                                    ("docker", "docker"), ("nerdctl", "nerdctl")):
+            with self.subTest(selection=selection):
+                args = ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER),
+                        "-f", "Makefile", "-f", str(probe), "parent", "PLATFORM=kind",
+                        "PROFILE=dev", "NS=osac"]
+                if selection is not None:
+                    args.append(f"KIND_EXPERIMENTAL_PROVIDER={selection}")
+                result = subprocess.run(args, env=self.env, text=True, capture_output=True, timeout=15)
+                self.assert_success(result)
+                self.assertIn(f"provider={expected}\n", result.stdout)
+
+    def test_reusable_ci_pins_provider_for_make_and_raw_kind_steps(self):
+        workflow = (REPO / ".github/workflows/tests.yml").read_text()
+        job = workflow.split("jobs:\n  run:\n", 1)[1].split("    steps:", 1)[0]
+        self.assertRegex(job, r"(?m)^    env:\n      KIND_EXPERIMENTAL_PROVIDER: docker$")
+        self.assertIn("kind load docker-image localhost/fulfillment-service:it --name osac-dev", workflow)
+
+    def test_direct_non_podman_selection_has_no_pid_operations(self):
+        for provider in ("docker", "nerdctl", "unset"):
+            with self.subTest(provider=provider):
+                self.log.unlink(missing_ok=True)
+                if provider == "unset":
+                    self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+                    (self.bin / "podman").unlink()
+                    for command in ("bash", "env", "awk", "sed", "basename", "dirname", "grep", "mktemp", "rm"):
+                        (self.bin / command).symlink_to(shutil.which(command))
+                    self.env["PATH"] = str(self.bin)
+                else:
+                    self.env["KIND_EXPERIMENTAL_PROVIDER"] = provider
+                self.assert_success(self.run_direct_infra())
+                self.assertIn(f"kind context provider={provider} host=unset connection=unset", self.commands())
+                self.assertFalse(any(cmd.startswith(("podman ", "docker ", "sudo ")) for cmd in self.commands()))
+
+    def test_direct_non_podman_lookup_failure_preserves_creation_fallback(self):
+        for provider in ("docker", "nerdctl"):
+            with self.subTest(provider=provider):
+                self.log.unlink(missing_ok=True)
+                (self.directory / "kind-created").unlink(missing_ok=True)
+                self.env["KIND_EXPERIMENTAL_PROVIDER"] = provider
+                self.env["MOCK_KIND_NODES_FAILURE"] = "1"
+                self.assert_success(self.run_direct_infra())
+                self.assertTrue(any(cmd.startswith("kind 0 create cluster ") for cmd in self.commands()))
+                self.assertIn("kind 0 export kubeconfig --name osac-dev --kubeconfig "
+                              + str(self.directory / "cluster.kubeconfig"), self.commands())
+                self.assertTrue(any(cmd.startswith("helm upgrade") for cmd in self.commands()))
+                self.assertFalse(any(cmd.startswith(("podman ", "docker ", "sudo ")) for cmd in self.commands()))
+
+    def test_podman_sufficient_and_unlimited_pid_limits_are_preserved(self):
+        for limit in ("65536", "131072", "0", "-1"):
+            with self.subTest(limit=limit):
+                self.log.unlink(missing_ok=True)
+                self.env["MOCK_PID_LIMIT"] = limit
+                self.assert_success(self.run_direct_infra())
+                self.assertFalse(any(" update " in cmd for cmd in self.commands()))
+
+    def test_direct_pid_errors_stop_before_helm(self):
+        cases = (("MOCK_KIND_NODES_FAILURE", "1", "Could not list Podman Kind nodes"),
+                 ("MOCK_PID_INSPECT_FAILURE", "1", "inspect"),
+                 ("MOCK_PID_LIMIT", "invalid", "inspect"),
+                 ("MOCK_PID_UPDATE_FAILURE", "1", "raise"),
+                 ("MOCK_PID_UPDATE_NOOP", "1", "verification"),
+                 ("MOCK_PID_VERIFY_FAILURE", "1", "verification"))
+        for setting, value, diagnostic in cases:
+            with self.subTest(setting=setting):
+                self.log.unlink(missing_ok=True)
+                self.env["MOCK_PID_LIMIT"] = "2048"
+                self.env[setting] = value
+                result = self.run_direct_infra()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(diagnostic, result.stderr)
+                self.assertFalse(any(cmd.startswith("helm upgrade") for cmd in self.commands()))
+                self.env[setting] = "0"
+                for state in self.directory.glob("*.pids"):
+                    state.unlink()
+
+    def test_wrapper_pid_hook_uses_existing_dispatch_on_create_and_reuse(self):
+        for existing in ("", "osac-dev-control-plane\nosac-dev-worker"):
+            with self.subTest(existing=bool(existing)):
+                self.log.unlink(missing_ok=True)
+                (self.directory / "kind-created").unlink(missing_ok=True)
+                for state in self.directory.glob("*.pids"):
+                    state.unlink()
+                self.env["MOCK_KIND_NODES"] = existing
+                self.env["MOCK_PID_LIMIT"] = "2048"
+                self.assert_success(self.run_create_cluster())
+                for node in existing.splitlines() or ["osac-dev-control-plane"]:
+                    self.assertIn(f"podman root update --pids-limit 65536 {node}", self.commands())
+                self.assertFalse(any(cmd.startswith("podman user update") for cmd in self.commands()))
+
+    def test_wrapper_pid_hook_preserves_desktop_connection_and_kubeconfig_on_error(self):
+        self.env["MOCK_OS"] = "Darwin"
+        self.env["CONTAINER_CONNECTION"] = "test-desktop"
+        self.env["MOCK_PID_LIMIT"] = "2048"
+        self.env["MOCK_PID_UPDATE_FAILURE"] = "1"
+        result = self.run_create_cluster()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Could not raise Podman PID limit", result.stderr)
+        self.assertIn("podman user update --pids-limit 65536 osac-dev-control-plane", self.commands())
+        self.assertIn("kind context provider=podman host=unset connection=test-desktop", self.commands())
+        self.assertFalse(any(cmd.startswith("sudo ") or "get kubeconfig" in cmd for cmd in self.commands()))
+
+    def test_wrapper_loads_pid_helper_only_when_needed_and_reuses_it(self):
+        self.env["KIND_EXPERIMENTAL_PROVIDER"] = "docker"
+        self.env["OC_IMPERSONATE"] = "test-user"
+        self.assert_success(self.run_shell('! declare -F oc; [[ -z "${POSTGRES_INSTALL_DOC+x}" ]]'))
+        self.env["KIND_EXPERIMENTAL_PROVIDER"] = "podman"
+        self.env["KIND_PROFILE"] = "dev"
+        self.env["MOCK_PID_LIMIT"] = "2048"
+        result = self.run_shell(f'''
+source "${{SCRIPT_DIR}}/../lib.sh"
+create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.kubeconfig'))}
+''')
+        self.assert_success(result)
+        self.assertIn("podman user update --pids-limit 65536 osac-dev-control-plane", self.commands())
+
     def test_create_keeps_credentials_when_cluster_lookup_fails(self):
         self.env["MOCK_KIND_NODES_FAILURE"] = "1"
         for output in ("", "osac-dev-control-plane"):
@@ -630,7 +924,7 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
         (module / "it").mkdir(parents=True)
         shutil.copy(INSTALLER / "Makefile", installer / "Makefile")
         env = {key: value for key, value in self.env.items() if key != "FULFILLMENT_IT_REPORT_DIR"}
-        phases = ["service-only", "networking-operator", "bmaas-disabled"]
+        phases = ["service-only", "networking-operator", "bmaas-disabled", "compute-storage"]
         cases = [("default", None), ("disabled", ""), ("relative", "../local-reports"),
                  ("absolute", str(module / "logs/timings"))]
         for name, directory in cases:
@@ -685,7 +979,53 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
             helm = [word.split("=", 1)[1] for word in words if word.startswith("EXTRA_HELM_ARGS=")][0].split()
             enabled.append([value for value in helm if value.startswith("operator.enabled=")])
         self.assertEqual(enabled, [["operator.enabled=false"], ["operator.enabled=true"],
-                                   ["operator.enabled=false"]])
+                                   ["operator.enabled=false"], ["operator.enabled=true"]])
+
+    def test_compute_storage_phase_uses_real_services_and_only_the_aap_recorder(self):
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=compute-storage", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        self.assertIn("fulfillment-service:it", result.stdout)
+        self.assertIn('container save localhost/fulfillment-service:it > "$tmpfile"', result.stdout)
+        self.assertIn("osac-operator:it", result.stdout)
+        self.assertIn("operator.controllers.computeInstance=true", result.stdout)
+        self.assertIn("operator.controllers.storage=true", result.stdout)
+        self.assertIn("operator.controllers.volume=false", result.stdout)
+        self.assertIn("operator.controllers.tenant=false", result.stdout)
+        self.assertIn("operator.aap.url=http://compute-storage-aap.osac.svc.cluster.local:8080/api", result.stdout)
+        self.assertIn("IT_TEST_SUITE=compute-storage", result.stdout)
+        self.assertIn("-p test_compute_storage_aap.py", result.stdout)
+        self.assertIn("--label-filter 'compute-storage'", result.stdout)
+        self.assertNotIn("service.enabled=false", result.stdout)
+
+    def test_operator_phase_uses_the_aap_recorder(self):
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=operator", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        self.assertIn("osac-operator:it", result.stdout)
+        self.assertIn("global.networking.provisioningEnabled=false", result.stdout)
+        # The operator points at the recorder the spec installs before it
+        # creates a ComputeInstance; the same inline override shape the
+        # compute-storage phase uses.
+        self.assertIn("operator.aap.url=http://osac-aap-recorder.osac.svc.cluster.local:8080/api", result.stdout)
+        self.assertIn("operator.aap.statusPollInterval=1s", result.stdout)
+        self.assertIn("IT_TEST_SUITE=operator", result.stdout)
+
+    def test_service_only_phase_excludes_compute_storage_specs(self):
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=fulfillment", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        service_only = next(line for line in result.stdout.splitlines() if "--skip " in line)
+        self.assertIn("ComputeInstance storage handoff", service_only)
 
     def prepare_helm_dependencies(self):
         installer = self.directory / "installer"
@@ -776,8 +1116,9 @@ fi
                         env=self.env, text=True, capture_output=True, timeout=15,
                     )
                     self.assert_success(result)
-                    commands = [shlex.split(line) for line in result.stdout.replace("\\\n", " ").splitlines()
-                                if line.startswith("helm upgrade --install ")]
+                    command_text = result.stdout.replace("\\\n", " ")
+                    commands = [shlex.split("helm upgrade --install " + line)
+                                for line in command_text.split("helm upgrade --install ")[1:]]
                     self.assertEqual(len(commands), 1, result.stdout)
                     args = commands[0]
                     self.assertEqual(args[3], release)
@@ -854,6 +1195,23 @@ exec /usr/bin/mktemp "$@"
         self.assertTrue(any(cmd.startswith("kind 0 load image-archive ") for cmd in self.commands()))
         self.assertFalse(any(cmd.startswith("sudo ") for cmd in self.commands()))
 
+    def test_devfull_arm64_preflight_requires_uv(self):
+        """Fail before setup when the ARM64 image build lacks uv."""
+        self.env["KIND_EXPERIMENTAL_PROVIDER"] = "docker"
+        self.env["KIND_REQUIRE_UV"] = "true"
+        self.env["MOCK_OS"] = "Darwin"
+        for tool in ("curl", "openssl", "python3"):
+            self.write_command(tool, "exit 0")
+        (self.bin / "dirname").symlink_to(shutil.which("dirname"))
+        self.env["PATH"] = str(self.bin)
+        result = subprocess.run(
+            ["/bin/bash", str(RUNTIME), "check"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Missing required tools: uv", result.stderr)
+        self.assertFalse(any(line.startswith("docker info") for line in self.commands()))
+
     def test_installer_ui_load_propagates_the_selected_profile(self):
         result = subprocess.run(
             ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "kind-load-images", "PLATFORM=kind", "PROFILE=dev-full", "NS=osac"],
@@ -861,6 +1219,624 @@ exec /usr/bin/mktemp "$@"
         )
         self.assert_success(result)
         self.assertIn('KIND_PROFILE=dev-full KIND_OSAC_NAMESPACE=osac', result.stdout)
+        metering_load = result.stdout.find(
+            'kind-load-image.sh" "ghcr.io/osac-project/metering-service:latest"'
+        )
+        ui_load = result.stdout.find('kind-load-image.sh" "ghcr.io/osac-project/osac-ui:latest"')
+        self.assertGreaterEqual(metering_load, 0, result.stdout)
+        self.assertGreater(ui_load, metering_load, result.stdout)
+
+    def test_arm64_devfull_install_builds_and_loads_all_images_before_osac(self):
+        """Check the Apple Silicon install builds and loads all local images first."""
+        result = subprocess.run(
+            [
+                "make", "--no-print-directory", "-n", "-C", str(INSTALLER), "install",
+                "PLATFORM=kind", "PROFILE=dev-full", "NS=osac",
+                "CONTAINER_TOOL=docker", "KIND_EXPERIMENTAL_PROVIDER=docker",
+                "HOST_IS_MAC_ARM=true",
+            ],
+            env=self.env, text=True, capture_output=True, timeout=30,
+        )
+        self.assert_success(result)
+
+        output = result.stdout
+        builds = [
+            "image-build IMG=ghcr.io/osac-project/fulfillment-service:latest",
+            "image-build IMG=ghcr.io/osac-project/osac-operator:latest",
+            "image-build IMG=ghcr.io/osac-project/metering-service:latest",
+            "execution-environment-build IMG=ghcr.io/osac-project/osac-aap:latest",
+            "build -f ../osac-ui/Containerfile -t ghcr.io/osac-project/osac-ui:latest ..",
+        ]
+        build_positions = [output.find(command) for command in builds]
+        self.assertTrue(all(position >= 0 for position in build_positions), output)
+        osac_install = output.find("helm upgrade --install osac ")
+        devstack_install = output.find("helm upgrade --install osac-devstack ")
+        self.assertGreater(osac_install, max(build_positions), output)
+        self.assertGreater(devstack_install, osac_install, output)
+        self.assertIn("kind-build-load-images", output)
+        self.assertIn("KIND_REQUIRE_UV=true", output)
+        self.assertNotIn("container save quay.io/openshift/origin-cli:4.19", output)
+        preflight = output.find("scripts/dev-full/kind-runtime.sh check")
+        cluster_create = output.find("scripts/dev-full/kind-runtime.sh create-cluster")
+        preflight_line = next(
+            (line for line in output.splitlines() if "scripts/dev-full/kind-runtime.sh check" in line),
+            "",
+        )
+        self.assertGreaterEqual(preflight, 0, output)
+        self.assertIn("KIND_REQUIRE_UV=true", preflight_line)
+        self.assertGreater(cluster_create, preflight, output)
+        aap_cli_image = output.find(
+            "build-arm64-cli-image.sh osac-dev quay.io/openshift/origin-cli:4.19 4.19.0"
+        )
+        aap_build = output.find(
+            "execution-environment-build IMG=ghcr.io/osac-project/osac-aap:latest"
+        )
+        self.assertGreaterEqual(aap_cli_image, 0, output)
+        self.assertGreater(aap_build, aap_cli_image, output)
+        self.assertIn(
+            'kind-load-image.sh" "ghcr.io/osac-project/metering-service:latest"',
+            output,
+        )
+        self.assertIn(
+            'kind-load-image.sh" "ghcr.io/osac-project/osac-ui:latest"',
+            output,
+        )
+        for image in (
+            "kind-load-image IMG=ghcr.io/osac-project/fulfillment-service:latest",
+            "kind-load-image IMG=ghcr.io/osac-project/osac-operator:latest",
+            "kind-load-image IMG=ghcr.io/osac-project/osac-aap:latest",
+        ):
+            self.assertIn(image, output)
+
+        mixed_runtime_result = subprocess.run(
+            [
+                "make", "--no-print-directory", "-n", "-C", str(INSTALLER), "install",
+                "PLATFORM=kind", "PROFILE=dev-full", "NS=osac",
+                "CONTAINER_TOOL=docker", "KIND_EXPERIMENTAL_PROVIDER=podman",
+                "HOST_IS_MAC_ARM=true",
+            ],
+            env=self.env, text=True, capture_output=True, timeout=30,
+        )
+        self.assert_success(mixed_runtime_result)
+        mixed_output = mixed_runtime_result.stdout
+        copy_out = mixed_output.find("container save quay.io/openshift/origin-cli:4.19")
+        copy_in = mixed_output.find("docker load -i")
+        mixed_aap_build = mixed_output.find(
+            "execution-environment-build IMG=ghcr.io/osac-project/osac-aap:latest"
+        )
+        self.assertGreaterEqual(copy_out, 0, mixed_output)
+        self.assertGreater(copy_in, copy_out, mixed_output)
+        self.assertGreater(mixed_aap_build, copy_in, mixed_output)
+
+        linux_result = subprocess.run(
+            [
+                "make", "--no-print-directory", "-n", "-C", str(INSTALLER), "install",
+                "PLATFORM=kind", "PROFILE=dev-full", "NS=osac",
+                "CONTAINER_TOOL=docker", "HOST_IS_MAC_ARM=false",
+            ],
+            env=self.env, text=True, capture_output=True, timeout=30,
+        )
+        self.assert_success(linux_result)
+        self.assertNotIn("kind-build-load-images", linux_result.stdout)
+        self.assertNotIn("metering-service:latest", linux_result.stdout)
+        self.assertNotIn("origin-cli:4.19", linux_result.stdout)
+
+    def _run_inotify(self):
+        """Run the shared helper with only stubbed host commands."""
+        return self.run_shell(
+            'source "${SCRIPT_DIR}/../lib.sh"; ensure_inotify_instances')
+
+    def _run_inotify_make(self, provider):
+        """Exercise provider transport through the real Make recipe."""
+        return subprocess.run(
+            ["make", "--no-print-directory", "-C", str(INSTALLER),
+             "ensure-inotify", f"KIND_EXPERIMENTAL_PROVIDER={provider}"],
+            env=self.env, text=True, capture_output=True, timeout=15)
+
+    def test_inotify_make_provider_is_data(self):
+        """Reject shell metacharacters without executing provider contents."""
+        target = self.directory / "max_user_instances"
+        target.write_text("1024\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(target)
+        marker = self.directory / "injected-marker"
+        for provider in (f'docker"; printf injected > {marker}; #',
+                         f'podman$$(printf injected > {marker})',
+                         "unknown", "docker podman"):
+            with self.subTest(provider=provider):
+                marker.unlink(missing_ok=True)
+                result = self._run_inotify_make(provider)
+                self.assertFalse(marker.exists(), "provider was executed as shell source")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsupported inotify provider", result.stderr)
+                self.assertEqual(target.read_text(), "1024\n")
+
+    def test_inotify_podman_effective_transport(self):
+        """Saved remote targets matter only in effective API remote mode."""
+        target = self.directory / "max_user_instances"
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(target)
+        self.env["MOCK_UID"] = "0"
+        cases = (("false", "ssh://sentinel@remote.invalid/socket", True),
+                 ("true", "ssh://sentinel@remote.invalid/socket", False),
+                 ("true", "tcp://sentinel.invalid:1234", False),
+                 ("true", "unix:///run/podman/podman.sock", True),
+                 ("true", "", False),
+                 ("true", "unknown://sentinel", False),
+                 ("true", "unix:///run/podman.sock\nssh://sentinel", False),
+                 ("", "unix:///run/podman/podman.sock", False),
+                 ("unknown", "unix:///run/podman/podman.sock", False))
+        for mode, uri, allowed in cases:
+            for value in ("128", "1024"):
+                with self.subTest(mode=mode, uri=uri, value=value):
+                    self.log.unlink(missing_ok=True)
+                    target.write_text(value + "\n")
+                    self.env.update(MOCK_PODMAN_REMOTE=mode, MOCK_PODMAN_URI=uri)
+                    result = self._run_inotify_make("podman")
+                    self.assertEqual(result.returncode == 0, allowed, result.stderr)
+                    self.assertNotIn("sentinel", result.stdout + result.stderr)
+                    self.assertNotIn("docker context show", self.commands())
+                    if not allowed:
+                        self.assertEqual(target.read_text().strip(), value)
+                        self.assertFalse(any(command.startswith(("sysctl ", "sudo "))
+                                             for command in self.commands()))
+                    if mode == "false":
+                        self.assertFalse(any("system connection list" in command
+                                             for command in self.commands()))
+
+    def test_inotify_podman_metadata_failure_and_host_override(self):
+        """Fail closed on unsupported metadata while honoring explicit Unix hosts."""
+        target = self.directory / "max_user_instances"
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(target)
+        self.env.update(MOCK_UID="0", MOCK_PODMAN_REMOTE="true",
+                        MOCK_PODMAN_URI="ssh://sentinel@remote.invalid/socket")
+        for failure in ("1", "2"):
+            with self.subTest(failure=failure):
+                self.log.unlink(missing_ok=True)
+                target.write_text("1024\n")
+                self.env["MOCK_PODMAN_METADATA_FAILURE"] = failure
+                result = self._run_inotify()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("sentinel", result.stdout + result.stderr)
+                self.assertFalse(any(command.startswith(("sysctl ", "sudo "))
+                                     for command in self.commands()))
+        self.env["MOCK_PODMAN_METADATA_FAILURE"] = "0"
+        self.env["CONTAINER_HOST"] = "unix:///run/podman/podman.sock"
+        target.write_text("128\n")
+        self.assert_success(self._run_inotify())
+        self.assertEqual(target.read_text().strip(), "512")
+
+    def test_inotify_docker_does_not_query_podman(self):
+        """An unselected Podman runtime cannot block a local Docker target."""
+        target = self.directory / "max_user_instances"
+        target.write_text("128\n")
+        self.env.update(_INOTIFY_INSTANCES_FILE=str(target), MOCK_UID="0",
+                        MOCK_PODMAN_METADATA_FAILURE="1")
+        self.assert_success(self._run_inotify_make("docker"))
+        self.assertFalse(any(command.startswith("podman ") for command in self.commands()))
+
+    def test_inotify_write_errors_are_sanitized(self):
+        """Categorize failures without disclosing arbitrary privileged stderr."""
+        target = self.directory / "max_user_instances"
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(target)
+        cases = (("sysctl: sentinel-host.invalid /sentinel/path sentinel-token Read-only file system", "read-only filesystem"),
+                 ("sysctl: sentinel-host.invalid Invalid argument", "invalid argument"),
+                 ("sysctl: permission denied /sentinel/path", "permission denied"),
+                 ("sysctl: sentinel-token unrecognized failure", "write command failed"))
+        for uid in ("0", "1000"):
+            for diagnostic, category in cases:
+                with self.subTest(uid=uid, category=category):
+                    target.write_text("128\n")
+                    self.env.update(MOCK_UID=uid, MOCK_NOPASSWD="1",
+                                    MOCK_SYSCTL_FAILURE="1", MOCK_SYSCTL_ERROR=diagnostic)
+                    result = self._run_inotify()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(category, result.stderr)
+                    self.assertNotIn("sentinel", result.stderr + result.stdout)
+                    self.assertNotIn("passwordless sudo", result.stderr)
+                    self.assertEqual(result.stdout, "")
+        self.env.update(MOCK_UID="1000", MOCK_NOPASSWD="0", MOCK_SYSCTL_FAILURE="0")
+        for diagnostic, category in (
+                ("sudo: unable to resolve host sentinel-host.invalid\nsudo: a password is required", "passwordless sudo"),
+                ("sudo: unable to initialize policy plugin /sentinel/path", "sudo policy plugin failure"),
+                ("sudo: sentinel-token is not allowed to execute command", "authorization denied")):
+            with self.subTest(category=category):
+                target.write_text("128\n")
+                self.env["MOCK_SUDO_ERROR"] = diagnostic
+                result = self._run_inotify()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(category, result.stderr)
+                self.assertNotIn("sentinel", result.stderr + result.stdout)
+                self.assertEqual(result.stdout, "")
+
+    def test_inotify_sufficient_values_skip_write(self):
+        """Values >= 512 are preserved with no sysctl or elevation."""
+        for value in ("512", "1024", "65536"):
+            with self.subTest(value=value):
+                self.log.unlink(missing_ok=True)
+                inotify = self.directory / "max_user_instances"
+                inotify.write_text(f"{value}\n")
+                self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+                self.assert_success(self._run_inotify())
+                self.assertEqual(inotify.read_text().strip(), value)
+                cmds = self.commands()
+                self.assertFalse(
+                    any("sysctl" in command for command in cmds))
+                self.assertFalse(
+                    any(command.startswith("sudo ") for command in cmds))
+
+    def test_inotify_low_as_root_raises_to_floor(self):
+        """Root user: direct sysctl -w, no sudo, verifies."""
+        for initial in ("128", "0"):
+            with self.subTest(initial=initial):
+                self.log.unlink(missing_ok=True)
+                inotify = self.directory / "max_user_instances"
+                inotify.write_text(f"{initial}\n")
+                self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+                self.env["MOCK_UID"] = "0"
+                self.assert_success(self._run_inotify())
+                self.assertEqual(
+                    inotify.read_text().strip(), "512")
+                cmds = self.commands()
+                self.assertIn(
+                    "sysctl -w fs.inotify.max_user_instances=512",
+                    cmds)
+                self.assertFalse(
+                    any(command.startswith("sudo ") for command in cmds))
+        self.env["MOCK_UID"] = "1000"
+
+    def test_inotify_low_nonroot_uses_passwordless_sudo(self):
+        """Non-root: sudo -n sysctl write."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_NOPASSWD"] = "1"
+        self.assert_success(self._run_inotify())
+        self.assertEqual(inotify.read_text().strip(), "512")
+        self.assertIn(
+            "sudo -n sysctl -w fs.inotify.max_user_instances=512",
+            self.commands())
+        self.env["MOCK_NOPASSWD"] = "0"
+
+    def test_inotify_writes_only_target_key(self):
+        """Exactly one sysctl call with the one expected key."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        self.assert_success(self._run_inotify())
+        sysctl_cmds = [
+            command for command in self.commands() if command.startswith("sysctl ")]
+        self.assertEqual(len(sysctl_cmds), 1)
+        self.assertEqual(
+            sysctl_cmds[0],
+            "sysctl -w fs.inotify.max_user_instances=512")
+        self.env["MOCK_UID"] = "1000"
+
+    def test_inotify_missing_proc_file_errors(self):
+        """Missing instances file returns error."""
+        absent = self.directory / "absent" / "max_user_instances"
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(absent)
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not found", result.stderr)
+
+    def test_inotify_invalid_value_errors(self):
+        """Non-numeric value returns error."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("garbage\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not read a numeric value", result.stderr)
+
+    def test_inotify_sysctl_write_failure_errors(self):
+        """sysctl write failure stops with error."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        self.env["MOCK_SYSCTL_FAILURE"] = "1"
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failed", result.stderr)
+        self.assertEqual(inotify.read_text().strip(), "128")
+        self.env["MOCK_UID"] = "1000"
+        self.env["MOCK_SYSCTL_FAILURE"] = "0"
+
+    def test_inotify_verify_still_low_after_write_errors(self):
+        """Write succeeds but re-read still low returns error."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        self.env["MOCK_SYSCTL_NOOP"] = "1"
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("after write", result.stderr)
+        self.env["MOCK_UID"] = "1000"
+        self.env["MOCK_SYSCTL_NOOP"] = "0"
+
+    def test_inotify_non_linux_fails_with_guidance(self):
+        """Non-Linux host fails with actionable guidance."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_OS"] = "Darwin"
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("native Linux", result.stderr)
+        self.assertIn("512", result.stderr)
+        self.assertEqual(inotify.read_text().strip(), "128")
+        self.assertFalse(
+            any("sysctl" in command for command in self.commands()))
+        self.env["MOCK_OS"] = "Linux"
+
+    def test_inotify_remote_container_host_fails_closed(self):
+        """Remote CONTAINER_HOST/DOCKER_HOST: no sysctl, no
+        endpoint value in stderr."""
+        inotify = self.directory / "max_user_instances"
+        for var, url in (
+            ("CONTAINER_HOST", "ssh://sentinel-user@sentinel-host"),
+            ("CONTAINER_HOST", "tcp://192.0.2.1:2375"),
+            ("DOCKER_HOST", "tcp://sentinel-dock:2376"),
+        ):
+            for val in ("128", "1024"):
+                with self.subTest(var=var, url=url, val=val):
+                    self.log.unlink(missing_ok=True)
+                    inotify.write_text(f"{val}\n")
+                    self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+                    self.env[var] = url
+                    result = self._run_inotify()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("remote", result.stderr)
+                    self.assertNotIn("sentinel", result.stderr)
+                    self.assertEqual(
+                        inotify.read_text().strip(), val)
+                    self.assertFalse(any(
+                        "sysctl" in command for command in self.commands()))
+                    self.assertFalse(any(
+                        command.startswith("sudo ") for command in
+                        self.commands()))
+                    del self.env[var]
+
+    def test_inotify_mixed_endpoints_remote_detected(self):
+        """Local unix in one var must not mask remote in the other."""
+        inotify = self.directory / "max_user_instances"
+        cases = (
+            {"CONTAINER_HOST": "unix:///run/podman.sock",
+             "DOCKER_HOST": "tcp://example.invalid:2376"},
+            {"CONTAINER_HOST": "ssh://sentinel@remote.invalid",
+             "DOCKER_HOST": "unix:///var/run/docker.sock"},
+        )
+        for env_set in cases:
+            for val in ("128", "1024"):
+                with self.subTest(env=env_set, val=val):
+                    self.log.unlink(missing_ok=True)
+                    inotify.write_text(f"{val}\n")
+                    self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+                    for variable, value in env_set.items():
+                        self.env[variable] = value
+                    result = self._run_inotify()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("remote", result.stderr)
+                    self.assertNotIn("sentinel", result.stderr)
+                    self.assertEqual(
+                        inotify.read_text().strip(), val)
+                    self.assertFalse(any(
+                        "sysctl" in command for command in self.commands()))
+                    for variable in env_set:
+                        del self.env[variable]
+
+    def test_inotify_local_unix_socket_proceeds(self):
+        """CONTAINER_HOST=unix://... is local, guard proceeds."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        self.env["CONTAINER_HOST"] = "unix:///run/podman.sock"
+        self.assert_success(self._run_inotify())
+        self.assertEqual(inotify.read_text().strip(), "512")
+        del self.env["CONTAINER_HOST"]
+        self.env["MOCK_UID"] = "1000"
+
+    def test_inotify_named_connection_fails_closed(self):
+        """Named Podman connection / Docker context: error,
+        no connection/context name in stderr."""
+        inotify = self.directory / "max_user_instances"
+        for var in ("CONTAINER_CONNECTION", "DOCKER_CONTEXT"):
+            with self.subTest(var=var):
+                self.log.unlink(missing_ok=True)
+                inotify.write_text("128\n")
+                self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+                self.env[var] = "sentinel-ctx-name"
+                result = self._run_inotify()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("engine host", result.stderr)
+                self.assertNotIn("sentinel", result.stderr)
+                self.assertEqual(
+                    inotify.read_text().strip(), "128")
+                self.assertFalse(any(
+                    "sysctl" in command for command in self.commands()))
+                del self.env[var]
+
+    def test_inotify_sudo_not_authorized_errors(self):
+        """Non-root without passwordless sudo fails actionably."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("passwordless sudo", result.stderr)
+        self.assertIn("passwordless sudo required", result.stderr)
+        self.assertEqual(inotify.read_text().strip(), "128")
+
+    def test_inotify_baseline_install_infra_unchanged(self):
+        """Existing install-infra flow does not touch inotify."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.assert_success(self.run_direct_infra())
+        self.assertEqual(inotify.read_text().strip(), "128")
+        self.assertFalse(
+            any("sysctl" in command for command in self.commands()))
+
+    def test_inotify_ensure_make_target(self):
+        """make ensure-inotify invokes the guard."""
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_UID"] = "0"
+        result = subprocess.run(
+            ["/usr/bin/make", "--no-print-directory",
+             "-C", str(INSTALLER), "ensure-inotify"],
+            env=self.env, text=True, capture_output=True,
+            timeout=15)
+        self.assert_success(result)
+        self.assertEqual(inotify.read_text().strip(), "512")
+        self.assertIn(
+            "sysctl -w fs.inotify.max_user_instances=512",
+            self.commands())
+        self.env["MOCK_UID"] = "1000"
+
+    def test_inotify_persisted_docker_context_refused(self):
+        """Refuse non-default Docker contexts before any limit success."""
+        self.env["KIND_EXPERIMENTAL_PROVIDER"] = "docker"
+        self.env["MOCK_DOCKER_CONTEXT"] = "sentinel-private-context"
+        self.env["MOCK_UID"] = "0"
+        inotify = self.directory / "max_user_instances"
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        for value in ("128", "1024"):
+            with self.subTest(value=value):
+                self.log.unlink(missing_ok=True)
+                inotify.write_text(f"{value}\n")
+                result = self._run_inotify()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Docker context", result.stderr)
+                self.assertNotIn("sentinel", result.stderr + result.stdout)
+                self.assertEqual(inotify.read_text().strip(), value)
+                self.assertFalse(any("sysctl" in cmd or cmd.startswith("sudo ")
+                                     for cmd in self.commands()))
+
+    def test_inotify_docker_default_and_host_override(self):
+        """Allow default Docker and its explicit local Unix-host override."""
+        self.env["KIND_EXPERIMENTAL_PROVIDER"] = "docker"
+        self.env["MOCK_UID"] = "0"
+        inotify = self.directory / "max_user_instances"
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        for host in ("", "unix:///var/run/docker.sock"):
+            with self.subTest(host=host):
+                self.log.unlink(missing_ok=True)
+                self.env["DOCKER_HOST"] = host
+                self.env["MOCK_DOCKER_CONTEXT"] = (
+                    "sentinel-private-context" if host else "default")
+                inotify.write_text("128\n")
+                result = self._run_inotify()
+                self.assert_success(result)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("docker context show", self.commands())
+                self.assertEqual(inotify.read_text().strip(), "512")
+
+    def test_inotify_podman_ignores_persisted_docker_context(self):
+        """An unselected Docker context cannot prevent local Podman setup."""
+        self.env["MOCK_DOCKER_CONTEXT"] = "sentinel-private-context"
+        self.env["MOCK_CONTEXT_FAILURE"] = "1"
+        self.env["MOCK_UID"] = "0"
+        inotify = self.directory / "max_user_instances"
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        for provider in ("podman", ""):
+            with self.subTest(provider=provider):
+                self.log.unlink(missing_ok=True)
+                self.env["KIND_EXPERIMENTAL_PROVIDER"] = provider
+                inotify.write_text("128\n")
+                self.assert_success(self._run_inotify())
+                self.assertNotIn("docker context show", self.commands())
+                self.assertEqual(inotify.read_text().strip(), "512")
+
+    def test_inotify_docker_context_probe_fails_closed(self):
+        """Failed context discovery never falls through to a local write."""
+        self.env["KIND_EXPERIMENTAL_PROVIDER"] = "docker"
+        self.env["MOCK_CONTEXT_FAILURE"] = "1"
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Docker context", result.stderr)
+        self.assertNotIn("sentinel", result.stderr + result.stdout)
+        self.assertFalse(any("sysctl" in cmd or cmd.startswith("sudo ")
+                             for cmd in self.commands()))
+
+    def test_inotify_auto_detects_docker_without_podman(self):
+        """Use Docker context checks when Podman-first discovery falls back."""
+        (self.bin / "podman").unlink()
+        for name in ("bash", "dirname", "cat"):
+            (self.bin / name).symlink_to(shutil.which(name))
+        self.env["PATH"] = str(self.bin)
+        self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+        self.env["MOCK_DOCKER_CONTEXT"] = "sentinel-private-context"
+        self.env["MOCK_UID"] = "0"
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Docker context", result.stderr)
+        self.assertNotIn("sentinel", result.stderr + result.stdout)
+        self.assertEqual(inotify.read_text().strip(), "128")
+
+    def test_inotify_make_explicit_provider_checks_context(self):
+        """Honor the Make provider override rather than installed binaries."""
+        self.env["MOCK_DOCKER_CONTEXT"] = "sentinel-private-context"
+        self.env["MOCK_UID"] = "0"
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-C", str(INSTALLER),
+             "ensure-inotify", "KIND_EXPERIMENTAL_PROVIDER=docker"],
+            env=self.env, text=True, capture_output=True, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Docker context", result.stderr)
+        self.assertNotIn("sentinel", result.stderr + result.stdout)
+        self.assertEqual(inotify.read_text().strip(), "128")
+
+    def test_inotify_write_diagnostics_do_not_blame_sudo(self):
+        """Sanitize sysctl failures without suggesting unrelated sudo policy."""
+        inotify = self.directory / "max_user_instances"
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        self.env["MOCK_SYSCTL_FAILURE"] = "1"
+        self.env["MOCK_NOPASSWD"] = "1"
+        for uid in ("0", "1000"):
+            for diagnostic, category in (
+                    ("sysctl: setting key: Read-only file system", "read-only filesystem"),
+                    ("sysctl: setting key: Invalid argument", "invalid argument"),
+                    ("sysctl: permission denied on key", "permission denied")):
+                with self.subTest(uid=uid, diagnostic=diagnostic):
+                    self.env["MOCK_UID"] = uid
+                    self.env["MOCK_SYSCTL_ERROR"] = diagnostic
+                    inotify.write_text("128\n")
+                    result = self._run_inotify()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(category, result.stderr)
+                    self.assertNotIn(diagnostic, result.stderr)
+                    self.assertNotIn("passwordless sudo", result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(inotify.read_text().strip(), "128")
+
+    def test_inotify_sudo_non_auth_failure_has_no_auth_hint(self):
+        """Report a safe plugin-failure category, not an authorization hint."""
+        self.env["MOCK_SUDO_ERROR"] = "sudo: unable to initialize policy plugin"
+        inotify = self.directory / "max_user_instances"
+        inotify.write_text("128\n")
+        self.env["_INOTIFY_INSTANCES_FILE"] = str(inotify)
+        result = self._run_inotify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sudo policy plugin failure", result.stderr)
+        self.assertNotIn(self.env["MOCK_SUDO_ERROR"], result.stderr)
+        self.assertNotIn("passwordless sudo", result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(inotify.read_text().strip(), "128")
+        self.assertFalse(any(cmd.startswith("sysctl ") for cmd in self.commands()))
 
 
 if __name__ == "__main__":

@@ -32,11 +32,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ServiceAccounts_List_FullMethodName   = "/osac.public.v1.ServiceAccounts/List"
-	ServiceAccounts_Get_FullMethodName    = "/osac.public.v1.ServiceAccounts/Get"
-	ServiceAccounts_Create_FullMethodName = "/osac.public.v1.ServiceAccounts/Create"
-	ServiceAccounts_Update_FullMethodName = "/osac.public.v1.ServiceAccounts/Update"
-	ServiceAccounts_Delete_FullMethodName = "/osac.public.v1.ServiceAccounts/Delete"
+	ServiceAccounts_List_FullMethodName             = "/osac.public.v1.ServiceAccounts/List"
+	ServiceAccounts_Get_FullMethodName              = "/osac.public.v1.ServiceAccounts/Get"
+	ServiceAccounts_Create_FullMethodName           = "/osac.public.v1.ServiceAccounts/Create"
+	ServiceAccounts_Update_FullMethodName           = "/osac.public.v1.ServiceAccounts/Update"
+	ServiceAccounts_Delete_FullMethodName           = "/osac.public.v1.ServiceAccounts/Delete"
+	ServiceAccounts_RegenerateSecret_FullMethodName = "/osac.public.v1.ServiceAccounts/RegenerateSecret"
 )
 
 // ServiceAccountsClient is the client API for ServiceAccounts service.
@@ -54,6 +55,8 @@ type ServiceAccountsClient interface {
 	Update(ctx context.Context, in *ServiceAccountsUpdateRequest, opts ...grpc.CallOption) (*ServiceAccountsUpdateResponse, error)
 	// Marks the account deleting; cleanup completes asynchronously before archival.
 	Delete(ctx context.Context, in *ServiceAccountsDeleteRequest, opts ...grpc.CallOption) (*ServiceAccountsDeleteResponse, error)
+	// Requests asynchronous credential rotation. The controller updates the tenant-scoped Secret referenced by status.
+	RegenerateSecret(ctx context.Context, in *ServiceAccountsRegenerateSecretRequest, opts ...grpc.CallOption) (*ServiceAccountsRegenerateSecretResponse, error)
 }
 
 type serviceAccountsClient struct {
@@ -114,6 +117,16 @@ func (c *serviceAccountsClient) Delete(ctx context.Context, in *ServiceAccountsD
 	return out, nil
 }
 
+func (c *serviceAccountsClient) RegenerateSecret(ctx context.Context, in *ServiceAccountsRegenerateSecretRequest, opts ...grpc.CallOption) (*ServiceAccountsRegenerateSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ServiceAccountsRegenerateSecretResponse)
+	err := c.cc.Invoke(ctx, ServiceAccounts_RegenerateSecret_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ServiceAccountsServer is the server API for ServiceAccounts service.
 // All implementations must embed UnimplementedServiceAccountsServer
 // for forward compatibility.
@@ -129,6 +142,8 @@ type ServiceAccountsServer interface {
 	Update(context.Context, *ServiceAccountsUpdateRequest) (*ServiceAccountsUpdateResponse, error)
 	// Marks the account deleting; cleanup completes asynchronously before archival.
 	Delete(context.Context, *ServiceAccountsDeleteRequest) (*ServiceAccountsDeleteResponse, error)
+	// Requests asynchronous credential rotation. The controller updates the tenant-scoped Secret referenced by status.
+	RegenerateSecret(context.Context, *ServiceAccountsRegenerateSecretRequest) (*ServiceAccountsRegenerateSecretResponse, error)
 	mustEmbedUnimplementedServiceAccountsServer()
 }
 
@@ -153,6 +168,9 @@ func (UnimplementedServiceAccountsServer) Update(context.Context, *ServiceAccoun
 }
 func (UnimplementedServiceAccountsServer) Delete(context.Context, *ServiceAccountsDeleteRequest) (*ServiceAccountsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedServiceAccountsServer) RegenerateSecret(context.Context, *ServiceAccountsRegenerateSecretRequest) (*ServiceAccountsRegenerateSecretResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RegenerateSecret not implemented")
 }
 func (UnimplementedServiceAccountsServer) mustEmbedUnimplementedServiceAccountsServer() {}
 func (UnimplementedServiceAccountsServer) testEmbeddedByValue()                         {}
@@ -265,6 +283,24 @@ func _ServiceAccounts_Delete_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ServiceAccounts_RegenerateSecret_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ServiceAccountsRegenerateSecretRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ServiceAccountsServer).RegenerateSecret(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ServiceAccounts_RegenerateSecret_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ServiceAccountsServer).RegenerateSecret(ctx, req.(*ServiceAccountsRegenerateSecretRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ServiceAccounts_ServiceDesc is the grpc.ServiceDesc for ServiceAccounts service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -291,6 +327,10 @@ var ServiceAccounts_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _ServiceAccounts_Delete_Handler,
+		},
+		{
+			MethodName: "RegenerateSecret",
+			Handler:    _ServiceAccounts_RegenerateSecret_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

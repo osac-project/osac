@@ -169,12 +169,26 @@ spec:
                 maxLength: 512
                 pattern: ^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[A-Fa-f0-9:]+\])(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*)+(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}(?:@sha256:[A-Fa-f0-9]{64})?|@sha256:[A-Fa-f0-9]{64})$
                 type: string
-              sshPublicKey:
+              sshKey:
                 description: |-
-                  SSHPublicKey is an SSH public key installed on cluster worker nodes.
-                  If not provided, the provider's default SSH key is used.
-                maxLength: 16384
-                type: string
+                  SSHKey references the fulfillment Secret holding the cluster's registered
+                  SSH public key. Only the canonical Secret ID is stored here; key material
+                  is resolved by the operator when launching provisioning jobs and creating
+                  bare-metal worker instances.
+                properties:
+                  id:
+                    description: ID is the canonical fulfillment Secret identifier.
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                required:
+                - id
+                type: object
+              supportsAutomaticCaaSEndpoints:
+                description: |-
+                  SupportsAutomaticCaaSEndpoints is copied from the resolved ClusterTemplate
+                  capability and selects the automatic CaaS endpoint lifecycle.
+                type: boolean
               templateID:
                 description: TemplateID is the unique identigier of the cluster template
                   to use when creating this cluster
@@ -198,6 +212,15 @@ spec:
             - message: networkAttachment is immutable after creation
               rule: has(self.networkAttachment) == has(oldSelf.networkAttachment)
                 && (!has(self.networkAttachment) || self.networkAttachment == oldSelf.networkAttachment)
+            - message: sshKey is immutable after creation
+              rule: has(self.sshKey) == has(oldSelf.sshKey) && (!has(self.sshKey)
+                || self.sshKey == oldSelf.sshKey)
+            - message: supportsAutomaticCaaSEndpoints is immutable except for migration
+                from unset to true
+              rule: (!has(oldSelf.supportsAutomaticCaaSEndpoints) && has(self.supportsAutomaticCaaSEndpoints)
+                && self.supportsAutomaticCaaSEndpoints) || (has(self.supportsAutomaticCaaSEndpoints)
+                == has(oldSelf.supportsAutomaticCaaSEndpoints) && (!has(self.supportsAutomaticCaaSEndpoints)
+                || self.supportsAutomaticCaaSEndpoints == oldSelf.supportsAutomaticCaaSEndpoints))
           status:
             description: ClusterOrderStatus defines the observed state of ClusterOrder
             properties:
@@ -269,10 +292,24 @@ spec:
                   - type
                   type: object
                 type: array
-              apiEndpoint:
+              apiDNSHostedClusterName:
                 description: |-
-                  ApiEndpoint is the internal API server VIP allocated by MetalLB.
-                  Written by the CaaS template after VIP discovery.
+                  APIDNSHostedClusterName records the HostedCluster name used for API DNS
+                  publication. It is retained until API DNS cleanup succeeds, including when
+                  publication only partially completed.
+                type: string
+              apiDNSRecordsPublishedTime:
+                description: APIDNSRecordsPublishedTime records when the API DNS records
+                  were last published.
+                format: date-time
+                type: string
+              apiEndpoint:
+                description: ApiEndpoint is the management API VIP reported by the
+                  HostedControlPlane Service.
+                type: string
+              apiURL:
+                description: APIURL is the public API URL after the API ExternalIP
+                  and DNS record are ready.
                 type: string
               clusterReference:
                 description: Reference to the namespace that contains the HostedCluster
@@ -413,6 +450,10 @@ spec:
                   - type
                   type: object
                 type: array
+              consoleURL:
+                description: ConsoleURL is the public console URL after ingress is
+                  ready.
+                type: string
               currentWorkers:
                 description: |-
                   CurrentWorkers is the number of retained requested slots that hold a
@@ -440,21 +481,82 @@ spec:
                 description: FulfillmentTrustBundleHash is the hash of the last synchronized
                   fulfillment trust bundle.
                 type: string
-              ingressEndpoint:
-                description: |-
-                  IngressEndpoint is the internal ingress VIP allocated by MetalLB.
-                  Written by the CaaS template after VIP discovery.
+              ingressAllocatedAddress:
+                description: IngressAllocatedAddress is the Fabric Manager-reserved
+                  guest ingress address.
                 type: string
+              ingressDNSHostedClusterName:
+                description: |-
+                  IngressDNSHostedClusterName records the HostedCluster name used for ingress
+                  DNS publication. It is retained until ingress DNS cleanup succeeds, including
+                  when publication only partially completed.
+                type: string
+              ingressEndpoint:
+                description: IngressEndpoint is the guest ingress Service address
+                  reported by the cluster.
+                type: string
+              jobs:
+                description: Jobs tracks ClusterOrder Fabric Manager and guest endpoint
+                  tasks.
+                items:
+                  description: |-
+                    NetworkJobStatus tracks the latest AAP job of one task on one manager
+                    (contract §4.7 Job tracking). OSAC never removes an entry.
+                  properties:
+                    attempt:
+                      description: Attempt counts the task's launches on this manager.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    jobID:
+                      description: JobID is the AAP job ID; empty until AAP returned
+                        it.
+                      type: string
+                    manager:
+                      description: Manager is the manager type the task runs on.
+                      enum:
+                      - fabric
+                      - kubernetes
+                      - none
+                      type: string
+                    message:
+                      description: |-
+                        Message is the job's osac_error message, the AAP failure text, or why
+                        OSAC rejected the result; while retrying it also names the next retry time.
+                      type: string
+                    state:
+                      description: State is the state of the latest job.
+                      enum:
+                      - Running
+                      - Retrying
+                      - Succeeded
+                      - Failed
+                      - Cancelled
+                      type: string
+                    task:
+                      description: Task is the task name, for example create_subnet.
+                      minLength: 1
+                      type: string
+                  required:
+                  - attempt
+                  - manager
+                  - state
+                  - task
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - task
+                - manager
+                x-kubernetes-list-type: map
               nodeRequests:
                 description: NodeRequests reflects how many nodes are currently associated
                   with the ClusterOrder
                 items:
                   description: |-
-                    NodeRequestStatus records the observed node count for a node set.
-                    The count is not updated while the NodePool has zero observed
-                    replicas (e.g. during initial provisioning or node drain), so
-                    an existing entry retains its last positive value until a new
-                    positive observation arrives.
+                    NodeRequestStatus records the observed node count and version for a node set.
+                    Neither value is refreshed while the NodePool has zero observed replicas
+                    (e.g. during initial provisioning or node drain), so an existing entry
+                    retains its last positive count and last observed version.
                   properties:
                     bareMetal:
                       description: BareMetalNodeSpec holds configuration specific
@@ -479,6 +581,11 @@ spec:
                     numberOfNodes:
                       minimum: 0
                       type: integer
+                    observedVersion:
+                      description: |-
+                        ObservedVersion is the OpenShift version reported by this node set's
+                        selected NodePool, independently of an OSAC upgrade attempt.
+                      type: string
                     upgradeObservation:
                       description: |-
                         UpgradeObservation reports the observed version and state of this node set's
@@ -530,6 +637,11 @@ spec:
                   - numberOfNodes
                   type: object
                 type: array
+              observedVersion:
+                description: |-
+                  ObservedVersion is the latest completed OpenShift version reported by the
+                  selected HostedCluster. It is independent of an OSAC upgrade attempt.
+                type: string
               phase:
                 description: Phase provides a single-value overview of the state of
                   the ClusterOrder
@@ -619,6 +731,11 @@ spec:
                   Populated by the BareMetalWorkerReconciler.
                 format: int32
                 type: integer
+              taskInput:
+                description: TaskInput is the persisted input used to release the
+                  Fabric Manager ingress reservation.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               upgradeObservation:
                 description: |-
                   UpgradeObservation reports the observed version and state of the control

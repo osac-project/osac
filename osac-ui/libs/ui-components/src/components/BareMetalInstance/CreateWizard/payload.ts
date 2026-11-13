@@ -9,14 +9,14 @@ import {
 
 import type { BareMetalInstanceWizardValues } from './fields';
 import { catalogFieldPolicyLocked } from '../../catalog/catalogFieldPolicyDisplay';
+import { getUserDataSourcePayload } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
 export const buildBareMetalInstanceCreatePayload = (
   values: BareMetalInstanceWizardValues,
   catalogItem?: BareMetalInstanceCatalogItem,
 ): MessageInitShape<typeof BareMetalInstanceSchema> => {
   const sshKey = values.spec.sshKey.value.trim();
-  const userData = values.spec.userData.value.trim();
-  const userDataSecretName = values.spec.userDataSecret.value.trim();
+  const userDataSource = getUserDataSourcePayload(values.spec.userData);
 
   const bmi: MessageInitShape<typeof BareMetalInstanceSchema> = {
     metadata: { name: values.metadata.name.trim(), project: values.metadata.project },
@@ -27,11 +27,8 @@ export const buildBareMetalInstanceCreatePayload = (
       ...(!catalogFieldPolicyLocked(catalogItem?.fields?.runStrategy) && {
         runStrategy: BareMetalInstanceRunStrategy.ALWAYS,
       }),
-      ...(!values.spec.sshKey.locked && sshKey && { sshPublicKey: sshKey }),
-      ...(values.spec.userDataSource.value === 'secret'
-        ? !values.spec.userDataSecret.locked &&
-          userDataSecretName && { userDataSecret: { name: userDataSecretName } }
-        : !values.spec.userData.locked && userData && { userData }),
+      ...(!values.spec.sshKey.locked && sshKey && { sshKey: { name: sshKey } }),
+      ...(userDataSource && { userDataSource }),
       ...(!values.spec.instanceType.locked &&
         values.spec.instanceType.value && {
           instanceType: {

@@ -1,12 +1,23 @@
 name: OSAC Promote to Production
 
-# Promotes an already-staged OSAC release to production by creating a
-# SECOND Konflux Release against the exact Snapshot a prior
+# Promotes an already-staged OSAC release to production. For images, this
+# is a SECOND Konflux Release against the exact Snapshot a prior
 # osac-release.yaml dispatch already built, tested, and shipped to
-# registry.stage.redhat.io -- never a rebuild. The point of a staging gate
-# is that what ships to production is bit-for-bit what was already
-# validated, not a fresh build of "the same" version that could in
-# principle differ.
+# registry.stage.redhat.io -- never a rebuild; each image's digest is
+# multi-homed into registry.redhat.io by cloud-extensions-prod's own
+# ReleasePlanAdmission, so what ships to production is bit-for-bit what
+# was already validated.
+#
+# The chart CANNOT be promoted the same no-rebuild way: its own committed
+# values.yaml has registry.stage.redhat.io literally baked into every
+# component image reference at stamp time (osac-build-and-publish.yaml's
+# stamp-and-release-charts job), so the already-built staging chart
+# Snapshot is only ever correct for stage. stamp-prod-chart /
+# wait-for-prod-chart-build / release-prod-chart below instead re-stamp
+# that exact same stage-tested source commit with registry.redhat.io
+# (only the hostname changes -- every image tag/version is untouched) and
+# push it through a real, independent Konflux build+sign+attest cycle,
+# mirroring the staging chart pipeline's own three-stage shape.
 #
 # Deliberately a standalone workflow, not a third `mode:` on
 # osac-build-and-publish.yaml: that pipeline's jobs (build, test, tag) are
@@ -24,38 +35,38 @@ name: OSAC Promote to Production
 # "fix" this duplication, make sure promotion has actually shipped
 # successfully a few times first.
 #
-# Both mutating jobs below sit behind the "production" GitHub Environment
-# approval gate (Settings -> Environments -- a manual, one-time repo
-# setup action, not something this file can create). resolve-and-verify
-# itself is read-only and ungated: there's no reason to make a human
-# approve before even checking whether promotion is possible.
+# Every mutating job below (promote-image, stamp-prod-chart,
+# release-prod-chart -- not wait-for-prod-chart-build, which only polls)
+# sits behind the "production" GitHub Environment approval gate (Settings
+# -> Environments -- a manual, one-time repo setup action, not something
+# this file can create). resolve-and-verify itself is read-only and
+# ungated: there's no reason to make a human approve before even checking
+# whether promotion is possible.
 #
 # That manual setup MUST happen before this workflow is ever dispatched,
 # not just "at some point": GitHub auto-creates an environment the first
 # time a workflow run references one by name, with NO protection rules
 # (no required reviewers) unless one already exists under that name. A
 # premature first dispatch would silently create an unprotected
-# "production" environment and sail straight through promote-image/
-# promote-chart with no approval at all -- the opposite of the gate this
-# workflow exists to provide. Confirm the environment already has
-# required reviewers configured (Settings -> Environments -> production)
-# before the first-ever dispatch, not after.
+# "production" environment and sail straight through with no approval at
+# all -- the opposite of the gate this workflow exists to provide.
+# Confirm the environment already has required reviewers configured
+# (Settings -> Environments -> production) before the first-ever
+# dispatch, not after.
 #
-# cloud-extensions-prod/osac-charts-prod do not exist in Konflux yet
-# (tracked under OSAC-1090, a GitLab MR outside this repo) -- this
-# workflow cannot succeed until that lands. resolve-and-verify's
-# ReleasePlan check is what surfaces that cleanly instead of this
-# workflow hanging or failing cryptically.
+# cloud-extensions-prod/osac-charts-prod (OSAC-1090) are both live.
 
 on:
   workflow_dispatch:
     inputs:
       release_version:
         description: >-
-          The umbrella chart version being promoted (e.g. 0.4.0) --
-          informational only (run name, Slack message); not used to
-          compute anything, since the two inputs below already name the
-          exact Snapshots directly.
+          The umbrella chart version being promoted (e.g. 0.4.0, or a
+          release-branch freeze build like 0.4.0-rc.1) -- used for the
+          run name/Slack message and to cross-check that image_snapshot
+          and chart_snapshot below both belong to this same release (the
+          same dot-to-hyphen slug osac-build-and-publish.yaml itself
+          uses to name a Snapshot).
         type: string
         required: true
       image_snapshot:
@@ -107,8 +118,14 @@ jobs:
       id: validate
       run: |
         set -euo pipefail
-        if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          echo "::error::release_version '${RELEASE_VERSION}' is not a plain X.Y.Z semver" >&2
+        # Same grammar as RELEASE_VERSION_RE (osac-installer/scripts/lib.sh):
+        # X.Y.Z or X.Y.Z-rc.N. SLUG below must still match
+        # osac-build-and-publish.yaml's own version_slug computation
+        # exactly (a plain dot-to-hyphen replace, no other
+        # transformation), which is why it isn't restricted to only the
+        # X.Y.Z portion.
+        if [[ ! "${RELEASE_VERSION}" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})(-rc\.[1-9][0-9]{0,5})?$ ]]; then
+          echo "::error::release_version '${RELEASE_VERSION}' is not a valid release version (X.Y.Z or X.Y.Z-rc.N)" >&2
           exit 1
         fi
         SLUG="${RELEASE_VERSION//./-}"
@@ -456,16 +473,32 @@ jobs:
             sys.exit(1)
         PYEOF
 
-  promote-chart:
-    name: Promote chart Snapshot to production
-    # Gated on promote-image's own result too (not just resolve-and-
-    # verify's chart-ready), mirroring the staging pipeline's own
-    # chart-depends-on-image-release ordering: the chart references
-    # specific image tags, so it should never ship after an attempted
-    # image promotion has failed. Still runs when image promotion was
-    # never attempted at all (image-ready == 'false'), since that's an
-    # independent, orthogonal reason to skip -- only an attempted-and-
-    # failed image promotion blocks chart promotion.
+  # -------------------------------------------------------------------
+  # The chart (unlike the image) cannot be promoted by just re-releasing
+  # the existing staging Snapshot: the registry hostname is a literal
+  # string baked into the chart's own committed values.yaml at stamp
+  # time (osac-build-and-publish.yaml's stamp-and-release-charts job),
+  # so a chart artifact built from a registry.stage.redhat.io-stamped
+  # commit can only ever be correct for stage -- confirmed live: the
+  # real registry.redhat.io/cloud-extensions/osac-chart:0.4.0-rc.1
+  # embeds "registry.stage.redhat.io" image refs, which a real customer
+  # cannot pull (they don't have stage credentials).
+  #
+  # Mirrors the staging pipeline's own three-stage shape (stamp, wait
+  # for Konflux to build, assemble+release), one stage per job below,
+  # just stamping registry.redhat.io and releasing against
+  # osac-charts-prod instead of osac-charts-stage. This is a real
+  # second Konflux build+sign+attest cycle, not a metadata operation --
+  # deliberately so: this whole productization effort exists to route
+  # every customer-facing artifact through that pipeline, so a local
+  # unpack/sed/repack/push of the already-built stage chart was
+  # rejected as bypassing it for the one artifact customers actually
+  # `helm install`.
+  # -------------------------------------------------------------------
+  stamp-prod-chart:
+    name: Stamp chart image refs for production and trigger chart build
+    # Same gating shape as the old promote-chart job it replaces: see
+    # that reasoning, still accurate here.
     needs: [resolve-and-verify, promote-image]
     if: |
       always() &&
@@ -476,13 +509,19 @@ jobs:
       )
     environment: production
     runs-on: osac-ci
-    timeout-minutes: 100
+    # continue-on-error mirrors stamp-and-release-charts' own stance:
+    # charts are new/unproven enough here that a stamping failure
+    # shouldn't be treated as this whole workflow failing outright.
     continue-on-error: true
+    timeout-minutes: 15
     permissions:
       contents: read
     outputs:
-      release-outcome: ${{ steps.release.outcome }}
+      tag-pushed: ${{ steps.push-tag.outputs.pushed }}
+      already-released: ${{ steps.dedup.outputs.already-released }}
+      commit-sha: ${{ steps.push-tag.outputs.commit-sha }}
     env:
+      RELEASE_VERSION: ${{ github.event.inputs.release_version }}
       CHART_SNAPSHOT: ${{ needs.resolve-and-verify.outputs.chart-snapshot }}
 
     steps:
@@ -493,8 +532,215 @@ jobs:
         openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
         namespace: osac-tenant
 
-    - name: Create and poll prod Release
-      id: release
+    # stamp-prod-chart's own marker tag is always unique per dispatch
+    # (RUN_ID/RUN_ATTEMPT-suffixed), so without this check a re-dispatch
+    # for a version that already has a successful prod chart release
+    # would still push a brand new tag and burn another real ~15-30min,
+    # 11-component Konflux rebuild -- harmless (same source content) but
+    # wasteful, and it would leave a second redundant Release object
+    # around. release-prod-chart's own near-identical dedup check can't
+    # catch this: its resource_name is also unique per dispatch, so it
+    # would never match a prior dispatch's Release either.
+    - name: Check for an existing successful prod chart release
+      id: dedup
+      run: |
+        set -euo pipefail
+        SLUG="${RELEASE_VERSION//./-}"
+        PREFIX="osac-charts-release-v${SLUG}-prod-"
+        MATCHING=$(oc get release -n osac-tenant -o json | jq -c --arg plan "osac-charts-prod" --arg prefix "${PREFIX}" '
+          [.items[] | select(.spec.releasePlan == $plan and (.spec.snapshot | startswith($prefix)))]
+        ')
+        ALREADY_RELEASED=$(jq -r '
+          [.[] | select([.status.conditions[]? | select(.type == "Released" and .status == "True")] | length > 0)] | length > 0
+        ' <<<"${MATCHING}")
+        if [[ "${ALREADY_RELEASED}" == "true" ]]; then
+          echo "::notice::A prod chart release already succeeded for ${RELEASE_VERSION} -- skipping a redundant rebuild" >&2
+          echo "already-released=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # A matching Release that's neither Released=True nor a
+        # confirmed terminal Failed is still in flight -- same
+        # "don't race a second attempt" reasoning as promote-image's
+        # own identical dedup check.
+        IN_FLIGHT=$(jq -r '
+          [.[] | select(
+            ([.status.conditions[]? | select(.type == "Released" and .status == "True")] | length == 0) and
+            ([.status.conditions[]? | select(.type == "Released" and .status == "False" and .reason == "Failed")] | length == 0)
+          )] | length > 0
+        ' <<<"${MATCHING}")
+        if [[ "${IN_FLIGHT}" == "true" ]]; then
+          echo "::error::A prod chart release for ${RELEASE_VERSION} is already in flight -- not starting another. Wait for it to finish or delete it, then re-dispatch." >&2
+          exit 1
+        fi
+        echo "already-released=false" >> "$GITHUB_OUTPUT"
+
+    - name: Generate osac-ci app token
+      id: app-token
+      if: steps.dedup.outputs.already-released != 'true'
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+      with:
+        app-id: "4966101"
+        private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
+        # Explicit least-privilege scope: this job only ever pushes a
+        # git tag to this repository, nothing else.
+        permission-contents: write
+
+    # chart_snapshot's own checks in resolve-and-verify
+    # (AppStudioTestSucceeded + a successful stage Release) already
+    # prove this tag exists and is real; see that job's own comments.
+    # They don't prove this tag still points at the exact commit
+    # chart_snapshot was actually built from, though -- the next step
+    # cross-checks that directly against Konflux's own recorded
+    # provenance, independent of trusting the git ref alone.
+    - name: Checkout stage-stamped chart source commit
+      if: steps.dedup.outputs.already-released != 'true'
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        ref: refs/tags/osac-charts-release/v${{ github.event.inputs.release_version }}
+        fetch-depth: 0
+        token: ${{ steps.app-token.outputs.token }}
+
+    # stamp-and-release-charts' own tag-push already refuses to move
+    # this tag to a different commit once it exists (osac-build-and-
+    # publish.yaml: "refusing to move tag"), so in the normal case this
+    # can't actually fail -- added anyway as a real, independent check
+    # against Konflux's own recorded provenance (the override
+    # Snapshot's component source.git.revision, not the git ref) rather
+    # than resting entirely on that one git-side safeguard: it also
+    # catches the case of someone manually force-moving this specific
+    # tag outside of normal automation.
+    - name: Verify checked-out commit matches the validated chart Snapshot
+      if: steps.dedup.outputs.already-released != 'true'
+      run: |
+        set -euo pipefail
+        CHECKED_OUT_SHA=$(git rev-parse HEAD)
+        # Any one component's revision suffices: every component in
+        # this Snapshot was built from the same tag-push event, so they
+        # all share the same source commit.
+        SNAPSHOT_SHA=$(oc get snapshot "${CHART_SNAPSHOT}" -n osac-tenant -o json | jq -er '.spec.components[0].source.git.revision')
+        if [[ "${CHECKED_OUT_SHA}" != "${SNAPSHOT_SHA}" ]]; then
+          echo "::error::Checked-out commit for osac-charts-release/v${RELEASE_VERSION} does not match chart_snapshot ${CHART_SNAPSHOT}'s own recorded source commit -- refusing to stamp or build from the wrong content" >&2
+          exit 1
+        fi
+
+    - name: Re-stamp chart image refs for registry.redhat.io
+      if: steps.dedup.outputs.already-released != 'true'
+      run: |
+        set -euo pipefail
+        # Every file osac-build-and-publish.yaml's stamp-and-release-
+        # charts job writes registry.stage.redhat.io into -- same list,
+        # same component-chart paths. Only the hostname changes: every
+        # image tag/version already stamped into these files is correct
+        # and untouched (same digest, multi-homed into both registries
+        # by cloud-extensions-prod's own ReleasePlanAdmission).
+        FILES=(
+          osac-operator/charts/operator/values.yaml
+          fulfillment-service/charts/service/values.yaml
+          osac-aap/charts/aap/values.yaml
+          bare-metal-fulfillment-operator/charts/operator/values.yaml
+          osac-metering/charts/osac-metering/values.yaml
+          osac-csi-driver/charts/csi-driver/values.yaml
+          osac-ui/charts/ui/values.yaml
+          osac-installer/charts/osac/values.yaml
+        )
+        for f in "${FILES[@]}"; do
+          if ! grep -q 'registry\.stage\.redhat\.io' "${f}"; then
+            echo "::error::${f} does not contain registry.stage.redhat.io -- stamping assumptions are stale, refusing to proceed blindly" >&2
+            exit 1
+          fi
+          sed -i 's/registry\.stage\.redhat\.io/registry.redhat.io/g' "${f}"
+        done
+
+    - name: Commit prod-stamped chart image refs
+      if: steps.dedup.outputs.already-released != 'true'
+      run: |
+        set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add -A
+        if git diff --cached --quiet; then
+          echo "::error::No chart stamping changes staged -- refusing to push" >&2
+          exit 1
+        fi
+        git commit -m "build: stamp real registry.redhat.io image refs into charts for production"
+
+    # Tag-only push -- no branch needed. A git tag keeps its target
+    # commit reachable on its own; nothing downstream reads a branch
+    # (wait-for-prod-chart-build keys off this step's own commit-sha
+    # output, not a checkout). The CEL trigger on every chart's
+    # .tekton/*-chart/release.yaml only checks
+    # target_branch.startsWith("refs/tags/osac-charts-release/"), so any
+    # suffix after that prefix is picked up the same way the staging
+    # marker tag already is -- the "-prod-r<run>a<attempt>" suffix just
+    # keeps this dispatch's tag unique from both the original stage tag
+    # and any other promote-to-prod dispatch for the same version.
+    - name: Push prod charts release marker tag
+      id: push-tag
+      if: steps.dedup.outputs.already-released != 'true'
+      env:
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        SLUG="${RELEASE_VERSION//./-}"
+        TAG="osac-charts-release/v${SLUG}-prod-r${RUN_ID}a${RUN_ATTEMPT}"
+        COMMIT_SHA=$(git rev-parse HEAD)
+        git tag "${TAG}" "${COMMIT_SHA}"
+        git push origin "refs/tags/${TAG}"
+        echo "Pushed ${TAG} -> ${COMMIT_SHA}"
+        echo "pushed=true" >> "$GITHUB_OUTPUT"
+        echo "commit-sha=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+
+  wait-for-prod-chart-build:
+    name: Wait for Konflux prod chart build (${{ matrix.component }})
+    continue-on-error: true
+    # Gated on stamp-prod-chart's own explicit tag-pushed output, not its
+    # job result -- same reasoning as wait-for-konflux-chart-build's
+    # identical gating on stamp-and-release-charts.
+    needs: stamp-prod-chart
+    if: |
+      always() && !cancelled() &&
+      needs.stamp-prod-chart.outputs.tag-pushed == 'true'
+    runs-on: osac-ci
+    timeout-minutes: 85
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - osac-chart
+          - osac-operator-chart
+          - osac-operator-crds-chart
+          - fulfillment-service-chart
+          - osac-aap-chart
+          - bare-metal-fulfillment-operator-chart
+          - bare-metal-fulfillment-operator-crds-chart
+          - osac-metering-chart
+          - osac-csi-driver-chart
+          - osac-csi-backends-chart
+          - osac-ui-chart
+    permissions:
+      contents: read
+      checks: read
+
+    steps:
+    - name: Log in to Konflux cluster
+      uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
+      with:
+        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
+        namespace: osac-tenant
+
+    # Literal copy of wait-for-konflux-chart-build's own step (see that
+    # job's comments for the full rationale) -- COMMIT_SHA comes
+    # directly from stamp-prod-chart's own output instead of a fresh
+    # checkout+rev-parse, since no later step in this job needs the
+    # repository checked out at all.
+    - name: Wait for chart component's Konflux build
+      env:
+        COMMIT_SHA: ${{ needs.stamp-prod-chart.outputs.commit-sha }}
+        COMPONENT: ${{ matrix.component }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
         set -euo pipefail
         python3 - <<'PYEOF'
@@ -503,8 +749,215 @@ jobs:
         import subprocess
         import sys
         import time
+        import urllib.parse
 
-        SNAPSHOT = os.environ["CHART_SNAPSHOT"]
+        COMMIT_SHA = os.environ["COMMIT_SHA"]
+        COMPONENT = os.environ["COMPONENT"]
+        GITHUB_REPOSITORY = os.environ["GITHUB_REPOSITORY"]
+        NAMESPACE = "osac-tenant"
+        POLL_INTERVAL_SECONDS = 30
+        TIMEOUT_SECONDS = 80 * 60
+
+        def condition_true(conditions, cond_type):
+            return any(
+                c.get("type") == cond_type and c.get("status") == "True"
+                for c in conditions
+            )
+
+        def is_permanent_auth_error(stderr):
+            lowered = stderr.lower()
+            return "unauthorized" in lowered or "forbidden" in lowered
+
+        def find_component():
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "snapshots", "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                # No raw oc stderr is logged, even plainly -- it can
+                # embed cluster hostnames/internal details. The fixed
+                # messages below are all this logs.
+                if is_permanent_auth_error(stderr):
+                    print("::error::oc get snapshots failed with a permanent auth/RBAC error")
+                    raise
+                print("::warning::oc get snapshots failed, will retry", flush=True)
+                return None
+            for item in json.loads(out.stdout)["items"]:
+                ann = item["metadata"].get("annotations", {})
+                if ann.get("build.appstudio.redhat.com/commit_sha") != COMMIT_SHA:
+                    continue
+                comps = item["spec"].get("components", [])
+                if len(comps) != 1 or comps[0]["name"] != COMPONENT:
+                    continue
+                if condition_true(item.get("status", {}).get("conditions", []), "AppStudioTestSucceeded"):
+                    return comps[0]  # keep full entry, incl. source
+            return None
+
+        pipelinerun_rbac_denied = [False]
+
+        def describe_pending_state():
+            if pipelinerun_rbac_denied[0]:
+                print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
+                return
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "pipelinerun", "-n", NAMESPACE,
+                     "-l", f"appstudio.openshift.io/component={COMPONENT},pipelinesascode.tekton.dev/sha={COMMIT_SHA}",
+                     "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print("::warning::oc get pipelinerun denied -- falling back to plain waiting messages for the rest of this poll")
+                    pipelinerun_rbac_denied[0] = True
+                    print(f"Waiting on {COMPONENT}'s Konflux build...", flush=True)
+                    return
+                print(f"[{COMPONENT}] Waiting on Konflux build (oc get pipelinerun failed, will retry)", flush=True)
+                return
+            items = json.loads(out.stdout)["items"]
+            if not items:
+                print(f"[{COMPONENT}] Waiting on Konflux build -- no PipelineRun found yet for this commit", flush=True)
+                return
+            items.sort(key=lambda i: i["metadata"].get("creationTimestamp", ""))
+            latest = items[-1]
+            succeeded = next(
+                (c for c in latest.get("status", {}).get("conditions", []) if c.get("type") == "Succeeded"),
+                {},
+            )
+            reason = succeeded.get("reason", "Unknown")
+            # Only the enum-like reason is logged -- the condition's own
+            # free-text message can embed internal URLs/paths and isn't
+            # needed to follow progress here.
+            print(f"[{COMPONENT}] PipelineRun status: {reason}", flush=True)
+
+        def check_run_failed():
+            # Same reasoning as wait-for-konflux-chart-build's identical
+            # helper -- curl (not gh, absent on this runner's PATH), a
+            # server-side-filtered, URL-encoded check_name, and only a
+            # completed check-run's conclusion is trusted.
+            check_name = f"Konflux kflux-prd-rh02 / {COMPONENT}-on-release"
+            query = urllib.parse.urlencode({"check_name": check_name, "per_page": 100})
+            url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/{COMMIT_SHA}/check-runs?{query}"
+            curl_config = (
+                f'header = "Authorization: Bearer {os.environ["GH_TOKEN"]}"\n'
+                'header = "Accept: application/vnd.github+json"\n'
+                f'url = "{url}"\n'
+            )
+            try:
+                out = subprocess.run(
+                    ["curl", "-sf", "--max-time", "15", "-K", "-"],
+                    input=curl_config,
+                    capture_output=True, text=True, check=True, timeout=20,
+                )
+                data = json.loads(out.stdout)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                     FileNotFoundError, json.JSONDecodeError):
+                print(f"::warning::check-run lookup for {COMPONENT} failed, will retry", flush=True)
+                return False
+            for check_run in data.get("check_runs", []):
+                if check_run.get("name") == check_name and check_run.get("status") == "completed":
+                    conclusion = check_run.get("conclusion") or ""
+                    return conclusion not in ("", "success", "neutral", "skipped")
+            return False
+
+        deadline = time.time() + TIMEOUT_SECONDS
+        found = None
+        while time.time() < deadline:
+            found = find_component()
+            if found:
+                break
+            if check_run_failed():
+                print(f"::error::Konflux build for {COMPONENT} failed (confirmed via its own GitHub check-run) -- not waiting out the remaining timeout")
+                sys.exit(1)
+            describe_pending_state()
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            print(f"::error::Timed out waiting for {COMPONENT}'s Konflux release build")
+            sys.exit(1)
+
+        # The image ref itself isn't logged (it's an internal Konflux
+        # workload-registry path) -- component.json carries it forward
+        # for the next job to consume.
+        print(f"{COMPONENT}: build complete, tests passed")
+        with open("component.json", "w") as f:
+            json.dump(found, f)
+        PYEOF
+
+    - name: Upload chart component build fragment
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+      with:
+        name: konflux-prod-chart-build-${{ matrix.component }}
+        path: component.json
+        retention-days: 1
+
+  release-prod-chart:
+    name: Assemble and release prod chart Snapshot
+    # Gated on stamp-prod-chart actually having pushed its tag (not just
+    # its job result, same reasoning as the staging pipeline's identical
+    # tag-pushed gating) and on wait-for-prod-chart-build having
+    # produced all 11 fragments.
+    needs: [resolve-and-verify, stamp-prod-chart, wait-for-prod-chart-build]
+    if: |
+      always() && !cancelled() &&
+      needs.stamp-prod-chart.outputs.tag-pushed == 'true' &&
+      needs.wait-for-prod-chart-build.result == 'success'
+    environment: production
+    runs-on: osac-ci
+    timeout-minutes: 100
+    continue-on-error: true
+    permissions:
+      contents: read
+    outputs:
+      release-outcome: ${{ steps.release.outcome }}
+    env:
+      RELEASE_VERSION: ${{ github.event.inputs.release_version }}
+
+    steps:
+    # One fragment per component, each written by wait-for-prod-chart-
+    # build's own matrix row -- a job that succeeded (this job's own
+    # needs: above requires it) produced exactly 11.
+    - name: Download chart component build fragments
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+      with:
+        pattern: konflux-prod-chart-build-*
+        path: konflux-prod-chart-build-fragments
+
+    - name: Log in to Konflux cluster
+      uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
+      with:
+        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
+        namespace: osac-tenant
+
+    # Identical logic to trigger-konflux-chart-staging-release's own
+    # step (assemble an override Snapshot from the 11 fragments, wait
+    # for its own integration test, then create+poll a Release) --
+    # targeting osac-charts-prod instead of osac-charts-stage, and
+    # naming the Snapshot/Release off this run's own id/attempt rather
+    # than the original release's run-attempt, since this is a separate
+    # workflow dispatched independently, potentially long after the
+    # original staging release ran.
+    - name: Assemble override Snapshot and create prod Release
+      id: release
+      env:
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PYEOF'
+        import glob
+        import json
+        import os
+        import subprocess
+        import sys
+        import time
+
+        RELEASE_VERSION = os.environ["RELEASE_VERSION"]
+        RUN_ID = os.environ["RUN_ID"]
+        RUN_ATTEMPT = os.environ["RUN_ATTEMPT"]
         NAMESPACE = "osac-tenant"
         RELEASE_PLAN = "osac-charts-prod"
         POLL_INTERVAL_SECONDS = 30
@@ -522,6 +975,97 @@ jobs:
             lowered = stderr.lower()
             return "unauthorized" in lowered or "forbidden" in lowered
 
+        found = {}
+        for path in sorted(glob.glob("konflux-prod-chart-build-fragments/konflux-prod-chart-build-*/component.json")):
+            with open(path) as f:
+                component = json.load(f)
+            found[component["name"]] = component
+
+        EXPECTED = {
+            "osac-chart", "osac-operator-chart", "osac-operator-crds-chart",
+            "fulfillment-service-chart", "osac-aap-chart",
+            "bare-metal-fulfillment-operator-chart",
+            "bare-metal-fulfillment-operator-crds-chart", "osac-metering-chart",
+            "osac-csi-driver-chart", "osac-csi-backends-chart", "osac-ui-chart",
+        }
+        missing = EXPECTED - found.keys()
+        unexpected = found.keys() - EXPECTED
+        if missing or unexpected:
+            print(f"::error::Chart fragment set mismatch -- missing={sorted(missing)} unexpected={sorted(unexpected)}")
+            sys.exit(1)
+
+        print("All prod chart components built and passed tests:")
+        for name in found:
+            print(f"  {name}: ready")
+
+        slug = RELEASE_VERSION.replace(".", "-")
+        resource_name = f"osac-charts-release-v{slug}-prod-r{RUN_ID}a{RUN_ATTEMPT}"
+        snapshot = {
+            "apiVersion": "appstudio.redhat.com/v1alpha1",
+            "kind": "Snapshot",
+            "metadata": {
+                "name": resource_name,
+                "namespace": NAMESPACE,
+                "labels": {"test.appstudio.openshift.io/type": "override"},
+            },
+            "spec": {
+                "application": "osac",
+                "components": [
+                    {
+                        "name": n,
+                        "containerImage": component["containerImage"],
+                        **({"source": component["source"]} if "source" in component else {}),
+                    }
+                    for n, component in found.items()
+                ],
+            },
+        }
+        with open("/tmp/prod-chart-snapshot.json", "w") as f:
+            json.dump(snapshot, f)
+        try:
+            subprocess.run(
+                ["oc", "apply", "-f", "/tmp/prod-chart-snapshot.json"],
+                capture_output=True, text=True, check=True,
+            )
+        except subprocess.CalledProcessError:
+            print("::error::oc apply failed for the override Snapshot")
+            sys.exit(1)
+        print(f"Created override Snapshot {resource_name}")
+
+        deadline = time.time() + TIMEOUT_SECONDS
+        while time.time() < deadline:
+            try:
+                out = subprocess.run(
+                    ["oc", "get", "snapshot", resource_name, "-n", NAMESPACE, "-o", "json"],
+                    capture_output=True, text=True, check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                stderr = e.stderr or ""
+                if is_permanent_auth_error(stderr):
+                    print("::error::oc get snapshot failed with a permanent auth/RBAC error")
+                    raise
+                print("::warning::oc get snapshot failed, will retry", flush=True)
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
+            conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
+            if condition_true(conditions, "AppStudioTestSucceeded"):
+                break
+            if condition_false(conditions, "AppStudioTestSucceeded"):
+                print(f"::error::Override snapshot {resource_name} failed its integration tests")
+                sys.exit(1)
+            if conditions:
+                # Only type/status/reason (short, enum-like) are logged --
+                # a condition's free-text message can embed internal
+                # URLs/paths.
+                summary = "; ".join(f"{c.get('type')}={c.get('status')} ({c.get('reason')})" for c in conditions)
+                print(f"[{resource_name}] {summary}", flush=True)
+            else:
+                print(f"Waiting on {resource_name}'s integration tests -- no conditions reported yet", flush=True)
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            print(f"::error::Timed out waiting for {resource_name}'s integration tests")
+            sys.exit(1)
+
         def apply_release(release_file, release_name, max_apply_retries=3, apply_retry_seconds=15):
             for i in range(1, max_apply_retries + 1):
                 try:
@@ -530,12 +1074,12 @@ jobs:
                 except subprocess.CalledProcessError as e:
                     stderr = e.stderr or ""
                     if is_permanent_auth_error(stderr):
-                        print(f"::error::oc apply failed with a permanent auth/RBAC error: {stderr.strip()}")
+                        print("::error::oc apply failed with a permanent auth/RBAC error")
                         raise
                     if i == max_apply_retries:
-                        print(f"::error::oc apply failed {max_apply_retries} times for {release_name}: {stderr.strip()}")
+                        print(f"::error::oc apply failed {max_apply_retries} times for {release_name}")
                         raise
-                    print(f"::warning::oc apply failed for {release_name}, retrying same apply: {stderr.strip()}")
+                    print(f"::warning::oc apply failed for {release_name}, retrying same apply")
                     time.sleep(apply_retry_seconds)
 
         def poll_release(release_name, timeout_seconds):
@@ -549,25 +1093,24 @@ jobs:
                 except subprocess.CalledProcessError as e:
                     stderr = e.stderr or ""
                     if is_permanent_auth_error(stderr):
-                        print(f"::error::oc get release failed with a permanent auth/RBAC error: {stderr.strip()}")
+                        print("::error::oc get release failed with a permanent auth/RBAC error")
                         raise
-                    print(f"::warning::oc get release failed, will retry: {stderr.strip()}", flush=True)
+                    print("::warning::oc get release failed, will retry", flush=True)
                     time.sleep(POLL_INTERVAL_SECONDS)
                     continue
                 conditions = json.loads(out.stdout).get("status", {}).get("conditions", [])
                 if condition_true(conditions, "Released"):
-                    print(f"::notice::Konflux production release succeeded: {release_name}")
+                    print(f"::notice::Konflux production chart release succeeded: {release_name}")
                     return "succeeded"
                 if condition_false(conditions, "Released") and any(
                     c.get("type") == "Released" and c.get("reason") == "Failed" for c in conditions
                 ):
-                    print(f"::warning::Konflux production release failed: {release_name}")
+                    print(f"::warning::Konflux production chart release failed: {release_name}")
                     return "failed"
                 if conditions:
-                    summary = "; ".join(
-                        f"{c.get('type')}={c.get('status')} ({c.get('reason')}: {c.get('message')})"
-                        for c in conditions
-                    )
+                    # Only type/status/reason are logged -- see the
+                    # identical reasoning on the Snapshot-wait loop above.
+                    summary = "; ".join(f"{c.get('type')}={c.get('status')} ({c.get('reason')})" for c in conditions)
                 else:
                     summary = f"Waiting on {release_name} -- no conditions yet"
                 print(f"[{release_name}] {summary}", flush=True)
@@ -575,46 +1118,41 @@ jobs:
             print(f"::warning::Timed out waiting for {release_name}")
             return "timeout"
 
-        # See promote-image's identical comments on why the "-prod" suffix
-        # and the RUN_TAG/duplicate-check both matter -- same reasoning,
-        # applied to the chart Snapshot/Release.
-        RUN_TAG = f"r{os.environ['GITHUB_RUN_ID']}a{os.environ['GITHUB_RUN_ATTEMPT']}"
-
-        existing = subprocess.run(
-            ["oc", "get", "release", "-n", NAMESPACE, "-o", "json"],
-            capture_output=True, text=True, check=True,
-        )
+        # Don't create a redundant prod Release if a prior dispatch
+        # already promoted this exact Snapshot to this exact
+        # ReleasePlan successfully -- same reasoning as promote-image's
+        # identical check.
+        try:
+            existing = subprocess.run(
+                ["oc", "get", "release", "-n", NAMESPACE, "-o", "json"],
+                capture_output=True, text=True, check=True,
+            )
+        except subprocess.CalledProcessError:
+            print("::error::oc get release failed while checking for an existing Release")
+            sys.exit(1)
         for item in json.loads(existing.stdout).get("items", []):
             spec = item.get("spec", {})
-            if spec.get("snapshot") == SNAPSHOT and spec.get("releasePlan") == RELEASE_PLAN:
+            if spec.get("snapshot") == resource_name and spec.get("releasePlan") == RELEASE_PLAN:
                 conditions = item.get("status", {}).get("conditions", [])
                 if condition_true(conditions, "Released"):
-                    print(f"::notice::{SNAPSHOT} was already promoted to {RELEASE_PLAN} by {item['metadata']['name']} -- nothing to do")
+                    print(f"::notice::{resource_name} was already promoted to {RELEASE_PLAN} by {item['metadata']['name']} -- nothing to do")
                     sys.exit(0)
-                # Release names include RUN_TAG, so each dispatch creates
-                # a distinct object -- a Release that's merely still
-                # in-flight (not yet Released=True, and not terminally
-                # Failed either) would NOT be caught by the check above,
-                # letting a second dispatch race ahead and create another
-                # Release for the same Snapshot while the first is still
-                # running. Only a confirmed terminal Failed is safe to
-                # proceed past; anything else must block.
                 is_terminal_failure = any(
                     c.get("type") == "Released" and c.get("status") == "False" and c.get("reason") == "Failed"
                     for c in conditions
                 )
                 if not is_terminal_failure:
-                    print(f"::error::Release {item['metadata']['name']} for {SNAPSHOT} against {RELEASE_PLAN} is still in flight -- not creating a second one. Wait for it to finish or delete it, then re-dispatch.")
+                    print(f"::error::Release {item['metadata']['name']} for {resource_name} against {RELEASE_PLAN} is still in flight -- not creating a second one. Wait for it to finish or delete it, then re-dispatch.")
                     sys.exit(1)
 
         released = False
         for attempt_num in range(1, MAX_RELEASE_ATTEMPTS + 1):
-            release_name = f"{SNAPSHOT}-prod-{RUN_TAG}" if attempt_num == 1 else f"{SNAPSHOT}-prod-{RUN_TAG}-retry{attempt_num - 1}"
+            release_name = f"{resource_name}-release" if attempt_num == 1 else f"{resource_name}-release-retry{attempt_num - 1}"
             release = {
                 "apiVersion": "appstudio.redhat.com/v1alpha1",
                 "kind": "Release",
                 "metadata": {"name": release_name, "namespace": NAMESPACE},
-                "spec": {"releasePlan": RELEASE_PLAN, "snapshot": SNAPSHOT},
+                "spec": {"releasePlan": RELEASE_PLAN, "snapshot": resource_name},
             }
             with open("/tmp/prod-chart-release.json", "w") as f:
                 json.dump(release, f)
@@ -629,13 +1167,13 @@ jobs:
                 sys.exit(1)
 
         if not released:
-            print(f"::error::Production chart release failed after {MAX_RELEASE_ATTEMPTS} attempts: {SNAPSHOT}")
+            print(f"::error::Production chart release failed after {MAX_RELEASE_ATTEMPTS} attempts: {resource_name}")
             sys.exit(1)
         PYEOF
 
   notify-promotion:
     name: Notify production promotion result
-    needs: [resolve-and-verify, promote-image, promote-chart]
+    needs: [resolve-and-verify, promote-image, stamp-prod-chart, wait-for-prod-chart-build, release-prod-chart]
     if: always()
     runs-on: osac-ci
     timeout-minutes: 10
@@ -659,7 +1197,17 @@ jobs:
         IMAGE_READY: ${{ needs.resolve-and-verify.outputs.image-ready }}
         CHART_READY: ${{ needs.resolve-and-verify.outputs.chart-ready }}
         IMAGE_RESULT: ${{ needs.promote-image.result }}
-        CHART_RESULT: ${{ needs.promote-chart.outputs.release-outcome || needs.promote-chart.result }}
+        ALREADY_RELEASED: ${{ needs.stamp-prod-chart.outputs.already-released }}
+        STAMP_RESULT: ${{ needs.stamp-prod-chart.result == 'skipped' && 'skipped' || ((needs.stamp-prod-chart.outputs.tag-pushed == 'true' || needs.stamp-prod-chart.outputs.already-released == 'true') && 'success' || 'failure') }}
+        # release-prod-chart's job-level continue-on-error: true masks
+        # an early-step failure (e.g. the Konflux login or the artifact
+        # download, both before the "release" step) as job .result ==
+        # 'success', with steps.release.outcome left at 'skipped' since
+        # that step never ran. Only a genuinely skipped JOB (its own
+        # if: condition false) should read 'skipped' here; an outcome
+        # of 'skipped' on top of a 'success' job result means something
+        # failed before the release step got a chance to run at all.
+        CHART_RESULT: ${{ needs.release-prod-chart.result == 'skipped' && 'skipped' || (needs.release-prod-chart.outputs.release-outcome == 'skipped' && 'failure' || needs.release-prod-chart.outputs.release-outcome) }}
         WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail
@@ -667,9 +1215,31 @@ jobs:
         [[ "${IMAGE_READY}" != "true" ]] && IMAGE_TEXT="skipped (Snapshot or ReleasePlan not found)"
         CHART_TEXT="${CHART_RESULT}"
         [[ "${CHART_READY}" != "true" ]] && CHART_TEXT="skipped (Snapshot or ReleasePlan not found)"
+        # stamp-prod-chart has continue-on-error: true, so its own
+        # .result always reads 'success' downstream regardless of
+        # whether it actually pushed the tag -- STAMP_RESULT above
+        # already resolves that via its own tag-pushed/already-released
+        # outputs, same pattern as the staging pipeline's identical
+        # caveat. Checking == 'failure' specifically (not != 'success')
+        # matters: a genuinely skipped stamp-prod-chart (e.g. image
+        # promotion was attempted and failed, so chart promotion is
+        # correctly withheld) must stay "skipped", not get mislabeled as
+        # a stamping failure that never actually happened.
+        [[ "${CHART_READY}" == "true" && "${STAMP_RESULT}" == "failure" ]] && CHART_TEXT="failure (stamping chart for production failed, see stamp-prod-chart)"
+        # When already-released short-circuits stamp-prod-chart,
+        # release-prod-chart never runs at all (its own if: requires
+        # tag-pushed == 'true'), so CHART_RESULT above would otherwise
+        # read plain "skipped" -- misleading, since the chart genuinely
+        # is already live in production. Report it as success instead.
+        CHART_SUCCESS=false
+        [[ "${CHART_TEXT}" == "success" ]] && CHART_SUCCESS=true
+        if [[ "${CHART_READY}" == "true" && "${ALREADY_RELEASED}" == "true" ]]; then
+          CHART_TEXT="success (already promoted previously)"
+          CHART_SUCCESS=true
+        fi
 
         HEADER_TEXT=":warning: ${VERSION} - Production promotion incomplete"
-        if [[ "${IMAGE_TEXT}" == "success" && "${CHART_TEXT}" == "success" ]]; then
+        if [[ "${IMAGE_TEXT}" == "success" && "${CHART_SUCCESS}" == "true" ]]; then
           HEADER_TEXT=":white_check_mark: ${VERSION} - Promoted to production"
         elif [[ "${IMAGE_TEXT}" == "failure" ]]; then
           HEADER_TEXT=":x: ${VERSION} - Production promotion failed"

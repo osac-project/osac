@@ -35,9 +35,18 @@ def parent_entry():
 
 def subnet_entry(uid, cidr, vlan_id, *, vip_cidr=""):
     subnet = ipaddress.ip_network(cidr)
-    dhcp_end = subnet.broadcast_address - 1
+    physical = [str(subnet)]
+    vip = []
     if vip_cidr:
-        dhcp_end = ipaddress.ip_network(vip_cidr).network_address - 1
+        vip_network = ipaddress.ip_network(vip_cidr)
+        first = subnet.network_address + 2
+        last = vip_network.network_address - 1
+        physical = (
+            [str(block) for block in ipaddress.summarize_address_range(first, last)]
+            if first <= last
+            else []
+        )
+        vip = [str(vip_network)]
     return {
         "uid": uid,
         "virtual_network_uid": VN_UID,
@@ -46,189 +55,115 @@ def subnet_entry(uid, cidr, vlan_id, *, vip_cidr=""):
         "vlan_id": vlan_id,
         "vlan_interface": f"s{hashlib.sha256(uid.encode()).hexdigest()[:12]}",
         "trunk_interface": "eth1",
-        "gateway_ipv4": str(subnet.network_address + 1),
-        "dhcp_range_start": str(subnet.network_address + 2),
-        "dhcp_range_end": str(dhcp_end),
-        "vip_cidr": vip_cidr,
+        "ipam": {
+            "gateway_ipv4": str(subnet.network_address + 1),
+            "overlay_ipv4_cidrs": [],
+            "physical_ipv4_cidrs": physical,
+            "lb_vip_ipv4_cidrs": vip,
+        },
         "phase": "provisioning",
     }
 
 
-def test_parse_switch_vlan_exclusions_includes_ranges_pvids_and_nvue_reservations():
-    bridge = json.dumps(
-        [
+def dhcp_attachment(uid, subnet_uid, mac_address, address):
+    return {
+        "uid": uid,
+        "subnet_uid": subnet_uid,
+        "mac_address": mac_address,
+        "address": address,
+        "phase": "ready",
+    }
+
+
+def switch_state(interfaces, used, reserved=()):
+    return {
+        "interfaces": [
             {
-                "ifname": "bridge",
-                "vlans": [{"vlan": 1, "flags": ["PVID", "Egress Untagged"]}],
-            },
-            {
-                "ifname": "swp1",
-                "vlans": [{"vlan": 100, "vlanEnd": 102}, {"vlan": 220}],
-            },
-        ]
-    )
-    reserved = json.dumps(
-        {
-            "internal": {"range": {"operational": "3700-3702", "applied": "3700-3702"}},
-            "l3-vni-vlan": {
-                "begin": {"operational": 4000, "applied": 4001},
-                "end": {"operational": 4005, "applied": 4006},
-            },
-        }
-    )
-
-    observed = agentless_net_subnet.parse_switch_vlan_exclusions(bridge, reserved)
-
-    assert observed == {1, 100, 101, 102, 220, 3700, 3701, 3702, 4000, 4001, 4002, 4003, 4004, 4005, 4006}
+                "name": name,
+                "vlan_ids": vlan_ids,
+                "tagged_vlan_ids": [],
+                "untagged_vlan_ids": [],
+                "pvid": None,
+            }
+            for name, vlan_ids in interfaces
+        ],
+        "used_vlan_ids": list(used),
+        "reserved_vlan_ids": list(reserved),
+    }
 
 
-def test_parse_switch_vlan_exclusions_accepts_trailing_newline_in_nvue_range():
-    bridge = json.dumps([{"ifname": "swp1", "vlans": []}])
-    reserved = json.dumps(
-        {
-            "internal": {"range": "3725-3999\n"},
-            "l3-vni-vlan": {"begin": 4000, "end": 4064},
-        }
+def test_parse_switch_vlan_exclusions_merges_used_and_reserved_vlan_ids():
+    state = switch_state(
+        [("br_default", [1]), ("swp1", [100, 101, 102, 220])],
+        [1, 100, 101, 102, 220],
+        [3700, 3701, 3702, 4000, 4001, 4002],
     )
 
-    observed = agentless_net_subnet.parse_switch_vlan_exclusions(bridge, reserved)
+    observed = agentless_net_subnet.parse_switch_vlan_exclusions(state)
 
-    assert observed == set(range(3725, 4000)) | set(range(4000, 4065))
-
-
-def test_parse_switch_vlan_exclusions_uses_switchd_range_when_nvue_omits_it():
-    bridge = json.dumps([{"ifname": "br_default", "vlans": [{"vlan": 1}]}])
-    reserved = json.dumps({"internal": {}, "l3-vni-vlan": {"begin": 4000, "end": 4064}})
-
-    observed = agentless_net_subnet.parse_switch_vlan_exclusions(
-        bridge, reserved, "resv_vlan_range = 3725-3999\n"
-    )
-
-    assert observed == {1} | set(range(3725, 4000)) | set(range(4000, 4065))
+    assert observed == {1, 100, 101, 102, 220, 3700, 3701, 3702, 4000, 4001, 4002}
 
 
-def test_parse_switch_vlan_exclusions_rejects_malformed_switchd_range():
-    bridge = json.dumps([{"ifname": "br_default", "vlans": []}])
-    reserved = json.dumps({"internal": {}, "l3-vni-vlan": {"begin": 4000, "end": 4064}})
+def test_parse_switch_vlan_exclusions_accepts_an_empty_reserved_list():
+    state = switch_state([("br_default", [1])], [1])
 
-    with pytest.raises(
-        agentless_net_subnet.SubnetProviderError,
-        match="Cumulus switchd internal reserved VLAN range is malformed",
-    ):
-        agentless_net_subnet.parse_switch_vlan_exclusions(
-            bridge, reserved, "reserved_vlan_range = 3725-3999"
-        )
+    assert agentless_net_subnet.parse_switch_vlan_exclusions(state) == {1}
 
 
 @pytest.mark.parametrize(
-    ("contents", "mac_address", "now", "expected"),
-    [
-        (
-            b"200 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n",
-            "AA:BB:CC:DD:EE:FF",
-            100,
-            {"ip_address": "10.20.1.22", "mac_address": "aa:bb:cc:dd:ee:ff"},
-        ),
-        (
-            b"0 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n",
-            "aa:bb:cc:dd:ee:ff",
-            100,
-            {"ip_address": "10.20.1.22", "mac_address": "aa:bb:cc:dd:ee:ff"},
-        ),
-        (
-            b"100 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n",
-            "aa:bb:cc:dd:ee:ff",
-            100,
-            None,
-        ),
-        (
-            b"200 aa:bb:cc:dd:ee:ff 10.20.2.22 client-a *\n",
-            "aa:bb:cc:dd:ee:ff",
-            100,
-            None,
-        ),
-        (
-            b"200 02:00:00:00:00:02 10.20.1.22 client-a *\n",
-            "aa:bb:cc:dd:ee:ff",
-            100,
-            None,
-        ),
-    ],
+    "state",
+    (
+        "not-a-mapping",
+        {},
+        {"interfaces": [], "used_vlan_ids": [], "reserved_vlan_ids": []},
+        {
+            "interfaces": [{"name": "", "vlan_ids": []}],
+            "used_vlan_ids": [],
+            "reserved_vlan_ids": [],
+        },
+        {
+            "interfaces": [
+                {"name": "swp1", "vlan_ids": []},
+                {"name": "swp1", "vlan_ids": []},
+            ],
+            "used_vlan_ids": [],
+            "reserved_vlan_ids": [],
+        },
+        {
+            "interfaces": [{"name": "swp1", "vlan_ids": ["10"]}],
+            "used_vlan_ids": [10],
+            "reserved_vlan_ids": [],
+        },
+        {
+            "interfaces": [{"name": "swp1", "vlan_ids": [0]}],
+            "used_vlan_ids": [0],
+            "reserved_vlan_ids": [],
+        },
+        {
+            "interfaces": [{"name": "swp1", "vlan_ids": [4095]}],
+            "used_vlan_ids": [4095],
+            "reserved_vlan_ids": [],
+        },
+        {
+            "interfaces": [{"name": "swp1", "vlan_ids": [10, 10]}],
+            "used_vlan_ids": [10],
+            "reserved_vlan_ids": [],
+        },
+        {
+            "interfaces": [{"name": "swp1", "vlan_ids": [10]}],
+            "used_vlan_ids": [10, 20],
+            "reserved_vlan_ids": [],
+        },
+        {
+            "interfaces": [{"name": "swp1", "vlan_ids": [10]}],
+            "used_vlan_ids": [10],
+            "reserved_vlan_ids": "3700",
+        },
+    ),
 )
-def test_find_active_dhcp_lease_matches_mac_range_and_expiry(
-    contents, mac_address, now, expected
-):
-    subnet = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
-
-    result = agentless_net_subnet.find_active_dhcp_lease(
-        contents, subnet, mac_address, now=now
-    )
-
-    assert result == expected
-
-
-def test_find_active_dhcp_lease_rejects_ambiguous_records():
-    subnet = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
-    contents = (
-        b"200 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n"
-        b"300 AA:BB:CC:DD:EE:FF 10.20.1.23 client-a *\n"
-    )
-
-    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="multiple active"):
-        agentless_net_subnet.find_active_dhcp_lease(
-            contents, subnet, "aa:bb:cc:dd:ee:ff", now=100
-        )
-
-
-def test_find_active_dhcp_lease_rejects_bad_mac_and_malformed_file():
-    subnet = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
-
-    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="valid NIC MAC"):
-        agentless_net_subnet.find_active_dhcp_lease(b"", subnet, "not-a-mac", now=100)
-    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="malformed"):
-        agentless_net_subnet.find_active_dhcp_lease(
-            b"malformed\n", subnet, "aa:bb:cc:dd:ee:ff", now=100
-        )
-
-
-def test_read_lease_file_read_only_requires_initialized_private_regular_file(tmp_path):
-    lease_dir = tmp_path / "dhcp" / VN_UID
-    lease_dir.mkdir(parents=True, mode=0o700)
-    lease_dir.chmod(0o700)
-    marker = lease_dir / ".initialized"
-    marker.write_text("initialized\n")
-    marker.chmod(0o600)
-    lease_file = lease_dir / "dnsmasq.leases"
-    contents = b"200 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n"
-    lease_file.write_bytes(contents)
-    lease_file.chmod(0o600)
-
-    assert agentless_net_subnet.read_lease_file_read_only(lease_file) == contents
-    assert lease_file.stat().st_mode & 0o777 == 0o600
-
-    lease_file.chmod(0o644)
-    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="unsafe"):
-        agentless_net_subnet.read_lease_file_read_only(lease_file)
-
-    lease_file.unlink()
-    lease_file.symlink_to(marker)
-    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="safely open"):
-        agentless_net_subnet.read_lease_file_read_only(lease_file)
-
-
-@pytest.mark.parametrize(
-    ("bridge", "reserved"),
-    [
-        ("not-json", '{"internal":{"range":"10-20"},"l3-vni-vlan":{"begin":30,"end":40}}'),
-        ('[{"ifname":"swp1","vlans":[{"vlan":"10"}]}]', '{"internal":{"range":"10-20"},"l3-vni-vlan":{"begin":30,"end":40}}'),
-        ('[{"ifname":"swp1","vlans":[{"vlan":0}]}]', '{"internal":{"range":"10-20"},"l3-vni-vlan":{"begin":30,"end":40}}'),
-        ('[{"ifname":"swp1","vlans":[]}]', '{"internal":{"range":"bad"},"l3-vni-vlan":{"begin":30,"end":40}}'),
-        ('[{"ifname":"swp1","vlans":[]}]', '{"internal":{"range":"10-20"}}'),
-    ],
-)
-def test_parse_switch_vlan_exclusions_rejects_unverifiable_output(bridge, reserved):
+def test_parse_switch_vlan_exclusions_rejects_unverifiable_state(state):
     with pytest.raises(agentless_net_subnet.SubnetProviderError):
-        agentless_net_subnet.parse_switch_vlan_exclusions(bridge, reserved)
+        agentless_net_subnet.parse_switch_vlan_exclusions(state)
 
 
 def test_resolve_dhcp_manager_reuses_existing_service_file(tmp_path, monkeypatch):
@@ -540,13 +475,18 @@ def test_dhcp_config_contains_sorted_scopes_gateway_and_vip_exclusions(tmp_path)
     first = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
     second = subnet_entry(
         SUBNET_B_UID,
-        "10.20.2.0/30",
+        "10.20.2.0/28",
         101,
-        vip_cidr="10.20.2.3/32",
+        vip_cidr="10.20.2.15/32",
     )
 
+    attachments = [
+        dhcp_attachment("bbbbbbbb", SUBNET_B_UID, "aa:bb:cc:dd:ee:02", "10.20.2.22"),
+        dhcp_attachment("cccccccc", SUBNET_A_UID, "aa:bb:cc:dd:ee:03", "10.20.1.23"),
+        dhcp_attachment("aaaaaaaa", SUBNET_A_UID, "aa:bb:cc:dd:ee:01", "10.20.1.21"),
+    ]
     config = agentless_net_subnet._render_dhcp_config(
-        parent_entry(), [second, first], paths
+        parent_entry(), [second, first], attachments, paths
     ).decode()
 
     assert config.index(f"interface={first['vlan_interface']}") < config.index(
@@ -555,9 +495,15 @@ def test_dhcp_config_contains_sorted_scopes_gateway_and_vip_exclusions(tmp_path)
     assert "port=0\n" in config
     assert "no-resolv\n" in config
     assert "dhcp-option=option:dns-server\n" in config
-    assert "dhcp-range=set:" + first["vlan_interface"] + ",10.20.1.2,10.20.1.254,255.255.255.0,12h" in config
-    assert "dhcp-range=set:" + second["vlan_interface"] + ",10.20.2.2,10.20.2.2,255.255.255.252,12h" in config
+    assert "dhcp-range=set:" + first["vlan_interface"] + ",10.20.1.0,static,255.255.255.0,12h" in config
+    assert "dhcp-range=set:" + second["vlan_interface"] + ",10.20.2.0,static,255.255.255.240,12h" in config
     assert "option:router,10.20.2.1" in config
+    host_entries = [line for line in config.splitlines() if line.startswith("dhcp-host=")]
+    assert host_entries == [
+        f"dhcp-host=tag:{first['vlan_interface']},aa:bb:cc:dd:ee:01,id:*,10.20.1.21,12h",
+        f"dhcp-host=tag:{first['vlan_interface']},aa:bb:cc:dd:ee:03,id:*,10.20.1.23,12h",
+        f"dhcp-host=tag:{second['vlan_interface']},aa:bb:cc:dd:ee:02,id:*,10.20.2.22,12h",
+    ]
 
 
 def test_dhcp_restart_preserves_existing_valid_lease_bytes(monkeypatch, tmp_path):
@@ -571,22 +517,33 @@ def test_dhcp_restart_preserves_existing_valid_lease_bytes(monkeypatch, tmp_path
     state_paths["leases"].chmod(0o600)
     state_paths["marker"].write_bytes(b"initialized\n")
     state_paths["marker"].chmod(0o600)
+    attachments = [
+        dhcp_attachment(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            SUBNET_A_UID,
+            "aa:bb:cc:dd:ee:ff",
+            "10.20.1.22",
+        )
+    ]
 
     first_changed = agentless_net_subnet.ensure_subnet_data_plane(
-        parent_entry(), [first], "systemd"
+        parent_entry(), [first], attachments, "systemd"
     )
     assert first_changed is True
     assert service["active"] is True
     assert state_paths["leases"].read_bytes() == original_leases
 
     second_changed = agentless_net_subnet.ensure_subnet_data_plane(
-        parent_entry(), [first, second], "systemd"
+        parent_entry(), [first, second], attachments, "systemd"
     )
 
     assert second_changed is True
     assert service["restarts"] == 1
     assert state_paths["leases"].read_bytes() == original_leases
-    assert b"10.20.2.2,10.20.2.254" in state_paths["config"].read_bytes()
+    assert (
+        f"dhcp-range=set:{second['vlan_interface']},10.20.2.0,static,255.255.255.0,12h".encode()
+        in state_paths["config"].read_bytes()
+    )
     assert paths["units"].joinpath(f"agentless-dhcp@{VN_UID}.service").exists()
     lifecycle = [
         command[1]
@@ -604,8 +561,28 @@ def test_dhcp_prune_stops_dnsmasq_before_reading_and_replacing_open_lease_file(
     _, _, _, _, _, service = provider_testbed(monkeypatch, tmp_path)
     first = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
     removed = subnet_entry(SUBNET_B_UID, "10.20.2.0/24", 101)
+    attachments = [
+        dhcp_attachment(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            SUBNET_A_UID,
+            "aa:bb:cc:dd:ee:ff",
+            "10.20.1.22",
+        ),
+        dhcp_attachment(
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            SUBNET_A_UID,
+            "aa:bb:cc:dd:ee:11",
+            "10.20.1.23",
+        ),
+        dhcp_attachment(
+            "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            SUBNET_B_UID,
+            "4a:83:40:2c:97:ca",
+            "10.20.2.172",
+        ),
+    ]
     agentless_net_subnet.ensure_subnet_data_plane(
-        parent_entry(), [first, removed], dhcp_supervisor
+        parent_entry(), [first, removed], attachments, dhcp_supervisor
     )
 
     lease_path = agentless_net_subnet._state_paths(VN_UID)["leases"]
@@ -623,7 +600,7 @@ def test_dhcp_prune_stops_dnsmasq_before_reading_and_replacing_open_lease_file(
 
         service["on_stop"] = flush_open_lease_stream
         changed = agentless_net_subnet.prepare_subnet_delete_data_plane(
-            parent_entry(), removed, [first], dhcp_supervisor
+            parent_entry(), removed, [first], attachments, dhcp_supervisor
         )
 
     assert changed is True
@@ -864,6 +841,7 @@ def test_dhcp_update_restores_snapshot_if_start_fails_after_taking_effect(
         agentless_net_subnet._ensure_dhcp_service(
             parent_entry(),
             [first],
+            [],
             dhcp_supervisor,
             paths,
             interface_changed=True,
@@ -993,10 +971,24 @@ def test_removed_subnet_leases_are_pruned_before_range_reuse(monkeypatch, tmp_pa
     first = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
     removed = subnet_entry(SUBNET_B_UID, "10.20.2.0/24", 101)
     replacement = subnet_entry(
-        "44444444-4444-4444-8444-444444444444", "10.20.2.0/30", 101
+        "44444444-4444-4444-8444-444444444444", "10.20.2.0/28", 101
     )
+    attachments = [
+        dhcp_attachment(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            SUBNET_A_UID,
+            "aa:bb:cc:dd:ee:ff",
+            "10.20.1.22",
+        ),
+        dhcp_attachment(
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            SUBNET_B_UID,
+            "4a:83:40:2c:97:ca",
+            "10.20.2.172",
+        ),
+    ]
     agentless_net_subnet.ensure_subnet_data_plane(
-        parent_entry(), [first, removed], "supervisor"
+        parent_entry(), [first, removed], attachments, "supervisor"
     )
     lease_path = agentless_net_subnet._state_paths(VN_UID)["leases"]
     active_lease = b"1798765432 aa:bb:cc:dd:ee:ff 10.20.1.22 client-a *\n"
@@ -1008,7 +1000,7 @@ def test_removed_subnet_leases_are_pruned_before_range_reuse(monkeypatch, tmp_pa
     lease_path.chmod(0o600)
 
     changed = agentless_net_subnet.prepare_subnet_delete_data_plane(
-        parent_entry(), removed, [first], "supervisor"
+        parent_entry(), removed, [first], attachments, "supervisor"
     )
 
     assert changed is True
@@ -1017,13 +1009,13 @@ def test_removed_subnet_leases_are_pruned_before_range_reuse(monkeypatch, tmp_pa
     assert service["supervisor_restarts"] == 1
 
     agentless_net_subnet.ensure_subnet_data_plane(
-        parent_entry(), [first, replacement], "supervisor"
+        parent_entry(), [first, replacement], [attachments[0]], "supervisor"
     )
 
     assert lease_path.read_bytes() == active_lease
     expected_range = (
         f"dhcp-range=set:{replacement['vlan_interface']},"
-        "10.20.2.2,10.20.2.2,255.255.255.252,12h"
+        "10.20.2.0,static,255.255.255.240,12h"
     ).encode()
     config = paths["config"].joinpath(VN_UID, "dnsmasq.conf").read_bytes()
     assert expected_range in config

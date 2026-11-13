@@ -24,7 +24,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
-	"github.com/onsi/gomega/ghttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -89,10 +88,8 @@ var _ = Describe("MCP authorized discovery", func() {
 
 		httpServer := startInProcessMCPServer(ctx, "fulfillment-mcp-discovery-it")
 
-		adamSession := connectMCPDiscoveryCaller(ctx, httpServer.URL, "adam")
-		DeferCleanup(func() { Expect(adamSession.Close()).To(Succeed()) })
-		benSession := connectMCPDiscoveryCaller(ctx, httpServer.URL, "ben")
-		DeferCleanup(func() { Expect(benSession.Close()).To(Succeed()) })
+		adamSession := connectMCPCaller(ctx, httpServer.URL, "it-mcp-adam-discovery", "adam")
+		benSession := connectMCPCaller(ctx, httpServer.URL, "it-mcp-ben-discovery", "ben")
 
 		adamProjectsList, _ := listMCPDiscoveryResource(ctx, adamSession, mcpserver.ResourceTypeProject, adamProjectID)
 		Expect(resourceIDs(adamProjectsList)).To(ContainElement(adamProjectID))
@@ -152,8 +149,9 @@ var _ = Describe("MCP authorized discovery", func() {
 			for _, item := range decoded.Items {
 				Expect(item).To(HaveKey("id"))
 				Expect(item).To(HaveKey("name"))
+				Expect(item).To(HaveKey("version"))
 				Expect(item).To(HaveKey("type"))
-				Expect(item).To(HaveLen(3))
+				Expect(item).To(HaveLen(4))
 			}
 		}
 
@@ -210,21 +208,7 @@ var _ = Describe("MCP authorized discovery", func() {
 func grantMCPDiscoveryTenantAdmin(ctx context.Context, username string) func(context.Context) {
 	GinkgoHelper()
 
-	roleStatus, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet, "/roles/tenant-admin", nil)
-	Expect(err).ToNot(HaveOccurred())
-	if roleStatus == http.StatusNotFound {
-		code, _, createErr := tool.KeycloakAdminRequest(
-			ctx, http.MethodPost, "/roles", map[string]any{"name": "tenant-admin"},
-		)
-		Expect(createErr).ToNot(HaveOccurred())
-		Expect(code).To(Equal(http.StatusCreated))
-		roleStatus, body, err = tool.KeycloakAdminRequest(ctx, http.MethodGet, "/roles/tenant-admin", nil)
-		Expect(err).ToNot(HaveOccurred())
-	}
-	Expect(roleStatus).To(Equal(http.StatusOK))
-
-	var role map[string]any
-	Expect(json.Unmarshal(body, &role)).To(Succeed())
+	role := getOrCreateKeycloakTenantAdminRole(ctx)
 	roleID, ok := role["id"].(string)
 	Expect(ok).To(BeTrue())
 	Expect(roleID).ToNot(BeEmpty())
@@ -370,27 +354,6 @@ func createMCPDiscoverySecret(ctx context.Context, conn *grpc.ClientConn, caller
 		}
 	})
 	return secretID, secretBytes
-}
-
-func connectMCPDiscoveryCaller(ctx context.Context, endpoint, username string) *mcp.ClientSession {
-	tokenSource, err := tool.makeKeycloakTokenSource(ctx, username, usersPassword)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	httpClient := &http.Client{Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
-		token, err := tokenSource.Token(request.Context())
-		if err != nil {
-			return nil, err
-		}
-		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
-		return http.DefaultTransport.RoundTrip(request)
-	})}
-	client := mcp.NewClient(&mcp.Implementation{
-		Name: fmt.Sprintf("it-mcp-%s-discovery", username), Version: "0.1.0",
-	}, nil)
-	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: endpoint, HTTPClient: httpClient,
-	}, nil)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	return session
 }
 
 func listMCPDiscoveryResource(

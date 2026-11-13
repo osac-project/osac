@@ -1,46 +1,20 @@
+import { Code, ConnectError } from '@connectrpc/connect';
 import { screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { ComputeInstance } from '@osac/types';
 import { ComputeInstanceState } from '@osac/types';
-import { mockQueryResult } from '@osac/ui-components/test-utils/query';
 
 import { VmListPage } from './VmListPage';
+import type { MockTransportOverrides } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
-
-vi.mock('@osac/ui-components/api/v1/compute-instance', () => ({
-  useComputeInstances: vi.fn(),
-}));
-
-vi.mock('@osac/ui-components/api/v1/instance-types', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@osac/ui-components/api/v1/instance-types')>();
-  return {
-    ...actual,
-    useInstanceTypes: vi.fn(),
-  };
-});
-
-vi.mock('../../components/vm/VmActionsMenu', () => ({
-  VmActionsMenu: () => <button type="button">Actions</button>,
-}));
-
-vi.mock('../../components/vm/VmInstanceTypeLabel', () => ({
-  VmInstanceTypeLabel: ({
-    instanceTypeId,
-    instanceType,
-  }: {
-    instanceTypeId?: string;
-    instanceType?: { metadata?: { name?: string } };
-  }) => <span>{instanceType?.metadata?.name ?? instanceTypeId ?? '—'}</span>,
-}));
-
-const { useComputeInstances } = await import('@osac/ui-components/api/v1/compute-instance');
-const { useInstanceTypes } = await import('@osac/ui-components/api/v1/instance-types');
 
 const vm = {
   id: 'vm-1',
   metadata: { name: 'web-01' },
-  spec: { instanceType: { id: 'standard-4-8' } },
+  spec: {
+    instanceType: { id: 'standard-4-8', name: 'Standard 4 vCPU / 8 GiB' },
+  },
   status: {
     state: ComputeInstanceState.RUNNING,
     internalIpAddress: '10.0.0.5',
@@ -48,54 +22,42 @@ const vm = {
   },
 } as ComputeInstance;
 
-const renderPage = () => renderWithProviders(<VmListPage />, { session: { role: 'tenant-user' } });
-
-describe('VmListPage', () => {
-  beforeEach(() => {
-    vi.mocked(useComputeInstances).mockReturnValue({
-      data: [vm],
-      isLoading: false,
-      error: null,
-    } as ReturnType<typeof useComputeInstances>);
-
-    vi.mocked(useInstanceTypes).mockReturnValue({
-      data: [{ id: 'standard-4-8', metadata: { name: 'Standard 4 vCPU / 8 GiB' } }],
-      isLoading: false,
-      error: null,
-    } as ReturnType<typeof useInstanceTypes>);
+const renderPage = (transportOverrides?: MockTransportOverrides) =>
+  renderWithProviders(<VmListPage />, {
+    apiFixtures: { computeInstances: [vm] },
+    session: { role: 'tenant-user' },
+    transportOverrides,
   });
 
+describe('VmListPage', () => {
   it('shows an alert and still renders the table when instance types fail to load', async () => {
-    vi.mocked(useInstanceTypes).mockReturnValue(
-      mockQueryResult({
-        data: [],
-        isLoading: false,
-        error: new Error('Instance types unavailable'),
-      }),
+    const { user } = renderPage({
+      onPublicInstanceTypeList: () => {
+        throw new ConnectError('Instance types unavailable', Code.Unavailable);
+      },
+    });
+
+    expect(await screen.findByRole('link', { name: 'web-01' })).toBeInTheDocument();
+    expect(screen.getByText('Standard 4 vCPU / 8 GiB')).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole('button', { name: 'Filter instance type by All instance types' }),
     );
 
-    renderPage();
-
-    expect(await screen.findByText('Could not load instance types')).toBeInTheDocument();
+    expect(await screen.findByText('Unable to load instance types')).toBeInTheDocument();
     expect(screen.getByText('Instance types unavailable')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Create virtual machine' })).toHaveAttribute(
       'href',
       '/vms/create',
     );
-    expect(screen.getByRole('link', { name: 'web-01' })).toBeInTheDocument();
-    expect(screen.getByText('standard-4-8')).toBeInTheDocument();
   });
 
   it('keeps compute instance failures on the page-level error path', async () => {
-    vi.mocked(useComputeInstances).mockReturnValue(
-      mockQueryResult({
-        data: [],
-        isLoading: false,
-        error: new Error('VMs unavailable'),
-      }),
-    );
-
-    renderPage();
+    renderPage({
+      onComputeInstanceList: () => {
+        throw new ConnectError('VMs unavailable', Code.Unavailable);
+      },
+    });
 
     expect(await screen.findByText('An error occurred')).toBeInTheDocument();
     expect(screen.getByText('VMs unavailable')).toBeInTheDocument();

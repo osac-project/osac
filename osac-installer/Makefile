@@ -13,12 +13,12 @@
 #   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|operator|bmf
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|compute-storage|operator|bmf
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
 # UI, seeded catalog) via scripts/dev-full/. It needs a rootful container runtime
-# (Linux: rootful podman or Docker; macOS: Docker Desktop) and /dev/kvm on Linux —
+# (Linux: rootful podman or Docker; macOS: Docker Desktop or Colima) and /dev/kvm on Linux —
 # see scripts/dev-full/kind-runtime.sh and README.md.
 #
 # Helm chart management (no parameters required):
@@ -31,6 +31,10 @@ SHELL := /usr/bin/env bash -o pipefail
 
 # Extra helm --set/--set-string args appended to the OSAC chart command.
 EXTRA_HELM_ARGS ?=
+# Optional PEM CA bundle file for Keycloak's external OIDC identity providers.
+OIDC_IDP_CA_FILE ?=
+export OIDC_IDP_CA_FILE
+OIDC_IDP_CA_HELM_ARGS = $(if $(strip $(OIDC_IDP_CA_FILE)),--set-file keycloak.oidcIdpTrust.caPem="$${OIDC_IDP_CA_FILE}")
 FULFILLMENT_GINKGO_ARGS ?=
 FULFILLMENT_IT_REPORT_DIR ?=
 fulfillment-json-report = $(if $(strip $(FULFILLMENT_IT_REPORT_DIR)),--json-report="$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(1).json)")
@@ -63,7 +67,7 @@ TOPOLVM_BACKING_SIZE ?= 20G
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-load-images test
+ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-build-load-images kind-load-images test
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -147,10 +151,10 @@ endif
 SUITE_TARGETS := test
 ifneq ($(filter $(SUITE_TARGETS),$(MAKECMDGOALS)),)
 ifndef SUITE
-$(error SUITE is required (all|fulfillment|operator|bmf))
+$(error SUITE is required (all|fulfillment|compute-storage|operator|bmf))
 endif
-ifeq ($(filter $(SUITE),all fulfillment operator bmf),)
-$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, operator, or bmf)
+ifeq ($(filter $(SUITE),all fulfillment compute-storage operator bmf),)
+$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, compute-storage, operator, or bmf)
 endif
 ifeq ($(MCP_TEST_ENABLED),true)
 ifneq ($(PLATFORM),kind)
@@ -230,6 +234,7 @@ endif
 # provider selection aligned.
 KIND_RUNTIME := scripts/dev-full/kind-runtime.sh
 KIND_ARM64_CLI_IMAGE := quay.io/openshift/origin-cli:4.20.0
+KIND_AAP_CLI_IMAGE := quay.io/openshift/origin-cli:4.19
 
 # quay.io/openshift/origin-cli:4.20.0 has no arm64 manifest. On Apple Silicon,
 # build a compatible local image with the same tag so every chart can continue
@@ -247,6 +252,20 @@ endif
 # Apple Silicon and dev-full use the runtime wrapper. Plain non-macOS dev
 # keeps its existing direct Kind/container-tool behavior.
 KIND_RUNTIME_REQUIRED := $(if $(filter true,$(HOST_IS_MAC_ARM)),true,$(if $(filter dev-full,$(PROFILE)),true,false))
+KIND_REQUIRE_UV := false
+ifeq ($(PLATFORM)/$(PROFILE),kind/dev-full)
+ifeq ($(HOST_IS_MAC_ARM),true)
+KIND_REQUIRE_UV := true
+endif
+endif
+
+ifeq ($(PLATFORM)/$(PROFILE)/$(KIND_RUNTIME_REQUIRED),kind/dev/false)
+ifeq ($(strip $(KIND_EXPERIMENTAL_PROVIDER)),)
+ifneq ($(shell command -v podman 2>/dev/null),)
+override export KIND_EXPERIMENTAL_PROVIDER := podman
+endif
+endif
+endif
 
 # Helm 4 moved post-renderers into plugins; Helm 3 still accepts an executable path.
 HELM_MAJOR := $(shell version=$$(helm version --short 2>/dev/null) || exit; printf '%s\n' "$$version" | sed -nE 's/^v([0-9]+).*/\1/p')
@@ -285,6 +304,7 @@ endif
 KIND_RUNTIME_ENV := KIND_PROFILE=$(PROFILE) \
 	KIND_OSAC_NAMESPACE=$(NS) \
 	TOPOLVM_BACKING_SIZE=$(TOPOLVM_BACKING_SIZE) \
+	KIND_REQUIRE_UV=$(KIND_REQUIRE_UV) \
 	$(if $(KIND_RUNTIME_PROVIDER),KIND_EXPERIMENTAL_PROVIDER=$(KIND_RUNTIME_PROVIDER))
 KIND_RUNTIME_CMD := $(KIND_RUNTIME_ENV) $(KIND_RUNTIME)
 KIND_CLUSTER_NAME ?= osac-dev
@@ -305,10 +325,15 @@ endif
 # it empty and helm/kubectl would fall back to localhost:8080. `$(or ...)` skips empty.
 export KUBECONFIG := $(or $(KUBECONFIG),$(KIND_KUBECONFIG))
 
+# These local image references match the dev-full chart values.
+KIND_FULFILLMENT_IMAGE := ghcr.io/osac-project/fulfillment-service:latest
+KIND_OPERATOR_IMAGE := ghcr.io/osac-project/osac-operator:latest
+KIND_METERING_IMAGE := ghcr.io/osac-project/metering-service:latest
+KIND_AAP_IMAGE := ghcr.io/osac-project/osac-aap:latest
 # UI has no component Makefile, so the installer keeps its local image reference.
 KIND_UI_IMAGE := ghcr.io/osac-project/osac-ui:latest
 KIND_LOAD_IMAGE_SCRIPT ?= $(abspath scripts/dev-full/kind-load-image.sh)
-define kind-load-ui-image
+define kind-load-local-image
 	$(KIND_RUNTIME_ENV) NS="$(NS)" \
 	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KUBECONFIG="$(KUBECONFIG)" \
 	CONTAINER_TOOL="$(CONTAINER_TOOL)" "$(KIND_LOAD_IMAGE_SCRIPT)" "$(1)"
@@ -318,7 +343,7 @@ define kind-load-image
 	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
 		trap 'rm -f "$$tmpfile"' EXIT; \
-		$(KIND_RUNTIME_CMD) container save $(1) -o "$$tmpfile"; \
+		$(KIND_RUNTIME_CMD) container save $(1) > "$$tmpfile"; \
 		$(KIND_RUNTIME_CMD) load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
 	elif [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
 		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
@@ -351,10 +376,36 @@ kind-load-images: ## Load previously built dev-full images into Kind (PLATFORM=k
 	@if [ "$(PLATFORM)/$(PROFILE)" != "kind/dev-full" ]; then \
 		echo "ERROR: kind-load-images requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1; \
 	fi
-	$(MAKE) -C ../fulfillment-service kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
-	$(MAKE) -C ../osac-operator kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
-	$(MAKE) -C ../osac-aap kind-load-image NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
-	$(call kind-load-ui-image,$(KIND_UI_IMAGE))
+	$(MAKE) -C ../fulfillment-service kind-load-image IMG=$(KIND_FULFILLMENT_IMAGE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-operator kind-load-image IMG=$(KIND_OPERATOR_IMAGE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-aap kind-load-image IMG=$(KIND_AAP_IMAGE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(call kind-load-local-image,$(KIND_METERING_IMAGE))
+	$(call kind-load-local-image,$(KIND_UI_IMAGE))
+
+.PHONY: kind-build-load-images
+kind-build-load-images: ## Build and load dev-full images into Kind (PLATFORM=kind PROFILE=dev-full NS= required)
+	@if [ "$(PLATFORM)/$(PROFILE)" != "kind/dev-full" ]; then \
+		echo "ERROR: kind-build-load-images requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1; \
+	fi
+	$(MAKE) -C ../fulfillment-service image-build IMG=$(KIND_FULFILLMENT_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-operator image-build IMG=$(KIND_OPERATOR_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) -C ../osac-metering/metering-service image-build IMG=$(KIND_METERING_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL)
+ifeq ($(HOST_IS_MAC_ARM),true)
+	$(KIND_RUNTIME_ENV) scripts/dev-full/build-arm64-cli-image.sh $(KIND_CLUSTER_NAME) $(KIND_AAP_CLI_IMAGE) 4.19.0
+# The AAP build uses CONTAINER_TOOL. Copy the ARM64 CLI image there when the
+# Kind provider uses a different engine.
+ifneq ($(KIND_RUNTIME_PROVIDER),)
+ifneq ($(KIND_RUNTIME_PROVIDER),$(notdir $(CONTAINER_TOOL)))
+	@set -e; archive=$$(mktemp "$${TMPDIR:-/tmp}/osac-aap-cli-image-XXXXXX.tar"); \
+		trap 'rm -f "$$archive"' EXIT; \
+		$(KIND_RUNTIME_CMD) container save $(KIND_AAP_CLI_IMAGE) -o "$$archive"; \
+		$(CONTAINER_TOOL) load -i "$$archive"
+endif
+endif
+endif
+	$(MAKE) -C ../osac-aap execution-environment-build IMG=$(KIND_AAP_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(CONTAINER_TOOL) build -f ../osac-ui/Containerfile -t $(KIND_UI_IMAGE) ..
+	$(MAKE) kind-load-images PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 ##@ Entity: Infra
 
 .PHONY: install-infra
@@ -372,8 +423,12 @@ else
 	else \
 		echo "Creating Kind cluster '$(KIND_CLUSTER_NAME)'..."; \
 		kind create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG) --wait 60s; \
-	fi
-	@kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
+	fi; \
+	if [[ "$${KIND_EXPERIMENTAL_PROVIDER:-}" == podman ]]; then \
+		source scripts/lib.sh; \
+		ensure_podman_pid_limits "$(KIND_CLUSTER_NAME)" kind podman; \
+	fi; \
+	kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
 endif
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_ENV) $(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
@@ -395,8 +450,10 @@ endif
 		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
 		--set osacNamespace=$(NS) \
 		$(INFRA_HELM_ARGS) \
+		$(OIDC_IDP_CA_HELM_ARGS) \
 		--wait-for-jobs --timeout 30m \
 	|| { echo "=== osac-infra hook jobs ==="; kubectl get jobs,pods,cm -n osac-infra || true; kubectl logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; kubectl get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
+	@bash -c 'source scripts/lib.sh && wait_for_infra_ready kubectl'
 	@for f in ../osac-operator/config/crd/fakes/*.yaml; do \
 		case "$$(basename "$$f")" in \
 			*osac.openshift.io*|kustomization.*) continue ;; \
@@ -447,6 +504,7 @@ else
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
 		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DOMAIN)/realms/osac" \
+		$(OIDC_IDP_CA_HELM_ARGS) \
 		--timeout "$${helm_timeout_seconds}s" --wait-for-jobs \
 	|| { \
 		echo "=== osac-infra release status ==="; \
@@ -462,6 +520,7 @@ else
 		oc logs deploy/trust-manager -n cert-manager --tail=100 || true; \
 		exit 1; \
 	}
+	@bash -c 'source scripts/lib.sh && wait_for_infra_ready oc'
 endif
 
 .PHONY: uninstall-infra
@@ -598,7 +657,14 @@ endif
 ifeq ($(DRY_RUN),1)
 install: install-dry-run ## Render full install manifests without cluster changes (DRY_RUN=1)
 else ifeq ($(PROFILE),dev-full)
+ifeq ($(HOST_IS_MAC_ARM),true)
+install: install-infra ## Full ARM64 Mac install: infra + local images + osac + dev stack
+	$(MAKE) kind-build-load-images PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) install-osac PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+	$(MAKE) install-devstack PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
+else
 install: install-infra install-osac install-devstack ## Full install: infra + osac (+ dev stack for dev-full)
+endif
 else
 install: install-infra install-osac ## Full install: infra + osac (PLATFORM= PROFILE= required)
 endif
@@ -619,7 +685,8 @@ ifeq ($(PLATFORM),kind)
 	helm template osac-infra $(INFRA_CHART) \
 		--namespace osac-infra \
 		-f $(INFRA_VALUES) $(INFRA_VALUES_EXTRA) \
-		--set osacNamespace=$(NS)
+		--set osacNamespace=$(NS) \
+		$(OIDC_IDP_CA_HELM_ARGS)
 else
 	helm template osac-deps $(DEPS_CHART) \
 		--namespace osac-deps \
@@ -633,7 +700,8 @@ else
 		--set keycloak.hostname=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN) \
 		--set keycloak.uiUrl=https://osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) \
-		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac"
+		--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac" \
+		$(OIDC_IDP_CA_HELM_ARGS)
 endif
 	helm template osac $(if $(OSAC_CHART_OCI_REF),$(OSAC_CHART_OCI_REF)$(if $(OSAC_CHART_OCI_VERSION), --version $(OSAC_CHART_OCI_VERSION)),$(OSAC_CHART)) \
 		-f $(INSTANCE_VALUES) $(INSTANCE_VALUES_EXTRA) \
@@ -704,24 +772,27 @@ METERING_IT_IMAGE := localhost/metering-service:it
 METERING_IT_IMAGE_ARGS := --set metering.image.repository=localhost/metering-service --set metering.image.tag=it --set metering.image.pullPolicy=Never
 
 .PHONY: test
-test: ## Run integration tests (SUITE= required: all|fulfillment|operator|bmf)
+test: ## Run integration tests (SUITE= required: all|fulfillment|compute-storage|operator|bmf)
 ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=fulfillment
 	$(MAKE) test SUITE=operator
 	$(MAKE) test SUITE=bmf
 endif
-ifeq ($(SUITE),fulfillment)
+ifneq ($(filter $(SUITE),fulfillment compute-storage),)
 ifneq ($(strip $(FULFILLMENT_IT_REPORT_DIR)),)
 # A reused local output directory must not retain old reports for phases a failed run never reaches.
-	rm -f $(foreach phase,service-only networking-operator bmaas-disabled,"$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(phase).json)")
+	rm -f $(foreach phase,$(if $(filter fulfillment,$(SUITE)),service-only networking-operator bmaas-disabled) compute-storage,"$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(phase).json)")
 endif
 # Exercise event-driven reconciliation without full synchronization in every test phase.
+	python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
+endif
+ifeq ($(SUITE),fulfillment)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=false --set global.networking.provisioningEnabled=false $(MCP_TEST_HELM_ARGS) $(METERING_IT_IMAGE_ARGS)"
 # OSAC and BMF CRDs come from the installed charts. Only HostedCluster is external.
@@ -730,7 +801,7 @@ endif
 # No operator runs in this phase: the specs report networking and tenant status
 # through the private API as the operator's feedback controllers would, so a
 # running operator would race them. The networking-operator phase covers it.
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) --timeout 1h15m -v --skip 'Networking with operator' $(FULFILLMENT_GINKGO_ARGS) it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) --timeout 1h15m -v --skip 'Networking with operator|ComputeInstance storage handoff' $(FULFILLMENT_GINKGO_ARGS) it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=false --set operator.controllers.volume=false --set operator.controllers.networking=true --set operator.controllers.computeInstance=false --set operator.controllers.clusterOrder=false --set operator.networkManagers.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,networking-operator) --timeout 30m -v --label-filter 'networking-operator' it
@@ -738,14 +809,22 @@ endif
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set global.services.bmaas.enabled=false --set operator.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmaas-disabled ginkgo run $(call fulfillment-json-report,bmaas-disabled) --timeout 1h -v --focus 'Service enablement' it
 endif
+ifneq ($(filter $(SUITE),fulfillment compute-storage),)
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=true --set operator.controllers.volume=false --set operator.controllers.networking=false --set operator.controllers.computeInstance=true --set operator.controllers.clusterOrder=false --set operator.networkManagers.enabled=false --set-string operator.aap.url=http://compute-storage-aap.$(NS).svc.cluster.local:8080/api --set operator.aap.statusPollInterval=1s --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=compute-storage ginkgo run $(call fulfillment-json-report,compute-storage) --timeout 30m -v --label-filter 'compute-storage' it
+endif
 ifeq ($(SUITE),operator)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
+	# The AAP base URL is test configuration, not a credential: the bearer
+	# token is never logged. It is set inline, like the compute-storage phase
+	# above, so the operator phase needs no extra values file.
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
-	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
+		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=false --set-string operator.aap.url=http://osac-aap-recorder.$(NS).svc.cluster.local:8080/api --set operator.aap.statusPollInterval=1s $(METERING_IT_IMAGE_ARGS)"
+	cd ../osac-operator && IT_TEST_SUITE=operator ginkgo run --timeout 30m -v test/integration
 	# Provisioning-enabled phase: the operator resolves NetworkClass manager
 	# registrations (chart-rendered netris and cudn_evpn), which
 	# it skips when provider networking is disabled. No AAP or networking CR is needed.
@@ -909,9 +988,17 @@ metering-auth-render-test: helm-deps ## Check metering service-account auth rend
 event-publisher-render-test: helm-deps ## Check the event publisher and metering topic wiring renders
 	python3 scripts/test-event-publisher-render.py
 
+.PHONY: billing-render-test
+billing-render-test: helm-osac-deps ## Check billing provider config renders and validates
+	uv run --project .. python scripts/test-billing-render.py
+
 .PHONY: mce-render-test
 mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py
+
+.PHONY: lvms-optional-path-render-test
+lvms-optional-path-render-test: ## Check the OSAC-managed LVMS worker allowlist renders
+	uv run --project .. python scripts/test-lvms-optional-path-render.py
 
 .PHONY: evpn-render-test
 evpn-render-test: helm-infra-deps ## Check EVPN host networking renders
@@ -929,6 +1016,15 @@ dev-full-render-test: helm-deps helm-infra-deps ## Check dev-full TLS and Helm p
 openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext renders numeric UID on Kind, omits on OpenShift
 	./scripts/test-openbao-security-context.sh
 
+.PHONY: ensure-inotify
+ensure-inotify: override export _INOTIFY_PROVIDER := $(KIND_RUNTIME_PROVIDER)
+ensure-inotify: ## Opt in to native Linux host inotify preparation (floor 512)
+	@source scripts/lib.sh && ensure_inotify_instances
+
+.PHONY: infra-ready-wait-test
+infra-ready-wait-test: ## Check install-infra waits for the issuer, PostgreSQL and Kafka when the profile creates them (stub kubectl)
+	bash scripts/test-infra-ready-wait.sh
+
 .PHONY: kind-runtime-test
 kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster cleanup with command stubs
 	python3 scripts/test-kind-runtime.py
@@ -937,12 +1033,16 @@ kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster clean
 bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret API Helm wiring
 	uv run --project .. python scripts/test-bmf-netbox-render.py
 
+.PHONY: netris-ca-lifecycle-test
+netris-ca-lifecycle-test: helm-deps ## Check Netris CA validation and protection
+	uv run --project .. python scripts/test-netris-ca-lifecycle.py
+
 .PHONY: chart-name-independence-render-test
 chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/cert names survive repackaging under a different Chart.yaml name
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test network-class-step-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test mce-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

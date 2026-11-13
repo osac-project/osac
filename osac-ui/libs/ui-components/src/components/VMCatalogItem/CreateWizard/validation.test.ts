@@ -1,0 +1,113 @@
+import type { TFunction } from 'i18next';
+import { describe, expect, it } from 'vitest';
+
+import { buildComputeCatalogStepSchema } from './validation';
+
+const t = ((key: string) => key) as TFunction;
+
+describe('buildComputeCatalogStepSchema', () => {
+  it.each([
+    ['diskImage', 'Disk image is required when locked'],
+    ['instanceType', 'Instance type is required when locked'],
+  ])('requires an empty locked %s selection', async (field, message) => {
+    const schema = buildComputeCatalogStepSchema('configuration', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        [field]: { locked: true, value: { id: '', name: '' } },
+      }),
+    ).rejects.toMatchObject({ path: `${field}.value.id`, message });
+  });
+
+  it('allows an empty editable selection', async () => {
+    const schema = buildComputeCatalogStepSchema('configuration', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        diskImage: { locked: false, value: { id: '', name: '' } },
+        instanceType: { locked: false, value: { id: '', name: '' } },
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('requires text user data when locked', async () => {
+    const schema = buildComputeCatalogStepSchema('access-init', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        userData: { locked: true, value: '' },
+      }),
+    ).rejects.toMatchObject({
+      path: 'userData.value',
+      message: 'User data is required when locked',
+    });
+  });
+
+  it('allows a locked Secret user-data source without inline text', async () => {
+    const schema = buildComputeCatalogStepSchema('access-init', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        userData: { locked: true, value: '' },
+        userDataSecret: { value: 'cloud-init' },
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('rejects user data larger than 64 KB', async () => {
+    const schema = buildComputeCatalogStepSchema('access-init', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        userData: { locked: false, value: 'x'.repeat(65537) },
+      }),
+    ).rejects.toMatchObject({
+      path: 'userData.value',
+      message: 'User data must not exceed 64 KB.',
+    });
+  });
+
+  it('allows an empty editable boot disk size but requires a locked value', async () => {
+    const schema = buildComputeCatalogStepSchema('storage', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        bootDiskSizeGib: { locked: false, value: undefined },
+      }),
+    ).resolves.toBeDefined();
+    await expect(
+      schema?.validate({
+        bootDiskSizeGib: { locked: true, value: undefined },
+      }),
+    ).rejects.toMatchObject({
+      path: 'bootDiskSizeGib.value',
+      message: 'Boot disk size is required when locked',
+    });
+  });
+
+  it.each([undefined, Number.NaN, 0, -1, 30.5, 16385])(
+    'rejects an invalid size for every additional disk row (%s)',
+    async (sizeGib) => {
+      const schema = buildComputeCatalogStepSchema('storage', t, 'tenant-admin');
+
+      await expect(
+        schema?.validate({
+          additionalDisks: {
+            locked: false,
+            value: [{ sizeGib, storageTier: { id: 'tier-1', name: 'fast' } }],
+          },
+        }),
+      ).rejects.toMatchObject({
+        path: 'additionalDisks.value[0].sizeGib',
+        message:
+          sizeGib === undefined
+            ? 'Disk size is required'
+            : sizeGib === 0 || sizeGib === -1
+              ? 'Must be greater than zero'
+              : sizeGib === 16385
+                ? 'Must be at most {{max}}'
+                : 'Must be a whole number',
+      });
+    },
+  );
+});

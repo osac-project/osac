@@ -1,0 +1,28 @@
+{{- if and .Values.kafka.enabled .Values.kafka.exporter.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor") }}
+{{- /*
+Scrape Strimzi's Kafka Exporter, which kafka.exporter.enabled turns on. The
+exporter reports consumer-group lag, and the MeteringConsumerLag rule selects
+the consumer groups that read heartbeat topics.
+
+The PodMonitor is rendered only where the PodMonitor CRD exists, so a Kind
+install without a Prometheus operator still applies the chart.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: osac-kafka-exporter
+  namespace: osac-kafka
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+    {{- with .Values.kafka.exporter.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      strimzi.io/name: osac-kafka-kafka-exporter
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      path: /metrics
+      interval: 60s
+{{- end }}

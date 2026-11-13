@@ -2,8 +2,9 @@
 
 This project contains the code for the fulfillment service. For instructions on how to install it
 in a deployed environment see the [installation guide](docs/INSTALL.md). For a guided walkthrough
-of how a request flows through the service — the shared data model, the transaction/event
-mechanism, and the end-to-end path from a `Create` call to a Kubernetes custom resource — see
+of how requests flow through the service — the shared data model, the transaction/event
+mechanism, the end-to-end path from a `Create` call to a Kubernetes custom resource, and the
+tenant/project cascading delete workflow — see
 [docs/CODEWALK.md](docs/CODEWALK.md).
 
 The API is defined using protocol buffers in the [`proto`](proto) directory. An OpenAPI
@@ -286,9 +287,10 @@ $ make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfill
 $ make -C ../osac-installer uninstall PLATFORM=kind PROFILE=dev NS=osac
 ```
 
-The integration tests use TLS with SNI (_Server Name Indication_) routing through the Envoy Gateway.
-This means that the services are accessed using their Kubernetes internal host names, but routed
-through `127.0.0.1:8000` which is exposed by the Kind cluster.
+The integration tests use TLS with SNI (_Server Name Indication_) routing through the Envoy Gateway
+on the Kind HTTPS port (default `8443`). With `PROFILE=dev`, Keycloak's TLS route uses
+`keycloak.keycloak.svc.cluster.local`; Fulfillment uses its internal service hostnames because those
+are the hostnames configured on its TLS routes.
 
 For the tests to work correctly, the following host names must resolve to `127.0.0.1`:
 

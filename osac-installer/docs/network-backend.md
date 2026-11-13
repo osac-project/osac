@@ -131,64 +131,187 @@ install those registrations and the provider configuration using the manager's
 documented procedure. With provider networking disabled, the operator does not
 require manager registrations for networking resources to become READY.
 
-## CaaS on Netris
+## Shared CaaS endpoint lifecycle
 
-CaaS can run the Netris CaaS steps (`NETWORK_CLASS=netris`) in the
-`cluster-fulfillment` jobs. These jobs are not networking jobs: they read the
-`cluster-fulfillment-ig` ConfigMap and Secret, not `network-fulfillment-ig`.
-The installation-owned Netris connection settings are given once, with the
-Netris settings in `aap.instanceGroups.networkFulfillment.config`, and the
-installer passes them to AAP config-as-code. Config-as-code sets them as fixed
-environment variables of the cluster-fulfillment container group, which runs
-with the `netris.controller.protected_linear` strategy so that launch-time
-`extra_vars` cannot override them:
+The standard `ocp_small` template leaves its external-access task as a no-op.
+The `ocp_4_20_ai_maas` wrapper delegates cluster creation and deletion to
+`ocp_small`, so it uses this same endpoint lifecycle; MaaS configuration
+remains in its own post-install role. The ClusterOrder controller owns endpoint
+readiness and the shared networking resources. It discovers the API address
+from the HostedCluster's `kube-apiserver` Service and requests an automatic API
+ExternalIPAttachment for that VIP only after `ManagementPublicationReady=True`.
+For ingress, it reserves the guest ingress address through the Fabric Manager
+recorded on the Subnet, runs `configure_guest_ingress`, and waits for the guest
+`external-ingress` Service address to match the reservation. The controller
+then writes `IngressEndpoint` and requests the automatic ingress
+ExternalIPAttachment. It publishes DNS only after the endpoint addresses are
+usable. Deletion removes DNS, deletes the automatic ExternalIPAttachments and
+ExternalIPs, and waits for those resources to disappear. It then waits for
+provider deprovisioning, HostedCluster deletion, and recorded worker cleanup
+before releasing the ingress reservation.
+Reservation cleanup uses the Fabric Manager recorded with the original job, so
+deletion does not require the NetworkClass to remain present or Ready.
+Provider networking must remain enabled until deletion releases any recorded
+ingress reservation.
+The ingress reservation uses the generic Fabric Manager task contract; manager
+selection comes from the Subnet status, not an environment variable or a
+manager-specific external-access task.
 
-| Key under `networkFulfillment.config` | Cluster-fulfillment effect |
-|---|---|
-| `NETRIS_CONTROLLER_URL` | `NETRIS_CONTROLLER_URL` |
-| `NETRIS_VALIDATE_CERTS` | `NETRIS_VALIDATE_CERTS` (default `true`) |
-| `NETRIS_CA_CONFIGMAP` | Mounts `bundle.pem` of this customer-created ConfigMap in the AAP namespace read-only at `/etc/netris/ca/bundle.pem` and sets `NETRIS_CA_PATH`. The ConfigMap is required at pod start. |
+When `global.networking.provisioningEnabled` is `false`, the HostedCluster can
+still install. The endpoint lifecycle creates no provider jobs, ingress
+reservation, DNS records, or automatic ExternalIPAttachments.
 
-The installer renders these keys only when they are set, and the render fails
-unless `NETRIS_CONTROLLER_URL` is an `https://` URL and `NETRIS_VALIDATE_CERTS`
-is `"true"` or `"false"`. The installer reads them even when
-`networkFulfillment.enabled` is `false`. `NETRIS_CA_CONFIGMAP` applies only to
-cluster-fulfillment (CaaS) jobs: it is also written to `network-fulfillment-ig`,
-but networking jobs neither mount nor read it. The three keys cannot be set in
-`aap.instanceGroups.clusterFulfillment.config`.
-The other CaaS Netris settings go in the cluster-fulfillment instance group:
+This lifecycle applies to `ocp_small` and its CaaS wrappers, including
+`ocp_4_20_ai_maas`. The `ocp_ci_small` template keeps its CI DNS entry points
+(`caas_create.yaml` and `caas_delete.yaml`). CI obtains
+the API IP from the `kube-apiserver` Service and the ingress IP from
+ClusterOrder-labeled Agent inventory. The NICo template also keeps its direct
+`nico.steps.external_access` tasks and uses OSAC's `publish.yaml` and
+`clear.yaml` only for endpoint annotations.
+
+Netris manager settings and credentials belong to the networking operations
+instance group because its jobs run the generic Fabric Manager tasks. Put all
+required settings under `aap.instanceGroups.networkFulfillment.config` and
+credentials under `.secret`:
 
 ```yaml
 aap:
   instanceGroups:
-    clusterFulfillment:
-      enabled: true
-      config:
-        NETWORK_CLASS: netris
-        NETWORK_STEPS_COLLECTION: netris.steps
-        NETRIS_USERNAME: netris
-        NETRIS_SITE_ID: "5"
-        NETRIS_TENANT_ID: "1"
-        NETRIS_TENANT_NAME: Admin
-        NETRIS_MGMT_VPC_ID: "4"
-        NETRIS_MGMT_VPC_NAME: RH-Infra
-        NETRIS_RESOURCE_CLASS_MAP: '{"fc430": {...}}'
-      secret:
-        NETRIS_PASSWORD: "<password>"   # or the netris-credentials Secret
     networkFulfillment:
       enabled: true
       config:
         NETRIS_CONTROLLER_URL: https://netris.example.com
         NETRIS_VALIDATE_CERTS: "true"
         NETRIS_CA_CONFIGMAP: customer-netris-ca   # optional
+        NETRIS_USERNAME: netris
+        NETRIS_SITE_ID: "5"
+        NETRIS_TENANT_ID: "1"
+        NETRIS_MGMT_VPC_ID: "4"
+        NETRIS_BM_PROVISIONING_VNET: provisioning   # CaaS workers with physical attachments
+        NETRIS_RESOURCE_CLASS_MAP: '{"fc430": {"server_cluster_template_id": 89}}'   # BMaaS and FabricDomains only
+      secret: {}
 ```
 
-Instead of `clusterFulfillment.secret.NETRIS_PASSWORD`, the password can be
-kept in a Secret named `netris-credentials` (key `NETRIS_PASSWORD`) that is
-managed outside Helm in the AAP namespace; cluster-fulfillment jobs load it
-when it exists. Cluster-fulfillment jobs also mount the optional
-`agentless-net-inventory` ConfigMap at `/var/config/agentless-net` for the
-AgentlessNet CaaS steps.
+The example omits `NETRIS_PASSWORD` intentionally. For Helm deployments, supply
+`aap.instanceGroups.networkFulfillment.secret.NETRIS_PASSWORD` through the
+deployment's secure values-injection process. For manually managed AAP, populate
+the `network-fulfillment-ig` Secret through your secret-management process. Do
+not commit the credential in a values file or manifest.
+
+The networking job pod reads the ConfigMap and Secret named
+`network-fulfillment-ig`. The installer validates the controller URL,
+certificate-validation flag, and optional CA ConfigMap name. When
+`NETRIS_CA_CONFIGMAP` is set, the job mounts that ConfigMap's `bundle.pem`
+read-only at `/etc/netris/ca/bundle.pem` and sets `NETRIS_CA_PATH`; the
+ConfigMap must exist in the AAP namespace when the job starts.
+
+### Upgrade from the transitional CaaS dispatcher
+
+Remove the obsolete `NETWORK_STEPS_COLLECTION` and `NETWORK_CLASS` keys from
+values files. Move Netris manager settings and credentials from
+`clusterFulfillment.config` and `.secret` to `networkFulfillment.config` and
+`.secret`; the generic manager tasks run in the networking operations job
+group. On the first upgrade, do not use Helm `--reuse-values` with release
+values that still contain the old keys or cluster-fulfillment Netris settings.
+`--reuse-values` merges stored values into the upgrade, while `--reset-values`
+starts from chart defaults ([Helm upgrade options](https://helm.sh/docs/helm/helm_upgrade/)).
+Use a complete values file with `--reset-values`, omit both obsolete keys, and
+verify that manager settings are under `networkFulfillment` and the old
+cluster-fulfillment values are gone. Because `--reset-values` resets
+unspecified settings to chart defaults, include all customer overrides in that
+values file.
+
+### Netris CA ConfigMap lifecycle
+
+`NETRIS_CA_CONFIGMAP` names a ConfigMap that the platform administrator creates
+and owns. The installer never creates, rotates, or deletes it. The Helm client
+and the chart values never carry the PEM contents; the validation hooks read
+the ConfigMap in-cluster:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: customer-netris-ca
+  namespace: <AAP namespace>
+immutable: true
+data:
+  bundle.pem: |
+    -----BEGIN CERTIFICATE-----
+    ...
+    -----END CERTIFICATE-----
+```
+
+#### Validation and protection
+
+With `validation.enabled` and `NETRIS_CA_CONFIGMAP` set, install and upgrade run
+these checks:
+
+- The pre-install/pre-upgrade hook (`<release>-netris-ca-preflight`) reads the
+  ConfigMap and fails unless it exists, sets `immutable: true`, and has a
+  non-empty `data.bundle.pem` that OpenSSL can parse as a certificate bundle.
+  Each failure uses a stable `ERROR: NETRIS_CA_*` message.
+- Both CA jobs run `.Values.cliImage`. With CA validation enabled that image
+  must provide `kubectl`, `sh`, `grep`, `mktemp`, `rm` and `openssl`. The
+  default `quay.io/openshift/origin-cli` image does; a custom `cliImage` that
+  omits `openssl` fails with `ERROR: NETRIS_CA_OPENSSL_MISSING` instead of
+  skipping the bundle check.
+- The post-install/post-upgrade hook
+  (`<release>-netris-ca-identity-validate`) submits a SubjectAccessReview for
+  `system:serviceaccount:<namespace>:<aap.serviceAccounts.osacSa>` (default
+  `osac-sa`) and fails with `ERROR: NETRIS_CA_IDENTITY_DENIED` unless that
+  identity can `get` the ConfigMap. It runs after the CA read Role exists and
+  before the AAP bootstrap job, so the first upgrade cannot fail on missing
+  RBAC.
+
+Both hooks are gated by `validation.enabled`. Clear `NETRIS_CA_CONFIGMAP` to
+keep the system-trust path unchanged and render no CA validation resources.
+
+A ValidatingAdmissionPolicy protects only the active ConfigMap name. It denies
+`CREATE`, `UPDATE`, and `DELETE` of that name unless the requester is in
+`global.networking.caBundle.adminGroups`, and it fails closed if the policy
+cannot be evaluated. Other ConfigMap names are unaffected, so a new CA version
+can be created before the Helm switch. The default is
+`["system:masters", "system:cluster-admins"]`: `system:masters` is the
+break-glass group of the `system:admin` client certificate, and
+`system:cluster-admins` contains the built-in `cluster-admin` subjects
+(`kubeadmin` and the default cluster administrator binding). An identity
+provider group bound directly to `cluster-admin` is in neither group; add each
+such group to `adminGroups` explicitly. The namespace controller may `DELETE`
+the object during namespace teardown.
+
+The AAP execution ServiceAccount (`osac-sa` by default) is not in
+`adminGroups`, so the policy denies it any write to the active ConfigMap. It
+only needs `get`, which the chart grants through the `<release>-netris-ca-read`
+Role. Its `cluster-admin` binding still lets that identity edit or delete the
+policy itself.
+
+#### Rotation and rollback
+
+Treat each CA version as a separate immutable object:
+
+1. Create a new ConfigMap such as `customer-netris-ca-2026-10` with
+   `immutable: true` and the new `bundle.pem`.
+2. Set `aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP` to the
+   new name and reconcile the release with `helm upgrade`.
+3. Wait for the release hooks to complete, then confirm a new AAP job pod mounts
+   the new ConfigMap at `/etc/netris/ca/bundle.pem` and completes a real HTTPS
+   Netris operation.
+4. Keep the previous ConfigMap for the rollback window. The window closes only
+   when the administrator no longer needs to roll back.
+
+To roll back, restore the previous ConfigMap name and reconcile, then repeat the
+job-pod and Netris operation check. A rollback needs the previous object to
+still exist and remain immutable.
+
+Deleting an old version is safe only after a new job has succeeded against the
+replacement and rollback is no longer required. Delete it as a platform
+administrator. The admission policy protects only the active ConfigMap name, so
+once the Helm switch points at a new name the previous copy has no admission
+protection: any identity with ConfigMap delete permission, including `osac-sa`
+through its `cluster-admin` binding, can remove it. Keep the rollback copy in
+place until the rollback window closes; otherwise a rollback needs the
+administrator to recreate the ConfigMap from the PEM.
 
 ## Checks during a rollout
 

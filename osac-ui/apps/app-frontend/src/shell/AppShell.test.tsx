@@ -42,7 +42,7 @@ describe('AppShell', () => {
 
     expect(await screen.findByRole('heading', { name: 'Instance types' })).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText('No instance types yet.')).toBeInTheDocument();
+      expect(screen.getByText('No instance types found')).toBeInTheDocument();
     });
   });
 
@@ -98,6 +98,32 @@ describe('AppShell', () => {
 
     expect(screen.queryByRole('heading', { name: /volumes/i })).toBeNull();
     expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
+  });
+
+  it('does not register catalog create route for tenant-user', async () => {
+    renderAppShell('/catalog/vm/create', 'tenant-user');
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('heading', { name: 'Create VM Catalog Item' }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('does not register catalog edit route for tenant-user', async () => {
+    renderAppShell('/catalog/vm/item-1/edit', 'tenant-user');
+
+    expect(await screen.findByRole('heading', { name: 'Catalog' })).toBeInTheDocument();
+  });
+
+  it.each([
+    { path: '/catalog/vm/item-1', title: 'VM catalog item not found' },
+    { path: '/catalog/cluster/item-1', title: 'Cluster catalog item not found' },
+    { path: '/catalog/bm/item-1', title: 'Bare metal catalog item not found' },
+  ])('routes $path to its resource-specific catalog detail page', async ({ path, title }) => {
+    renderAppShell(path);
+
+    expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
   });
 
   it.each([

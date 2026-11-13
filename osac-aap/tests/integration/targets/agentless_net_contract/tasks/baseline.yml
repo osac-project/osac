@@ -1,0 +1,653 @@
+---
+- name: Verify AgentlessNet manager tasks through the generic network playbook
+  hosts: localhost
+  gather_facts: false
+  vars:
+    agentless_net_contract_tenant: agentless-net-contract
+    agentless_net_contract_manager:
+      name: agentless_net
+      type: fabric
+      ansible_role: osac.templates.agentless_net
+    agentless_net_contract_vn_id: "a0000000-0000-4000-8000-000000000001"
+    agentless_net_contract_subnet_id: "a0000000-0000-4000-8000-000000000002"
+    agentless_net_contract_bmi_id: "a0000000-0000-4000-8000-000000000003"
+    agentless_net_contract_pool_id: "a0000000-0000-4000-8000-000000000004"
+    agentless_net_contract_eip_id: "a0000000-0000-4000-8000-000000000005"
+    agentless_net_contract_vn:
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: VirtualNetwork
+      id: "{{ agentless_net_contract_vn_id }}"
+      metadata:
+        name: agentless-contract-network
+        namespace: agentless-net-contract
+        uid: "b0000000-0000-4000-8000-000000000001"
+        generation: 1
+      spec:
+        ipv4Cidr: 10.20.0.0/16
+    agentless_net_contract_subnet:
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: Subnet
+      id: "{{ agentless_net_contract_subnet_id }}"
+      metadata:
+        name: agentless-contract-subnet
+        namespace: agentless-net-contract
+        uid: "b0000000-0000-4000-8000-000000000002"
+        generation: 1
+      spec:
+        ipv4Cidr: 10.20.1.0/28
+    agentless_net_contract_ipam:
+      gateway_ipv4: 10.20.1.1
+      overlay_ipv4_cidrs: []
+      physical_ipv4_cidrs:
+        - 10.20.1.0/28
+      lb_vip_ipv4_cidrs: []
+    agentless_net_contract_network_attachment:
+      subnet: "{{ agentless_net_contract_subnet_id }}"
+      security_group_ids: []
+      interface:
+        type: physical
+        name: eno1
+        mac_address: aa:bb:cc:dd:ee:ff
+    agentless_net_contract_resource:
+      apiVersion: osac.openshift.io/v1alpha1
+      kind: NetworkAttachment
+      id: "{{ agentless_net_contract_bmi_id }}"
+      metadata:
+        name: baremetalinstance-a0000000-0000-4000-8000-000000000003
+        namespace: agentless-net-contract
+        uid: "b0000000-0000-4000-8000-000000000003"
+        generation: 1
+      spec:
+        target:
+          kind: BareMetalInstance
+          id: "{{ agentless_net_contract_bmi_id }}"
+        subnet: "{{ agentless_net_contract_subnet_id }}"
+  tasks:
+    - name: Create isolated SQLite and switch fixtures
+      block:
+        - name: Create temporary state directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: osac-agentless-contract-
+          register: agentless_net_contract_tempdir
+
+        - name: Record fixture paths
+          ansible.builtin.set_fact:
+            agentless_net_contract_state_file: "{{ agentless_net_contract_tempdir.path }}/network.sqlite3"
+            agentless_net_contract_switch_state: "{{ agentless_net_contract_tempdir.path }}/switch.json"
+            agentless_net_contract_fail_marker: "{{ agentless_net_contract_tempdir.path }}/switch-failed-once"
+            agentless_net_contract_lease_file: "{{ agentless_net_contract_tempdir.path }}/dhcp/dnsmasq.leases"
+            agentless_net_contract_inventory:
+              all:
+                vars:
+                  agentless_net_provisioning_network:
+                    name: provisioning
+                    vlan_id: 30
+                  agentless_net_host_ports:
+                    bmi-01.example.test:
+                      eno1: {switch: leaf-1, port: swp1}
+                      eno2: {switch: leaf-1, port: swp2}
+                children:
+                  net_nodes:
+                    hosts:
+                      network-node:
+                        ansible_host: 127.0.0.1
+                        ansible_user: contract-test
+                  switches:
+                    hosts:
+                      leaf-1:
+                        ansible_host: 127.0.0.1
+                        ansible_user: contract-test
+                        ansible_network_os: cumulus
+                        trunk_ports: [swp100]
+
+        - name: Prepare the versioned API-ID state database
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/prepare_state.py"
+              - "{{ agentless_net_contract_state_file }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          changed_when: true
+
+        - name: Write the child playbook inventory
+          ansible.builtin.copy:
+            dest: "{{ agentless_net_contract_tempdir.path }}/inventory.yaml"
+            mode: "0600"
+            content: >-
+              {{ {'all': {'hosts': {'localhost': {}}, 'vars': {
+                  'ansible_connection': 'local', 'ansible_become': false,
+                  'ansible_python_interpreter': ansible_playbook_python}}} | to_nice_yaml }}
+
+        - name: Create a private SSH control directory for the fake transport
+          ansible.builtin.file:
+            path: "{{ agentless_net_contract_tempdir.path }}/ssh-control"
+            state: directory
+            mode: "0700"
+
+        - name: Seed the stateful fake switch VLANs
+          ansible.builtin.copy:
+            dest: "{{ agentless_net_contract_switch_state }}"
+            mode: "0600"
+            content: >-
+              {{ {'ports': {'swp1': [30], 'swp2': [30], 'swp3': [200]},
+                  'tombstones': []} | to_json }}
+
+        - name: Build the physical NetworkAttachment task input
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars:
+              manager: "{{ agentless_net_contract_manager }}"
+              task: apply_network_attachment
+              tenant: "{{ agentless_net_contract_tenant }}"
+              resource: "{{ agentless_net_contract_resource }}"
+              target:
+                kind: BareMetalInstance
+                id: "{{ agentless_net_contract_bmi_id }}"
+                host_name: bmi-01.example.test
+              network_attachment: "{{ agentless_net_contract_network_attachment }}"
+              virtual_network: "{{ agentless_net_contract_vn }}"
+              subnet: "{{ agentless_net_contract_subnet }}"
+              ipam: "{{ agentless_net_contract_ipam }}"
+
+        - name: Inject one failure while removing a saved provisioning port
+          ansible.builtin.set_fact:
+            sft_label: attachment-partial-apply
+            agentless_net_contract_expect: retryable
+            agentless_net_contract_fail_once: remove:swp2
+
+        - name: Run partial NetworkAttachment apply through the generic playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect the saved NetworkAttachment and port claims after failure
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_net_contract_state_file }}"
+              - network_attachment
+              - "{{ agentless_net_contract_bmi_id }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_net_contract_failed_state
+          changed_when: false
+
+        - name: Confirm the failed apply keeps its stable address and exact port claims
+          vars:
+            _saved: "{{ agentless_net_contract_failed_state.stdout | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _saved.present
+              - _saved.phase == 'provisioning'
+              - _saved.entry.uid == agentless_net_contract_bmi_id
+              - _saved.entry.address == '10.20.1.2'
+              - _saved.claims == [['leaf-1', 'swp1'], ['leaf-1', 'swp2']]
+          no_log: true
+
+        - name: Confirm the fake switch retains the partial apply state
+          ansible.builtin.slurp:
+            src: "{{ agentless_net_contract_switch_state }}"
+          register: agentless_net_contract_partial_switch
+
+        - name: Check the selected port moved while the provisioning port remains
+          vars:
+            _switch: "{{ agentless_net_contract_partial_switch.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _switch.ports.swp1 == [100]
+              - _switch.ports.swp2 == [30]
+              - _switch.ports.swp3 == [200]
+
+        - name: Retry the same captured NetworkAttachment input
+          ansible.builtin.set_fact:
+            sft_label: attachment-apply-retry
+            agentless_net_contract_expect: success
+            agentless_net_contract_fail_once: ''
+
+        - name: Run the retry through the generic playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect the Ready NetworkAttachment state
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_net_contract_state_file }}"
+              - network_attachment
+              - "{{ agentless_net_contract_bmi_id }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_net_contract_ready_state
+          changed_when: false
+
+        - name: Confirm retry converged and preserved the reserved address
+          vars:
+            _saved: "{{ agentless_net_contract_ready_state.stdout | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _saved.phase == 'ready'
+              - _saved.entry.address == '10.20.1.2'
+              - _saved.claims == [['leaf-1', 'swp1'], ['leaf-1', 'swp2']]
+          no_log: true
+
+        - name: Confirm only the selected port entered the tenant VLAN
+          ansible.builtin.slurp:
+            src: "{{ agentless_net_contract_switch_state }}"
+          register: agentless_net_contract_applied_switch
+
+        - name: Check the applied switch port boundary
+          vars:
+            _switch: "{{ agentless_net_contract_applied_switch.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _switch.ports.swp1 == [100]
+              - _switch.ports.swp2 == []
+              - _switch.ports.swp3 == [200]
+
+        - name: Query before a DHCP lease has appeared
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars: >-
+              {{ agentless_net_contract_job_vars | combine({'task': 'query_dhcp_lease'}) }}
+            sft_label: dhcp-lease-pending
+            agentless_net_contract_expect: retryable
+
+        - name: Confirm a missing active DHCP lease is retryable
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Create a private fake DHCP lease file for the reserved address
+          block:
+            - name: Create the fake DHCP directory
+              ansible.builtin.file:
+                path: "{{ agentless_net_contract_tempdir.path }}/dhcp"
+                state: directory
+                mode: "0700"
+
+            - name: Mark the fake DHCP lease file initialized
+              ansible.builtin.copy:
+                dest: "{{ agentless_net_contract_tempdir.path }}/dhcp/.initialized"
+                content: "initialized\n"
+                mode: "0600"
+
+            - name: Write the active lease matching the saved MAC and address
+              ansible.builtin.copy:
+                dest: "{{ agentless_net_contract_lease_file }}"
+                content: "0 aa:bb:cc:dd:ee:ff 10.20.1.2 bmi-01 *\n"
+                mode: "0600"
+
+        - name: Query the physical attachment DHCP lease
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars: >-
+              {{ agentless_net_contract_job_vars | combine({'task': 'query_dhcp_lease'}) }}
+            sft_label: dhcp-lease-result
+            agentless_net_contract_expect: success
+
+        - name: Run DHCP query through the generic playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+          vars:
+            agentless_net_contract_expected_result:
+              dhcp_lease:
+                ip_address: 10.20.1.2
+                mac_address: aa:bb:cc:dd:ee:ff
+
+        - name: Restore and delete the NetworkAttachment through the generic playbook
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars: >-
+              {{ agentless_net_contract_job_vars | combine({'task': 'delete_network_attachment'}) }}
+            sft_label: attachment-delete
+            agentless_net_contract_expect: success
+
+        - name: Run delete through the generic playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect state after physical port and DHCP cleanup
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_net_contract_state_file }}"
+              - network_attachment
+              - "{{ agentless_net_contract_bmi_id }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_net_contract_deleted_state
+          changed_when: false
+
+        - name: Confirm the reservation is absent and permanently tombstoned
+          vars:
+            _saved: "{{ agentless_net_contract_deleted_state.stdout | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - not _saved.present
+              - _saved.tombstoned
+              - _saved.claims == []
+
+        - name: Confirm delete restored only saved fabric ports
+          ansible.builtin.slurp:
+            src: "{{ agentless_net_contract_switch_state }}"
+          register: agentless_net_contract_deleted_switch
+
+        - name: Check provisioning VLAN restoration and untouched foreign ports
+          vars:
+            _switch: "{{ agentless_net_contract_deleted_switch.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _switch.ports.swp1 == [30]
+              - _switch.ports.swp2 == [30]
+              - _switch.ports.swp3 == [200]
+              - ('network-attachment-' ~ agentless_net_contract_bmi_id) in _switch.tombstones
+
+        - name: Attempt a late apply after delete completed
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars: >-
+              {{ agentless_net_contract_job_vars | combine({'task': 'apply_network_attachment'}) }}
+            sft_label: late-apply-after-delete
+            agentless_net_contract_expect: final
+
+        - name: Confirm the tombstone rejects late apply
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Check late apply did not mutate the switch
+          ansible.builtin.slurp:
+            src: "{{ agentless_net_contract_switch_state }}"
+          register: agentless_net_contract_late_switch
+
+        - name: Assert switch state is unchanged after late apply
+          vars:
+            _switch: "{{ agentless_net_contract_late_switch.content | b64decode | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _switch.ports.swp1 == [30]
+              - _switch.ports.swp2 == [30]
+              - _switch.ports.swp3 == [200]
+
+        - name: Build a shared ExternalIPPool input without tenant data
+          ansible.builtin.set_fact:
+            agentless_net_contract_pool:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIPPool
+              id: "{{ agentless_net_contract_pool_id }}"
+              metadata:
+                name: agentless-contract-pool
+                namespace: osac-networking
+                uid: "b0000000-0000-4000-8000-000000000004"
+                generation: 1
+              spec:
+                cidrs: [198.51.100.0/30]
+
+        - name: Set the shared ExternalIPPool task input
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars:
+              manager: "{{ agentless_net_contract_manager }}"
+              task: create_external_ip_pool
+              resource: "{{ agentless_net_contract_pool }}"
+            sft_label: shared-pool-create
+            agentless_net_contract_expect: success
+
+        - name: Assert the shared pool task carries no tenant input
+          ansible.builtin.assert:
+            that: agentless_net_contract_job_vars.tenant is not defined
+
+        - name: Register the shared ExternalIPPool
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Build the ExternalIP create input from API-ID snapshots
+          ansible.builtin.set_fact:
+            agentless_net_contract_external_ip:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIP
+              id: "{{ agentless_net_contract_eip_id }}"
+              metadata:
+                name: agentless-contract-ip
+                namespace: agentless-net-contract
+                uid: "b0000000-0000-4000-8000-000000000005"
+                generation: 1
+              spec:
+                pool: "{{ agentless_net_contract_pool_id }}"
+            agentless_net_contract_pool_snapshot:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIPPool
+              id: "{{ agentless_net_contract_pool_id }}"
+              metadata: "{{ agentless_net_contract_pool.metadata }}"
+              spec: "{{ agentless_net_contract_pool.spec }}"
+
+        - name: Set the ExternalIP create task input
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars:
+              manager: "{{ agentless_net_contract_manager }}"
+              task: create_external_ip
+              tenant: "{{ agentless_net_contract_tenant }}"
+              resource: "{{ agentless_net_contract_external_ip }}"
+              external_ip_pool: "{{ agentless_net_contract_pool_snapshot }}"
+            sft_label: external-ip-typed-result
+            agentless_net_contract_expect: success
+
+        - name: Allocate ExternalIP through the generic playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+          vars:
+            agentless_net_contract_expected_result:
+              external_ip:
+                address: 198.51.100.1
+
+        - name: Build the ExternalIPAttachment task input
+          ansible.builtin.set_fact:
+            agentless_net_contract_eia:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: ExternalIPAttachment
+              id: "a0000000-0000-4000-8000-000000000006"
+              metadata:
+                name: agentless-contract-external-access
+                namespace: agentless-net-contract
+                uid: "b0000000-0000-4000-8000-000000000006"
+                generation: 1
+            agentless_net_contract_external_ip_snapshot:
+              id: "{{ agentless_net_contract_eip_id }}"
+              address: 198.51.100.1
+            agentless_net_contract_destination:
+              address: 10.20.1.10
+              routing_domain:
+                type: tenant_virtual_network
+                virtual_network_id: "{{ agentless_net_contract_vn_id }}"
+                subnet_id: "{{ agentless_net_contract_subnet_id }}"
+
+        - name: Set the ExternalIPAttachment create task input
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars:
+              manager: "{{ agentless_net_contract_manager }}"
+              task: attach_external_ip
+              tenant: "{{ agentless_net_contract_tenant }}"
+              resource: "{{ agentless_net_contract_eia }}"
+              external_ip: "{{ agentless_net_contract_external_ip_snapshot }}"
+              destination: "{{ agentless_net_contract_destination }}"
+            sft_label: external-ip-attachment-create
+            agentless_net_contract_expect: success
+
+        - name: Attach the ExternalIP using API-ID snapshots
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Inspect saved ExternalIPAttachment state
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_net_contract_state_file }}"
+              - external_ip_attachment
+              - "{{ agentless_net_contract_eia.id }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_net_contract_eia_state
+          changed_when: false
+
+        - name: Verify the destination and API-ID ownership were saved
+          vars:
+            _saved: "{{ agentless_net_contract_eia_state.stdout | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - _saved.present
+              - _saved.phase == 'ready'
+              - _saved.entry.uid == agentless_net_contract_eia.id
+              - _saved.entry.context.destination == agentless_net_contract_destination
+              - _saved.entry.external_ip_uid == agentless_net_contract_eip_id
+          no_log: true
+
+        - name: Detach the ExternalIP through the generic playbook
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars: >-
+              {{ agentless_net_contract_job_vars | combine({'task': 'detach_external_ip'}) }}
+            sft_label: external-ip-attachment-delete
+            agentless_net_contract_expect: success
+
+        - name: Run ExternalIPAttachment cleanup with no typed result
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Verify ExternalIPAttachment provider state is removed
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../files/inspect_state.py"
+              - "{{ agentless_net_contract_state_file }}"
+              - external_ip_attachment
+              - "{{ agentless_net_contract_eia.id }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_net_contract_eia_deleted_state
+          changed_when: false
+
+        - name: Confirm ExternalIPAttachment deletion leaves its tombstone
+          vars:
+            _saved: "{{ agentless_net_contract_eia_deleted_state.stdout | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - not _saved.present
+              - _saved.tombstoned
+
+        - name: Release ExternalIP by API ID
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars:
+              manager: "{{ agentless_net_contract_manager }}"
+              task: delete_external_ip
+              tenant: "{{ agentless_net_contract_tenant }}"
+              resource: "{{ agentless_net_contract_external_ip }}"
+              external_ip_pool: "{{ agentless_net_contract_pool_snapshot }}"
+            sft_label: external-ip-delete
+            agentless_net_contract_expect: success
+
+        - name: Run ExternalIP release with no typed result
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Delete the shared pool after address release
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars:
+              manager: "{{ agentless_net_contract_manager }}"
+              task: delete_external_ip_pool
+              resource: "{{ agentless_net_contract_pool }}"
+            sft_label: shared-pool-delete
+            agentless_net_contract_expect: success
+
+        - name: Run shared pool delete with no tenant task input
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Build a SecurityGroup no-op snapshot
+          ansible.builtin.set_fact:
+            agentless_net_contract_security_group:
+              apiVersion: osac.openshift.io/v1alpha1
+              kind: SecurityGroup
+              id: "a0000000-0000-4000-8000-000000000007"
+              metadata:
+                name: agentless-contract-security-group
+                namespace: agentless-net-contract
+                uid: "b0000000-0000-4000-8000-000000000007"
+                generation: 1
+              spec: {ingressRules: [], egressRules: []}
+
+        - name: Run the documented SecurityGroup create no-op
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars:
+              manager: "{{ agentless_net_contract_manager }}"
+              task: create_security_group
+              tenant: "{{ agentless_net_contract_tenant }}"
+              resource: "{{ agentless_net_contract_security_group }}"
+            sft_label: security-group-create-no-op
+            agentless_net_contract_expect: success
+
+        - name: Execute SecurityGroup create through the generic playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Run the documented SecurityGroup delete no-op
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars: >-
+              {{ agentless_net_contract_job_vars | combine({'task': 'delete_security_group'}) }}
+            sft_label: security-group-delete-no-op
+            agentless_net_contract_expect: success
+
+        - name: Execute SecurityGroup delete through the generic playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Confirm unsupported FabricDomain create is final
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars:
+              manager: "{{ agentless_net_contract_manager }}"
+              task: create_fabric_domain
+              tenant: "{{ agentless_net_contract_tenant }}"
+              resource:
+                apiVersion: osac.openshift.io/v1alpha1
+                kind: FabricDomain
+                id: "a0000000-0000-4000-8000-000000000008"
+                metadata:
+                  name: unsupported-fabric-domain
+                  namespace: agentless-net-contract
+                  uid: "b0000000-0000-4000-8000-000000000008"
+                  generation: 1
+                spec: {}
+            sft_label: unsupported-fabric-domain-create
+            agentless_net_contract_expect: final
+
+        - name: Run unsupported FabricDomain create
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Confirm FabricDomain delete is an absent-tolerant no-op
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars: >-
+              {{ agentless_net_contract_job_vars | combine({'task': 'delete_fabric_domain'}) }}
+            sft_label: fabric-domain-delete-no-op
+            agentless_net_contract_expect: success
+
+        - name: Run FabricDomain delete through the generic playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Confirm unsupported cluster ingress reservation is final
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars:
+              manager: "{{ agentless_net_contract_manager }}"
+              task: reserve_cluster_ingress_ip
+              tenant: "{{ agentless_net_contract_tenant }}"
+              resource:
+                apiVersion: osac.openshift.io/v1alpha1
+                kind: ClusterOrder
+                id: "a0000000-0000-4000-8000-000000000009"
+                metadata:
+                  name: unsupported-cluster-ingress
+                  namespace: agentless-net-contract
+                  uid: "b0000000-0000-4000-8000-000000000009"
+                  generation: 1
+                spec: {}
+            sft_label: unsupported-ingress-reservation
+            agentless_net_contract_expect: final
+
+        - name: Run unsupported ingress reservation
+          ansible.builtin.include_tasks: run_playbook.yaml
+
+        - name: Confirm cluster ingress release is an absent-tolerant no-op
+          ansible.builtin.set_fact:
+            agentless_net_contract_job_vars: >-
+              {{ agentless_net_contract_job_vars | combine({'task': 'release_cluster_ingress_ip'}) }}
+            sft_label: ingress-release-no-op
+            agentless_net_contract_expect: success
+
+        - name: Run cluster ingress release through the generic playbook
+          ansible.builtin.include_tasks: run_playbook.yaml
+      always:
+        - name: Remove temporary AgentlessNet contract fixtures
+          ansible.builtin.file:
+            path: "{{ agentless_net_contract_tempdir.path }}"
+            state: absent
+          when: agentless_net_contract_tempdir is defined

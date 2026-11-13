@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ValidationError } from 'yup';
 
 import type { ComputeInstanceCatalogItem } from '@osac/types';
-import { ComputeInstanceTemplateReferenceSchema } from '@osac/types';
+import { ComputeInstanceTemplateReferenceSchema, GuestOSFamily } from '@osac/types';
 import { tIdentity } from '@osac/ui-components/test-utils/i18n';
 
 import type { ComputeInstanceWizardValues } from './fields';
@@ -16,8 +16,6 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
   id: 'catalog-rhel-9',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: 'catalog-rhel-9',
     annotations: {},
     creator: 'foo',
@@ -41,13 +39,12 @@ const emptyValues: ComputeInstanceWizardValues = {
   metadata: { name: '', project: '' },
   spec: {
     sshKey: provisioningFieldValue(''),
+    guestOsFamily: GuestOSFamily.GUEST_OS_FAMILY_LINUX,
     diskImage: provisioningFieldValue(emptyResourceSelectValue()),
-    instanceType: provisioningFieldValue(''),
-    userDataSource: provisioningFieldValue('inline'),
-    userData: provisioningFieldValue(''),
-    userDataSecret: provisioningFieldValue(''),
+    instanceType: provisioningFieldValue(emptyResourceSelectValue()),
+    userData: provisioningFieldValue({ source: 'inline', inline: '', secret: '' }),
     bootDisk: {
-      sizeGib: provisioningFieldValue(''),
+      sizeGib: provisioningFieldValue(undefined),
       storageTier: provisioningFieldValue(emptyResourceSelectValue()),
     },
     additionalDisks: provisioningFieldValue([]),
@@ -114,10 +111,7 @@ describe('buildComputeInstanceStepSchema', () => {
       ...emptyValues,
       catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
       metadata: { name: '', project: '' },
-      spec: {
-        ...emptyValues.spec,
-        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
-      },
+      spec: { ...emptyValues.spec },
     });
     expect(errors).toEqual({ metadata: { name: 'Name is required' } });
   });
@@ -127,10 +121,7 @@ describe('buildComputeInstanceStepSchema', () => {
       ...emptyValues,
       catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
       metadata: { name: 'MyVM', project: '' },
-      spec: {
-        ...emptyValues.spec,
-        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
-      },
+      spec: { ...emptyValues.spec },
     });
     expect(errors).toEqual({
       metadata: {
@@ -144,19 +135,20 @@ describe('buildComputeInstanceStepSchema', () => {
       ...emptyValues,
       catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
       metadata: { name: 'my-vm', project: '' },
-      spec: {
-        ...emptyValues.spec,
-        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
-      },
+      spec: { ...emptyValues.spec },
     });
     expect(errors).toEqual({});
   });
 
-  it('requires a disk image on general step', async () => {
-    const errors = await validateStep('general', {
+  it('requires a disk image on configuration step', async () => {
+    const errors = await validateStep('configuration', {
       ...emptyValues,
       catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
       metadata: { name: 'my-vm', project: '' },
+      spec: {
+        ...emptyValues.spec,
+        instanceType: provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' }),
+      },
     });
     expect(errors).toEqual({
       spec: { diskImage: { value: { id: 'Disk image is required' } } },
@@ -171,13 +163,13 @@ describe('buildComputeInstanceStepSchema', () => {
       spec: {
         ...emptyValues.spec,
         bootDisk: {
-          sizeGib: provisioningFieldValue('not-a-number'),
+          sizeGib: provisioningFieldValue(Number.NaN),
           storageTier: provisioningFieldValue({ id: 'id-fast', name: 'fast' }),
         },
       },
     });
     expect(errors).toEqual({
-      spec: { bootDisk: { sizeGib: { value: 'catalogProvision.validation.bootDiskNumber' } } },
+      spec: { bootDisk: { sizeGib: { value: 'Must be a whole number' } } },
     });
   });
 
@@ -188,9 +180,10 @@ describe('buildComputeInstanceStepSchema', () => {
       metadata: { name: 'web-01', project: '' },
       spec: {
         ...emptyValues.spec,
-        instanceType: provisioningFieldValue('standard-4-8'),
+        instanceType: provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' }),
+        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
         bootDisk: {
-          sizeGib: provisioningFieldValue('not-a-number'),
+          sizeGib: provisioningFieldValue(Number.NaN),
           storageTier: provisioningFieldValue(emptyResourceSelectValue()),
         },
       },
@@ -206,7 +199,7 @@ describe('buildComputeInstanceStepSchema', () => {
       spec: {
         ...emptyValues.spec,
         bootDisk: {
-          sizeGib: provisioningFieldValue('30'),
+          sizeGib: provisioningFieldValue(30),
           storageTier: provisioningFieldValue({ id: 'id-fast', name: 'fast' }),
         },
       },
@@ -233,12 +226,11 @@ describe('buildComputeInstanceStepSchema', () => {
       metadata: { name: 'web-01', project: '' },
       spec: {
         ...emptyValues.spec,
+        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
       },
     });
     expect(errors).toEqual({
-      spec: {
-        instanceType: { value: 'Instance type is required' },
-      },
+      spec: { instanceType: { value: { id: 'Instance type is required' } } },
     });
   });
 
@@ -249,11 +241,15 @@ describe('buildComputeInstanceStepSchema', () => {
       metadata: { name: 'web-01', project: '' },
       spec: {
         ...emptyValues.spec,
-        userData: provisioningFieldValue('a'.repeat(65537)),
+        userData: provisioningFieldValue({
+          source: 'inline',
+          inline: 'a'.repeat(65537),
+          secret: '',
+        }),
       },
     });
     expect(errors).toEqual({
-      spec: { userData: { value: 'Cloud-init must not exceed 64 KB.' } },
+      spec: { userData: { value: { inline: 'User data must not exceed 64 KB.' } } },
     });
 
     await expect(
@@ -263,7 +259,11 @@ describe('buildComputeInstanceStepSchema', () => {
         metadata: { name: 'web-01', project: '' },
         spec: {
           ...emptyValues.spec,
-          userData: provisioningFieldValue('a'.repeat(65536)),
+          userData: provisioningFieldValue({
+            source: 'inline',
+            inline: 'a'.repeat(65536),
+            secret: '',
+          }),
         },
       }),
     ).resolves.toEqual({});
@@ -275,9 +275,11 @@ describe('buildComputeInstanceStepSchema', () => {
         metadata: { name: 'web-01', project: '' },
         spec: {
           ...emptyValues.spec,
-          userDataSource: provisioningFieldValue('secret'),
-          userData: provisioningFieldValue('a'.repeat(65537)),
-          userDataSecret: provisioningFieldValue('user-data-secret'),
+          userData: provisioningFieldValue({
+            source: 'secret',
+            inline: 'a'.repeat(65537),
+            secret: 'user-data-secret',
+          }),
         },
       }),
     ).resolves.toEqual({});
@@ -292,7 +294,7 @@ describe('buildComputeInstanceStepSchema', () => {
     expect(errors).toEqual({
       spec: {
         bootDisk: {
-          sizeGib: { value: 'catalogProvision.validation.required' },
+          sizeGib: { value: 'This field is required' },
           storageTier: { value: 'Storage tier is required' },
         },
       },
@@ -307,11 +309,11 @@ describe('buildComputeInstanceStepSchema', () => {
       spec: {
         ...emptyValues.spec,
         bootDisk: {
-          sizeGib: provisioningFieldValue('30'),
+          sizeGib: provisioningFieldValue(30),
           storageTier: provisioningFieldValue({ id: 'id-fast', name: 'fast' }),
         },
         additionalDisks: provisioningFieldValue([
-          { sizeGib: '100', storageTier: emptyResourceSelectValue() },
+          { sizeGib: 100, storageTier: emptyResourceSelectValue() },
         ]),
       },
     });
@@ -334,7 +336,7 @@ describe('buildComputeInstanceStepSchema', () => {
       spec: {
         ...emptyValues.spec,
         bootDisk: {
-          sizeGib: provisioningFieldValue('30'),
+          sizeGib: provisioningFieldValue(30),
           storageTier: provisioningFieldValue(emptyResourceSelectValue()),
         },
       },
@@ -354,11 +356,11 @@ describe('buildComputeInstanceStepSchema', () => {
       spec: {
         ...emptyValues.spec,
         bootDisk: {
-          sizeGib: provisioningFieldValue('30'),
+          sizeGib: provisioningFieldValue(30),
           storageTier: provisioningFieldValue({ id: '', name: 'fast' }),
         },
         additionalDisks: provisioningFieldValue([
-          { sizeGib: '100', storageTier: { id: '', name: 'fast' } },
+          { sizeGib: 100, storageTier: { id: '', name: 'fast' } },
         ]),
       },
     });
@@ -366,13 +368,13 @@ describe('buildComputeInstanceStepSchema', () => {
   });
 
   it.each([
-    ['blank', ''],
-    ['non-numeric', 'not-a-number'],
-    ['zero', '0'],
-    ['negative', '-5'],
-    ['fractional', '30.5'],
-    ['above the maximum', '16385'],
-  ])('rejects an additional disk size that is %s', async (_label, sizeGib) => {
+    ['blank', undefined, 'Disk size is required'],
+    ['non-numeric', Number.NaN, 'Must be a whole number'],
+    ['zero', 0, 'Must be greater than zero'],
+    ['negative', -5, 'Must be greater than zero'],
+    ['fractional', 30.5, 'Must be a whole number'],
+    ['above the maximum', 16385, 'Must be at most {{max}}'],
+  ])('rejects an additional disk size that is %s', async (_label, sizeGib, message) => {
     const errors = await validateStep('storage', {
       ...emptyValues,
       catalogItemReference: { name: vmCatalogItem.title, id: vmCatalogItem.id },
@@ -380,7 +382,7 @@ describe('buildComputeInstanceStepSchema', () => {
       spec: {
         ...emptyValues.spec,
         bootDisk: {
-          sizeGib: provisioningFieldValue('30'),
+          sizeGib: provisioningFieldValue(30),
           storageTier: provisioningFieldValue({ id: 'id-fast', name: 'fast' }),
         },
         additionalDisks: provisioningFieldValue([
@@ -392,7 +394,7 @@ describe('buildComputeInstanceStepSchema', () => {
       spec: {
         additionalDisks: {
           'value[0]': {
-            sizeGib: 'Additional disk size must be a number',
+            sizeGib: message,
           },
         },
       },
@@ -400,9 +402,9 @@ describe('buildComputeInstanceStepSchema', () => {
   });
 
   it.each([
-    ['the minimum', '1'],
-    ['the maximum', '16384'],
-    ['a typical value', '100'],
+    ['the minimum', 1],
+    ['the maximum', 16384],
+    ['a typical value', 100],
   ])(
     'accepts an additional disk size at %s with a storage tier selected',
     async (_label, sizeGib) => {
@@ -413,7 +415,7 @@ describe('buildComputeInstanceStepSchema', () => {
         spec: {
           ...emptyValues.spec,
           bootDisk: {
-            sizeGib: provisioningFieldValue('30'),
+            sizeGib: provisioningFieldValue(30),
             storageTier: provisioningFieldValue({ id: 'id-fast', name: 'fast' }),
           },
           additionalDisks: provisioningFieldValue([
@@ -432,9 +434,10 @@ describe('buildComputeInstanceStepSchema', () => {
       metadata: { name: 'web-01', project: '' },
       spec: {
         ...emptyValues.spec,
-        instanceType: provisioningFieldValue('standard-4-8'),
+        diskImage: provisioningFieldValue({ id: 'disk-image-rhel', name: 'rhel' }),
+        instanceType: provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' }),
         additionalDisks: provisioningFieldValue([
-          { sizeGib: '100', storageTier: emptyResourceSelectValue() },
+          { sizeGib: 100, storageTier: emptyResourceSelectValue() },
         ]),
       },
     });

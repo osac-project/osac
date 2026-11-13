@@ -42,8 +42,8 @@ describe('buildClusterCreatePayload', () => {
           {
             ...row,
             name: 'production',
-            hostType: 'acme_1tb',
-            size: '3',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: 3,
           },
         ]),
         network: {
@@ -53,7 +53,7 @@ describe('buildClusterCreatePayload', () => {
       },
     };
 
-    expect(buildClusterCreatePayload(values, clusterCatalogItem)).toEqual({
+    expect(buildClusterCreatePayload(values)).toEqual({
       metadata: { name: 'my-cluster', project: '' },
       spec: {
         catalogItem: { id: clusterCatalogItem.id },
@@ -71,7 +71,7 @@ describe('buildClusterCreatePayload', () => {
     });
   });
 
-  it('omits blank optional fields, version, and node sets when no valid rows exist', () => {
+  it('omits blank optional fields, version, and node sets when no rows exist', () => {
     const values = {
       ...createEmptyClusterValues(),
       catalogItemReference: { name: clusterCatalogItem.title, id: clusterCatalogItem.id },
@@ -85,7 +85,7 @@ describe('buildClusterCreatePayload', () => {
       },
     };
 
-    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    const payload = buildClusterCreatePayload(values);
     expect(payload.spec).toEqual({
       catalogItem: { id: clusterCatalogItem.id },
       pullSecretSecret: { name: 'secret' },
@@ -94,34 +94,6 @@ describe('buildClusterCreatePayload', () => {
     expect(payload.spec).not.toHaveProperty('version');
     expect(payload.spec).not.toHaveProperty('nodeSets');
     expect(payload.spec).not.toHaveProperty('network');
-  });
-
-  it('filters out invalid node set rows from the payload', () => {
-    const row = createEmptyNodeSetRow();
-    const values = {
-      ...createEmptyClusterValues(),
-      catalogItemReference: { name: clusterCatalogItem.title, id: clusterCatalogItem.id },
-      metadata: { name: 'filtered-pools', project: '' },
-      spec: {
-        ...createEmptyClusterValues().spec,
-        pullSecretSecret: provisioningFieldValue('secret'),
-        versionName: provisioningFieldValue('4-17-0'),
-        nodeSetRows: provisioningFieldValue([
-          { ...row, name: 'empty-host-type', hostType: '', size: '3' },
-          { ...row, name: 'zero-size', hostType: 'acme_1tb', size: '0' },
-          { ...row, name: 'invalid-size', hostType: 'acme_2tb', size: 'not-a-number' },
-          { ...row, name: 'production', hostType: 'acme_1tb', size: '3' },
-          { ...row, name: 'development', hostType: 'acme_1tb', size: '2' },
-        ]),
-        network: { podCidr: provisioningFieldValue(''), serviceCidr: provisioningFieldValue('') },
-      },
-    };
-
-    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
-    expect(payload.spec?.nodeSets).toEqual({
-      production: { baremetalInstanceType: { id: 'acme_1tb' }, size: 3 },
-      development: { baremetalInstanceType: { id: 'acme_1tb' }, size: 2 },
-    });
   });
 
   it('preserves __proto__ as a node set name in the payload', () => {
@@ -137,15 +109,15 @@ describe('buildClusterCreatePayload', () => {
           {
             ...createEmptyNodeSetRow(),
             name: '__proto__',
-            hostType: 'acme_1tb',
-            size: '3',
+            hostType: { id: 'acme_1tb', name: 'acme_1tb' },
+            size: 3,
           },
         ]),
         network: { podCidr: provisioningFieldValue(''), serviceCidr: provisioningFieldValue('') },
       },
     };
 
-    const nodeSets = buildClusterCreatePayload(values, clusterCatalogItem).spec?.nodeSets;
+    const nodeSets = buildClusterCreatePayload(values).spec?.nodeSets;
     expect(Object.keys(nodeSets ?? {})).toContain('__proto__');
     expect(nodeSets?.['__proto__']).toEqual({
       baremetalInstanceType: { id: 'acme_1tb' },
@@ -170,7 +142,7 @@ describe('buildClusterCreatePayload', () => {
       },
     };
 
-    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    const payload = buildClusterCreatePayload(values);
     expect(payload.spec).not.toHaveProperty('networkAttachment');
   });
 
@@ -191,7 +163,7 @@ describe('buildClusterCreatePayload', () => {
       },
     };
 
-    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    const payload = buildClusterCreatePayload(values);
     expect(payload.spec).not.toHaveProperty('networkAttachment');
   });
 
@@ -215,7 +187,7 @@ describe('buildClusterCreatePayload', () => {
       },
     };
 
-    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    const payload = buildClusterCreatePayload(values);
     expect(payload.spec?.networkAttachment).toEqual({
       subnet: { id: 'my-subnet' },
       securityGroups: [{ id: 'sg-1' }, { id: 'sg-2' }],
@@ -248,7 +220,7 @@ describe('buildClusterCreatePayload', () => {
       },
     };
 
-    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    const payload = buildClusterCreatePayload(values);
     expect(payload.spec?.autoExternalIpAttachment).toBe(true);
   });
 
@@ -264,7 +236,7 @@ describe('buildClusterCreatePayload', () => {
       },
     };
 
-    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    const payload = buildClusterCreatePayload(values);
     expect(payload.spec?.autoExternalIpAttachment).toBe(false);
   });
 
@@ -283,7 +255,7 @@ describe('buildClusterCreatePayload', () => {
       },
     };
 
-    expect(buildClusterCreatePayload(values, clusterCatalogItem).metadata).toEqual({
+    expect(buildClusterCreatePayload(values).metadata).toEqual({
       name: 'my-cluster',
       project,
     });
@@ -303,7 +275,7 @@ describe('buildClusterCreatePayload — locked catalog fields', () => {
       },
     };
 
-    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    const payload = buildClusterCreatePayload(values);
     expect(payload.spec).not.toHaveProperty('version');
     expect(payload.spec?.pullSecretSecret).toEqual({ name: 'secret' });
   });
@@ -320,7 +292,7 @@ describe('buildClusterCreatePayload — locked catalog fields', () => {
       },
     };
 
-    expect(buildClusterCreatePayload(values, clusterCatalogItem).spec?.version).toEqual({
+    expect(buildClusterCreatePayload(values).spec?.version).toEqual({
       name: '4-20-0',
     });
   });
@@ -339,8 +311,8 @@ describe('buildClusterCreatePayload — locked catalog fields', () => {
             {
               ...createEmptyNodeSetRow(),
               name: 'workers',
-              hostType: 'bmit-worker',
-              size: '2',
+              hostType: { id: 'bmit-worker', name: 'worker' },
+              size: 2,
             },
           ],
           true,
@@ -353,7 +325,7 @@ describe('buildClusterCreatePayload — locked catalog fields', () => {
       },
     };
 
-    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    const payload = buildClusterCreatePayload(values);
     expect(payload.spec).not.toHaveProperty('sshPublicKey');
     expect(payload.spec).not.toHaveProperty('nodeSets');
     expect(payload.spec).not.toHaveProperty('network');
@@ -380,7 +352,7 @@ describe('buildClusterCreatePayload — locked catalog fields', () => {
       },
     };
 
-    const payload = buildClusterCreatePayload(values, clusterCatalogItem);
+    const payload = buildClusterCreatePayload(values);
     expect(payload.spec).not.toHaveProperty('pullSecretSecret');
     expect(payload.spec).not.toHaveProperty('networkAttachment');
   });

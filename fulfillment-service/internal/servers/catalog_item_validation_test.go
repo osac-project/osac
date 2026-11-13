@@ -24,31 +24,6 @@ import (
 )
 
 var _ = Describe("Catalog Item typed field policies", func() {
-	DescribeTable("validates concrete SSH policy values",
-		func(validate func(*privatev1.StringFieldPolicy) error) {
-			empty := ""
-			malformed := "not-an-openssh-key"
-			valid := testSSHPublicKey
-
-			Expect(validate(privatev1.StringFieldPolicy_builder{Locked: &empty}.Build())).To(HaveOccurred())
-			Expect(validate(privatev1.StringFieldPolicy_builder{
-				Editable: privatev1.EditableStringField_builder{DefaultValue: &empty}.Build(),
-			}.Build())).To(HaveOccurred())
-			Expect(validate(privatev1.StringFieldPolicy_builder{Locked: &malformed}.Build())).To(HaveOccurred())
-			Expect(validate(privatev1.StringFieldPolicy_builder{Locked: &valid}.Build())).To(Succeed())
-			Expect(validate(privatev1.StringFieldPolicy_builder{
-				Editable: privatev1.EditableStringField_builder{}.Build(),
-			}.Build())).To(Succeed())
-		},
-		Entry("for Cluster Catalog Items", func(policy *privatev1.StringFieldPolicy) error {
-			return validateClusterCatalogItemScalarPolicies(
-				privatev1.ClusterCatalogItemFields_builder{SshPublicKey: policy}.Build())
-		}),
-		Entry("for BareMetalInstance Catalog Items", func(policy *privatev1.StringFieldPolicy) error {
-			return validateBareMetalInstanceCatalogItemScalarPolicies(
-				privatev1.BareMetalInstanceCatalogItemFields_builder{SshPublicKey: policy}.Build())
-		}),
-	)
 
 	It("applies compute defaults without aliasing the Catalog Item", func() {
 		defaultImage := privatev1.DiskImageReference_builder{Name: "default-image"}.Build()
@@ -158,6 +133,12 @@ var _ = Describe("Catalog Item typed field policies", func() {
 		Expect(validateSharedCatalogItemLocalReferencePolicy(scope, "fields.pull_secret_secret", false, false)).To(Succeed())
 		Expect(validateSharedCatalogItemLocalReferencePolicy(scope, "fields.pull_secret_secret", true, false)).To(MatchError(ContainSubstring("field 'fields.pull_secret_secret': shared catalog items cannot define a locked or default tenant-local reference")))
 		Expect(validateSharedCatalogItemLocalReferencePolicy(scope, "fields.pull_secret_secret", false, true)).To(MatchError(ContainSubstring("field 'fields.pull_secret_secret': shared catalog items cannot define a locked or default tenant-local reference")))
+	})
+
+	It("rejects Cluster SSH-key policies without behavior", func() {
+		policy := privatev1.FullSecretReferenceFieldPolicy_builder{}.Build()
+		_, err := decodeFullSecretReferencePolicy(policy)
+		Expect(err).To(MatchError(ContainSubstring("full Secret reference policy has no behavior")))
 	})
 
 	It("materializes the resolved full-reference scope", func() {

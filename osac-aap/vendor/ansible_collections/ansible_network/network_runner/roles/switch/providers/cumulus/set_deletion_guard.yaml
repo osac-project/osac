@@ -1,0 +1,15 @@
+---
+- name: "cumulus: record the deletion guard under the nvue lock"
+  raw: |
+    flock /tmp/nvue.lock -c '
+      set -eu
+      root="{{ _guard_root }}"
+      scope="{{ guard_scope }}"
+      key="{{ guard_key }}"
+      install -d -m 0700 "$root"
+      install -d -m 0700 "$root/$scope"
+      umask 077
+      : >"$root/$scope/$key"
+    '
+  changed_when: true
+  no_log: true

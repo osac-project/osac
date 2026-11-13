@@ -99,7 +99,6 @@ describe('ExternalIpWizardPage', () => {
     expect(screen.getByRole('button', { name: 'Review' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Name' })).toBeInTheDocument();
-    expect(screen.getByRole('textbox', { name: 'Description' })).toBeInTheDocument();
     expect(screen.queryByLabelText(/^IP pool/)).not.toBeInTheDocument();
   });
 

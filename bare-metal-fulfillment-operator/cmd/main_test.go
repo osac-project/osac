@@ -74,6 +74,52 @@ func (m *startupTestManager) GetRESTMapper() meta.RESTMapper {
 	return m.mapper
 }
 
+var _ = Describe("createSecretAPIClientFromEnv", func() {
+	DescribeTable("requires an endpoint before reading credentials",
+		func(endpoint string) {
+			GinkgoT().Setenv(envSecretAPIURL, endpoint)
+			secretsClient, err := createSecretAPIClientFromEnv()
+			Expect(secretsClient).To(BeNil())
+			Expect(err).To(MatchError("OSAC_SECRET_API_URL is required"))
+		},
+		Entry("missing", ""),
+		Entry("blank", " \t\n"),
+	)
+
+	DescribeTable("identifies invalid endpoint configuration without exposing the input",
+		func(endpoint string) {
+			GinkgoT().Setenv(envSecretAPIURL, endpoint)
+			secretsClient, err := createSecretAPIClientFromEnv()
+			Expect(secretsClient).To(BeNil())
+			Expect(err).To(MatchError("failed to configure Secret API client " +
+				"(OSAC_SECRET_API_URL): Secret API endpoint must be a valid URL with a host"))
+			Expect(err.Error()).NotTo(ContainSubstring(endpoint))
+		},
+		Entry("malformed", "https://example.test:invalid"),
+		Entry("hostless", "https:///api"),
+		Entry("port-only", "https://:8001"),
+	)
+
+	DescribeTable("preserves the cause of non-endpoint configuration errors",
+		func(issuerURL, caFile, wantCause string) {
+			credentialFile := filepath.Join(GinkgoT().TempDir(), "credential")
+			Expect(os.WriteFile(credentialFile, []byte("test-value"), 0o600)).To(Succeed())
+			GinkgoT().Setenv(envSecretAPIURL, "https://secrets.example.test:8001")
+			GinkgoT().Setenv(envSecretAPIIssuerURL, issuerURL)
+			GinkgoT().Setenv(envSecretAPIClientIDFile, credentialFile)
+			GinkgoT().Setenv(envSecretAPIClientSecretFile, credentialFile)
+			GinkgoT().Setenv(envSecretAPICAFile, caFile)
+			secretsClient, err := createSecretAPIClientFromEnv()
+			Expect(secretsClient).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring("failed to configure Secret API client " +
+				"(OSAC_SECRET_API_URL): " + wantCause)))
+			Expect(err.Error()).NotTo(ContainSubstring("endpoint must be a valid URL"))
+		},
+		Entry("issuer", "", "", "Secret API issuer URL must use HTTPS"),
+		Entry("CA", "https://issuer.example.test", "/missing/secret-api-ca.pem", "failed to read Secret API CA file"),
+	)
+})
+
 var _ = Describe("Scheme Initialization", func() {
 	It("should register all expected schemes", func() {
 		// Verify the global scheme variable is initialized

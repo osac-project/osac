@@ -20,6 +20,24 @@ global:
   # <service.externalHostname>:443 for OpenShift.
   fulfillment:
     endpoint: ""
+  # Optional billing provider. Leave provider null to disable billing. The
+  # credential lives in an existing Secret that is mounted into the fulfillment
+  # gRPC server; never put it in values. Metering can consume the same block.
+  billing:
+    provider: null
+    # Example:
+    #   provider:
+    #     key: m360
+    #     baseUrl: https://billing.example.com/api/v1/external
+    #     credentialSecret: {name: billing-token, key: api-token}
+    #     # Optional: extra CA bundle the service trusts for the provider.
+    #     caSecret: {name: billing-ca, key: ca-bundle}
+    tuning:
+      retryCount: 3
+      pricingBreaker:
+        failureThreshold: 5
+        failureWindowSeconds: 30
+        openSeconds: 30
   fulfillmentTrust:
     # Enables trust reconciliation for tenant-scoped ClusterOrders.
     # Enable only when tenant CSI trust support is deployed.
@@ -57,6 +75,17 @@ global:
     fabricManager: ""
     # OSAC Kubernetes Manager; required with VMaaS. "" or cudn_evpn.
     k8sManager: ""
+    # Groups allowed to create, update, or delete the customer-managed Netris
+    # CA ConfigMap named by
+    # aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP.
+    # system:masters is the break-glass group of the system:admin certificate;
+    # system:cluster-admins holds the built-in cluster-admin subjects. An
+    # identity-provider group bound directly to cluster-admin is in neither,
+    # so add each such group here explicitly.
+    caBundle:
+      adminGroups:
+        - "system:masters"
+        - "system:cluster-admins"
     networkClass:
       defaults:
         virtualNetworkIPv4CIDR: 10.200.0.0/16
@@ -75,6 +104,9 @@ global:
       #   fabric: 0.25
       #   lbVip: 0.25
 
+# Used by the validation and CA identity hook Jobs. With Netris CA validation
+# enabled the image must provide kubectl, sh, grep, mktemp, rm and openssl (the
+# hooks fail with ERROR: NETRIS_CA_* instead of skipping the checks).
 cliImage: quay.io/openshift/origin-cli:4.20.0
 
 # Shared PostgreSQL host for the db-init hook.
@@ -373,6 +405,14 @@ metering:
     repository: ghcr.io/osac-project/metering-service
     tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
     pullPolicy: Always
+  # Outside systems that read every tenant's heartbeat topics with their own
+  # credentials. Each entry names one reader and no tenant; the reader name is
+  # also its Kafka consumer group, where lag is reported. The grant covers the
+  # osac.metering.heartbeat. topic prefix, so a new tenant needs no chart
+  # change. Add or remove an entry and run helm upgrade to grant or revoke; no
+  # OSAC service restarts. This is a list of objects, so the Enclave Wizard
+  # renders no control for it; operators set it in values.
+  readers: []
   database:
     connection:
     - secret:

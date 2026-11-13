@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -818,7 +819,7 @@ func TestBackupFixturePreservesAllLedgerPiecesAndPendingOutbox(t *testing.T) {
 		t.Fatalf("writing the ledger: %v", err)
 	}
 	event, err := heartbeat.New(tenant, key, pieces[1].StartTime, pieces[1].EndTime,
-		pieces[1].QuantityMicro, "second", pieces[1].EndTime, 3, "0001")
+		pieces[1].QuantityMicro, "second", pieces[1].EndTime, 3, "0001", "")
 	if err != nil {
 		t.Fatalf("building the heartbeat: %v", err)
 	}
@@ -1773,5 +1774,303 @@ func TestRebuildCountsAResentCopyOnceAcrossACrash(t *testing.T) {
 	if got := billedMicro(t, tenant, "vm-web"); got != 180_000_000 {
 		t.Fatalf("a copy resent after a crash mid-replay must count once: vm-web "+
 			"billed %d micro, want 180000000", got)
+	}
+}
+
+func heartbeatDataOf(t *testing.T, row database.OutboxRow) schema.HeartbeatData {
+	t.Helper()
+	event := cloudevents.Event{}
+	if err := event.UnmarshalJSON(row.Payload); err != nil {
+		t.Fatalf("unmarshaling heartbeat: %v", err)
+	}
+	data, err := heartbeat.Data(event)
+	if err != nil {
+		t.Fatalf("decoding heartbeat: %v", err)
+	}
+	return data
+}
+
+func TestRoundCarriesTheLatestExternalBillingAccountID(t *testing.T) {
+	const tenant = "billing-round"
+	p := pipelinetest.NewPipeline(t, tenant)
+	created := testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+		base, base, "web", "RUNNING", base, "small", base)
+	created.SetExternalBillingId("acct-1")
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{created})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(time.Minute))
+
+	first := pendingHeartbeats(t, p.Store, tenant)
+	if len(first) == 0 {
+		t.Fatal("expected heartbeats for the first round")
+	}
+	firstPayload := map[string]string{}
+	for _, row := range first {
+		data := heartbeatDataOf(t, row)
+		if data.ExternalBillingAccountID == nil || *data.ExternalBillingAccountID != "acct-1" {
+			t.Fatalf("heartbeat %s billing id = %v, want acct-1", row.ID, data.ExternalBillingAccountID)
+		}
+		firstPayload[row.ID] = string(row.Payload)
+	}
+
+	changed := testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+		base.Add(time.Minute), base, "web", "RUNNING", base, "small", base)
+	changed.SetExternalBillingId("acct-2")
+	total += testenv.ProduceEvents(t, tenant, []*privatev1.Event{changed})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(2*time.Minute))
+
+	var sawNew bool
+	for _, row := range pendingHeartbeats(t, p.Store, tenant) {
+		if payload, ok := firstPayload[row.ID]; ok {
+			if string(row.Payload) != payload {
+				t.Fatalf("heartbeat %s already in the outbox was rewritten", row.ID)
+			}
+			continue
+		}
+		sawNew = true
+		data := heartbeatDataOf(t, row)
+		if data.ExternalBillingAccountID == nil || *data.ExternalBillingAccountID != "acct-2" {
+			t.Fatalf("new heartbeat %s billing id = %v, want acct-2", row.ID, data.ExternalBillingAccountID)
+		}
+	}
+	if !sawNew {
+		t.Fatal("the round after the billing id change wrote no new heartbeat")
+	}
+}
+
+type failingFoldConsumer struct {
+	sarama.Consumer
+}
+
+func (consumer failingFoldConsumer) ConsumePartition(string, int32, int64) (sarama.PartitionConsumer, error) {
+	return nil, errors.New("injected fold partition error")
+}
+
+func TestFoldAllReportsWorkerError(t *testing.T) {
+	if os.Getenv("OSAC_FOLD_ERROR_HELPER") == "1" {
+		store := testenv.Database(t)
+		worker, err := fold.New(store, failingFoldConsumer{}, logr.Discard())
+		if err != nil {
+			t.Fatal(err)
+		}
+		pipeline := &pipelinetest.Pipeline{Tenant: "fold-error", Store: store, Fold: worker}
+		pipeline.FoldAll(t, 1)
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, executable, "-test.run=^TestFoldAllReportsWorkerError$", "-test.v")
+	command.Env = append(os.Environ(), "OSAC_FOLD_ERROR_HELPER=1")
+	output, err := command.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("fold error helper did not finish: %v", ctx.Err())
+	}
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 1 {
+		t.Fatalf("fold error helper exit = %v, want test failure", err)
+	}
+	if !strings.Contains(string(output), "folding events: consuming osac.events.fold-error: injected fold partition error") {
+		t.Fatal("FoldAll did not report the original partition-consumption error")
+	}
+	if strings.Contains(string(output), "fold did not reach offset") {
+		t.Fatal("FoldAll reported an offset timeout instead of the worker error")
+	}
+}
+
+type gatedCloseConsumer struct {
+	sarama.Consumer
+	closing chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (consumer *gatedCloseConsumer) ConsumePartition(
+	topic string, partition int32, offset int64,
+) (sarama.PartitionConsumer, error) {
+	actual, err := consumer.Consumer.ConsumePartition(topic, partition, offset)
+	if err != nil {
+		return nil, err
+	}
+	return &gatedClosePartition{PartitionConsumer: actual, owner: consumer}, nil
+}
+
+type gatedClosePartition struct {
+	sarama.PartitionConsumer
+	owner *gatedCloseConsumer
+}
+
+func (partition *gatedClosePartition) Close() error {
+	partition.owner.once.Do(func() { close(partition.owner.closing) })
+	<-partition.owner.release
+	return partition.PartitionConsumer.Close()
+}
+
+func TestFoldAllWaitsForConsumerRelease(t *testing.T) {
+	const tenant = "fold-all-release"
+	pipeline := pipelinetest.NewPipeline(t, tenant)
+	consumer := &gatedCloseConsumer{
+		Consumer: testenv.NewConsumer(t),
+		closing:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(consumer.release) }) }
+	worker, err := fold.New(pipeline.Store, consumer, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipeline.Fold = worker
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+	})
+	returned := make(chan struct{})
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-returned:
+		case <-time.After(5 * time.Second):
+			t.Error("fold worker did not finish during cleanup")
+		}
+	})
+	go func() {
+		defer close(returned)
+		pipeline.FoldAll(t, total)
+	}()
+	select {
+	case <-consumer.closing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled fold did not start closing its partition")
+	}
+	select {
+	case <-returned:
+		t.Fatal("FoldAll returned before its partition consumer was released")
+	case <-time.After(250 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("FoldAll did not return after releasing its partition consumer")
+	}
+	total += testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			base.Add(time.Minute), base, "web", "RUNNING", base, "small", base),
+	})
+	pipeline.FoldAll(t, total)
+}
+
+// TestRoundCarriesBillingAccountFromLaterEventOffset checks that a later Kafka
+// offset wins when its event timestamp is earlier than a previous envelope.
+func TestRoundCarriesBillingAccountFromLaterEventOffset(t *testing.T) {
+	const tenant = "billing-round-offset"
+	p := pipelinetest.NewPipeline(t, tenant)
+	laterStamp := testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+		base.Add(time.Minute), base, "web", "RUNNING", base, "small", base)
+	laterStamp.SetExternalBillingId("acct-2")
+	earlierStamp := testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+		base, base, "web", "RUNNING", base, "small", base)
+	earlierStamp.SetExternalBillingId("acct-1")
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{laterStamp, earlierStamp})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(2*time.Minute))
+	rows := pendingHeartbeats(t, p.Store, tenant)
+	if len(rows) == 0 {
+		t.Fatal("expected heartbeats")
+	}
+	for _, row := range rows {
+		data := heartbeatDataOf(t, row)
+		if data.ExternalBillingAccountID == nil || *data.ExternalBillingAccountID != "acct-1" {
+			t.Fatalf("heartbeat %s billing id = %v, want acct-1 from the later offset",
+				row.ID, data.ExternalBillingAccountID)
+		}
+	}
+}
+
+func TestRoundOmitsExternalBillingAccountIDWhenTheTenantHasNone(t *testing.T) {
+	const tenant = "billing-round-empty"
+	p := pipelinetest.NewPipeline(t, tenant)
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{
+		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+			base, base, "web", "RUNNING", base, "small", base),
+	})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(time.Minute))
+	rows := pendingHeartbeats(t, p.Store, tenant)
+	if len(rows) == 0 {
+		t.Fatal("expected heartbeats")
+	}
+	for _, row := range rows {
+		data := heartbeatDataOf(t, row)
+		if data.ExternalBillingAccountID != nil {
+			t.Fatalf("heartbeat %s has billing id %q", row.ID, *data.ExternalBillingAccountID)
+		}
+		if strings.Contains(string(row.Payload), "external_billing_account_id") {
+			t.Fatalf("heartbeat %s payload contains external_billing_account_id", row.ID)
+		}
+	}
+}
+
+// TestRoundKeepsBillingAccountOnDeletionReversal bills a VM, then deletes it and
+// the tenant. The tenant delete event still carries the account, which is what the
+// publisher stamps from the archived tenant row. The reversal that takes back the
+// minutes billed after the VM was deleted must name that same account.
+func TestRoundKeepsBillingAccountOnDeletionReversal(t *testing.T) {
+	const tenant = "billing-round-reversal"
+	const account = "acct-1"
+	p := pipelinetest.NewPipeline(t, tenant)
+
+	created := testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+		base, base, "web", "RUNNING", base, "small", base)
+	created.SetExternalBillingId(account)
+	total := testenv.ProduceEvents(t, tenant, []*privatev1.Event{created})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(time.Minute))
+
+	deletedAt := base.Add(30 * time.Second)
+	vmDeleted := testenv.VMEvent("e2", privatev1.EventType_EVENT_TYPE_OBJECT_DELETED,
+		deletedAt, base, "web", "STOPPED", deletedAt, "small", base)
+	vmDeleted.SetExternalBillingId(account)
+	tenantDeleted := &privatev1.Event{
+		Id:        "e3",
+		Type:      privatev1.EventType_EVENT_TYPE_OBJECT_DELETED,
+		Timestamp: timestamppb.New(deletedAt.Add(10 * time.Second)),
+		Payload: &privatev1.Event_Tenant{
+			Tenant: &privatev1.Tenant{
+				Id: tenant,
+				Metadata: &privatev1.Metadata{
+					CreationTimestamp: timestamppb.New(base),
+				},
+			},
+		},
+	}
+	tenantDeleted.SetExternalBillingId(account)
+	total += testenv.ProduceEvents(t, tenant, []*privatev1.Event{vmDeleted, tenantDeleted})
+	p.FoldAll(t, total)
+	p.RoundAt(t, base.Add(2*time.Minute))
+
+	var reversals int
+	for _, row := range pendingHeartbeats(t, p.Store, tenant) {
+		data := heartbeatDataOf(t, row)
+		quantity, err := heartbeat.ParseMicro(data.Usage.Quantity)
+		if err != nil {
+			t.Fatalf("parsing quantity of heartbeat %s: %v", row.ID, err)
+		}
+		if quantity >= 0 {
+			continue
+		}
+		reversals++
+		if data.ExternalBillingAccountID == nil || *data.ExternalBillingAccountID != account {
+			t.Fatalf("reversal heartbeat %s billing id = %v, want %s",
+				row.ID, data.ExternalBillingAccountID, account)
+		}
+	}
+	if reversals == 0 {
+		t.Fatal("deleting the billed VM produced no reversal heartbeat")
 	}
 }

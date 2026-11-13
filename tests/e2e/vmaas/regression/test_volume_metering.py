@@ -28,6 +28,7 @@ from tests.e2e.core.metering import (
     HEARTBEAT_TYPE,
     MeteringCollector,
     assert_exact_contiguous_life,
+    delete_recording_timestamp,
     interval_seconds,
     parse_time,
     usage_interval,
@@ -104,7 +105,7 @@ def test_volume_bills_gibibyte_seconds(
         # assertions below need its recorded deletion timestamp.
         volume_cr_name = poll_until(
             fn=lambda: k8s_hub_client.get_by_label(
-                resource="volume",
+                resource="volumes.osac.openshift.io",
                 label=f"osac.openshift.io/volume-uuid={volume_id}",
                 jsonpath="{.items[0].metadata.name}",
             ),
@@ -185,43 +186,24 @@ def test_volume_bills_gibibyte_seconds(
 def _delete_volume(grpc: GRPCClient, k8s: K8sClient, *, volume_id: str, cr_name: str | None) -> datetime | None:
     """Delete the volume and return the deletion time the API server recorded.
 
-    The Volume CR's whole teardown can finish in under a second (the vendor
-    deprovisioning of a node-local thin volume is fast), so the deletion
-    timestamp is read through a watch established before the delete request:
-    the watch always delivers the modification that stamps it, where a plain
-    get can arrive after the object is already gone. None when the volume
-    never had a CR to watch: the cleanup path after a failed setup.
+    None when the volume never had a CR to watch: the cleanup path after a
+    failed setup.
     """
     deletion_recorded: datetime | None = None
     if cr_name is None:
         with contextlib.suppress(Exception):
             grpc.call(service=f"{PRIVATE_API}.Volumes/Delete", data={"id": volume_id})
     else:
-        try:
-            with k8s.watch_deletion_timestamp(resource="volume", name=cr_name) as deletion_stamp:
-                with contextlib.suppress(Exception):
-                    grpc.call(service=f"{PRIVATE_API}.Volumes/Delete", data={"id": volume_id})
-                with contextlib.suppress(Exception):
-                    deletion_recorded = parse_time(
-                        poll_until(
-                            fn=deletion_stamp,
-                            until=lambda stamp: bool(stamp),
-                            retries=30,
-                            delay=2,
-                            description=f"deletion timestamp of Volume CR {cr_name}",
-                            resource_kind=WaitResourceKind.VOLUME,
-                            resource_id=cr_name,
-                        )
-                    )
-        except Exception:
-            # A watch that never started must not leak the volume: the
-            # delete above never ran, so issue it now, then fail loudly.
-            with contextlib.suppress(Exception):
-                grpc.call(service=f"{PRIVATE_API}.Volumes/Delete", data={"id": volume_id})
-            raise
+        deletion_recorded = delete_recording_timestamp(
+            k8s,
+            resource="volumes.osac.openshift.io",
+            cr_name=cr_name,
+            delete=lambda: grpc.call(service=f"{PRIVATE_API}.Volumes/Delete", data={"id": volume_id}),
+            resource_kind=WaitResourceKind.VOLUME,
+        )
         with contextlib.suppress(Exception):
             poll_until(
-                fn=lambda: not k8s.is_present(resource="volume", name=cr_name),
+                fn=lambda: not k8s.is_present(resource="volumes.osac.openshift.io", name=cr_name),
                 until=lambda gone: gone is True,
                 retries=60,
                 delay=5,

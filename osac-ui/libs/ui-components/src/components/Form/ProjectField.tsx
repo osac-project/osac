@@ -30,13 +30,14 @@ const ProjectField = ({ label, onSelect: onSelectProp, isDisabled }: ProjectFiel
   const fieldLabel = label || t('Project');
   const helperDescribedBy = getFormFieldHelperDescribedBy(fieldId, fieldError);
   const {
-    data: projects = [],
+    data: projectReply,
     isLoading,
     error: loadError,
   } = useListAllResources(
     Projects,
     cel<Project>((builder) => builder.field('metadata.tenant').notEquals('shared')),
   );
+  const projects = projectReply?.items ?? [];
 
   return (
     <>

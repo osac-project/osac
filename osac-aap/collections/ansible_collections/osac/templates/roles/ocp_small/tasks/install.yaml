@@ -7,8 +7,8 @@
       name: osac.service.hosted_cluster
       tasks_from: main.yaml
     install_step_external_access_default:
-      name: osac.service.external_access
-      tasks_from: main.yaml
+      name: osac.templates.ocp_small
+      tasks_from: noop.yaml
     install_step_retrieve_kubeconfig_default:
       name: osac.service.retrieve_kubeconfig
       tasks_from: main.yaml
@@ -49,7 +49,6 @@
     external_access_name: "{{ cluster_order.metadata.name }}"
     external_access_state: present
     external_access_namespace: "{{ cluster_working_namespace }}"
-    external_access_ingress_internal_network: "network-{{ cluster_order.metadata.name }}"
 
 - name: Step - Retrieve kubeconfig
   ansible.builtin.include_role:

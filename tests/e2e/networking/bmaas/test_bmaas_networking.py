@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 from collections.abc import Iterator
 from typing import Any, ClassVar
@@ -19,10 +20,7 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_attachment_ready,
     wait_for_external_ip_cr,
     wait_for_external_ip_deletion,
-    wait_for_external_ip_pool_cr,
     wait_for_external_ip_pool_deletion,
-    wait_for_external_ip_pool_grpc_ready,
-    wait_for_external_ip_pool_ready,
     wait_for_grpc_subnet_ready,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
@@ -36,19 +34,39 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import poll_until
+from tests.e2e.core.runner import CommandFailed, poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
+from tests.e2e.networking.vmaas.stack import resolve_external_ip_pool
 
 pytestmark = pytest.mark.regression
 
 _NETRIS_BMI_RUNNING_RETRIES = 240
+_DEFAULT_LABEL = "osac.openshift.io/default"
+_LOG = logging.getLogger(__name__)
 
 
 def _require(state: dict[str, Any], *keys: str) -> None:
     missing = [k for k in keys if k not in state]
     if missing:
         pytest.skip(f"Prerequisite state missing: {', '.join(missing)}")
+
+
+def _pool_external_ips(private_grpc: GRPCClient, pool_id: str) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in private_grpc.list_private_external_ips()
+        if item.get("spec", {}).get("pool", {}).get("id") == pool_id
+    ]
+
+
+def _is_default_external_ip(item: dict[str, Any]) -> bool:
+    return (item.get("metadata", {}).get("labels") or {}).get(_DEFAULT_LABEL) == "true"
+
+
+def _describe_external_ip(item: dict[str, Any]) -> str:
+    metadata = item.get("metadata", {})
+    return f"{metadata.get('name', '?')} ({item.get('id', '?')}, tenant {metadata.get('tenant', '?')})"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -67,20 +85,23 @@ class TestBmaasNetworking:
 
     # ── Phase 0: External IP Pool ─────────────────────────────────────
 
-    def test_00_create_external_ip_pool(
+    def test_00_resolve_external_ip_pool(
         self,
         private_grpc: GRPCClient,
         k8s_hub_client: K8sClient,
         external_ip_pool_name: str,
         external_ip_pool_cidr: str,
     ) -> None:
-        pool_id = private_grpc.create_external_ip_pool(name=external_ip_pool_name, cidrs=[external_ip_pool_cidr])
-        pool_cr = wait_for_external_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
-        wait_for_external_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr)
-        wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
-
-        self.__class__.state.update(pool_id=pool_id, pool_cr=pool_cr)
-        print("Created ExternalIPPool")
+        # The lab setup creates the routed pool before the tenants, because
+        # their default-nat needs it. Adopt it; create it only when missing.
+        pool = resolve_external_ip_pool(
+            private_grpc=private_grpc,
+            k8s_hub_client=k8s_hub_client,
+            name=external_ip_pool_name,
+            cidr=external_ip_pool_cidr,
+        )
+        self.__class__.state.update(pool_id=pool["id"], pool_cr=pool["cr"], pool_owned=pool["owned"])
+        print(f"ExternalIPPool {pool['id']} (created by this suite: {pool['owned']})")
 
     # ── Phase 1: Build the Network ──────────────────────────────────────
 
@@ -190,7 +211,7 @@ class TestBmaasNetworking:
         bmi_instance_type: str,
         bmi_network_interface: str,
         bmi_disk_image: str,
-        net_ssh_public_key: str,
+        net_ssh_key_secret: str,
         bmh_namespace: str,
         net_test_run_id: str,
         bmh_ssh_hosts: dict[str, str],
@@ -210,7 +231,7 @@ class TestBmaasNetworking:
                 name=bmi_name,
                 catalog_item=catalog,
                 instance_type=bmi_instance_type,
-                ssh_key=net_ssh_public_key,
+                ssh_key=net_ssh_key_secret,
                 disk_image=bmi_disk_image,
                 network_attachments=[
                     f"subnet={subnet_id},interface={bmi_network_interface},primary,security-groups={sg}"
@@ -557,8 +578,82 @@ class TestBmaasNetworking:
         if "pool_id" not in self.state:
             pytest.skip("No ExternalIPPool to delete")
 
-        private_grpc.delete_external_ip_pool(pool_id=self.state["pool_id"])
+        pool_id = self.state["pool_id"]
+        suite_eip_ids = {
+            self.state[key] for key in ("nat_eip_id", "auto_eip_id", "ingress_eip_id") if self.state.get(key)
+        }
+        holders = _pool_external_ips(private_grpc, pool_id)
+        remaining_suite_eips = [item for item in holders if item.get("id") in suite_eip_ids]
+        assert not remaining_suite_eips, (
+            f"ExternalIPs created by this suite still hold pool {pool_id}: "
+            f"{', '.join(_describe_external_ip(item) for item in remaining_suite_eips)}"
+        )
+
+        poll_until(
+            fn=lambda: (
+                int(private_grpc.get_external_ip_pool(pool_id=pool_id)["object"]["status"].get("allocated", 0)),
+                len(_pool_external_ips(private_grpc, pool_id)),
+            ),
+            until=lambda counts: counts[0] == counts[1],
+            retries=12,
+            delay=5,
+            description=f"ExternalIPPool {pool_id} allocation count to match its live ExternalIPs",
+            resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
+            resource_id=pool_id,
+        )
+
+        # Decide on the holders after the poll: a default ExternalIP can be
+        # released or allocated while the allocation count settles.
+        holders = _pool_external_ips(private_grpc, pool_id)
+        other_holders = [item for item in holders if not _is_default_external_ip(item)]
+        assert not other_holders, (
+            f"ExternalIPPool {pool_id} is still held by: "
+            f"{', '.join(_describe_external_ip(item) for item in other_holders)}"
+        )
+        if not self.state.get("pool_owned"):
+            assert pool_id in private_grpc.list_external_ip_pool_ids(), (
+                f"ExternalIPPool {pool_id} disappeared; this suite adopted it and did not create it"
+            )
+            _LOG.info("Leaving adopted ExternalIPPool %s in place", pool_id)
+            return
+        if holders:
+            assert pool_id in private_grpc.list_external_ip_pool_ids(), (
+                f"ExternalIPPool {pool_id} disappeared while tenant default ExternalIPs still use it"
+            )
+            _LOG.warning(
+                "Leaving ExternalIPPool %s in place because tenant default ExternalIPs still use it: %s",
+                pool_id,
+                ", ".join(_describe_external_ip(item) for item in holders),
+            )
+            return
+
+        try:
+            private_grpc.delete_external_ip_pool(pool_id=pool_id)
+        except CommandFailed as exc:
+            # Tenant default addresses can be allocated between the holder
+            # check and delete. Keep the pool if that race is the only reason
+            # the API rejected deletion.
+            detail = f"{exc.stdout or ''} {exc.stderr or ''}"
+            if "FailedPrecondition" not in detail:
+                raise
+            holders = _pool_external_ips(private_grpc, pool_id)
+            other_holders = [item for item in holders if not _is_default_external_ip(item)]
+            assert not other_holders, (
+                f"ExternalIPPool {pool_id} is still held by: "
+                f"{', '.join(_describe_external_ip(item) for item in other_holders)}"
+            )
+            if not holders:
+                raise
+            assert pool_id in private_grpc.list_external_ip_pool_ids(), (
+                f"ExternalIPPool {pool_id} disappeared while tenant default ExternalIPs still use it"
+            )
+            _LOG.warning(
+                "Leaving ExternalIPPool %s in place because tenant default ExternalIPs appeared during deletion: %s",
+                pool_id,
+                ", ".join(_describe_external_ip(item) for item in holders),
+            )
+            return
         wait_for_external_ip_pool_deletion(k8s=k8s_hub_client, name=self.state["pool_cr"])
 
         remaining = private_grpc.list_external_ip_pool_ids()
-        assert self.state["pool_id"] not in remaining, "ExternalIPPool still in API after deletion"
+        assert pool_id not in remaining, "ExternalIPPool still in API after deletion"

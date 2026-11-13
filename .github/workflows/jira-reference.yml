@@ -35,9 +35,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          # The cherry-pick robot titles its pull requests "[release-0.4] NO-ISSUE: ..." and Prow's jira plugin does not
+          # read a title that starts with the branch, so such a pull request never gets the label, although the pull
+          # request it copies was checked (and labelled) when it merged to the default branch.
+          CHERRYPICK_BOT: openshift-cherrypick-robot
         run: |
           for i in 1 2 3; do
-            LABELS=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json labels --jq '[.labels[].name]') && break
+            VIEW=$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json labels,title,author) && break
             if [ "$i" -lt 3 ]; then
               echo "::warning::gh pr view attempt $i/3 failed, retrying in 3s..."
               sleep 3
@@ -46,12 +50,20 @@ jobs:
               exit 1
             fi
           done
-          if ! echo "$LABELS" | jq -e 'index("jira/valid-reference")' > /dev/null 2>&1; then
-            echo "::error::The pull request has no valid Jira reference."
-            echo ""
-            echo "Start the title with OSAC-1234: (an existing Jira issue) or NO-ISSUE:."
-            echo "Prow checks the title and sets the label jira/valid-reference;"
-            echo "this check runs again when it does."
-            exit 1
+          if jq -e '[.labels[].name] | index("jira/valid-reference")' <<<"$VIEW" > /dev/null 2>&1; then
+            echo "Jira reference is valid"
+            exit 0
           fi
-          echo "Jira reference is valid"
+          if jq -e --arg bot "${CHERRYPICK_BOT}" '
+              .author.login == $bot and
+              (.title | test("^\\[release-[0-9]+\\.[0-9]+\\] (NO-ISSUE|[A-Z][A-Z0-9]*-[0-9]+): "))
+            ' <<<"$VIEW" > /dev/null 2>&1; then
+            echo "Jira reference is valid: a cherry-pick of ${CHERRYPICK_BOT} whose title keeps the reference of the original pull request"
+            exit 0
+          fi
+          echo "::error::The pull request has no valid Jira reference."
+          echo ""
+          echo "Start the title with OSAC-1234: (an existing Jira issue) or NO-ISSUE:."
+          echo "Prow checks the title and sets the label jira/valid-reference;"
+          echo "this check runs again when it does."
+          exit 1

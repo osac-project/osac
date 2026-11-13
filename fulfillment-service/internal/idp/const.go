@@ -18,6 +18,10 @@ package idp
 // realm and is the only client we interact with for role assignments.
 const realmManagementClientID = "realm-management"
 
+// keycloakHideIdPWhenOrganizationUnknown hides tenant IdPs until the login
+// email resolves to their organization.
+const keycloakHideIdPWhenOrganizationUnknown = "kc.org.broker.login.hide-when-org-unknown"
+
 // Authorization group constants for hierarchical project access control. These define the group
 // names used in Keycloak organization groups. The "system:" prefix prevents collisions with
 // user-created project names, since the colon character is not valid in DNS labels.

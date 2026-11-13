@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Label } from '@patternfly/react-core';
 import LockIcon from '@patternfly/react-icons/dist/esm/icons/lock-icon';
 
@@ -5,7 +6,6 @@ import { StorageProtocol, type StorageTier, StorageTierState, StorageTiers } fro
 
 import { ResourceSelectField } from './ResourceSelectField';
 import { cel } from '../../api/cel';
-import { STORAGE_TIER_ACTIVE_LIST_FILTER } from '../../api/v1/storage-tiers';
 import { useTranslation } from '../../hooks/useTranslation';
 
 const STORAGE_TIER_ACTIVE_BLOCK_LIST_FILTER = cel<StorageTier>((filter) =>
@@ -15,13 +15,20 @@ const STORAGE_TIER_ACTIVE_BLOCK_LIST_FILTER = cel<StorageTier>((filter) =>
   ),
 );
 
-interface StorageTierSelectFieldProps {
+const STORAGE_TIER_ACTIVE_LIST_FILTER = cel<StorageTier>((filter) =>
+  filter.field('status.state').equals(StorageTierState.ACTIVE),
+);
+
+export interface StorageTierSelectFieldProps {
   name?: string;
   label: string;
   fieldId: string;
   isRequired?: boolean;
   protocol?: StorageProtocol;
   isDisabled?: boolean;
+  labelInfo?: ReactNode;
+  description?: string;
+  autoSelectSingleOption?: boolean;
 }
 
 export const StorageTierSelectField = ({
@@ -31,6 +38,9 @@ export const StorageTierSelectField = ({
   isRequired = false,
   protocol,
   isDisabled = false,
+  labelInfo,
+  description,
+  autoSelectSingleOption = true,
 }: StorageTierSelectFieldProps) => {
   const { t } = useTranslation();
 
@@ -48,12 +58,15 @@ export const StorageTierSelectField = ({
       }}
       isRequired={isRequired}
       isDisabled={isDisabled}
+      autoSelectSingleOption={autoSelectSingleOption}
+      description={description}
       labelInfo={
-        isDisabled ? (
+        labelInfo ??
+        (isDisabled ? (
           <Label color="grey" icon={<LockIcon aria-hidden />}>
             {t('Locked by catalog')}
           </Label>
-        ) : undefined
+        ) : undefined)
       }
       placeholder={t('Select a storage tier')}
       loadingPlaceholder={t('Loading...')}

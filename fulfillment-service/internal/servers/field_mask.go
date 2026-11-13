@@ -40,3 +40,18 @@ func updateIncludesField(mask *fieldmaskpb.FieldMask, prefixes ...string) bool {
 	}
 	return false
 }
+
+// updateMaskIncludesExactPath reports whether the mask selects one exact path.
+// Parent paths are intentionally excluded so servers can distinguish an
+// explicit field update from a public parent-object replacement.
+func updateMaskIncludesExactPath(mask *fieldmaskpb.FieldMask, path string) bool {
+	if mask == nil {
+		return false
+	}
+	for _, maskPath := range mask.GetPaths() {
+		if maskPath == path {
+			return true
+		}
+	}
+	return false
+}

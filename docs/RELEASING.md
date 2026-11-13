@@ -59,12 +59,37 @@ component version" below.
 
 ## Versioning model
 
-There is no single version number stamped onto everything. Each
-mono-repo component keeps its own independent version
-(`<component>/vX.Y.Z` git tags); only the umbrella chart (`osac`) gets its
-own release version. "OSAC vX.Y.Z" means a specific, tested combination of
-component versions — recorded in the published chart's `Chart.lock` and in
-that run's release notes/Slack summary, not implied by the number itself.
+Every branch records its **release line** (`X.Y`) in the `RELEASE_LINE` file
+at the repository root: `main` holds the upcoming release, `release-X.Y`
+holds `X.Y`. Everything built from a branch shares that `X.Y`. Inside the
+line, each mono-repo component (`<component>/v…` git tags) and the umbrella
+chart (`osac/v…`) keep their own patch number and their own candidate
+counter, so releasing one component never renumbers another.
+
+A release version is `X.Y.Z` or `X.Y.Z-rc.N`, nothing else:
+
+| Stage | Version | Built from |
+|---|---|---|
+| Nightly | `X.Y.Z-nightly.<date>.<sha>.<run>.<attempt>` | `main`, automatic |
+| Release candidate | `X.Y.Z-rc.N` | `release-X.Y` |
+| Stable | `X.Y.Z` | `release-X.Y` |
+
+Semver precedence follows that order (`nightly` < `rc` < stable), and the
+pipeline enforces the maturity it implies:
+
+- A candidate umbrella can only build candidate component versions, so a
+  stable-looking component version never exists before it ships in a stable
+  umbrella.
+- A stable umbrella can only contain stable component versions. The first
+  stable release of a line therefore releases every component as `X.Y.0`.
+- A new version must be higher than the latest one in its line, and no
+  version outside the branch's line is accepted. Git tags are not
+  branch-scoped; the line check is what keeps `release-0.4` and `main` from
+  resolving or minting each other's versions.
+
+"OSAC vX.Y.Z" means a specific, tested combination of component versions —
+recorded in the published chart's `Chart.lock` and in that run's release
+notes/Slack summary, not implied by the number itself.
 
 `osac-ui` is a mono-repo component like every other one here — built,
 tested, tagged, and published by this same pipeline, with its own
@@ -81,8 +106,10 @@ Every night at 03:00 UTC (or via a manual `workflow_dispatch` on
 
 1. Every mono-repo component is rebuilt fresh from `HEAD`, whether or not
    it changed since its last real release.
-2. Each gets tagged `<latest-real-base>-nightly.<date>.<sha>.<run>.<attempt>`
-   — never a permanent tag, never a bare `<component>/vX.Y.Z`.
+2. Each is versioned `<base>-nightly.<date>.<sha>.<run>.<attempt>` — never a
+   permanent tag, never a bare `<component>/vX.Y.Z`. `<base>` is `X.Y.0` of
+   the branch's release line, or the patch after the line's latest stable
+   version of that component once one exists.
 3. The full test gate runs: unit, integration, security (CodeQL), and the
    three e2e suites (vmaas/caas/bmaas) unless `skip_e2e` was set.
 4. On success, every image and the umbrella chart are signed with cosign
@@ -101,23 +128,38 @@ release_version=<version>`), selecting the branch/ref you want to release
 from GitHub's own "Use workflow from" selector — there is no separate
 ref input.
 
-**Required input:** `release_version` — a real, human-chosen semver (e.g.
-`0.1.0`, no leading `v`). The run fails immediately (in the `prepare` job,
+**Required input:** `release_version` — `X.Y.Z` or `X.Y.Z-rc.N` in the
+dispatched branch's release line (e.g. `0.5.0-rc.2`, no leading `v`), higher
+than the line's latest umbrella version. The run fails immediately (in the `prepare` job,
 before anything builds) if `osac/v<release_version>` already exists — you
 cannot re-release or silently overwrite a version that already shipped;
 cut the next patch instead.
 
 **Default behavior (no other input needed):** every component is pinned
-to its current latest real `<component>/vX.Y.Z` tag, verbatim — no
-rebuild, no retag. Only the umbrella chart is new. This is the common
+to its latest version in the branch's release line (candidates included),
+verbatim — no rebuild, no retag. A component with no version in the line
+yet must be named in `component_versions`; the run fails otherwise. Only the umbrella chart is new. This is the common
 case: "package whatever's already released into a new umbrella cut."
 
 **Optional `component_versions` input** — bump one or more components as
 part of the same release, as comma-separated `component=version` pairs:
 
 ```
-osac-operator=0.0.13,fulfillment-service=0.0.99
+osac-operator=0.5.0-rc.2,fulfillment-service=0.5.0-rc.3
 ```
+
+A named version is either new or the component's existing latest:
+
+- A **new** version must be in the branch's line, higher than that
+  component's latest, and a candidate exactly when `release_version` is one.
+- An **existing** version is only accepted when it is the component's
+  latest in the line, which is what the default already pins. A candidate
+  umbrella may pin a stable version this way.
+
+An older version cannot be pinned. The Konflux chart pipelines publish each
+chart's highest version in the line, so a release always carries every
+component's latest. For a stable release this means a component whose
+latest version is a candidate must get a stable version in the same run.
 
 For each named component:
 - If that exact version already exists as a real tag, it's just pinned
@@ -162,9 +204,8 @@ for validating the release *mechanism* itself (e.g. after a change to
 - A real `<component>/vX.Y.Z` tag for every component that was actually
   bumped this run.
 - The published umbrella chart's `Chart.lock` records its resolved dependencies.
-  Components with resolved release versions use pinned OCI dependencies;
-  components without a release can still use their committed local fallback.
-  The release inventory makes that distinction visible.
+  Every mono-repo component has a resolved version in a release run (the run
+  fails otherwise), so each is a pinned OCI dependency.
 - Every image and chart signed with cosign; see the root
   [`README.md`](../README.md#verifying-container-image-signatures) for
   how to verify a specific artifact.
@@ -184,16 +225,22 @@ for validating the release *mechanism* itself (e.g. after a change to
 ## Release branches and code freeze
 
 For a release that needs a stabilization period instead of shipping
-straight off `main`, cut a release branch named `release-X.Y` (e.g.
-`release-0.4`) and push it directly to `upstream` — not a fork, since
+straight off `main`, cut a release branch named `release-X.Y`, where `X.Y`
+is `main`'s current `RELEASE_LINE` (e.g. `release-0.5` while `main` is at
+`0.5`), and push it directly to `upstream` — not a fork, since
 every contributor opens PRs against it for the duration of the freeze,
 the same way they would against `main`:
 
 ```bash
 git fetch upstream
-git checkout -b release-0.4 upstream/main
-git push upstream release-0.4
+git checkout -b release-0.5 upstream/main
+git push upstream release-0.5
 ```
+
+The new branch keeps the `RELEASE_LINE` it was cut with. Immediately open a
+PR on `main` that bumps `RELEASE_LINE` to the next line (`0.5` → `0.6`), so
+nightlies start tracking the next release and the two branches can never
+mint versions in the same line.
 
 GitHub's required checks (`CI`, CodeQL, `jira-reference`, Component Hooks
 Smoke) and Konflux's build/Enterprise-Contract triggers both already
@@ -224,8 +271,8 @@ instead of `main`.
 **Cleanup:** delete the release branch a few days after the release ships
 and no hotfix need has surfaced — the authoritative record of what
 shipped is the `osac/vX.Y.Z` tag and the published artifacts, not the
-branch. If a patch release (e.g. `0.4.1`) becomes necessary before then,
-dispatch it from the still-live `release-0.4` branch directly rather than
+branch. If a patch release (e.g. `0.5.1`) becomes necessary before then,
+dispatch it from the still-live `release-0.5` branch directly rather than
 re-deriving a new branch from the tag.
 
 ## Staging release (Konflux)
@@ -241,8 +288,19 @@ whole set together to the **staging** registry
 (`registry.stage.redhat.io`, under `cloud-extensions/<component>-rhel10`).
 This wait set is fixed regardless of what `component_versions` actually
 bumped this run; `osac-aap` has no Konflux image component yet and is
-never included. This is currently staging only — there is no automated
-path to a production release yet.
+never included.
+
+A separate, manually-dispatched workflow, `osac-promote-to-prod.yaml`,
+promotes an already-staged release to `registry.redhat.io` once it's
+ready. Images promote with no rebuild — the same built digest is
+multi-homed into `registry.redhat.io` by `cloud-extensions-prod`'s own
+`ReleasePlanAdmission`. The chart cannot: its own `values.yaml` has
+`registry.stage.redhat.io` baked into every component image reference at
+build time, so the already-built staging chart is only ever correct for
+stage. Promoting it re-stamps that exact same source commit with
+`registry.redhat.io` (only the hostname changes) and pushes it through a
+real, independent Konflux build — expect the chart side of a production
+promotion to take meaningfully longer than the image side as a result.
 
 A component only reaches staging if its Konflux build passes Red Hat's
 Enterprise Contract policy — a set of supply-chain and security checks
@@ -293,6 +351,26 @@ explicitly excluded from Latest. Cancellation prevents the umbrella release
 and success notification jobs from starting; a release publication failure
 reaches the failure notification instead of a success message. Optional
 Konflux staging remains independent of this GHCR publication path.
+
+**GitHub's "Re-run failed jobs" does not recover a confirmed staging
+failure.** GHCR image and chart publication (`promote-and-publish`,
+`publish-umbrella`) runs before Konflux staging even starts, so those
+artifacts can remain published after a confirmed staging failure — only
+the GitHub Releases (component and umbrella) and fulfillment-service's
+binaries/proto wait for the real Konflux image staging release to have
+actually succeeded, never on a cancelled or timed-out run, only on a
+confirmed failure of `trigger-konflux-staging-release` itself. Rolling
+tags back after a
+confirmed failure, combined with `cleanup` always deleting the temp branch
+once `tag` succeeds, means a "Re-run failed jobs" attempt afterward has
+neither the tags `create-component-releases` would reference nor the
+branch `stamp-and-release-charts` would need to check out. Dispatch a fresh
+`osac-release.yaml` run with a new `release_version` instead — don't retry
+a release whose staging has already confirmed failed. A cancelled or
+timed-out staging attempt is left alone on purpose (the underlying Konflux
+Release it created may still be progressing and could still succeed) and
+needs manual reconciliation: check whether that Release actually completed
+before deciding to delete anything by hand.
 
 The version inventory is not an upgrade compatibility guarantee. Before an
 upgrade, compare the installed and target inventories, read the affected

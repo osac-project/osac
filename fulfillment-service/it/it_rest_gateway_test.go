@@ -19,11 +19,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("REST gateway", func() {
@@ -122,5 +128,88 @@ var _ = Describe("REST gateway", func() {
 		Expect(body["title"]).To(Equal("My private template"))
 		Expect(body["description"]).To(Equal("My private template."))
 
+	})
+
+	It("returns an unauthenticated error for an expired Keycloak token", func(ctx context.Context) {
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+
+		_, originalClient, err := getKeycloakClient(ctx, "osac-cli")
+		Expect(err).ToNot(HaveOccurred())
+		shortLivedClient, err := cloneJSONMap(originalClient)
+		Expect(err).ToNot(HaveOccurred())
+		testClientName := "rest-expired-" + uuid.New()
+		delete(shortLivedClient, "id")
+		if protocolMappers, ok := shortLivedClient["protocolMappers"].([]any); ok {
+			for _, value := range protocolMappers {
+				if mapper, ok := value.(map[string]any); ok {
+					delete(mapper, "id")
+				}
+			}
+		}
+		shortLivedClient["clientId"] = testClientName
+		shortLivedClient["name"] = "Fulfillment expired-token integration test"
+		attributes, ok := shortLivedClient["attributes"].(map[string]interface{})
+		if !ok {
+			attributes = make(map[string]interface{})
+			shortLivedClient["attributes"] = attributes
+		}
+		attributes["access.token.lifespan"] = "1"
+		code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPost, "/clients", shortLivedClient)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Equal(http.StatusCreated))
+		DeferCleanup(func(cleanupCtx context.Context) {
+			clientID, _, getErr := getKeycloakClient(cleanupCtx, testClientName)
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(deleteKeycloakClient(cleanupCtx, clientID)).To(Succeed())
+		})
+
+		token, err := tool.simulateOIDCLogin(
+			ctx, testClientName, "http://localhost", "", "", userUsername, usersPassword,
+		)
+		Expect(err).ToNot(HaveOccurred())
+		claims, err := parseJWTClaims(token)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(claims["iss"]).To(Equal(fmt.Sprintf("https://%s/realms/osac", keycloakAddr)))
+		Expect(jwtAudiences(claims)).To(ContainElement("osac-api"))
+		issuedAt, err := claims.GetIssuedAt()
+		Expect(err).ToNot(HaveOccurred())
+		expiresAt, err := claims.GetExpirationTime()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(expiresAt.Time.Sub(issuedAt.Time)).To(BeNumerically("<=", 3*time.Second))
+
+		staticTokenSource, err := auth.NewStaticTokenSource().
+			SetLogger(tool.logger).
+			SetToken(&auth.Token{Access: token, Expiry: expiresAt.Time}).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		conn, err := tool.makeGrpcConn(externalServiceAddr, staticTokenSource)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { Expect(conn.Close()).To(Succeed()) })
+
+		By("waiting for the protected gRPC method to reject the expired bearer")
+		clusterTemplates := publicv1.NewClusterTemplatesClient(conn)
+		Eventually(func(g Gomega) {
+			_, listErr := clusterTemplates.List(ctx, publicv1.ClusterTemplatesListRequest_builder{}.Build())
+			g.Expect(grpcstatus.Code(listErr)).To(Equal(grpccodes.Unauthenticated))
+			g.Expect(grpcstatus.Convert(listErr).Message()).To(ContainSubstring("token expired"))
+		}, 20*time.Second, 250*time.Millisecond).Should(Succeed())
+
+		By("checking that the public REST gateway maps the expired token to HTTP 401")
+		request, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodGet,
+			"/api/fulfillment/v1/cluster_templates",
+			nil,
+		)
+		Expect(err).ToNot(HaveOccurred())
+		request.Header.Set("Authorization", "Bearer "+token)
+		response, err := tool.ExternalView().AnonymousClient().Do(request)
+		Expect(err).ToNot(HaveOccurred())
+		defer response.Body.Close()
+		Expect(response.StatusCode).To(Equal(http.StatusUnauthorized))
+		body, err := io.ReadAll(response.Body)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(string(body)).To(ContainSubstring("token expired"))
 	})
 })

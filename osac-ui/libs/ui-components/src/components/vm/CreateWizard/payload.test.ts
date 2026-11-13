@@ -1,6 +1,12 @@
+import { create } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
 
-import { type ComputeInstanceCatalogItem, ComputeInstanceRunStrategy } from '@osac/types';
+import {
+  type ComputeInstanceCatalogItem,
+  ComputeInstanceCatalogItemSchema,
+  ComputeInstanceRunStrategy,
+  ComputeInstanceSchema,
+} from '@osac/types';
 
 import { getComputeInstanceInitialValues } from './fields';
 import { buildComputeInstanceCreatePayload, createEmptyComputeInstanceValues } from './payload';
@@ -12,8 +18,6 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
   id: 'catalog-rhel-9',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: 'catalog-rhel-9',
     annotations: {},
     creator: 'foo',
@@ -41,7 +45,7 @@ const buildValues = (project: string) => ({
   metadata: { name: 'my-vm', project },
   spec: {
     ...createEmptyComputeInstanceValues().spec,
-    instanceType: provisioningFieldValue('standard-4-8'),
+    instanceType: provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' }),
     networking: {
       networkAttachment: provisioningFieldValue({
         useDefaultNetwork: false,
@@ -62,7 +66,7 @@ const baseValues = () => {
     metadata: { name: 'web-01', project: '' },
     spec: {
       ...values.spec,
-      instanceType: provisioningFieldValue('standard-4-8'),
+      instanceType: provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' }),
       networking: {
         networkAttachment: provisioningFieldValue({
           useDefaultNetwork: false,
@@ -91,6 +95,9 @@ describe('buildComputeInstanceCreatePayload', () => {
           },
         ],
         autoExternalIpAttachment: false,
+        additionalDisks: {
+          items: [],
+        },
       },
     });
   });
@@ -110,46 +117,192 @@ describe('buildComputeInstanceCreatePayload', () => {
 
   it('sends inline user data when the inline source is selected', () => {
     const values = baseValues();
-    values.spec.userDataSource = provisioningFieldValue('inline');
-    values.spec.userData = provisioningFieldValue('  #cloud-config\nusers: []  ');
-    values.spec.userDataSecret = provisioningFieldValue('stale-secret');
+    values.spec.userData = provisioningFieldValue({
+      source: 'inline',
+      inline: '  #cloud-config\nusers: []  ',
+      secret: 'stale-secret',
+    });
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
-    //expect(payload.spec?.userData).toBe('#cloud-config\nusers: []');
+    expect(payload.spec?.userDataSource).toEqual({
+      source: { case: 'inline', value: '#cloud-config\nusers: []' },
+    });
+    expect(create(ComputeInstanceSchema, payload).spec?.userDataSource?.source).toEqual({
+      case: 'inline',
+      value: '#cloud-config\nusers: []',
+    });
+    expect(payload.spec).not.toHaveProperty('userData');
     expect(payload.spec).not.toHaveProperty('userDataSecret');
   });
 
   it('sends a Secret reference when the Secret source is selected', () => {
     const values = baseValues();
-    values.spec.userDataSource = provisioningFieldValue('secret');
-    values.spec.userData = provisioningFieldValue('stale inline data');
-    values.spec.userDataSecret = provisioningFieldValue('  cloud-init  ');
+    values.spec.userData = provisioningFieldValue({
+      source: 'secret',
+      inline: 'stale inline data',
+      secret: '  cloud-init  ',
+    });
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
-    //expect(payload.spec?.userDataSecret).toEqual({ name: 'cloud-init' });
+    expect(payload.spec?.userDataSource).toEqual({
+      source: { case: 'secret', value: { name: 'cloud-init' } },
+    });
+    expect(create(ComputeInstanceSchema, payload).spec?.userDataSource?.source).toMatchObject({
+      case: 'secret',
+      value: { name: 'cloud-init' },
+    });
     expect(payload.spec).not.toHaveProperty('userData');
+    expect(payload.spec).not.toHaveProperty('userDataSecret');
   });
 
   it('omits user data when the selected source is empty', () => {
     const values = baseValues();
-    values.spec.userDataSource = provisioningFieldValue('secret');
-    values.spec.userData = provisioningFieldValue('stale inline data');
-    values.spec.userDataSecret = provisioningFieldValue('   ');
+    values.spec.userData = provisioningFieldValue({
+      source: 'secret',
+      inline: 'stale inline data',
+      secret: '   ',
+    });
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
     expect(payload.spec).not.toHaveProperty('userData');
     expect(payload.spec).not.toHaveProperty('userDataSecret');
+    expect(payload.spec).not.toHaveProperty('userDataSource');
   });
+
+  it('omits an empty inline source when an editable default is cleared', () => {
+    const values = baseValues();
+    values.spec.userData = provisioningFieldValue({ source: 'inline', inline: '', secret: '' });
+    const catalogItem = create(ComputeInstanceCatalogItemSchema, {
+      id: vmCatalogItem.id,
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { source: { case: 'inline', value: 'cloud-init' } } },
+          },
+        },
+      },
+    });
+
+    const payload = buildComputeInstanceCreatePayload(values, catalogItem);
+
+    expect(payload.spec).not.toHaveProperty('userDataSource');
+  });
+
+  it('omits a locked user data source so the catalog policy can apply it', () => {
+    const values = baseValues();
+    values.spec.userData = provisioningFieldValue(
+      { source: 'secret', inline: 'stale inline data', secret: 'cloud-init' },
+      true,
+    );
+
+    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+
+    expect(payload.spec).not.toHaveProperty('userDataSource');
+  });
+});
+
+describe('getComputeInstanceInitialValues — user data source', () => {
+  it('defaults to an editable empty inline source when the policy is absent', () => {
+    const values = getComputeInstanceInitialValues(vmCatalogItem);
+
+    expect(values.spec.userData).toEqual({
+      value: { source: 'inline', inline: '', secret: '' },
+      locked: false,
+    });
+  });
+
+  it('loads an editable inline default while allowing replacement', () => {
+    const catalogItem = create(ComputeInstanceCatalogItemSchema, {
+      id: 'catalog-rhel-9',
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: {
+                source: { case: 'inline', value: '#cloud-config\nusers: []' },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const values = getComputeInstanceInitialValues(catalogItem);
+
+    expect(values.spec.userData).toEqual({
+      value: { source: 'inline', inline: '#cloud-config\nusers: []', secret: '' },
+      locked: false,
+    });
+  });
+
+  it('loads an editable Secret default while allowing replacement', () => {
+    const catalogItem = create(ComputeInstanceCatalogItemSchema, {
+      id: 'catalog-rhel-9',
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: {
+                source: { case: 'secret', value: { name: 'catalog-user-data' } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const values = getComputeInstanceInitialValues(catalogItem);
+
+    expect(values.spec.userData).toEqual({
+      value: { source: 'secret', inline: '', secret: 'catalog-user-data' },
+      locked: false,
+    });
+  });
+
+  it.each([
+    [
+      'inline',
+      { source: { case: 'inline', value: '#cloud-config' } },
+      { value: { source: 'inline', inline: '#cloud-config', secret: '' }, locked: true },
+    ],
+    [
+      'Secret',
+      { source: { case: 'secret', value: { name: 'catalog-user-data' } } },
+      {
+        value: { source: 'secret', inline: '', secret: 'catalog-user-data' },
+        locked: true,
+      },
+    ],
+  ] as const)(
+    'loads a locked %s source and prevents overrides',
+    (_label, source, expectedSource) => {
+      const catalogItem = create(ComputeInstanceCatalogItemSchema, {
+        id: 'catalog-rhel-9',
+        fields: {
+          userDataSource: {
+            behavior: { case: 'locked', value: source },
+          },
+        },
+      });
+
+      const values = getComputeInstanceInitialValues(catalogItem);
+
+      expect(values.spec.userData).toEqual(expectedSource);
+    },
+  );
 });
 
 describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
   it('sends the boot disk tier id and name', () => {
     const values = baseValues();
     values.spec.bootDisk = {
-      sizeGib: provisioningFieldValue('20'),
+      sizeGib: provisioningFieldValue(20),
       storageTier: provisioningFieldValue({ id: 'id-balanced', name: 'balanced' }),
     };
 
@@ -164,7 +317,7 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
   it('omits storage_tier from the boot disk when no tier is selected', () => {
     const values = baseValues();
     values.spec.bootDisk = {
-      sizeGib: provisioningFieldValue('20'),
+      sizeGib: provisioningFieldValue(20),
       storageTier: provisioningFieldValue(emptyResourceSelectValue()),
     };
 
@@ -177,11 +330,11 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
   it('carries both the boot disk tier and each additional disk tier', () => {
     const values = baseValues();
     values.spec.bootDisk = {
-      sizeGib: provisioningFieldValue('20'),
+      sizeGib: provisioningFieldValue(20),
       storageTier: provisioningFieldValue({ id: 'id-fast', name: 'fast' }),
     };
     values.spec.additionalDisks = provisioningFieldValue([
-      { sizeGib: '100', storageTier: { id: 'id-bulk', name: 'bulk' } },
+      { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
     ]);
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
@@ -195,46 +348,34 @@ describe('buildComputeInstanceCreatePayload — disk storage tiers', () => {
     ]);
   });
 
-  it('drops additional disk rows that have no size', () => {
+  it('sends an empty additional_disks list when no rows are present', () => {
     const values = baseValues();
-    values.spec.bootDisk = {
-      sizeGib: provisioningFieldValue('20'),
-      storageTier: provisioningFieldValue(emptyResourceSelectValue()),
-    };
-    values.spec.additionalDisks = provisioningFieldValue([
-      { sizeGib: '100', storageTier: { id: 'id-bulk', name: 'bulk' } },
-      { sizeGib: '', storageTier: { id: 'id-fast', name: 'fast' } },
-    ]);
+    values.spec.additionalDisks = provisioningFieldValue([]);
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
-    expect(payload.spec?.additionalDisks?.items).toEqual([
-      { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
-    ]);
+    expect(payload.spec?.additionalDisks?.items).toEqual([]);
   });
 
-  it('omits additional_disks entirely when no rows have a size', () => {
-    const values = baseValues();
-    values.spec.additionalDisks = provisioningFieldValue([
-      { sizeGib: '', storageTier: { id: 'id-fast', name: 'fast' } },
-    ]);
+  it('sends an empty additional_disks list when all editable catalog disks are removed', () => {
+    const catalogItem = create(ComputeInstanceCatalogItemSchema, {
+      id: vmCatalogItem.id,
+      fields: {
+        additionalDisks: {
+          behavior: {
+            case: 'editable',
+            value: { defaultValue: { items: [{ sizeGib: 100 }] } },
+          },
+        },
+      },
+    });
+    const values = getComputeInstanceInitialValues(catalogItem);
+    values.metadata.name = 'my-vm';
+    values.spec.additionalDisks.value = [];
 
-    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
+    const payload = buildComputeInstanceCreatePayload(values, catalogItem);
 
-    expect(payload.spec).not.toHaveProperty('additionalDisks');
-  });
-
-  it('still sends non-empty additional disks as usual', () => {
-    const values = baseValues();
-    values.spec.additionalDisks = provisioningFieldValue([
-      { sizeGib: '100', storageTier: { id: 'id-bulk', name: 'bulk' } },
-    ]);
-
-    const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
-
-    expect(payload.spec?.additionalDisks?.items).toEqual([
-      { sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } },
-    ]);
+    expect(payload.spec?.additionalDisks?.items).toEqual([]);
   });
 });
 
@@ -306,7 +447,10 @@ describe('getComputeInstanceInitialValues — instance type', () => {
       },
     } as ComputeInstanceCatalogItem);
 
-    expect(values.spec.instanceType).toEqual({ value: 'it-small', locked: false });
+    expect(values.spec.instanceType).toEqual({
+      value: { id: 'it-small', name: 'u1-small' },
+      locked: false,
+    });
   });
 
   it('locks the instance type when the catalog policy is locked', () => {
@@ -322,7 +466,10 @@ describe('getComputeInstanceInitialValues — instance type', () => {
       },
     } as ComputeInstanceCatalogItem);
 
-    expect(values.spec.instanceType).toEqual({ value: 'it-small', locked: true });
+    expect(values.spec.instanceType).toEqual({
+      value: { id: 'it-small', name: 'u1-small' },
+      locked: true,
+    });
   });
 });
 
@@ -368,6 +515,31 @@ describe('getComputeInstanceInitialValues — disk image', () => {
   });
 });
 
+describe('getComputeInstanceInitialValues — user data', () => {
+  it('loads an editable catalog user-data default into the wizard', () => {
+    const values = getComputeInstanceInitialValues({
+      ...vmCatalogItem,
+      fields: {
+        userDataSource: {
+          behavior: {
+            case: 'editable',
+            value: {
+              defaultValue: {
+                source: { case: 'inline', value: '#cloud-config\nruncmd: []' },
+              },
+            },
+          },
+        },
+      },
+    } as ComputeInstanceCatalogItem);
+
+    expect(values.spec.userData).toEqual({
+      value: { source: 'inline', inline: '#cloud-config\nruncmd: []', secret: '' },
+      locked: false,
+    });
+  });
+});
+
 describe('getComputeInstanceInitialValues — network attachments', () => {
   it('locks the attachment unit without locking nested pickers', () => {
     const values = getComputeInstanceInitialValues({
@@ -404,7 +576,10 @@ describe('getComputeInstanceInitialValues — network attachments', () => {
 describe('buildComputeInstanceCreatePayload — locked catalog fields', () => {
   it('omits a locked instance type so the catalog policy can apply it', () => {
     const values = baseValues();
-    values.spec.instanceType = provisioningFieldValue('standard-4-8', true);
+    values.spec.instanceType = provisioningFieldValue(
+      { id: 'standard-4-8', name: 'standard-4-8' },
+      true,
+    );
 
     const payload = buildComputeInstanceCreatePayload(values, vmCatalogItem);
 
@@ -413,7 +588,7 @@ describe('buildComputeInstanceCreatePayload — locked catalog fields', () => {
 
   it('sends instance type when the catalog policy is not locked', () => {
     const values = baseValues();
-    values.spec.instanceType = provisioningFieldValue('standard-4-8');
+    values.spec.instanceType = provisioningFieldValue({ id: 'standard-4-8', name: 'standard-4-8' });
 
     expect(buildComputeInstanceCreatePayload(values, vmCatalogItem).spec?.instanceType).toEqual({
       id: 'standard-4-8',
@@ -471,13 +646,16 @@ describe('buildComputeInstanceCreatePayload — locked catalog fields', () => {
     const values = baseValues();
     values.spec.sshKey = provisioningFieldValue('my-ssh-key', true);
     values.spec.diskImage = provisioningFieldValue({ id: 'disk-image-1', name: 'rhel' }, true);
-    values.spec.userData = provisioningFieldValue('#cloud-config', true);
+    values.spec.userData = provisioningFieldValue(
+      { source: 'inline', inline: '#cloud-config', secret: '' },
+      true,
+    );
     values.spec.bootDisk = {
-      sizeGib: provisioningFieldValue('20', true),
+      sizeGib: provisioningFieldValue(20, true),
       storageTier: provisioningFieldValue({ id: 'id-balanced', name: 'balanced' }, true),
     };
     values.spec.additionalDisks = provisioningFieldValue(
-      [{ sizeGib: '100', storageTier: { id: 'id-bulk', name: 'bulk' } }],
+      [{ sizeGib: 100, storageTier: { id: 'id-bulk', name: 'bulk' } }],
       true,
     );
     values.spec.networking.networkAttachment = provisioningFieldValue(

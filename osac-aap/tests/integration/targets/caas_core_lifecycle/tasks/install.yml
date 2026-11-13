@@ -1,0 +1,69 @@
+---
+# GATE-CAAS-04: run the real osac.templates.ocp_small install workflow with
+# provider networking left at its default. Core steps are overridden so no
+# HostedCluster is created, but the external-access step is deliberately not
+# overridden: the template default must be the no-op step.
+- name: CaaS core lifecycle - install setup
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read the ocp_small ClusterOrder fixture
+      ansible.builtin.set_fact:
+        test_cluster_order: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
+
+    - name: Set up core install steps with provider networking at its default
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          resource: "{{ test_cluster_order }}"
+        cluster_working_namespace: "cluster-test-cluster-work"
+        install_step_hosted_cluster_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_retrieve_kubeconfig_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_wait_for_nodes_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        install_step_wait_for_cluster_operators_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        hook_workflow_complete:
+          name: caas_role_audit
+          tasks_from: capture.yml
+- name: Import the ocp_small cluster create workflow
+  ansible.builtin.import_playbook: osac.workflows.cluster.create
+
+- name: Verify the disabled provider networking install flow
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Verify the external-access install step is the template no-op
+      ansible.builtin.assert:
+        that:
+          - install_step_external_access_default is defined
+          - install_step_external_access_default.name == "osac.templates.ocp_small"
+          - install_step_external_access_default.tasks_from == "noop.yaml"
+        fail_msg: >-
+          ocp_small must resolve its external-access install step to the
+          template no-op; the ClusterOrder controller owns provider networking.
+
+    - name: Verify the core install flow ran without a provider networking role
+      ansible.builtin.assert:
+        that:
+          - workflow_completed_roles is defined
+          - "'osac.templates.ocp_small' in workflow_completed_roles"
+          - "'osac.service.lease' in workflow_completed_roles"
+          - "'osac.service.finalizer' in workflow_completed_roles"
+          - "'osac.workflows.workflow_helpers' in workflow_completed_roles"
+          - workflow_completed_roles | select('search', 'external_access') | list | length == 0
+          - workflow_completed_roles | select('search', 'cluster_infra') | list | length == 0
+          - "'osac.templates.netris' not in workflow_completed_roles"
+        fail_msg: >-
+          The core install flow must include osac.templates.ocp_small and its
+          core lease and finalizer steps, and no osac.service.external_access,
+          netris.steps.external_access, cluster_infra or Netris template role.

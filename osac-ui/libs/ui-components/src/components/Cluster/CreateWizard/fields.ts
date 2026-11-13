@@ -1,9 +1,7 @@
-import type {
-  ClusterCatalogItem,
-  ClusterCatalogNodeSet,
-  ClusterNodeSetMapPolicy,
-} from '@osac/types';
+import type { ClusterCatalogItem, ClusterNodeSetMapPolicy } from '@osac/types';
 
+import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
+import { emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 import {
   type NetworkAttachmentFormFields,
   getEmptyNetworkAttachmentFormFields,
@@ -18,8 +16,8 @@ import {
 export interface ClusterNodeSetRow {
   rowId: string;
   name: string;
-  hostType: string;
-  size: string;
+  hostType: ResourceSelectValue;
+  size: number | undefined;
 }
 
 export interface ClusterWizardValues {
@@ -70,8 +68,8 @@ export const createNodeSetRowId = (): string => crypto.randomUUID();
 export const createEmptyNodeSetRow = (): ClusterNodeSetRow => ({
   rowId: createNodeSetRowId(),
   name: '',
-  hostType: '',
-  size: '',
+  hostType: emptyResourceSelectValue(),
+  size: undefined,
 });
 
 export const createEmptyClusterValues = (): ClusterWizardValues => ({
@@ -134,9 +132,6 @@ export const getInitialFormValues = (catalogItem?: ClusterCatalogItem): ClusterW
   };
 };
 
-const hostTypeFromCatalogNodeSet = (nodeSet: ClusterCatalogNodeSet): string =>
-  nodeSet.baremetalInstanceType?.id?.trim() || nodeSet.baremetalInstanceType?.name?.trim() || '';
-
 const nodeSetRowsFromPolicy = (
   policy: ClusterNodeSetMapPolicy | undefined,
 ): ProvisioningFieldValue<ClusterNodeSetRow[]> => {
@@ -150,8 +145,8 @@ const nodeSetRowsFromPolicy = (
   const rows = Object.entries(items ?? {}).map(([name, nodeSet]) => ({
     rowId: createNodeSetRowId(),
     name,
-    hostType: hostTypeFromCatalogNodeSet(nodeSet),
-    size: nodeSet.size ? String(nodeSet.size) : '',
+    hostType: nodeSet.baremetalInstanceType ?? emptyResourceSelectValue(),
+    size: nodeSet.size,
   }));
 
   return provisioningFieldValue(

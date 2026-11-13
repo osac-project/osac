@@ -280,19 +280,28 @@ fields; in YAML, write them as nested mappings.
 | Field | CLI flag | Description |
 |-------|----------|-------------|
 | `pull_secret_secret` | `--pull-secret` | Local Secret reference containing container registry credentials |
-| `ssh_public_key` | `--ssh-public-key` | SSH public key installed on worker nodes |
+| `ssh_key` | `--ssh-key` | Immutable reference to a registered SSH public-key Secret for worker access; a shared catalog may only leave it editable |
 | `version` | `--version` | ClusterVersion reference for the OpenShift release |
 | `network.pod_cidr` | `--pod-cidr` | Pod network CIDR (system default: `10.128.0.0/14`) |
 | `network.service_cidr` | `--service-cidr` | Service network CIDR (system default: `172.30.0.0/16`) |
 | `node_sets` | — | Policy for the complete node-set map, including sizes and BareMetalInstanceType references |
 | `network_attachment` | — | Subnet and security-group attachment |
 | `auto_external_ip_attachment` | — | Whether to provision external IP attachments automatically |
+| `add_on_operators` | `--add-on-operator` | Policy for the complete list of published add-on operators |
+
+Templates that declare the `supports_automatic_caas_endpoints` capability
+(the CaaS `ocp_small` and its MaaS wrapper) require automatic API and ingress
+external access. Fulfillment stores `auto_external_ip_attachment: true` for
+these templates. A request or catalog policy that explicitly sets the field
+to `false` is rejected with `InvalidArgument`; do not lock it to `false` in a
+catalog item. Automatic ExternalIPs are created only when provider networking
+is enabled. CI and NICo template behavior is unchanged.
 
 **ComputeInstanceCatalogItem** policies:
 
 | Field | Description |
 |-------|-------------|
-| `ssh_key` | Optional reference to an SSH public key Secret |
+| `ssh_key` | Optional immutable reference to an SSH public key Secret |
 | `instance_type` | InstanceType reference defining CPU cores, memory, and optional GPUs |
 | `run_strategy` | VM run strategy (`COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS`, `COMPUTE_INSTANCE_RUN_STRATEGY_HALTED`) |
 | `user_data_source` | Inline cloud-init/ignition content or a user data Secret reference |
@@ -309,7 +318,7 @@ fields; in YAML, write them as nested mappings.
 |-------|-------------|
 | `instance_type` | Local BareMetalInstanceType reference for host placement; separate from compute InstanceType |
 | `disk_image` | DiskImage reference |
-| `ssh_public_key` | SSH public key |
+| `ssh_key` | Immutable reference to a registered SSH public-key Secret |
 | `user_data_source` | Inline provisioning user data or a user data Secret reference |
 | `run_strategy` | Bare metal run strategy |
 | `network_attachments` | Policy for the complete list of network attachments |
@@ -382,6 +391,23 @@ fulfillment checks the effective types for fabric ports during cluster creation.
 When the user omits the map or supplies an empty one, the catalog's locked map or editable default
 is used. Without a catalog value, creation fails: cluster templates never supply node sets.
 
+Cluster add-on operator policies use the same complete-list semantics:
+
+```yaml
+fields:
+  add_on_operators:
+    locked:
+      items:
+        - name: cert-manager
+          shared: true
+```
+
+The referenced operators must be published platform operators. A locked list is applied when the
+cluster is created and rejects a user-supplied list. An editable default is used when the user omits
+`--add-on-operator`; a nonempty user list replaces the default rather than merging with it. Operator
+dependencies are resolved automatically. Installation progress is available in the cluster's
+`status.add_on_operators` field.
+
 ### Template parameter policies
 
 Template parameters are custom provisioning inputs passed to Ansible Automation Platform (AAP) as
@@ -425,7 +451,7 @@ osac create computeinstance --catalog-item <standard-vm-id> \
   --name my-vm \
   --boot-disk-size 100 \
   --boot-disk-storage-tier <active-tier-name> \
-  --ssh-public-key "$(cat ~/.ssh/id_ed25519.pub)"
+  --ssh-key my-login-key
 ```
 
 The VM uses the locked Fedora image and the default `u1-small` instance type. The user-supplied disk
@@ -444,16 +470,26 @@ osac create computeinstance --catalog-item <standard-vm-id> \
 # Error includes: disk_image: field is not editable
 ```
 
-For the cluster example, supply a pull secret and SSH key and optionally override the pod CIDR:
+For the cluster example, supply a pull secret and a registered SSH key and
+optionally override the pod CIDR:
+
+Resource creation commands accept either a bare Secret name, such as
+`--ssh-key cluster-login-key`, or a project-qualified reference, such as
+`--ssh-key 'name=cluster-login-key,project=platform-access'`. A bare name
+selects the tenant's default project. The selected Secret must belong to the
+resource's tenant; shared SSH-key Secrets are rejected.
 
 ```bash
 osac create secret --name cluster-pull-secret --type=pull-secret \
   --from-file=.dockerconfigjson=pull-secret.json
 
+osac create secret --name cluster-login-key --type=ssh-public-key \
+  --from-file public_key="$HOME/.ssh/id_ed25519.pub"
+
 osac create cluster --catalog-item sandbox \
   --name my-cluster \
   --pull-secret cluster-pull-secret \
-  --ssh-public-key "$(cat ~/.ssh/id_ed25519.pub)" \
+  --ssh-key cluster-login-key \
   --pod-cidr "10.128.0.0/14"
 ```
 
@@ -564,10 +600,16 @@ osac get baremetalinstancecatalogitems --filter 'this.published'
 ### Inspect
 
 ```bash
+osac describe clustercatalogitem <id-or-name>
 osac get clustercatalogitems <id> -o yaml
 osac get computeinstancecatalogitems <id> -o yaml
 osac get baremetalinstancecatalogitems <id> -o yaml
 ```
+
+`describe clustercatalogitem` shows governed fields in a readable form, including the add-on
+operator names and whether the complete list is `LOCKED` or `EDITABLE`. For an editable list, it
+also shows the catalog default when one is configured. Use `get -o yaml` for the complete policy
+definition.
 
 ### Update
 

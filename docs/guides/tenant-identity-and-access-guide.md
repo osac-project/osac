@@ -1,6 +1,6 @@
 # Tenant Identity and Access Guide (Fulfillment API / CLI)
 
-**Last Updated**: 2026-10-26
+**Last Updated**: 2026-11-05
 **Audience**: Cloud provider administrators, tenant administrators, developers validating fulfillment-service
 **Status**: Draft
 
@@ -9,7 +9,8 @@
 - [Overview](#overview)
 - [Why This Flow Matters](#why-this-flow-matters)
 - [Concepts](#concepts)
-- [Labels and annotations](#labels-and-annotations)
+  - [Labels and annotations](#labels-and-annotations)
+  - [Tenant organization membership](#tenant-organization-membership)
 - [Checking the current user with `osac whoami`](#checking-the-current-user-with-osac-whoami)
 - [Flow map](#flow-map)
 - [Prerequisites](#prerequisites)
@@ -27,6 +28,7 @@
 - [Flow 10 — Viewer IdP login again](#flow-10--viewer-idp-login-again)
 - [Flow 11 — Viewer lists project, cannot delete](#flow-11--viewer-lists-project-cannot-delete)
 - [Flow 12 — Delete the project](#flow-12--delete-the-project)
+- [Tenant Service Accounts](tenant-service-accounts.md)
 - [Troubleshooting](#troubleshooting)
 - [Frequently Asked Questions](#frequently-asked-questions)
 
@@ -36,6 +38,10 @@
 
 This guide shows tenant identity and access on OSAC using the `osac` CLI end to end:
 create a tenant, attach an IdP, grant roles, and prove project RBAC.
+
+For machine identities, see the [Tenant Service Accounts guide](tenant-service-accounts.md), which
+covers account administration, RoleBinding-based access, credential rotation, and workload use of
+client credentials.
 
 A **cloud provider administrator** creates the tenant. OSAC then sets up the basics for
 that tenant automatically (break-glass account, Keycloak organization, and Kubernetes
@@ -90,6 +96,14 @@ After the IdP is registered and READY:
 | Break-glass | `{tenant}-osac-break-glass` | Password printed **once** on tenant create |
 | Tenant admin | `alice` | Public API: device login → tenant IdP (`--flow device`) |
 | Tenant user | `bob` | Public API: device login → tenant IdP |
+
+### Tenant organization membership
+
+Each Keycloak Organization maps to an OSAC tenant. Regular users, including
+tenant admins, can belong to only one tenant Organization at a time. Cloud
+Provider Admins are the only users who may belong to multiple tenant
+Organizations. Their access across tenants remains governed by their assigned
+OSAC permissions.
 
 ### Private vs public API
 

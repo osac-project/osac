@@ -583,6 +583,263 @@ var _ = Describe("registered SSH key resolution", func() {
 		Expect(spec.SSHKey).To(Equal(publicKey))
 	})
 
+	It("keeps a running VM healthy when its registered Secret is gone", func() {
+		const (
+			instanceID   = "running-vm-with-deleted-key"
+			hubID        = "ssh-key-hub"
+			hubNamespace = "ssh-key-hub-ns"
+		)
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		existingCR := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: hubNamespace,
+				Name:      "running-vm",
+				Labels: map[string]string{
+					labels.ComputeInstanceUuid: instanceID,
+				},
+			},
+			Spec: osacv1alpha1.ComputeInstanceSpec{
+				TemplateID:  "osac.templates.ocp_virt_vm",
+				VCPUs:       2,
+				MemoryGiB:   4,
+				RunStrategy: osacv1alpha1.RunStrategyAlways,
+				SSHKey:      publicKey,
+			},
+		}
+		hubClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(existingCR).
+			Build()
+
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: hubClient}, nil)
+		instanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		instanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 2, MemoryGib: 4}.Build(),
+				}.Build(),
+			}.Build(), nil)
+		secretsClient := NewMockSecretsClient(ctrl)
+		secretsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			AnyTimes().
+			Return(nil, status.Error(codes.NotFound, "Secret is gone"))
+		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
+		computeInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			AnyTimes().
+			DoAndReturn(func(_ context.Context, request *privatev1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
+				return privatev1.ComputeInstancesUpdateResponse_builder{Object: request.GetObject()}.Build(), nil
+			})
+
+		provisionedReason := "Provisioned"
+		provisionedMessage := "The instance is running."
+		computeInstance := privatev1.ComputeInstance_builder{
+			Id: instanceID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-a",
+			}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "osac.templates.ocp_virt_vm"}.Build(),
+				InstanceType: privatev1.InstanceTypeReference_builder{Id: "small"}.Build(),
+				RunStrategy:  privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+				SshKey:       privatev1.SecretReference_builder{Id: "deleted-secret", Name: "login"}.Build(),
+			}.Build(),
+			Status: privatev1.ComputeInstanceStatus_builder{
+				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+				Hub:   hubID,
+				Conditions: []*privatev1.ComputeInstanceCondition{
+					privatev1.ComputeInstanceCondition_builder{
+						Type:    privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+						Status:  privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+						Reason:  &provisionedReason,
+						Message: &provisionedMessage,
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		reconciler := &function{
+			logger:                 logger,
+			hubCache:               hubCache,
+			computeInstancesClient: computeInstancesClient,
+			instanceTypesClient:    instanceTypesClient,
+			secretsClient:          secretsClient,
+			maskCalculator:         masks.NewCalculator().Build(),
+		}
+
+		Expect(reconciler.run(ctx, computeInstance)).To(Succeed())
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
+		provisioned := computeInstance.GetStatus().GetConditions()[0]
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
+		Expect(provisioned.GetReason()).To(Equal(provisionedReason))
+
+		stored := &osacv1alpha1.ComputeInstance{}
+		Expect(hubClient.Get(ctx, clnt.ObjectKeyFromObject(existingCR), stored)).To(Succeed())
+		Expect(stored.Spec.SSHKey).To(Equal(publicKey))
+	})
+
+	DescribeTable("returns a failed status write together with the reconciliation failure", func(writeErr error, expectConflict bool) {
+		const (
+			instanceID   = "new-vm-with-deleted-key-and-conflict"
+			hubID        = "conflict-ssh-key-hub"
+			hubNamespace = "conflict-ssh-key-hub-ns"
+		)
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		hubClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: hubClient}, nil)
+		instanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		instanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 2, MemoryGib: 4}.Build(),
+				}.Build(),
+			}.Build(), nil)
+		secretsClient := NewMockSecretsClient(ctrl)
+		secretsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "Secret is gone"))
+		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
+		computeInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, writeErr)
+
+		computeInstance := privatev1.ComputeInstance_builder{
+			Id: instanceID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-a",
+			}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "osac.templates.ocp_virt_vm"}.Build(),
+				InstanceType: privatev1.InstanceTypeReference_builder{Id: "small"}.Build(),
+				RunStrategy:  privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+				SshKey:       privatev1.SecretReference_builder{Id: "deleted-secret", Name: "login"}.Build(),
+			}.Build(),
+			Status: privatev1.ComputeInstanceStatus_builder{
+				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+		reconciler := &function{
+			logger:                 logger,
+			hubCache:               hubCache,
+			computeInstancesClient: computeInstancesClient,
+			instanceTypesClient:    instanceTypesClient,
+			secretsClient:          secretsClient,
+			maskCalculator:         masks.NewCalculator().Build(),
+		}
+
+		err := reconciler.run(ctx, computeInstance)
+		// The write error must be visible so the loop retries a conflict, and only a conflict.
+		Expect(err).To(MatchError(ContainSubstring("Secret is gone")))
+		Expect(err).To(MatchError(writeErr))
+		Expect(controllers.IsConflict(err)).To(Equal(expectConflict))
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
+	},
+		Entry("with a conflict", status.Error(codes.Aborted, "object has been modified"), true),
+		Entry("with another error", status.Error(codes.Unavailable, "database unavailable"), false),
+	)
+
+	It("marks initial reconciliation failed when the registered Secret is gone", func() {
+		const (
+			instanceID   = "new-vm-with-deleted-key"
+			hubID        = "initial-ssh-key-hub"
+			hubNamespace = "initial-ssh-key-hub-ns"
+		)
+		ctx := context.Background()
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+
+		scheme := runtime.NewScheme()
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		hubClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: hubClient}, nil)
+		instanceTypesClient := NewMockInstanceTypesClient(ctrl)
+		instanceTypesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.InstanceTypesGetResponse_builder{
+				Object: privatev1.InstanceType_builder{
+					Spec: privatev1.InstanceTypeSpec_builder{Vcpus: 2, MemoryGib: 4}.Build(),
+				}.Build(),
+			}.Build(), nil)
+		secretsClient := NewMockSecretsClient(ctrl)
+		secretsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "Secret is gone"))
+		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
+		computeInstancesClient.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, request *privatev1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
+				return privatev1.ComputeInstancesUpdateResponse_builder{Object: request.GetObject()}.Build(), nil
+			})
+
+		computeInstance := privatev1.ComputeInstance_builder{
+			Id: instanceID,
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.Controller},
+				Tenant:     "tenant-a",
+			}.Build(),
+			Spec: privatev1.ComputeInstanceSpec_builder{
+				Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "osac.templates.ocp_virt_vm"}.Build(),
+				InstanceType: privatev1.InstanceTypeReference_builder{Id: "small"}.Build(),
+				RunStrategy:  privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+				SshKey:       privatev1.SecretReference_builder{Id: "deleted-secret", Name: "login"}.Build(),
+			}.Build(),
+			Status: privatev1.ComputeInstanceStatus_builder{
+				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+				Hub:   hubID,
+			}.Build(),
+		}.Build()
+		reconciler := &function{
+			logger:                 logger,
+			hubCache:               hubCache,
+			computeInstancesClient: computeInstancesClient,
+			instanceTypesClient:    instanceTypesClient,
+			secretsClient:          secretsClient,
+			maskCalculator:         masks.NewCalculator().Build(),
+		}
+
+		err := reconciler.run(ctx, computeInstance)
+		Expect(err).To(MatchError(ContainSubstring("Secret is gone")))
+		Expect(controllers.IsConflict(err)).To(BeFalse())
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_FAILED))
+		var provisioned *privatev1.ComputeInstanceCondition
+		for _, condition := range computeInstance.GetStatus().GetConditions() {
+			if condition.GetType() == privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED {
+				provisioned = condition
+				break
+			}
+		}
+		Expect(provisioned).NotTo(BeNil())
+		Expect(provisioned.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(provisioned.GetReason()).To(Equal("SecretNotFound"))
+	})
+
 	DescribeTable("classifies SSH key lookup failures", func(code codes.Code, permanent bool, reason string) {
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
@@ -597,7 +854,7 @@ var _ = Describe("registered SSH key resolution", func() {
 		Expect(resolutionErr.Permanent).To(Equal(permanent))
 		Expect(resolutionErr.Reason).To(Equal(reason))
 	},
-		Entry("not found", codes.NotFound, false, "SecretNotFound"),
+		Entry("not found", codes.NotFound, true, "SecretNotFound"),
 		Entry("invalid", codes.InvalidArgument, true, "SecretInvalid"),
 		Entry("unavailable", codes.Unavailable, false, ""),
 		Entry("deadline", codes.DeadlineExceeded, false, ""),
@@ -1970,6 +2227,176 @@ var _ = Describe("delete", func() {
 		err := t.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(hasFinalizer(t.computeInstance)).To(BeFalse())
+	})
+})
+
+// The pass bumps the version through a registration update before its finalizer write is rejected; the retry must
+// converge without repeating the registration write.
+var _ = Describe("finalizer removal conflict on delete", func() {
+	It("retries a rejected finalizer removal from a fresh read and converges", func() {
+		ctx := context.Background()
+		const recoveredID = "volume-original"
+		t, computeInstancesClient, volumesClient := newVolumeCleanupTask(nil, []*privatev1.ComputeInstanceVolumeRegistration{
+			privatev1.ComputeInstanceVolumeRegistration_builder{
+				DiskKey: "boot",
+				State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+			}.Build(),
+		})
+		f := t.r
+		f.maskCalculator = masks.NewCalculator().Build()
+
+		prepared, err := prepareDiskRegistrations(t.computeInstance)
+		Expect(err).NotTo(HaveOccurred())
+		recovered := registrationTestVolume(prepared[0].request, recoveredID, "system")
+		recovered.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		volumesClient.list = func(context.Context, *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {
+			return registrationTestListResponse([]*privatev1.Volume{recovered}, 1), nil
+		}
+		volumesClient.get = volumeCleanupGetSequence(
+			volumeCleanupGetResult{volume: recovered},
+			volumeCleanupGetResult{err: status.Error(codes.NotFound, "Volume is absent")},
+			volumeCleanupGetResult{err: status.Error(codes.NotFound, "Volume is absent")},
+		)
+		volumesClient.delete = func(context.Context, *privatev1.VolumesDeleteRequest) (*privatev1.VolumesDeleteResponse, error) {
+			return privatev1.VolumesDeleteResponse_builder{}.Build(), nil
+		}
+
+		// Update 1 resolves the registration; update 2, the finalizer removal, is rejected.
+		computeInstancesClient.failBeforeUpdateCalls = map[int]error{
+			2: status.Error(codes.Aborted, "object has been modified"),
+		}
+
+		startVersion := t.computeInstance.GetMetadata().GetVersion()
+		err = f.run(ctx, t.computeInstance)
+		Expect(err).To(HaveOccurred())
+		Expect(controllers.IsConflict(err)).To(BeTrue())
+		Expect(computeInstancesClient.updateRequests).To(HaveLen(2))
+		Expect(computeInstancesClient.updateRequests[0].GetLock()).To(BeTrue())
+		Expect(computeInstancesClient.updateRequests[1].GetUpdateMask().GetPaths()).To(Equal([]string{"metadata.finalizers"}))
+		Expect(computeInstancesClient.updateRequests[1].GetObject().GetMetadata().GetVersion()).To(
+			Equal(computeInstancesClient.object.GetMetadata().GetVersion()),
+			"the removal must carry the version of the read that followed the recovery")
+		Expect(computeInstancesClient.updateRequests[1].GetObject().GetMetadata().GetFinalizers()).ToNot(
+			ContainElement(finalizers.Controller))
+
+		// The retry starts from a fresh read with the registration already resolved.
+		freshResponse, err := computeInstancesClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{
+			Id: t.computeInstance.GetId(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		fresh := freshResponse.GetObject()
+		Expect(fresh.GetMetadata().GetVersion()).To(BeNumerically(">", startVersion))
+		Expect(fresh.GetStatus().GetVolumeRegistration()[0].GetState()).To(
+			Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+		Expect(fresh.GetStatus().GetVolumes()).To(HaveLen(1))
+
+		err = f.run(ctx, fresh)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(computeInstancesClient.updateRequests).To(HaveLen(3))
+		final := computeInstancesClient.updateRequests[2]
+		Expect(final.GetUpdateMask().GetPaths()).To(ContainElement("metadata.finalizers"))
+		Expect(final.GetUpdateMask().GetPaths()).ToNot(ContainElement(HavePrefix("status.volume")))
+		Expect(final.GetObject().GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		Expect(final.GetObject().GetMetadata().GetVersion()).To(Equal(fresh.GetMetadata().GetVersion()))
+		Expect(volumesClient.createCalls).To(BeZero())
+	})
+
+	// The release must use the list and version read after the recovery, so another writer's finalizer is kept.
+	It("removes the finalizer in the pass that recovers a registration, from the list read after the recovery", func() {
+		ctx := context.Background()
+		const (
+			recoveredID = "volume-original"
+			foreign     = "test.osac.io/foreign"
+		)
+		t, computeInstancesClient, volumesClient := newVolumeCleanupTask(nil, []*privatev1.ComputeInstanceVolumeRegistration{
+			privatev1.ComputeInstanceVolumeRegistration_builder{
+				DiskKey: "boot",
+				State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+			}.Build(),
+		})
+		f := t.r
+		f.maskCalculator = masks.NewCalculator().Build()
+		computeInstancesClient.checkFinalizers = true
+
+		prepared, err := prepareDiskRegistrations(t.computeInstance)
+		Expect(err).NotTo(HaveOccurred())
+		recovered := registrationTestVolume(prepared[0].request, recoveredID, "system")
+		recovered.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		volumesClient.list = func(context.Context, *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {
+			return registrationTestListResponse([]*privatev1.Volume{recovered}, 1), nil
+		}
+		volumesClient.get = volumeCleanupGetSequence(
+			volumeCleanupGetResult{volume: recovered},
+			volumeCleanupGetResult{err: status.Error(codes.NotFound, "Volume is absent")},
+			volumeCleanupGetResult{err: status.Error(codes.NotFound, "Volume is absent")},
+		)
+		volumesClient.delete = func(context.Context, *privatev1.VolumesDeleteRequest) (*privatev1.VolumesDeleteResponse, error) {
+			return privatev1.VolumesDeleteResponse_builder{}.Build(), nil
+		}
+
+		// Another writer adds a finalizer after the pass read the object.
+		stored := computeInstancesClient.object.GetMetadata()
+		stored.SetFinalizers([]string{finalizers.Controller, foreign})
+		stored.SetVersion(stored.GetVersion() + 1)
+
+		err = f.run(ctx, t.computeInstance)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(computeInstancesClient.updateRequests).To(HaveLen(2))
+		Expect(computeInstancesClient.updateRequests[0].GetLock()).To(BeTrue())
+		Expect(computeInstancesClient.updateRequests[1].GetUpdateMask().GetPaths()).To(Equal([]string{"metadata.finalizers"}))
+		Expect(computeInstancesClient.object.GetMetadata().GetFinalizers()).To(ConsistOf(foreign))
+	})
+
+	// When the Volume record outlives the recovery the pass has nothing to release, so it writes nothing after the
+	// recovery itself, even though another writer changed the finalizers and the version in the meantime.
+	It("writes nothing after a recovery whose Volume cleanup is still pending", func() {
+		ctx := context.Background()
+		const (
+			recoveredID = "volume-original"
+			foreign     = "test.osac.io/foreign"
+		)
+		t, computeInstancesClient, volumesClient := newVolumeCleanupTask(nil, []*privatev1.ComputeInstanceVolumeRegistration{
+			privatev1.ComputeInstanceVolumeRegistration_builder{
+				DiskKey: "boot",
+				State:   privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN,
+			}.Build(),
+		})
+		f := t.r
+		f.maskCalculator = masks.NewCalculator().Build()
+		computeInstancesClient.checkFinalizers = true
+
+		prepared, err := prepareDiskRegistrations(t.computeInstance)
+		Expect(err).NotTo(HaveOccurred())
+		recovered := registrationTestVolume(prepared[0].request, recoveredID, "system")
+		recovered.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_AVAILABLE)
+		volumesClient.list = func(context.Context, *privatev1.VolumesListRequest) (*privatev1.VolumesListResponse, error) {
+			return registrationTestListResponse([]*privatev1.Volume{recovered}, 1), nil
+		}
+		// The record stays visible after Delete, so the cleanup is pending.
+		volumesClient.get = volumeCleanupGetSequence(
+			volumeCleanupGetResult{volume: recovered},
+			volumeCleanupGetResult{volume: recovered},
+		)
+		volumesClient.delete = func(context.Context, *privatev1.VolumesDeleteRequest) (*privatev1.VolumesDeleteResponse, error) {
+			return privatev1.VolumesDeleteResponse_builder{}.Build(), nil
+		}
+
+		stored := computeInstancesClient.object.GetMetadata()
+		stored.SetFinalizers([]string{finalizers.Controller, foreign})
+		stored.SetVersion(stored.GetVersion() + 1)
+
+		err = f.run(ctx, t.computeInstance)
+
+		Expect(err).To(MatchError(ContainSubstring("volume records are still present")))
+		Expect(controllers.IsRequeueable(err)).To(BeTrue())
+		Expect(controllers.IsConflict(err)).To(BeFalse())
+		Expect(volumesClient.deleteRequests).To(HaveLen(1), "the cleanup must have asked for the deletion")
+		Expect(computeInstancesClient.updateRequests).To(HaveLen(1), "only the recovery may write")
+		Expect(computeInstancesClient.updateRequests[0].GetLock()).To(BeTrue())
+		Expect(computeInstancesClient.object.GetMetadata().GetFinalizers()).To(ConsistOf(finalizers.Controller, foreign))
+		Expect(t.computeInstance.GetMetadata().GetFinalizers()).To(ConsistOf(finalizers.Controller),
+			"the pass must not copy another writer's finalizers before a release")
 	})
 })
 

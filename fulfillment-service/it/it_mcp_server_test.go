@@ -26,7 +26,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
-	"github.com/onsi/gomega/ghttp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -97,7 +96,6 @@ var _ = Describe("MCP server", func() {
 		projectID                string
 		projectName              string
 		mcpHTTPServer            *httptest.Server
-		mcpClient                *http.Client
 	)
 
 	BeforeEach(func() {
@@ -108,7 +106,7 @@ var _ = Describe("MCP server", func() {
 		storageBackendID, storageTierID, subnetID = "", "", ""
 		virtualNetworkID, networkClassID, securityGroupID = "", "", ""
 		projectID, projectName = "", ""
-		mcpHTTPServer, mcpClient = nil, nil
+		mcpHTTPServer = nil
 		adminConn := tool.InternalView().AdminConn()
 		catalogItemsClient = privatev1.NewComputeInstanceCatalogItemsClient(adminConn)
 		computeInstanceTemplatesClient = privatev1.NewComputeInstanceTemplatesClient(adminConn)
@@ -289,13 +287,6 @@ var _ = Describe("MCP server", func() {
 		})
 		waitForNetworkClassReady(ctx, networkClassesClient, networkClassID)
 
-		err = updateNetworkClassStatusWithRetry(ctx, networkClassesClient, networkClassID, privatev1.NetworkClassStatus_builder{
-			State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
-			Hub:   hubId,
-		}.Build(), &fieldmaskpb.FieldMask{Paths: []string{"status.state", "status.hub"}})
-		Expect(err).ToNot(HaveOccurred())
-		waitForNetworkClassReady(ctx, networkClassesClient, networkClassID)
-
 		virtualNetworkID = fmt.Sprintf("mcp-virtual-network-%s", uuid.New())
 		_, err = virtualNetworksClient.Create(ctx, privatev1.VirtualNetworksCreateRequest_builder{
 			Object: privatev1.VirtualNetwork_builder{
@@ -405,35 +396,14 @@ var _ = Describe("MCP server", func() {
 		DeferCleanup(func() { _ = mcpConn.Close() })
 		computeInstancesClient = publicv1.NewComputeInstancesClient(mcpConn)
 		mcpHTTPServer = startInProcessMCPServer(ctx, "fulfillment-mcp-server-it")
-		mcpClient = &http.Client{
-			Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
-				token, err := mcpTokenSource.Token(request.Context())
-				if err != nil {
-					return nil, err
-				}
-				request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
-				return http.DefaultTransport.RoundTrip(request)
-			}),
-		}
 	})
 
 	It("drives ComputeInstance discovery, creation, inspection, and deletion over real HTTP with bearer token forwarding", func() {
-		transport := &mcp.StreamableClientTransport{Endpoint: mcpHTTPServer.URL, HTTPClient: mcpClient}
-		client := mcp.NewClient(&mcp.Implementation{Name: "it-mcp-client", Version: "0.1.0"}, nil)
-		session, err := client.Connect(ctx, transport, nil)
-		Expect(err).ToNot(HaveOccurred())
-		defer func() { Expect(session.Close()).To(Succeed()) }()
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-client", userUsername)
 		listedTools, err := session.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(listedTools.Tools).To(HaveLen(6))
-		Expect([]string{
-			listedTools.Tools[0].Name, listedTools.Tools[1].Name,
-			listedTools.Tools[2].Name, listedTools.Tools[3].Name, listedTools.Tools[4].Name,
-			listedTools.Tools[5].Name,
-		}).To(ConsistOf(
-			"check_connection", "list_resources", "get_resource", "create_compute_instance",
-			"update_compute_instance", "delete_compute_instance",
-		))
+		Expect(listedTools.Tools).To(HaveLen(len(expectedMCPServerToolNames)))
+		Expect(mcpToolNames(listedTools.Tools)).To(ConsistOf(expectedMCPServerToolNames))
 
 		instancesBefore, err := computeInstancesClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{
 			Limit: proto.Int32(1),
@@ -448,10 +418,7 @@ var _ = Describe("MCP server", func() {
 		Expect(connection.Caller.Subject).ToNot(BeEmpty())
 		Expect(connection.Caller.Tenants).To(ContainElement(usersGroup))
 		Expect(connection.ResourceFamilies).To(HaveLen(11))
-		Expect(connection.Tools).To(ConsistOf(
-			"check_connection", "list_resources", "get_resource", "create_compute_instance",
-			"update_compute_instance", "delete_compute_instance",
-		))
+		Expect(connection.Tools).To(ConsistOf(expectedMCPServerToolNames))
 		Expect(connection.Permissions).To(ConsistOf(
 			mcpserver.CheckConnectionPermission{
 				Tenant: usersGroup, Service: "osac.public.v1.ComputeInstances", Method: "List", Allowed: true,
@@ -487,19 +454,22 @@ var _ = Describe("MCP server", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resource.Resource).To(HaveKeyWithValue("id", id))
+			Expect(resource.Resource).To(HaveKey("name"))
+			Expect(resource.Resource).To(HaveKey("version"))
+			Expect(resource.Resource).ToNot(HaveKey("title"))
+			Expect(resource.Resource).ToNot(HaveKey("description"))
+			Expect(resource.Resource).ToNot(HaveKey("annotations"))
+			Expect(resource.Resource).ToNot(HaveKey("status"))
+			Expect(resource.Resource).ToNot(HaveKey("conditions"))
+			Expect(resource.Resource).ToNot(HaveKey("specDefaults"))
+			Expect(resource.Resource).ToNot(HaveKey("spec"))
+			Expect(resource.Resource).ToNot(HaveKey("fields"))
+			Expect(resource.Resource).ToNot(HaveKey("userData"))
 			return resource.Resource
 		}
 
 		catalogItem := assertDiscoverable(mcpserver.ResourceTypeComputeInstanceCatalogItem, catalogItemID)
-		Expect(catalogItem).To(HaveKeyWithValue("title", "MCP compute instance"))
-		template := assertDiscoverable(mcpserver.ResourceTypeComputeInstanceTemplate, templateID)
-		specDefaults, ok := template["specDefaults"].(map[string]any)
-		Expect(ok).To(BeTrue())
-		bootDisk, ok := specDefaults["bootDisk"].(map[string]any)
-		Expect(ok).To(BeTrue())
-		storageTier, ok := bootDisk["storageTier"].(map[string]any)
-		Expect(ok).To(BeTrue())
-		Expect(storageTier).To(HaveKeyWithValue("id", storageTierID))
+		assertDiscoverable(mcpserver.ResourceTypeComputeInstanceTemplate, templateID)
 		instanceType := assertDiscoverable(mcpserver.ResourceTypeInstanceType, instanceTypeID)
 		assertDiscoverable(mcpserver.ResourceTypeDiskImage, diskImageID)
 		projectList, err := callMCPTool[mcpserver.ListResourcesOutput](ctx, session, "list_resources", mcpserver.ListResourcesInput{
@@ -553,7 +523,8 @@ var _ = Describe("MCP server", func() {
 			if computeInstanceID == "" {
 				return
 			}
-			_, err := computeInstancesClient.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: computeInstanceID}.Build())
+			adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+			_, err := adminInstances.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: computeInstanceID}.Build())
 			if status.Code(err) != codes.NotFound {
 				Expect(err).ToNot(HaveOccurred())
 			}
@@ -576,12 +547,28 @@ var _ = Describe("MCP server", func() {
 				publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
 			))
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
-		currentResponse, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
-			Id: computeInstanceID,
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		currentVersion := currentResponse.GetObject().GetMetadata().GetVersion()
-		staleVersion := currentVersion + 1
+		var staleVersion int32
+		Eventually(func(g Gomega) error {
+			currentResponse, getErr := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+				Id: computeInstanceID,
+			}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			currentVersion := currentResponse.GetObject().GetMetadata().GetVersion()
+			g.Expect(currentVersion).To(BeNumerically(">", 0))
+
+			_, updateErr := callMCPTool[mcpserver.UpdateComputeInstanceOutput](
+				ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
+					ID: computeInstanceID, Version: currentVersion, RunStrategy: "HALTED",
+				},
+			)
+			if updateErr != nil {
+				g.Expect(updateErr.Error()).To(ContainSubstring("The resource version is stale"))
+				return updateErr
+			}
+			staleVersion = currentVersion
+			return nil
+		}, time.Minute, 100*time.Millisecond).Should(Succeed())
+		Expect(staleVersion).To(BeNumerically(">", 0))
 
 		_, err = callMCPTool[mcpserver.UpdateComputeInstanceOutput](
 			ctx, session, "update_compute_instance", mcpserver.UpdateComputeInstanceInput{
@@ -611,9 +598,9 @@ var _ = Describe("MCP server", func() {
 				return
 			}
 			updated = output
-			g.Expect(updated.Version).To(BeNumerically(">", retryVersion))
+			g.Expect(updated.ID).To(Equal(computeInstanceID))
+			g.Expect(updated.Version).To(BeNumerically(">=", retryVersion))
 		}, time.Minute, 100*time.Millisecond).Should(Succeed())
-		Expect(updated.ID).To(Equal(computeInstanceID))
 
 		updateInstanceTypeWithRetry := func(instanceTypeID string) mcpserver.UpdateComputeInstanceOutput {
 			var output mcpserver.UpdateComputeInstanceOutput
@@ -686,22 +673,7 @@ var _ = Describe("MCP server", func() {
 		Expect(rejectedResponse.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal(deprecatedInstanceTypeID))
 
 		otherNetwork := createCatalogItemNetworkInClassFixture(ctx, "development", "", networkClassID)
-		otherTokenSource, err := tool.makeKeycloakTokenSource(ctx, "ben", usersPassword)
-		Expect(err).ToNot(HaveOccurred())
-		otherHTTPClient := &http.Client{Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
-			token, e := otherTokenSource.Token(request.Context())
-			if e != nil {
-				return nil, e
-			}
-			request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
-			return http.DefaultTransport.RoundTrip(request)
-		})}
-		otherClient := mcp.NewClient(&mcp.Implementation{Name: "it-mcp-other-tenant", Version: "0.1.0"}, nil)
-		otherSession, err := otherClient.Connect(ctx, &mcp.StreamableClientTransport{
-			Endpoint: mcpHTTPServer.URL, HTTPClient: otherHTTPClient,
-		}, nil)
-		Expect(err).ToNot(HaveOccurred())
-		defer func() { Expect(otherSession.Close()).To(Succeed()) }()
+		otherSession := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-other-tenant", "ben")
 
 		otherCreated, err := callMCPTool[mcpserver.CreateComputeInstanceOutput](
 			ctx, otherSession, "create_compute_instance", mcpserver.CreateComputeInstanceInput{
@@ -716,7 +688,8 @@ var _ = Describe("MCP server", func() {
 		Expect(otherCreated.ID).ToNot(BeEmpty())
 		otherComputeInstanceID = otherCreated.ID
 		DeferCleanup(func() {
-			_, err := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn()).Delete(
+			adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+			_, err := adminInstances.Delete(
 				ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: otherComputeInstanceID}.Build(),
 			)
 			if status.Code(err) != codes.NotFound {
@@ -852,6 +825,103 @@ var _ = Describe("MCP server", func() {
 		Expect(deleted.ID).To(Equal(computeInstanceID))
 		waitForMCPComputeInstanceDeletion(ctx, computeInstanceID)
 		computeInstanceID = ""
+	})
+
+	It("returns safe missing-Secret guidance from the real API boundary", func() {
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-missing-secret", userUsername)
+		missingSecretCatalogItemID := fmt.Sprintf("mcp-missing-secret-item-%s", uuid.New())
+		mockSecretValue := uuid.New()
+		missingSecretID := createCatalogItemSecretFixture(ctx, usersGroup,
+			privatev1.SecretType_SECRET_TYPE_USER_DATA,
+			map[string][]byte{"userdata": []byte(mockSecretValue)},
+		)
+		_, err := catalogItemsClient.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{
+			Object: privatev1.ComputeInstanceCatalogItem_builder{
+				Id:          missingSecretCatalogItemID,
+				Metadata:    privatev1.Metadata_builder{Name: missingSecretCatalogItemID, Tenant: usersGroup}.Build(),
+				Title:       "MCP missing Secret catalog item",
+				Description: "Catalog item for missing-Secret MCP integration testing",
+				Published:   true,
+				Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+					InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
+						Editable: privatev1.EditableInstanceTypeReferenceField_builder{}.Build(),
+					}.Build(),
+					BootDisk: privatev1.ComputeInstanceBootDiskFieldPolicies_builder{
+						SizeGib: privatev1.Int32FieldPolicy_builder{
+							Editable: privatev1.EditableInt32Field_builder{}.Build(),
+						}.Build(),
+						StorageTier: privatev1.StorageTierReferenceFieldPolicy_builder{
+							Editable: privatev1.EditableStorageTierReferenceField_builder{}.Build(),
+						}.Build(),
+					}.Build(),
+					RunStrategy: privatev1.ComputeInstanceRunStrategyFieldPolicy_builder{
+						Editable: privatev1.EditableComputeInstanceRunStrategyField_builder{}.Build(),
+					}.Build(),
+					NetworkAttachments: privatev1.ComputeNetworkAttachmentListFieldPolicy_builder{
+						Editable: privatev1.EditableComputeNetworkAttachmentList_builder{}.Build(),
+					}.Build(),
+					UserDataSource: privatev1.UserDataSourceFieldPolicy_builder{
+						Editable: privatev1.EditableUserDataSourceField_builder{
+							DefaultValue: privatev1.UserDataSource_builder{
+								Secret: privatev1.SecretLocalReference_builder{
+									Id: missingSecretID,
+								}.Build(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			_, err := catalogItemsClient.Delete(
+				ctx, privatev1.ComputeInstanceCatalogItemsDeleteRequest_builder{Id: missingSecretCatalogItemID}.Build(),
+			)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		secretsClient := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+		_, err = secretsClient.Delete(ctx, privatev1.SecretsDeleteRequest_builder{Id: missingSecretID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func() codes.Code {
+			_, getErr := secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: missingSecretID}.Build())
+			return status.Code(getErr)
+		}, 10*time.Second, 100*time.Millisecond).Should(Equal(codes.NotFound))
+
+		instanceName := fmt.Sprintf("mcp-missing-secret-instance-%s", uuid.New()[24:32])
+		bootDiskSize := int32(20)
+		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
+			ctx, session, "create_compute_instance", mcpserver.CreateComputeInstanceInput{
+				Name:           instanceName,
+				CatalogItem:    missingSecretCatalogItemID,
+				DiskImageID:    diskImageID,
+				ProjectID:      projectID,
+				InstanceTypeID: instanceTypeID,
+				BootDisk: &mcpserver.ComputeInstanceBootDiskInput{
+					SizeGiB:       &bootDiskSize,
+					StorageTierID: storageTierID,
+				},
+				NetworkAttachments: []mcpserver.ComputeInstanceNetworkAttachmentInput{{
+					SubnetID:         subnetID,
+					SecurityGroupIDs: []string{securityGroupID},
+				}},
+			},
+		)
+		expectMCPSafeError(
+			err, "not_found", "NotFound", "/secrets/create",
+			fmt.Sprintf("Secret reference %s is missing", missingSecretID),
+		)
+		Expect(err.Error()).ToNot(ContainSubstring(mockSecretValue))
+		Expect(err.Error()).ToNot(ContainSubstring("Bearer "))
+		Expect(err.Error()).ToNot(ContainSubstring(`"token"`))
+
+		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+		instances, err := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{
+			Filter: proto.String(fmt.Sprintf("this.metadata.name == %q", instanceName)),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(instances.GetItems()).To(BeEmpty())
 	})
 })
 

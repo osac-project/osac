@@ -39,17 +39,18 @@ UID_THREE = "33333333-3333-4333-8333-333333333333"
 TENANT_ONE = "tenant-one"
 TENANT_TWO = "tenant-two"
 POOL_UID = "44444444-4444-4444-8444-444444444444"
-POOL_FULFILLMENT_ID = "55555555-5555-4555-8555-555555555555"
+POOL_FULFILLMENT_ID = POOL_UID
 POOL_CIDR = "198.51.100.0/24"
 ATTACHMENT_UID = "66666666-6666-4666-8666-666666666666"
-ATTACHMENT_FULFILLMENT_ID = "77777777-7777-4777-8777-777777777777"
-EXTERNAL_IP_FULFILLMENT_ID = "88888888-8888-4888-8888-888888888888"
-SUBNET_FULFILLMENT_ID = "99999999-9999-4999-8999-999999999999"
-VIRTUAL_NETWORK_FULFILLMENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+ATTACHMENT_FULFILLMENT_ID = ATTACHMENT_UID
+NETWORK_ATTACHMENT_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+EXTERNAL_IP_FULFILLMENT_ID = UID_THREE
+SUBNET_FULFILLMENT_ID = UID_TWO
+VIRTUAL_NETWORK_FULFILLMENT_ID = UID_ONE
 BARE_METAL_INSTANCE_UID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-BARE_METAL_INSTANCE_FULFILLMENT_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+BARE_METAL_INSTANCE_FULFILLMENT_ID = BARE_METAL_INSTANCE_UID
 NAT_GATEWAY_UID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
-NAT_GATEWAY_FULFILLMENT_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+NAT_GATEWAY_FULFILLMENT_ID = NAT_GATEWAY_UID
 SECOND_SUBNET_UID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 
 
@@ -74,7 +75,7 @@ def delete_virtual_network(store, uid, tenant_id=TENANT_ONE):
     return store.delete_and_remove_virtual_network(uid, tenant_id)
 
 
-def register_external_ip_pool(store, *, tenant_id=TENANT_ONE, cidr=POOL_CIDR):
+def register_external_ip_pool(store, *, tenant_id="shared", cidr=POOL_CIDR):
     return store.ensure_external_ip_pool(
         POOL_UID,
         POOL_FULFILLMENT_ID,
@@ -92,7 +93,7 @@ def reserve_external_address(
     tenant_id=TENANT_ONE,
     pool_uid=POOL_UID,
     pool_fulfillment_id=POOL_FULFILLMENT_ID,
-    pool_tenant_id=TENANT_ONE,
+    pool_tenant_id="shared",
     pool_cidr=POOL_CIDR,
     check_mode=False,
 ):
@@ -111,52 +112,21 @@ def reserve_external_address(
 def external_ip_attachment_context(
     store, *, target_ip="10.0.1.10", external_ip_uid=UID_THREE
 ):
-    subnet = store.get_subnet(UID_TWO, TENANT_ONE)
     with sqlite3.connect(store.path) as connection:
-        external_ip = connection.execute(
-            "SELECT fulfillment_id, address FROM external_ips WHERE uid = ?",
-            (external_ip_uid,),
-        ).fetchone()
+        external_ip = connection.execute("SELECT address FROM external_ips WHERE uid = ?", (external_ip_uid,)).fetchone()
     assert external_ip is not None
-    parent = store.get_virtual_network(UID_ONE, TENANT_ONE)
     return {
         "external_ip": {
-            "name": "test-eip",
-            "namespace": "test-networking",
-            "fulfillment_id": external_ip[0],
-            "kubernetes_uid": external_ip_uid,
-            "tenant_id": TENANT_ONE,
-            "address": external_ip[1],
-            "state": "Allocated",
-            "phase": "Ready",
+            "id": external_ip_uid,
+            "address": external_ip[0],
         },
-        "target": {
-            "kind": "BareMetalInstance",
-            "name": "test-bmi",
-            "namespace": "bmaas",
-            "fulfillment_id": BARE_METAL_INSTANCE_FULFILLMENT_ID,
-            "kubernetes_uid": BARE_METAL_INSTANCE_UID,
-            "tenant_id": TENANT_ONE,
-            "ip_address": target_ip,
-            "ready": True,
-        },
-        "subnet": {
-            "name": "test-subnet",
-            "namespace": "test-networking",
-            "fulfillment_id": SUBNET_FULFILLMENT_ID,
-            "kubernetes_uid": UID_TWO,
-            "tenant_id": TENANT_ONE,
-            "ipv4_cidr": subnet["ipv4_cidr"],
-            "virtual_network_id": VIRTUAL_NETWORK_FULFILLMENT_ID,
-            "phase": "Ready",
-        },
-        "virtual_network": {
-            "name": "test-network",
-            "namespace": "test-networking",
-            "fulfillment_id": VIRTUAL_NETWORK_FULFILLMENT_ID,
-            "kubernetes_uid": UID_ONE,
-            "tenant_id": TENANT_ONE,
-            "phase": "Ready",
+        "destination": {
+            "address": target_ip,
+            "routing_domain": {
+                "type": "tenant_virtual_network",
+                "virtual_network_id": UID_ONE,
+                "subnet_id": UID_TWO,
+            },
         },
     }
 
@@ -172,7 +142,7 @@ def nat_gateway_context(store):
             "name": "test-eip",
             "namespace": "test-networking",
             "fulfillment_id": EXTERNAL_IP_FULFILLMENT_ID,
-            "kubernetes_uid": UID_THREE,
+            "kubernetes_uid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             "tenant_id": TENANT_ONE,
             "address": address,
             "state": "Allocated",
@@ -182,7 +152,7 @@ def nat_gateway_context(store):
             "name": "test-network",
             "namespace": "test-networking",
             "fulfillment_id": VIRTUAL_NETWORK_FULFILLMENT_ID,
-            "kubernetes_uid": UID_ONE,
+            "kubernetes_uid": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
             "tenant_id": TENANT_ONE,
             "ipv4_cidr": parent["virtual_network_cidr"],
             "phase": "Ready",
@@ -204,6 +174,46 @@ def prepare_attachment_state(tmp_path, monkeypatch):
         lambda *args, **kwargs: False,
     )
     return store
+
+
+def prepare_network_attachment_state(tmp_path, monkeypatch, *, ready=True):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(store, uid=UID_TWO, cidr="10.0.1.0/24")
+    mark_subnet_ready(store, subnet)
+    monkeypatch.setattr(
+        agentless_net_state,
+        "preflight_dhcp_supervisor",
+        lambda _uid: "systemd",
+    )
+    monkeypatch.setattr(
+        agentless_net_state,
+        "reconcile_virtual_network_dhcp",
+        lambda *_args, **_kwargs: False,
+    )
+    attachment, _, _ = store.prepare_network_attachment(
+        NETWORK_ATTACHMENT_ID,
+        TENANT_ONE,
+        UID_ONE,
+        UID_TWO,
+        "bmi-01.example.test",
+        "eno1",
+        "aa:bb:cc:dd:ee:ff",
+        [
+            {
+                "switch_name": "leaf-1",
+                "port_name": "swp1",
+                "selected": True,
+                "fabric": True,
+            }
+        ],
+        "systemd",
+    )
+    if ready:
+        attachment, _ = store.mark_network_attachment_ready(
+            NETWORK_ATTACHMENT_ID, TENANT_ONE
+        )
+    return store, attachment
 
 
 def prepare_nat_gateway_state(tmp_path, monkeypatch, *, with_subnet=True):
@@ -243,19 +253,41 @@ def reserve_subnet(
     trunk="eth1",
     observed_vlan_ids=(),
     vip="",
+    physical_ranges=None,
     check_mode=False,
 ):
     parent = store.get_virtual_network(parent_uid, tenant_id)
     if cidr is None:
         cidr = available_subnet_cidr(parent)
+    network = ipaddress.ip_network(cidr, strict=True)
+    physical = [str(network)]
+    vip_ranges = []
+    if vip:
+        vip_network = ipaddress.ip_network(vip, strict=True)
+        vip_ranges = [str(vip_network)]
+        first = network.network_address + 2
+        last = vip_network.network_address - 1
+        physical = (
+            [str(block) for block in ipaddress.summarize_address_range(first, last)]
+            if first <= last
+            else []
+        )
+    if physical_ranges is not None:
+        physical = physical_ranges
+    ipam = {
+        "gateway_ipv4": str(network.network_address + 1),
+        "overlay_ipv4_cidrs": [],
+        "physical_ipv4_cidrs": physical,
+        "lb_vip_ipv4_cidrs": vip_ranges,
+    }
     return store.reserve_subnet(
         uid,
         parent_uid,
         tenant_id,
         cidr,
         trunk,
+        ipam,
         set(observed_vlan_ids),
-        vip,
         check_mode=check_mode,
     )
 
@@ -844,8 +876,8 @@ def test_delete_keeps_state_until_provider_cleanup_and_preserves_peer(tmp_path, 
     assert get_virtual_network(store, UID_ONE) is None
     assert get_virtual_network(store, UID_TWO) == second
 
-    replacement = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
-    assert replacement["transit"]["cidr"] == first["transit"]["cidr"]
+    with pytest.raises(StateError, match="was deleted"):
+        ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
 
 
 def test_failed_delete_preserves_its_entry_and_peer(tmp_path, monkeypatch):
@@ -882,7 +914,12 @@ def test_delete_cleans_deterministic_residue_even_when_state_entry_is_absent(
     monkeypatch.setattr(agentless_net_state, "delete_virtual_network", cleanup_residue)
     assert delete_virtual_network(store, UID_THREE) is True
     assert len(observed) == 1
-    assert not store.path.exists()
+    assert store.path.exists()
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT tenant_id FROM deleted_resources WHERE kind = 'VirtualNetwork' AND uid = ?",
+            (UID_THREE,),
+        ).fetchone() == (TENANT_ONE,)
 
 
 def test_absent_state_entry_without_provider_residue_is_idempotent(tmp_path, monkeypatch):
@@ -922,6 +959,20 @@ def test_state_database_rejects_unsafe_mode_and_corrupt_payload(tmp_path):
         connection.execute("UPDATE virtual_networks SET payload = ? WHERE uid = ?", ("{", UID_ONE))
     with pytest.raises(StateCorrupt, match="malformed VirtualNetwork state payload"):
         get_virtual_network(store, UID_ONE)
+
+
+def test_corrupt_unrelated_payload_fails_closed_on_every_state_open(tmp_path):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    ensure_virtual_network(store, UID_TWO, "10.0.0.0/16")
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE virtual_networks SET payload = ? WHERE uid = ?",
+            ("{", UID_TWO),
+        )
+
+    with pytest.raises(StateCorrupt, match="malformed VirtualNetwork state payload"):
+        store.get_virtual_network(UID_ONE, TENANT_ONE)
 
 
 def test_smallest_virtual_network_cidr_allocates_one_transit_link(tmp_path):
@@ -983,6 +1034,9 @@ def test_state_database_uses_current_schema_v1_and_preserves_uid_and_transit_ind
 
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT key, value FROM state_metadata"
+        ).fetchall() == [("contract", "network-manager-api-id-v1")]
         assert {
             row[0]
             for row in connection.execute(
@@ -995,6 +1049,10 @@ def test_state_database_uses_current_schema_v1_and_preserves_uid_and_transit_ind
             "external_ips",
             "attachments",
             "nat_gateways",
+            "network_attachments",
+            "network_attachment_ports",
+            "deleted_resources",
+            "state_metadata",
         }
         assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 2
         with pytest.raises(sqlite3.IntegrityError):
@@ -1017,114 +1075,100 @@ def test_incomplete_schema_v1_fails_closed_without_modification(tmp_path):
         connection.execute("DROP TABLE IF EXISTS external_ip_pools")
         connection.execute("DROP TABLE IF EXISTS attachments")
         connection.execute("DROP TABLE IF EXISTS nat_gateways")
+        connection.execute("DROP TABLE IF EXISTS network_attachments")
+        connection.execute("DROP TABLE IF EXISTS network_attachment_ports")
+        connection.execute("DROP TABLE IF EXISTS deleted_resources")
+        connection.execute("DROP TABLE IF EXISTS state_metadata")
         connection.execute("DROP TABLE subnets")
         connection.execute("PRAGMA user_version = 1")
+    original_database = store.path.read_bytes()
 
-    with pytest.raises(StateCorrupt, match="invalid schema"):
+    with pytest.raises(StateCorrupt, match="incompatible layout"):
         store.get_virtual_network(UID_ONE, TENANT_ONE, check_mode=True)
-    with pytest.raises(StateCorrupt, match="invalid schema"):
+    with pytest.raises(StateCorrupt, match="incompatible layout"):
         store.get_virtual_network(UID_ONE, TENANT_ONE)
 
-    with sqlite3.connect(store.path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall() == [("virtual_networks",)]
-        assert connection.execute("SELECT count(*) FROM virtual_networks").fetchone()[0] == 1
+    assert store.path.read_bytes() == original_database
     assert original["uid"] == UID_ONE
 
 
+def test_state_contract_marker_mismatch_fails_without_modification(tmp_path):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            "UPDATE state_metadata SET value = ? WHERE key = 'contract'",
+            ("uid-owned-v1",),
+        )
+    original_database = store.path.read_bytes()
+
+    with pytest.raises(StateCorrupt, match="incompatible ownership contract"):
+        store.get_virtual_network(UID_ONE, TENANT_ONE)
+
+    assert store.path.read_bytes() == original_database
+
+
+def test_missing_state_index_fails_closed_without_repair(tmp_path):
+    store = store_for(tmp_path)
+    register_external_ip_pool(store)
+    with sqlite3.connect(store.path) as connection:
+        connection.execute("DROP INDEX external_ips_by_pool")
+    original_database = store.path.read_bytes()
+
+    with pytest.raises(StateCorrupt, match="ExternalIP pool index is invalid"):
+        store.ensure_external_ip_pool(
+            POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
+        )
+
+    assert store.path.read_bytes() == original_database
+
+
 @pytest.mark.parametrize("check_mode", [False, True], ids=["normal", "check-mode"])
-def test_previous_v1_schema_adds_consumer_tables_without_losing_state(
-    tmp_path, check_mode
-):
+def test_previous_v1_schema_is_rejected_without_adoption(tmp_path, check_mode):
     store = store_for(tmp_path)
     original, _ = store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
     with sqlite3.connect(store.path) as connection:
         connection.execute("DROP TABLE attachments")
         connection.execute("DROP TABLE nat_gateways")
         connection.execute("PRAGMA user_version = 1")
-        assert {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        } == agentless_net_state.PREVIOUS_V1_SCHEMA_TABLES
 
-    migrated, changed = store.ensure_external_ip_pool(
-        POOL_UID,
-        POOL_FULFILLMENT_ID,
-        TENANT_ONE,
-        "IPv4",
-        [POOL_CIDR],
-        check_mode=check_mode,
-    )
-
-    assert migrated == original
-    assert changed is False
+    original_database = store.path.read_bytes()
+    with pytest.raises(StateCorrupt, match="incompatible layout"):
+        store.ensure_external_ip_pool(
+            POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR],
+            check_mode=check_mode,
+        )
+    assert store.path.read_bytes() == original_database
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
-        assert {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        } == agentless_net_state.SCHEMA_TABLES
-        attachment_indexes = {
-            row[1] for row in connection.execute("PRAGMA index_list(attachments)")
-        }
-        assert {"attachments_by_vn", "attachments_by_subnet"}.issubset(
-            attachment_indexes
-        )
-        assert connection.execute("SELECT count(*) FROM attachments").fetchone() == (0,)
-        assert connection.execute("SELECT count(*) FROM nat_gateways").fetchone() == (0,)
         assert connection.execute("SELECT count(*) FROM external_ip_pools").fetchone() == (1,)
 
 
 @pytest.mark.parametrize("check_mode", [False, True], ids=["normal", "check-mode"])
-def test_attachment_schema_v1_adds_nat_gateway_table_without_losing_state(
-    tmp_path, check_mode
-):
+def test_old_attachment_schema_is_rejected_without_adoption(tmp_path, check_mode):
     store = store_for(tmp_path)
     original, _ = register_external_ip_pool(store)
     with sqlite3.connect(store.path) as connection:
         connection.execute("DROP TABLE nat_gateways")
         connection.execute("PRAGMA user_version = 1")
-        assert {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        } == agentless_net_state.PRE_NAT_GATEWAY_V1_SCHEMA_TABLES
 
-    migrated, changed = store.ensure_external_ip_pool(
-        POOL_UID,
-        POOL_FULFILLMENT_ID,
-        TENANT_ONE,
-        "IPv4",
-        [POOL_CIDR],
-        check_mode=check_mode,
-    )
-
-    assert migrated == original
-    assert changed is False
+    original_database = store.path.read_bytes()
+    with pytest.raises(StateCorrupt, match="incompatible layout"):
+        store.ensure_external_ip_pool(
+            POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR],
+            check_mode=check_mode,
+        )
+    assert store.path.read_bytes() == original_database
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
-        assert {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        } == agentless_net_state.SCHEMA_TABLES
-        assert connection.execute("SELECT count(*) FROM nat_gateways").fetchone() == (0,)
 
 
 def test_invalid_previous_v1_schema_is_rejected_without_modification(tmp_path):
     store = store_for(tmp_path)
     store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
     with sqlite3.connect(store.path) as connection:
         connection.execute("DROP TABLE attachments")
@@ -1133,11 +1177,11 @@ def test_invalid_previous_v1_schema_is_rejected_without_modification(tmp_path):
         connection.execute("PRAGMA user_version = 1")
     original_database = store.path.read_bytes()
 
-    with pytest.raises(StateCorrupt, match="external_ip_pools table has an invalid schema"):
+    with pytest.raises(StateCorrupt, match="incompatible layout"):
         store.ensure_external_ip_pool(
             POOL_UID,
             POOL_FULFILLMENT_ID,
-            TENANT_ONE,
+            "shared",
             "IPv4",
             [POOL_CIDR],
             check_mode=True,
@@ -1168,7 +1212,7 @@ def test_external_ip_pool_registers_identity_in_current_schema_v1(tmp_path):
     pool, changed = store.ensure_external_ip_pool(
         POOL_UID,
         POOL_FULFILLMENT_ID,
-        TENANT_ONE,
+        "shared",
         "IPv4",
         [POOL_CIDR],
     )
@@ -1177,7 +1221,7 @@ def test_external_ip_pool_registers_identity_in_current_schema_v1(tmp_path):
     assert pool == {
         "uid": POOL_UID,
         "fulfillment_id": POOL_FULFILLMENT_ID,
-        "tenant_id": TENANT_ONE,
+        "tenant_id": "shared",
         "ip_family": "IPv4",
         "ipv4_cidr": POOL_CIDR,
     }
@@ -1187,7 +1231,7 @@ def test_external_ip_pool_registers_identity_in_current_schema_v1(tmp_path):
             "SELECT uid, fulfillment_id, tenant_id, ip_family, ipv4_cidr "
             "FROM external_ip_pools"
         ).fetchall() == [
-            (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", POOL_CIDR)
+            (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", POOL_CIDR)
         ]
         assert {
             row[0]
@@ -1201,17 +1245,21 @@ def test_external_ip_pool_registers_identity_in_current_schema_v1(tmp_path):
             "external_ips",
             "attachments",
             "nat_gateways",
+            "network_attachments",
+            "network_attachment_ports",
+            "deleted_resources",
+            "state_metadata",
         }
 
 
 def test_external_ip_pool_registration_retry_preserves_saved_identity(tmp_path):
     store = store_for(tmp_path)
     first, first_changed = store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
 
     retry, retry_changed = store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
 
     assert first_changed is True
@@ -1226,7 +1274,7 @@ def test_external_ip_pool_registration_retry_preserves_saved_identity(tmp_path):
 def test_external_ip_pool_schema_has_required_identity_uniqueness(tmp_path):
     store = store_for(tmp_path)
     store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
 
     with sqlite3.connect(store.path) as connection:
@@ -1263,7 +1311,7 @@ def test_external_ip_pool_schema_has_required_identity_uniqueness(tmp_path):
                 (
                     UID_TWO,
                     POOL_FULFILLMENT_ID,
-                    TENANT_ONE,
+                    "shared",
                     "IPv4",
                     "203.0.113.0/24",
                 ),
@@ -1274,7 +1322,7 @@ def test_external_ip_pool_schema_has_required_identity_uniqueness(tmp_path):
 def test_malformed_saved_external_ip_pool_is_not_repaired(tmp_path):
     store = store_for(tmp_path)
     store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
     with sqlite3.connect(store.path) as connection:
         connection.execute(
@@ -1284,7 +1332,7 @@ def test_malformed_saved_external_ip_pool_is_not_repaired(tmp_path):
 
     with pytest.raises(StateCorrupt, match="malformed ExternalIPPool state"):
         store.ensure_external_ip_pool(
-            POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+            POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
         )
 
     with sqlite3.connect(store.path) as connection:
@@ -1296,23 +1344,23 @@ def test_malformed_saved_external_ip_pool_is_not_repaired(tmp_path):
 @pytest.mark.parametrize(
     ("uid", "fulfillment_id", "tenant_id", "ip_family", "cidrs"),
     [
-        ("not-a-uuid", POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]),
-        ("AAAAAAAA-1111-4111-8111-111111111111", POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]),
-        (POOL_UID, "not-a-uuid", TENANT_ONE, "IPv4", [POOL_CIDR]),
-        (POOL_UID, "AAAAAAAA-1111-4111-8111-111111111111", TENANT_ONE, "IPv4", [POOL_CIDR]),
+        ("not-a-uuid", POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]),
+        ("AAAAAAAA-1111-4111-8111-111111111111", POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]),
+        (POOL_UID, "not-a-uuid", "shared", "IPv4", [POOL_CIDR]),
+        (POOL_UID, "AAAAAAAA-1111-4111-8111-111111111111", "shared", "IPv4", [POOL_CIDR]),
         (POOL_UID, POOL_FULFILLMENT_ID, "", "IPv4", [POOL_CIDR]),
         (POOL_UID, POOL_FULFILLMENT_ID, " tenant-one ", "IPv4", [POOL_CIDR]),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv6", [POOL_CIDR]),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IP_FAMILY_IPV4", [POOL_CIDR]),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "", [POOL_CIDR]),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", []),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR, "203.0.113.0/24"]),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", "198.51.100.0/24"),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [None]),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", ["198.51.100.1/24"]),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", ["198.51.100.0/024"]),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", ["198.51.100.0/24 "]),
-        (POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", ["2001:db8::/64"]),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv6", [POOL_CIDR]),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IP_FAMILY_IPV4", [POOL_CIDR]),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "", [POOL_CIDR]),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", []),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR, "203.0.113.0/24"]),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", "198.51.100.0/24"),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [None]),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", ["198.51.100.1/24"]),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", ["198.51.100.0/024"]),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", ["198.51.100.0/24 "]),
+        (POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", ["2001:db8::/64"]),
     ],
 )
 def test_invalid_external_ip_pool_identity_or_cidr_creates_no_state(
@@ -1329,9 +1377,9 @@ def test_invalid_external_ip_pool_identity_or_cidr_creates_no_state(
 @pytest.mark.parametrize(
     ("fulfillment_id", "tenant_id", "cidrs"),
     [
-        ("77777777-7777-4777-8777-777777777777", TENANT_ONE, [POOL_CIDR]),
+        ("77777777-7777-4777-8777-777777777777", "shared", [POOL_CIDR]),
         (POOL_FULFILLMENT_ID, TENANT_TWO, [POOL_CIDR]),
-        (POOL_FULFILLMENT_ID, TENANT_ONE, ["203.0.113.0/24"]),
+        (POOL_FULFILLMENT_ID, "shared", ["203.0.113.0/24"]),
     ],
 )
 def test_conflicting_external_ip_pool_retry_never_overwrites_saved_identity(
@@ -1339,10 +1387,10 @@ def test_conflicting_external_ip_pool_retry_never_overwrites_saved_identity(
 ):
     store = store_for(tmp_path)
     original, _ = store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
 
-    with pytest.raises(StateError, match="identity does not match saved state"):
+    with pytest.raises(StateError):
         store.ensure_external_ip_pool(POOL_UID, fulfillment_id, tenant_id, "IPv4", cidrs)
 
     with sqlite3.connect(store.path) as connection:
@@ -1363,14 +1411,14 @@ def test_conflicting_external_ip_pool_retry_never_overwrites_saved_identity(
 def test_invalid_external_ip_pool_retry_does_not_change_existing_state(tmp_path):
     store = store_for(tmp_path)
     original, _ = store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
 
     with pytest.raises(StateError):
         store.ensure_external_ip_pool(
             POOL_UID,
             POOL_FULFILLMENT_ID,
-            TENANT_ONE,
+            "shared",
             "IPv4",
             ["198.51.100.1/24"],
         )
@@ -1393,12 +1441,12 @@ def test_invalid_external_ip_pool_retry_does_not_change_existing_state(tmp_path)
 def test_external_ip_pool_fulfillment_identity_is_unique(tmp_path):
     store = store_for(tmp_path)
     store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
 
     with pytest.raises(StateError, match="Fulfillment identity is already registered"):
         store.ensure_external_ip_pool(
-            UID_TWO, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", ["203.0.113.0/24"]
+            UID_TWO, POOL_FULFILLMENT_ID, "shared", "IPv4", ["203.0.113.0/24"]
         )
 
     with sqlite3.connect(store.path) as connection:
@@ -1413,7 +1461,7 @@ def test_external_ip_pool_check_mode_reads_without_creating_state(tmp_path):
     pool, changed = store.ensure_external_ip_pool(
         POOL_UID,
         POOL_FULFILLMENT_ID,
-        TENANT_ONE,
+        "shared",
         "IPv4",
         [POOL_CIDR],
         check_mode=True,
@@ -1426,7 +1474,7 @@ def test_external_ip_pool_check_mode_reads_without_creating_state(tmp_path):
     assert store.delete_external_ip_pool(
         POOL_UID,
         POOL_FULFILLMENT_ID,
-        TENANT_ONE,
+        "shared",
         "IPv4",
         [POOL_CIDR],
         check_mode=True,
@@ -1437,13 +1485,13 @@ def test_external_ip_pool_check_mode_reads_without_creating_state(tmp_path):
 def test_external_ip_pool_check_mode_preserves_existing_identity(tmp_path):
     store = store_for(tmp_path)
     original, _ = store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
 
     pool, changed = store.ensure_external_ip_pool(
         POOL_UID,
         POOL_FULFILLMENT_ID,
-        TENANT_ONE,
+        "shared",
         "IPv4",
         [POOL_CIDR],
         check_mode=True,
@@ -1459,16 +1507,16 @@ def test_external_ip_pool_check_mode_preserves_existing_identity(tmp_path):
 def test_external_ip_pool_delete_validates_identity_and_is_idempotent(tmp_path):
     store = store_for(tmp_path)
     primary, _ = store.ensure_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
     peer, _ = store.ensure_external_ip_pool(
         "66666666-6666-4666-8666-666666666666",
         "77777777-7777-4777-8777-777777777777",
-        TENANT_TWO,
+        "shared",
         "IPv4",
         ["203.0.113.0/24"],
     )
-    with pytest.raises(StateError, match="identity does not match saved state"):
+    with pytest.raises(StateError, match="shared global marker"):
         store.delete_external_ip_pool(
             POOL_UID, POOL_FULFILLMENT_ID, TENANT_TWO, "IPv4", [POOL_CIDR]
         )
@@ -1476,7 +1524,7 @@ def test_external_ip_pool_delete_validates_identity_and_is_idempotent(tmp_path):
     assert store.delete_external_ip_pool(
         POOL_UID,
         POOL_FULFILLMENT_ID,
-        TENANT_ONE,
+        "shared",
         "IPv4",
         [POOL_CIDR],
         check_mode=True,
@@ -1491,23 +1539,31 @@ def test_external_ip_pool_delete_validates_identity_and_is_idempotent(tmp_path):
         ).fetchone() == (peer["uid"],)
 
     assert store.delete_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     ) == (primary, True)
     assert store.delete_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     ) == (None, False)
     assert store.delete_external_ip_pool(
         peer["uid"], peer["fulfillment_id"], peer["tenant_id"], "IPv4", [peer["ipv4_cidr"]]
     ) == (peer, True)
 
 
-def test_external_ip_pool_delete_of_absent_database_does_not_create_state(tmp_path):
+def test_external_ip_pool_delete_tombstones_an_absent_database(tmp_path):
     store = store_for(tmp_path)
 
     assert store.delete_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     ) == (None, False)
-    assert not store.path.exists()
+    assert store.path.exists()
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT kind, uid, tenant_id FROM deleted_resources"
+        ).fetchall() == [("ExternalIPPool", POOL_UID, "shared")]
+    with pytest.raises(StateError, match="cannot be recreated"):
+        store.ensure_external_ip_pool(
+            POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
+        )
 
 
 def test_external_ip_pool_simultaneous_retry_creates_one_row(tmp_path):
@@ -1517,7 +1573,7 @@ def test_external_ip_pool_simultaneous_retry_creates_one_row(tmp_path):
     def register():
         start.wait(timeout=5)
         return store.ensure_external_ip_pool(
-            POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+            POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
         )
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1544,7 +1600,9 @@ def test_subnet_lifecycle_stays_functional_at_schema_v1(tmp_path, monkeypatch):
         ).fetchone() == (1,)
 
     monkeypatch.setattr(agentless_net_state, "prepare_subnet_delete_data_plane", lambda *args: False)
-    deleting, changed = store.prepare_delete_subnet(UID_TWO, TENANT_ONE, "systemd")
+    deleting, changed = store.prepare_delete_subnet(
+        UID_TWO, TENANT_ONE, UID_ONE, "systemd"
+    )
     assert changed is True
     assert deleting["phase"] == "deleting"
     with pytest.raises(StateError, match="saved Subnets remain"):
@@ -1554,10 +1612,7 @@ def test_subnet_lifecycle_stays_functional_at_schema_v1(tmp_path, monkeypatch):
 def test_query_dhcp_lease_returns_matching_ready_subnet_lease_without_writes(
     tmp_path, monkeypatch
 ):
-    store = store_for(tmp_path)
-    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
-    subnet, _ = reserve_subnet(store, uid=UID_TWO, cidr="10.0.1.0/24")
-    subnet = mark_subnet_ready(store, subnet)
+    store, attachment = prepare_network_attachment_state(tmp_path, monkeypatch)
     lease_root = tmp_path / "dhcp"
     lease_dir = lease_root / UID_ONE
     lease_dir.mkdir(parents=True, mode=0o700)
@@ -1567,7 +1622,7 @@ def test_query_dhcp_lease_returns_matching_ready_subnet_lease_without_writes(
     marker.chmod(0o600)
     lease_file = lease_dir / "dnsmasq.leases"
     lease_file.write_bytes(
-        b"200 aa:bb:cc:dd:ee:ff 10.0.1.22 client-a *\n"
+        b"200 aa:bb:cc:dd:ee:ff 10.0.1.2 client-a *\n"
         b"200 02:00:00:00:00:02 10.0.2.22 client-b *\n"
     )
     lease_file.chmod(0o600)
@@ -1579,40 +1634,54 @@ def test_query_dhcp_lease_returns_matching_ready_subnet_lease_without_writes(
     database_before = store.path.read_bytes()
     lease_before = lease_file.read_bytes()
 
-    result = store.query_dhcp_lease(
-        UID_TWO, TENANT_ONE, "AA:BB:CC:DD:EE:FF", now=100
-    )
+    result = store.query_dhcp_lease(NETWORK_ATTACHMENT_ID, TENANT_ONE, now=100)
 
     assert result == {
-        "ip_address": "10.0.1.22",
+        "ip_address": attachment["address"],
         "mac_address": "aa:bb:cc:dd:ee:ff",
     }
     assert store.path.read_bytes() == database_before
     assert lease_file.read_bytes() == lease_before
 
 
-def test_query_dhcp_lease_returns_none_for_missing_subnet_or_match(tmp_path):
+def test_query_dhcp_lease_returns_none_for_missing_attachment_or_match(
+    tmp_path, monkeypatch
+):
     store = store_for(tmp_path)
+    assert store.query_dhcp_lease(NETWORK_ATTACHMENT_ID, TENANT_ONE) is None
 
-    assert store.query_dhcp_lease(UID_TWO, TENANT_ONE, "aa:bb:cc:dd:ee:ff") is None
+    store, _ = prepare_network_attachment_state(tmp_path, monkeypatch)
+    lease_root = tmp_path / "dhcp"
+    lease_dir = lease_root / UID_ONE
+    lease_dir.mkdir(parents=True, mode=0o700)
+    lease_dir.chmod(0o700)
+    (lease_dir / ".initialized").write_text("initialized\n")
+    (lease_dir / ".initialized").chmod(0o600)
+    lease_file = lease_dir / "dnsmasq.leases"
+    lease_file.write_bytes(b"200 02:00:00:00:00:02 10.0.1.2 client-b *\n")
+    lease_file.chmod(0o600)
+    monkeypatch.setattr(
+        agentless_net_state,
+        "dhcp_lease_path",
+        lambda uid: lease_root / uid / "dnsmasq.leases",
+    )
+
+    assert store.query_dhcp_lease(NETWORK_ATTACHMENT_ID, TENANT_ONE, now=100) is None
 
 
-def test_query_dhcp_lease_rejects_wrong_tenant_and_non_ready_subnet(tmp_path):
-    store = store_for(tmp_path)
-    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
-    reserve_subnet(store, uid=UID_TWO, cidr="10.0.1.0/24")
+def test_query_dhcp_lease_rejects_wrong_tenant_and_non_ready_subnet(
+    tmp_path, monkeypatch
+):
+    store, _ = prepare_network_attachment_state(tmp_path, monkeypatch, ready=False)
 
     with pytest.raises(StateError, match="tenant"):
-        store.query_dhcp_lease(UID_TWO, TENANT_TWO, "aa:bb:cc:dd:ee:ff")
-    with pytest.raises(StateError, match="ready Subnet"):
-        store.query_dhcp_lease(UID_TWO, TENANT_ONE, "aa:bb:cc:dd:ee:ff")
+        store.query_dhcp_lease(NETWORK_ATTACHMENT_ID, TENANT_TWO)
+    with pytest.raises(StateError, match="ready NetworkAttachment"):
+        store.query_dhcp_lease(NETWORK_ATTACHMENT_ID, TENANT_ONE)
 
 
 def test_query_dhcp_lease_rejects_missing_initialized_lease_file(tmp_path, monkeypatch):
-    store = store_for(tmp_path)
-    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
-    subnet, _ = reserve_subnet(store, uid=UID_TWO, cidr="10.0.1.0/24")
-    mark_subnet_ready(store, subnet)
+    store, _ = prepare_network_attachment_state(tmp_path, monkeypatch)
     monkeypatch.setattr(
         agentless_net_state,
         "dhcp_lease_path",
@@ -1620,13 +1689,333 @@ def test_query_dhcp_lease_rejects_missing_initialized_lease_file(tmp_path, monke
     )
 
     with pytest.raises(agentless_net_state.SubnetProviderError, match="lease directory"):
-        store.query_dhcp_lease(UID_TWO, TENANT_ONE, "aa:bb:cc:dd:ee:ff")
+        store.query_dhcp_lease(NETWORK_ATTACHMENT_ID, TENANT_ONE)
+
+
+def test_network_attachment_uses_disjoint_physical_ranges_and_claims_ports(
+    tmp_path, monkeypatch
+):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(
+        store,
+        uid=UID_TWO,
+        cidr="10.0.1.0/24",
+        physical_ranges=["10.0.1.8/30", "10.0.1.0/30"],
+    )
+    mark_subnet_ready(store, subnet)
+    monkeypatch.setattr(
+        agentless_net_state,
+        "preflight_dhcp_supervisor",
+        lambda _uid: "systemd",
+    )
+    monkeypatch.setattr(
+        agentless_net_state,
+        "reconcile_virtual_network_dhcp",
+        lambda *_args, **_kwargs: False,
+    )
+
+    def prepare(uid, mac, port):
+        return store.prepare_network_attachment(
+            uid,
+            TENANT_ONE,
+            UID_ONE,
+            UID_TWO,
+            "bmi-01.example.test",
+            "eno1",
+            mac,
+            [{
+                "switch_name": "leaf-1",
+                "port_name": port,
+                "selected": True,
+                "fabric": True,
+            }],
+            "systemd",
+        )
+
+    first, _, _ = prepare(
+        NETWORK_ATTACHMENT_ID, "aa:bb:cc:dd:ee:ff", "swp1"
+    )
+    second_id = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    second, _, _ = prepare(second_id, "aa:bb:cc:dd:ee:11", "swp2")
+
+    assert first["address"] == "10.0.1.2"
+    assert second["address"] == "10.0.1.9"
+    assert first["uid"] == NETWORK_ATTACHMENT_ID
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT uid, address FROM network_attachments ORDER BY uid"
+        ).fetchall() == sorted(
+            [(NETWORK_ATTACHMENT_ID, "10.0.1.2"), (second_id, "10.0.1.9")]
+        )
+        assert connection.execute(
+            "SELECT switch_name, port_name, attachment_uid "
+            "FROM network_attachment_ports ORDER BY port_name"
+        ).fetchall() == [
+            ("leaf-1", "swp1", NETWORK_ATTACHMENT_ID),
+            ("leaf-1", "swp2", second_id),
+        ]
+
+    third, _, _ = prepare(
+        "88888888-8888-4888-8888-888888888888",
+        "aa:bb:cc:dd:ee:22",
+        "swp3",
+    )
+    assert third["address"] == "10.0.1.10"
+    with pytest.raises(StateError, match="range is exhausted"):
+        prepare("99999999-9999-4999-8999-999999999999", "aa:bb:cc:dd:ee:33", "swp4")
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT count(*) FROM network_attachments").fetchone() == (3,)
+
+
+def test_empty_physical_ipam_has_no_dhcp_scope_and_rejects_attachment(
+    tmp_path, monkeypatch
+):
+    store = store_for(tmp_path)
+    parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(
+        store, uid=UID_TWO, cidr="10.0.1.0/24", physical_ranges=[]
+    )
+    mark_subnet_ready(store, subnet)
+    rendered = agentless_net_subnet._render_dhcp_config(
+        parent,
+        [subnet],
+        [],
+        {"leases": tmp_path / "leases", "pid": tmp_path / "pid"},
+    ).decode()
+    assert "interface=" not in rendered
+    assert "dhcp-range=" not in rendered
+
+    with pytest.raises(StateError, match="no physical IPv4 address range"):
+        store.prepare_network_attachment(
+            NETWORK_ATTACHMENT_ID,
+            TENANT_ONE,
+            UID_ONE,
+            UID_TWO,
+            "bmi-01.example.test",
+            "eno1",
+            "aa:bb:cc:dd:ee:ff",
+            [{
+                "switch_name": "leaf-1",
+                "port_name": "swp1",
+                "selected": True,
+                "fabric": True,
+            }],
+        )
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT count(*) FROM network_attachments").fetchone() == (0,)
+        assert connection.execute("SELECT count(*) FROM network_attachment_ports").fetchone() == (0,)
+
+
+def test_network_attachment_check_mode_does_not_change_state_or_reconcile_dhcp(
+    tmp_path, monkeypatch
+):
+    store, attachment = prepare_network_attachment_state(
+        tmp_path, monkeypatch, ready=False
+    )
+    database_before = store.path.read_bytes()
+    monkeypatch.setattr(
+        agentless_net_state,
+        "preflight_dhcp_supervisor",
+        lambda *_args, **_kwargs: pytest.fail("check mode must not preflight DHCP"),
+    )
+    monkeypatch.setattr(
+        agentless_net_state,
+        "reconcile_virtual_network_dhcp",
+        lambda *_args, **_kwargs: pytest.fail("check mode must not reconcile DHCP"),
+    )
+
+    planned_ready, changed = store.mark_network_attachment_ready(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, check_mode=True
+    )
+    assert planned_ready["phase"] == "ready"
+    assert changed is True
+    assert store.get_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE) == attachment
+
+    planned_delete = store.begin_delete_network_attachment(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, UID_ONE, check_mode=True
+    )
+    assert planned_delete["phase"] == "deleting"
+    assert store.get_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE) == attachment
+
+    planned_cleanup, state_changed, dhcp_changed = store.finish_delete_network_attachment(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, check_mode=True
+    )
+    assert planned_cleanup["phase"] == "deleting"
+    assert state_changed is True
+    assert dhcp_changed is False
+    assert store.get_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE) == attachment
+    assert store.path.read_bytes() == database_before
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM deleted_resources WHERE kind = 'NetworkAttachment'"
+        ).fetchone() == (0,)
+
+
+def test_mark_network_attachment_ready_reports_only_phase_transition(tmp_path, monkeypatch):
+    store, _ = prepare_network_attachment_state(tmp_path, monkeypatch, ready=False)
+
+    ready, changed = store.mark_network_attachment_ready(NETWORK_ATTACHMENT_ID, TENANT_ONE)
+    retried, changed_again = store.mark_network_attachment_ready(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE
+    )
+
+    assert ready["phase"] == "ready"
+    assert retried == ready
+    assert changed is True
+    assert changed_again is False
+
+
+def test_mark_network_attachment_ready_check_mode_without_reservation_is_noop(tmp_path):
+    store = store_for(tmp_path)
+    ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
+    subnet, _ = reserve_subnet(store, uid=UID_TWO, cidr="10.0.1.0/24")
+    mark_subnet_ready(store, subnet)
+    database_before = store.path.read_bytes()
+
+    entry, changed = store.mark_network_attachment_ready(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, check_mode=True
+    )
+
+    assert entry is None
+    assert changed is False
+    assert store.path.read_bytes() == database_before
+
+
+def test_network_attachment_delete_wins_and_retains_claims_until_cleanup(
+    tmp_path, monkeypatch
+):
+    store, attachment = prepare_network_attachment_state(tmp_path, monkeypatch)
+    deleting = store.begin_delete_network_attachment(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, UID_ONE
+    )
+    assert deleting["phase"] == "deleting"
+    with pytest.raises(StateError, match="cannot be recreated"):
+        store.prepare_network_attachment(
+            NETWORK_ATTACHMENT_ID,
+            TENANT_ONE,
+            UID_ONE,
+            UID_TWO,
+            attachment["host_name"],
+            attachment["interface_name"],
+            attachment["mac_address"],
+            attachment["ports"],
+            "systemd",
+        )
+
+    monkeypatch.setattr(
+        agentless_net_state,
+        "reconcile_virtual_network_dhcp",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            agentless_net_state.NetworkCommandError("DHCP cleanup failed")
+        ),
+    )
+    with pytest.raises(agentless_net_state.RetryableStateError, match="DHCP cleanup failed"):
+        store.finish_delete_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE, "systemd")
+    assert store.get_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE)["phase"] == "deleting"
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM network_attachment_ports WHERE attachment_uid = ?",
+            (NETWORK_ATTACHMENT_ID,),
+        ).fetchone() == (1,)
+
+    monkeypatch.setattr(
+        agentless_net_state,
+        "reconcile_virtual_network_dhcp",
+        lambda *_args, **_kwargs: False,
+    )
+    removed, state_changed, _ = store.finish_delete_network_attachment(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, "systemd"
+    )
+    assert removed["phase"] == "deleting"
+    assert state_changed is True
+    assert store.get_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE) is None
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute(
+            "SELECT kind, uid, tenant_id FROM deleted_resources "
+            "WHERE kind = 'NetworkAttachment'"
+        ).fetchall() == [("NetworkAttachment", NETWORK_ATTACHMENT_ID, TENANT_ONE)]
+
+
+def test_network_attachment_port_claim_conflict_is_retryable(tmp_path, monkeypatch):
+    store, _ = prepare_network_attachment_state(tmp_path, monkeypatch)
+
+    with pytest.raises(agentless_net_state.RetryableStateError, match="reserved concurrently") as error:
+        store.prepare_network_attachment(
+            "ffffffff-ffff-4fff-8fff-ffffffffffff",
+            TENANT_ONE,
+            UID_ONE,
+            UID_TWO,
+            "bmi-02.example.test",
+            "eno1",
+            "aa:bb:cc:dd:ee:11",
+            [{
+                "switch_name": "leaf-1",
+                "port_name": "swp1",
+                "selected": True,
+                "fabric": True,
+            }],
+            "systemd",
+        )
+    assert error.value.retryable is True
+    with sqlite3.connect(store.path) as connection:
+        assert connection.execute("SELECT count(*) FROM network_attachments").fetchone() == (1,)
+        assert connection.execute("SELECT count(*) FROM network_attachment_ports").fetchone() == (1,)
+
+
+def test_network_attachment_delete_waits_for_external_ip_destination_cleanup(
+    tmp_path, monkeypatch
+):
+    store, attachment = prepare_network_attachment_state(tmp_path, monkeypatch)
+    register_external_ip_pool(store)
+    reserve_external_address(store, UID_THREE, EXTERNAL_IP_FULFILLMENT_ID)
+    monkeypatch.setattr(
+        agentless_net_state,
+        "reconcile_virtual_network",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_external_ip,
+        "reconcile_external_ip_attachment",
+        lambda *_args, **_kwargs: False,
+    )
+    context = external_ip_attachment_context(store, target_ip=attachment["address"])
+    store.ensure_external_ip_attachment(
+        ATTACHMENT_UID,
+        ATTACHMENT_FULFILLMENT_ID,
+        TENANT_ONE,
+        context,
+        "eth0",
+    )
+    store.begin_delete_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE, UID_ONE)
+
+    with pytest.raises(StateError, match="still has an ExternalIPAttachment"):
+        store.finish_delete_network_attachment(
+            NETWORK_ATTACHMENT_ID, TENANT_ONE, "systemd"
+        )
+    assert store.get_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE)["phase"] == "deleting"
+
+    monkeypatch.setattr(
+        agentless_net_state.agentless_net_external_ip,
+        "delete_external_ip_attachment",
+        lambda *_args, **_kwargs: False,
+    )
+    store.delete_external_ip_attachment(
+        ATTACHMENT_UID,
+        ATTACHMENT_FULFILLMENT_ID,
+        TENANT_ONE,
+        context,
+    )
+    store.finish_delete_network_attachment(
+        NETWORK_ATTACHMENT_ID, TENANT_ONE, "systemd"
+    )
+    assert store.get_network_attachment(NETWORK_ATTACHMENT_ID, TENANT_ONE) is None
 
 
 def test_check_mode_subnet_reservation_does_not_create_a_row(tmp_path):
     store = store_for(tmp_path)
     parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
-    cidr = available_subnet_cidr(parent, prefix=30)
+    cidr = available_subnet_cidr(parent, prefix=28)
 
     proposed, changed = reserve_subnet(
         store, cidr=cidr, check_mode=True, observed_vlan_ids=range(1, 321)
@@ -1634,7 +2023,9 @@ def test_check_mode_subnet_reservation_does_not_create_a_row(tmp_path):
 
     assert changed is True
     assert proposed["vlan_id"] == 321
-    assert proposed["gateway_ipv4"] == str(ipaddress.ip_network(cidr).network_address + 1)
+    assert proposed["ipam"]["gateway_ipv4"] == str(
+        ipaddress.ip_network(cidr).network_address + 1
+    )
     assert store.get_subnet(UID_TWO, TENANT_ONE) is None
 
 
@@ -1705,7 +2096,7 @@ def test_allocator_rejects_malformed_observed_vlan_ids(tmp_path, invalid_vlan):
     store = store_for(tmp_path)
     parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
 
-    with pytest.raises(StateError, match="Observed Cumulus VLAN ID"):
+    with pytest.raises(StateError, match="Observed switch VLAN ID"):
         reserve_subnet(
             store,
             uid=UID_TWO,
@@ -1759,12 +2150,12 @@ def test_subnet_reservation_checks_parent_tenant_transit_and_siblings(tmp_path):
         reserve_subnet(store, uid=UID_THREE, cidr=cidr)
     with pytest.raises(StateError, match="tenant does not match"):
         reserve_subnet(store, uid=UID_THREE, cidr=available_subnet_cidr(parent), tenant_id=TENANT_TWO)
-    transit_supernet = ipaddress.ip_network(parent["transit"]["cidr"]).supernet(new_prefix=30)
+    transit_supernet = ipaddress.ip_network(parent["transit"]["cidr"]).supernet(new_prefix=28)
     with pytest.raises(StateError, match="overlaps its parent VirtualNetwork transit"):
         reserve_subnet(store, uid=UID_THREE, cidr=str(transit_supernet))
 
 
-def test_subnet_reservation_validates_pool_exhaustion_and_vip_host_space(tmp_path):
+def test_subnet_reservation_validates_pool_exhaustion_and_small_prefix(tmp_path):
     store = store_for(tmp_path)
     parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
     cidr = available_subnet_cidr(parent)
@@ -1780,13 +2171,11 @@ def test_subnet_reservation_validates_pool_exhaustion_and_vip_host_space(tmp_pat
         )
 
     small_cidr = available_subnet_cidr(parent, prefix=30)
-    network = ipaddress.ip_network(small_cidr)
-    with pytest.raises(StateError, match="leaves no DHCP address"):
+    with pytest.raises(StateError, match="too small"):
         reserve_subnet(
             store,
             uid="44444444-4444-4444-8444-444444444444",
             cidr=small_cidr,
-            vip=f"{network.network_address + 2}/31",
         )
 
 
@@ -1810,10 +2199,12 @@ def test_subnet_delete_retains_vlan_until_release_and_blocks_parent_delete(tmp_p
         lambda *args, **kwargs: False,
     )
 
-    deleting, changed = store.prepare_delete_subnet(UID_TWO, TENANT_ONE, "systemd")
+    deleting, changed = store.prepare_delete_subnet(
+        UID_TWO, TENANT_ONE, UID_ONE, "systemd"
+    )
     assert changed is True
     assert deleting["phase"] == "deleting"
-    with pytest.raises(StateError, match="already deleting"):
+    with pytest.raises(StateError, match="cannot be recreated"):
         reserve_subnet(store, uid=UID_TWO, cidr=subnet["ipv4_cidr"])
     with pytest.raises(StateError, match="saved Subnets remain"):
         store.delete_and_remove_virtual_network(UID_ONE, TENANT_ONE)
@@ -1881,7 +2272,7 @@ def test_extra_development_schema_fails_before_provider_cleanup(tmp_path, monkey
         connection.execute("CREATE TABLE obsolete_development_state (id INTEGER)")
     monkeypatch.setattr(agentless_net_state, "delete_virtual_network",
                         lambda *args, **kwargs: pytest.fail("invalid schema must not reach provider cleanup"))
-    with pytest.raises(StateCorrupt, match="invalid schema"):
+    with pytest.raises(StateCorrupt, match="incompatible layout"):
         delete_virtual_network(store, UID_ONE)
     assert store.path.exists()
 
@@ -1909,7 +2300,8 @@ def test_module_failure_does_not_disclose_state_values(monkeypatch, action):
     module.main()
 
     ansible_module.fail_json.assert_called_once_with(
-        msg="AgentlessNet VirtualNetwork operation failed; inspect the network node and retry."
+        msg="AgentlessNet VirtualNetwork operation failed; inspect the network node and retry.",
+        retryable=False,
     )
     assert sensitive not in str(ansible_module.fail_json.call_args)
 
@@ -2024,7 +2416,8 @@ def test_external_ip_pool_module_errors_do_not_disclose_state_values(
     module.main()
 
     module_object.fail_json.assert_called_once_with(
-        msg="AgentlessNet ExternalIPPool operation failed; inspect the network node and retry."
+        msg="AgentlessNet ExternalIPPool operation failed; inspect the network node and retry.",
+        retryable=False,
     )
     assert sensitive not in str(module_object.fail_json.call_args)
 
@@ -2144,24 +2537,15 @@ def test_external_ip_attachment_rejects_duplicate_fulfillment_id(tmp_path, monke
         )
 
 
-def test_external_ip_attachment_changed_target_cleans_old_path_first(tmp_path, monkeypatch):
+def test_external_ip_attachment_rejects_changed_destination(tmp_path, monkeypatch):
     store = prepare_attachment_state(tmp_path, monkeypatch)
     context = external_ip_attachment_context(store)
     events = []
 
-    def record_delete(entry):
-        events.append(("delete", entry["context"]["target"]["ip_address"]))
-        return True
-
     def record_reconcile(parent, subnet, entry):
-        events.append(("ensure", entry["context"]["target"]["ip_address"]))
+        events.append(("ensure", entry["context"]["destination"]["address"]))
         return True
 
-    monkeypatch.setattr(
-        agentless_net_state.agentless_net_external_ip,
-        "delete_external_ip_attachment",
-        record_delete,
-    )
     monkeypatch.setattr(
         agentless_net_state.agentless_net_external_ip,
         "reconcile_external_ip_attachment",
@@ -2172,18 +2556,15 @@ def test_external_ip_attachment_changed_target_cleans_old_path_first(tmp_path, m
     )
 
     replacement_context = external_ip_attachment_context(store, target_ip="10.0.1.11")
-    store.ensure_external_ip_attachment(
-        ATTACHMENT_UID,
-        ATTACHMENT_FULFILLMENT_ID,
-        TENANT_ONE,
-        replacement_context,
-        "eth0",
-    )
-    assert events == [
-        ("ensure", "10.0.1.10"),
-        ("delete", "10.0.1.10"),
-        ("ensure", "10.0.1.11"),
-    ]
+    with pytest.raises(StateError, match="identity does not match saved state"):
+        store.ensure_external_ip_attachment(
+            ATTACHMENT_UID,
+            ATTACHMENT_FULFILLMENT_ID,
+            TENANT_ONE,
+            replacement_context,
+            "eth0",
+        )
+    assert events == [("ensure", "10.0.1.10")]
 
 
 def test_external_ip_attachment_failure_retains_saved_cleanup_state(tmp_path, monkeypatch):
@@ -2246,7 +2627,7 @@ def test_external_ip_attachment_blocks_dependency_release_until_cleanup(tmp_path
 def test_external_ip_attachment_rejects_target_outside_subnet(tmp_path, monkeypatch):
     store = prepare_attachment_state(tmp_path, monkeypatch)
     context = external_ip_attachment_context(store, target_ip="10.0.2.10")
-    with pytest.raises(StateError, match="outside its canonical IPv4 Subnet"):
+    with pytest.raises(StateError, match="outside usable Subnet addresses"):
         store.ensure_external_ip_attachment(
             ATTACHMENT_UID, ATTACHMENT_FULFILLMENT_ID, TENANT_ONE, context, "eth0"
         )
@@ -2421,7 +2802,9 @@ def test_subnet_delete_does_not_reconcile_nat_gateway(tmp_path, monkeypatch):
         lambda *_args: events.append(("subnet",)) or False,
     )
 
-    deleting, changed = store.prepare_delete_subnet(UID_TWO, TENANT_ONE, "systemd")
+    deleting, changed = store.prepare_delete_subnet(
+        UID_TWO, TENANT_ONE, UID_ONE, "systemd"
+    )
 
     assert changed is True
     assert deleting["phase"] == "deleting"
@@ -2459,7 +2842,7 @@ def test_subnet_ensure_does_not_reconcile_nat_gateway(tmp_path, monkeypatch):
     monkeypatch.setattr(
         agentless_net_state,
         "ensure_subnet_data_plane",
-        lambda _parent, active_subnets, _supervisor: events.append(
+        lambda _parent, active_subnets, _attachments, _supervisor: events.append(
             ("subnet-provider", [item["uid"] for item in active_subnets])
         ) or False,
     )
@@ -2514,7 +2897,7 @@ def test_nat_gateway_retains_external_ip_and_virtual_network_until_cleanup(
         NAT_GATEWAY_UID, NAT_GATEWAY_FULFILLMENT_ID, TENANT_ONE
     ) == (None, False)
     monkeypatch.setattr(agentless_net_state, "prepare_subnet_delete_data_plane", lambda *_args: False)
-    store.prepare_delete_subnet(UID_TWO, TENANT_ONE, "systemd")
+    store.prepare_delete_subnet(UID_TWO, TENANT_ONE, UID_ONE, "systemd")
     assert store.release_subnet(UID_TWO, TENANT_ONE)[1] is True
     assert store.release_external_ip(
         UID_THREE, EXTERNAL_IP_FULFILLMENT_ID, TENANT_ONE, POOL_UID
@@ -2602,7 +2985,9 @@ def test_subnet_delete_succeeds_while_nat_gateway_cleanup_is_pending(
         "prepare_subnet_delete_data_plane",
         lambda *_args: False,
     )
-    deleting, changed = store.prepare_delete_subnet(UID_TWO, TENANT_ONE, "systemd")
+    deleting, changed = store.prepare_delete_subnet(
+        UID_TWO, TENANT_ONE, UID_ONE, "systemd"
+    )
     assert deleting["phase"] == "deleting"
     assert changed is True
     assert store.release_subnet(UID_TWO, TENANT_ONE)[1] is True
@@ -2622,10 +3007,15 @@ def test_external_ip_attachment_module_dispatches_identity_and_context(
         "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
     )
     context = {
-        "external_ip": {"name": "public-ip"},
-        "target": {"kind": "BareMetalInstance"},
-        "subnet": {"name": "subnet"},
-        "virtual_network": {"name": "network"},
+        "external_ip": {"id": UID_THREE, "address": "198.51.100.1"},
+        "destination": {
+            "address": "10.0.1.10",
+            "routing_domain": {
+                "type": "tenant_virtual_network",
+                "virtual_network_id": UID_ONE,
+                "subnet_id": UID_TWO,
+            },
+        },
     }
     params = {
         "action": action,
@@ -2663,6 +3053,7 @@ def test_external_ip_attachment_module_dispatches_identity_and_context(
             ATTACHMENT_UID,
             ATTACHMENT_FULFILLMENT_ID,
             TENANT_ONE,
+            context,
             check_mode=True,
         )
     ansible_module.exit_json.assert_called_once_with(
@@ -2711,8 +3102,8 @@ def test_external_ip_reservation_rejects_exhausted_or_mismatched_pool(tmp_path):
             pool_cidr="198.51.100.4/30",
             pool_fulfillment_id=UID_THREE,
         )
-    with pytest.raises(StateError, match="tenant"):
-        reserve_external_address(store, UID_THREE, UID_ONE, tenant_id=TENANT_TWO)
+    with pytest.raises(StateError, match="identity does not match"):
+        reserve_external_address(store, UID_ONE, POOL_UID, tenant_id=TENANT_TWO)
 
     with sqlite3.connect(store.path) as connection:
         assert connection.execute("SELECT count(*) FROM external_ips").fetchone()[0] == 2
@@ -2844,12 +3235,12 @@ def test_external_ip_pool_cannot_be_deleted_while_addresses_are_reserved(tmp_pat
 
     with pytest.raises(StateError, match="ExternalIP reservation"):
         store.delete_external_ip_pool(
-            POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+            POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
         )
 
     store.release_external_ip(UID_ONE, POOL_UID, TENANT_ONE, POOL_UID)
     deleted, changed = store.delete_external_ip_pool(
-        POOL_UID, POOL_FULFILLMENT_ID, TENANT_ONE, "IPv4", [POOL_CIDR]
+        POOL_UID, POOL_FULFILLMENT_ID, "shared", "IPv4", [POOL_CIDR]
     )
     assert deleted == pool
     assert changed is True
@@ -2886,7 +3277,6 @@ def test_query_dhcp_lease_module_dispatches_read_only_lookup(
             "state_file": "/unused/state.sqlite3",
             "uid": UID_TWO,
             "tenant_id": TENANT_ONE,
-            "mac_address": "AA:BB:CC:DD:EE:FF",
         },
         check_mode=True,
         exit_json=lambda **kwargs: (_ for _ in ()).throw(ModuleExit(kwargs)),
@@ -2905,10 +3295,133 @@ def test_query_dhcp_lease_module_dispatches_read_only_lookup(
         module.main()
 
     assert result.value.args[0] == expected
-    store.query_dhcp_lease.assert_called_once_with(
-        UID_TWO, TENANT_ONE, "AA:BB:CC:DD:EE:FF"
+    store.query_dhcp_lease.assert_called_once_with(UID_TWO, TENANT_ONE)
+    assert not any(
+        condition[:2] == ("action", "query_dhcp_lease")
+        and "mac_address" in condition[2]
+        for condition in calls["required_if"]
     )
-    assert ("action", "query_dhcp_lease", ["mac_address"]) in calls["required_if"]
+    assert calls["supports_check_mode"] is True
+
+
+def test_get_network_attachment_module_returns_the_saved_reservation(monkeypatch):
+    module = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
+    )
+    saved = {
+        "uid": NETWORK_ATTACHMENT_ID,
+        "tenant_id": TENANT_ONE,
+        "address": "10.0.1.2",
+        "phase": "ready",
+    }
+
+    class ModuleExit(Exception):
+        pass
+
+    module_object = SimpleNamespace(
+        params={
+            "action": "get_network_attachment",
+            "state_file": "/unused/state.sqlite3",
+            "uid": NETWORK_ATTACHMENT_ID,
+            "tenant_id": TENANT_ONE,
+        },
+        check_mode=False,
+        exit_json=lambda **kwargs: (_ for _ in ()).throw(ModuleExit(kwargs)),
+        fail_json=Mock(),
+    )
+    monkeypatch.setattr(module, "AnsibleModule", lambda **_kwargs: module_object)
+    store = Mock()
+    store.get_network_attachment.return_value = saved
+    monkeypatch.setattr(module, "StateStore", lambda _path: store)
+
+    with pytest.raises(ModuleExit) as result:
+        module.main()
+
+    store.get_network_attachment.assert_called_once_with(NETWORK_ATTACHMENT_ID, TENANT_ONE)
+    assert result.value.args[0] == {
+        "changed": False,
+        "found": True,
+        "attachment": saved,
+    }
+    module_object.fail_json.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("action", "method", "result", "expected", "expected_call"),
+    [
+        (
+            "mark_network_attachment_ready",
+            "mark_network_attachment_ready",
+            ({"uid": NETWORK_ATTACHMENT_ID, "phase": "ready"}, True),
+            {
+                "changed": True,
+                "attachment": {"uid": NETWORK_ATTACHMENT_ID, "phase": "ready"},
+            },
+            (NETWORK_ATTACHMENT_ID, TENANT_ONE),
+        ),
+        (
+            "mark_network_attachment_ready",
+            "mark_network_attachment_ready",
+            (None, False),
+            {"changed": False, "attachment": {}},
+            (NETWORK_ATTACHMENT_ID, TENANT_ONE),
+        ),
+        (
+            "begin_delete_network_attachment",
+            "begin_delete_network_attachment",
+            {"uid": NETWORK_ATTACHMENT_ID, "phase": "deleting"},
+            {
+                "changed": True,
+                "found": True,
+                "attachment": {"uid": NETWORK_ATTACHMENT_ID, "phase": "deleting"},
+            },
+            (NETWORK_ATTACHMENT_ID, TENANT_ONE, UID_ONE),
+        ),
+        (
+            "finish_delete_network_attachment",
+            "finish_delete_network_attachment",
+            ({"uid": NETWORK_ATTACHMENT_ID, "phase": "deleting"}, True, False),
+            {"changed": True, "found": True},
+            (NETWORK_ATTACHMENT_ID, TENANT_ONE, None),
+        ),
+    ],
+)
+def test_network_attachment_write_actions_pass_check_mode_to_store(
+    action, method, result, expected, expected_call, monkeypatch
+):
+    module = importlib.import_module(
+        "ansible_collections.osac.templates.plugins.modules.agentless_net_state"
+    )
+
+    class ModuleExit(Exception):
+        pass
+
+    calls = {}
+    module_object = SimpleNamespace(
+        params={
+            "action": action,
+            "state_file": "/unused/state.sqlite3",
+            "uid": NETWORK_ATTACHMENT_ID,
+            "tenant_id": TENANT_ONE,
+            "virtual_network_uid": UID_ONE,
+            "dhcp_supervisor": None,
+        },
+        check_mode=True,
+        exit_json=lambda **kwargs: (_ for _ in ()).throw(ModuleExit(kwargs)),
+        fail_json=lambda **kwargs: pytest.fail(f"unexpected module error: {kwargs}"),
+    )
+    monkeypatch.setattr(
+        module, "AnsibleModule", lambda **kwargs: calls.update(kwargs) or module_object
+    )
+    store = Mock()
+    getattr(store, method).return_value = result
+    monkeypatch.setattr(module, "StateStore", lambda _path: store)
+
+    with pytest.raises(ModuleExit) as exited:
+        module.main()
+
+    assert exited.value.args[0] == expected
+    getattr(store, method).assert_called_once_with(*expected_call, check_mode=True)
     assert calls["supports_check_mode"] is True
 
 

@@ -49,12 +49,13 @@ func validateBareMetalUserData(userData []byte) error {
 }
 
 type PrivateBareMetalInstancesServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	metricsRegisterer prometheus.Registerer
-	filterDesc        protoreflect.MessageDescriptor
-	secretStore       vault.SecretStore
+	logger             *slog.Logger
+	attributionLogic   auth.AttributionLogic
+	tenancyLogic       auth.TenancyLogic
+	metricsRegisterer  prometheus.Registerer
+	filterDesc         protoreflect.MessageDescriptor
+	secretStore        vault.SecretStore
+	networkingSettings *NetworkingSettings
 }
 
 var _ privatev1.BareMetalInstancesServer = (*PrivateBareMetalInstancesServer)(nil)
@@ -77,6 +78,7 @@ type PrivateBareMetalInstancesServer struct {
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
 	secretStore             vault.SecretStore
+	settings                NetworkingSettings
 	lifecycle               *externalIPLifecycle
 }
 
@@ -113,6 +115,13 @@ func (b *PrivateBareMetalInstancesServerBuilder) SetFilterDesc(value protoreflec
 
 func (b *PrivateBareMetalInstancesServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateBareMetalInstancesServerBuilder {
 	b.secretStore = value
+	return b
+}
+
+// SetNetworkingSettings sets the networking installation settings. This is optional; the default is
+// DefaultNetworkingSettings.
+func (b *PrivateBareMetalInstancesServerBuilder) SetNetworkingSettings(value NetworkingSettings) *PrivateBareMetalInstancesServerBuilder {
+	b.networkingSettings = &value
 	return b
 }
 
@@ -263,6 +272,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
 		secretStore:             b.secretStore,
+		settings:                resolveNetworkingSettings(b.networkingSettings),
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,
@@ -323,6 +333,9 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 		return
 	}
 	if err = s.validateAndResolveUserDataSecret(ctx, candidate.GetSpec(), true); err != nil {
+		return
+	}
+	if err = s.validateAndResolveSshKey(ctx, candidate); err != nil {
 		return
 	}
 
@@ -468,6 +481,32 @@ func (s *PrivateBareMetalInstancesServer) validateAndResolveUserDataSecret(
 	return nil
 }
 
+// validateAndResolveSshKey resolves and validates the tenant-scoped SSH-key
+// Secret and stores only its canonical reference.
+func (s *PrivateBareMetalInstancesServer) validateAndResolveSshKey(
+	ctx context.Context,
+	bmi *privatev1.BareMetalInstance,
+) error {
+	if bmi == nil {
+		return nil
+	}
+	canonical, err := resolveAndCanonicalizeSSHKeyReference(
+		ctx,
+		s.logger,
+		s.secretsDao,
+		s.secretStore,
+		bmi.GetMetadata(),
+		bmi.GetSpec().GetSshKey(),
+	)
+	if err != nil {
+		return err
+	}
+	if canonical != nil {
+		bmi.GetSpec().SetSshKey(canonical)
+	}
+	return nil
+}
+
 func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 	request *privatev1.BareMetalInstancesDeleteRequest) (response *privatev1.BareMetalInstancesDeleteResponse, err error) {
 	id := request.GetId()
@@ -553,12 +592,6 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "bare metal instance spec is mandatory")
 	}
 
-	if key := spec.GetSshPublicKey(); key != "" {
-		if err := validateOpenSSHPublicKey(key); err != nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
-		}
-	}
-
 	if spec.GetUserDataSource().HasInline() {
 		if err := validateBareMetalUserData([]byte(spec.GetUserDataSource().GetInline())); err != nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.user_data_source.inline: %s", err)
@@ -566,9 +599,10 @@ func (s *PrivateBareMetalInstancesServer) validateSpec(bmi *privatev1.BareMetalI
 	}
 
 	// If none of the authentication inputs are set, the server cannot be accessed after deployment.
-	if spec.GetSshPublicKey() == "" && spec.GetUserDataSource().GetInline() == "" && spec.GetUserDataSource().GetSecret() == nil {
+	if spec.GetSshKey() == nil &&
+		spec.GetUserDataSource().GetInline() == "" && spec.GetUserDataSource().GetSecret() == nil {
 		return grpcstatus.Error(grpccodes.InvalidArgument,
-			"at least one authentication method must be provided: spec.ssh_public_key, spec.user_data_source.inline or spec.user_data_source.secret")
+			"at least one authentication method must be provided: spec.ssh_key, spec.user_data_source.inline or spec.user_data_source.secret")
 	}
 
 	return nil
@@ -607,7 +641,7 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 		var err error
 		defaultSubnet, err = findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenantName, project)
 		if err != nil {
-			return err
+			return defaultResourceLookupFailure(err, "subnet")
 		}
 	}
 	defaultVN := ""
@@ -631,6 +665,9 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"spec.network_attachments: subnet is required and no tenant default subnet is available")
 		}
+		if err := validateResolvedSubnetReady(defaultSubnet, defaultSubnet.GetId(), " in spec.network_attachments[0]"); err != nil {
+			return err
+		}
 		attachment.SetSubnet(privatev1.SubnetLocalReference_builder{Id: defaultSubnet.GetId()}.Build())
 		resolvedSubnet = defaultSubnet
 	} else if securityGroupsMissing(attachment) {
@@ -651,11 +688,14 @@ func (s *PrivateBareMetalInstancesServer) applyDefaultNetworkAttachments(
 		if sgErr != nil {
 			s.logger.ErrorContext(ctx, "Failed to look up default security group",
 				slog.Any("error", sgErr))
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to find default security group")
+			return defaultResourceLookupFailure(sgErr, "security group")
 		}
 		if sg == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"spec.network_attachments[0]: security_groups are required and no tenant default security group is available")
+		}
+		if err := validateResolvedSecurityGroup(sg, sg.GetId(), " in spec.network_attachments[0]", subnetVN); err != nil {
+			return err
 		}
 		attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
 			privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
@@ -697,16 +737,22 @@ func (s *PrivateBareMetalInstancesServer) injectFullDefaultNetworkAttachment(
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"spec.network_attachments: at least one network attachment is required and no tenant default subnet is available")
 	}
+	if err := validateResolvedSubnetReady(defaultSubnet, defaultSubnet.GetId(), " in spec.network_attachments[0]"); err != nil {
+		return err
+	}
 	subnetVN := refKey(defaultSubnet.GetSpec().GetVirtualNetwork())
 	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, subnetVN, tenantName, project)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "Failed to look up default security group",
 			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to find default security group")
+		return defaultResourceLookupFailure(err, "security group")
 	}
 	if sg == nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"spec.network_attachments: no tenant default security group is available")
+	}
+	if err := validateResolvedSecurityGroup(sg, sg.GetId(), " in spec.network_attachments[0]", subnetVN); err != nil {
+		return err
 	}
 
 	ifaceName, err := s.resolveDefaultInterface(instanceType)
@@ -819,7 +865,8 @@ func (s *PrivateBareMetalInstancesServer) applyBareMetalTemplate(bmi *privatev1.
 	return nil
 }
 
-// validateBareMetalImmutability ensures template, catalog_item, instance_type, disk_image, ssh_public_key, user_data_source.inline, template_parameters,
+// validateBareMetalImmutability ensures template, catalog_item, instance_type, disk_image, ssh_key,
+// user_data_source.inline, template_parameters,
 // auto_external_ip_attachment, and network_attachments cannot be changed after creation.
 func validateBareMetalImmutability(
 	current, candidate *privatev1.BareMetalInstance,
@@ -829,7 +876,7 @@ func validateBareMetalImmutability(
 	updatingCatalogItem := updateIncludesField(mask, "spec.catalog_item")
 	updatingInstanceType := updateIncludesField(mask, "spec.instance_type")
 	updatingDiskImage := updateIncludesField(mask, "spec.disk_image")
-	updatingSshKey := updateIncludesField(mask, "spec.ssh_public_key")
+	updatingSshKey := updateIncludesField(mask, "spec.ssh_key")
 	updatingUserDataSource := updateIncludesField(mask, "spec.user_data_source")
 	updatingTemplateParams := updateIncludesField(mask, "spec.template_parameters")
 	updatingAutoExternalIP := updateIncludesField(mask, "spec.auto_external_ip_attachment")
@@ -864,9 +911,26 @@ func validateBareMetalImmutability(
 			refKey(existingSpec.GetDiskImage()), refKey(newSpec.GetDiskImage()))
 	}
 
-	if updatingSshKey && existingSpec.GetSshPublicKey() != newSpec.GetSshPublicKey() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"cannot change spec.ssh_public_key: ssh_public_key is immutable after creation")
+	if updatingSshKey {
+		existingKey := existingSpec.GetSshKey()
+		newKey := newSpec.GetSshKey()
+		sameKey := proto.Equal(existingKey, newKey)
+		if existingKey != nil && newKey != nil {
+			if newKey.GetId() != "" {
+				sameKey = existingKey.GetId() == newKey.GetId()
+			} else {
+				sameKey = existingKey.GetName() == newKey.GetName() &&
+					(newKey.GetProject() == "" || newKey.GetProject() == existingKey.GetProject()) &&
+					(!newKey.GetShared() || existingKey.GetShared())
+			}
+		}
+		if !sameKey {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"cannot change spec.ssh_key: ssh_key is immutable after creation")
+		}
+		if existingKey != nil {
+			newSpec.SetSshKey(cloneMessage(existingKey))
+		}
 	}
 
 	if err := validateBareMetalUserDataImmutability(
@@ -1049,6 +1113,10 @@ func validateBareMetalAttachmentsForInstanceType(
 func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 	ctx context.Context, bmi *privatev1.BareMetalInstance,
 ) error {
+	if !s.settings.ProvisioningEnabled {
+		return nil
+	}
+
 	pool, err := SelectExternalIPPool(ctx, s.logger, s.externalIPPoolDao, 1)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)

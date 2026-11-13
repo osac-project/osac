@@ -15,6 +15,8 @@ package servers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 
 	grpccodes "google.golang.org/grpc/codes"
@@ -24,32 +26,93 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-// findDefaultSubnet returns the tenant's READY default Subnet with an IPv4 CIDR, or nil. Tenant defaults are
-// tenant-wide (Default Networking design), so the project isn't used.
-func findDefaultSubnet(
+type ambiguousDefaultResourceError struct {
+	resource string
+	count    int
+}
+
+func (e *ambiguousDefaultResourceError) Error() string {
+	return fmt.Sprintf("multiple default %s resources found (count %d)", e.resource, e.count)
+}
+
+func defaultResourceLookupFailure(err error, resource string) error {
+	var ambiguous *ambiguousDefaultResourceError
+	if errors.As(err, &ambiguous) {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"tenant default networking is misconfigured: %s", ambiguous)
+	}
+	return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default %s: %v", resource, err)
+}
+
+func findDefaultVirtualNetwork(
 	ctx context.Context,
-	_ *slog.Logger,
-	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
+	logger *slog.Logger,
+	virtualNetworksDao *dao.GenericDAO[*privatev1.VirtualNetwork],
 	tenant, _ string,
-) (*privatev1.Subnet, error) {
-	return findTenantDefault(ctx, subnetsDao, tenant, func(subnet *privatev1.Subnet) bool {
-		return subnet.GetSpec().GetIpv4Cidr() != "" &&
-			subnet.GetStatus().GetState() == privatev1.SubnetState_SUBNET_STATE_READY
+) (*privatev1.VirtualNetwork, error) {
+	return findUniqueTenantDefault(ctx, logger, virtualNetworksDao, tenant, "VirtualNetwork", func(*privatev1.VirtualNetwork) bool {
+		return true
 	})
 }
 
-// findDefaultSecurityGroup returns the tenant's READY default SecurityGroup of the given VirtualNetwork, or nil.
+func findUniqueTenantDefault[O lifecycleResource](
+	ctx context.Context,
+	logger *slog.Logger,
+	objectDao *dao.GenericDAO[O],
+	tenant, resource string,
+	match func(O) bool,
+) (O, error) {
+	var zero O
+	response, err := objectDao.List().SetFilter(fmt.Sprintf(
+		`this.metadata.tenant == %q && this.metadata.labels[%q] == "true"`, tenant, defaultLabel,
+	)).Do(ctx)
+	if err != nil {
+		return zero, grpcstatus.Error(grpccodes.Internal, "failed to find the tenant defaults")
+	}
+	var found O
+	count := 0
+	for _, item := range response.GetItems() {
+		if !match(item) {
+			continue
+		}
+		found = item
+		count++
+	}
+	if count > 1 {
+		logger.ErrorContext(ctx, "multiple default networking resources found",
+			slog.String("resource", resource), slog.Int("count", count))
+		return zero, &ambiguousDefaultResourceError{resource: resource, count: count}
+	}
+	if count == 0 {
+		return zero, nil
+	}
+	return found, nil
+}
+
+// findDefaultSubnet returns the tenant's default Subnet with an IPv4 CIDR, or nil. Tenant defaults are
+// tenant-wide (Default Networking design), so the project isn't used.
+func findDefaultSubnet(
+	ctx context.Context,
+	logger *slog.Logger,
+	subnetsDao *dao.GenericDAO[*privatev1.Subnet],
+	tenant, _ string,
+) (*privatev1.Subnet, error) {
+	return findUniqueTenantDefault(ctx, logger, subnetsDao, tenant, "Subnet", func(subnet *privatev1.Subnet) bool {
+		return subnet.GetSpec().GetIpv4Cidr() != ""
+	})
+}
+
+// findDefaultSecurityGroup returns the tenant's default SecurityGroup of the given VirtualNetwork, or nil.
 // Tenant defaults are tenant-wide (Default Networking design), so the project isn't used.
 func findDefaultSecurityGroup(
 	ctx context.Context,
-	_ *slog.Logger,
+	logger *slog.Logger,
 	securityGroupsDao *dao.GenericDAO[*privatev1.SecurityGroup],
 	virtualNetworkID string,
 	tenant, _ string,
 ) (*privatev1.SecurityGroup, error) {
-	return findTenantDefault(ctx, securityGroupsDao, tenant, func(group *privatev1.SecurityGroup) bool {
-		return refKey(group.GetSpec().GetVirtualNetwork()) == virtualNetworkID &&
-			group.GetStatus().GetState() == privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY
+	return findUniqueTenantDefault(ctx, logger, securityGroupsDao, tenant, "SecurityGroup", func(group *privatev1.SecurityGroup) bool {
+		return refKey(group.GetSpec().GetVirtualNetwork()) == virtualNetworkID
 	})
 }
 
@@ -73,15 +136,12 @@ func resolveNetworkingReference[O referenceResource](
 	if err == nil || grpcstatus.Code(err) != notFoundCode {
 		return object, err
 	}
-	key := reference.GetId()
-	if key == "" {
-		key = reference.GetName()
-	}
-	found, findErr := findInScope(ctx, resourceDao, owner.GetTenant(), owner.GetProject(), key)
+	found, findErr := findTenantDefaultInScope(ctx, resourceDao, owner.GetTenant(),
+		reference.GetId(), reference.GetName())
 	if findErr != nil {
 		return object, findErr
 	}
-	if found.GetId() == "" || found.GetMetadata().GetLabels()[defaultLabel] != "true" {
+	if found.GetId() == "" {
 		return object, err
 	}
 	if locked {

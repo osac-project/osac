@@ -1,0 +1,17 @@
+---
+- name: Record the NetworkAttachment deletion on its switch
+  ansible.builtin.include_role:
+    name: ansible_network.network_runner.switch
+    tasks_from: set_deletion_guard
+    apply:
+      delegate_to: "{{ _agentless_net_switch_name }}"
+      become: true
+  vars:
+    ansible_connection: ssh
+    ansible_host: "{{ hostvars[_agentless_net_switch_name].ansible_host }}"
+    ansible_user: "{{ hostvars[_agentless_net_switch_name].ansible_user }}"
+    ansible_port: "{{ hostvars[_agentless_net_switch_name].ansible_port | default(22) }}"
+    ansible_network_os: "{{ hostvars[_agentless_net_switch_name].ansible_network_os }}"
+    guard_scope: "{{ _agentless_net_deletion_guard_scope }}"
+    guard_key: "network-attachment-{{ osac_job_vars.resource.id }}"
+  no_log: true

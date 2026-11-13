@@ -102,7 +102,7 @@ message ClusterVersionsDeleteRequest {
   string id = 1;
 }
 
-message ClusterVersionsDeleteResponse {}
+message ClusterVersionsDeleteResponse { ClusterVersion object = 1; }
 
 service ClusterVersions {
   // Retrieves the list of cluster versions. Returns active and deprecated versions by default.
@@ -147,6 +147,6 @@ service ClusterVersions {
   //
   // This method isn't allowed for regular users, only for the system itself.
   rpc Delete(ClusterVersionsDeleteRequest) returns (ClusterVersionsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/cluster_versions/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/cluster_versions/{id}" response_body: "object"};
   }
 }

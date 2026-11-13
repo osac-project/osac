@@ -11,4 +11,5 @@ use (
 	./osac-operator/api
 	./osac-ui/proxy
 	./proto
+	./terraform-provider
 )

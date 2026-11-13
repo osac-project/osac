@@ -1,6 +1,6 @@
 module github.com/osac-project/osac/terraform-provider
 
-go 1.27
+go 1.26
 
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.19.0

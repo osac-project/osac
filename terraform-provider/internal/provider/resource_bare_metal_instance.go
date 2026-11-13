@@ -15,12 +15,11 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"time"
 
-	"encoding/json/jsontext"
-	json "encoding/json/v2"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -46,8 +45,8 @@ const sharedTenant = "shared"
 
 // instanceObject is the minimal shape of a bare metal instance response needed by this resource.
 type instanceObject struct {
-	Id     string         `json:"id"`
-	Status jsontext.Value `json:"status"`
+	Id     string          `json:"id"`
+	Status json.RawMessage `json:"status"`
 }
 
 // state returns the state name reported in the status.

@@ -15,9 +15,8 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-
-	json "encoding/json/v2"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"

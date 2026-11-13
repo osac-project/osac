@@ -363,10 +363,11 @@ func (s *PrivateSecretsServer) Delete(ctx context.Context,
 		return
 	}
 
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
 	if err != nil {
 		return
 	}
+	response = &privatev1.SecretsDeleteResponse{Object: object}
 
 	if obj != nil && obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
 		tenant := obj.GetMetadata().GetTenant()

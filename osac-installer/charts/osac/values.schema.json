@@ -1044,25 +1044,25 @@
           "properties": {
             "cache": {
               "type": "object",
-              "description": "Refresh intervals for the catalog-pricing caches, in seconds. defaultSeconds is the shared interval; inventorySeconds and rateCardSeconds are overrides that inherit it when cleared",
+              "description": "Refresh intervals for the catalog-pricing caches, in seconds. defaultSeconds is the shared interval; inventorySeconds and rateCardSeconds are overrides that inherit it when null",
               "properties": {
                 "defaultSeconds": {
                   "type": "integer",
-                  "description": "Shared refresh interval, and the interval every catalog-pricing cache inherits when its own override is cleared",
+                  "description": "Shared refresh interval, and the interval every catalog-pricing cache inherits when its own override is null",
                   "minimum": 1,
                   "maximum": 86400,
                   "default": 300
                 },
                 "inventorySeconds": {
                   "type": ["integer", "null"],
-                  "description": "Override of defaultSeconds for the metered catalog inventory behind CatalogPricingInputs.List. The shipped 30 keeps the admin gap-check view fresh; null or unset inherits defaultSeconds",
+                  "description": "Override of defaultSeconds for the metered catalog inventory behind CatalogPricingInputs.List. The shipped 30 keeps the admin gap-check view fresh; null clears the override and inherits defaultSeconds, while deleting the key keeps the shipped 30",
                   "minimum": 1,
                   "maximum": 86400,
                   "default": 30
                 },
                 "rateCardSeconds": {
                   "type": ["integer", "null"],
-                  "description": "Override of defaultSeconds for the priced rate card items of one provider. Shipped equal to defaultSeconds; null or unset inherits defaultSeconds",
+                  "description": "Override of defaultSeconds for the priced rate card items of one provider. Shipped equal to defaultSeconds; null clears the override and inherits defaultSeconds, while deleting the key keeps the shipped value",
                   "minimum": 1,
                   "maximum": 86400,
                   "default": 300

@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,20 +27,7 @@ import (
 	"strings"
 	"time"
 
-	json "encoding/json/v2"
-
 	"github.com/osac-project/osac/terraform-provider/internal/osaccli"
-)
-
-// Paths of the public API in the REST gateway. Note that the naming isn't fully consistent between services: most
-// bare metal services spell 'baremetal' as one word, but instance types use 'bare_metal'. See OSAC-7379.
-const (
-	bareMetalInstancesPath         = "/api/fulfillment/v1/baremetal_instances"
-	bareMetalInstanceTypesPath     = "/api/fulfillment/v1/bare_metal_instance_types"
-	bareMetalInstanceTemplatesPath = "/api/fulfillment/v1/baremetal_instance_templates"
-	bareMetalInstanceCatalogsPath  = "/api/fulfillment/v1/baremetal_instance_catalog_items"
-	diskImagesPath                 = "/api/fulfillment/v1/disk_images"
-	secretsPath                    = "/api/fulfillment/v1/secrets"
 )
 
 // requestTimeout bounds each individual HTTP request. The creation of a bare metal instance polls with repeated

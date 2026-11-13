@@ -15,11 +15,9 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/big"
-
-	"encoding/json/jsontext"
-	json "encoding/json/v2"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -28,7 +26,7 @@ import (
 // valueOfJSON converts a JSON value, taken directly from a REST response, into a generated custom value type. The
 // REST gateway marshals with the same protojson options that the schema generation uses, so no intermediate
 // representation is needed.
-func valueOfJSON[V attr.Value](ctx context.Context, data jsontext.Value, zero V) V {
+func valueOfJSON[V attr.Value](ctx context.Context, data json.RawMessage, zero V) V {
 	var decoded any
 	err := json.Unmarshal(data, &decoded)
 	if err != nil {
@@ -170,7 +168,7 @@ func terraformToJSON(ctx context.Context, value tftypes.Value) (any, error) {
 		if err := value.As(&result); err != nil {
 			return nil, err
 		}
-		return jsontext.Value(result.Text('f', -1)), nil
+		return json.RawMessage(result.Text('f', -1)), nil
 	}
 	switch terraformType.(type) {
 	case tftypes.Object:

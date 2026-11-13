@@ -15,10 +15,8 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-
-	"encoding/json/jsontext"
-	json "encoding/json/v2"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -94,7 +92,7 @@ func (d *secretDataSource) Read(ctx context.Context,
 	// Copy the results to the state. The response is in the same JSON shape as the generated schema:
 	var object struct {
 		Id       string            `json:"id"`
-		Metadata jsontext.Value    `json:"metadata"`
+		Metadata json.RawMessage   `json:"metadata"`
 		Data     map[string]string `json:"data"`
 		Type     string            `json:"type"`
 	}

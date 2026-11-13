@@ -15,10 +15,8 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-
-	"encoding/json/jsontext"
-	json "encoding/json/v2"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -93,10 +91,10 @@ func (d *bareMetalInstanceTypeDataSource) Read(ctx context.Context,
 
 	// Copy the results to the state. The response is in the same JSON shape as the generated schema:
 	var object struct {
-		Id       string         `json:"id"`
-		Metadata jsontext.Value `json:"metadata"`
-		Spec     jsontext.Value `json:"spec"`
-		Status   jsontext.Value `json:"status"`
+		Id       string          `json:"id"`
+		Metadata json.RawMessage `json:"metadata"`
+		Spec     json.RawMessage `json:"spec"`
+		Status   json.RawMessage `json:"status"`
 	}
 	_ = json.Unmarshal(data, &object)
 	state.Id = types.StringValue(object.Id)

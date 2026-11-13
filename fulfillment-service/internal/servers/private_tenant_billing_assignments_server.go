@@ -284,9 +284,9 @@ func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
 		s.logger.ErrorContext(ctx, "Failed to read billing account", slog.Any("error", err))
 		return snapshot, status.Errorf(codes.Internal, "failed to read billing account")
 	}
-	if err = requireActiveBillingAccount(account); err != nil {
-		return snapshot, err
-	}
+	// The stored account state is not an eligibility gate here: it is only the last observation, and assign
+	// validates the state the provider reports after this snapshot. A stale INACTIVE or UNKNOWN row must not veto an
+	// account the provider has since reactivated.
 	snapshot.account = account
 	if closeID == "" {
 		return snapshot, s.rejectIfAlreadyBound(ctx, tx, in.TenantID, accountID)
@@ -432,16 +432,17 @@ func (s *PrivateTenantBillingAssignmentsServer) rejectIfAccountAlreadyBound(
 	return nil
 }
 
-// requireActiveBillingAccount fails with ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN unless account.State is ACTIVE.
-func requireActiveBillingAccount(account database.BillingAccountForAssignment) error {
-	switch billing.AccountState(account.State) {
+// requireActiveBillingAccountState fails with ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN unless state is ACTIVE.
+// Assignment applies it to its fresh provider observation or newer stored evidence, including commit-time state.
+func requireActiveBillingAccountState(state billing.AccountState, accountID string) error {
+	switch state {
 	case billing.AccountActive:
 		return nil
 	case billing.AccountInactive:
-		return failedPreconditionWithReason(tbaAccountInactiveReason, "billing account %q is inactive", account.ID)
+		return failedPreconditionWithReason(tbaAccountInactiveReason, "billing account %q is inactive", accountID)
 	default:
 		return failedPreconditionWithReason(tbaAccountStateUnknownReason,
-			"billing account %q has an unknown state", account.ID)
+			"billing account %q has an unknown state", accountID)
 	}
 }
 
@@ -450,6 +451,50 @@ type tenantBillingAssignmentAssignInput struct {
 	Name     string
 	TenantID string
 	Creator  string
+}
+
+// observeSelectedAccount reads one account from the provider under the assign provider deadline and records its
+// normalized state in a short independent transaction. It holds no transaction or pool connection across the read.
+// The durable lease fences the local write, so a superseded assign cannot publish an observation, and the database
+// helper keeps the stored observation monotonic: a slower read never overwrites a newer discovery's state. The
+// returned state is the effective stored observation, so a concurrent newer observation decides eligibility too.
+func (s *PrivateTenantBillingAssignmentsServer) observeSelectedAccount(
+	ctx context.Context, lease *database.BillingOperationLease, adapter billing.Adapter,
+	account database.BillingAccountForAssignment, ref billing.AccountRef,
+) (state billing.AccountState, err error) {
+	providerCtx, cancel := context.WithTimeout(ctx, s.assignProviderDeadline)
+	// Match discovery's conservative observation-start timestamp: a delayed response may already be stale when
+	// it arrives, so its completion time must not let it supersede a newer observation that committed meanwhile.
+	observedAt := time.Now().UTC()
+	observed, err := adapter.GetAccount(providerCtx, ref)
+	cancel()
+	if err != nil {
+		return "", err
+	}
+	if observed.Ref != ref {
+		return "", billing.NewError(billing.ReasonMalformed, "GetAccount", false, 0)
+	}
+	_, err = database.WithNewTx(ctx, func(txCtx context.Context) (struct{}, error) {
+		tx, txErr := database.TxFromContext(txCtx)
+		if txErr != nil {
+			return struct{}{}, txErr
+		}
+		if checkErr := lease.Check(txCtx, tx); checkErr != nil {
+			return struct{}{}, checkErr
+		}
+		effective, _, observeErr := database.ObserveBillingAccountState(txCtx, tx, account.ID,
+			string(observed.State), observedAt)
+		if observeErr != nil {
+			return struct{}{}, observeErr
+		}
+		state = billing.AccountState(effective)
+		return struct{}{}, nil
+	})
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to record billing account observation", slog.Any("error", err))
+		return "", err
+	}
+	return state, nil
 }
 
 // assign holds committed expiring guards, never a transaction, across provider I/O; local reads and writes use
@@ -506,6 +551,24 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 		return row, mapBillingProviderBuildError(err)
 	}
 	ref := billing.NewAccountRef(account.ProviderAccountReference)
+
+	// Validate the selected account's normalized state from a fresh provider read in the existing bounded provider
+	// phase, before any correlation write or assignment mutation. Preflight stored state alone cannot decide
+	// eligibility: an account the provider reports as inactive or unknown now is rejected even when
+	// discovery stored ACTIVE, and a stale stored INACTIVE or UNKNOWN does not block an account the provider has since
+	// reactivated. The read also refreshes the local observation so a later BillingAccounts.List shows the state that
+	// decided this request.
+	observedState, err := s.observeSelectedAccount(operationCtx, lease, adapter, account, ref)
+	if err != nil {
+		return row, err
+	}
+	if err = requireActiveBillingAccountState(observedState, account.ID); err != nil {
+		return row, err
+	}
+	// The preflight snapshot now carries the observation that decided this request, so the final comparison detects
+	// only a state change that happens after it, not its own refresh.
+	snapshot.account.State = string(observedState)
+
 	providerCtx, cancel := context.WithTimeout(operationCtx, s.assignProviderDeadline)
 	resolution, err := billing.ResolveAccountCorrelationID(providerCtx, billing.AccountCorrelationInput{
 		Adapter: adapter, AccountID: account.ID, Ref: ref, LocalValue: account.CorrelationID,
@@ -559,6 +622,12 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 		}
 		latest, err := s.assignmentSnapshot(txCtx, accountID, closeID, in, true)
 		if err != nil {
+			return row, err
+		}
+		// The stored state can change between the preflight read and this commit, from discovery or another
+		// assignment. A change committed after this request's provider read is news the observation cannot supersede,
+		// so reject the now-known-inactive account instead of opening an interval for it.
+		if err := requireActiveBillingAccountState(billing.AccountState(latest.account.State), account.ID); err != nil {
 			return row, err
 		}
 		if latest != snapshot {

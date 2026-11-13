@@ -92,6 +92,15 @@ mitigate this here:
   Event emission is therefore atomic with the request: an event is never published for a change
   that rolls back.
 
+Generic DAO creation checks the normalized owning tenant under a transaction-held
+`FOR SHARE` row lock. A create waiting behind tenant deletion rechecks the committed
+deletion state instead of treating a retained billing-history tenant as live merely
+because its foreign key still resolves. Tenant self-bootstrap is exempt. Existing
+controller cleanup updates remain available; this application guard does not constrain
+direct SQL writers that bypass the DAO. Tenant archival takes `FOR UPDATE` outside
+its archive savepoint and, when billing history retains the identity, checks every
+other restrictive tenant foreign key before accepting the tombstone.
+
 Known footgun: rollback is driven by `Tx.ReportError(&err)`
 ([`internal/database/database_tx.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/database/database_tx.go)),
 which must be called (typically via `defer`) by any code path that can produce an error inside the

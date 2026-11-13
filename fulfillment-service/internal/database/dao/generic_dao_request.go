@@ -118,6 +118,16 @@ const archiveDeferredConstraint = "tenant_billing_assignments_tenant_id_fkey"
 // When that constraint is the violation, the rollback leaves the row live-but-deleted; checkDeferredArchiveBlockers
 // then decides whether that tombstone is the intended final state. Any other error is translated as usual.
 func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
+	if r.dao.table == "tenants" {
+		// Take the key lock outside the savepoint: rolling back the failed DELETE must not release it.
+		// FK checks on concurrent dependent inserts take KEY SHARE, so wait for earlier inserts before
+		// taking the fresh READ COMMITTED snapshot used by the recovery probe.
+		var id string
+		if err := r.queryRow(ctx, getOpType, `select id from tenants where id = $1 for update`, args.id).
+			Scan(&id); err != nil {
+			return r.translateArchiveError(ctx, args.tenant, err)
+		}
+	}
 	deferred := false
 	outerTx := r.tx
 	err := outerTx.Savepoint(ctx, func(spCtx context.Context) error {
@@ -194,11 +204,10 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 	return r.translateArchiveError(ctx, args.tenant, err)
 }
 
-// checkDeferredArchiveBlockers runs after the archive savepoint rolled back, with the row still live and the
-// outer transaction usable. A tenant that still has projects must be rejected here, as the non-deferred
-// projects_tenant_fk violation would have done. The query also proves the transaction is healthy: a broken
-// connection fails closed instead of silently accepting the tombstone. Both callers hold a row lock on the tenant,
-// and the check applies only to tenants.
+// checkDeferredArchiveBlockers runs after the archive savepoint rolled back. The retained billing identity must not
+// mask any other restrictive FK, including soft-deleted dependents still awaiting cleanup. Derive the probes from
+// the actual schema rather than maintaining another partial list of tenant-scoped tables. Cascades are not blockers;
+// the tenant's own self-reference disappears with a physical delete and is excluded from its probe.
 func (r *request[O]) checkDeferredArchiveBlockers(ctx context.Context, args archiveArgs) error {
 	if r.dao.table != "tenants" {
 		return fmt.Errorf(
@@ -207,24 +216,52 @@ func (r *request[O]) checkDeferredArchiveBlockers(ctx context.Context, args arch
 			r.dao.table,
 		)
 	}
-	var exists bool
+	var probes string
 	err := r.queryRow(
 		ctx,
 		existsOpType,
-		`select exists(select 1 from projects where tenant = $1)`,
-		args.name,
-	).Scan(&exists)
+		`select coalesce(string_agg(format(
+			'select %L::text as blocker where exists (select 1 from %s as child join tenants as parent on %s
+			 where parent.id = $1 %s)',
+			fk.conname, fk.conrelid::regclass, keys.predicate,
+			case when fk.conrelid = fk.confrelid then 'and child.id <> parent.id' else '' end
+		), ' union all ' order by (fk.conname = 'projects_tenant_fk') desc, fk.conname), '')
+		from pg_catalog.pg_constraint as fk
+		cross join lateral (
+			select string_agg(format('child.%I = parent.%I', child.attname, parent.attname), ' and ') as predicate
+			from unnest(fk.conkey, fk.confkey) as key(child, parent)
+			join pg_catalog.pg_attribute as child on child.attrelid = fk.conrelid and child.attnum = key.child
+			join pg_catalog.pg_attribute as parent on parent.attrelid = fk.confrelid and parent.attnum = key.parent
+		) as keys
+		where fk.contype = 'f' and fk.confrelid = 'tenants'::regclass
+		and fk.confdeltype in ('a', 'r') and fk.conname <> $1`,
+		archiveDeferredConstraint,
+	).Scan(&probes)
+	if err == nil && probes == "" {
+		err = errors.New("no restrictive tenant foreign keys found")
+	}
+	var blocker string
+	if err == nil {
+		err = r.queryRow(ctx, existsOpType,
+			`select coalesce((select blocker from (`+probes+`) as blockers limit 1), '')`, args.id,
+		).Scan(&blocker)
+	}
 	if err != nil {
 		return fmt.Errorf(
-			"failed to check projects for tenant '%s' after deferred archive: %w",
+			"failed to check dependencies for tenant '%s' after deferred archive: %w",
 			args.name,
 			err,
 		)
 	}
-	if exists {
+	if blocker == "projects_tenant_fk" {
 		return &ErrInUse{
 			Reason: fmt.Sprintf("tenant '%s' cannot be deleted because it still has projects", args.name),
 		}
+	}
+	if blocker != "" {
+		r.dao.logger.WarnContext(ctx, "Tenant archive blocked by a restrictive dependency",
+			slog.String("constraint", blocker))
+		return &ErrInUse{Reason: "object cannot be deleted because it is still referenced by other objects"}
 	}
 	return nil
 }

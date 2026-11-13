@@ -228,6 +228,33 @@ const (
 
 	// HostConditionReasonInvalidSelector indicates the host selector is missing or empty.
 	HostConditionReasonInvalidSelector = "InvalidSelector"
+
+	// HostConditionReasonSelectedPortMACUnavailable indicates inventory did not
+	// provide a valid MAC for the selected network interface.
+	HostConditionReasonSelectedPortMACUnavailable = "SelectedPortMACUnavailable"
+
+	// HostConditionReasonNetworkAttachmentFailed indicates the network attachment
+	// reached a final failed state.
+	HostConditionReasonNetworkAttachmentFailed = "NetworkAttachmentFailed"
+
+	HostConditionReasonPoweringOff          = "PoweringOff"
+	HostConditionReasonPoweringOn           = "PoweringOn"
+	HostConditionReasonNetworkHandoffFailed = "NetworkHandoffFailed"
+	// NetworkAttachmentNotCreated means BMF knows no attachment create request
+	// is in flight or has been accepted.
+	HostConditionReasonNetworkAttachmentNotCreated = "NetworkAttachmentNotCreated"
+	// NetworkAttachmentCreating marks a persisted create intent whose request
+	// may still be in flight.
+	HostConditionReasonNetworkAttachmentCreating = "NetworkAttachmentCreating"
+	HostConditionReasonNetworkDetaching          = "NetworkDetaching"
+	// NetworkAttachmentMissing means an attachment may have been applied but
+	// cannot be found during cleanup.
+	HostConditionReasonNetworkAttachmentMissing = "NetworkAttachmentMissing"
+	HostConditionReasonLeasePending             = "LeasePending"
+	HostConditionReasonIPDiscoveryFailed        = "IPDiscoveryFailed"
+	HostConditionReasonProvisioningDisabled     = "ProvisioningDisabled"
+	HostConditionReasonOffboarding              = "Offboarding"
+	HostConditionReasonPowerOffFailed           = "PowerOffFailed"
 )
 
 // HostSelectorSpec defines host selection constraints.
@@ -256,7 +283,8 @@ type BareMetalHardware struct {
 	NICs []BareMetalNICStatus `json:"nics,omitempty"`
 }
 
-// BareMetalNetworkAttachmentStatus captures the runtime networking state for a single NIC.
+// BareMetalNetworkAttachmentStatus captures the selected port and runtime
+// networking state for a single NIC.
 type BareMetalNetworkAttachmentStatus struct {
 	// Interface is the physical interface name from the spec's network attachment.
 	// +kubebuilder:validation:Optional
@@ -265,6 +293,12 @@ type BareMetalNetworkAttachmentStatus struct {
 	// SubnetRef is the fulfillment Subnet ID associated with this attachment.
 	// +kubebuilder:validation:Optional
 	SubnetRef string `json:"subnetRef,omitempty"`
+
+	// MACAddress is the selected physical interface MAC in lowercase,
+	// colon-separated form.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`
+	MACAddress string `json:"macAddress,omitempty"`
 
 	// IPAddress is the IP discovered after DHCP assignment.
 	// +kubebuilder:validation:Optional

@@ -29,13 +29,22 @@ not prove the deployed path, and static CRDs or HTTP doubles do not satisfy
 Metal3/Ironic/BMC/power/hardware boundaries. Keep generated and Helm CRDs
 synchronized.
 
-## Networking cleanup ownership (NET-CLEAN-08)
+## Networking cleanup ownership (NET-CLEAN-08, NET-CLEAN-09)
 
 The deployed `test/integration/` suite exercises the installed BMF manager and
 Kubernetes persistence. Metal3 status and OSAC cleanup completion are simulated;
 it does not exercise a real provider or the OSAC operator's cleanup. Run it via
 the installer's Kind target with the BMF suite on its own cluster and ports
 ([Multi-branch test isolation](../MULTI-BRANCH-ISOLATION.md)).
+
+NET-CLEAN-09 ([OSAC-7598](https://redhat.atlassian.net/browse/OSAC-7598)) adds
+fixture-driven physical attachment offboarding: the test observes BMF request
+power-off, then waits for the networking finalizer before releasing the host.
+The Envtest suite also verifies that a missing attachment after a possibly
+applied network change retains host ownership, including legacy `Progressing`
+and failed conditions. The Kind suite checks that the installed CRD rejects an
+invalid selected-port MAC. These tests do not prove physical power control or a
+live Fabric Manager boundary.
 
 ## Coverage gaps
 

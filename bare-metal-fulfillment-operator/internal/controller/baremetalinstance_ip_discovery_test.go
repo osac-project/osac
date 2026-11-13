@@ -18,11 +18,13 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
@@ -77,7 +79,7 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 
 	AfterEach(func() {
 		if attachment != nil {
-			_ = k8sClient.Delete(ctx, attachment)
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, attachment))).To(Succeed())
 		}
 	})
 
@@ -114,7 +116,7 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		Expect(err).NotTo(HaveOccurred())
 		cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
 		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-		Expect(cond.Reason).To(Equal("Skipped"))
+		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProvisioningDisabled))
 	})
 
 	It("mirrors the accepted DHCP lease of the NetworkAttachment", func() {
@@ -133,12 +135,30 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		}}))
 	})
 
+	It("emits IPDiscovered once when a pending lease becomes available", func() {
+		bmi = newBMI(attachments)
+		handoffComplete(bmi)
+		bmi.SetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete, metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonLeasePending, "Waiting for the tenant DHCP lease")
+		createAttachment(&opv1alpha1.NetworkAttachmentDHCPLease{IPAddress: "10.0.1.130", MACAddress: "aa:bb:cc:dd:ee:ff"})
+		recorder := events.NewFakeRecorder(2)
+		reconciler.EventRecorder = recorder
+
+		_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(recorder.Events).Should(Receive(ContainSubstring("Normal IPDiscovered")))
+
+		_, err = reconciler.reconcileIPDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(recorder.Events).To(BeEmpty(), "a completed discovery must not emit a duplicate event")
+	})
+
 	It("keeps waiting while the lease query has not succeeded", func() {
 		bmi = newBMI(attachments)
 		handoffComplete(bmi)
 		createAttachment(nil, opv1alpha1.NetworkJobStatus{
 			Task: "query_dhcp_lease", Manager: opv1alpha1.NetworkJobManagerFabric, Attempt: 2,
-			State: opv1alpha1.NetworkJobStateRetrying, Message: "no DHCP lease yet",
+			State: opv1alpha1.NetworkJobStateRetrying, JobID: "job-in-flight-123", Message: "no DHCP lease yet",
 		})
 
 		result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
@@ -146,7 +166,23 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 		cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonLeasePending))
+		Expect(bmi.Status.IPDiscoveryJobs).To(HaveLen(1))
+		Expect(bmi.Status.IPDiscoveryJobs[0].Target).To(Equal("query_dhcp_lease:fabric:attempt-2"))
+		Expect(bmi.Status.IPDiscoveryJobs[0].State).To(Equal(opv1alpha1.JobStateWaiting))
+		Expect(bmi.Status.IPDiscoveryJobs[0].JobID).To(Equal("job-in-flight-123"))
+		firstAttemptTime := bmi.Status.IPDiscoveryJobs[0].Timestamp
+		recordIPDiscoveryJob(bmi, &opv1alpha1.NetworkJobStatus{
+			Task: "query_dhcp_lease", Manager: opv1alpha1.NetworkJobManagerFabric, Attempt: 2,
+			State: opv1alpha1.NetworkJobStateRunning, JobID: "job-in-flight-123", Message: "job running",
+		})
+		Expect(bmi.Status.IPDiscoveryJobs).To(HaveLen(1), "an attempt update replaces its prior status")
+		Expect(bmi.Status.IPDiscoveryJobs[0].Timestamp).To(Equal(firstAttemptTime))
+		recordIPDiscoveryJob(bmi, &opv1alpha1.NetworkJobStatus{
+			Task: "query_dhcp_lease", Manager: opv1alpha1.NetworkJobManagerFabric, Attempt: 3,
+			State: opv1alpha1.NetworkJobStateRetrying,
+		})
+		Expect(bmi.Status.IPDiscoveryJobs).To(HaveLen(2), "a new attempt is retained in history")
 		Expect(bmi.Status.NetworkAttachmentStatuses).To(BeEmpty())
 	})
 
@@ -163,8 +199,9 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		Expect(result.IsZero()).To(BeTrue())
 		cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonTemplateFailed))
-		Expect(cond.Message).To(Equal("two leases match"))
+		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonIPDiscoveryFailed))
+		Expect(cond.Message).To(ContainSubstring("two leases match"))
+		Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
 	})
 
 	It("fails when the NetworkAttachment does not exist", func() {
@@ -174,6 +211,29 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
 		Expect(err).NotTo(HaveOccurred())
 		cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonTemplateFailed))
+		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonIPDiscoveryFailed))
+	})
+
+	It("records LeaseNotFound after ten minutes and keeps querying", func() {
+		bmi = newBMI(attachments)
+		handoffComplete(bmi)
+		handoff := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+		handoff.LastTransitionTime = metav1.NewTime(time.Now().Add(-11 * time.Minute))
+		createAttachment(nil, opv1alpha1.NetworkJobStatus{
+			Task: "query_dhcp_lease", Manager: opv1alpha1.NetworkJobManagerFabric, Attempt: 1,
+			State: opv1alpha1.NetworkJobStateRetrying, JobID: "job-opaque-123",
+		})
+		recorder := events.NewFakeRecorder(1)
+		reconciler.EventRecorder = recorder
+
+		result, err := reconciler.reconcileIPDiscovery(ctx, bmi)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Eventually(recorder.Events).Should(Receive(ContainSubstring("Warning LeaseNotFound")))
+		cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+		Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonLeasePending))
+		Expect(cond.Message).To(ContainSubstring(leaseNotFoundMarker))
+		Expect(cond.Message).To(ContainSubstring("AAP job ID: job-opaque-123"))
 	})
 })

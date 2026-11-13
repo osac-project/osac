@@ -118,7 +118,7 @@ message Event {
     AddOnOperator add_on_operator = 37 [(cleanapi.field).private = true];
     FabricDomain fabric_domain = 38 [(cleanapi.field).private = true];
     ServiceAccount service_account = 39 [(cleanapi.field).private = true];
-    WorkloadCluster workload_cluster = 41 [(cleanapi.field).private = true];
+    WorkloadCluster workload_cluster = 41;
   }
 
   reserved 10;

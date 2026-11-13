@@ -1831,7 +1831,9 @@ var _ = Describe("Event publisher", Ordered, func() {
 					"table" text not null,
 					op text not null,
 					data jsonb not null,
-					"timestamp" timestamptz not null default now()
+					"timestamp" timestamptz not null default now(),
+					reason text,
+					severity text
 				)
 			`)
 			Expect(err).ToNot(HaveOccurred())

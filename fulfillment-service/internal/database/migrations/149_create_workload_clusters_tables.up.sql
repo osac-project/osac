@@ -54,12 +54,15 @@ alter table workload_clusters
   foreign key (tenant) references tenants (name);
 
 -- Keep the WorkloadCluster spec in the generic JSONB resource payload, but
--- project its OSAC Hub relationship into a relational table. This gives the
--- relationship a real foreign key and lets PostgreSQL enforce physical
--- uniqueness without adding a non-generic column to the resource tables.
+-- project its OSAC Hub relationship into a relational table. This lets
+-- PostgreSQL enforce physical uniqueness without adding non-generic columns
+-- to the resource tables while retaining the Hub identity after Hub deletion.
 create table workload_cluster_hub_refs (
   workload_cluster_id text not null primary key references workload_clusters(id) on delete cascade,
-  source_hub_id text not null references hubs(id),
+  -- Keep the Hub identity after the Hub is deleted so existing
+  -- WorkloadClusters remain inert registrations and can report HubUnreachable.
+  -- New registrations validate the Hub at the API layer.
+  source_hub_id text not null,
   managed_cluster_name text not null,
   constraint workload_cluster_hub_refs_unique_identity unique (source_hub_id, managed_cluster_name)
 );
@@ -92,26 +95,6 @@ $$ language plpgsql;
 create trigger sync_workload_cluster_hub_ref
   after insert or update of data, deletion_timestamp on workload_clusters
   for each row execute function sync_workload_cluster_hub_ref();
-
-create function prevent_hub_soft_delete_with_workload_clusters() returns trigger as $$
-begin
-  if old.deletion_timestamp = 'epoch' and new.deletion_timestamp != 'epoch'
-    and exists (
-      select 1
-      from workload_cluster_hub_refs
-      where source_hub_id = old.id
-    ) then
-    raise exception using
-      errcode = 'Z0003',
-      message = format('Hub ''%s'' is referenced by an active WorkloadCluster', old.id);
-  end if;
-  return new;
-end;
-$$ language plpgsql;
-
-create trigger prevent_hub_soft_delete_with_workload_clusters
-  before update of deletion_timestamp on hubs
-  for each row execute function prevent_hub_soft_delete_with_workload_clusters();
 
 insert into active_workload_clusters (id)
 select id from workload_clusters where deletion_timestamp = 'epoch';

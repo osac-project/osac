@@ -35,7 +35,7 @@ module = AnsibleModule(argument_spec={
 params = module.params
 resources = []
 if params["kind"] == "StorageClass":
-    resources = [{"metadata": {"name": name}} for name in
+    resources = [{"metadata": {"name": name}, "parameters": {"legacy-option": "retained"}} for name in
                  json.loads(os.environ["OSAC_FSTYPE_EXISTING"])]
 elif params["kind"] == "CSIDriver":
     resources = [{"metadata": {"name": params["name"]}}]
@@ -76,6 +76,7 @@ def run_provider(
     tier_names=None,
     endpoint="fixture.invalid",
     explicit_fstype=None,
+    expected_classes=None,
 ):
     for collection, names, source in (
         ("kubernetes/core", ("k8s", "k8s_info"), KUBERNETES_MODULE),
@@ -119,7 +120,20 @@ def run_provider(
                             "name": "Dispatch real provider tasks",
                             "ansible.builtin.include_role": {"name": "osac.service.storage_provider"},
                         }
-                    ],
+                    ]
+                    + (
+                        [
+                            {
+                                "name": "Verify complete returned StorageClass names",
+                                "ansible.builtin.assert": {
+                                    "that": "storage_provider_storage_class_names == expected_classes"
+                                },
+                                "vars": {"expected_classes": expected_classes},
+                            }
+                        ]
+                        if expected_classes is not None
+                        else []
+                    ),
                 }
             ]
         )
@@ -286,3 +300,77 @@ def test_lvms_creates_only_missing_class(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert [entry["metadata"]["name"] for entry in created_classes(calls)] == ["osac-fstype-test-block"]
+
+
+@pytest.mark.parametrize("fstype", [None, OPAQUE])
+def test_vast_creates_only_missing_block_class(tmp_path, fstype):
+    existing_name = "vast-block-fstype-test-existing"
+    missing_name = "vast-block-fstype-test-new"
+    result, calls = run_provider(
+        tmp_path,
+        "vast",
+        fstype,
+        protocols=("block", "block"),
+        tier_names=("existing", "new"),
+        existing=[existing_name],
+        expected_classes=[{"name": existing_name, "tier": "existing"}, {"name": missing_name, "tier": "new"}],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    classes = created_classes(calls)
+    assert [entry["metadata"]["name"] for entry in classes] == [missing_name]
+    assert classes[0]["parameters"][FSTYPE] == ("ext4" if fstype is None else fstype)
+
+
+@pytest.mark.parametrize("explicit_fstype", [None, ""])
+def test_vast_existing_block_creates_nfs_with_empty_fstype(tmp_path, explicit_fstype):
+    block_name = "vast-block-fstype-test-block"
+    nfs_name = "vast-nfs-fstype-test-nfs"
+    result, calls = run_provider(
+        tmp_path,
+        "vast",
+        "",
+        protocols=("block", "nfs"),
+        existing=[block_name],
+        explicit_fstype=explicit_fstype,
+        expected_classes=[{"name": block_name, "tier": "block"}, {"name": nfs_name, "tier": "nfs"}],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    classes = created_classes(calls)
+    assert [entry["metadata"]["name"] for entry in classes] == [nfs_name]
+    parameters = classes[0]["parameters"]
+    assert FSTYPE not in parameters
+    assert parameters["root_export"] == "/osac-fstype-test-12345678/nfs"
+    assert parameters["view_policy"] == "osac-fstype-test-nfs"
+    assert classes[0]["provisioner"] == "csi.vastdata.com"
+    assert classes[0]["volumeBindingMode"] == "Immediate"
+
+
+@pytest.mark.parametrize("explicit_fstype", [None, ""])
+def test_vast_missing_block_rejects_empty_fstype_before_writes(tmp_path, explicit_fstype):
+    result, calls = run_provider(
+        tmp_path,
+        "vast",
+        "",
+        protocols=("nfs", "block"),
+        existing=["vast-nfs-fstype-test-nfs"],
+        explicit_fstype=explicit_fstype,
+    )
+    assert result.returncode != 0
+    assert "must be defined and nonempty for block StorageClasses" in result.stdout
+    assert created_classes(calls) == []
+    assert len(calls) == 1
+
+
+def test_vast_all_existing_returns_complete_class_names(tmp_path):
+    names = ["vast-block-fstype-test-block", "vast-nfs-fstype-test-nfs"]
+    result, calls = run_provider(
+        tmp_path,
+        "vast",
+        "",
+        protocols=("block", "nfs"),
+        existing=names,
+        expected_classes=[{"name": name, "tier": tier} for name, tier in zip(names, ("block", "nfs"), strict=True)],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert created_classes(calls) == []
+    assert len(calls) == 1

@@ -14,10 +14,10 @@ not consume this setting.
 
 This setting does not migrate existing StorageClasses or volumes. LVMS skips
 existing class names; VAST skips provisioning when all requested classes
-already exist. If only some requested VAST classes exist, the existing
-provisioning path still submits all requested classes, and immutable parameter
-differences can be rejected by Kubernetes. Changing the setting does not
-update an existing class's filesystem type.
+already exist and creates only missing block classes on partial requests.
+If only NFS classes are missing, VAST does not validate the block filesystem
+setting or resubmit existing block classes. Changing the setting does not
+update an existing class's immutable filesystem parameters.
 
 ## Hosted cluster DNS
 

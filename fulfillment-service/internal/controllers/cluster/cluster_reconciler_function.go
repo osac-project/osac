@@ -434,10 +434,11 @@ func (t *task) buildSpec(ctx context.Context) (osacv1alpha1.ClusterOrderSpec, er
 		operatorNames = append(operatorNames, operator.GetName())
 	}
 	spec := osacv1alpha1.ClusterOrderSpec{
-		TemplateID:         controllers.RefKeyStr(t.cluster.GetSpec().GetTemplate()),
-		TemplateParameters: templateParameters,
-		NodeRequests:       t.prepareNodeRequests(),
-		AddOnOperators:     operatorNames,
+		TemplateID:                     controllers.RefKeyStr(t.cluster.GetSpec().GetTemplate()),
+		TemplateParameters:             templateParameters,
+		NodeRequests:                   t.prepareNodeRequests(),
+		AddOnOperators:                 operatorNames,
+		SupportsAutomaticCaaSEndpoints: t.cluster.GetSpec().GetSupportsAutomaticCaasEndpoints(),
 	}
 
 	// Add explicit spec fields if present:
@@ -489,8 +490,10 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 		}
 		spec.PullSecret = pullSecret
 	}
-	if clusterSpec.HasSshPublicKey() {
-		spec.SSHPublicKey = clusterSpec.GetSshPublicKey()
+	if clusterSpec.GetSshKey() != nil {
+		spec.SSHKey = &osacv1alpha1.FulfillmentSecretReference{
+			ID: clusterSpec.GetSshKey().GetId(),
+		}
 	}
 	// Resolve version reference to a release image via the ClusterVersion resource.
 	if versionRef := clusterSpec.GetVersion(); versionRef != nil && versionRef.GetName() != "" {

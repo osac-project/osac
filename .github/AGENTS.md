@@ -21,8 +21,9 @@ plus a native approval on the head commit, and the merge queue.
   suites for a merge queue entry. `workflows/e2e-review-relay.yml` only finishes, so a review wakes `e2e-pr.yml`. `workflows/e2e-comment.yml` posts the placeholder of the control comment when a pull request opens (its finished run is deleted by `e2e-pr.yml`). The same run turns on auto-merge for a pull request that has an approval that counts, so it adds no check.
 - The `e2e-<suite>-full-install.yml` workflows hold one job each, no gating; they run on a schedule (every 5 hours), by hand
   and when called.
-- `workflow_run` lists workflows by exact name (`CI`, `E2E review relay`, `E2E comment` and the six `E2E <Suite> PR suite` workflows in `e2e-pr.yml`): keep the
-  list in step when one is renamed.
+- `workflow_run` lists workflows by exact name (`CI`, `E2E review relay`, `E2E comment` and the six `E2E <Suite> PR suite` workflows in `e2e-pr.yml`; `e2e-pr-rerun.yml` lists the six suite workflows): keep the
+  lists in step when one is renamed. `workflows/e2e-pr-rerun.yml` tells the pull request that a suite run again with GitHub's button goes
+  (its line and the `E2E` check), because a re-run sends `workflow_run` `in_progress` and no `requested`.
 - Every suite's policy job names a `workflow:` (`workflows/e2e-pr-<suite>.yml`): on a pull request it runs as a run of its own,
   started by the decision with `workflow_dispatch`, and has no job in `e2e-pr.yml` (the merge queue still runs it as a job). See `.github/CI.md`.
 - Path filters: `tests/e2e/**` is the full-install suite and must still make the E2E apply (`e2e-suite` filter). Do not fold
@@ -98,5 +99,6 @@ success; a tag existing is not evidence its publish happened.
 | Touched area | Required coverage | Repository-root command | Boundary |
 | --- | --- | --- | --- |
 | Umbrella release notes, package inventory, Latest selection, and Slack publication/staging notifications | [DEV] Unit | `python3 -m unittest discover -s .github/scripts -p test_umbrella_release.py -v` (requires PyYAML 6.0.3, Bash, and jq) | Runs the actual Python helpers and notification shell with synthetic chart archives and captured GitHub/Slack operations; no live publication or Konflux cluster. |
+| Release versions: `RELEASE_LINE`, the version helpers in `osac-installer/scripts/lib.sh`, the `prepare` job's version steps, `resolve-chart-version` in `.tekton/*-chart/release.yaml` | [DEV] Unit | `python3 -m unittest discover -s .github/scripts -p test_release_versioning.py -v` (requires PyYAML 6.0.3, Bash, git, and jq) | Runs the actual workflow steps and Tekton scripts in throwaway git repositories; no Konflux cluster, no registry. |
 
 See [release automation test boundaries](../docs/INTEGRATION-TESTING.md#release-automation).

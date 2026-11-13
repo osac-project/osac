@@ -113,7 +113,7 @@ spec:
           - name: OSAC_INSTALLATION_API_CA_FILE
             value: "/etc/osac/secret-api/ca/bundle.pem"
           {{- end }}
-          {{- if .Values.netbox.enabled }}
+          {{- if .Values.secretAPI.url }}
           - name: OSAC_SECRET_API_URL
             value: {{ .Values.secretAPI.url | quote }}
           - name: OSAC_SECRET_API_ISSUER_URL

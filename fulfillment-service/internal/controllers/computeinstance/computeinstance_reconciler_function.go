@@ -255,11 +255,9 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 	}
 
 	if reconcileErr != nil {
+		// Return the write error too, so the reconciler loop can retry a conflict.
 		if updateErr != nil {
-			r.logger.WarnContext(ctx, "Failed to persist status after reconciliation error",
-				slog.String("reconcile_error", reconcileErr.Error()),
-				slog.String("update_error", updateErr.Error()),
-			)
+			return errors.Join(reconcileErr, updateErr)
 		}
 		return reconcileErr
 	}

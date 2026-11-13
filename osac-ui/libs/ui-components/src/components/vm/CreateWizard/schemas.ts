@@ -2,8 +2,11 @@ import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
 import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/network-attachment';
+import { intSchema } from '@osac/ui-components/validation/number';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
+
+import type { ComputeInstanceWizardValues } from './fields';
 
 export type VmWizardStepId =
   | 'catalog'
@@ -45,38 +48,14 @@ const buildComputeInstanceFieldDefinitions = (t: TFunction) => {
         name: yup.string(),
       }),
     ),
-    specUserData: lockedField(
-      yup.object({
-        source: yup.string().oneOf(['inline', 'secret']).required(),
-        inline: yup.string().when('source', {
-          is: 'inline',
-          then: () => userDataSchema(t),
-        }),
-        secret: yup.string(),
-      }),
-    ),
     specBootDisk: yup.object({
-      sizeGib: lockedField(
-        yup
-          .string()
-          .test(
-            'boot-disk-number',
-            t('catalogProvision.validation.bootDiskNumber'),
-            (value) => !value?.trim() || !Number.isNaN(Number(value)),
-          )
-          .required(t('catalogProvision.validation.required')),
-      ),
+      sizeGib: lockedField(intSchema(t).required(t('This field is required'))),
       storageTier: lockedField(storageTierSchema(t)),
     }),
     specAdditionalDisks: lockedField(
       yup.array(
         yup.object({
-          sizeGib: yup
-            .string()
-            .test('additional-disk-number', t('Additional disk size must be a number'), (value) => {
-              const size = Number(value?.trim());
-              return Number.isInteger(size) && size >= 1 && size <= 16384;
-            }),
+          sizeGib: intSchema(t, 1, 16384).required(t('Disk size is required')),
           storageTier: storageTierSchema(t),
         }),
       ),
@@ -160,10 +139,21 @@ export const buildComputeInstanceStepSchema = (
       });
     case 'access':
       return yup.object({
-        spec: yup.object({
-          sshKey: lockedField(yup.string()),
-          userData: fields.specUserData,
-        }),
+        spec: yup.lazy((spec: ComputeInstanceWizardValues['spec'] | undefined) =>
+          yup.object({
+            sshKey: lockedField(yup.string()),
+            userData: lockedField(
+              yup.object({
+                source: yup.string().oneOf(['inline', 'secret']).required(),
+                inline: yup.string().when('source', {
+                  is: 'inline',
+                  then: () => userDataSchema(t, spec?.guestOsFamily),
+                }),
+                secret: yup.string(),
+              }),
+            ),
+          }),
+        ),
       });
     default:
       return undefined;

@@ -36,6 +36,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
+	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -47,6 +48,7 @@ type PrivateClustersServerBuilder struct {
 	filterDesc                   protoreflect.MessageDescriptor
 	addOnOperatorResolverFactory addOnOperatorResolverFactory
 	networkingSettings           *NetworkingSettings
+	secretStore                  vault.SecretStore
 }
 
 var _ privatev1.ClustersServer = (*PrivateClustersServer)(nil)
@@ -59,18 +61,28 @@ type PrivateClustersServer struct {
 	catalogItemsDao           *dao.GenericDAO[*privatev1.ClusterCatalogItem]
 	clusterVersionsDao        *dao.GenericDAO[*privatev1.ClusterVersion]
 	networkClassesDao         *dao.GenericDAO[*privatev1.NetworkClass]
+	virtualNetworksDao        *dao.GenericDAO[*privatev1.VirtualNetwork]
 	subnetsDao                *dao.GenericDAO[*privatev1.Subnet]
 	securityGroupsDao         *dao.GenericDAO[*privatev1.SecurityGroup]
+	natGatewaysDao            *dao.GenericDAO[*privatev1.NATGateway]
 	externalIPPoolDao         *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao             *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao   *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 	secretsDao                *dao.GenericDAO[*privatev1.Secret]
 	addOnOperators            *addOnOperatorResourceResolver
 	generic                   *GenericServer[*privatev1.Cluster]
+	secretStore               vault.SecretStore
 	lifecycle                 *externalIPLifecycle
 	bareMetalInstanceTypesDao *dao.GenericDAO[*privatev1.BareMetalInstanceType]
 	tenantsDao                *dao.GenericDAO[*privatev1.Tenant]
 	settings                  NetworkingSettings
+}
+
+// SetSecretStore sets the store used to load Vault-backed SSH-key Secret data
+// during reference validation.
+func (b *PrivateClustersServerBuilder) SetSecretStore(value vault.SecretStore) *PrivateClustersServerBuilder {
+	b.secretStore = value
+	return b
 }
 
 func NewPrivateClustersServer() *PrivateClustersServerBuilder {
@@ -195,8 +207,26 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		return
 	}
 
-	// Create the subnets DAO:
+	// Create the networking resource DAOs:
+	virtualNetworksDao, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	subnetsDao, err := dao.NewGenericDAO[*privatev1.Subnet]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
+	natGatewaysDao, err := dao.NewGenericDAO[*privatev1.NATGateway]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -277,14 +307,17 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		settings:                  resolveNetworkingSettings(b.networkingSettings),
 		clusterVersionsDao:        clusterVersionsDao,
 		networkClassesDao:         networkClassesDao,
+		virtualNetworksDao:        virtualNetworksDao,
 		subnetsDao:                subnetsDao,
 		securityGroupsDao:         securityGroupsDao,
+		natGatewaysDao:            natGatewaysDao,
 		externalIPPoolDao:         externalIPPoolDao,
 		externalIPDao:             externalIPDao,
 		externalIPAttachmentDao:   externalIPAttachmentDao,
 		secretsDao:                secretsDao,
 		addOnOperators:            addOnOperators,
 		generic:                   generic,
+		secretStore:               b.secretStore,
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,
@@ -318,7 +351,8 @@ func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.C
 	if err != nil {
 		return
 	}
-	if !isDryRun(ctx) && response.GetObject().GetSpec().GetAutoExternalIpAttachment() {
+	if !isDryRun(ctx) && s.settings.ProvisioningEnabled &&
+		response.GetObject().GetSpec().GetAutoExternalIpAttachment() {
 		err = s.autoProvisionExternalIPs(ctx, response.GetObject())
 		if err != nil {
 			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
@@ -356,23 +390,36 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	if err != nil {
 		return
 	}
+	supportsAutomaticCAASEndpoints := template.GetCapabilities()[supportsAutomaticCAASEndpointsCapability]
+	candidate.GetSpec().SetSupportsAutomaticCaasEndpoints(supportsAutomaticCAASEndpoints)
+	if supportsAutomaticCAASEndpoints {
+		if spec := candidate.GetSpec(); spec.HasAutoExternalIpAttachment() && !spec.GetAutoExternalIpAttachment() {
+			return grpcstatus.Error(grpccodes.InvalidArgument,
+				"spec.auto_external_ip_attachment must be omitted or true for templates that support automatic CaaS endpoints")
+		}
+		// The template declares that the cluster uses the automatic CaaS
+		// endpoint lifecycle. Persist that contract so the ClusterOrder
+		// reconciler creates both endpoints when provider networking is enabled.
+		candidate.GetSpec().SetAutoExternalIpAttachment(true)
+	}
 	if err := s.validateCreatedNodeSetVersions(ctx, candidate); err != nil {
 		return err
 	}
-	if key := spec.GetSshPublicKey(); key != "" {
-		if err = validateOpenSSHPublicKey(key); err != nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
+	if spec.GetSshKey() != nil {
+		canonical, keyErr := resolveAndCanonicalizeSSHKeyReference(ctx, s.logger, s.secretsDao, s.secretStore,
+			candidate.GetMetadata(), spec.GetSshKey())
+		if keyErr != nil {
+			return keyErr
 		}
+		spec.SetSshKey(canonical)
 	}
 
 	if err = s.validateAndExpandAddOnOperators(ctx, candidate, clusterVersion); err != nil {
 		return
 	}
 
-	if candidate.GetSpec().GetNetworkAttachment() == nil {
-		if err = s.injectDefaultNetworkAttachment(ctx, candidate); err != nil {
-			return
-		}
+	if err = s.applyDefaultNetworkAttachment(ctx, candidate); err != nil {
+		return
 	}
 
 	// Resolve fabric_interface for each node set when the cluster has a
@@ -388,6 +435,9 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 	if err = s.validateNetworkAttachmentState(ctx, candidate); err != nil {
 		return
 	}
+	if err = s.validateClusterNATGatewayReady(ctx, candidate); err != nil {
+		return
+	}
 	// The resolved creation reference is the initial observed baseline until
 	// HyperShift reports the installed versions.
 	candidate.GetStatus().SetObservedVersion(clusterVersion.GetSpec().GetVersion())
@@ -401,6 +451,8 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 
 	return
 }
+
+const supportsAutomaticCAASEndpointsCapability = "supports_automatic_caas_endpoints"
 
 // resolveCreationSource accepts exactly one provisioning source: spec.catalog_item or
 // spec.template. For a Catalog Item it finds the item's Template and applies its field rules;
@@ -473,7 +525,7 @@ func (s *PrivateClustersServer) validateClusterUpdateRequest(ctx context.Context
 func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, current, candidate *privatev1.Cluster,
 	request *privatev1.ClustersUpdateRequest, resolvedTarget *privatev1.ClusterVersion) error {
 	if current.GetMetadata().GetTenant() != candidate.GetMetadata().GetTenant() {
-		return grpcstatus.Error(grpccodes.InvalidArgument, "metadata.tenant is immutable")
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'metadata.tenant' is immutable")
 	}
 	// An unmasked metadata-only request omits spec. Keep the stored spec so its
 	// version and node sets are not interpreted as a metering-relevant change.
@@ -512,7 +564,7 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 	if err := s.initializeAddedNodeSetVersions(ctx, current, candidate); err != nil {
 		return err
 	}
-	if err := s.validateUpdatedClusterSpec(current, candidate, mask); err != nil {
+	if err := s.validateUpdatedClusterSpec(ctx, current, candidate, mask); err != nil {
 		return err
 	}
 	return s.prepareUpdatedClusterReferences(ctx, current, candidate, mask, sizeOnlyNodeSets)
@@ -543,15 +595,31 @@ func (s *PrivateClustersServer) initializeAddedNodeSetVersions(ctx context.Conte
 	return nil
 }
 
-func (s *PrivateClustersServer) validateUpdatedClusterSpec(current, candidate *privatev1.Cluster,
+func (s *PrivateClustersServer) validateUpdatedClusterSpec(ctx context.Context, current, candidate *privatev1.Cluster,
 	mask *fieldmaskpb.FieldMask) error {
-	if updateIncludesField(mask, "spec.ssh_public_key") {
-		if key := candidate.GetSpec().GetSshPublicKey(); key != "" {
-			if err := validateOpenSSHPublicKey(key); err != nil {
-				return grpcstatus.Errorf(grpccodes.InvalidArgument, "spec.ssh_public_key: %s", err)
-			}
+	if updateIncludesField(mask, "spec.ssh_key") {
+		existingKey := current.GetSpec().GetSshKey()
+		candidateKey := candidate.GetSpec().GetSshKey()
+		if !sameImmutableSSHKeyReference(existingKey, candidateKey) {
+			return grpcstatus.Error(grpccodes.InvalidArgument,
+				"cannot change spec.ssh_key: ssh_key is immutable after creation")
+		}
+		if existingKey != nil {
+			candidate.GetSpec().SetSshKey(cloneMessage(existingKey))
 		}
 	}
+	const supportsAutomaticCAASEndpointsPath = "spec.supports_automatic_caas_endpoints"
+	currentSupportsAutomaticCAASEndpoints := current.GetSpec().GetSupportsAutomaticCaasEndpoints()
+	candidateSupportsAutomaticCAASEndpoints := candidate.GetSpec().GetSupportsAutomaticCaasEndpoints()
+	if updateIncludesField(mask, supportsAutomaticCAASEndpointsPath) &&
+		currentSupportsAutomaticCAASEndpoints != candidateSupportsAutomaticCAASEndpoints &&
+		(!isPublicAPIView(ctx) || updateMaskIncludesExactPath(mask, supportsAutomaticCAASEndpointsPath)) {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"cannot change spec.supports_automatic_caas_endpoints: template capability is immutable")
+	}
+	// The capability is server-owned and absent from public Cluster specs. Keep
+	// it when a parent-spec mask or full-object update replaces the public spec.
+	candidate.GetSpec().SetSupportsAutomaticCaasEndpoints(currentSupportsAutomaticCAASEndpoints)
 	if err := s.validateAddOnOperatorImmutability(current, candidate, mask); err != nil {
 		return err
 	}
@@ -1106,9 +1174,13 @@ func (s *PrivateClustersServer) resolveTargetTenant(ctx context.Context, cluster
 	return s.tenancyLogic.DetermineDefaultTenant(ctx)
 }
 
-// injectDefaultNetworkAttachment populates spec.network_attachment from the
-// tenant's default subnet and security group when the caller omits it.
-func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Context,
+func clusterSecurityGroupsMissing(att *privatev1.ClusterNetworkAttachment) bool {
+	return att == nil || len(att.GetSecurityGroups()) == 0
+}
+
+// applyDefaultNetworkAttachment completes singular network_attachment at Create time.
+// Missing fields come from tenant defaults, while supplied fields are preserved.
+func (s *PrivateClustersServer) applyDefaultNetworkAttachment(ctx context.Context,
 	cluster *privatev1.Cluster) error {
 	tenant, err := s.resolveTargetTenant(ctx, cluster)
 	if err != nil {
@@ -1125,42 +1197,156 @@ func (s *PrivateClustersServer) injectDefaultNetworkAttachment(ctx context.Conte
 	}
 
 	spec := cluster.GetSpec()
-	subnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant, cluster.GetMetadata().GetProject())
+	project := cluster.GetMetadata().GetProject()
+	attachment := spec.GetNetworkAttachment()
+	if attachment != nil && refKey(attachment.GetSubnet()) != "" && !clusterSecurityGroupsMissing(attachment) {
+		return nil
+	}
+	if attachment == nil {
+		attachment = privatev1.ClusterNetworkAttachment_builder{}.Build()
+		spec.SetNetworkAttachment(attachment)
+	}
+
+	usedDefaults := false
+	var resolvedSubnet *privatev1.Subnet
+	var defaultVirtualNetwork *privatev1.VirtualNetwork
+	if refKey(attachment.GetSubnet()) == "" {
+		resolvedSubnet, defaultVirtualNetwork, err = s.resolveClusterDefaultSubnet(ctx, tenant, project)
+		if err != nil {
+			return err
+		}
+		attachment.SetSubnet(privatev1.SubnetLocalReference_builder{Id: resolvedSubnet.GetId()}.Build())
+		usedDefaults = true
+	}
+
+	if clusterSecurityGroupsMissing(attachment) {
+		if err := s.applyDefaultClusterSecurityGroup(ctx, cluster.GetMetadata(), tenant, project,
+			attachment, resolvedSubnet, defaultVirtualNetwork); err != nil {
+			return err
+		}
+		usedDefaults = true
+	}
+
+	if usedDefaults {
+		if err := requireDefaultNetworkingReady(ctx, s.tenantsDao, tenant); err != nil {
+			return err
+		}
+		s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachment fields",
+			slog.String("subnet_id", refKey(attachment.GetSubnet())),
+			slog.Any("security_group_ids", attachment.GetSecurityGroups()),
+		)
+	}
+	return nil
+}
+
+func (s *PrivateClustersServer) resolveClusterDefaultSubnet(ctx context.Context, tenant, project string) (
+	*privatev1.Subnet, *privatev1.VirtualNetwork, error) {
+	defaultSubnet, err := findDefaultSubnet(ctx, s.logger, s.subnetsDao, tenant, project)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to look up default subnet", slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default subnet")
+		return nil, nil, defaultResourceLookupFailure(err, "subnet")
 	}
+	if defaultSubnet == nil {
+		return nil, nil, grpcstatus.Error(grpccodes.InvalidArgument,
+			"spec.network_attachment: subnet is required and no tenant default subnet is available")
+	}
+	if err := validateResolvedSubnetReady(defaultSubnet, defaultSubnet.GetId(), " in spec.network_attachment"); err != nil {
+		return nil, nil, err
+	}
+
+	defaultVirtualNetwork, err := s.lookupDefaultVirtualNetwork(ctx, tenant, project)
+	if err != nil {
+		return nil, nil, err
+	}
+	if defaultVirtualNetwork == nil {
+		return nil, nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"tenant default networking is misconfigured: default subnet %q has no default VirtualNetwork",
+			defaultSubnet.GetId())
+	}
+	if err := validateDefaultVirtualNetworkReady(defaultVirtualNetwork); err != nil {
+		return nil, nil, err
+	}
+	defaultVirtualNetworkID := defaultVirtualNetwork.GetId()
+	subnetVirtualNetworkID := refKey(defaultSubnet.GetSpec().GetVirtualNetwork())
+	if subnetVirtualNetworkID == "" || subnetVirtualNetworkID != defaultVirtualNetworkID {
+		return nil, nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"tenant default networking is misconfigured: default subnet %q references VirtualNetwork %q, but the tenant default VirtualNetwork is %q",
+			defaultSubnet.GetId(), subnetVirtualNetworkID, defaultVirtualNetworkID)
+	}
+	return defaultSubnet, defaultVirtualNetwork, nil
+}
+
+func (s *PrivateClustersServer) applyDefaultClusterSecurityGroup(ctx context.Context, owner *privatev1.Metadata,
+	tenant, project string, attachment *privatev1.ClusterNetworkAttachment, subnet *privatev1.Subnet,
+	defaultVirtualNetwork *privatev1.VirtualNetwork) error {
 	if subnet == nil {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "tenant default networking is not ready")
+		var err error
+		subnet, err = resolveNetworkingReference(ctx, s.subnetsDao, owner,
+			attachment.GetSubnet(), "subnet", grpccodes.NotFound, false)
+		if err != nil {
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"spec.network_attachment: subnet '%s' does not exist", refKey(attachment.GetSubnet()))
+			}
+			return err
+		}
+		if err := validateResolvedSubnetReady(subnet, refKey(attachment.GetSubnet()), " in spec.network_attachment"); err != nil {
+			return err
+		}
 	}
-	if err := requireDefaultNetworkingReady(ctx, s.tenantsDao, tenant); err != nil {
+	if defaultVirtualNetwork == nil {
+		var err error
+		defaultVirtualNetwork, err = s.lookupDefaultVirtualNetwork(ctx, tenant, project)
+		if err != nil {
+			return err
+		}
+	}
+
+	subnetVirtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
+	if defaultVirtualNetwork == nil || subnetVirtualNetworkID != defaultVirtualNetwork.GetId() {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"spec.network_attachment: security_groups are required when the subnet is not on the tenant default VirtualNetwork")
+	}
+	if err := validateDefaultVirtualNetworkReady(defaultVirtualNetwork); err != nil {
 		return err
 	}
 
-	attachment := privatev1.ClusterNetworkAttachment_builder{
-		Subnet: privatev1.SubnetLocalReference_builder{Id: subnet.GetId()}.Build(),
-	}.Build()
-
-	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
-	sg, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao, virtualNetworkID, tenant, cluster.GetMetadata().GetProject())
+	securityGroup, err := findDefaultSecurityGroup(ctx, s.logger, s.securityGroupsDao,
+		subnetVirtualNetworkID, tenant, project)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "failed to look up default security group", slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to look up default security group")
+		return defaultResourceLookupFailure(err, "security group")
 	}
-	if sg == nil {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "tenant default networking is not ready")
+	if securityGroup == nil {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"spec.network_attachment: security_groups are required and no tenant default security group is available")
+	}
+	if err := validateResolvedSecurityGroup(securityGroup, securityGroup.GetId(),
+		" in spec.network_attachment.security_groups[0]", subnetVirtualNetworkID); err != nil {
+		return err
 	}
 	attachment.SetSecurityGroups([]*privatev1.SecurityGroupLocalReference{
-		privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build(),
+		privatev1.SecurityGroupLocalReference_builder{Id: securityGroup.GetId()}.Build(),
 	})
+	return nil
+}
 
-	spec.SetNetworkAttachment(attachment)
-
-	attrs := []slog.Attr{
-		slog.String("subnet_id", subnet.GetId()),
-		slog.String("security_group_id", sg.GetId()),
+func (s *PrivateClustersServer) lookupDefaultVirtualNetwork(ctx context.Context, tenant, project string) (
+	*privatev1.VirtualNetwork, error) {
+	defaultVirtualNetwork, err := findDefaultVirtualNetwork(ctx, s.logger, s.virtualNetworksDao, tenant, project)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "failed to look up default virtual network", slog.Any("error", err))
+		return nil, defaultResourceLookupFailure(err, "virtual network")
 	}
-	s.logger.LogAttrs(ctx, slog.LevelInfo, "auto-injected default network attachment", attrs...)
+	return defaultVirtualNetwork, nil
+}
+
+func validateDefaultVirtualNetworkReady(virtualNetwork *privatev1.VirtualNetwork) error {
+	if virtualNetwork.GetMetadata().HasDeletionTimestamp() ||
+		virtualNetwork.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"default VirtualNetwork '%s' is not READY", virtualNetwork.GetId())
+	}
 	return nil
 }
 
@@ -1242,6 +1428,53 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 	return validateNetworkingHubReferences(canonicalHubID, hubReferences...)
 }
 
+// validateClusterNATGatewayReady enforces the CaaS create gate when provider
+// networking is enabled. This runs after attachment defaulting and validation,
+// so explicit and defaulted attachments use the same readiness check.
+func (s *PrivateClustersServer) validateClusterNATGatewayReady(ctx context.Context, cluster *privatev1.Cluster) error {
+	if !s.settings.ProvisioningEnabled || cluster == nil || cluster.GetSpec() == nil ||
+		cluster.GetSpec().GetNetworkAttachment() == nil {
+		return nil
+	}
+
+	attachment := cluster.GetSpec().GetNetworkAttachment()
+	subnetKey := refKey(attachment.GetSubnet())
+	subnet, err := resolveNetworkingReference(ctx, s.subnetsDao, cluster.GetMetadata(), attachment.GetSubnet(),
+		"subnet", grpccodes.NotFound, true)
+	if err != nil {
+		return err
+	}
+	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
+	if virtualNetworkID == "" {
+		return grpcstatus.Errorf(grpccodes.Internal,
+			"spec.network_attachment: subnet '%s' has no virtual network reference", subnetKey)
+	}
+	// NATGateway deletion locks the VirtualNetwork before checking Cluster references.
+	// Take the same lock so a concurrent delete cannot pass its reference check while this
+	// Cluster is still being prepared.
+	if _, err := lockRecord(ctx, s.virtualNetworksDao, virtualNetworkID); err != nil {
+		return err
+	}
+
+	gateways, err := s.natGatewaysDao.List().SetFilter(fmt.Sprintf(
+		"this.spec.virtual_network.id == %q", virtualNetworkID)).Do(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "failed to check Cluster NATGateway readiness", slog.Any("error", err))
+		return grpcstatus.Error(grpccodes.Internal, "failed to check Cluster NATGateway readiness")
+	}
+	for _, gateway := range gateways.GetItems() {
+		if gateway.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		if gateway.GetStatus().GetState() == privatev1.NATGatewayState_NAT_GATEWAY_STATE_READY {
+			return nil
+		}
+	}
+
+	return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		"spec.network_attachment: VirtualNetwork '%s' does not have a READY NATGateway", virtualNetworkID)
+}
+
 // validateAutoExternalIPImmutability prevents changing auto_external_ip_attachment after creation.
 func (s *PrivateClustersServer) validateAutoExternalIPImmutability(ctx context.Context,
 	request *privatev1.ClustersUpdateRequest) error {
@@ -1303,6 +1536,10 @@ func selectClusterFabricInterface(instanceType *privatev1.BareMetalInstanceType)
 // autoProvisionExternalIPs creates the API and ingress ExternalIPs. The ClusterOrder
 // reconciler requests their ExternalIPAttachments once the cluster endpoints are ready.
 func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cluster *privatev1.Cluster) error {
+	if !s.settings.ProvisioningEnabled {
+		return nil
+	}
+
 	pool, err := SelectExternalIPPool(ctx, s.logger, s.externalIPPoolDao, 2)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)

@@ -101,7 +101,7 @@ func resolveDiskImage(
 func resolveDiskImageReference(ctx context.Context, resourceDao *dao.GenericDAO[*privatev1.DiskImage], scope referenceScope, ref *privatev1.DiskImageReference, source string) (*privatev1.DiskImage, error) {
 	var err error
 	var resolved *privatev1.DiskImage
-	if ref.GetId() == "" && ref.GetName() != "" && !ref.GetShared() && ref.GetProject() == "" {
+	if ref.GetId() == "" && ref.GetName() != "" && ref.GetTenant() == "" && !ref.GetShared() && ref.GetProject() == "" {
 		resolved, err = resolveDiskImage(
 			ctx, resourceDao, ref.GetName(), scope.tenant, source,
 		)
@@ -116,7 +116,7 @@ func resolveDiskImageReference(ctx context.Context, resourceDao *dao.GenericDAO[
 	if err != nil {
 		return nil, err
 	}
-	if err := validateDependencyOwnerScope(scope, resolved.GetMetadata(), "disk image", source); err != nil {
+	if err := validateDependencyOwnerScope(scope, resolved.GetMetadata(), ref.GetTenant(), "disk image", source); err != nil {
 		return nil, err
 	}
 	return resolved, nil
@@ -127,7 +127,7 @@ func resolveDiskImageReference(ctx context.Context, resourceDao *dao.GenericDAO[
 func resolveLockedDiskImageReference(ctx context.Context, resourceDao *dao.GenericDAO[*privatev1.DiskImage], scope referenceScope, ref *privatev1.DiskImageReference, source string) (*privatev1.DiskImage, error) {
 	var err error
 	var resolved *privatev1.DiskImage
-	if ref.GetId() == "" && ref.GetName() != "" && !ref.GetShared() && ref.GetProject() == "" {
+	if ref.GetId() == "" && ref.GetName() != "" && ref.GetTenant() == "" && !ref.GetShared() && ref.GetProject() == "" {
 		resolved, err = resolveDiskImage(ctx, resourceDao, ref.GetName(), scope.tenant, source)
 		if err != nil {
 			return nil, err
@@ -144,7 +144,7 @@ func resolveLockedDiskImageReference(ctx context.Context, resourceDao *dao.Gener
 			return nil, err
 		}
 	}
-	if err := validateDependencyOwnerScope(scope, resolved.GetMetadata(), "disk image", source); err != nil {
+	if err := validateDependencyOwnerScope(scope, resolved.GetMetadata(), ref.GetTenant(), "disk image", source); err != nil {
 		return nil, err
 	}
 	return resolved, nil

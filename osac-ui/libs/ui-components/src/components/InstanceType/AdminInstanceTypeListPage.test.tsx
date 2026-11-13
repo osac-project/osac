@@ -1,17 +1,20 @@
 import { Route, Routes } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
 import { screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   InstanceTypeSchema,
   InstanceTypeState,
+  InstanceTypes,
   InstanceTypesDeleteResponseSchema,
   type InstanceTypesListResponse,
   InstanceTypesListResponseSchema,
   InstanceTypesUpdateResponseSchema,
   type InstanceType as PrivateInstanceType,
 } from '@osac/types/private';
+import { useListResource } from '@osac/ui-components/api/use-resource';
+import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 import { mockQueryResult } from '@osac/ui-components/test-utils/query';
 
 import AdminInstanceTypeListPage from './AdminInstanceTypeListPage';
@@ -22,10 +25,11 @@ vi.mock('@osac/ui-components/api/use-resource', async (importOriginal) => {
   return { ...actual, useListResource: vi.fn() };
 });
 
-const { useListResource } = await import('@osac/ui-components/api/use-resource');
 const { useListResource: useListResourceActual } = await vi.importActual<
   typeof import('@osac/ui-components/api/use-resource')
 >('@osac/ui-components/api/use-resource');
+
+const VIEW_PREF_KEY = getViewTypePrefKey('admin-instance-types-list');
 
 const makeInstanceType = (
   id: string,
@@ -47,12 +51,36 @@ const makeInstanceType = (
     },
   });
 
-const makeListResponse = (items: PrivateInstanceType[]): InstanceTypesListResponse =>
+const makeListResponse = (
+  items: PrivateInstanceType[],
+  total = items.length,
+): InstanceTypesListResponse =>
   create(InstanceTypesListResponseSchema, {
     items,
     size: items.length,
-    total: items.length,
+    total,
   });
+
+const mockListSuccess = (items: PrivateInstanceType[], total?: number) =>
+  mockQueryResult<InstanceTypesListResponse>({
+    data: makeListResponse(items, total),
+    isLoading: false,
+    error: null,
+  });
+
+const mockTotalsSuccess = (total: number) =>
+  mockQueryResult<InstanceTypesListResponse>({
+    data: makeListResponse([], total),
+    isLoading: false,
+    error: null,
+  });
+
+const setupDefaultListMocks = (items: PrivateInstanceType[], total?: number) => {
+  vi.mocked(useListResource).mockImplementation((_service, request) => {
+    const limit = (request as { limit?: number })?.limit;
+    return limit === 0 ? mockTotalsSuccess(total ?? items.length) : mockListSuccess(items, total);
+  });
+};
 
 const renderPage = () => renderWithProviders(<AdminInstanceTypeListPage />);
 
@@ -69,24 +97,25 @@ const renderPageWithCreateRoute = () =>
   );
 
 describe('AdminInstanceTypeListPage', () => {
+  beforeEach(() => {
+    localStorage.setItem(VIEW_PREF_KEY, 'list');
+  });
+
   afterEach(() => {
     vi.mocked(useListResource).mockReset();
+    localStorage.removeItem(VIEW_PREF_KEY);
   });
 
   it('renders the required columns and lifecycle labels for populated data', () => {
-    vi.mocked(useListResource).mockReturnValue(
-      mockQueryResult<InstanceTypesListResponse>({
-        data: makeListResponse([
-          makeInstanceType('active-1', InstanceTypeState.ACTIVE, {
-            pciDeviceSelector: '10DE:20B0',
-            resourceName: 'nvidia.com/A100',
-            count: 2,
-          }),
-          makeInstanceType('deprecated-1', InstanceTypeState.DEPRECATED),
-          makeInstanceType('obsolete-1', InstanceTypeState.OBSOLETE),
-        ]),
+    setupDefaultListMocks([
+      makeInstanceType('active-1', InstanceTypeState.ACTIVE, {
+        pciDeviceSelector: '10DE:20B0',
+        resourceName: 'nvidia.com/A100',
+        count: 2,
       }),
-    );
+      makeInstanceType('deprecated-1', InstanceTypeState.DEPRECATED),
+      makeInstanceType('obsolete-1', InstanceTypeState.OBSOLETE),
+    ]);
 
     renderPage();
 
@@ -113,6 +142,7 @@ describe('AdminInstanceTypeListPage', () => {
       mockQueryResult<InstanceTypesListResponse>({
         data: undefined,
         isLoading: true,
+        error: null,
       }),
     );
 
@@ -122,28 +152,30 @@ describe('AdminInstanceTypeListPage', () => {
   });
 
   it('shows the empty state when no instance types are returned', () => {
-    vi.mocked(useListResource).mockReturnValue(
-      mockQueryResult<InstanceTypesListResponse>({
-        data: makeListResponse([]),
-      }),
-    );
+    setupDefaultListMocks([]);
 
     renderPage();
 
-    expect(screen.getByText('No instance types yet.')).toBeInTheDocument();
-    expect(
-      screen.getByText('Create an instance type to start defining provider-managed sizes.'),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('grid', { name: 'Instance types' })).toBeInTheDocument();
+    expect(screen.getByText('No instance types found')).toBeInTheDocument();
+    expect(screen.getByText('No instance types are available yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('grid', { name: 'Instance types' })).not.toBeInTheDocument();
   });
 
   it('uses the page-level error state when the query fails', () => {
-    vi.mocked(useListResource).mockReturnValue(
-      mockQueryResult<InstanceTypesListResponse>({
+    vi.mocked(useListResource).mockImplementation((service) => {
+      if (service === InstanceTypes) {
+        return mockQueryResult<InstanceTypesListResponse>({
+          data: makeListResponse([]),
+          isLoading: false,
+          error: new Error('Private instance types unavailable'),
+        });
+      }
+      return mockQueryResult<InstanceTypesListResponse>({
         data: makeListResponse([]),
-        error: new Error('Private instance types unavailable'),
-      }),
-    );
+        isLoading: false,
+        error: null,
+      });
+    });
 
     renderPage();
 
@@ -153,11 +185,7 @@ describe('AdminInstanceTypeListPage', () => {
   });
 
   it('navigates to the create route when the create button is clicked', async () => {
-    vi.mocked(useListResource).mockReturnValue(
-      mockQueryResult<InstanceTypesListResponse>({
-        data: makeListResponse([]),
-      }),
-    );
+    setupDefaultListMocks([]);
 
     const { user } = renderPageWithCreateRoute();
 
@@ -229,6 +257,6 @@ describe('AdminInstanceTypeListPage', () => {
       expect(screen.queryByText('instance-type-obsolete-1')).not.toBeInTheDocument(),
     );
     expect(deleteCalled).toBe(true);
-    expect(screen.getByText('No instance types yet.')).toBeInTheDocument();
+    expect(screen.getByText('No instance types found')).toBeInTheDocument();
   });
 });

@@ -2096,7 +2096,7 @@ def test_allocator_rejects_malformed_observed_vlan_ids(tmp_path, invalid_vlan):
     store = store_for(tmp_path)
     parent = ensure_virtual_network(store, UID_ONE, "10.0.0.0/16")
 
-    with pytest.raises(StateError, match="Observed Cumulus VLAN ID"):
+    with pytest.raises(StateError, match="Observed switch VLAN ID"):
         reserve_subnet(
             store,
             uid=UID_TWO,

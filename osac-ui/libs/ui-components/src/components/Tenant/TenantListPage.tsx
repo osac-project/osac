@@ -1,43 +1,122 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
-  SearchInput,
+  Button,
+  EmptyState,
+  EmptyStateBody,
+  Gallery,
+  GalleryItem,
+  Stack,
+  StackItem,
   Toolbar,
   ToolbarContent,
   ToolbarGroup,
   ToolbarItem,
 } from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import { Tenants } from '@osac/types/private';
 import { useListResource } from '@osac/ui-components/api/use-resource';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
+import ListPageToolbar from '@osac/ui-components/components/Page/ListPageToolbar';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
-import { Timestamp } from '@osac/ui-components/components/Primitives/Timestamp';
-import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
-import { SubtleContent } from '@osac/ui-components/components/SubtleContent/SubtleContent';
-import TenantActionsMenu from '@osac/ui-components/components/Tenant/TenantActionsMenu';
-import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter.ts';
+import DebounceSearchInput from '@osac/ui-components/components/Primitives/DebounceSearchInput';
+import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
+import {
+  SEARCH_PARAM,
+  useArrayPageFilter,
+  usePageFilter,
+} from '@osac/ui-components/hooks/use-page-filter.ts';
+import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
-import TenantStatusLabel from '../../components/Tenant/TenantStatusLabel';
+import TenantCard from './TenantCard';
+import TenantStateFilter from './TenantStateFilter';
+import TenantTable from './TenantTable';
+import {
+  STATE_FILTER_PARAM,
+  TENANT_STATE_FILTER_TO_ENUM,
+  type TenantStateFilterValue,
+  buildTenantListFilter,
+  isTenantStateFilterValue,
+} from './utils';
+
+const TENANTS_VIEW_KEY = 'tenants';
 
 const TenantListPage = () => {
   const { t } = useTranslation();
+  const [, setSearchParams] = useSearchParams();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
+  const [stateFilters, toggleStateFilter] = useArrayPageFilter<TenantStateFilterValue>(
+    STATE_FILTER_PARAM,
+    isTenantStateFilterValue,
+  );
+  const [viewType] = useViewType(TENANTS_VIEW_KEY);
+  const [searchResetKey, setSearchResetKey] = useState(0);
 
-  const { data, isLoading, error } = useListResource(Tenants);
+  const stateEnumValues = useMemo(
+    () => stateFilters.map((value) => TENANT_STATE_FILTER_TO_ENUM[value]),
+    [stateFilters],
+  );
 
-  const filteredTenants = useMemo(() => {
-    if (!search || !data?.items) {
-      return data?.items || [];
-    }
-    const lowerSearch = search.toLowerCase();
-    return data.items.filter((tenant) => {
-      const name = tenant.metadata?.name ?? tenant.id;
-      return name.toLowerCase().includes(lowerSearch);
+  const filter = useMemo(
+    () => buildTenantListFilter(stateEnumValues, search.trim()),
+    [stateEnumValues, search],
+  );
+
+  const { data, isLoading, error } = useListResource(Tenants, { filter });
+
+  const { data: totalsData, error: totalsError } = useListResource(Tenants, {
+    limit: 0,
+  });
+
+  const items = data?.items ?? [];
+  const totalItems = totalsData?.total ?? 0;
+  const hasTotals = totalsData !== undefined && !totalsError;
+
+  const isFiltered = Boolean(search || stateEnumValues.length);
+
+  const showEmptyState = !isLoading && !error && items.length === 0;
+
+  const clearAllFilters = () => {
+    setSearchResetKey((key) => key + 1);
+    requestAnimationFrame(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete(SEARCH_PARAM);
+          next.delete(STATE_FILTER_PARAM);
+          return next;
+        },
+        { replace: true },
+      );
     });
-  }, [search, data?.items]);
+  };
+
+  const emptyState =
+    totalItems === 0 && !isFiltered ? (
+      <EmptyState titleText={t('No tenants found')} headingLevel="h2">
+        <EmptyStateBody>{t('No tenants are available yet.')}</EmptyStateBody>
+      </EmptyState>
+    ) : (
+      <EmptyState titleText={t('No tenants match your filters')} headingLevel="h2">
+        <EmptyStateBody>
+          {t('Try a different state or search term.')}{' '}
+          <Button variant="link" isInline onClick={clearAllFilters}>
+            {t('Clear all filters')}
+          </Button>
+        </EmptyStateBody>
+      </EmptyState>
+    );
+
+  const filteredText = hasTotals
+    ? items.length === totalItems
+      ? t('{{count}} tenant', { count: totalItems })
+      : t('{{shown}} of {{total}} tenants', {
+          shown: items.length,
+          total: totalItems,
+        })
+    : undefined;
 
   return (
     <ListPage
@@ -50,61 +129,54 @@ const TenantListPage = () => {
         </CreateButton>
       }
     >
-      <ListPageBody isLoading={isLoading} error={error}>
-        <Toolbar>
-          <ToolbarContent>
-            <ToolbarGroup>
-              <ToolbarItem>
-                <SearchInput
-                  placeholder={t('Search tenants by name…')}
-                  value={search}
-                  onChange={(_e, v) => setSearch(v)}
-                  onClear={() => setSearch('')}
-                  aria-label={t('Search tenants')}
-                />
-              </ToolbarItem>
-            </ToolbarGroup>
-          </ToolbarContent>
-        </Toolbar>
-        {filteredTenants.length === 0 ? (
-          <SubtleContent component="p">
-            {search
-              ? t('No tenants match your search.')
-              : t('No tenants yet. Register one to get started.')}
-          </SubtleContent>
-        ) : (
-          <Table aria-label={t('Tenants')} variant="compact">
-            <Thead>
-              <Tr>
-                <Th>{t('Tenant')}</Th>
-                <Th>{t('Status')}</Th>
-                <Th>{t('Primary domain')}</Th>
-                <Th>{t('Registered')}</Th>
-                <Th aria-label={t('Actions')} />
-              </Tr>
-            </Thead>
-            <Tbody>
-              {filteredTenants.map((tenant) => (
-                <Tr key={tenant.id}>
-                  <Td dataLabel={t('Tenant')}>
-                    <ResourceNameField resource={tenant} />
-                  </Td>
-                  <Td dataLabel={t('Status')}>
-                    <TenantStatusLabel state={tenant.status?.state} />
-                  </Td>
-                  <Td dataLabel={t('Primary domain')}>{tenant.spec?.domains?.[0] ?? '—'}</Td>
-                  <Td dataLabel={t('Registered')}>
-                    <Timestamp value={tenant.metadata?.creationTimestamp} />
-                  </Td>
-                  <Td dataLabel={t('Actions')} isActionCell>
-                    <TenantActionsMenu tenant={tenant} />
-                  </Td>
-                </Tr>
-              ))}
-            </Tbody>
-          </Table>
-        )}
-      </ListPageBody>
+      <Stack hasGutter>
+        <StackItem>
+          <ListPageToolbar
+            filteredText={showEmptyState ? undefined : filteredText}
+            isFiltered={isFiltered}
+            onClearAllFilters={clearAllFilters}
+          >
+            <Toolbar>
+              <ToolbarContent>
+                <ToolbarGroup>
+                  <TenantStateFilter stateFilters={stateFilters} onToggle={toggleStateFilter} />
+                  <ToolbarItem>
+                    <DebounceSearchInput
+                      placeholder={t('Search tenants')}
+                      value={search}
+                      onChange={(v) => setSearch(v)}
+                      resetKey={searchResetKey}
+                      aria-label={t('Search tenants')}
+                    />
+                  </ToolbarItem>
+                </ToolbarGroup>
+                <ToolbarGroup align={{ default: 'alignEnd' }}>
+                  <ToolbarItem>
+                    <ViewSwitcher pageKey={TENANTS_VIEW_KEY} />
+                  </ToolbarItem>
+                </ToolbarGroup>
+              </ToolbarContent>
+            </Toolbar>
+          </ListPageToolbar>
+        </StackItem>
+        <StackItem>
+          <ListPageBody isLoading={isLoading} error={error}>
+            {showEmptyState ? (
+              emptyState
+            ) : viewType === 'cards' ? (
+              <Gallery hasGutter minWidths={{ default: '300px' }} maxWidths={{ default: '1fr' }}>
+                {items.map((tenant) => (
+                  <GalleryItem key={tenant.id}>
+                    <TenantCard tenant={tenant} />
+                  </GalleryItem>
+                ))}
+              </Gallery>
+            ) : (
+              <TenantTable tenants={items} />
+            )}
+          </ListPageBody>
+        </StackItem>
+      </Stack>
     </ListPage>
   );
 };

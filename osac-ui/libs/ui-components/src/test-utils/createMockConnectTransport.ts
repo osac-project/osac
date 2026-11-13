@@ -1,7 +1,11 @@
 import type { MessageInitShape } from '@bufbuild/protobuf';
 import { Code, ConnectError, type Transport, createRouterTransport } from '@connectrpc/connect';
 
-import type { SelfSubjectAccessReviewsCreateRequest } from '@osac/types';
+import type {
+  ComputeInstance,
+  ComputeInstancesListRequest,
+  SelfSubjectAccessReviewsCreateRequest,
+} from '@osac/types';
 import {
   BareMetalInstanceCatalogItem,
   BareMetalInstanceCatalogItemsCreateRequest,
@@ -22,6 +26,8 @@ import {
   ClusterVersionsListRequest,
   ClustersCreateRequest,
   ClustersCreateResponse,
+  ClustersGetRequest,
+  ClustersUpdateRequest,
   ComputeInstanceCatalogItem,
   type ComputeInstanceCatalogItemsCreateRequest,
   ComputeInstanceCatalogItemsCreateResponse,
@@ -64,6 +70,8 @@ import {
   Project,
   ProjectMembership,
   ExternalIPPool as PublicExternalIPPool,
+  InstanceTypesGetRequest as PublicInstanceTypesGetRequest,
+  InstanceTypesGetResponse as PublicInstanceTypesGetResponse,
   StorageTier as PublicStorageTier,
   StorageTiersGetRequest as PublicStorageTiersGetRequest,
   StorageTiersListRequest as PublicStorageTiersListRequest,
@@ -101,11 +109,14 @@ import {
   ClusterVersions,
   ClusterVersionsListResponseSchema,
   Clusters,
+  ClustersGetResponseSchema,
+  ClustersUpdateResponseSchema,
   ComputeInstanceCatalogItems,
   ComputeInstanceCatalogItemsDeleteResponseSchema,
   ComputeInstanceCatalogItemsUpdateResponseSchema,
   ComputeInstanceTemplates,
   ComputeInstances,
+  ComputeInstancesListResponseSchema,
   DiskImageLifecycle,
   DiskImages,
   DiskImagesGetResponseSchema,
@@ -165,6 +176,8 @@ import type {
   StorageBackend,
   StorageBackendsCreateRequest,
   StorageBackendsCreateResponse,
+  StorageBackendsDeleteRequest,
+  StorageBackendsGetRequest,
   StorageBackendsListRequest,
   StorageBackendsUpdateRequest,
   StorageBackendsUpdateResponse,
@@ -192,6 +205,8 @@ import {
   Tenants as PrivateTenants,
   StorageBackendState,
   StorageBackends,
+  StorageBackendsDeleteResponseSchema,
+  StorageBackendsGetResponseSchema,
   StorageBackendsListResponseSchema,
   StorageTierState,
   StorageTiers,
@@ -206,6 +221,7 @@ import { UnauthorizedError } from '../utils/unauthorizedError';
 export type MockApiFixtures = {
   enabledServices?: ServiceTier[];
   catalogItems?: ComputeInstanceCatalogItem[];
+  computeInstances?: ComputeInstance[];
   clusters?: Cluster[];
   clusterCatalogItems?: ClusterCatalogItem[];
   bareMetalCatalogItems?: BareMetalInstanceCatalogItem[];
@@ -291,12 +307,80 @@ const matchesProjectSearchFilter = (filter: string | undefined, project: Project
   );
 };
 
+const matchesVirtualNetworkIdInFilter = (
+  filter: string | undefined,
+  virtualNetwork: string | undefined,
+): boolean => {
+  const inMarker = 'this.spec.virtual_network.id in ';
+  const inIndex = filter?.indexOf(inMarker) ?? -1;
+  if (inIndex < 0) {
+    return true;
+  }
+  if (!filter) {
+    return false;
+  }
+  const afterIn = filter.slice(inIndex + inMarker.length);
+  const bracketEnd = afterIn.indexOf(']');
+  if (bracketEnd < 0) {
+    return false;
+  }
+  const ids = JSON.parse(afterIn.slice(0, bracketEnd + 1)) as string[];
+  return virtualNetwork !== undefined && ids.includes(virtualNetwork);
+};
+
 const matchesVirtualNetworkScopeFilter = (
   filter: string | undefined,
   virtualNetwork: string | undefined,
 ): boolean => {
+  if (!matchesVirtualNetworkIdInFilter(filter, virtualNetwork)) {
+    return false;
+  }
   return matchesStringEqualityFilter(filter, 'this.spec.virtual_network.id', virtualNetwork);
 };
+
+const matchesNameContainsFilter = (
+  filter: string | undefined,
+  name: string | undefined,
+): boolean => {
+  const searchLiteral = filter?.match(/this\.metadata\.name\.contains\(("(?:\\.|[^"\\])*")\)/)?.[1];
+  if (!searchLiteral) {
+    return true;
+  }
+  const search = JSON.parse(searchLiteral) as string;
+  return (name ?? '').includes(search);
+};
+
+const matchesStatusStateInFilter = (
+  filter: string | undefined,
+  state: number | undefined,
+): boolean => {
+  const inMarker = 'this.status.state in ';
+  const inIndex = filter?.indexOf(inMarker) ?? -1;
+  if (inIndex < 0) {
+    return true;
+  }
+  if (!filter) {
+    return false;
+  }
+  const afterIn = filter.slice(inIndex + inMarker.length);
+  const bracketEnd = afterIn.indexOf(']');
+  if (bracketEnd < 0) {
+    return false;
+  }
+  const states = afterIn
+    .slice(1, bracketEnd)
+    .split(',')
+    .map((value) => Number(value.trim()))
+    .filter((value) => !Number.isNaN(value));
+  return states.includes(state ?? 0);
+};
+
+const matchesExternalIpPoolListFilter = (
+  filter: string | undefined,
+  pool: ExternalIPPool,
+): boolean =>
+  matchesNameContainsFilter(filter, pool.metadata?.name) &&
+  matchesStatusStateInFilter(filter, pool.status?.state);
 
 const matchesUnallocatedExternalIpFilter = (
   filter: string | undefined,
@@ -457,9 +541,16 @@ export type MockTransportOverrides = {
     | MessageInitShape<typeof BareMetalInstanceCatalogItemsDeleteResponseSchema>
     | Promise<MessageInitShape<typeof BareMetalInstanceCatalogItemsDeleteResponseSchema>>;
   onClusterCreate?: (req: ClustersCreateRequest) => ClustersCreateResponse;
+  onClusterGet?: (req: ClustersGetRequest) => MessageInitShape<typeof ClustersGetResponseSchema>;
+  onClusterUpdate?: (
+    req: ClustersUpdateRequest,
+  ) => MessageInitShape<typeof ClustersUpdateResponseSchema>;
   onComputeInstanceCreate?: (
     req: ComputeInstancesCreateRequest,
   ) => ComputeInstancesCreateResponse | Promise<ComputeInstancesCreateResponse>;
+  onComputeInstanceList?: (
+    req: ComputeInstancesListRequest,
+  ) => MessageInitShape<typeof ComputeInstancesListResponseSchema>;
   onBareMetalInstanceCreate?: (
     req: BareMetalInstancesCreateRequest,
   ) => BareMetalInstancesCreateResponse | Promise<BareMetalInstancesCreateResponse>;
@@ -477,10 +568,20 @@ export type MockTransportOverrides = {
   onStorageBackendList?: (
     req: StorageBackendsListRequest,
   ) => MessageInitShape<typeof StorageBackendsListResponseSchema>;
+  onStorageBackendGet?: (
+    req: StorageBackendsGetRequest,
+  ) =>
+    | MessageInitShape<typeof StorageBackendsGetResponseSchema>
+    | Promise<MessageInitShape<typeof StorageBackendsGetResponseSchema>>;
   onStorageBackendCreate?: (
     req: StorageBackendsCreateRequest,
   ) => StorageBackendsCreateResponse | Promise<StorageBackendsCreateResponse>;
   onStorageBackendUpdate?: (req: StorageBackendsUpdateRequest) => StorageBackendsUpdateResponse;
+  onStorageBackendDelete?: (
+    req: StorageBackendsDeleteRequest,
+  ) =>
+    | MessageInitShape<typeof StorageBackendsDeleteResponseSchema>
+    | Promise<MessageInitShape<typeof StorageBackendsDeleteResponseSchema>>;
   onExternalIPPoolList?: (
     req: ExternalIPPoolsListRequest,
   ) => MessageInitShape<typeof ExternalIPPoolsListResponseSchema>;
@@ -512,6 +613,9 @@ export type MockTransportOverrides = {
     req: StorageTiersDeleteRequest,
   ) => MessageInitShape<typeof StorageTiersDeleteResponseSchema>;
   onPublicInstanceTypeList?: () => { items: InstanceType[] };
+  onPublicInstanceTypeGet?: (
+    req: PublicInstanceTypesGetRequest,
+  ) => PublicInstanceTypesGetResponse | Promise<PublicInstanceTypesGetResponse>;
   onInstanceTypeList?: (req: InstanceTypesListRequest) => InstanceTypesListResponse;
   onInstanceTypeGet?: (
     req: InstanceTypesGetRequest,
@@ -555,6 +659,8 @@ export type MockTransportOverrides = {
   onDiskImageUpdate?: (req: DiskImagesUpdateRequest) => DiskImagesUpdateResponse;
   onDiskImageDelete?: (req: DiskImagesDeleteRequest) => DiskImagesDeleteResponse;
   onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet };
+  onSubnetList?: (req: unknown) => void;
+  onSecurityGroupList?: (req: unknown) => void;
   onNatGatewayList?: (req: NATGatewaysListRequest) => void;
   onNatGatewayCreate?: (
     req: NATGatewaysCreateRequest,
@@ -590,6 +696,7 @@ export const createMockConnectTransport = (
   ];
   const catalogItems = fixtures.catalogItems ?? [];
   const clusters = fixtures.clusters ?? [];
+  const computeInstances = fixtures.computeInstances ?? [];
   const clusterCatalogItems = fixtures.clusterCatalogItems ?? [];
   const bareMetalCatalogItems = fixtures.bareMetalCatalogItems ?? [];
   const bareMetalInstanceTemplates = fixtures.bareMetalInstanceTemplates ?? [];
@@ -661,6 +768,16 @@ export const createMockConnectTransport = (
       });
 
       router.service(ComputeInstances, {
+        list: (req) => {
+          if (overrides.onComputeInstanceList) {
+            return overrides.onComputeInstanceList(req);
+          }
+          return {
+            items: computeInstances,
+            size: computeInstances.length,
+            total: computeInstances.length,
+          };
+        },
         create: (req) => {
           if (overrides.onComputeInstanceCreate) {
             return overrides.onComputeInstanceCreate(req);
@@ -794,26 +911,33 @@ export const createMockConnectTransport = (
       });
 
       router.service(VirtualNetworks, {
-        list: (req) => ({
-          items: virtualNetworks.filter(
+        list: (req) => {
+          const items = virtualNetworks.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
               matchesVirtualNetworkScopeFilter(req.filter, undefined),
-          ),
-        }),
+          );
+          const total = virtualNetworks.length;
+          if (req.limit === 0) {
+            return { items: [], size: 0, total };
+          }
+          return { items, size: items.length, total };
+        },
         get: (req) => ({
           object: virtualNetworks.find((i) => i.id === req.id),
         }),
       });
 
       router.service(Subnets, {
-        list: (req) => ({
-          items: subnets.filter(
+        list: (req) => {
+          overrides.onSubnetList?.(req);
+          const items = subnets.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
               matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
-          ),
-        }),
+          );
+          return { items, size: items.length, total: items.length };
+        },
         get: (req) => {
           if (overrides.onSubnetGet) {
             return overrides.onSubnetGet(req);
@@ -825,13 +949,15 @@ export const createMockConnectTransport = (
       });
 
       router.service(SecurityGroups, {
-        list: (req) => ({
-          items: securityGroups.filter(
+        list: (req) => {
+          overrides.onSecurityGroupList?.(req);
+          const items = securityGroups.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
               matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
-          ),
-        }),
+          );
+          return { items, size: items.length, total: items.length };
+        },
       });
 
       router.service(InstanceTypes, {
@@ -845,9 +971,12 @@ export const createMockConnectTransport = (
             ),
           };
         },
-        get: (req) => ({
-          object: instanceTypes.find((i) => i.id === req.id),
-        }),
+        get: (req) => {
+          if (overrides.onPublicInstanceTypeGet) {
+            return overrides.onPublicInstanceTypeGet(req);
+          }
+          return { object: instanceTypes.find((i) => i.id === req.id) };
+        },
       });
 
       router.service(DiskImages, {
@@ -919,14 +1048,23 @@ export const createMockConnectTransport = (
           if (overrides.onStorageBackendList) {
             return overrides.onStorageBackendList(req);
           }
-          const items = storageBackends.filter((item) =>
-            matchesStorageBackendReadyFilter(req.filter, item.status?.state),
+          const items = storageBackends.filter(
+            (item) =>
+              matchesStorageBackendReadyFilter(req.filter, item.status?.state) &&
+              matchesNameContainsFilter(req.filter, item.metadata?.name),
           );
-          return { items, size: items.length, total: items.length };
+          return {
+            items: req.limit === 0 ? [] : items,
+            size: req.limit === 0 ? 0 : items.length,
+            total: items.length,
+          };
         },
-        get: (req) => ({
-          object: storageBackends.find((b) => b.id === req.id),
-        }),
+        get: (req) => {
+          if (overrides.onStorageBackendGet) {
+            return overrides.onStorageBackendGet(req);
+          }
+          return { object: storageBackends.find((b) => b.id === req.id) };
+        },
         create: (req) => {
           if (overrides.onStorageBackendCreate) {
             return overrides.onStorageBackendCreate(req);
@@ -947,6 +1085,9 @@ export const createMockConnectTransport = (
           return { object: req.object };
         },
         delete: (req) => {
+          if (overrides.onStorageBackendDelete) {
+            return overrides.onStorageBackendDelete(req);
+          }
           const index = storageBackends.findIndex((b) => b.id === req.id);
           if (index !== -1) {
             storageBackends.splice(index, 1);
@@ -974,10 +1115,13 @@ export const createMockConnectTransport = (
           if (overrides.onExternalIPPoolList) {
             return overrides.onExternalIPPoolList(req);
           }
+          const items = privateExternalIpPools.filter((pool) =>
+            matchesExternalIpPoolListFilter(req.filter, pool),
+          );
           return {
-            items: privateExternalIpPools,
-            size: privateExternalIpPools.length,
-            total: privateExternalIpPools.length,
+            items: req.limit === 0 ? [] : items,
+            size: items.length,
+            total: items.length,
           };
         },
         get: (req) => ({
@@ -1207,14 +1351,19 @@ export const createMockConnectTransport = (
 
       router.service(Clusters, {
         list: () => ({ items: clusters, size: clusters.length, total: clusters.length }),
-        get: (req) => ({
-          object: clusters.find((c) => c.id === req.id),
-        }),
+        get: (req) =>
+          overrides.onClusterGet?.(req) ?? { object: clusters.find((c) => c.id === req.id) },
         create: (req) => {
           if (overrides.onClusterCreate) {
             return overrides.onClusterCreate(req);
           }
           return { object: { id: 'cluster-1', ...req.object } };
+        },
+        update: (req) => {
+          if (overrides.onClusterUpdate) {
+            return overrides.onClusterUpdate(req);
+          }
+          throw new ConnectError('Cluster update not configured in test', Code.Unimplemented);
         },
       });
 
@@ -1315,16 +1464,19 @@ export const createMockConnectTransport = (
       router.service(ExternalIPs, {
         list: (req) => {
           overrides.onExternalIpList?.(req);
+          const items = externalIps.filter(
+            (item) =>
+              matchesIdInFilter(req.filter, item.id) &&
+              matchesUnallocatedExternalIpFilter(
+                req.filter,
+                item.status?.state,
+                item.status?.attached,
+              ),
+          );
           return {
-            items: externalIps.filter(
-              (item) =>
-                matchesIdInFilter(req.filter, item.id) &&
-                matchesUnallocatedExternalIpFilter(
-                  req.filter,
-                  item.status?.state,
-                  item.status?.attached,
-                ),
-            ),
+            items: req.limit === 0 ? [] : items,
+            size: items.length,
+            total: items.length,
           };
         },
         get: (req) => ({

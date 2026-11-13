@@ -12,6 +12,7 @@ language governing permissions and limitations under the License.
 */
 
 //go:generate mockgen -destination=projects_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 ProjectsClient
+//go:generate mockgen -destination=users_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 UsersClient
 //go:generate mockgen -destination=network_classes_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 NetworkClassesClient
 //go:generate mockgen -destination=virtual_networks_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 VirtualNetworksClient
 //go:generate mockgen -destination=subnets_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 SubnetsClient
@@ -144,6 +145,7 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		logger:                b.logger,
 		tenantsClient:         privatev1.NewTenantsClient(b.connection),
 		projectsClient:        privatev1.NewProjectsClient(b.connection),
+		usersClient:           privatev1.NewUsersClient(b.connection),
 		networkClassesClient:  privatev1.NewNetworkClassesClient(b.connection),
 		virtualNetworksClient: privatev1.NewVirtualNetworksClient(b.connection),
 		subnetsClient:         privatev1.NewSubnetsClient(b.connection),
@@ -167,6 +169,7 @@ type function struct {
 	logger                *slog.Logger
 	tenantsClient         privatev1.TenantsClient
 	projectsClient        privatev1.ProjectsClient
+	usersClient           privatev1.UsersClient
 	networkClassesClient  privatev1.NetworkClassesClient
 	virtualNetworksClient privatev1.VirtualNetworksClient
 	subnetsClient         privatev1.SubnetsClient
@@ -382,10 +385,10 @@ func (t *task) resolveBreakGlassPassword(ctx context.Context) (string, error) {
 
 const breakGlassSecretName = "break-glass-credentials"
 
-// persistBreakGlassSecret stores generated break-glass credentials as a Secret and records the
-// reference on the tenant spec. No-op when a reference is already set or no secrets client is
-// configured (unit tests). If the Secret already exists (retry after a failed status save),
-// the existing object is adopted instead of failing.
+// persistBreakGlassSecret stores the break-glass username as a Secret and records the reference
+// on the tenant spec. The password is only shown once at tenant creation and is not persisted.
+// No-op when a reference is already set or no secrets client is configured (unit tests). If the
+// Secret already exists (retry after a failed status save), the existing object is adopted.
 func (t *task) persistBreakGlassSecret(ctx context.Context) error {
 	if t.tenant.GetSpec().GetBreakGlassCredentialsSecret() != nil {
 		return nil
@@ -407,7 +410,6 @@ func (t *task) persistBreakGlassSecret(ctx context.Context) error {
 			Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
 			Data: map[string][]byte{
 				"username": []byte(creds.GetUsername()),
-				"password": []byte(creds.GetPassword()),
 			},
 		}.Build(),
 	}.Build())
@@ -553,11 +555,32 @@ func (t *task) delete(ctx context.Context) error {
 		}
 	}
 
+	// Users are tenant-owned and reference their project, including the root
+	// project. Remove them before requesting project deletion so they cannot
+	// block the project foreign key.
+	pendingUsers, err := t.deleteTenantUsers(ctx)
+	if err != nil {
+		return err
+	}
+	if pendingUsers {
+		return controllers.RequeueAtInterval(
+			errors.New("tenant users are still pending deletion"),
+			tenantDeletionRetryInterval,
+		)
+	}
+
 	// Delete every project in the tenant. Project controllers enforce child-first
 	// archival, while this reconciler signals deleting projects again on each
 	// retry so parents continue after their children have been archived.
-	if err := t.deleteTenantProjects(ctx); err != nil {
+	pendingProjects, err := t.deleteTenantProjects(ctx)
+	if err != nil {
 		return err
+	}
+	if pendingProjects {
+		return controllers.RequeueAtInterval(
+			errors.New("tenant projects are still pending deletion"),
+			tenantDeletionRetryInterval,
+		)
 	}
 
 	// Keep the tenant and its IDP organization until all projects are archived.
@@ -672,10 +695,72 @@ func (t *task) countRemainingProjects(ctx context.Context) (int32, error) {
 	return listResp.GetTotal(), nil
 }
 
+// deleteTenantUsers requests deletion of every user in the tenant. Users are
+// paginated because tenants may have many users; existing deletion requests are
+// signaled again on retries so their finalizers can make progress.
+func (t *task) deleteTenantUsers(ctx context.Context) (bool, error) {
+	if t.r.usersClient == nil {
+		return false, nil
+	}
+
+	tenantName := t.tenant.GetMetadata().GetName()
+	filter := fmt.Sprintf("this.metadata.tenant == %q", tenantName)
+	limit := int32(100)
+	var (
+		offset int32
+		users  []*privatev1.User
+		total  *int32
+	)
+	for {
+		listResp, err := t.r.usersClient.List(ctx, privatev1.UsersListRequest_builder{
+			Filter: &filter,
+			Limit:  &limit,
+			Offset: &offset,
+		}.Build())
+		if err != nil {
+			return false, fmt.Errorf("failed to list users for tenant deletion: %w", err)
+		}
+		if listResp == nil || listResp.GetSize() < 0 ||
+			int64(listResp.GetSize()) != int64(len(listResp.GetItems())) ||
+			listResp.GetTotal() < 0 {
+			return false, errors.New("user listing returned an invalid page")
+		}
+		pageTotal := listResp.GetTotal()
+		if total == nil {
+			total = &pageTotal
+		} else if *total != pageTotal {
+			return false, errors.New("user listing total changed during tenant deletion")
+		}
+		users = append(users, listResp.GetItems()...)
+		if int64(len(users)) > int64(*total) {
+			return false, errors.New("user listing returned more items than its total")
+		}
+		if int64(len(users)) == int64(*total) {
+			break
+		}
+		if listResp.GetSize() == 0 {
+			return false, errors.New("user listing returned an incomplete page")
+		}
+		offset += listResp.GetSize()
+	}
+
+	return controllers.CascadeDeleteItems(ctx, controllers.CascadeDeleteItemsOptions[*privatev1.User]{
+		Items: users,
+		Delete: func(ctx context.Context, id string) error {
+			_, err := t.r.usersClient.Delete(ctx, privatev1.UsersDeleteRequest_builder{Id: id}.Build())
+			return err
+		},
+		Signal: func(ctx context.Context, id string) error {
+			_, err := t.r.usersClient.Signal(ctx, privatev1.UsersSignalRequest_builder{Id: id}.Build())
+			return err
+		},
+	})
+}
+
 // deleteTenantProjects requests deletion of every project in the tenant. Existing
 // deletion requests are signaled again so projects blocked on children or external
 // references retry as the tenant deletion makes progress.
-func (t *task) deleteTenantProjects(ctx context.Context) error {
+func (t *task) deleteTenantProjects(ctx context.Context) (bool, error) {
 	tenantName := t.tenant.GetMetadata().GetName()
 	filter := fmt.Sprintf("this.metadata.tenant == %q", tenantName)
 	limit := int32(100)
@@ -683,7 +768,6 @@ func (t *task) deleteTenantProjects(ctx context.Context) error {
 		offset   int32
 		projects []*privatev1.Project
 		total    *int32
-		err      error
 	)
 	for {
 		listResp, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
@@ -692,60 +776,43 @@ func (t *task) deleteTenantProjects(ctx context.Context) error {
 			Offset: &offset,
 		}.Build())
 		if err != nil {
-			return fmt.Errorf("failed to list projects for tenant deletion: %w", err)
+			return false, fmt.Errorf("failed to list projects for tenant deletion: %w", err)
 		}
 		if listResp == nil || listResp.GetSize() < 0 ||
 			int64(listResp.GetSize()) != int64(len(listResp.GetItems())) ||
 			listResp.GetTotal() < 0 {
-			return errors.New("project listing returned an invalid page")
+			return false, errors.New("project listing returned an invalid page")
 		}
 		pageTotal := listResp.GetTotal()
 		if total == nil {
 			total = &pageTotal
 		} else if *total != pageTotal {
-			return errors.New("project listing total changed during tenant deletion")
+			return false, errors.New("project listing total changed during tenant deletion")
 		}
 		projects = append(projects, listResp.GetItems()...)
 		if int64(len(projects)) > int64(*total) {
-			return errors.New("project listing returned more items than its total")
+			return false, errors.New("project listing returned more items than its total")
 		}
 		if int64(len(projects)) == int64(*total) {
 			break
 		}
 		if listResp.GetSize() == 0 {
-			return errors.New("project listing returned an incomplete page")
+			return false, errors.New("project listing returned an incomplete page")
 		}
 		offset += listResp.GetSize()
 	}
 
-	var deletionErrors []error
-	for _, project := range projects {
-		if project.GetMetadata().HasDeletionTimestamp() {
-			_, err = t.r.projectsClient.Signal(ctx, privatev1.ProjectsSignalRequest_builder{
-				Id: project.GetId(),
-			}.Build())
-			if err != nil && grpcstatus.Code(err) != grpccodes.NotFound {
-				deletionErrors = append(deletionErrors,
-					fmt.Errorf("failed to signal project %s for tenant deletion: %w", project.GetId(), err))
-			}
-			continue
-		}
-		_, err = t.r.projectsClient.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{
-			Id: project.GetId(),
-		}.Build())
-		if err != nil {
-			if grpcstatus.Code(err) == grpccodes.NotFound {
-				continue
-			}
-			deletionErrors = append(deletionErrors, fmt.Errorf("failed to delete project %s: %w", project.GetId(), err))
-			continue
-		}
-		t.r.logger.DebugContext(ctx, "Requested project deletion for tenant",
-			slog.String("tenant_id", t.tenant.GetId()),
-			slog.String("project_id", project.GetId()),
-		)
-	}
-	return errors.Join(deletionErrors...)
+	return controllers.CascadeDeleteItems(ctx, controllers.CascadeDeleteItemsOptions[*privatev1.Project]{
+		Items: projects,
+		Delete: func(ctx context.Context, id string) error {
+			_, err := t.r.projectsClient.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{Id: id}.Build())
+			return err
+		},
+		Signal: func(ctx context.Context, id string) error {
+			_, err := t.r.projectsClient.Signal(ctx, privatev1.ProjectsSignalRequest_builder{Id: id}.Build())
+			return err
+		},
+	})
 }
 
 var tenantConditionTypes = []privatev1.TenantConditionType{
@@ -819,21 +886,19 @@ func (t *task) ensureVaultNamespace(ctx context.Context) error {
 	if t.r.vaultLifecycle == nil {
 		return nil
 	}
-	if t.isConditionTrue(condType) {
-		return nil
-	}
 
 	tenantName := t.tenant.GetMetadata().GetName()
 	err := t.r.vaultLifecycle.EnsureTenantNamespace(ctx, tenantName)
 	if err != nil {
+		code := grpcstatus.Code(vault.ToGrpcError(err))
 		t.r.logger.ErrorContext(ctx, "Failed to provision vault namespace for tenant",
 			slog.String("tenant_id", t.tenant.GetId()),
 			slog.String("tenant_name", tenantName),
-			slog.Any("error", err),
+			slog.String("error_code", code.String()),
 		)
 
 		t.updateCondition(condType, privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"ProvisionFailed", fmt.Sprintf("Failed to provision vault namespace: %v", err))
+			"ProvisionFailed", "Failed to provision vault namespace ("+code.String()+")")
 		return nil
 	}
 

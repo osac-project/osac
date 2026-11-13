@@ -1,13 +1,19 @@
 import { useParams } from 'react-router-dom';
 
-import { useCluster } from '../../api/v1/cluster';
+import { Clusters } from '@osac/types';
+
+import { useGetResource } from '../../api/use-resource';
 import { ResourceDetailsPageError } from '../Resource/ResourceDetailsPageError';
 import { ResourceDetailsPageLoading } from '../Resource/ResourceDetailsPageLoading';
 import ClusterDetailsPageContent from './Details/ClusterDetailsPageContent';
 
 export const ClusterDetailsPage = () => {
   const { clusterId } = useParams() as { clusterId: string };
-  const { data: cluster, isLoading, isError, error, refetch } = useCluster(clusterId);
+  const { data, isLoading, isError, error, refetch } = useGetResource(
+    Clusters,
+    { id: clusterId },
+    { enabled: Boolean(clusterId) },
+  );
 
   if (isLoading) {
     return (
@@ -32,7 +38,7 @@ export const ClusterDetailsPage = () => {
     );
   }
 
-  if (!cluster) {
+  if (!data?.object) {
     return (
       <ResourceDetailsPageError
         parentTo="/clusters"
@@ -43,5 +49,5 @@ export const ClusterDetailsPage = () => {
     );
   }
 
-  return <ClusterDetailsPageContent cluster={cluster} />;
+  return <ClusterDetailsPageContent cluster={data.object} />;
 };

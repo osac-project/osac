@@ -9,8 +9,6 @@ import {
 } from './fields';
 import NameField from '../../Form/NameField';
 import OsacForm from '../../Form/OsacForm';
-import SshKeyField from '../../Form/SshKeyField';
-import ProvisioningField from '../../ProvisioningWizard/fields/ProvisioningField';
 
 const BareMetalGeneralStep = () => {
   const { values, setFieldValue } = useFormikContext<BareMetalInstanceWizardValues>();
@@ -28,9 +26,6 @@ const BareMetalGeneralStep = () => {
         }}
       />
       <NameField />
-      <ProvisioningField name={BM_SSH_KEY_FORM_PATH}>
-        {({ valueName, isDisabled }) => <SshKeyField name={valueName} isDisabled={isDisabled} />}
-      </ProvisioningField>
     </OsacForm>
   );
 };

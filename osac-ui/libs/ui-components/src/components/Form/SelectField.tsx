@@ -1,4 +1,12 @@
-import { type MouseEvent, type ReactNode, type Ref, useEffect, useMemo, useState } from 'react';
+import {
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type Ref,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import {
   FormGroup,
   MenuToggle,
@@ -6,6 +14,7 @@ import {
   Select,
   SelectList,
   SelectOption,
+  type SelectProps,
 } from '@patternfly/react-core';
 import { useField } from 'formik';
 
@@ -36,6 +45,7 @@ export interface SelectFieldProps {
   onSelect?: (value: string | number) => void;
   asFormGroup?: boolean;
   labelInfo?: ReactNode;
+  popperProps?: SelectProps['popperProps'];
 }
 
 export const SelectField = ({
@@ -53,6 +63,7 @@ export const SelectField = ({
   onSelect: onSelectProp,
   asFormGroup = true,
   labelInfo,
+  popperProps,
 }: SelectFieldProps) => {
   const [field, meta, helpers] = useField<string | number>(name);
   const [isOpen, setIsOpen] = useState(false);
@@ -87,11 +98,22 @@ export const SelectField = ({
     setIsOpen(false);
   };
 
+  const onEscapeCapture = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Escape' || !isOpen) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setIsOpen(false);
+    document.getElementById(fieldId)?.focus();
+  };
+
   const toggle = (toggleRef: Ref<MenuToggleElement>) => (
     <MenuToggle
       ref={toggleRef}
       id={fieldId}
       onClick={() => setIsOpen((wasOpen) => !wasOpen)}
+      onKeyDownCapture={onEscapeCapture}
       isExpanded={isOpen}
       isDisabled={controlDisabled}
       isFullWidth
@@ -114,6 +136,8 @@ export const SelectField = ({
         onOpenChange={setIsOpen}
         toggle={toggle}
         shouldFocusToggleOnSelect
+        popperProps={popperProps}
+        onKeyDownCapture={onEscapeCapture}
         aria-label={label}
       >
         <SelectList>

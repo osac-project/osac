@@ -54,18 +54,20 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
   const { values } = formik;
   const catalogFilter =
     role === 'tenant-user' ? buildCatalogListFilter({ published: 'published' }) : undefined;
-  const catalogQuery = useListResource<DescMessage, DescMessage, T[]>(
+  const catalogQuery = useListResource<DescMessage, DescMessage>(
     catalogService,
     catalogFilter ? { filter: catalogFilter } : {},
-    {},
-    (data) => (isCatalogItemList<T>(data) ? data.items : []),
   );
   const loading = isInitializing || catalogQuery.isPending;
   const error = catalogQuery.isError;
   const retry = () => void catalogQuery.refetch();
 
   const filtered = useMemo(
-    () => filterCatalogItemsBySearch(catalogQuery.data ?? [], search),
+    () =>
+      filterCatalogItemsBySearch(
+        isCatalogItemList<T>(catalogQuery.data) ? catalogQuery.data.items : [],
+        search,
+      ),
     [catalogQuery.data, search],
   );
 

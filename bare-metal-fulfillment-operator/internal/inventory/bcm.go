@@ -35,6 +35,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bmcdiscovery"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
@@ -45,6 +46,7 @@ const certBaseDir = "/etc/osac/certs"
 // without depending on the bcmclient package.
 //
 //go:generate mockgen -source=$GOFILE -destination=bcm_mock_test.go -package=$GOPACKAGE BCMAPI,BMCDiscoverer
+//go:generate mockgen -destination=credentials_writer_mock_test.go -package=$GOPACKAGE github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials Writer
 type BCMAPI interface {
 	CertWatcher() *certwatcher.CertWatcher
 	GetDevices(ctx context.Context) ([]bcmclient.Device, error)
@@ -124,18 +126,25 @@ func ParseBCMOptions(options map[string]any) (*BCMClientConfig, error) {
 // BCMClient implements inventory.Client by wrapping a BCMAPI
 // for BCM API communication and a baremetalhost.BMHLifecycleManager for BMH lifecycle.
 type BCMClient struct {
-	client        BCMAPI
-	bmhManager    baremetalhost.BMHLifecycleManager
-	bmcDiscoverer BMCDiscoverer
-	hostClass     string
+	client            BCMAPI
+	bmhManager        baremetalhost.BMHLifecycleManager
+	credentialsWriter credentials.Writer
+	bmcDiscoverer     BMCDiscoverer
+	hostClass         string
 }
 
 // NewBCMClient creates a BCM inventory client with injected dependencies.
-func NewBCMClient(client BCMAPI, bmhManager baremetalhost.BMHLifecycleManager, hostClass string) *BCMClient {
+func NewBCMClient(
+	client BCMAPI,
+	bmhManager baremetalhost.BMHLifecycleManager,
+	credentialsWriter credentials.Writer,
+	hostClass string,
+) *BCMClient {
 	return &BCMClient{
-		client:     client,
-		bmhManager: bmhManager,
-		hostClass:  hostClass,
+		client:            client,
+		bmhManager:        bmhManager,
+		credentialsWriter: credentialsWriter,
+		hostClass:         hostClass,
 	}
 }
 
@@ -482,13 +491,14 @@ func (c *BCMClient) ensureBMHExists(ctx context.Context, device *bcmclient.Devic
 		return err
 	}
 
-	// Secret name is derived from the BMH so the two stay coupled.
-	secretName := bmhName + bmcSecretSuffix
-	if err := c.bmhManager.EnsureBMCSecret(ctx, secretName, username, password); err != nil {
+	if err := c.credentialsWriter.Create(ctx, credentials.Reference{HostID: bmhName, BMIID: bareMetalInstanceID}, credentials.BMC{
+		Username: []byte(username),
+		Password: []byte(password),
+	}); err != nil {
 		return fmt.Errorf("failed to create BMC credentials Secret for host %q: %w", device.Hostname, err)
 	}
 
-	params := bmhCreateParams(bmhName, bmcAddress, secretName, device.MAC, bareMetalInstanceID)
+	params := bmhCreateParams(bmhName, bmcAddress, device.MAC, bareMetalInstanceID)
 	if err := c.bmhManager.CreateBMH(ctx, params); err != nil {
 		return fmt.Errorf("failed to create BareMetalHost for %s: %w", device.Hostname, err)
 	}
@@ -501,12 +511,11 @@ func (c *BCMClient) ensureBMHExists(ctx context.Context, device *bcmclient.Devic
 // intentionally omitted from ConsumerRef: the consumer is identified by an
 // opaque ID, not a resolvable namespace/name — matching the Metal3 adapter's
 // documented convention, which is sufficient for BMO's claim mechanism.
-func bmhCreateParams(bmhName, bmcAddress, secretName, bootMAC, bareMetalInstanceID string) baremetalhost.CreateParams {
+func bmhCreateParams(bmhName, bmcAddress, bootMAC, bareMetalInstanceID string) baremetalhost.CreateParams {
 	return baremetalhost.CreateParams{
-		Name:              bmhName,
-		BMCAddress:        bmcAddress,
-		CredentialsSecret: secretName,
-		BootMACAddress:    bootMAC,
+		Name:           bmhName,
+		BMCAddress:     bmcAddress,
+		BootMACAddress: bootMAC,
 		ConsumerRef: &corev1.ObjectReference{
 			APIVersion: "osac.openshift.io/v1alpha1",
 			Kind:       "BareMetalInstance",
@@ -517,9 +526,6 @@ func bmhCreateParams(bmhName, bmcAddress, secretName, bootMAC, bareMetalInstance
 		},
 	}
 }
-
-// bmcSecretSuffix is appended to the BMH name to name operator-created BMC Secrets.
-const bmcSecretSuffix = "-bmc-secret"
 
 // resolveBMCCredentials resolves the per-host BMC username/password from BCM,
 // following BCM's own inheritance order (device → category → partition
@@ -663,37 +669,51 @@ func (c *BCMClient) buildHost(device *bcmclient.Device) *Host {
 	}
 }
 
-// UnassignHost clears the OSAC assignment from a BCM device and deletes the
-// on-demand BMH CR. Ordering is BCM update before BMH deletion for crash
-// recovery safety — both steps are individually idempotent.
+// UnassignHost deletes generated resources before clearing the BCM claim.
 func (c *BCMClient) UnassignHost(ctx context.Context, inventoryHostID, bareMetalInstanceID string, labels []string) error {
 	_, hostname, err := ParseHostID(inventoryHostID)
 	if err != nil {
 		return fmt.Errorf("UnassignHost: %w", err)
 	}
-
-	log := ctrllog.FromContext(ctx)
-	log.Info("Unassigning BCM host", "hostname", hostname)
-
-	ownedByAnother, err := c.clearBCMAssignment(ctx, hostname, bareMetalInstanceID, labels)
+	ctrllog.FromContext(ctx).Info("Unassigning BCM host", "hostname", hostname, "bmiUID", bareMetalInstanceID)
+	ownedByAnother, err := c.bcmHostOwnedByAnother(ctx, hostname, bareMetalInstanceID)
 	if err != nil {
 		return fmt.Errorf("UnassignHost: %w", err)
 	}
 	if ownedByAnother {
 		return nil
 	}
-
-	if err := c.bmhManager.DeleteBMH(ctx, hostname); err != nil {
+	if err := c.deleteBCMResources(ctx, hostname, bareMetalInstanceID); err != nil {
 		return fmt.Errorf("UnassignHost: %w", err)
 	}
-
-	// Delete the operator-created BMC Secret if we own it. Label-guarded inside
-	// DeleteBMCSecret, so admin-provided Secrets are never touched.
-	if err := c.bmhManager.DeleteBMCSecret(ctx, hostname+bmcSecretSuffix); err != nil {
+	_, err = c.clearBCMAssignment(ctx, hostname, bareMetalInstanceID, labels)
+	if err != nil {
 		return fmt.Errorf("UnassignHost: %w", err)
 	}
-
 	return nil
+}
+
+func (c *BCMClient) bcmHostOwnedByAnother(ctx context.Context, hostname, ownerUID string) (bool, error) {
+	device, err := c.client.GetDevice(ctx, hostname)
+	if err != nil || device == nil {
+		return false, err
+	}
+	owner, assigned := device.ExtraValues[bcmclient.ExtraValueInstanceID]
+	return assigned && owner != ownerUID, nil
+}
+
+func (c *BCMClient) deleteBCMResources(ctx context.Context, hostname, ownerUID string) error {
+	if err := c.bmhManager.DeleteBMH(ctx, hostname, ownerUID); err != nil {
+		return err
+	}
+	exists, err := c.bmhManager.BMHExists(ctx, hostname)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("BareMetalHost %s deletion pending", hostname)
+	}
+	return c.credentialsWriter.Delete(ctx, credentials.Reference{HostID: hostname, BMIID: ownerUID})
 }
 
 func (c *BCMClient) clearBCMAssignment(ctx context.Context, hostname, bareMetalInstanceID string, labels []string) (bool, error) {

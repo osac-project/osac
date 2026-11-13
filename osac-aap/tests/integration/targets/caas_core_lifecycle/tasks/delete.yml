@@ -1,0 +1,60 @@
+---
+# GATE-CAAS-04: run the real osac.templates.ocp_small delete workflow with
+# provider networking left at its default. The hosted-cluster step is
+# overridden so no resources are deleted, but the external-access step is
+# deliberately not overridden: the template default must be the no-op step.
+- name: CaaS core lifecycle - delete setup
+  hosts: localhost
+  gather_facts: true
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Read the ocp_small ClusterOrder fixture
+      ansible.builtin.set_fact:
+        test_cluster_order: "{{ lookup('file', '../../../fixtures/clusterorder-test.yaml') | from_yaml }}"
+
+    - name: Set up core delete steps with provider networking at its default
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          resource: "{{ test_cluster_order }}"
+        cluster_working_namespace: "cluster-test-cluster-work"
+        delete_step_hosted_cluster_override:
+          name: osac.workflows.workflow_helpers
+          tasks_from: noop.yml
+        hook_workflow_complete:
+          name: caas_role_audit
+          tasks_from: capture.yml
+
+- name: Import the ocp_small cluster delete workflow
+  ansible.builtin.import_playbook: osac.workflows.cluster.delete
+
+- name: Verify the disabled provider networking delete flow
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Verify the external-access delete step is the template no-op
+      ansible.builtin.assert:
+        that:
+          - delete_step_external_access_default is defined
+          - delete_step_external_access_default.name == "osac.templates.ocp_small"
+          - delete_step_external_access_default.tasks_from == "noop.yaml"
+        fail_msg: >-
+          ocp_small must resolve its external-access delete step to the
+          template no-op; the ClusterOrder controller owns provider networking.
+
+    - name: Verify the core delete flow ran without a provider networking role
+      ansible.builtin.assert:
+        that:
+          - workflow_completed_roles is defined
+          - "'osac.templates.ocp_small' in workflow_completed_roles"
+          - "'osac.service.finalizer' in workflow_completed_roles"
+          - "'osac.workflows.workflow_helpers' in workflow_completed_roles"
+          - workflow_completed_roles | select('search', 'external_access') | list | length == 0
+          - workflow_completed_roles | select('search', 'cluster_infra') | list | length == 0
+          - "'osac.templates.netris' not in workflow_completed_roles"
+        fail_msg: >-
+          The core delete flow must include osac.templates.ocp_small and its
+          core finalizer step, and no osac.service.external_access,
+          netris.steps.external_access, cluster_infra or Netris template role.

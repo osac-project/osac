@@ -1,4 +1,4 @@
-import { type Page, expect, test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
 import {
@@ -13,6 +13,7 @@ import {
   launchCatalogItem,
   openCatalogItemDetails,
 } from '../../../../libs/test-utils/src/catalog.page';
+import { selectOption } from '../../../../libs/test-utils/src/general/form_controls';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openCatalogPage } from '../../../../libs/test-utils/src/main.page';
@@ -31,22 +32,6 @@ import {
 
 const vmName = vmTestName;
 const cloudInit = '#cloud-config\nruncmd:\n  - echo vm-e2e';
-
-const selectOption = async (
-  page: Page,
-  field: readonly [role: 'button', options: { readonly name: string; readonly exact: true }],
-  optionName: string | RegExp,
-  index = 0,
-): Promise<string> => {
-  const fieldLocator = page.getByRole(...field).nth(index);
-  await expect(fieldLocator).toBeVisible();
-  await fieldLocator.click();
-  const option = page.getByRole('option', { name: optionName }).first();
-  await expect(option).toBeVisible();
-  const selectedName = (await option.innerText()).trim();
-  await option.click();
-  return selectedName;
-};
 
 test('tenant creates a VM from the published catalog item', async ({ page }) => {
   test.setTimeout(300_000);
@@ -97,22 +82,22 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
 
   const projectName = await testStep('catalog-launch', 'Set the project and VM name', async () => {
     const selectedProject = await selectOption(page, VmCreatePage.project, /.*/);
-    await page.getByRole(...VmCreatePage.vmName).fill(vmName);
+    await page.locator(...VmCreatePage.vmName).fill(vmName);
+    await page.getByRole(...VmCreatePage.next).click();
     return selectedProject;
   });
 
-  await testStep('catalog-launch', 'Verify the Disk image field on the General step', async () => {
-    const diskImage = page.getByRole(...VmCreatePage.diskImage);
-    const diskImageValue = page.locator(...VmCreatePage.diskImageValue);
-    await expect(diskImage).toBeVisible();
-    if (await diskImage.isEnabled()) {
-      if ((await diskImageValue.inputValue()) !== catalogTestData.fields.diskImage.name) {
+  await testStep(
+    'catalog-launch',
+    'Verify the Disk image field on the Compute configuration step',
+    async () => {
+      const diskImage = page.locator(...VmCreatePage.diskImage);
+      await expect(diskImage).toBeVisible();
+      if (await diskImage.isEnabled()) {
         await selectOption(page, VmCreatePage.diskImage, catalogTestData.fields.diskImage.name);
       }
-    }
-    await expect(diskImageValue).toHaveValue(catalogTestData.fields.diskImage.name);
-    await page.getByRole(...VmCreatePage.next).click();
-  });
+    },
+  );
 
   await testStep('catalog-launch', 'Select the Instance type', async () => {
     await selectOption(page, VmCreatePage.instanceType, new RegExp(instanceTypeTestData.name));
@@ -120,17 +105,17 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
   });
 
   await testStep('catalog-launch', 'Configure boot and additional disks', async () => {
-    await page.getByLabel(...VmCreatePage.bootDisk).fill('100');
-    await selectOption(page, VmCreatePage.storageTier, storageTierTestData.name);
+    await page.locator(...VmCreatePage.bootDisk).fill('100');
+    await selectOption(page, VmCreatePage.bootStorageTier, storageTierTestData.name);
     await page.getByRole(...VmCreatePage.addDisk).click();
-    await page.getByLabel(...VmCreatePage.additionalDiskSize).fill('30');
-    await selectOption(page, VmCreatePage.storageTier, storageTierTestData.name, 1);
+    await page.locator(...VmCreatePage.additionalDiskSize).fill('30');
+    await selectOption(page, VmCreatePage.storageTier, storageTierTestData.name);
     await page.getByRole(...VmCreatePage.next).click();
   });
 
   await testStep('catalog-launch', 'Configure default networking and external IP', async () => {
-    await expect(page.getByRole(...VmCreatePage.useTenantDefaultNetwork)).toBeChecked();
-    await page.getByRole(...VmCreatePage.autoExternalIp).check();
+    await expect(page.locator(...VmCreatePage.useTenantDefaultNetwork)).toBeChecked();
+    await page.locator(...VmCreatePage.autoExternalIp).check({ force: true });
     await page.getByRole(...VmCreatePage.next).click();
   });
 
@@ -168,7 +153,7 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
     await expect(
       page.getByText('30 GB, ' + storageTierTestData.name, { exact: true }),
     ).toBeVisible();
-    await expect(page.getByText('••••••••', { exact: true })).toBeVisible();
+    await expect(page.getByText(...VmCreatePage.userDataProvided)).toBeVisible();
     await expect(page.getByRole(...VmCreatePage.create)).toBeVisible();
   });
 

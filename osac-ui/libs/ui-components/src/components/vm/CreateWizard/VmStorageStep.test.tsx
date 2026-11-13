@@ -12,10 +12,10 @@ import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 import { provisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 
-const makeTier = (name: string, displayName: string) =>
+const makeTier = (name: string) =>
   create(StorageTierSchema, {
     id: `id-${name}`,
-    metadata: { name, displayName },
+    metadata: { name },
     status: { state: StorageTierState.ACTIVE },
   });
 
@@ -30,7 +30,7 @@ const renderStep = (
         spec: {
           ...createEmptyComputeInstanceValues().spec,
           bootDisk: {
-            sizeGib: provisioningFieldValue(''),
+            sizeGib: provisioningFieldValue(undefined),
             storageTier: provisioningFieldValue(storageTier, storageTierLocked),
           },
         },
@@ -41,7 +41,7 @@ const renderStep = (
     </Formik>,
     {
       apiFixtures: {
-        publicStorageTiers: [makeTier('other', 'Other'), makeTier('fast', 'Fast SSD')],
+        publicStorageTiers: [makeTier('other'), makeTier('fast')],
       },
     },
   );

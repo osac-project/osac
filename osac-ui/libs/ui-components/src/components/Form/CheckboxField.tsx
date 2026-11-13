@@ -12,6 +12,7 @@ interface CheckboxFieldProps {
   ariaLabel?: string;
   fieldId: string;
   isDisabled?: boolean;
+  isRequired?: boolean;
   helperText?: string;
   /** Called after the Formik value is set with the new checked state. */
   onChange?: (checked: boolean) => void;
@@ -23,6 +24,7 @@ export const CheckboxField = ({
   ariaLabel,
   fieldId,
   isDisabled = false,
+  isRequired = false,
   helperText,
   onChange,
 }: CheckboxFieldProps) => {
@@ -39,6 +41,7 @@ export const CheckboxField = ({
         aria-label={ariaLabel}
         isChecked={field.value}
         isDisabled={isDisabled}
+        isRequired={isRequired}
         onChange={(_event, checked) => {
           void helpers.setValue(checked);
           onChange?.(checked);

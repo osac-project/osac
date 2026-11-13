@@ -63,12 +63,30 @@ describe('buildComputeCatalogStepSchema', () => {
       }),
     ).rejects.toMatchObject({
       path: 'userData.value',
-      message: 'Cloud-init must not exceed 64 KB.',
+      message: 'User data must not exceed 64 KB.',
     });
   });
 
-  it.each(['', '   '])(
-    'requires a non-blank size for every additional disk row',
+  it('allows an empty editable boot disk size but requires a locked value', async () => {
+    const schema = buildComputeCatalogStepSchema('storage', t, 'tenant-admin');
+
+    await expect(
+      schema?.validate({
+        bootDiskSizeGib: { locked: false, value: undefined },
+      }),
+    ).resolves.toBeDefined();
+    await expect(
+      schema?.validate({
+        bootDiskSizeGib: { locked: true, value: undefined },
+      }),
+    ).rejects.toMatchObject({
+      path: 'bootDiskSizeGib.value',
+      message: 'Boot disk size is required when locked',
+    });
+  });
+
+  it.each([undefined, Number.NaN, 0, -1, 30.5, 16385])(
+    'rejects an invalid size for every additional disk row (%s)',
     async (sizeGib) => {
       const schema = buildComputeCatalogStepSchema('storage', t, 'tenant-admin');
 
@@ -81,7 +99,14 @@ describe('buildComputeCatalogStepSchema', () => {
         }),
       ).rejects.toMatchObject({
         path: 'additionalDisks.value[0].sizeGib',
-        message: 'Disk size is required',
+        message:
+          sizeGib === undefined
+            ? 'Disk size is required'
+            : sizeGib === 0 || sizeGib === -1
+              ? 'Must be greater than zero'
+              : sizeGib === 16385
+                ? 'Must be at most {{max}}'
+                : 'Must be a whole number',
       });
     },
   );

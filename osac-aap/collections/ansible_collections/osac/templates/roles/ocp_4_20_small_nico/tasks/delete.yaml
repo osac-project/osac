@@ -3,4 +3,7 @@
     name: osac.templates.ocp_small
     tasks_from: "delete"
   vars:
-    ocp_release_image: "{{ nico_ocp_release_image }}"
+    ocp_release_version: "{{ nico_ocp_release_version }}"
+    delete_step_external_access_override:
+      name: osac.templates.ocp_4_20_small_nico
+      tasks_from: nico_external_access_delete.yaml

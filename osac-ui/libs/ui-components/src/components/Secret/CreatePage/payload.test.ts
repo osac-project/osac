@@ -7,7 +7,7 @@ import { buildSecretCreatePayload, buildSecretUpdatePayload } from './payload';
 import { createSecretDataEntry, getSecretValues } from './values';
 
 const values = (data: Array<{ key: string; value: Uint8Array }>) => ({
-  metadata: { name: 'my-secret', project: 'my-project', description: 'foo-desc' },
+  metadata: { name: 'my-secret', project: 'my-project' },
   type: SecretType.OPAQUE,
   data: data.map((e) => createSecretDataEntry(e.key, e.value)),
 });

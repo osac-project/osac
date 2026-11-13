@@ -335,7 +335,7 @@ class K8sClient:
     def get_subnet_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",
-            "subnet",
+            "subnets.osac.openshift.io",
             "-n",
             self.namespace,
             "-l",
@@ -426,11 +426,7 @@ class K8sClient:
     # Storage tier resolution
 
     def get_storage_class_for_tier(
-        self,
-        *,
-        tier_name: str,
-        tenant_name: str | None = None,
-        storage_class_client: K8sClient | None = None,
+        self, *, tier_name: str, tenant_name: str | None = None, storage_class_client: K8sClient | None = None
     ) -> str:
         """Resolve StorageClass name from tier name via Tenant.status.storageClasses or labeled StorageClasses."""
         normalized_tier = tier_name.strip().lower()
@@ -719,7 +715,7 @@ class K8sClient:
     def get_security_group_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",
-            "securitygroup",
+            "securitygroups.osac.openshift.io",
             "-n",
             self.namespace,
             "-l",

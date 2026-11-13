@@ -44,8 +44,6 @@ const allCatalogServiceTiers = [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier
 
 const vmCatalogMetaData: Metadata = {
   $typeName: 'osac.public.v1.Metadata',
-  displayName: '',
-  description: '',
   name: 'catalog-rhel-9',
   annotations: {},
   creator: 'foo',
@@ -114,8 +112,6 @@ const clusterCatalogItem: ClusterCatalogItem = {
   id: 'catalog-openshift-4',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: 'catalog-openshift-4',
     creator: 'admin',
     annotations: {},
@@ -136,8 +132,6 @@ const bareMetalCatalogItem: BareMetalInstanceCatalogItem = {
   id: 'catalog-bare-metal-1',
   metadata: {
     $typeName: 'osac.public.v1.Metadata',
-    displayName: '',
-    description: '',
     name: 'catalog-bare-metal-1',
     creator: 'admin',
     annotations: {},
@@ -829,8 +823,6 @@ describe('CatalogPage', () => {
       id: 'catalog-fedora-40',
       metadata: {
         $typeName: 'osac.public.v1.Metadata',
-        displayName: '',
-        description: '',
         name: 'catalog-fedora-40',
         annotations: {},
         creator: 'foo',

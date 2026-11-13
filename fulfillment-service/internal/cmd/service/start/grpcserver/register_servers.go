@@ -20,10 +20,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -76,6 +79,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PublicAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetSecretStore(deps.SecretStore).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cluster templates server: %w", err)
@@ -128,6 +132,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
+			SetSecretStore(deps.SecretStore).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private cluster templates server: %w", err)
@@ -181,6 +186,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetNetworkingSettings(deps.NetworkingSettings).
+			SetSecretStore(deps.SecretStore).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create clusters server: %w", err)
@@ -194,6 +200,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetNetworkingSettings(deps.NetworkingSettings).
+			SetSecretStore(deps.SecretStore).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private clusters server: %w", err)
@@ -316,6 +323,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetSecretStore(deps.SecretStore).
+			SetNetworkingSettings(deps.NetworkingSettings).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create bare metal instances server: %w", err)
@@ -353,6 +361,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 			SetTenancyLogic(deps.TenancyLogic).
 			SetMetricsRegisterer(deps.MetricsRegisterer).
 			SetSecretStore(deps.SecretStore).
+			SetNetworkingSettings(deps.NetworkingSettings).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private bare metal instances server: %w", err)
@@ -684,6 +693,13 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	publicv1.RegisterStorageTiersServer(registrar, storageTiersServer)
 
+	// Create the permission catalog, derived from the proto registry of the running build:
+	deps.Logger.InfoContext(ctx, "Creating permission catalog")
+	permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create permission catalog: %w", err)
+	}
+
 	// Create the roles server:
 	deps.Logger.InfoContext(ctx, "Creating roles server")
 	rolesServer, err := servers.NewRolesServer().
@@ -691,6 +707,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetPermissionCatalog(permissionCatalog).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create roles server: %w", err)
@@ -704,11 +721,22 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetPermissionCatalog(permissionCatalog).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private roles server: %w", err)
 	}
 	privatev1.RegisterRolesServer(registrar, privateRolesServer)
+
+	userReferenceDAO, err := dao.NewGenericDAO[*privatev1.User]().
+		SetLogger(deps.Logger).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create User DAO for public reference redaction: %w", err)
+	}
+	userReferenceLookup := references.NewTenantScopedDAOLookupFunc(userReferenceDAO)
 
 	// Create the role bindings server:
 	deps.Logger.InfoContext(ctx, "Creating role bindings server")
@@ -717,6 +745,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetUserReferenceLookup(userReferenceLookup).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create role bindings server: %w", err)
@@ -765,6 +794,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PublicAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetUserReferenceLookup(userReferenceLookup).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project memberships server: %w", err)

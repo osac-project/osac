@@ -6,5 +6,8 @@ description: >
 
 template_type: cluster
 
+capabilities:
+  supports_automatic_caas_endpoints: true
+
 spec_defaults:
   version_name: "4.22.0"

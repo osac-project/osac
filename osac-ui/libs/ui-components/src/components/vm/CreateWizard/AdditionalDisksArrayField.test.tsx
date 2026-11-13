@@ -12,14 +12,14 @@ import { getAllResourceSelectInputs } from '../../../test-utils/query';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 import { type ResourceSelectValue, emptyResourceSelectValue } from '../../Form/resourceSelectValue';
 
-const makeTier = (name: string, displayName: string) =>
+const makeTier = (name: string) =>
   create(StorageTierSchema, {
     id: `id-${name}`,
-    metadata: { name, displayName },
+    metadata: { name },
     status: { state: StorageTierState.ACTIVE },
   });
 
-const storageTiers = [makeTier('fast', 'Fast SSD'), makeTier('bulk', 'Bulk Capacity')];
+const storageTiers = [makeTier('fast'), makeTier('bulk')];
 
 const selectTier = async (
   user: ReturnType<typeof renderWithProviders>['user'],
@@ -32,7 +32,7 @@ const selectTier = async (
 };
 
 const renderField = (
-  initialDisks: { sizeGib: string; storageTier: ResourceSelectValue }[] = [],
+  initialDisks: { sizeGib: number | undefined; storageTier: ResourceSelectValue }[] = [],
   withValidation = false,
 ) =>
   renderWithProviders(
@@ -127,7 +127,7 @@ describe('AdditionalDisksArrayField', () => {
   });
 
   it('leaves a new disk storage tier unset until selected', async () => {
-    renderField([{ sizeGib: '30', storageTier: emptyResourceSelectValue() }], true);
+    renderField([{ sizeGib: 30, storageTier: emptyResourceSelectValue() }], true);
 
     await waitFor(() => expect(getAllResourceSelectInputs(/^Storage tier/)[0]).toHaveValue(''));
     expect(screen.getByText('Storage tier is required')).toBeInTheDocument();
@@ -161,7 +161,7 @@ describe('AdditionalDisksArrayField', () => {
   });
 
   it('renders a row already present in initial values (e.g. seeded from a catalog default) as editable and removable', async () => {
-    const { user } = renderField([{ sizeGib: '40', storageTier: { id: 'id-fast', name: 'fast' } }]);
+    const { user } = renderField([{ sizeGib: 40, storageTier: { id: 'id-fast', name: 'fast' } }]);
 
     const sizeInput = screen.getByRole('spinbutton', { name: 'Disk size (GiB)' });
     expect(sizeInput).toHaveValue(40);

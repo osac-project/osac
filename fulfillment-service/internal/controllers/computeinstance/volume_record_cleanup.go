@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -62,6 +63,15 @@ func (t *task) releaseFinalizerAfterVolumeCleanup(ctx context.Context, release f
 		}
 		if _, err := diskRegistrationsComplete(instance, prepared); err != nil {
 			return t.retryVolumeCleanup(err)
+		}
+
+		// The recovery wrote the ComputeInstance, so a release must change the finalizers read after it and carry
+		// that version. When the cleanup is still pending nothing is copied, so this pass writes nothing more.
+		releaseFinalizer := release
+		release = func() {
+			t.computeInstance.GetMetadata().SetFinalizers(slices.Clone(instance.GetMetadata().GetFinalizers()))
+			t.computeInstance.GetMetadata().SetVersion(instance.GetMetadata().GetVersion())
+			releaseFinalizer()
 		}
 	}
 

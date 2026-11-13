@@ -71,19 +71,19 @@ describe('buildClusterCatalogItemCreatePayload', () => {
           rowId: 'workers-row',
           name: 'workers',
           hostType: { id: 'bmit-worker', name: 'worker' },
-          size: '3',
+          size: 3,
         },
         {
           rowId: 'infra-row',
           name: 'infra',
           hostType: { id: 'bmit-infra', name: 'infra' },
-          size: '1',
+          size: 1,
         },
         {
           rowId: 'legacy-row',
           name: 'legacy',
-          hostType: { id: 'bmit-legacy', name: '' },
-          size: '1',
+          hostType: { id: 'bmit-legacy', name: 'legacy' },
+          size: 1,
         },
       ],
     };
@@ -103,7 +103,7 @@ describe('buildClusterCatalogItemCreatePayload', () => {
             },
             legacy: {
               size: 1,
-              baremetalInstanceType: { id: 'bmit-legacy', shared: true },
+              baremetalInstanceType: { id: 'bmit-legacy', name: 'legacy', shared: true },
             },
           },
         },

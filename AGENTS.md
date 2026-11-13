@@ -85,6 +85,7 @@ tool surface and setup; later MCP epics own the supported host setup surface.
 - After changing protos, regenerate ONCE: `make -C proto generate`, then commit `proto/private/` (or `proto/tests/`), `proto/public/`, and `proto/gen/`. See [`proto/AGENTS.md`](proto/AGENTS.md). Never hand-edit `proto/public/` or `proto/gen/`.
 - Cross-component architecture and dependency conventions are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md).
 - E2E tests belong under [`tests/e2e/`](tests/e2e/) and follow [`tests/e2e/AGENTS.md`](tests/e2e/AGENTS.md).
+- Code that writes fulfillment `metadata.finalizers` must change an object it read in the same pass and send its `metadata.version`; the server rejects a stale finalizer change with `Aborted`. Reconciler functions return that error so the loop re-reads and retries. See [`fulfillment-service/docs/API.md`](fulfillment-service/docs/API.md#update-when-supported).
 - Bootstrap-created sibling checkouts are separate repositories; do not include their changes in a mono-repo PR. The `osac-ux/` checkout is read-only. The tracked `osac-ui/` component is part of this mono-repo.
 
 
@@ -125,7 +126,12 @@ forks writable repositories using authenticated `gh`; use
 
 Use the affected component's touched-area map and the relevant section of
 [Integration testing](docs/INTEGRATION-TESTING.md) for tiers, commands, and
-coverage boundaries. Keep both current when suites change, and link missing
+coverage boundaries. Follow the linked component suite guide and inspect its
+actual test source before extending coverage. Update the suite guide only when
+commands, prerequisites, dependency boundaries, coverage scope or known gaps
+change; update the touched-area map when required validation changes. Routine
+test additions do not require a documentation inventory update. Keep individual
+assertions in test source and execution results in the PR or task. Link missing
 coverage to its owning follow-up ticket using the Jira URL.
 
 Assign Unit, Envtest, component-integration, and Contract coverage for changed

@@ -10,11 +10,10 @@ import { tIdentity as t } from '../../test-utils/i18n';
 const validValues: VolumeFormValues = {
   metadata: {
     name: 'data-volume',
-    description: 'A block volume',
   },
   spec: {
     storageTier: { id: 'gold-block', name: 'gold-block' },
-    sizeGib: '128',
+    sizeGib: 128n,
     accessMode: VolumeAccessMode.READ_WRITE_ONCE,
   },
 };
@@ -25,7 +24,7 @@ describe('getVolumeValidationSchema', () => {
       metadata: validValues.metadata,
       spec: {
         ...validValues.spec,
-        sizeGib: 128,
+        sizeGib: 128n,
       },
     });
   });
@@ -34,8 +33,9 @@ describe('getVolumeValidationSchema', () => {
     ['metadata.name', ''],
     ['metadata.name', 'Invalid_Name'],
     ['spec.storageTier.id', ''],
-    ['spec.sizeGib', '0'],
+    ['spec.sizeGib', 0n],
     ['spec.sizeGib', 'not-a-number'],
+    ['spec.sizeGib', undefined],
     ['spec.accessMode', VolumeAccessMode.UNSPECIFIED],
   ])('rejects invalid value at %s', async (path, value) => {
     const values = structuredClone(validValues) as unknown as Record<string, unknown>;

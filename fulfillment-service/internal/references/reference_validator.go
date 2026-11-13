@@ -34,6 +34,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
 
@@ -438,7 +439,16 @@ func (v *ReferenceValidator) resolveAndMutate(ctx context.Context, refMsg protor
 			"no lookup registered for reference type %q", fullName)
 	}
 
-	refTenant, refProject := resolveTenantProject(refMsg, fullName, callerTenant, callerProject)
+	fieldPath := strings.Join(path, ".")
+	refTenant, refProject, scopeErr := resolveTenantProject(refMsg, fullName, callerTenant, callerProject)
+	if scopeErr != nil {
+		*violations = append(*violations, &errdetails.BadRequest_FieldViolation{
+			Field:       fieldPath,
+			Description: scopeErr.Error(),
+		})
+		v.recordResult(string(fullName.Name()), "invalid")
+		return nil
+	}
 
 	idField := refMsg.Descriptor().Fields().ByName("id")
 	nameField := refMsg.Descriptor().Fields().ByName("name")
@@ -450,7 +460,6 @@ func (v *ReferenceValidator) resolveAndMutate(ctx context.Context, refMsg protor
 	name := refMsg.Get(nameField).String()
 
 	resourceType := string(fullName.Name())
-	fieldPath := strings.Join(path, ".")
 
 	if id == "" && name == "" {
 		*violations = append(*violations, &errdetails.BadRequest_FieldViolation{
@@ -502,6 +511,20 @@ func (v *ReferenceValidator) resolveAndMutate(ctx context.Context, refMsg protor
 		v.recordResult(resourceType, "error")
 		return grpcstatus.Errorf(grpccodes.Internal,
 			"internal error resolving reference at %s", fieldPath)
+	}
+
+	// ID-based DAOLookup registrations preserve their visibility-based legacy behavior.
+	// If the request supplies an explicit tenant, verify the resolved target belongs to it
+	// before filling fields or allowing the request to proceed.
+	tenantField := refMsg.Descriptor().Fields().ByName("tenant")
+	if isStringField(tenantField) && refMsg.Get(tenantField).String() != "" &&
+		resolved.Tenant != refMsg.Get(tenantField).String() {
+		*violations = append(*violations, &errdetails.BadRequest_FieldViolation{
+			Field:       fieldPath,
+			Description: fmt.Sprintf("%s %q not found", shortName(fullName), identifier(id, name)),
+		})
+		v.recordResult(resourceType, "invalid")
+		return nil
 	}
 
 	if id == "" && resolved.ID != "" {
@@ -556,19 +579,31 @@ func (v *ReferenceValidator) recordDuration(resourceType string, d time.Duration
 
 // resolveTenantProject determines the tenant and project for a reference lookup based on the
 // reference type and fields. Local references always use the caller's tenant and project.
-// Global (full) references use the reference's own project value directly: an empty project
+// Full references use an explicit tenant when present, falling back to the legacy shared
+// selector and then the caller tenant. Their project value is used directly: an empty project
 // selects the tenant's default/root project rather than inheriting the caller's project.
 func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.FullName,
-	callerTenant, callerProject string) (string, string) {
+	callerTenant, callerProject string) (string, string, error) {
 	if isLocalReference(fullName) {
-		return callerTenant, callerProject
+		return callerTenant, callerProject, nil
 	}
 
 	tenant := callerTenant
+	tenantField := refMsg.Descriptor().Fields().ByName("tenant")
+	explicitTenant := ""
+	if isStringField(tenantField) {
+		explicitTenant = refMsg.Get(tenantField).String()
+	}
 
 	sharedField := refMsg.Descriptor().Fields().ByName("shared")
-	if sharedField != nil && refMsg.Get(sharedField).Bool() {
-		tenant = "shared"
+	shared := sharedField != nil && refMsg.Get(sharedField).Bool()
+	if explicitTenant != "" && shared && explicitTenant != auth.SharedTenant {
+		return "", "", fmt.Errorf("reference has conflicting tenant and shared selectors")
+	}
+	if explicitTenant != "" {
+		tenant = explicitTenant
+	} else if shared {
+		tenant = auth.SharedTenant
 	}
 
 	project := ""
@@ -577,7 +612,7 @@ func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.Ful
 		project = refMsg.Get(projectField).String()
 	}
 
-	return tenant, project
+	return tenant, project, nil
 }
 
 // extractTenantProject extracts the tenant and project from the request's embedded object metadata

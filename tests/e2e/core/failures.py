@@ -12,7 +12,6 @@ from tests.e2e.core.sanitize import sanitize_text
 
 _SUMMARY_LIMIT = 1000
 _CHAIN_LIMIT = 6
-_API_PROGRAMS = frozenset({"grpcurl", "osac"})
 _GRPC_LINE = re.compile(r"(?m)^\s*(Code|Message):\s*(.+?)\s*$")
 
 
@@ -75,8 +74,7 @@ def _kind_of(exc: BaseException) -> Kind | None:
     if isinstance(tag, Kind):
         return tag
     if isinstance(exc, CommandFailed):
-        program = str(exc.cmd[0]).rsplit("/", 1)[-1] if exc.cmd else ""
-        return Kind.API_REFUSED if program in _API_PROGRAMS else None
+        return Kind.API_REFUSED if exc.is_api_command else None
     if isinstance(exc, StuckState):
         return Kind.STUCK_STATE
     if isinstance(exc, AssertionError):
@@ -84,11 +82,41 @@ def _kind_of(exc: BaseException) -> Kind | None:
     return None
 
 
+def _classification_chain(exc: BaseException) -> list[BaseException]:
+    """Prefer ordinary chain kinds, then the first known depth-first group branch within six links."""
+    outer = _chain(exc)
+    pending = [(outer, [])]
+    seen: dict[int, int] = {}
+    while pending:
+        candidates, prefix = pending.pop()
+        chain: list[BaseException] = []
+        for candidate in candidates[: _CHAIN_LIMIT - len(prefix)]:
+            depth = len(prefix) + len(chain)
+            if seen.get(id(candidate), _CHAIN_LIMIT) <= depth:
+                break
+            seen[id(candidate)] = depth
+            chain.append(candidate)
+        if any(_kind_of(error) is not None for error in chain):
+            return prefix + chain
+        branches = [
+            (_chain(member), prefix + chain[: index + 1])
+            for index, error in enumerate(chain)
+            if isinstance(error, BaseExceptionGroup)
+            for member in error.exceptions
+        ]
+        pending.extend(reversed(branches))
+    return outer
+
+
 def classify(exc: BaseException) -> Classified:
-    """Kind, a sanitized summary of the outermost exception, and any IDs the failure carries."""
-    chain = _chain(exc)
+    """Classify ordinary chains first, then ordered group members, keeping evidence on the selected branch."""
+    chain = _classification_chain(exc)
     kind = next((k for k in map(_kind_of, chain) if k is not None), Kind.UNCLASSIFIED)
     text = str(exc) or type(exc).__name__
+    if any(isinstance(error, BaseExceptionGroup) for error in chain):
+        selected = next((error for error in chain if _kind_of(error) is not None), exc)
+        if selected is not exc:
+            text = f"{text}\n{selected}"
     if kind is Kind.UNCLASSIFIED:
         text = f"{type(exc).__name__}: {text}"
     # An outer message (a hint, a diagnosis) comes first; the gRPC status of an inner command rides along.

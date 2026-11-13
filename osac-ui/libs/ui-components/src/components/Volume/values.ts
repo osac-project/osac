@@ -7,11 +7,10 @@ export const VOLUMES_LIST_PATH = '/storage/volumes';
 export interface VolumeFormValues {
   metadata: {
     name: string;
-    description: string;
   };
   spec: {
     storageTier: ResourceSelectValue;
-    sizeGib: string;
+    sizeGib: bigint | undefined;
     accessMode: VolumeAccessMode;
   };
 }
@@ -19,11 +18,10 @@ export interface VolumeFormValues {
 export const getVolumeValues = (): VolumeFormValues => ({
   metadata: {
     name: '',
-    description: '',
   },
   spec: {
     storageTier: emptyResourceSelectValue(),
-    sizeGib: '',
+    sizeGib: undefined,
     accessMode: VolumeAccessMode.UNSPECIFIED,
   },
 });

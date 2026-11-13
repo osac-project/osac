@@ -29,7 +29,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 
-pytestmark = pytest.mark.regression
+pytestmark = pytest.mark.sanity
 
 logger = logging.getLogger(__name__)
 
@@ -156,10 +156,17 @@ def _grpc_popen(address: str, ticket: str, reflect_token: str) -> subprocess.Pop
     env["CONSOLE_TICKET"] = ticket
     return subprocess.Popen(
         [
-            "grpcurl", "-insecure", "-expand-headers",
-            "-reflect-header", "Authorization: Bearer ${REFLECTION_JWT}",
-            "-rpc-header", "Authorization: Bearer ${CONSOLE_TICKET}",
-            "-d", "@", address, CONSOLE_GRPC_SERVICE,
+            "grpcurl",
+            "-insecure",
+            "-expand-headers",
+            "-reflect-header",
+            "Authorization: Bearer ${REFLECTION_JWT}",
+            "-rpc-header",
+            "Authorization: Bearer ${CONSOLE_TICKET}",
+            "-d",
+            "@",
+            address,
+            CONSOLE_GRPC_SERVICE,
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,

@@ -242,7 +242,11 @@ func (s *PrivateDiskImagesServer) validateArchitectureUpdate(ctx context.Context
 
 func (s *PrivateDiskImagesServer) Delete(ctx context.Context,
 	request *privatev1.DiskImagesDeleteRequest) (response *privatev1.DiskImagesDeleteResponse, err error) {
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.DiskImagesDeleteResponse{Object: object}
 	return
 }
 

@@ -5,11 +5,6 @@
 # Used when a cluster is deleted but the tenant stays (resources may be
 # needed on other clusters).
 
-- name: Validate tenant_name is a valid DNS label
-  ansible.builtin.fail:
-    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
-  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
-
 # Outside the rescue-guarded block below: resolving the backend_id is a contract
 # check against the dispatched tiers, not a target-cluster operation, so a
 # failure here must surface rather than be reported as "target cluster

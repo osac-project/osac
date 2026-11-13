@@ -4,7 +4,7 @@
   gather_facts: false
   vars:
     vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     tenant_name: test-nolog
     tenant_namespace: osac-system
     storage_provider_backend_connections:

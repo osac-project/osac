@@ -11,7 +11,7 @@
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
     vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     storage_provider_backend_connections:
       be-a:
         endpoint: "127.0.0.1:18443"
@@ -73,7 +73,7 @@
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
     vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     storage_provider_backend_connections:
       be-b:
         endpoint: "127.0.0.1:18443"
@@ -102,7 +102,7 @@
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
     vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     storage_provider_backend_connections:
       be-b:
         endpoint: "127.0.0.1:18443"
@@ -178,7 +178,7 @@
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
     vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     storage_provider_backend_connections:
       be-a:
         endpoint: "127.0.0.1:18443"

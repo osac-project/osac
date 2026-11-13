@@ -7,7 +7,7 @@
     tenant_namespace: osac-system
     tenant_uid: "test-uid-retrystate"
     vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     storage_provider_backend_connections:
       be-retry:
         endpoint: "127.0.0.1:18443"
@@ -119,7 +119,7 @@
     tenant_namespace: osac-system
     tenant_uid: "test-uid-retrystate"
     vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     storage_provider_backend_connections:
       be-retry:
         endpoint: "127.0.0.1:18443"
@@ -190,7 +190,7 @@
     tenant_namespace: osac-system
     tenant_uid: "test-uid-retrystate"
     vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     storage_provider_backend_connections:
       be-retry:
         endpoint: "127.0.0.1:18443"

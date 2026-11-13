@@ -80,3 +80,5 @@ jobs:
       # Every run captures telemetry now, so the password is always passed.
       # Without it the run still passes, it just leaves no telemetry.
       CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
+      OSAC_CI_APP_ID: ${{ secrets.OSAC_CI_APP_ID }}
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

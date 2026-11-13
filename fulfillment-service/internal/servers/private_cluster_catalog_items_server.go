@@ -275,7 +275,11 @@ func (s *PrivateClusterCatalogItemsServer) validateAndCanonicalizeTemplate(
 
 func (s *PrivateClusterCatalogItemsServer) Delete(ctx context.Context,
 	request *privatev1.ClusterCatalogItemsDeleteRequest) (response *privatev1.ClusterCatalogItemsDeleteResponse, err error) {
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.ClusterCatalogItemsDeleteResponse{Object: object}
 	return
 }
 

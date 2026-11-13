@@ -167,6 +167,10 @@ spec:
             # to a newer line's version. The marker tag carries the
             # umbrella version, dotted (v0.4.1, v0.4.0-rc.2-retry1) or as
             # the prod promotion's dashed slug (v0-4-0-rc-2-prod-r1a1).
+            # The version filter below is the grammar of RELEASE_VERSION_RE
+            # (osac-installer/scripts/lib.sh). The result is always the
+            # highest version in the line, which is why the release
+            # workflow refuses to pin a component below its latest.
             if [[ ! "${TRIGGER_REF}" =~ ^refs/tags/osac-charts-release/v([0-9]+)[.-]([0-9]+)[.-][0-9]+ ]]; then
               echo "ERROR: cannot derive a release line from trigger ref ${TRIGGER_REF}" >&2
               exit 1
@@ -178,7 +182,7 @@ spec:
             git fetch --tags origin
             ALL_VERSIONS=$(git tag -l "$(params.tag-prefix)*" \
               | sed "s#^$(params.tag-prefix)##" \
-              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' || true; } \
+              | { grep -E '^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})(-rc\.[1-9][0-9]{0,5})?$' || true; } \
               | { grep -E "${LINE_RE}" || true; })
             if [ -z "${ALL_VERSIONS}" ]; then
               echo "ERROR: no release tag matching $(params.tag-prefix)* found in that line" >&2

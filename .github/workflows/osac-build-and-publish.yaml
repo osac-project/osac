@@ -291,6 +291,14 @@ jobs:
           elif [[ -n "${OVERRIDES[${COMPONENT}]+x}" ]]; then
             TARGET_VERSION="${OVERRIDES[${COMPONENT}]}"
             if real_tag_exists "${COMPONENT}" "${TARGET_VERSION}"; then
+              # The Konflux chart pipelines never see this pin: each one
+              # publishes the highest version its chart has in the line
+              # (resolve-chart-version in .tekton/*-chart/release.yaml).
+              # An older pin would ship one version here and another there.
+              if [[ "${TARGET_VERSION}" != "${LATEST_IN_LINE}" ]]; then
+                echo "::error::${COMPONENT} ${TARGET_VERSION} is not its latest version in line ${RELEASE_LINE}.x (${LATEST_IN_LINE}) -- a release always carries a component's latest version in the line" >&2
+                exit 1
+              fi
               NEEDS_BUILD=false
               WILL_TAG=false
               echo "${COMPONENT}: ${TARGET_VERSION} already released -- pinning, no rebuild"
@@ -326,7 +334,7 @@ jobs:
 
           if [[ "${MODE}" == "release" ]] && ! is_prerelease_version "${RELEASE_VERSION}" \
             && is_prerelease_version "${TARGET_VERSION}"; then
-            echo "::error::Stable release ${RELEASE_VERSION} cannot contain ${COMPONENT} ${TARGET_VERSION} -- release a stable version of it in component_versions" >&2
+            echo "::error::Stable release ${RELEASE_VERSION} cannot contain ${COMPONENT} ${TARGET_VERSION}, its latest version in line ${RELEASE_LINE}.x -- release a stable version of it in component_versions (an older stable version cannot be pinned)" >&2
             exit 1
           fi
 

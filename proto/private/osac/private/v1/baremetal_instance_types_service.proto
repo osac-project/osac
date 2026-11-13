@@ -115,6 +115,7 @@ message BareMetalInstanceTypesDeleteRequest {
 
 message BareMetalInstanceTypesDeleteResponse {
   option (cleanapi.message).private = true;
+  BareMetalInstanceType object = 1;
 }
 
 message BareMetalInstanceTypesSignalRequest {
@@ -158,7 +159,7 @@ service BareMetalInstanceTypes {
   }
   rpc Delete(BareMetalInstanceTypesDeleteRequest) returns (BareMetalInstanceTypesDeleteResponse) {
     option (cleanapi.method).private = true;
-    option (google.api.http) = {delete: "/api/private/v1/bare_metal_instance_types/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/bare_metal_instance_types/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

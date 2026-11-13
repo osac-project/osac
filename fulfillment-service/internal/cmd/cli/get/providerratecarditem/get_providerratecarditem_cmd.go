@@ -162,10 +162,10 @@ func renderTable(console *terminal.Console, items []*publicv1.ProviderRateCardIt
 			_, writeErr = fmt.Fprintf(writer, format, args...)
 		}
 	}
-	printf("SERVICE\tCURRENCY\tCONDITIONS\tAMOUNT\tUNIT\tCATALOG ITEMS\n")
+	printf("SERVICE\tCURRENCY\tDIMENSION\tCONDITIONS\tAMOUNT\tUNIT\tCATALOG ITEMS\n")
 	for _, item := range items {
-		printf("%s\t%s\t%s\t%s\t%s\t%s\n",
-			item.GetService(), item.GetCurrencyCode(), renderConditions(item), item.GetRate().GetAmount(),
+		printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			item.GetService(), item.GetCurrencyCode(), rendering.Dash(item.GetDimension()), renderConditions(item), item.GetRate().GetAmount(),
 			item.GetRate().GetUnit(), rendering.Dash(strings.Join(item.GetCatalogItemMatches(), ", ")))
 	}
 	if writeErr != nil {
@@ -174,7 +174,7 @@ func renderTable(console *terminal.Console, items []*publicv1.ProviderRateCardIt
 	return writer.Flush()
 }
 
-// renderConditions renders every resource condition as "dimension=value" (ANY omits the value), joined by "&".
+// renderConditions renders every resource condition as "dimension=value" (ANY uses a literal "ANY"), joined by "&".
 func renderConditions(item *publicv1.ProviderRateCardItem) string {
 	conditions := item.GetResourceConditions()
 	if len(conditions) == 0 {
@@ -194,8 +194,8 @@ func renderConditions(item *publicv1.ProviderRateCardItem) string {
 const shortHelp = `List provider rate-card rows`
 
 const longHelp = `
-List the billing provider's rate-card rows as currency-specific, provider-neutral rows: service, currency, match
-conditions, rate amount and unit, and the OSAC catalog items each row can price. The {{ bt }}--currency-code{{ bt }}
+List the billing provider's rate-card rows as currency-specific, provider-neutral rows: service, currency, priced
+dimension, match conditions, rate amount and unit, and the OSAC catalog items each row can price. The {{ bt }}--currency-code{{ bt }}
 flag is required: OSAC never discovers the currency of a billing account, so the 3-letter ISO-4217 code must always
 be given. Only Cloud Provider Admins may run it. Fails when billing is disabled.
 `

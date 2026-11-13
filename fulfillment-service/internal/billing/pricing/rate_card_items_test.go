@@ -30,7 +30,7 @@ import (
 var _ = Describe("Resolver.ListServiceRateCardItems", func() {
 	ctx := context.Background()
 
-	It("normalizes a QUANTITY row with no attribute values as a single ANY condition (OSAC-6891)", func() {
+	It("preserves the priced dimension of an unkeyed QUANTITY row without inventing conditions (OSAC-6891)", func() {
 		resolver := pricing.NewResolver(billingfake.New(baseScenario()))
 		items, skipped, err := resolver.ListServiceRateCardItems(ctx, "compute_instance", "USD")
 		Expect(err).ToNot(HaveOccurred())
@@ -40,15 +40,17 @@ var _ = Describe("Resolver.ListServiceRateCardItems", func() {
 		Expect(items[0].Currency).To(Equal("USD"))
 		Expect(items[0].Unit).To(Equal("second"))
 		Expect(items[0].Amount.Equal(decimal.RequireFromString("0.25"))).To(BeTrue())
-		Expect(items[0].Conditions).To(Equal([]pricing.RateCondition{{Dimension: "cpu_hours", Operator: pricing.OperatorAny}}))
+		Expect(items[0].Dimension).To(Equal("cpu_hours"))
+		Expect(items[0].Conditions).To(BeEmpty())
 	})
 
 	It("normalizes a row with attribute values as EQUALS conditions", func() {
 		scenario := baseScenario()
+		scenario.Services[0].Attributes = []billing.PriceableAttribute{{ID: "dim-1", Name: "ComputeRate"}}
 		scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{
 			Rows: []billing.RateRow{{
 				DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.00125",
-				AttributeValues: []billing.AttributeValue{{Name: "instance_type", Value: "small"}},
+				AttributeValues: []billing.AttributeValue{{Name: "InstanceType", Value: "large-gpu"}},
 			}},
 		}
 		resolver := pricing.NewResolver(billingfake.New(scenario))
@@ -56,8 +58,9 @@ var _ = Describe("Resolver.ListServiceRateCardItems", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(skipped).To(BeEmpty())
 		Expect(items).To(HaveLen(1))
+		Expect(items[0].Dimension).To(Equal("ComputeRate"))
 		Expect(items[0].Conditions).To(Equal(
-			[]pricing.RateCondition{{Dimension: "instance_type", Operator: pricing.OperatorEquals, Value: "small"}}))
+			[]pricing.RateCondition{{Dimension: "InstanceType", Operator: pricing.OperatorEquals, Value: "large-gpu"}}))
 	})
 
 	It("omits and counts a row with an empty EQUALS value", func() {
@@ -120,6 +123,16 @@ var _ = Describe("Resolver.ListServiceRateCardItems", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(items).To(HaveLen(1))
 		Expect(skipped[pricing.SkipRateShapeUnsupported]).To(Equal(1))
+	})
+
+	It("omits and counts a row whose priced attribute has no OSAC name", func() {
+		scenario := baseScenario()
+		scenario.Services[0].Attributes = []billing.PriceableAttribute{{ID: "dim-1"}}
+		resolver := pricing.NewResolver(billingfake.New(scenario))
+		items, skipped, err := resolver.ListServiceRateCardItems(ctx, "compute_instance", "USD")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(items).To(BeEmpty())
+		Expect(skipped).To(Equal(map[string]int{pricing.SkipDimensionUnmapped: 1}))
 	})
 
 	It("returns an empty, error-free result for a service with no matching provider name", func() {

@@ -172,7 +172,11 @@ func (s *PrivateStorageBackendsServer) Update(ctx context.Context,
 
 func (s *PrivateStorageBackendsServer) Delete(ctx context.Context,
 	request *privatev1.StorageBackendsDeleteRequest) (response *privatev1.StorageBackendsDeleteResponse, err error) {
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.StorageBackendsDeleteResponse{Object: object}
 	return
 }
 

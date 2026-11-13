@@ -45,7 +45,7 @@ def _select_disk(policy: RootDiskPolicy, disks: list[dict], options: dict) -> di
 
 
 def root_device_hints(
-    hardware_data: list[dict], bmh: dict, policy: str = "smallest", **options
+    hardware_data: list[dict], bmh: dict, policy: str = RootDiskPolicy.SMALLEST.value, **options
 ) -> dict:
     """Build rootDeviceHints for the disk chosen by the policy.
 

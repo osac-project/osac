@@ -63,6 +63,8 @@ jobs:
       # Telemetry is always on for every suite run; this workflow has no switch.
     secrets:
       CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
+      OSAC_CI_APP_ID: ${{ secrets.OSAC_CI_APP_ID }}
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
 
   caas:
     needs: [plan, entry]
@@ -80,6 +82,8 @@ jobs:
       # Always on for every suite run (see the vmaas job).
     secrets:
       CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
+      OSAC_CI_APP_ID: ${{ secrets.OSAC_CI_APP_ID }}
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
 
   bmaas:
     needs: [plan, entry]
@@ -97,6 +101,8 @@ jobs:
       # Always on for every suite run (see the vmaas job).
     secrets:
       CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
+      OSAC_CI_APP_ID: ${{ secrets.OSAC_CI_APP_ID }}
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
 
   # One job that looks after the queue entry: it watches the suites and the other required checks of the commit (the
   # unit and integration tests of CI, the Jira check), writes the required E2E check at once when one of them fails, and

@@ -295,7 +295,7 @@ func (s *PrivateSecurityGroupsServer) Delete(ctx context.Context,
 		return
 	}
 	if deleteAlreadyAccepted(securityGroup.GetMetadata()) {
-		return &privatev1.SecurityGroupsDeleteResponse{}, nil
+		return &privatev1.SecurityGroupsDeleteResponse{Object: securityGroup}, nil
 	}
 	if isAutomatic(securityGroup.GetMetadata()) && !auth.IsControllerServiceAccount(ctx) {
 		err = grpcstatus.Errorf(grpccodes.FailedPrecondition,
@@ -320,7 +320,11 @@ func (s *PrivateSecurityGroupsServer) Delete(ctx context.Context,
 	if err = markDeleting(ctx, s.generic.dao, securityGroup); err != nil {
 		return
 	}
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.SecurityGroupsDeleteResponse{Object: object}
 	return
 }
 

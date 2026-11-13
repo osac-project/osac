@@ -98,7 +98,7 @@ message SecurityGroupsDeleteRequest {
   string id = 1;
 }
 
-message SecurityGroupsDeleteResponse {}
+message SecurityGroupsDeleteResponse { SecurityGroup object = 1; }
 
 service SecurityGroups {
   // Retrieves the list of security groups.
@@ -135,6 +135,6 @@ service SecurityGroups {
 
   // Deletes a security group.
   rpc Delete(SecurityGroupsDeleteRequest) returns (SecurityGroupsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/security_groups/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/security_groups/{id}" response_body: "object"};
   }
 }

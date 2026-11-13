@@ -98,7 +98,7 @@ func runCreate(cmd *cobra.Command, args *createArgs) error {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
 	defer func() {
-		if closeErr := conn.Close(); err == nil {
+		if closeErr := conn.Close(); err == nil && closeErr != nil {
 			err = closeErr
 		}
 	}()
@@ -162,7 +162,7 @@ func listCmd() *cobra.Command {
 				return fmt.Errorf("failed to create gRPC connection: %w", err)
 			}
 			defer func() {
-				if closeErr := conn.Close(); err == nil {
+				if closeErr := conn.Close(); err == nil && closeErr != nil {
 					err = closeErr
 				}
 			}()
@@ -203,7 +203,7 @@ func describeCmd() *cobra.Command {
 				return fmt.Errorf("failed to create gRPC connection: %w", err)
 			}
 			defer func() {
-				if closeErr := conn.Close(); err == nil {
+				if closeErr := conn.Close(); err == nil && closeErr != nil {
 					err = closeErr
 				}
 			}()
@@ -278,7 +278,7 @@ func runUpdate(cmd *cobra.Command, ref string, args *updateArgs) error {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
 	defer func() {
-		if closeErr := conn.Close(); err == nil {
+		if closeErr := conn.Close(); err == nil && closeErr != nil {
 			err = closeErr
 		}
 	}()

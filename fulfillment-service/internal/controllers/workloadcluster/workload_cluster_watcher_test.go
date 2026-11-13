@@ -62,7 +62,9 @@ func TestSignalForHubRecordsReconnectMetadata(t *testing.T) {
 	defer connection.Close()
 
 	reconciler := &function{workloadClusters: privatev1.NewWorkloadClustersClient(connection)}
-	reconciler.signalForHub(context.Background(), "hub-1", "HubReconnected", "Normal")
+	signalCtx, cancelSignal := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelSignal()
+	reconciler.signalForHub(signalCtx, "hub-1", "HubReconnected", "Normal")
 
 	var request *privatev1.WorkloadClustersSignalRequest
 	select {

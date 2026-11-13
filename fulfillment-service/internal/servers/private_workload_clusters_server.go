@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	osacmetrics "github.com/osac-project/osac/fulfillment-service/internal/metrics"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -253,22 +254,30 @@ func (s *PrivateWorkloadClustersServer) validateSourceHub(ctx context.Context, i
 	var err error
 	if hubs, ok := s.hubsServer.(*PrivateHubsServer); ok {
 		activeHubFilter := "this.metadata.deletion_timestamp == null"
-		configured, listErr := hubs.generic.dao.List().SetFilter(activeHubFilter).Do(ctx)
+		configured, listErr := listActiveHubs(ctx, hubs, activeHubFilter)
 		if listErr != nil {
 			return ConvertDAOErrorToGRPC(listErr, "list", "hubs")
 		}
-		if err := validateExistingWorkloadClusterHub(configured.GetItems(), id); err != nil {
+		if err := validateExistingWorkloadClusterHub(configured, id); err != nil {
 			return err
 		}
-		activeHubIDs := make(map[string]struct{}, len(configured.GetItems()))
-		for _, hub := range configured.GetItems() {
+		activeHubIDs := make(map[string]struct{}, len(configured))
+		activeHubIDList := make([]string, 0, len(configured))
+		for _, hub := range configured {
 			activeHubIDs[hub.GetId()] = struct{}{}
+			activeHubIDList = append(activeHubIDList, hub.GetId())
 		}
-		workloadClusters, listErr := s.generic.dao.List().SetFilter(activeHubFilter).Do(ctx)
+		// Lock every active Hub row in this transaction. Registrations for
+		// different Hubs therefore serialize before checking the single-active-
+		// Hub invariant and inserting the new WorkloadCluster.
+		if _, lockErr := hubs.generic.dao.Lock().AddIds(activeHubIDList...).Do(ctx); lockErr != nil {
+			return ConvertDAOErrorToGRPC(lockErr, "lock", "hubs")
+		}
+		workloadClusters, listErr := listWorkloadClusters(ctx, s.generic.dao, activeHubFilter)
 		if listErr != nil {
 			return ConvertDAOErrorToGRPC(listErr, "list", "workload clusters")
 		}
-		if err := validateActiveWorkloadClusterHub(workloadClusters.GetItems(), activeHubIDs, id); err != nil {
+		if err := validateActiveWorkloadClusterHub(workloadClusters, activeHubIDs, id); err != nil {
 			return err
 		}
 		_, err = hubs.generic.dao.Get().SetId(id).SetShareLock(true).Do(ctx)
@@ -285,6 +294,36 @@ func (s *PrivateWorkloadClustersServer) validateSourceHub(ctx context.Context, i
 		return err
 	}
 	return nil
+}
+
+func listActiveHubs(ctx context.Context, hubs *PrivateHubsServer, filter string) ([]*privatev1.Hub, error) {
+	const pageSize int32 = 100
+	var result []*privatev1.Hub
+	for offset := int32(0); ; offset += pageSize {
+		page, err := hubs.generic.dao.List().SetFilter(filter).SetOffset(offset).SetLimit(pageSize).Do(ctx)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, page.GetItems()...)
+		if int64(offset)+int64(len(page.GetItems())) >= int64(page.GetTotal()) || len(page.GetItems()) == 0 {
+			return result, nil
+		}
+	}
+}
+
+func listWorkloadClusters(ctx context.Context, workloadClusters *dao.GenericDAO[*privatev1.WorkloadCluster], filter string) ([]*privatev1.WorkloadCluster, error) {
+	const pageSize int32 = 100
+	var result []*privatev1.WorkloadCluster
+	for offset := int32(0); ; offset += pageSize {
+		page, err := workloadClusters.List().SetFilter(filter).SetOffset(offset).SetLimit(pageSize).Do(ctx)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, page.GetItems()...)
+		if int64(offset)+int64(len(page.GetItems())) >= int64(page.GetTotal()) || len(page.GetItems()) == 0 {
+			return result, nil
+		}
+	}
 }
 
 func validateExistingWorkloadClusterHub(hubs []*privatev1.Hub, id string) error {

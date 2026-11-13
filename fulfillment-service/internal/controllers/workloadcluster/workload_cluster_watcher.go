@@ -62,7 +62,7 @@ func (r *function) ensureWatcher(parent context.Context, hubID, credentialFinger
 			r.watchersLock.Unlock()
 		}()
 		for ctx.Err() == nil {
-			if err := r.startWatcher(ctx, hubID, reconnecting); err == nil || ctx.Err() != nil {
+			if err := r.startWatcher(ctx, hubID, generation, reconnecting); err == nil || ctx.Err() != nil {
 				return
 			}
 			r.watchersLock.Lock()
@@ -81,7 +81,7 @@ func (r *function) ensureWatcher(parent context.Context, hubID, credentialFinger
 	}()
 }
 
-func (r *function) startWatcher(ctx context.Context, hubID string, reconnecting bool) error {
+func (r *function) startWatcher(ctx context.Context, hubID string, generation uint64, reconnecting bool) error {
 	hubResponse, err := privatev1.NewHubsClient(r.connection()).Get(ctx, privatev1.HubsGetRequest_builder{Id: hubID}.Build())
 	if err != nil {
 		return err
@@ -111,13 +111,18 @@ func (r *function) startWatcher(ctx context.Context, hubID string, reconnecting 
 	informer := factory.ForResource(managedClusterResourceGVR()).Informer()
 	if err := informer.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 		r.watchersLock.Lock()
-		r.readyHubs[hubID] = false
+		ownsWatcher := r.watcherGenerations[hubID] == generation
+		if ownsWatcher {
+			r.readyHubs[hubID] = false
+		}
 		r.watchersLock.Unlock()
-		if r.metrics != nil {
+		if ownsWatcher && r.metrics != nil {
 			r.metrics.HubWatchErrors.WithLabelValues(hubID).Inc()
 		}
-		r.logger.Warn("workload cluster Hub watch failed", slog.String("component", "workload-cluster-controller"), slog.String("operation", "watch"), slog.String("reason", "HubUnreachable"))
-		go r.signalHubUnavailable(hubID)
+		if ownsWatcher {
+			r.logger.Warn("workload cluster Hub watch failed", slog.String("component", "workload-cluster-controller"), slog.String("operation", "watch"), slog.String("reason", "HubUnreachable"))
+			go r.signalHubUnavailable(hubID)
+		}
 		cancel()
 	}); err != nil {
 		return err
@@ -137,6 +142,10 @@ func (r *function) startWatcher(ctx context.Context, hubID string, reconnecting 
 		return errors.New("hub ManagedCluster informer did not sync")
 	}
 	r.watchersLock.Lock()
+	if r.watcherGenerations[hubID] != generation {
+		r.watchersLock.Unlock()
+		return nil
+	}
 	r.readyHubs[hubID] = true
 	r.managedCaches[hubID] = informer
 	r.watchEstablished[hubID] = true
@@ -148,9 +157,9 @@ func (r *function) startWatcher(ctx context.Context, hubID string, reconnecting 
 		}
 		r.watchersLock.Unlock()
 	}()
-	if reconnecting {
+	if reconnecting && r.ownsWatcher(hubID, generation) {
 		r.signalForHub(ctx, hubID, "HubReconnected", "Normal")
-	} else {
+	} else if r.ownsWatcher(hubID, generation) {
 		// Initial cache sync must trigger reconciliation without being reported as
 		// a reconnect event. A signal without metadata is an internal wake-up.
 		r.signalForHub(ctx, hubID, "", "")
@@ -160,6 +169,12 @@ func (r *function) startWatcher(ctx context.Context, hubID string, reconnecting 
 		return nil
 	}
 	return errors.New("hub ManagedCluster watch stopped")
+}
+
+func (r *function) ownsWatcher(hubID string, generation uint64) bool {
+	r.watchersLock.Lock()
+	defer r.watchersLock.Unlock()
+	return r.watcherGenerations[hubID] == generation
 }
 
 func (r *function) signalHubUnavailable(hubID string) {

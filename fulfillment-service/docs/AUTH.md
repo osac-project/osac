@@ -513,17 +513,19 @@ The following tenancy logic implementations are available:
 
 #### Default
 
-Use `--tenancy-logic=default` (this is the default). This implementation reads the tenants directly
-from the `tenants` field of the subject, which the authentication interceptor populates from the
-JWT token claims (see [Subject Resolution](#subject-resolution)).
+Use `--tenancy-logic=default` (this is the default). This implementation starts with the subject's
+`tenants` field (see [Subject Resolution](#subject-resolution)). In the server, finite scopes are
+intersected with authoritative PostgreSQL tenant liveness: deleted or archived names are removed,
+while never-seen names remain eligible for initial JIT onboarding. Universal platform scope is
+unchanged; this is not a time-based authorization cache.
 
-- **Assignable Tenants**: All tenants from the subject
-- **Default Tenant**: First tenant from the subject. When the subject has access to all tenants
+- **Assignable Tenants**: Subject tenants remaining after the liveness check
+- **Default Tenant**: First assignable tenant. When the subject has access to all tenants
   (e.g., an admin with the universal set `["*"]`), the default tenant is `shared` because a
   universal set cannot be stored as the tenant of an object. For tenant-scoped resource types that
   cannot be placed in the `shared` tenant, admin users must explicitly specify `metadata.tenant`
   in the create request; otherwise the request will be rejected with `PermissionDenied`.
-- **Visible Tenants**: All subject's tenants plus the `shared` tenant. For admins with the
+- **Visible Tenants**: The remaining subject tenants plus the `shared` tenant. For admins with the
   universal set, all tenants are visible.
 
 Example with a JWT user:

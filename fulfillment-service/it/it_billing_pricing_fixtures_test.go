@@ -16,11 +16,15 @@ package it
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	. "github.com/onsi/gomega"
+	"sigs.k8s.io/yaml"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing/m360"
@@ -39,6 +43,23 @@ func billingRateCardScenario(instanceTypeName string) billingfake.Scenario {
 			AttributeValues: []billing.AttributeValue{{Name: "instance_type", Value: instanceTypeName}},
 		}}}},
 	}}}
+}
+
+// expectBillingPricingCountOnlyCLI checks count-only output without depending on table alignment or serialization
+// whitespace. A list (including an empty list) is not a count-only response.
+func expectBillingPricingCountOnlyCLI(g Gomega, stdout, format string, total int32) {
+	if format == "table" {
+		g.Expect(strings.Fields(stdout)).To(Equal([]string{"TOTAL", strconv.FormatInt(int64(total), 10)}))
+		return
+	}
+	var object map[string]int32
+	// YAML decoding also accepts JSON, but keep JSON strict so YAML cannot accidentally pass as JSON output.
+	if format == "json" {
+		g.Expect(json.Unmarshal([]byte(stdout), &object)).To(Succeed(), "stdout: %s", stdout)
+	} else {
+		g.Expect(yaml.UnmarshalStrict([]byte(stdout), &object)).To(Succeed(), "stdout: %s", stdout)
+	}
+	g.Expect(object).To(Equal(map[string]int32{"total": total}))
 }
 
 // TestBillingRateCardScenario checks the deployed fixture's protocol shape without a cluster. This is not deployed

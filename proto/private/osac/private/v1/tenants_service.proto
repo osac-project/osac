@@ -81,7 +81,7 @@ message TenantsDeleteRequest {
   string id = 1;
 }
 
-message TenantsDeleteResponse {}
+message TenantsDeleteResponse { Tenant object = 1; }
 
 message TenantsUpdateRequest {
   Tenant object = 1;
@@ -131,7 +131,7 @@ service Tenants {
 
   // Deletes a tenant.
   rpc Delete(TenantsDeleteRequest) returns (TenantsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/tenants/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/tenants/{id}" response_body: "object"};
   }
 
   // Updates an existing tenant.

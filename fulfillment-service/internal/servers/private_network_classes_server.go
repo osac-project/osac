@@ -219,7 +219,7 @@ func (s *PrivateNetworkClassesServer) Delete(ctx context.Context,
 	}
 	// A NetworkClass has no DELETING state: the deletion timestamp marks the accepted delete.
 	if deleteAlreadyAccepted(networkClass.GetMetadata()) {
-		response = &privatev1.NetworkClassesDeleteResponse{}
+		response = &privatev1.NetworkClassesDeleteResponse{Object: networkClass}
 		return
 	}
 	if err = rejectDeleteIfAnyExists(ctx, s.virtualNetworkDao, "VirtualNetwork", "NetworkClass",
@@ -230,7 +230,11 @@ func (s *PrivateNetworkClassesServer) Delete(ctx context.Context,
 		networkClass.GetId()); err != nil {
 		return
 	}
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.NetworkClassesDeleteResponse{Object: object}
 	return
 }
 

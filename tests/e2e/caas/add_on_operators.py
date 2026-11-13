@@ -172,6 +172,6 @@ def _wait_for_api_operators_installed(
         observed = observed_operators.get(name)
         assert observed is not None, f"Cluster API did not report add-on operator {name!r}"
         assert observed.get("state") == "ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED", (
-            f"Unexpected state for {name!r}: {observed!r}"
+            f"Unexpected state for {name!r}; expected ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED"
         )
-        assert observed.get("message", "") == "", f"Unexpected success status for {name!r}: {observed!r}"
+        assert observed.get("message", "") == "", f"Unexpected success message for {name!r}; expected it to be empty"

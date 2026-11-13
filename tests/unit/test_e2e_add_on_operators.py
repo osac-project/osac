@@ -138,8 +138,9 @@ def test_wait_for_installed_operator_rejects_non_empty_success_message(monkeypat
 
     monkeypatch.setattr(add_on_operators, "poll_until", fake_poll_until)
 
-    with pytest.raises(AssertionError, match="serverless"):
+    with pytest.raises(AssertionError, match="serverless") as exc_info:
         add_on_operators._wait_for_api_operators_installed(
             client=client, cluster_id="cluster-id", identity="test cluster", operator_names=("serverless",)
         )
+    assert "unexpected detail" not in str(exc_info.value)
     client.get_cluster.assert_called_once_with(cluster_id="cluster-id")

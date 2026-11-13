@@ -297,11 +297,20 @@ func (s *SecretsServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.SecretsDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err = s.private.Delete(ctx, privateRequest)
+	privateResponse, err := s.private.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	publicObject := &publicv1.Secret{}
+	err = s.outMapper.Copy(ctx, privateResponse.GetObject(), publicObject)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map private secret to public", slog.Any("error", err))
+		return nil, err
+	}
+	s.redactPublicSecret(publicObject)
+
 	response = &publicv1.SecretsDeleteResponse{}
+	response.SetObject(publicObject)
 	return
 }

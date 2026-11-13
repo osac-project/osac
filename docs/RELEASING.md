@@ -148,9 +148,18 @@ part of the same release, as comma-separated `component=version` pairs:
 osac-operator=0.5.0-rc.2,fulfillment-service=0.5.0-rc.3
 ```
 
-Each version follows the rules under "Versioning model": in the branch's
-line, higher than that component's latest, and a candidate exactly when
-`release_version` is one.
+A named version is either new or the component's existing latest:
+
+- A **new** version must be in the branch's line, higher than that
+  component's latest, and a candidate exactly when `release_version` is one.
+- An **existing** version is only accepted when it is the component's
+  latest in the line, which is what the default already pins. A candidate
+  umbrella may pin a stable version this way.
+
+An older version cannot be pinned. The Konflux chart pipelines publish each
+chart's highest version in the line, so a release always carries every
+component's latest. For a stable release this means a component whose
+latest version is a candidate must get a stable version in the same run.
 
 For each named component:
 - If that exact version already exists as a real tag, it's just pinned
@@ -195,9 +204,8 @@ for validating the release *mechanism* itself (e.g. after a change to
 - A real `<component>/vX.Y.Z` tag for every component that was actually
   bumped this run.
 - The published umbrella chart's `Chart.lock` records its resolved dependencies.
-  Components with resolved release versions use pinned OCI dependencies;
-  components without a release can still use their committed local fallback.
-  The release inventory makes that distinction visible.
+  Every mono-repo component has a resolved version in a release run (the run
+  fails otherwise), so each is a pinned OCI dependency.
 - Every image and chart signed with cosign; see the root
   [`README.md`](../README.md#verifying-container-image-signatures) for
   how to verify a specific artifact.
@@ -217,19 +225,20 @@ for validating the release *mechanism* itself (e.g. after a change to
 ## Release branches and code freeze
 
 For a release that needs a stabilization period instead of shipping
-straight off `main`, cut a release branch named `release-X.Y` (e.g.
-`release-0.4`) and push it directly to `upstream` — not a fork, since
+straight off `main`, cut a release branch named `release-X.Y`, where `X.Y`
+is `main`'s current `RELEASE_LINE` (e.g. `release-0.5` while `main` is at
+`0.5`), and push it directly to `upstream` — not a fork, since
 every contributor opens PRs against it for the duration of the freeze,
 the same way they would against `main`:
 
 ```bash
 git fetch upstream
-git checkout -b release-0.4 upstream/main
-git push upstream release-0.4
+git checkout -b release-0.5 upstream/main
+git push upstream release-0.5
 ```
 
 The new branch keeps the `RELEASE_LINE` it was cut with. Immediately open a
-PR on `main` that bumps `RELEASE_LINE` to the next line (`0.4` → `0.5`), so
+PR on `main` that bumps `RELEASE_LINE` to the next line (`0.5` → `0.6`), so
 nightlies start tracking the next release and the two branches can never
 mint versions in the same line.
 
@@ -262,8 +271,8 @@ instead of `main`.
 **Cleanup:** delete the release branch a few days after the release ships
 and no hotfix need has surfaced — the authoritative record of what
 shipped is the `osac/vX.Y.Z` tag and the published artifacts, not the
-branch. If a patch release (e.g. `0.4.1`) becomes necessary before then,
-dispatch it from the still-live `release-0.4` branch directly rather than
+branch. If a patch release (e.g. `0.5.1`) becomes necessary before then,
+dispatch it from the still-live `release-0.5` branch directly rather than
 re-deriving a new branch from the tag.
 
 ## Staging release (Konflux)

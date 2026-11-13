@@ -382,13 +382,14 @@ except (ValueError, base64.binascii.Error):
 # Release-line versioning. Every artifact built from a branch shares the
 # X.Y recorded in that branch's RELEASE_LINE file; each component and the
 # umbrella keep their own Z and their own rc.N inside that line. A release
-# version is X.Y.Z or X.Y.Z-rc.N, nothing else.
+# version is X.Y.Z or X.Y.Z-rc.N, nothing else. Each number has at most six
+# digits, which keeps the sort key below and patch arithmetic in range.
 #
 # Lookups are name-based (git tag -l), not ancestry-based: release tags sit
 # on throwaway temp-branch commits that are never merged back, so an
 # ancestry walk can never see them. Tags are not branch-scoped either,
 # which is why every lookup filters by line.
-readonly RELEASE_VERSION_RE='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.([1-9][0-9]*))?$'
+readonly RELEASE_VERSION_RE='^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})(-rc\.([1-9][0-9]{0,5}))?$'
 
 # Usage: read_release_line <repo_root>
 read_release_line() {
@@ -400,7 +401,7 @@ read_release_line() {
         return 1
     fi
     line=$(tr -d '[:space:]' < "${file}")
-    if [[ ! "${line}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    if [[ ! "${line}" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]]; then
         echo "ERROR: ${file} must contain a release line of the form X.Y" >&2
         return 1
     fi
@@ -409,7 +410,7 @@ read_release_line() {
 
 # Usage: is_release_version <version>
 is_release_version() {
-    [[ "${#1}" -le 64 ]] && [[ "$1" =~ ${RELEASE_VERSION_RE} ]]
+    [[ "$1" =~ ${RELEASE_VERSION_RE} ]]
 }
 
 # Usage: is_prerelease_version <version>

@@ -108,7 +108,7 @@ message SubnetsDeleteRequest {
   string id = 1;
 }
 
-message SubnetsDeleteResponse {}
+message SubnetsDeleteResponse { Subnet object = 1; }
 
 message SubnetsSignalRequest {
   option (cleanapi.message).private = true;
@@ -154,7 +154,7 @@ service Subnets {
 
   // Deletes a subnet.
   rpc Delete(SubnetsDeleteRequest) returns (SubnetsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/subnets/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/subnets/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 var _ = Describe("Private subnets server", func() {
@@ -250,11 +251,30 @@ var _ = Describe("Private subnets server", func() {
 			Expect(err.Error()).To(ContainSubstring("Cluster '" + cluster.GetObject().GetId() + "'"))
 		})
 
-		It("accepts a second delete", func() {
-			_, err := server.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnet.GetId()}.Build())
+		It("accepts a second delete and changes nothing", func() {
+			// Hold the subnet with a finalizer, so the first delete leaves it in deletion.
+			subnetDAO := fixtureDAO[*privatev1.Subnet]()
+			held, err := subnetDAO.Get().SetId(subnet.GetId()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			_, err = server.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnet.GetId()}.Build())
-			Expect(grpcstatus.Code(err)).To(BeElementOf(grpccodes.OK, grpccodes.NotFound))
+			heldObject := held.GetObject()
+			heldObject.GetMetadata().SetFinalizers([]string{"test/hold"})
+			_, err = subnetDAO.Update().SetObject(heldObject).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			first, err := server.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnet.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			before, err := server.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnet.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			second, err := server.Delete(ctx, privatev1.SubnetsDeleteRequest_builder{Id: subnet.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(second.GetObject().GetId()).To(Equal(subnet.GetId()))
+			Expect(second.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(proto.Equal(first.GetObject(), second.GetObject())).To(BeTrue())
+
+			after, err := server.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnet.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(before.GetObject(), after.GetObject())).To(BeTrue())
 		})
 
 		It("lets the controller delete a default Subnet but not a tenant", func() {

@@ -30,6 +30,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing/pricing"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/validation"
@@ -158,6 +159,7 @@ var _ = Describe("Provider rate card items server", func() {
 		item := response.GetItems()[0]
 		Expect(item.GetService()).To(Equal("widget_service"))
 		Expect(item.GetCurrencyCode()).To(Equal("USD"))
+		Expect(item.GetDimension()).To(Equal("widget_size"))
 		Expect(item.GetRate().GetAmount()).To(Equal("0.5"))
 		Expect(item.GetRate().GetUnit()).To(Equal("second"))
 		Expect(item.GetResourceConditions()).To(HaveLen(1))
@@ -170,7 +172,7 @@ var _ = Describe("Provider rate card items server", func() {
 		// Never a provider rule id, rate-card id, service id or native account id: the whole message has no such
 		// field to carry one, so a reflective round trip through the wire type is itself the proof.
 		Expect(proto.Equal(item, &publicv1.ProviderRateCardItem{
-			Service: "widget_service", CurrencyCode: "USD",
+			Service: "widget_service", CurrencyCode: "USD", Dimension: "widget_size",
 			ResourceConditions: item.GetResourceConditions(), Rate: item.GetRate(),
 		})).To(BeTrue())
 
@@ -585,6 +587,7 @@ var _ = Describe("Provider rate card items server catalog cross-reference", func
 	})
 
 	It("matches conditionless rows to every catalog item, including items without pricing dimensions", func() {
+		// Unkeyed provider rows reach this branch through List: their priced dimension is not a match restriction.
 		dimensionedItem := privatev1.ComputeInstanceCatalogItem_builder{
 			Id:       "c1",
 			Metadata: privatev1.Metadata_builder{Name: "vm-small"}.Build(),
@@ -605,46 +608,73 @@ var _ = Describe("Provider rate card items server catalog cross-reference", func
 		idx := buildIndex([]*privatev1.ComputeInstanceCatalogItem{dimensionedItem, noDimensionItem},
 			[]*privatev1.ClusterCatalogItem{clusterItem})
 
-		Expect(matchCatalogItems(pricing.RateCardItem{Service: serviceComputeInstance}, idx)).To(
+		Expect(matchCatalogItems(pricing.RateCardItem{Service: serviceComputeInstance, Dimension: "compute_rate"}, idx)).To(
 			ConsistOf("vm-small", "vm-no-dimensions"))
-		Expect(matchCatalogItems(pricing.RateCardItem{Service: serviceCluster}, idx)).To(
+		Expect(matchCatalogItems(pricing.RateCardItem{Service: serviceCluster, Dimension: "cluster_rate"}, idx)).To(
 			ConsistOf("cluster-no-dimensions"))
 		Expect(matchCatalogItems(pricing.RateCardItem{Service: "unmapped"}, idx)).To(BeEmpty())
 	})
 
 	It("loads dimensionless catalog items into the conditionless-match inventory", func() {
+		scenario := widgetScenario()
+		scenario.Services[0].Name = serviceComputeInstance
+		scenario.Services[0].Attributes = []billing.PriceableAttribute{{ID: "dim-1", Name: "compute_rate"}}
+		scenario.Services[0].Rates["USD"] = billingfake.RateCardSpec{Rows: []billing.RateRow{
+			{DimensionID: "dim-1", PriceMethod: "QUANTITY", UnitRate: "0.5"},
+		}}
 		server, err := NewPrivateProviderRateCardItemsServer().
 			SetLogger(logger).
-			SetProvider(billingfake.New(widgetScenario()).Provider()).
+			SetProvider(billingfake.New(scenario).Provider()).
 			SetTenancyLogic(tenancy).
 			SetMetricsRegisterer(prometheus.NewRegistry()).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
-		for _, item := range []*privatev1.ComputeInstanceCatalogItem{
-			privatev1.ComputeInstanceCatalogItem_builder{
-				Id:       uuid.NewString(),
-				Metadata: privatev1.Metadata_builder{Name: "vm-without-pricing-fields", Tenant: testTenant}.Build(),
-			}.Build(),
-			privatev1.ComputeInstanceCatalogItem_builder{
-				Id:       uuid.NewString(),
-				Metadata: privatev1.Metadata_builder{Name: "vm-with-instance-type", Tenant: testTenant}.Build(),
-				Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-					InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
-						Locked: privatev1.InstanceTypeReference_builder{Id: "type-id", Name: "small"}.Build(),
+		// List refreshes inventory in its own transaction, so commit the fixtures before checking the unkeyed row.
+		seedCommittedCatalogFixtures(func(seedCtx context.Context) {
+			for _, item := range []*privatev1.ComputeInstanceCatalogItem{
+				privatev1.ComputeInstanceCatalogItem_builder{
+					Id:       uuid.NewString(),
+					Metadata: privatev1.Metadata_builder{Name: "vm-without-pricing-fields", Tenant: testTenant}.Build(),
+				}.Build(),
+				privatev1.ComputeInstanceCatalogItem_builder{
+					Id:       uuid.NewString(),
+					Metadata: privatev1.Metadata_builder{Name: "vm-with-instance-type", Tenant: testTenant}.Build(),
+					Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
+						InstanceType: privatev1.InstanceTypeReferenceFieldPolicy_builder{
+							Locked: privatev1.InstanceTypeReference_builder{Id: "type-id", Name: "small"}.Build(),
+						}.Build(),
 					}.Build(),
 				}.Build(),
-			}.Build(),
-		} {
-			_, err := server.computeCatalogItemsDao.Create().SetObject(item).Do(ctx)
+			} {
+				_, err := server.computeCatalogItemsDao.Create().SetObject(item).Do(seedCtx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			_, err := server.clusterCatalogItemsDao.Create().SetObject(privatev1.ClusterCatalogItem_builder{
+				Id:       uuid.NewString(),
+				Metadata: privatev1.Metadata_builder{Name: "cluster-without-pricing-fields", Tenant: testTenant}.Build(),
+			}.Build()).Do(seedCtx)
 			Expect(err).ToNot(HaveOccurred())
-		}
+		})
 
-		inventory, err := sweepProviderRateCardCatalogInventory(ctx,
-			server.computeCatalogItemsDao, server.clusterCatalogItemsDao)
+		inventory, err := database.WithNewTx(ctx, func(txCtx context.Context) (catalogPricingInventory, error) {
+			return sweepProviderRateCardCatalogInventory(txCtx, server.computeCatalogItemsDao, server.clusterCatalogItemsDao)
+		})
 		Expect(err).ToNot(HaveOccurred())
 		idx := buildCatalogDimensionIndex(inventory.inputs, inventory.itemsByService)
 		Expect(matchCatalogItems(pricing.RateCardItem{Service: serviceComputeInstance}, idx)).To(
 			ConsistOf("vm-without-pricing-fields", "vm-with-instance-type"))
+
+		public, err := NewProviderRateCardItemsServer().SetLogger(logger).SetDelegate(server).Build()
+		Expect(err).ToNot(HaveOccurred())
+		response, err := public.List(ctx, publicv1.ProviderRateCardItemsListRequest_builder{
+			Service: proto.String(serviceComputeInstance), CurrencyCode: proto.String("USD"),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		row := response.GetItems()[0]
+		Expect(row.GetDimension()).To(Equal("compute_rate"))
+		Expect(row.GetResourceConditions()).To(BeEmpty())
+		Expect(row.GetCatalogItemMatches()).To(ConsistOf("vm-without-pricing-fields", "vm-with-instance-type"))
 	})
 
 	It("returns an empty, valid result for a row matching no catalog item", func() {

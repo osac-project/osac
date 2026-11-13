@@ -35,8 +35,8 @@ const (
 	// SkipRateShapeUnsupported is a price method other than QUANTITY, or a missing/unparsable unit rate: a
 	// FLAT_RATE, TIERED, AMOUNT, NO_PRICE, percentage-rate or pricing-logic shape.
 	SkipRateShapeUnsupported = ReasonRateShapeUnsupported
-	// SkipDimensionUnmapped is a row whose priced attribute id does not match any of the service's priceable
-	// attributes, so the row cannot be named in resource_conditions.
+	// SkipDimensionUnmapped is a row whose priced attribute has no OSAC dimension name, so the row cannot identify
+	// what it prices.
 	SkipDimensionUnmapped = "BILLING_RATE_DIMENSION_UNMAPPED"
 	// SkipConditionValueEmpty is an EQUALS condition with an empty value, which is reserved for ANY.
 	SkipConditionValueEmpty = "BILLING_RATE_CONDITION_VALUE_EMPTY"
@@ -54,8 +54,11 @@ type RateCondition struct {
 // RateCardItem is one normalized, supported rate-card row: a provider rule translated into OSAC's provider-neutral
 // shape. It carries no provider rule id, rate-card id, service id or native account id.
 type RateCardItem struct {
-	Service    string
-	Currency   string
+	Service  string
+	Currency string
+	// Dimension is the priced dimension name, unlike Conditions, which describe the configurations the row applies to.
+	Dimension string
+	// Conditions contain only the provider's restrictions; empty means every configuration of the service.
 	Conditions []RateCondition
 	// Amount is the provider decimal exactly as returned, never rounded.
 	Amount decimal.Decimal
@@ -115,16 +118,15 @@ func (r *Resolver) ListServiceRateCardItems(ctx context.Context, service, curren
 	return items, skipped, nil
 }
 
-// normalizeRateRow converts one provider row into a RateCardItem, or reports why it was skipped. The ANY/EQUALS
-// inference is: a row's AttributeValues being empty makes its one priced dimension ANY (the row matches every value,
-// i.e. "no conditions"); a non-empty AttributeValues list produces one EQUALS condition per entry, using the
-// attribute Name each entry already carries (the same shape matchRow/rowMatches use for request-side matching). Empty
-// EQUALS values are invalid because empty is reserved for ANY; those rows are rejected so the caller can skip and
-// count them.
+// normalizeRateRow converts one provider row into a RateCardItem, or reports why it was skipped. Dimension carries
+// the priced dimension; Conditions contain only the provider's own restrictions. Empty AttributeValues means no
+// conditions, while each supplied entry produces an EQUALS condition using its attribute Name (the same shape
+// matchRow/rowMatches use for request-side matching). Empty EQUALS values are invalid because empty is reserved for
+// ANY; those rows are rejected so the caller can skip and count them.
 func normalizeRateRow(row billing.RateRow, names map[string]string, cardCurrency string) (
 	item RateCardItem, skipReason string, ok bool) {
 	name, known := names[row.DimensionID]
-	if !known {
+	if !known || name == "" {
 		return RateCardItem{}, SkipDimensionUnmapped, false
 	}
 	amount, reason, ok := parseUnitRate(row)
@@ -133,20 +135,16 @@ func normalizeRateRow(row billing.RateRow, names map[string]string, cardCurrency
 	}
 
 	var conditions []RateCondition
-	if len(row.AttributeValues) == 0 {
-		conditions = []RateCondition{{Dimension: name, Operator: OperatorAny}}
-	} else {
-		conditions = make([]RateCondition, 0, len(row.AttributeValues))
-		for _, av := range row.AttributeValues {
-			if av.Value == "" {
-				return RateCardItem{}, SkipConditionValueEmpty, false
-			}
-			conditions = append(conditions, RateCondition{Dimension: av.Name, Operator: OperatorEquals, Value: av.Value})
+	for _, av := range row.AttributeValues {
+		if av.Value == "" {
+			return RateCardItem{}, SkipConditionValueEmpty, false
 		}
+		conditions = append(conditions, RateCondition{Dimension: av.Name, Operator: OperatorEquals, Value: av.Value})
 	}
 
 	return RateCardItem{
 		Currency:   cardCurrency,
+		Dimension:  name,
 		Conditions: conditions,
 		Amount:     amount,
 		Unit:       unitSecond,

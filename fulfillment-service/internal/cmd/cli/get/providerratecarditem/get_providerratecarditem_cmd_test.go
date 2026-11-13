@@ -32,6 +32,7 @@ var _ = Describe("render", func() {
 			publicv1.ProviderRateCardItem_builder{
 				Service:      "compute_instance",
 				CurrencyCode: "USD",
+				Dimension:    "compute_rate",
 				ResourceConditions: []*publicv1.ProviderRateCardItemResourceCondition{
 					publicv1.ProviderRateCardItemResourceCondition_builder{
 						Dimension: "instance_type",
@@ -75,7 +76,18 @@ var _ = Describe("render", func() {
 
 	It("renders an empty table header with no rows", func() {
 		output := run("table", nil)
-		Expect(output).To(ContainSubstring("SERVICE"))
+		Expect(testing.TableRows(output)).To(Equal([][]string{
+			{"SERVICE", "CURRENCY", "DIMENSION", "CONDITIONS", "AMOUNT", "UNIT", "CATALOG ITEMS"},
+		}))
+	})
+
+	It("renders an unkeyed row's dimension without inventing conditions", func() {
+		output := run("table", []*publicv1.ProviderRateCardItem{publicv1.ProviderRateCardItem_builder{
+			Service: "compute_instance", CurrencyCode: "USD", Dimension: "compute_rate",
+			Rate: publicv1.ProviderRateCardItemRate_builder{Amount: "1", Unit: "second"}.Build(),
+		}.Build()})
+		Expect(testing.TableRows(output)[1]).To(Equal(
+			[]string{"compute_instance", "USD", "compute_rate", "-", "1", "second", "-"}))
 	})
 
 	It("renders JSON with the API field names", func() {
@@ -90,9 +102,9 @@ var _ = Describe("render", func() {
 		},
 		Entry("table", "table", func(output string) {
 			Expect(testing.TableRows(output)).To(Equal([][]string{
-				{"SERVICE", "CURRENCY", "CONDITIONS", "AMOUNT", "UNIT", "CATALOG ITEMS"},
-				{"compute_instance", "USD", "instance_type=small", "0.00125", "second", "vm-fedora-small"},
-				{"widget_service", "USD", "widget_size=ANY", "5", "second", "-"},
+				{"SERVICE", "CURRENCY", "DIMENSION", "CONDITIONS", "AMOUNT", "UNIT", "CATALOG ITEMS"},
+				{"compute_instance", "USD", "compute_rate", "instance_type=small", "0.00125", "second", "vm-fedora-small"},
+				{"widget_service", "USD", "-", "widget_size=ANY", "5", "second", "-"},
 			}))
 		}),
 		Entry("json", "json", func(output string) {
@@ -100,6 +112,7 @@ var _ = Describe("render", func() {
 				{
 					"service": "compute_instance",
 					"currency_code": "USD",
+					"dimension": "compute_rate",
 					"resource_conditions": [
 						{"dimension": "instance_type", "operator": "BILLING_RATE_MATCH_OPERATOR_EQUALS", "value": "small"}
 					],

@@ -77,7 +77,7 @@ var _ = Describe("Pricing list proto contract", func() {
 			}
 			checkBoth(publicv1.ProviderRateCardItemsListResponse_builder{
 				Items: []*publicv1.ProviderRateCardItem{publicv1.ProviderRateCardItem_builder{
-					Service: service, CurrencyCode: currency,
+					Service: service, CurrencyCode: currency, Dimension: "compute_rate",
 					ResourceConditions: []*publicv1.ProviderRateCardItemResourceCondition{
 						publicv1.ProviderRateCardItemResourceCondition_builder{
 							Dimension: dimension, Operator: operator, Value: value,
@@ -94,7 +94,7 @@ var _ = Describe("Pricing list proto contract", func() {
 			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_EQUALS, true),
 		Entry("missing service", "", "USD", "instance_type",
 			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, false),
-		Entry("missing dimension", "compute_instance", "USD", "",
+		Entry("missing condition dimension", "compute_instance", "USD", "",
 			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, false),
 		Entry("missing currency", "compute_instance", "", "instance_type",
 			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_ANY, false),
@@ -106,6 +106,16 @@ var _ = Describe("Pricing list proto contract", func() {
 			publicv1.BillingRateMatchOperator_BILLING_RATE_MATCH_OPERATOR_UNSPECIFIED, false),
 		Entry("undefined operator", "compute_instance", "USD", "instance_type",
 			publicv1.BillingRateMatchOperator(99), false),
+	)
+
+	DescribeTable("requires a priced dimension even when the provider row has no conditions",
+		func(dimension string, valid bool) {
+			checkBoth(publicv1.ProviderRateCardItem_builder{
+				Service: "compute_instance", CurrencyCode: "USD", Dimension: dimension,
+			}.Build(), &privatev1.ProviderRateCardItem{}, valid)
+		},
+		Entry("empty priced dimension is invalid", "", false),
+		Entry("named priced dimension is valid without conditions", "compute_rate", true),
 	)
 
 	DescribeTable("validates catalog response names while allowing empty open values",

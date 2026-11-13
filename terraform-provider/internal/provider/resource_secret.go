@@ -57,14 +57,10 @@ func (r *secretResource) Metadata(ctx context.Context,
 // the server rejects type changes.
 func (r *secretResource) Schema(ctx context.Context,
 	request resource.SchemaRequest, response *resource.SchemaResponse) {
-	generated := markSensitive(gen.SecretResourceSchema(ctx), "data")
+	generated := useStateForUnknown(markSensitive(gen.SecretResourceSchema(ctx), "data"))
 	if attribute, ok := generated.Attributes["type"].(schema.StringAttribute); ok {
 		attribute.PlanModifiers = append(attribute.PlanModifiers, stringplanmodifier.RequiresReplace())
 		generated.Attributes["type"] = attribute
-	}
-	if attribute, ok := generated.Attributes["id"].(schema.StringAttribute); ok {
-		attribute.PlanModifiers = append(attribute.PlanModifiers, stringplanmodifier.UseStateForUnknown())
-		generated.Attributes["id"] = attribute
 	}
 	response.Schema = generated
 }

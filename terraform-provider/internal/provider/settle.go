@@ -17,11 +17,89 @@ import (
 	"context"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	gen "github.com/osac-project/osac/terraform-provider/internal/gen/resource_bare_metal_instance"
 )
+
+// useStateForUnknown recursively adds the UseStateForUnknown plan modifier to every computed attribute of a
+// generated resource schema. The generator marks everything as optional and computed, and the attributes the
+// configuration leaves unset would otherwise be planned as unknown, so every plan of an unchanged object would
+// show them as "known after apply" and trigger a pointless update. Nested objects get the modifier both on the
+// object itself — for the case where the configuration leaves the whole object unset — and on their attributes,
+// for the case where the configuration sets only some of them.
+func useStateForUnknown(generated schema.Schema) schema.Schema {
+	for name, attribute := range generated.Attributes {
+		generated.Attributes[name] = useStateForUnknownAttribute(attribute)
+	}
+	return generated
+}
+
+// useStateForUnknownAttribute adds the UseStateForUnknown plan modifier to the attribute when it is computed,
+// recursing into the attributes of nested objects.
+func useStateForUnknownAttribute(attribute schema.Attribute) schema.Attribute {
+	switch typed := attribute.(type) {
+	case schema.StringAttribute:
+		if typed.Computed {
+			typed.PlanModifiers = append(typed.PlanModifiers, stringplanmodifier.UseStateForUnknown())
+		}
+		return typed
+	case schema.BoolAttribute:
+		if typed.Computed {
+			typed.PlanModifiers = append(typed.PlanModifiers, boolplanmodifier.UseStateForUnknown())
+		}
+		return typed
+	case schema.Int64Attribute:
+		if typed.Computed {
+			typed.PlanModifiers = append(typed.PlanModifiers, int64planmodifier.UseStateForUnknown())
+		}
+		return typed
+	case schema.ListAttribute:
+		if typed.Computed {
+			typed.PlanModifiers = append(typed.PlanModifiers, listplanmodifier.UseStateForUnknown())
+		}
+		return typed
+	case schema.MapAttribute:
+		if typed.Computed {
+			typed.PlanModifiers = append(typed.PlanModifiers, mapplanmodifier.UseStateForUnknown())
+		}
+		return typed
+	case schema.SingleNestedAttribute:
+		if typed.Computed {
+			typed.PlanModifiers = append(typed.PlanModifiers, objectplanmodifier.UseStateForUnknown())
+		}
+		for name, nested := range typed.Attributes {
+			typed.Attributes[name] = useStateForUnknownAttribute(nested)
+		}
+		return typed
+	case schema.ListNestedAttribute:
+		if typed.Computed {
+			typed.PlanModifiers = append(typed.PlanModifiers, listplanmodifier.UseStateForUnknown())
+		}
+		for name, nested := range typed.NestedObject.Attributes {
+			typed.NestedObject.Attributes[name] = useStateForUnknownAttribute(nested)
+		}
+		return typed
+	case schema.MapNestedAttribute:
+		if typed.Computed {
+			typed.PlanModifiers = append(typed.PlanModifiers, mapplanmodifier.UseStateForUnknown())
+		}
+		for name, nested := range typed.NestedObject.Attributes {
+			typed.NestedObject.Attributes[name] = useStateForUnknownAttribute(nested)
+		}
+		return typed
+	default:
+		return attribute
+	}
+}
 
 // settleModel replaces the unknown values of a just-created or just-updated model with nulls, so that it can be
 // saved as state: the framework doesn't allow unknown values in the state, and the computed attributes that the

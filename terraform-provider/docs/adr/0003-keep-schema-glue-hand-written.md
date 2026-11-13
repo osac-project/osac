@@ -30,7 +30,11 @@ generated schema. There is no specification post-processing step.
 ## What the glue does today
 
 - `Secret.type` forces replacement: immutable server-side (OSAC-7403).
-- Resource ids use `UseStateForUnknown`, so plans don't show unknown ids.
+- Every computed attribute gets `UseStateForUnknown` recursively
+  (`useStateForUnknown`): the generated schema marks everything as
+  optional and computed, and the attributes the configuration leaves
+  unset would otherwise be planned as unknown, showing a phantom change
+  on every plan.
 - Secret `data` entries are marked `Sensitive` (`markSensitive`).
 - Data sources accept exactly one of `name`, `id` or `labels`
   (`ExactlyOneOf` validators); label lookups go through the same list

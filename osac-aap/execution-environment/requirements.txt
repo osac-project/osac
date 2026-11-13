@@ -305,7 +305,7 @@ referencing==0.37.0
     # via
     #   jsonschema
     #   jsonschema-specifications
-requests==2.33.0
+requests==2.34.2
     # via
     #   keystoneauth1
     #   kubernetes

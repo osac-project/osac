@@ -81,6 +81,18 @@ describe('getInstanceTypeCreateSchema', () => {
       await expect(schema.isValid(validValues)).resolves.toBe(true);
     });
 
+    it('accepts a zero gpu count when no gpu metadata is provided', async () => {
+      await expect(
+        schema.isValid({
+          ...validValues,
+          spec: {
+            ...validValues.spec,
+            gpu: { pciDeviceSelector: '', resourceName: '', count: 0 },
+          },
+        }),
+      ).resolves.toBe(true);
+    });
+
     it('accepts a fully populated gpu', async () => {
       await expect(
         schema.isValid({

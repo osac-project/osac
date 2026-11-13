@@ -1,14 +1,21 @@
-import { Route, Routes } from 'react-router-dom';
 import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { StorageBackend } from '@osac/types/private';
 import { StorageBackendState } from '@osac/types/private';
+import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 
 import { StorageBackendsListPage } from './StorageBackendsListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-const BACKENDS_LIST_PATH = '/admin/infrastructure/storage/backends';
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  };
+});
 
 const makeBackend = (
   id: string,
@@ -29,17 +36,23 @@ const defaultBackends = [
   makeBackend('b-2', 'ceph-dev', 'ceph', 'ceph.example.com', StorageBackendState.UNSPECIFIED),
 ];
 
-const renderPage = (storageBackends: StorageBackend[] = defaultBackends) =>
-  renderWithProviders(
-    <Routes>
-      <Route path={BACKENDS_LIST_PATH} element={<StorageBackendsListPage />} />
-      <Route path={`${BACKENDS_LIST_PATH}/:id/edit`} element={<div>navigated-to-edit</div>} />
-    </Routes>,
-    { apiFixtures: { storageBackends }, routerEntries: [BACKENDS_LIST_PATH] },
-  );
+const renderPage = (
+  storageBackends: StorageBackend[] = defaultBackends,
+  routerEntries?: string[],
+) =>
+  renderWithProviders(<StorageBackendsListPage />, {
+    apiFixtures: { storageBackends },
+    routerEntries,
+  });
 
 describe('StorageBackendsListPage', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    mockNavigate.mockReset();
+  });
+
   it('renders column headers', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-backends'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -51,6 +64,7 @@ describe('StorageBackendsListPage', () => {
   });
 
   it('renders a row per backend with name, provider, and endpoint', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-backends'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -60,9 +74,11 @@ describe('StorageBackendsListPage', () => {
     expect(screen.getByText('vast.example.com')).toBeInTheDocument();
     expect(screen.getByText('ceph-dev')).toBeInTheDocument();
     expect(screen.getByText('ceph')).toBeInTheDocument();
+    expect(screen.getByText('2 storage backends')).toBeInTheDocument();
   });
 
   it('links the backend name to its details page', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-backends'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -75,6 +91,7 @@ describe('StorageBackendsListPage', () => {
   });
 
   it('renders status labels for each backend', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-backends'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -88,10 +105,44 @@ describe('StorageBackendsListPage', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('No storage backends yet. Create one to get started.'),
+        screen.getByRole('heading', { name: 'No storage backends found', level: 2 }),
       ).toBeInTheDocument();
     });
+    expect(screen.getByText('No storage backends are available yet.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('shows a filter-specific empty state when a search filter has no results', async () => {
+    renderPage(defaultBackends, ['/admin/infrastructure/storage/backends?search=missing']);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', {
+          name: 'No storage backends match your filters',
+          level: 2,
+        }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByText('Try a different search term.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+    expect(screen.queryByText('No storage backends are available yet.')).not.toBeInTheDocument();
+  });
+
+  it('renders the search input', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search storage backends')).toBeInTheDocument();
+    });
+  });
+
+  it('renders the list and card view switcher', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Card view' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'List view' })).toBeInTheDocument();
+    });
   });
 
   it('links the Create backend action to the create route', () => {
@@ -104,6 +155,7 @@ describe('StorageBackendsListPage', () => {
   });
 
   it('navigates to the edit route with the correct ID when Edit is clicked', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-backends'), 'list');
     const { user } = renderPage();
 
     await waitFor(() => {
@@ -113,10 +165,11 @@ describe('StorageBackendsListPage', () => {
     await user.click(screen.getByRole('button', { name: 'Actions for vast-prod' }));
     await user.click(screen.getByText('Edit'));
 
-    expect(await screen.findByText('navigated-to-edit')).toBeInTheDocument();
+    expect(mockNavigate).toHaveBeenCalledWith('/admin/infrastructure/storage/backends/b-1/edit');
   });
 
   it('opens the delete confirmation dialog when Delete is clicked', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-backends'), 'list');
     const { user } = renderPage();
 
     await waitFor(() => {
@@ -131,6 +184,7 @@ describe('StorageBackendsListPage', () => {
   });
 
   it('removes the row from the table after a successful delete', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-backends'), 'list');
     const { user } = renderPage();
 
     await waitFor(() => {

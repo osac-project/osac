@@ -46,6 +46,21 @@ describe('resolveClusterUpgradeChoices', () => {
     expect(result.blockedReason).toBeUndefined();
   });
 
+  it('offers different targets above the observed version after a failed request', () => {
+    const failedTarget = makeVersion('failed-target', '4.18.0');
+    const catalog = [
+      makeVersion('patch', '4.17.1'),
+      failedTarget,
+      makeVersion('later', '4.19.0'),
+      makeVersion('older', '4.16.9'),
+    ];
+
+    const result = resolveClusterUpgradeChoices(failedTarget, catalog, t, '4.17.0');
+
+    expect(result.eligibleTargets.map((version) => version.id)).toEqual(['later', 'patch']);
+    expect(result.blockedReason).toBeUndefined();
+  });
+
   it('accepts a disabled obsolete configured version', () => {
     const result = resolveClusterUpgradeChoices(currentVersion(), [nextVersion()], t);
 

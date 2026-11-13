@@ -1,10 +1,11 @@
 # Codewalk: request lifecycle
 
-This document explains three things that are not obvious from reading any single file in
-isolation: why there is a single data model instead of the usual DTO/domain/persistence split, how
-the gRPC transaction interceptor works and why it exists, and how a `Create` call turns into a
-Kubernetes custom resource on a workload cluster. Read this after [docs/API.md](API.md), which
-covers the public/private API split referenced throughout.
+This document explains how four parts of the fulfillment service fit together: why there is a
+single data model instead of the usual DTO/domain/persistence split, how the gRPC transaction
+interceptor works and why it exists, how a `Create` call turns into a Kubernetes custom resource on
+a workload cluster, and how tenant and project deletion proceeds through child cleanup while
+finalizers are retained. Read this after [docs/API.md](API.md), which covers the public/private API
+split referenced throughout.
 
 File paths below link to `main`; if you're reading this from a different branch or commit, the
 line numbers in the linked files may have moved.
@@ -291,3 +292,75 @@ This exact `selectHub` function is duplicated near-identically across roughly a 
 reconciler functions (`cluster`, `computeinstance`, `externalip`, `subnet`, `virtualnetwork`, ...) —
 worth knowing if you need to change placement logic, since today it means changing it in every
 copy.
+
+## End-to-end flow: cascading deletion of a Tenant and its Projects
+
+The private API's `Delete` method starts the lifecycle. When an object has finalizers, the request
+sets `metadata.deletion_timestamp`, but the object remains present until its controller finishes
+cleanup. The private API's finalizer update and version requirements are described in
+[API.md](API.md#update-when-supported); the distinction between a deletion request and the final
+deleted event is described in [API.md](API.md#events).
+
+The [tenant](../internal/controllers/tenant/tenant_reconciler_function.go) and
+[project](../internal/controllers/project/project_reconciler_function.go) controllers use the
+shared [`controllers.CascadeDeleteItems`](../internal/controllers/cascade_delete.go) helper to
+process children after the caller has listed them. The callers own filtering and pagination; the
+helper owns the common per-child Delete/Signal behavior:
+
+- An active child is sent a `Delete` request.
+- A child that already has `metadata.deletion_timestamp` is sent `Signal` when the caller provides
+  a signal function. Tenant deletion provides this for users and projects so their controllers get
+  another reconciliation prompt. Project memberships and secrets have no signal callback here, so
+  the parent waits for them to disappear.
+- `NotFound` from Delete or Signal means the child is already gone. Other errors are collected
+  while the helper continues processing sibling children; the caller then returns the error and
+  keeps its own finalizer.
+- `pending` is set when Delete or Signal succeeds, or returns an error other than `NotFound`, and
+  when the helper finds an already-deleting child with no signal callback. `NotFound` means the
+  child is already gone and does not set `pending`. Other errors are returned to the caller;
+  otherwise, `pending` tells it to stop parent cleanup for this pass. It does not guarantee that
+  the child is still pending after the request returns. The caller re-lists on a later
+  reconciliation before removing the parent finalizer.
+
+Tenant deletion is ordered to respect ownership and foreign-key dependencies:
+
+```text
+Tenant Delete requested
+  └─ keep TenantLifecycle finalizer
+      ├─ delete break-glass secret and clear its spec reference
+      ├─ delete tenant default networking
+      ├─ list and cascade-delete tenant users
+      │    └─ pending/error: stop and retry; do not delete projects yet
+      ├─ list and cascade-delete tenant projects
+      │    └─ pending/error: stop and retry
+      ├─ confirm that no projects remain
+      ├─ delete the tenant Vault namespace
+      ├─ delete the tenant's identity-provider organization
+      └─ remove TenantLifecycle finalizer
+```
+
+Users are removed before projects because they can reference the tenant's root project. Project
+controllers in turn wait for child projects, memberships, and project-scoped secrets before doing
+their own final cleanup. The tenant controller requeues after each pending user or project pass;
+it also checks the remaining project count before deleting the Vault namespace and identity-provider
+organization.
+
+Project deletion follows its own child-first sequence:
+
+1. If child projects remain, the project stays finalized. The controller reports `DELETING` when
+   all children are already deleting, or `DELETE_FAILED` when an active child must be deleted first.
+2. The controller requests deletion of project memberships. If any are still present, including
+   memberships already marked for deletion, it records `DELETING` and returns without removing the
+   project finalizer.
+3. The controller requests deletion of project-scoped secrets. If the cascade helper reports
+   `pending`, it requeues and retains the project finalizer.
+4. For a tenant's root project, the controller removes default networking. It then deletes the
+   project's identity-provider groups.
+5. Only after these steps succeed does the controller remove the project finalizer.
+
+The stop-and-relist rule is important even when a Delete request succeeds: some children archive
+synchronously, while others have their own finalizers and need more reconciliations. Keeping the
+parent finalizer makes the sequence safe in both cases. Watch events prompt normal reconciliation,
+and the periodic full sync described in [Event delivery and reconciliation
+recovery](#event-delivery-and-reconciliation-recovery) recovers progress if a notification is
+missed.

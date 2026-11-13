@@ -37,10 +37,18 @@ export const VmDetailsPage = {
   pageTitle: ['h1.pf-v6-c-title'],
   statusTerm: ['term'],
   statusLabel: ['.pf-v6-c-label'],
+  instanceTypeEditButton: ['button', { name: 'Edit instance type', exact: true }],
+  conditionsTable: ['grid', { name: 'Virtual machine conditions', exact: true }],
   deleteButton: ['button', { name: 'Delete', exact: true }],
   deleteDialog: [`[role="dialog"][aria-labelledby="${deleteResourceModalIds.title}"]`],
   deleteTitle: [`#${deleteResourceModalIds.title}`],
   deleteWarning: ['This permanently deletes the compute instance. This action cannot be undone.'],
+} as const satisfies Record<string, VmsLocator>;
+
+export const VmDetailsActionButtons = {
+  start: ['button', { name: 'Start', exact: true }],
+  stop: ['button', { name: 'Stop', exact: true }],
+  restart: ['button', { name: 'Restart', exact: true }],
 } as const satisfies Record<string, VmsLocator>;
 
 export const VmCreatePage = {

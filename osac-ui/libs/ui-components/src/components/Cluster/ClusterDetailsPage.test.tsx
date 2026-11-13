@@ -1,5 +1,6 @@
 import { Route, Routes } from 'react-router-dom';
 import { clone, create } from '@bufbuild/protobuf';
+import { TimestampSchema } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
@@ -80,6 +81,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     );
     expect(screen.getByText('Upgrade available')).toBeInTheDocument();
     expect(screen.getByText('4.17.0')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();
   });
 
   it.each([ClusterUpgradeState.PENDING, ClusterUpgradeState.PROGRESSING])(
@@ -93,6 +95,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
       upgrading.status.state = ClusterState.PROGRESSING;
       upgrading.status.upgradeHistory = [
         create(ClusterUpgradeHistoryEntrySchema, {
+          component: { target: { case: 'controlPlane', value: {} } },
           state,
           sourceVersion: '4.17.0',
           targetVersion: '4.18.0',
@@ -101,13 +104,190 @@ describe('ClusterDetailsPage upgrade availability', () => {
       ];
       renderPage(upgrading, [currentVersion, targetVersion]);
 
-      await waitFor(() => expect(screen.getByText('Upgrade in progress')).toBeInTheDocument());
-      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-        'Upgrade accepted and running',
-      );
-      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
+      const label =
+        state === ClusterUpgradeState.PENDING ? 'Upgrade pending' : 'Upgrade in progress';
+      await waitFor(() => expect(screen.getByText(label)).toBeInTheDocument());
+      expect(screen.getByText('4.17.0 → 4.18.0')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+      expect(screen.getByText('Upgrade accepted and running')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();
     },
   );
+
+  it('shows the new observed version without a success status after an upgrade', async () => {
+    const upgraded = clone(ClusterSchema, readyCluster);
+    if (!upgraded.spec || !upgraded.status) {
+      throw new Error('The cluster fixture needs spec and status');
+    }
+    upgraded.spec.version = create(ClusterVersionReferenceSchema, { id: targetVersion.id });
+    upgraded.status.observedVersion = '4.18.0';
+    upgraded.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        state: ClusterUpgradeState.SUCCEEDED,
+        sourceVersion: '4.17.0',
+        targetVersion: '4.18.0',
+      }),
+    ];
+    renderPage(upgraded, [currentVersion, targetVersion]);
+
+    expect(await screen.findByText('4.18.0')).toBeInTheDocument();
+    expect(screen.queryByText('Upgrade succeeded')).not.toBeInTheDocument();
+    expect(screen.queryByText('Upgrade in progress')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();
+  });
+
+  it('ignores node-set attempts for progress and history', async () => {
+    const upgrading = clone(ClusterSchema, readyCluster);
+    if (!upgrading.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    upgrading.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'nodeSetId', value: 'workers' } },
+        state: ClusterUpgradeState.PROGRESSING,
+        sourceVersion: '4.17.0',
+        targetVersion: '4.18.0',
+        message: 'Workers are upgrading',
+      }),
+    ];
+    renderPage(upgrading, [currentVersion, targetVersion]);
+
+    await waitFor(() => expect(screen.getByText('Upgrade in progress')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upgrade history' })).not.toBeInTheDocument();
+  });
+
+  it('uses the newest control-plane attempt when a node-set entry comes first', async () => {
+    const upgrading = clone(ClusterSchema, readyCluster);
+    if (!upgrading.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    upgrading.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'nodeSetId', value: 'workers' } },
+        state: ClusterUpgradeState.FAILED,
+        targetVersion: '4.18.0',
+        message: 'Workers failed',
+      }),
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        state: ClusterUpgradeState.PROGRESSING,
+        sourceVersion: '4.17.0',
+        targetVersion: '4.18.0',
+        message: 'Control plane is upgrading',
+      }),
+    ];
+    const { user } = renderPage(upgrading, [currentVersion, targetVersion]);
+
+    await waitFor(() => expect(screen.getByText('Upgrade in progress')).toBeInTheDocument());
+    expect(screen.getByText('4.17.0 → 4.18.0')).toBeInTheDocument();
+    expect(screen.getByText('Control plane is upgrading')).toBeInTheDocument();
+    expect(screen.queryByText('Workers failed')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Upgrade history' }));
+    const history = screen.getByRole('dialog', { name: 'Upgrade history' });
+    expect(within(history).getAllByRole('row')).toHaveLength(2);
+    expect(within(history).getByText('4.17.0 → 4.18.0')).toBeInTheDocument();
+    expect(within(history).queryByText('Workers failed')).not.toBeInTheDocument();
+  });
+
+  it('shows the latest server state after a timed-out attempt succeeds', async () => {
+    let returnedCluster = clone(ClusterSchema, readyCluster);
+    if (!returnedCluster.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    returnedCluster.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        state: ClusterUpgradeState.TIMED_OUT,
+        sourceVersion: '4.17.0',
+        targetVersion: '4.18.0',
+        acceptedTime: create(TimestampSchema, { seconds: 1_700_000_000n }),
+        stateTransitionTime: create(TimestampSchema, { seconds: 1_700_000_300n }),
+        message: 'Still observing the control plane',
+      }),
+    ];
+    const { user } = renderPage(returnedCluster, [currentVersion, targetVersion], {
+      onClusterGet: () => ({ object: returnedCluster }),
+    });
+
+    await waitFor(() => expect(screen.getByText('Upgrade timed out')).toBeInTheDocument());
+    expect(screen.getByText('HyperShift may still complete the upgrade.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+    const timeoutLabel = screen.getByText('Upgrade timed out').closest('.pf-v6-c-label');
+    expect(timeoutLabel).toHaveClass('pf-m-compact');
+    expect(timeoutLabel).not.toHaveClass('pf-m-warning', 'pf-m-danger');
+    expect(screen.getByText('4.17.0')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Upgrade history' }));
+    expect(
+      within(screen.getByRole('dialog', { name: 'Upgrade history' })).getByText('Timed out'),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('dialog', { name: 'Upgrade history' })).getByText(
+        'Still observing the control plane',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('dialog', { name: 'Upgrade history' })).getAllByRole('time'),
+    ).toHaveLength(1);
+
+    returnedCluster = clone(ClusterSchema, returnedCluster);
+    if (!returnedCluster.spec || !returnedCluster.status) {
+      throw new Error('The cluster fixture needs spec and status');
+    }
+    returnedCluster.spec.version = create(ClusterVersionReferenceSchema, { id: targetVersion.id });
+    returnedCluster.status.observedVersion = '4.18.0';
+    returnedCluster.status.upgradeHistory[0].state = ClusterUpgradeState.SUCCEEDED;
+    returnedCluster.status.upgradeHistory[0].stateTransitionTime = create(TimestampSchema, {
+      seconds: 1_700_000_600n,
+    });
+    returnedCluster.status.upgradeHistory[0].message = '';
+    await user.click(screen.getByText('Refresh cluster'));
+
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('dialog', { name: 'Upgrade history' })).getByText('Succeeded'),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Upgrade timed out')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('HyperShift may still complete the upgrade.'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Still observing the control plane')).not.toBeInTheDocument();
+    expect(screen.getByText('4.18.0')).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('dialog', { name: 'Upgrade history' })).getAllByRole('time'),
+    ).toHaveLength(2);
+  });
+
+  it('shows a failed control-plane attempt as an error', async () => {
+    const failed = clone(ClusterSchema, readyCluster);
+    if (!failed.spec || !failed.status) {
+      throw new Error('The cluster fixture needs spec and status');
+    }
+    failed.spec.version = create(ClusterVersionReferenceSchema, { id: targetVersion.id });
+    failed.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        state: ClusterUpgradeState.FAILED,
+        sourceVersion: '4.17.0',
+        targetVersion: '4.18.0',
+        message: 'Control plane could not upgrade',
+      }),
+    ];
+    renderPage(failed, [currentVersion, targetVersion]);
+
+    await waitFor(() => expect(screen.getByText('Upgrade failed')).toBeInTheDocument());
+    expect(screen.getByText('Upgrade failed').closest('.pf-v6-c-label')).toHaveClass(
+      'pf-m-red',
+      'pf-m-compact',
+    );
+    expect(screen.getByText('4.17.0')).toBeInTheDocument();
+    expect(screen.getByText('Control plane could not upgrade')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();
+  });
 
   it('shows a disabled action when the version catalog request fails', async () => {
     renderPage(readyCluster, [currentVersion, targetVersion], {
@@ -230,6 +410,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     }
     returnedCluster.status.upgradeHistory = [
       create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
         state: ClusterUpgradeState.PENDING,
         message: 'Waiting for the control plane',
       }),
@@ -241,9 +422,9 @@ describe('ClusterDetailsPage upgrade availability', () => {
     );
     expect(updateCalls).toBe(0);
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-      'Waiting for the control plane',
-    );
+    expect(screen.getByText('Upgrade pending')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for the control plane')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
   });
 
   it('refreshes the real cluster detail after one accepted upgrade request', async () => {
@@ -269,6 +450,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
         returnedCluster.status.state = ClusterState.PROGRESSING;
         returnedCluster.status.upgradeHistory = [
           create(ClusterUpgradeHistoryEntrySchema, {
+            component: { target: { case: 'controlPlane', value: {} } },
             state: ClusterUpgradeState.PENDING,
             message: 'Waiting for the control plane',
           }),
@@ -290,11 +472,8 @@ describe('ClusterDetailsPage upgrade availability', () => {
     expect(updateRequest?.object?.spec?.version?.id).toBe(targetVersion.id);
     expect(updateRequest?.updateMask?.paths).toEqual(['spec.version']);
     await waitFor(() => expect(getCalls).toBeGreaterThan(1));
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-        'Waiting for the control plane',
-      ),
-    );
+    await waitFor(() => expect(screen.getByText('Upgrade pending')).toBeInTheDocument());
     expect(screen.queryByRole('dialog', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
   });
 });

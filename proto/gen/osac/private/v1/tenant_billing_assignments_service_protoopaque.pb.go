@@ -192,6 +192,12 @@ type TenantBillingAssignmentsListRequest_builder struct {
 	// one tenant:
 	//
 	//	this.spec.tenant_id == "tenant-a"
+	//
+	// To select a tenant's current validated assignment:
+	//
+	//	this.spec.tenant_id == "tenant-a" && !has(this.status.effective_to) && this.status.connection_state == "CONNECTED"
+	//
+	// Connection-state filters use PENDING, CONNECTED, or FAILED, not type-prefixed protobuf enum names.
 	Filter *string
 	// Order criteria.
 	//

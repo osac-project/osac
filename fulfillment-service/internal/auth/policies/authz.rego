@@ -189,19 +189,6 @@ is_tenant_idp_manager if {
   role in tenant_idp_manager_roles
 }
 
-# Cloud Provider Admin realm roles. The role grants only the closed billing method allow-list below and adds no
-# platform-admin permissions; existing client/tenant grants are unchanged. Managed service-account candidates
-# resolve roles from the database and ignore token realm roles (see subject_realm_roles), so a forged realm claim
-# cannot reach this grant.
-cloud_provider_admin_roles := {
-  "cloud-provider-admin",
-}
-default is_cloud_provider_admin = false
-is_cloud_provider_admin if {
-  some role in subject_realm_roles
-  role in cloud_provider_admin_roles
-}
-
 # CSI driver realm roles. The OSAC CSI driver's Keycloak service account is granted the
 # "osac-csi-driver" realm role. The role name is distinct from VAST's array-side VMS role
 # "osac-csi-<tenant>" to avoid collision. Short term the driver uses a single shared client;
@@ -605,9 +592,8 @@ is_billing_method if {
   startswith(grpc_method, namespace)
 }
 
-# The closed billing method allow-list. Platform admins (is_admin) and cloud-provider-admin realm role holders
-# may use exactly these methods; any other billing method is denied for everyone, so a new one must be reviewed
-# and added here.
+# The closed billing method allow-list. Only platform admins (is_admin) may use exactly these methods; any other
+# billing method is denied for everyone, so a new one must be reviewed and added here.
 billing_allowed_methods := {
   "/osac.public.v1.BillingAccounts/List",
   "/osac.private.v1.BillingAccounts/List",
@@ -623,19 +609,13 @@ billing_allowed_methods := {
   "/osac.private.v1.TenantBillingAssignments/Update",
 }
 
-# Billing methods reserved for platform admins and controllers only. The
-# cloud-provider-admin realm role must never grant these.
+# Billing methods reserved for platform admins and controllers only. No non-admin role grants these.
 billing_admin_only_methods := {
   "/osac.private.v1.TenantBillingAssignments/Signal",
 }
 
 legacy_allow if {
   is_admin
-  grpc_method in billing_allowed_methods
-}
-
-legacy_allow if {
-  is_cloud_provider_admin
   grpc_method in billing_allowed_methods
 }
 

@@ -41,7 +41,7 @@ const (
 type BillingAccountsClient interface {
 	// Reads the configured billing provider's account list, refreshing the local record, then returns the discovered
 	// accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled and `UNAVAILABLE` when the provider
-	// cannot be reached; it never serves a stale list unmarked as current.
+	// cannot be reached; it never serves a stale list unmarked as current. Deployment-wide administrator access only.
 	List(ctx context.Context, in *BillingAccountsListRequest, opts ...grpc.CallOption) (*BillingAccountsListResponse, error)
 }
 
@@ -69,7 +69,7 @@ func (c *billingAccountsClient) List(ctx context.Context, in *BillingAccountsLis
 type BillingAccountsServer interface {
 	// Reads the configured billing provider's account list, refreshing the local record, then returns the discovered
 	// accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled and `UNAVAILABLE` when the provider
-	// cannot be reached; it never serves a stale list unmarked as current.
+	// cannot be reached; it never serves a stale list unmarked as current. Deployment-wide administrator access only.
 	List(context.Context, *BillingAccountsListRequest) (*BillingAccountsListResponse, error)
 	mustEmbedUnimplementedBillingAccountsServer()
 }

@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -126,7 +127,13 @@ func (s *TenantsServer) List(ctx context.Context,
 	if request.HasLimit() {
 		privateRequest.SetLimit(request.GetLimit())
 	}
-	privateRequest.SetFilter(request.GetFilter())
+	// Keep deletion-marked identity anchors out of public listings, including while finalizers remain.
+	// Parenthesize the caller's expression so an OR cannot bypass the liveness condition.
+	filter := "this.metadata.deletion_timestamp == null"
+	if callerFilter := request.GetFilter(); callerFilter != "" {
+		filter = fmt.Sprintf("(%s) && (%s)", callerFilter, filter)
+	}
+	privateRequest.SetFilter(filter)
 	privateRequest.SetOrder(request.GetOrder())
 
 	// Delegate to private server:

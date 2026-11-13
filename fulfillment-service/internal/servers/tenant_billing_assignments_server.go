@@ -35,10 +35,8 @@ var _ publicv1.TenantBillingAssignmentsServer = (*TenantBillingAssignmentsServer
 
 // TenantBillingAssignmentsServer is the public server; it delegates to the private one.
 //
-// A tenant billing assignment names its tenant only as data: this server applies no caller-tenant scoping, and
-// authz.rego grants billing access only to global admins and cloud-provider-admin role holders. The authorization
-// evaluator suites pin that boundary. If a future change grants tenant roles access here, add a caller-tenant
-// filter first.
+// authz.rego grants method access only to is_admin callers. The private delegate enforces the trusted subject's
+// tenant scope for both APIs; spec.tenant_id and metadata.tenant are data, never authorization credentials.
 type TenantBillingAssignmentsServer struct {
 	publicv1.UnimplementedTenantBillingAssignmentsServer
 	logger    *slog.Logger

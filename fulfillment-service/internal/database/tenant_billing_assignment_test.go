@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
@@ -200,6 +201,58 @@ var _ = Describe("Tenant billing assignments", func() {
 		})
 	})
 
+	Describe("CloseTenantBillingAssignmentOnDeletion", func() {
+		It("closes only the tenant's active interval, preserves history, and is idempotent", func() {
+			account := createAccount("")
+			first, err := CloseAndInsertTenantBillingAssignment(ctx, tx, "", TenantBillingAssignmentInsert{
+				ID: uuid.New(), Name: "history", TenantID: "tenant-a", BillingAccountID: account,
+				ConnectionState: "PENDING", Message: "original history message",
+			})
+			Expect(err).ToNot(HaveOccurred())
+			current, err := CloseAndInsertTenantBillingAssignment(ctx, tx, first, TenantBillingAssignmentInsert{
+				ID: uuid.New(), Name: "current", TenantID: "tenant-a", BillingAccountID: account,
+				ConnectionState: "CONNECTED",
+			})
+			Expect(err).ToNot(HaveOccurred())
+			historyBefore, err := GetTenantBillingAssignment(ctx, tx, first)
+			Expect(err).ToNot(HaveOccurred())
+			other, err := CloseAndInsertTenantBillingAssignment(ctx, tx, "", TenantBillingAssignmentInsert{
+				ID: uuid.New(), Name: "other", TenantID: "tenant-b", BillingAccountID: createAccount(""),
+				ConnectionState: "CONNECTED",
+			})
+			Expect(err).ToNot(HaveOccurred())
+			otherBefore, err := GetTenantBillingAssignment(ctx, tx, other)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(CloseTenantBillingAssignmentOnDeletion(ctx, tx, "tenant-a")).To(Succeed())
+			closed, err := GetTenantBillingAssignment(ctx, tx, current)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(closed.EffectiveTo).ToNot(BeNil())
+			Expect(closed.Message).To(Equal(TenantBillingAssignmentDeletedMessage))
+			Expect(closed.ConnectionState).To(Equal("CONNECTED"))
+			_, err = GetActiveTenantBillingAssignmentByTenant(ctx, tx, "tenant-a")
+			Expect(errors.Is(err, pgx.ErrNoRows)).To(BeTrue())
+			_, err = GetActiveTenantBillingAssignmentByAccount(ctx, tx, account)
+			Expect(errors.Is(err, pgx.ErrNoRows)).To(BeTrue())
+
+			Expect(CloseTenantBillingAssignmentOnDeletion(ctx, tx, "tenant-a")).To(Succeed())
+			repeated, err := GetTenantBillingAssignment(ctx, tx, current)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(repeated).To(Equal(closed))
+			historyAfter, err := GetTenantBillingAssignment(ctx, tx, first)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(historyAfter).To(Equal(historyBefore))
+			otherAfter, err := GetTenantBillingAssignment(ctx, tx, other)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(otherAfter).To(Equal(otherBefore))
+		})
+
+		It("is a no-op when the tenant has no active assignment", func() {
+			Expect(CloseTenantBillingAssignmentOnDeletion(ctx, tx, "tenant-a")).To(Succeed())
+			Expect(CloseTenantBillingAssignmentOnDeletion(ctx, tx, "missing-tenant")).To(Succeed())
+		})
+	})
+
 	Describe("GetActiveTenantBillingAssignmentByAccount and ByTenant", func() {
 		It("returns pgx.ErrNoRows when no active assignment exists", func() {
 			_, err := GetActiveTenantBillingAssignmentByTenant(ctx, tx, "tenant-a")
@@ -239,6 +292,57 @@ var _ = Describe("Tenant billing assignments", func() {
 			for _, item := range items {
 				Expect(item.TenantID).To(Equal("tenant-a"))
 			}
+		})
+
+		It("scopes SQL counts and pages to finite, universal, empty and exclusion tenant sets", func() {
+			for _, tc := range []struct {
+				tenants collections.Set[string]
+				total   int32
+			}{
+				{collections.NewSet("tenant-a"), 2},
+				{collections.NewSet("tenant-a", "tenant-b"), 3},
+				{collections.NewUniversalSet[string](), 3},
+				{collections.NewSet[string](), 0},
+				{collections.Set[string]{}, 0},
+				{collections.NewSet("tenant-b").Negate(), 2},
+				{collections.NewSet(`tenant-a' OR true --`), 0},
+			} {
+				seen := map[string]bool{}
+				for offset := int32(0); offset <= tc.total; offset++ {
+					items, total, err := ListTenantBillingAssignmentsForTenants(ctx, tx, offset, 1, "", "id", tc.tenants)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(total).To(Equal(tc.total))
+					if offset == tc.total {
+						Expect(items).To(BeEmpty())
+						continue
+					}
+					Expect(items).To(HaveLen(1))
+					Expect(tc.tenants.Contains(items[0].TenantID)).To(BeTrue())
+					Expect(seen[items[0].ID]).To(BeFalse())
+					seen[items[0].ID] = true
+				}
+				Expect(seen).To(HaveLen(int(tc.total)))
+			}
+		})
+
+		It("intersects caller filters with the SQL tenant scope for current and historical rows", func() {
+			scope := collections.NewSet("tenant-a")
+			for _, filter := range []string{
+				`this.spec.tenant_id == "tenant-b"`,
+				`this.spec.billing_account_id == "` + account2 + `" && !has(this.status.effective_to)`,
+			} {
+				items, total, err := ListTenantBillingAssignmentsForTenants(ctx, tx, 0, 1, filter, "", scope)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(total).To(BeZero())
+				Expect(items).To(BeEmpty())
+			}
+			items, total, err := ListTenantBillingAssignmentsForTenants(ctx, tx, 0, 1,
+				`this.status.connection_state == "CONNECTED" && has(this.status.effective_to)`, "", scope)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(total).To(Equal(int32(1)))
+			Expect(items).To(HaveLen(1))
+			Expect(items[0].TenantID).To(Equal("tenant-a"))
+			Expect(items[0].EffectiveTo).ToNot(BeNil())
 		})
 
 		It("filters by spec.billing_account_id", func() {

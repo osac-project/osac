@@ -102,6 +102,7 @@ type Adapter interface {
 	// SupportsCorrelationWrite reports whether SetCorrelationValue is implemented by the provider.
 	SupportsCorrelationWrite() bool
 
-	// SetCorrelationValue fails with an UNSUPPORTED *Error when SupportsCorrelationWrite is false.
+	// SetCorrelationValue fails with an UNSUPPORTED *Error when SupportsCorrelationWrite is false, or when
+	// writing is unsupported for the selected account. Resolution retains the PENDING remediation path in either case.
 	SetCorrelationValue(ctx context.Context, ref AccountRef, value string) error
 }

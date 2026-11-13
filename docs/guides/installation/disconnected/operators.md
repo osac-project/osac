@@ -6,6 +6,8 @@
     - [Resume](#resume)
   - [2. Install the Selected Operators](#2-install-the-selected-operators)
     - [One OLM pattern](#one-olm-pattern)
+    - [Namespace preparation](#namespace-preparation)
+    - [Operator acceptance prerequisites](#operator-acceptance-prerequisites)
   - [3. Shared Certificates, Trust and Credentials](#3-shared-certificates-trust-and-credentials)
     - [Dependency order](#dependency-order)
     - [cert-manager initialization](#cert-manager-initialization)
@@ -109,7 +111,7 @@ Use the [OpenShift operator installation procedure](https://docs.redhat.com/en/d
 
 2. Verify the package, channel and any explicit CSV pin in the approved mirrored catalog. Record the resolved CSV where no fixed pin is specified.
 
-3. Create or adopt the Namespace and correctly scoped OperatorGroup; server-validate the Subscription before applying it.
+3. Create or adopt the Namespace with the exact product-specific metadata in [Namespace preparation](#namespace-preparation), then the correctly scoped OperatorGroup; server-validate the Subscription before applying it.
 
 4. For Manual approval, follow that exact Subscription's `status.installPlanRef`. Review every dependency CSV, bundle and image against the mirrored inventory. Before approval or acceptance of an adopted installation, satisfy the AAP security and selected AMQ compatibility prerequisites below.
 
@@ -130,6 +132,69 @@ All OLM rows use `source: redhat-operators` and `sourceNamespace: openshift-mark
 | AMQ Streams | `osac-kafka` | `stable` | No cross-release fixed pin; review resolved CSV | Manual | `redhat-operators` | Package/Subscription `amq-streams`; OwnNamespace; only in-cluster Kafka |
 | AAP | `ansible-aap` | `stable-2.6-cluster-scoped` | `aap-operator.v2.6.0-0.1787258256` | Manual, exact pin | `redhat-operators` | Package `ansible-automation-platform-operator`; Subscription `dev-ansible-automation-platform`; AllNamespaces |
 | OpenShift Virtualization / VMaaS | `openshift-cnv` | `stable` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `kubevirt-hyperconverged`; OperatorGroup `kubevirt-hyperconverged-group` with `spec.targetNamespaces: [openshift-cnv]`; OwnNamespace; VMaaS only |
+
+### Namespace preparation
+
+Before installing each selected operator, run only its namespace block below after the ownership review in the OLM pattern. The product-specific labels and annotations match the Namespace templates under `osac-installer/charts/osac-deps/templates/` at [`osac/v0.0.62`](https://github.com/osac-project/osac/tree/osac/v0.0.62/osac-installer/charts/osac-deps/templates). These are explicit administrator-managed resources, not an instruction to install the `osac-deps` or `osac-infra` Helm charts. Do not copy the common Helm release-tracking labels from `osac-deps.labels` onto these manually managed namespaces.
+
+| Product | Namespace | Product-specific labels | Product-specific annotations | Release template |
+| --- | --- | --- | --- | --- |
+| OpenShift Virtualization / VMaaS | `openshift-cnv` | `openshift.io/cluster-monitoring: "true"` | `workload.openshift.io/allowed: management` | `cnv.yaml` |
+| MetalLB | `metallb-system` | `openshift.io/cluster-monitoring: "true"` | `workload.openshift.io/allowed: management` | `metallb.yaml` |
+| AAP | `ansible-aap` | `openshift.io/cluster-monitoring: "true"` | None | `aap.yaml` |
+| LVMS | `openshift-storage` | `openshift.io/cluster-monitoring: "true"` | None | `lvms.yaml` |
+| cert-manager operator | `cert-manager-operator` | None | None | `cert-manager.yaml` |
+| cert-manager operands | `cert-manager` | None | None | `cert-manager.yaml` |
+| AMQ Streams | `osac-kafka` | None | None | `amq-streams.yaml` |
+
+Do not propagate the monitoring label or management annotation to other rows. For an adopted namespace, compare these product-specific keys with the table and obtain owner approval before reconciling any difference; `oc apply` does not remove existing extra metadata. Kubernetes-added labels are outside this comparison. Stop on any failed command before installing the operator or its operands.
+
+**OpenShift Virtualization — VMaaS only:**
+
+```bash
+oc create namespace openshift-cnv --dry-run=client -o yaml | oc apply -f -
+oc label namespace openshift-cnv openshift.io/cluster-monitoring='true' --overwrite
+oc annotate namespace openshift-cnv workload.openshift.io/allowed=management --overwrite
+```
+
+**MetalLB — only when selected:**
+
+```bash
+oc create namespace metallb-system --dry-run=client -o yaml | oc apply -f -
+oc label namespace metallb-system openshift.io/cluster-monitoring='true' --overwrite
+oc annotate namespace metallb-system workload.openshift.io/allowed=management --overwrite
+```
+
+**AAP:**
+
+```bash
+oc create namespace ansible-aap --dry-run=client -o yaml | oc apply -f -
+oc label namespace ansible-aap openshift.io/cluster-monitoring='true' --overwrite
+```
+
+**LVMS — only when selected:**
+
+```bash
+oc create namespace openshift-storage --dry-run=client -o yaml | oc apply -f -
+oc label namespace openshift-storage openshift.io/cluster-monitoring='true' --overwrite
+```
+
+**cert-manager — operator and operand namespaces:**
+
+```bash
+oc create namespace cert-manager-operator --dry-run=client -o yaml | oc apply -f -
+oc create namespace cert-manager --dry-run=client -o yaml | oc apply -f -
+```
+
+**AMQ Streams — only for in-cluster Kafka:**
+
+```bash
+oc create namespace osac-kafka --dry-run=client -o yaml | oc apply -f -
+```
+
+trust-manager reuses the `cert-manager` namespace prepared above. The release manifest `osac-installer/prerequisites/trust-manager.yaml` declares no Namespace; do not create a separate trust-manager namespace or add product-specific metadata for it.
+
+### Operator acceptance prerequisites
 
 > **CVE-2026-75884:** This AAP CSV is the last release before the CVE fix; the pin is accepted as source-correct for OSAC 0.0.62.
 > Source correctness is not security approval. No automatic pin change is authorized; monitor for a patched CSV.
@@ -403,6 +468,7 @@ Evidence result: `trust-ownership: pass`. Do not relabel namespaces to expand th
 
 **Bundle gate** — current generation, not a stale `Synced` condition:
 Set `CA_BUNDLE_NAME` to the approved rendered `certs.caBundle.configMap` value before running this check.
+
 ```bash
 : "${CA_BUNDLE_NAME:?Set CA_BUNDLE_NAME to the approved rendered certs.caBundle.configMap value}"
 oc --request-timeout=30s get bundle "$CA_BUNDLE_NAME" -o json | jq -e '.metadata.generation as $g | any(.status.conditions[]?; .type == "Synced" and .status == "True" and .observedGeneration == $g)'

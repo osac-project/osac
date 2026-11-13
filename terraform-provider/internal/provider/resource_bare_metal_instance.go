@@ -216,9 +216,12 @@ func (r *bareMetalInstanceResource) Update(ctx context.Context,
 		"id":   state.Id.ValueString(),
 		"spec": update,
 	}
-	_, err = r.client.update(ctx, bareMetalInstancesPath, state.Id.ValueString(), body,
-		[]string{"spec.run_strategy", "spec.restart_trigger"},
-	)
+	mask := []string{"spec.run_strategy", "spec.restart_trigger"}
+	if !plan.Metadata.Labels.IsNull() && !plan.Metadata.Labels.IsUnknown() {
+		body["metadata"] = map[string]any{"labels": stringMap(plan.Metadata.Labels)}
+		mask = append(mask, "metadata.labels")
+	}
+	_, err = r.client.update(ctx, bareMetalInstancesPath, state.Id.ValueString(), body, mask)
 	if err != nil {
 		response.Diagnostics.AddError(
 			"Failed to update bare metal instance",
@@ -363,6 +366,9 @@ func (r *bareMetalInstanceResource) buildBody(ctx context.Context,
 	}
 	if tenant := r.tenant(plan); tenant != "" {
 		metadata["tenant"] = tenant
+	}
+	if !plan.Metadata.Labels.IsNull() && !plan.Metadata.Labels.IsUnknown() {
+		metadata["labels"] = stringMap(plan.Metadata.Labels)
 	}
 	return map[string]any{
 		"metadata": metadata,

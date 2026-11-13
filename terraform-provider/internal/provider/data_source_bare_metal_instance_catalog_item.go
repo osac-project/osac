@@ -32,9 +32,10 @@ type bareMetalInstanceCatalogItemDataSource struct {
 	client *Client
 }
 
-// bareMetalInstanceCatalogItemModel is the generated model plus the `name` lookup attribute.
+// bareMetalInstanceCatalogItemModel is the generated model plus the `name` and `labels` lookup attributes.
 type bareMetalInstanceCatalogItemModel struct {
-	Name types.String `tfsdk:"name"`
+	Name   types.String `tfsdk:"name"`
+	Labels types.Map    `tfsdk:"labels"`
 	gen.BareMetalInstanceCatalogItemModel
 }
 
@@ -53,7 +54,7 @@ func (d *bareMetalInstanceCatalogItemDataSource) Metadata(ctx context.Context,
 // definitions, adapted so that the bare metal instance catalog item can also be resolved by name.
 func (d *bareMetalInstanceCatalogItemDataSource) Schema(ctx context.Context,
 	request datasource.SchemaRequest, response *datasource.SchemaResponse) {
-	response.Schema = withNameLookup(
+	response.Schema = withLookup(
 		gen.BareMetalInstanceCatalogItemDataSourceSchema(ctx), "bare metal instance catalog item",
 	)
 }
@@ -75,7 +76,7 @@ func (d *bareMetalInstanceCatalogItemDataSource) Read(ctx context.Context,
 
 	// Resolve the identifier, by name when necessary:
 	id, err := d.client.lookupID(ctx, bareMetalInstanceCatalogsPath, "bare metal instance catalog item",
-		state.Name.ValueString(), state.Id.ValueString())
+		state.Name.ValueString(), state.Id.ValueString(), stringMap(state.Labels))
 	if err != nil {
 		response.Diagnostics.AddError("Failed to find bare metal instance catalog item", err.Error())
 		return

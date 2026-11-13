@@ -20,6 +20,8 @@ import (
 	"math/big"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
@@ -42,6 +44,21 @@ func valueOfJSON[V attr.Value](ctx context.Context, data json.RawMessage, zero V
 		return nullTyped(ctx, zero)
 	}
 	result, _ := value.(V)
+	return result
+}
+
+// stringMap converts a map of strings, like the metadata labels of a plan or the lookup labels of a data source,
+// into a plain Go map. Null and unknown values become an empty map, so that lookups treat them as "not given".
+func stringMap(value basetypes.MapValue) map[string]string {
+	result := map[string]string{}
+	if value.IsNull() || value.IsUnknown() {
+		return result
+	}
+	for name, element := range value.Elements() {
+		if text, ok := element.(types.String); ok {
+			result[name] = text.ValueString()
+		}
+	}
 	return result
 }
 

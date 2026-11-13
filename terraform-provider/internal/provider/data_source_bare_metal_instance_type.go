@@ -32,9 +32,10 @@ type bareMetalInstanceTypeDataSource struct {
 	client *Client
 }
 
-// bareMetalInstanceTypeModel is the generated model plus the `name` lookup attribute.
+// bareMetalInstanceTypeModel is the generated model plus the `name` and `labels` lookup attributes.
 type bareMetalInstanceTypeModel struct {
-	Name types.String `tfsdk:"name"`
+	Name   types.String `tfsdk:"name"`
+	Labels types.Map    `tfsdk:"labels"`
 	gen.BareMetalInstanceTypeModel
 }
 
@@ -53,7 +54,7 @@ func (d *bareMetalInstanceTypeDataSource) Metadata(ctx context.Context,
 // definitions, adapted so that the bare metal instance type can also be resolved by name.
 func (d *bareMetalInstanceTypeDataSource) Schema(ctx context.Context,
 	request datasource.SchemaRequest, response *datasource.SchemaResponse) {
-	response.Schema = withNameLookup(
+	response.Schema = withLookup(
 		gen.BareMetalInstanceTypeDataSourceSchema(ctx), "bare metal instance type",
 	)
 }
@@ -75,7 +76,7 @@ func (d *bareMetalInstanceTypeDataSource) Read(ctx context.Context,
 
 	// Resolve the identifier, by name when necessary:
 	id, err := d.client.lookupID(ctx, bareMetalInstanceTypesPath, "bare metal instance type",
-		state.Name.ValueString(), state.Id.ValueString())
+		state.Name.ValueString(), state.Id.ValueString(), stringMap(state.Labels))
 	if err != nil {
 		response.Diagnostics.AddError("Failed to find bare metal instance type", err.Error())
 		return

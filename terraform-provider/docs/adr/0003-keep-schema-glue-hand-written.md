@@ -32,8 +32,9 @@ generated schema. There is no specification post-processing step.
 - `Secret.type` forces replacement: immutable server-side (OSAC-7403).
 - Resource ids use `UseStateForUnknown`, so plans don't show unknown ids.
 - Secret `data` entries are marked `Sensitive` (`markSensitive`).
-- Data sources accept exactly one of `name` or `id`
-  (`stringvalidator.ExactlyOneOf`).
+- Data sources accept exactly one of `name`, `id` or `labels`
+  (`ExactlyOneOf` validators); label lookups go through the same list
+  endpoint as name lookups, with a CEL filter.
 
 ## Alternatives rejected
 

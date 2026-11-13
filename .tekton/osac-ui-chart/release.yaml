@@ -119,6 +119,8 @@ spec:
         value: $(params.git-url)
       - name: tag-prefix
         value: $(params.tag-prefix)
+      - name: trigger-ref
+        value: '{{target_branch}}'
       runAfter:
       - init
       taskSpec:
@@ -126,6 +128,8 @@ spec:
         - name: git-url
           type: string
         - name: tag-prefix
+          type: string
+        - name: trigger-ref
           type: string
         results:
         - name: CHART_VERSION
@@ -135,6 +139,9 @@ spec:
           # Same image build-helm-chart-oci-ta's own "package-and-push" step
           # uses -- already has git.
           image: quay.io/konflux-ci/tools@sha256:2112b51ba80d1041c120c32b67b871d371fde4e5775b32a3c7bf01a2f9ec0964
+          env:
+          - name: TRIGGER_REF
+            value: $(params.trigger-ref)
           script: |
             #!/bin/bash
             set -euo pipefail
@@ -153,15 +160,28 @@ spec:
             # at that base -- plain `sort -V` alone gets this backwards,
             # since it has no notion of semver precedence and sorts a bare
             # "X.Y.Z" BELOW "X.Y.Z-rc.N".
-            echo "Resolving real chart version from $(params.tag-prefix)*..."
+            #
+            # Only tags in the release line of the triggering marker tag
+            # are considered: tags are not branch-scoped, so without this
+            # a patch release from an older release branch would resolve
+            # to a newer line's version. The marker tag carries the
+            # umbrella version, dotted (v0.4.1, v0.4.0-rc.2-retry1) or as
+            # the prod promotion's dashed slug (v0-4-0-rc-2-prod-r1a1).
+            if [[ ! "${TRIGGER_REF}" =~ ^refs/tags/osac-charts-release/v([0-9]+)[.-]([0-9]+)[.-][0-9]+ ]]; then
+              echo "ERROR: cannot derive a release line from trigger ref ${TRIGGER_REF}" >&2
+              exit 1
+            fi
+            LINE_RE="^${BASH_REMATCH[1]}\\.${BASH_REMATCH[2]}\\."
+            echo "Resolving real chart version from $(params.tag-prefix)* in line ${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.x..."
             git clone --filter=blob:none --no-checkout "$(params.git-url)" /tmp/repo
             cd /tmp/repo
             git fetch --tags origin
             ALL_VERSIONS=$(git tag -l "$(params.tag-prefix)*" \
               | sed "s#^$(params.tag-prefix)##" \
-              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || true; })
+              | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' || true; } \
+              | { grep -E "${LINE_RE}" || true; })
             if [ -z "${ALL_VERSIONS}" ]; then
-              echo "ERROR: no tag matching $(params.tag-prefix)* found" >&2
+              echo "ERROR: no release tag matching $(params.tag-prefix)* found in that line" >&2
               exit 1
             fi
             MAX_BASE=$(printf '%s\n' "${ALL_VERSIONS}" | sed -E 's/-.*$//' | sort -V | tail -1)

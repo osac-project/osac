@@ -59,12 +59,37 @@ component version" below.
 
 ## Versioning model
 
-There is no single version number stamped onto everything. Each
-mono-repo component keeps its own independent version
-(`<component>/vX.Y.Z` git tags); only the umbrella chart (`osac`) gets its
-own release version. "OSAC vX.Y.Z" means a specific, tested combination of
-component versions — recorded in the published chart's `Chart.lock` and in
-that run's release notes/Slack summary, not implied by the number itself.
+Every branch records its **release line** (`X.Y`) in the `RELEASE_LINE` file
+at the repository root: `main` holds the upcoming release, `release-X.Y`
+holds `X.Y`. Everything built from a branch shares that `X.Y`. Inside the
+line, each mono-repo component (`<component>/v…` git tags) and the umbrella
+chart (`osac/v…`) keep their own patch number and their own candidate
+counter, so releasing one component never renumbers another.
+
+A release version is `X.Y.Z` or `X.Y.Z-rc.N`, nothing else:
+
+| Stage | Version | Built from |
+|---|---|---|
+| Nightly | `X.Y.Z-nightly.<date>.<sha>.<run>.<attempt>` | `main`, automatic |
+| Release candidate | `X.Y.Z-rc.N` | `release-X.Y` |
+| Stable | `X.Y.Z` | `release-X.Y` |
+
+Semver precedence follows that order (`nightly` < `rc` < stable), and the
+pipeline enforces the maturity it implies:
+
+- A candidate umbrella can only build candidate component versions, so a
+  stable-looking component version never exists before it ships in a stable
+  umbrella.
+- A stable umbrella can only contain stable component versions. The first
+  stable release of a line therefore releases every component as `X.Y.0`.
+- A new version must be higher than the latest one in its line, and no
+  version outside the branch's line is accepted. Git tags are not
+  branch-scoped; the line check is what keeps `release-0.4` and `main` from
+  resolving or minting each other's versions.
+
+"OSAC vX.Y.Z" means a specific, tested combination of component versions —
+recorded in the published chart's `Chart.lock` and in that run's release
+notes/Slack summary, not implied by the number itself.
 
 `osac-ui` is a mono-repo component like every other one here — built,
 tested, tagged, and published by this same pipeline, with its own
@@ -81,8 +106,10 @@ Every night at 03:00 UTC (or via a manual `workflow_dispatch` on
 
 1. Every mono-repo component is rebuilt fresh from `HEAD`, whether or not
    it changed since its last real release.
-2. Each gets tagged `<latest-real-base>-nightly.<date>.<sha>.<run>.<attempt>`
-   — never a permanent tag, never a bare `<component>/vX.Y.Z`.
+2. Each is versioned `<base>-nightly.<date>.<sha>.<run>.<attempt>` — never a
+   permanent tag, never a bare `<component>/vX.Y.Z`. `<base>` is `X.Y.0` of
+   the branch's release line, or the patch after the line's latest stable
+   version of that component once one exists.
 3. The full test gate runs: unit, integration, security (CodeQL), and the
    three e2e suites (vmaas/caas/bmaas) unless `skip_e2e` was set.
 4. On success, every image and the umbrella chart are signed with cosign
@@ -101,23 +128,29 @@ release_version=<version>`), selecting the branch/ref you want to release
 from GitHub's own "Use workflow from" selector — there is no separate
 ref input.
 
-**Required input:** `release_version` — a real, human-chosen semver (e.g.
-`0.1.0`, no leading `v`). The run fails immediately (in the `prepare` job,
+**Required input:** `release_version` — `X.Y.Z` or `X.Y.Z-rc.N` in the
+dispatched branch's release line (e.g. `0.5.0-rc.2`, no leading `v`), higher
+than the line's latest umbrella version. The run fails immediately (in the `prepare` job,
 before anything builds) if `osac/v<release_version>` already exists — you
 cannot re-release or silently overwrite a version that already shipped;
 cut the next patch instead.
 
 **Default behavior (no other input needed):** every component is pinned
-to its current latest real `<component>/vX.Y.Z` tag, verbatim — no
-rebuild, no retag. Only the umbrella chart is new. This is the common
+to its latest version in the branch's release line (candidates included),
+verbatim — no rebuild, no retag. A component with no version in the line
+yet must be named in `component_versions`; the run fails otherwise. Only the umbrella chart is new. This is the common
 case: "package whatever's already released into a new umbrella cut."
 
 **Optional `component_versions` input** — bump one or more components as
 part of the same release, as comma-separated `component=version` pairs:
 
 ```
-osac-operator=0.0.13,fulfillment-service=0.0.99
+osac-operator=0.5.0-rc.2,fulfillment-service=0.5.0-rc.3
 ```
+
+Each version follows the rules under "Versioning model": in the branch's
+line, higher than that component's latest, and a candidate exactly when
+`release_version` is one.
 
 For each named component:
 - If that exact version already exists as a real tag, it's just pinned
@@ -194,6 +227,11 @@ git fetch upstream
 git checkout -b release-0.4 upstream/main
 git push upstream release-0.4
 ```
+
+The new branch keeps the `RELEASE_LINE` it was cut with. Immediately open a
+PR on `main` that bumps `RELEASE_LINE` to the next line (`0.4` → `0.5`), so
+nightlies start tracking the next release and the two branches can never
+mint versions in the same line.
 
 GitHub's required checks (`CI`, CodeQL, `jira-reference`, Component Hooks
 Smoke) and Konflux's build/Enterprise-Contract triggers both already

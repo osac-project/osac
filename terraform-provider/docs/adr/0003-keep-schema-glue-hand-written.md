@@ -34,7 +34,9 @@ generated schema. There is no specification post-processing step.
   (`useStateForUnknown`): the generated schema marks everything as
   optional and computed, and the attributes the configuration leaves
   unset would otherwise be planned as unknown, showing a phantom change
-  on every plan.
+  on every plan. The instance `status` is exempt: it is recomputed by
+  every apply, and a planned value taken from the state would make
+  Terraform reject the fresher apply result.
 - Secret `data` entries are marked `Sensitive` (`markSensitive`).
 - Data sources accept exactly one of `name`, `id` or `labels`
   (`ExactlyOneOf` validators); label lookups go through the same list

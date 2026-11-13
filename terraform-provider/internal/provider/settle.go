@@ -31,13 +31,22 @@ import (
 )
 
 // useStateForUnknown recursively adds the UseStateForUnknown plan modifier to every computed attribute of a
-// generated resource schema. The generator marks everything as optional and computed, and the attributes the
-// configuration leaves unset would otherwise be planned as unknown, so every plan of an unchanged object would
-// show them as "known after apply" and trigger a pointless update. Nested objects get the modifier both on the
-// object itself — for the case where the configuration leaves the whole object unset — and on their attributes,
-// for the case where the configuration sets only some of them.
-func useStateForUnknown(generated schema.Schema) schema.Schema {
+// generated resource schema, except the top-level attributes given by name. The generator marks everything as
+// optional and computed, and the attributes the configuration leaves unset would otherwise be planned as unknown,
+// so every plan of an unchanged object would show them as "known after apply" and trigger a pointless update.
+// Nested objects get the modifier both on the object itself — for the case where the configuration leaves the
+// whole object unset — and on their attributes, for the case where the configuration sets only some of them.
+// Attributes that the apply recomputes, like the status of an instance, must be skipped: their planned value
+// comes from the state, but the apply writes a fresher one, and Terraform rejects the mismatch.
+func useStateForUnknown(generated schema.Schema, skip ...string) schema.Schema {
+	skipped := make(map[string]struct{}, len(skip))
+	for _, name := range skip {
+		skipped[name] = struct{}{}
+	}
 	for name, attribute := range generated.Attributes {
+		if _, ok := skipped[name]; ok {
+			continue
+		}
 		generated.Attributes[name] = useStateForUnknownAttribute(attribute)
 	}
 	return generated

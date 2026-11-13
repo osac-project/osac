@@ -91,7 +91,8 @@ func (r *bareMetalInstanceResource) Metadata(ctx context.Context,
 // whose contents never flow through the provider.
 func (r *bareMetalInstanceResource) Schema(ctx context.Context,
 	request resource.SchemaRequest, response *resource.SchemaResponse) {
-	response.Schema = useStateForUnknown(gen.BareMetalInstanceResourceSchema(ctx))
+	// The status is refreshed and changes on every update, so it must stay unknown in plans (see settle.go):
+	response.Schema = useStateForUnknown(gen.BareMetalInstanceResourceSchema(ctx), "status")
 }
 
 // Configure is the implementation of the resource.Resource interface.

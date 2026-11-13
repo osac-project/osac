@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -129,6 +130,47 @@ var _ = Describe("Billing pricing REST routes", Label("billing"), Serial, func()
 		Expect(statusCode).To(Equal(http.StatusBadRequest), "grpc-gateway maps INVALID_ARGUMENT to 400")
 		Expect(string(body)).To(ContainSubstring("currency_code"))
 	})
+
+	DescribeTable("keeps currency validation provider-owned on both REST routes",
+		func(ctx context.Context, currency *string, expectedCode codes.Code) {
+			query := ""
+			if currency != nil {
+				query = "?" + url.Values{"currency_code": {*currency}}.Encode()
+			}
+			for _, route := range []struct {
+				client *http.Client
+				path   string
+			}{
+				{tool.ExternalView().AdminClient(), "/api/fulfillment/v1/billing/provider_rate_card_items"},
+				{tool.InternalView().AdminClient(), "/api/private/v1/billing/provider_rate_card_items"},
+			} {
+				By("checking " + route.path + query)
+				attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				body, statusCode, err := getBillingPricingREST(attemptCtx, route.client, route.path+query)
+				cancel()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(statusCode).To(Equal(http.StatusBadRequest))
+				// Both codes map to HTTP 400: assert the gRPC status in the body to distinguish input
+				// rejection from reaching the disabled billing handler.
+				var rejection struct {
+					Code    int32  `json:"code"`
+					Message string `json:"message"`
+				}
+				Expect(json.Unmarshal(body, &rejection)).To(Succeed(), "body: %s", body)
+				Expect(rejection.Code).To(Equal(int32(expectedCode)), "body: %s", body)
+				if expectedCode == codes.FailedPrecondition {
+					Expect(rejection.Message).To(ContainSubstring("billing is not configured"))
+				} else {
+					Expect(rejection.Message).To(ContainSubstring("currency_code"))
+				}
+			}
+		},
+		Entry("accepts a one-character provider currency", new("x"), codes.FailedPrecondition),
+		Entry("accepts a long provider currency", new("provider-credit"), codes.FailedPrecondition),
+		Entry("does not require an ISO currency", new("ZZZ"), codes.FailedPrecondition),
+		Entry("rejects an explicitly empty currency", new(""), codes.InvalidArgument),
+		Entry("still requires a currency", (*string)(nil), codes.InvalidArgument),
+	)
 
 	It("rejects a tenant-scoped provider rate card items REST request as not implemented", func(ctx context.Context) {
 		_, err := publicv1.NewProviderRateCardItemsClient(tool.ExternalView().AdminConn()).List(ctx,

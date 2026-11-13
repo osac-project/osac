@@ -305,6 +305,47 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing"), S
 		expectCleanLog(ctx)
 	})
 
+	It("preserves the configured-provider API total in count-only CLI output in every format", func(ctx context.Context) {
+		// Provider rows do not require a catalog match. The preceding rate-card spec covers cross-references;
+		// this spec needs only a positive, deterministic rate card through the existing HTTPS fixture.
+		stub.SetScenario(billingRateCardScenario("billing-it-small"))
+		homeDir, err := tool.NewCLIHomeDir()
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { Expect(os.RemoveAll(homeDir)).To(Succeed()) })
+		_, _, exitCode := tool.LoginCLI(ctx, homeDir, adminUsername, adminsPassword)
+		Expect(exitCode).To(Equal(0), "login should succeed")
+		client := publicv1.NewProviderRateCardItemsClient(tool.ExternalView().AdminConn())
+		for _, format := range []string{"table", "json", "yaml"} {
+			By("comparing count-only " + format + " output with the configured-provider API")
+			Eventually(ctx, func(g Gomega) {
+				attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				defer cancel()
+				list, err := client.List(attemptCtx, publicv1.ProviderRateCardItemsListRequest_builder{
+					Service: new("compute_instance"), CurrencyCode: new("USD"),
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(list.GetTotal()).To(BeNumerically(">", 0))
+				g.Expect(list.GetItems()).ToNot(BeEmpty())
+				count, err := client.List(attemptCtx, publicv1.ProviderRateCardItemsListRequest_builder{
+					Service: new("compute_instance"), CurrencyCode: new("USD"), Limit: new(int32(0)),
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(count.GetSize()).To(BeZero())
+				g.Expect(count.GetItems()).To(BeEmpty())
+				g.Expect(count.GetTotal()).To(Equal(list.GetTotal()))
+				stdout, stderr, exitCode := tool.RunCLI(attemptCtx, homeDir,
+					"get", "providerratecarditem", "--service", "compute_instance", "--currency-code", "USD",
+					"--limit", "0", "-o", format)
+				g.Expect(exitCode).To(Equal(0), "stdout: %s\nstderr: %s", stdout, stderr)
+				expectBillingPricingCountOnlyCLI(g, stdout, format, count.GetTotal())
+			}, time.Minute, time.Second).Should(Succeed())
+		}
+		for _, op := range []string{"FindServiceByName", "ListPriceableAttributes", "GetServiceRateCard"} {
+			Expect(stub.Succeeded(op)).To(BeNumerically(">", 0), op)
+		}
+		Expect(stub.Writes()).To(BeEmpty())
+	})
+
 	It("is UNAVAILABLE when the stub provider fails its health check", func(ctx context.Context) {
 		stub.SetScenario(billingfake.Scenario{Failures: map[string]billingfake.Failure{
 			"HealthCheck": {Reason: billing.ReasonUnavailable, Status: 503}}})

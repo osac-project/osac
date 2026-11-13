@@ -294,9 +294,10 @@ unless it has an override of its own. The installer ships two overrides,
 `inventorySeconds: 30` for the catalog inventory cache and
 `rateCardSeconds: 300` for the provider rate-card cache, so the shipped
 freshness is 30 seconds for inventory and 300 for rate cards. An override takes
-the place of the shared default only while it is set: clear it (set it to null,
-or remove it from your values) and that cache inherits `defaultSeconds` again.
-A deployment that supplies no tuning at all uses 300 seconds for both caches.
+the place of the shared default only while it is set: set it to null and that
+cache inherits `defaultSeconds` again, while deleting the key leaves the shipped
+override in place. A deployment of the service chart alone, with no tuning
+values, uses 300 seconds for both caches.
 The chart rejects an interval outside 1 to 86400 seconds, and the service falls
 back to the shared default if it still receives an unusable value. The chart
 passes the values to the fulfillment service as
@@ -321,3 +322,19 @@ catalog sweep or provider call takes; for the rate card the 120-second cap
 binds once the interval exceeds 240 seconds. Raise an interval while you
 investigate a slow catalog or provider; lower one only for a change that must
 appear sooner than the default.
+
+## Provider rate cards and the catalog
+
+`CatalogPricingInputs.List` reports the dimensions and values your catalog items
+offer. `ProviderRateCardItems.List` reports the provider's rate-card rows and,
+for each one, the dimension it prices. Compare the two to find billable
+dimensions the provider does not price, and provider rows that price nothing in
+your catalog.
+
+The dimension names are the pairing key, and they must match exactly: a row's
+`dimension` and its conditions use the same names your catalog uses, such as
+`instance_type`, and OSAC translates one vocabulary into the other only if the
+names already agree. A provider name that differs fails nothing: the row comes
+back with an empty `catalog_item_matches`, and a configuration priced on that
+dimension gets a `BILLING_COVERAGE_GAP` result, with no error. Aligning the
+provider's names with your catalog is part of configuring the provider.

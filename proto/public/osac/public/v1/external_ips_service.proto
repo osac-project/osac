@@ -87,7 +87,7 @@ message ExternalIPsDeleteRequest {
   string id = 1;
 }
 
-message ExternalIPsDeleteResponse {}
+message ExternalIPsDeleteResponse { ExternalIP object = 1; }
 
 service ExternalIPs {
   // Retrieves the list of external IPs.
@@ -114,6 +114,6 @@ service ExternalIPs {
 
   // Deletes an external IP. The allocated address is returned to the parent pool's available capacity.
   rpc Delete(ExternalIPsDeleteRequest) returns (ExternalIPsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/external_ips/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/external_ips/{id}" response_body: "object"};
   }
 }

@@ -108,7 +108,7 @@ message ExternalIPsDeleteRequest {
   string id = 1;
 }
 
-message ExternalIPsDeleteResponse {}
+message ExternalIPsDeleteResponse { ExternalIP object = 1; }
 
 message ExternalIPsSignalRequest {
   option (cleanapi.message).private = true;
@@ -154,7 +154,7 @@ service ExternalIPs {
 
   // Deletes an external IP. The allocated address is returned to the parent pool's available capacity.
   rpc Delete(ExternalIPsDeleteRequest) returns (ExternalIPsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/external_ips/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/external_ips/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

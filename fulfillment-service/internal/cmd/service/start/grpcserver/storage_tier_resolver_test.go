@@ -57,10 +57,10 @@ var _ = Describe("Storage tier resolver", func() {
 		return database.TxIntoContext(testCtx, tx), tx
 	}
 
-	createVolume := func(ctx context.Context) error {
+	createNamedVolume := func(ctx context.Context, name string) error {
 		_, err := volumeServer.Create(ctx, privatev1.VolumesCreateRequest_builder{
 			Object: privatev1.Volume_builder{
-				Metadata: privatev1.Metadata_builder{Name: "volume", Tenant: "volume-tenant"}.Build(),
+				Metadata: privatev1.Metadata_builder{Name: name, Tenant: "volume-tenant"}.Build(),
 				Spec: privatev1.VolumeSpec_builder{
 					StorageTier: "tier",
 					SizeGib:     1,
@@ -69,6 +69,9 @@ var _ = Describe("Storage tier resolver", func() {
 			}.Build(),
 		}.Build())
 		return err
+	}
+	createVolume := func(ctx context.Context) error {
+		return createNamedVolume(ctx, "volume")
 	}
 
 	deleteTier := func(ctx context.Context) error {
@@ -167,6 +170,37 @@ var _ = Describe("Storage tier resolver", func() {
 		return result
 	}
 
+	It("allows concurrent Volume creates on the same tier while blocking deletion", func() {
+		firstCtx, firstTx := begin()
+		Expect(createNamedVolume(firstCtx, "first")).To(Succeed())
+		secondCtx, secondTx := begin()
+		result := startRequest(secondCtx, func(ctx context.Context) error {
+			return createNamedVolume(ctx, "second")
+		})
+		var createErr error
+		Eventually(result, 5*time.Second).Should(Receive(&createErr))
+		Expect(createErr).NotTo(HaveOccurred())
+
+		deleteCtx, deleteTx := begin()
+		var pid int
+		Expect(deleteTx.QueryRow(deleteCtx, "select pg_backend_pid()").Scan(&pid)).To(Succeed())
+		deletion := startRequest(deleteCtx, deleteTier)
+		waitForTierLock(pid, "update")
+		Expect(firstTx.End(firstCtx)).To(Succeed())
+		waitForTierLock(pid, "update")
+		Expect(secondTx.End(secondCtx)).To(Succeed())
+		var deleteErr error
+		Eventually(deletion, 5*time.Second).Should(Receive(&deleteErr))
+		Expect(grpcstatus.Code(deleteErr)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(deleteTx.End(deleteCtx)).To(Succeed())
+
+		var active, count int
+		Expect(pool.QueryRow(testCtx, `select count(*) from storage_tiers where id = 'tier' and deletion_timestamp = 'epoch'`).Scan(&active)).To(Succeed())
+		Expect(active).To(Equal(1))
+		Expect(pool.QueryRow(testCtx, `select count(*) from volumes where data->'spec'->>'storage_tier' = 'tier'`).Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(2))
+	})
+
 	DescribeTable("holds the tier lock until Volume creation ends", func(commit bool) {
 		createCtx, createTx := begin()
 		Expect(createVolume(createCtx)).To(Succeed())
@@ -212,7 +246,7 @@ var _ = Describe("Storage tier resolver", func() {
 		var pid int
 		Expect(createTx.QueryRow(createCtx, "select pg_backend_pid()").Scan(&pid)).To(Succeed())
 		result := startRequest(createCtx, createVolume)
-		waitForTierLock(pid, "for update")
+		waitForTierLock(pid, "for share")
 		Expect(updateTx.End(updateCtx)).To(Succeed())
 		var createErr error
 		Eventually(result, 5*time.Second).Should(Receive(&createErr))
@@ -235,7 +269,7 @@ var _ = Describe("Storage tier resolver", func() {
 		var pid int
 		Expect(createTx.QueryRow(createCtx, "select pg_backend_pid()").Scan(&pid)).To(Succeed())
 		result := startRequest(createCtx, createVolume)
-		waitForTierLock(pid, "for update")
+		waitForTierLock(pid, "for share")
 		Expect(deleteTx.End(deleteCtx)).To(Succeed())
 		var createErr error
 		Eventually(result, 5*time.Second).Should(Receive(&createErr))

@@ -241,7 +241,7 @@ func (s *PrivateExternalIPPoolsServer) Delete(ctx context.Context,
 		return
 	}
 	if deleteAlreadyAccepted(pool.GetMetadata()) {
-		return &privatev1.ExternalIPPoolsDeleteResponse{}, nil
+		return &privatev1.ExternalIPPoolsDeleteResponse{Object: pool}, nil
 	}
 	if err = rejectGuardedDelete(ctx, s.guards, s.guards.externalIPs, "ExternalIP", "ExternalIPPool", pool,
 		func(externalIP *privatev1.ExternalIP) bool {
@@ -252,7 +252,11 @@ func (s *PrivateExternalIPPoolsServer) Delete(ctx context.Context,
 	if err = markDeleting(ctx, s.generic.dao, pool); err != nil {
 		return
 	}
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.ExternalIPPoolsDeleteResponse{Object: object}
 	return
 }
 

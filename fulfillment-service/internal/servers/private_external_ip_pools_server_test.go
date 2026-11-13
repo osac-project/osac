@@ -255,6 +255,38 @@ var _ = Describe("Private external IP pools server", func() {
 			Expect(getResponse.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 		})
 
+		It("keeps a deleting ExternalIPPool unchanged on a repeated delete", func() {
+			createResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
+				Object: privatev1.ExternalIPPool_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:       "test-pool-repeat-delete",
+						Finalizers: []string{"test"},
+					}.Build(),
+					Spec: privatev1.ExternalIPPoolSpec_builder{
+						Cidrs:    []string{"192.168.2.0/24"},
+						IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			first, err := poolsServer.Delete(ctx, privatev1.ExternalIPPoolsDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			before, err := poolsServer.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			second, err := poolsServer.Delete(ctx, privatev1.ExternalIPPoolsDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(second.GetObject().GetId()).To(Equal(id))
+			Expect(second.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(proto.Equal(first.GetObject(), second.GetObject())).To(BeTrue())
+
+			after, err := poolsServer.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(before.GetObject(), after.GetObject())).To(BeTrue())
+		})
+
 		It("Rejects deletion when allocated ExternalIPs reference the pool", func() {
 			createPoolResponse, err := poolsServer.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
 				Object: privatev1.ExternalIPPool_builder{

@@ -16,16 +16,19 @@ package servers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Private volumes server", func() {
@@ -190,6 +193,67 @@ var _ = Describe("Private volumes server", func() {
 			Expect(obj.GetId()).To(Equal(created.GetId()))
 			Expect(obj.GetSpec().GetStorageTier()).To(Equal("gold"))
 		})
+
+		DescribeTable("persists registration-only inventory state through private and public reads",
+			func(segments map[string]string, inventory, suppliedStatus bool) {
+				volume := privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{Name: "registered-disk", Tenant: testTenant}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold", SizeGib: 100,
+						AccessMode: privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Topology:   privatev1.VolumeTopology_builder{Segments: segments}.Build(),
+					}.Build(),
+				}.Build()
+				if suppliedStatus {
+					volume.SetStatus(privatev1.VolumeStatus_builder{
+						State: privatev1.VolumeState_VOLUME_STATE_FAILED, Message: new("stale failure"),
+						StateTransitionTime: timestamppb.New(time.Unix(1, 0)),
+						VendorVolumeId:      "caller-supplied-id", ProvisionedSizeGib: 999, Hub: "caller-hub",
+						VendorContext: map[string]string{"caller": "context"},
+						Provider:      "caller-provider", Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
+					}.Build())
+				}
+				before := time.Now().Truncate(time.Second)
+				created, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{Object: volume}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				stored, err := server.Get(ctx, privatev1.VolumesGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(proto.Equal(created.GetObject(), stored.GetObject())).To(BeTrue())
+				actual := stored.GetObject()
+				state := privatev1.VolumeState_VOLUME_STATE_CREATING
+				if inventory {
+					state = privatev1.VolumeState_VOLUME_STATE_AVAILABLE
+					Expect(actual.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+					Expect(actual.GetStatus().GetStateTransitionTime().GetNanos()).To(BeZero())
+					Expect(actual.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally(">=", before))
+					Expect(actual.GetStatus().GetStateTransitionTime().AsTime()).To(BeTemporally("<=", time.Now()))
+					Expect(actual.GetStatus().GetMessage()).To(BeEmpty())
+				}
+				Expect(actual.GetStatus().GetState()).To(Equal(state))
+				Expect(actual.GetStatus().GetVendorVolumeId()).To(BeEmpty())
+				Expect(actual.GetStatus().GetProvisionedSizeGib()).To(BeZero())
+				Expect(actual.GetStatus().GetVendorContext()).To(BeEmpty())
+				Expect(actual.GetStatus().GetHub()).To(BeEmpty())
+				Expect(actual.GetStatus().GetProvider()).To(Equal("test-provider"))
+				Expect(actual.GetStatus().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
+				Expect(actual.GetSpec().GetSizeGib()).To(Equal(int64(100)))
+				Expect(actual.GetMetadata().GetTenant()).To(Equal(testTenant))
+				publicServer, err := NewVolumesServer().SetLogger(logger).
+					SetAttributionLogic(attribution).SetTenancyLogic(tenancy).
+					SetTierResolver(server.tierResolver).Build()
+				Expect(err).NotTo(HaveOccurred())
+				public, err := publicServer.Get(ctx, publicv1.VolumesGetRequest_builder{Id: actual.GetId()}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(public.GetObject().GetStatus().GetState().String()).To(Equal(state.String()))
+				Expect(public.GetObject().GetStatus().GetMessage()).To(Equal(actual.GetStatus().GetMessage()))
+			},
+			Entry("CI inventory", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, true, false),
+			Entry("CI inventory discards stale vendor status", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, true, true),
+			Entry("ordinary CSI", map[string]string{"osac.io/node": "worker-1"}, false, false),
+			Entry("empty topology", nil, false, false),
+			Entry("near match", map[string]string{"osac.io/node": "osac-volume-registration-pending-other"}, false, false),
+			Entry("extra key", map[string]string{"osac.io/node": "osac-volume-registration-pending", "zone": "a"}, false, false),
+		)
 
 		It("stamps the resolved provider over caller-provided status", func() {
 			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{

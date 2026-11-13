@@ -258,6 +258,64 @@ var _ = Describe("setDefaults", func() {
 })
 
 var _ = Describe("update", func() {
+	DescribeTable("bypasses only the exact inventory topology after defaults and tenant validation",
+		func(segments map[string]string, bypass bool) {
+			ctrl := gomock.NewController(GinkgoT())
+			hubs := controllers.NewMockHubCache(ctrl)
+			if !bypass {
+				hubs.EXPECT().Get(gomock.Any(), "hub-1").Return(nil, errors.New("standalone hub lookup"))
+			}
+			volume := privatev1.Volume_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "tenant-1", Finalizers: []string{finalizers.Controller}}.Build(),
+				Spec: privatev1.VolumeSpec_builder{
+					Topology: privatev1.VolumeTopology_builder{Segments: segments}.Build(),
+				}.Build(),
+				Status: privatev1.VolumeStatus_builder{Hub: "hub-1"}.Build(),
+			}.Build()
+			task := &task{r: &function{logger: logger, hubCache: hubs}, volume: volume}
+			err := task.update(context.Background())
+			if bypass {
+				Expect(err).NotTo(HaveOccurred())
+			} else {
+				Expect(err).To(MatchError("standalone hub lookup"))
+			}
+			Expect(volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_CREATING))
+			Expect(volume.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+		},
+		Entry("CI inventory", map[string]string{"osac.io/node": "osac-volume-registration-pending"}, true),
+		Entry("standalone node", map[string]string{"osac.io/node": "worker-1"}, false),
+		Entry("missing topology", nil, false),
+		Entry("empty node", map[string]string{"osac.io/node": ""}, false),
+		Entry("not a prefix", map[string]string{"osac.io/node": "osac-volume-registration-pending-other"}, false),
+		Entry("not a superset", map[string]string{"osac.io/node": "osac-volume-registration-pending", "zone": "a"}, false),
+	)
+
+	It("preserves inventory finalizers, tenant validation and no-hub deletion", func() {
+		volume := privatev1.Volume_builder{
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant-1"}.Build(),
+			Spec: privatev1.VolumeSpec_builder{Topology: privatev1.VolumeTopology_builder{
+				Segments: map[string]string{"osac.io/node": "osac-volume-registration-pending"},
+			}.Build()}.Build(),
+			Status: privatev1.VolumeStatus_builder{
+				State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
+				StateTransitionTime: controllers.NowTruncated(),
+			}.Build(),
+		}.Build()
+		transitionTime := volume.GetStatus().GetStateTransitionTime()
+		task := &task{r: &function{logger: logger}, volume: volume}
+		Expect(task.update(context.Background())).To(Succeed())
+		Expect(hasFinalizer(volume)).To(BeTrue())
+		Expect(task.update(context.Background())).To(Succeed())
+		Expect(volume.GetStatus().GetHub()).To(BeEmpty())
+		Expect(volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+		Expect(volume.GetStatus().GetStateTransitionTime()).To(Equal(transitionTime))
+		volume.GetMetadata().SetTenant("")
+		Expect(task.update(context.Background())).To(Succeed())
+		Expect(volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
+		Expect(task.delete(context.Background())).To(Succeed())
+		Expect(hasFinalizer(volume)).To(BeFalse())
+	})
+
 	It("sets tenant and project annotations when creating the hub Volume", func() {
 		ctx := context.Background()
 		ctrl := gomock.NewController(GinkgoT())

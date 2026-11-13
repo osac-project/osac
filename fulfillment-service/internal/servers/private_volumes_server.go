@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -24,8 +25,10 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -181,6 +184,14 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 	// populated only by the operator feedback path after vendor provisioning.
 	vol.GetStatus().SetVendorContext(nil)
 	vol.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
+	// For 0.4 only: ticket - OSAC-7670
+	// AVAILABLE means inventory registration, not disk readiness or vendor provisioning.
+	if utils.IsComputeInstanceVolumeInventory(vol) {
+		vol.SetStatus(privatev1.VolumeStatus_builder{
+			State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
+			StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
+		}.Build())
+	}
 	vol.GetStatus().SetProvider(resolved.Provider)
 	vol.GetStatus().SetProtocol(resolved.Protocol)
 

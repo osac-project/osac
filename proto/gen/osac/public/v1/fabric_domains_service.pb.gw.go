@@ -247,7 +247,7 @@ func RegisterFabricDomainsHandlerServer(ctx context.Context, mux *runtime.ServeM
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_FabricDomains_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_FabricDomains_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_FabricDomains_Delete_0{resp.(*FabricDomainsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -355,7 +355,7 @@ func RegisterFabricDomainsHandlerClient(ctx context.Context, mux *runtime.ServeM
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_FabricDomains_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_FabricDomains_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_FabricDomains_Delete_0{resp.(*FabricDomainsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -373,6 +373,14 @@ type response_FabricDomains_Create_0 struct {
 }
 
 func (m response_FabricDomains_Create_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_FabricDomains_Delete_0 struct {
+	*FabricDomainsDeleteResponse
+}
+
+func (m response_FabricDomains_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

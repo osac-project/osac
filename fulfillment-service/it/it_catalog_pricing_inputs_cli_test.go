@@ -114,6 +114,56 @@ func catalogPricingShortenInventoryTTL(ctx context.Context) {
 // The inventory is derived from the catalog alone, so the dev deployment's unconfigured billing is no gap here:
 // these specs exercise the deployed CLI boundary end to end without needing a provider.
 var _ = Describe("Catalog pricing inputs CLI", Label("billing"), Serial, func() {
+	It("preserves the API total in count-only CLI output in every format", func(ctx context.Context) {
+		template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
+		item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(),
+			publicv1.ComputeInstanceCatalogItem_builder{
+				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Published: true,
+				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+					InstanceType: publicv1.InstanceTypeReferenceFieldPolicy_builder{
+						Editable: publicv1.EditableInstanceTypeReferenceField_builder{}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+		homeDir, err := tool.NewCLIHomeDir()
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { Expect(os.RemoveAll(homeDir)).To(Succeed()) })
+		_, _, exitCode := tool.LoginCLI(ctx, homeDir, adminUsername, adminsPassword)
+		Expect(exitCode).To(Equal(0), "login should succeed")
+
+		client := publicv1.NewCatalogPricingInputsClient(tool.ExternalView().AdminConn())
+		filter := `this.service == "compute_instance" && this.dimension == "instance_type" && this.value == ""`
+		for _, format := range []string{"table", "json", "yaml"} {
+			By("comparing count-only " + format + " output with the seeded API inventory")
+			// Allow the shipped 30s cache to refresh instead of assuming a preceding spec's snapshot or patching
+			// the Deployment. Re-read the total on each attempt; no fixed catalog cardinality is assumed.
+			Eventually(ctx, func(g Gomega) {
+				attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				defer cancel()
+				list, err := client.List(attemptCtx, publicv1.CatalogPricingInputsListRequest_builder{
+					Filter: &filter,
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(list.GetTotal()).To(BeNumerically(">", 0))
+				g.Expect(catalogPricingGRPCInputRowListsItem(list, item.GetId())).To(BeTrue(),
+					"the inventory must include this spec's seed, not merely a positive cached count")
+				count, err := client.List(attemptCtx, publicv1.CatalogPricingInputsListRequest_builder{
+					Filter: &filter, Limit: new(int32(0)),
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(count.GetSize()).To(BeZero())
+				g.Expect(count.GetItems()).To(BeEmpty())
+				g.Expect(count.GetTotal()).To(Equal(list.GetTotal()))
+				stdout, stderr, exitCode := tool.RunCLI(attemptCtx, homeDir,
+					"get", "catalogpricinginput", "--filter", filter, "--limit", "0", "-o", format)
+				g.Expect(exitCode).To(Equal(0), "stdout: %s\nstderr: %s", stdout, stderr)
+				expectBillingPricingCountOnlyCLI(g, stdout, format, count.GetTotal())
+			}, 90*time.Second, 2*time.Second).Should(Succeed())
+		}
+	})
+
 	It("lists the metered catalog pricing input inventory over the CLI", func(ctx context.Context) {
 		// The deployed server reuses one catalog inventory sweep until the cache TTL elapses, so a read right after
 		// seeding can observe a snapshot from another item. Shorten that TTL on the deployed Deployment first, then

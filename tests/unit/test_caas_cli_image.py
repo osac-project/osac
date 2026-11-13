@@ -37,14 +37,21 @@ def runner(tmp_path: Path) -> tuple[dict[str, str], Path]:
     output.touch()
     (tmp_path / "oc").write_text(
         "#!/bin/bash\nset -euo pipefail\n"
-        'if [[ "$1" == get ]]; then printf "%s" "$PODS"; '
-        'elif [[ "$1" == exec ]]; then printf "pod-cli"; exit "${COPY_STATUS:-0}"; '
+        'if [[ "$1" == get ]]; then '
+        '[[ "$*" == "get pods -n test -l app=fulfillment-grpc-server -o json" ]]; printf "%s" "$PODS"; '
+        'elif [[ "$1" == exec ]]; then '
+        '[[ "$*" == "exec fulfillment-ready -n test -c grpc-server -- cat /usr/local/bin/osac" ]]; '
+        'printf "pod-cli"; exit "${COPY_STATUS:-0}"; '
         "else exit 91; fi\n"
     )
     (tmp_path / "podman").write_text(
         '#!/bin/bash\nset -euo pipefail\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n'
         'case "$1" in\n'
         'pull) exit "${PULL_STATUS:-0}" ;;\n'
+        "run) exit 0 ;;\n"
+        "create) echo test-container ;;\n"
+        'cp) printf "image-cli" > "$3" ;;\n'
+        "rm) exit 0 ;;\n"
         'build) if [[ "$*" == *OSAC_CLI_BIN=* ]]; then cp osac-cli-bin image-cli; fi ;;\n'
         "*) exit 92 ;;\nesac\n"
     )
@@ -100,11 +107,34 @@ def test_implicit_cli_runs_after_install_and_uses_shared_action(steps: list[dict
 def test_digest_resolves_without_tag_parsing(steps: list[dict], runner: tuple[dict, Path], image_id: str) -> None:
     env, root = runner
     pods = json.loads(env["PODS"])
-    pods["items"][0]["status"]["containerStatuses"][0]["imageID"] = image_id
+    pods["items"][0]["spec"] = {"containers": [{"name": "grpc-server", "image": "registry.example/service:main"}]}
+    pods["items"][0]["status"]["containerStatuses"].insert(
+        0, {"name": "envoy", "ready": True, "imageID": "registry.example/sidecar@sha256:wrong"}
+    )
+    pods["items"][0]["status"]["containerStatuses"][1]["imageID"] = image_id
     env["PODS"] = json.dumps(pods)
     result = execute(named(steps, "Resolve deployed fulfillment-service image"), env, root)
     assert result.returncode == 0, result.stderr
     assert (root / "output").read_text() == f"image={image_id.removeprefix('docker-pullable://')}\n"
+    assert (root / "commands").read_text() == f"pull {image_id.removeprefix('docker-pullable://')}\n"
+
+
+def test_shared_action_output_reaches_test_image(steps: list[dict], runner: tuple[dict, Path]) -> None:
+    env, root = runner
+    action_path = Path(os.environ["OSAC_TEST_INFRA_DIR"]) / ".github/actions/extract-osac-cli/action.yml"
+    action = yaml.safe_load(action_path.read_text())["runs"]["steps"][0]
+    binary = root / "extracted CLI"
+    env.update(IMAGE="registry.example/service@sha256:abc", OUTPUT_PATH=str(binary))
+    extracted = execute(action, env, root)
+    assert extracted.returncode == 0, extracted.stderr
+    output = (root / "output").read_text().strip().removeprefix("path=")
+    assert output == str(binary)
+    assert os.access(output, os.X_OK)
+    env["DEPLOYED_CLI_BIN"] = output
+    built = execute(named(steps, "Build test image"), env, root)
+    assert built.returncode == 0, built.stderr
+    assert (root / "image-cli").read_bytes() == binary.read_bytes()
+    assert not (root / "osac-cli-bin").exists()
 
 
 def test_node_local_image_copies_running_pod_cli(steps: list[dict], runner: tuple[dict, Path]) -> None:

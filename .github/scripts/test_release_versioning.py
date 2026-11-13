@@ -1,4 +1,7 @@
-"""Run the release pipeline's real version-resolution shell against synthetic tag histories."""
+"""Run release shell against synthetic tag histories and isolated CI overlays.
+
+Requires Bash, Git, jq, Mike Farah yq v4, and PyYAML.
+"""
 
 import json
 import os

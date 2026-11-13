@@ -125,7 +125,7 @@ message RolesDeleteRequest {
 }
 
 // Response message for deleting a role.
-message RolesDeleteResponse {}
+message RolesDeleteResponse { Role object = 1; }
 
 // Request message for signaling a role.
 message RolesSignalRequest {
@@ -178,7 +178,7 @@ service Roles {
 
   // Deletes a role. This operation is only available to administrators.
   rpc Delete(RolesDeleteRequest) returns (RolesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/roles/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/roles/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

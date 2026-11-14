@@ -271,7 +271,7 @@ class TestTypeMappingCompleteness:
 
     @pytest.mark.parametrize(
         "key",
-        ["str", "string", "list", "dict", "bool", "int", "float", "path", "json", "bytes"],
+        ["str", "string", "list", "dict", "bool", "boolean", "int", "float", "path", "json", "bytes"],
     )
     def test_ansible_string_keys_present(self, key):
         assert key in TypeMapping

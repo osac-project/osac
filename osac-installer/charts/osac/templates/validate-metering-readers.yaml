@@ -4,14 +4,19 @@ creates. The metering chart rejects the osac- and osac. prefixes and its own
 users; the fulfillment service's KafkaUser is named by an umbrella helper, so
 only this chart can check it. A collision on upgrade lets the later document
 replace the other user's ACLs.
+
+Rejection messages identify the entry by its index, never by its name: reader
+names are customer-supplied infrastructure identifiers (often internal
+hostnames), and the offline validation gate surfaces these render errors in
+its logs.
 */}}
 {{- $reserved := list (include "osac.fulfillmentKafkaUserName" .) "osac-metering" "osac-metering-echo-adapter" "osac-metering-m360-adapter" -}}
-{{- range .Values.metering.readers }}
-{{- $name := required "metering.readers[].name is required" .name -}}
+{{- range $index, $reader := .Values.metering.readers }}
+{{- $name := required "metering.readers[].name is required" $reader.name -}}
 {{- if has $name $reserved }}
-{{- fail (printf "metering reader %q is a KafkaUser OSAC owns; pick another name" $name) }}
+{{- fail (printf "metering reader at index %d is a KafkaUser OSAC owns; pick another name" $index) }}
 {{- end }}
 {{- if or (hasPrefix "osac-" $name) (hasPrefix "osac." $name) }}
-{{- fail (printf "metering reader %q uses the reserved osac- or osac. name prefix" $name) }}
+{{- fail (printf "metering reader at index %d uses the reserved osac- or osac. name prefix" $index) }}
 {{- end }}
 {{- end }}

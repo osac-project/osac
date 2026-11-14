@@ -166,6 +166,7 @@ jobs:
       working-directory: osac-installer
       run: |
         make helm-infra-deps
+        make helm-devstack-deps
         helm dependency build charts/osac/
 
     - name: Test networking values
@@ -179,6 +180,10 @@ jobs:
     - name: Test Netris CA lifecycle contracts
       working-directory: osac-installer
       run: uv run --project .. python scripts/test-netris-ca-lifecycle.py
+
+    - name: Test input validation gate
+      working-directory: osac-installer
+      run: ./scripts/test-input-validation.sh
 
     - name: Test MCE rendering
       working-directory: osac-installer
@@ -197,7 +202,6 @@ jobs:
       run: uv run --project .. make lvms-optional-path-render-test
 
     - name: Test BMF NetBox rendering
-      if: steps.should-run.outputs.run
       working-directory: osac-installer
       run: uv run --project .. make bmf-netbox-render-test
 

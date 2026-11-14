@@ -267,7 +267,7 @@ class DefaultsTest(RenderFailureCase):
 
     def test_cidrs(self):
         self.assert_fails(
-            f"{DEFAULTS_PATH}.virtualNetworkIPv4CIDR must be a canonical IPv4 CIDR (got 10.200.0.1/16)",
+            f"{DEFAULTS_PATH}.virtualNetworkIPv4CIDR must be a canonical IPv4 CIDR (host bits must be zero)",
             self.defaults(virtualNetworkIPv4CIDR="10.200.0.1/16"),
         )
         self.assert_fails(
@@ -277,6 +277,19 @@ class DefaultsTest(RenderFailureCase):
         self.assert_fails(
             "/global/networking/networkClass/defaults/subnetIPv4CIDR", self.defaults(subnetIPv4CIDR="10.200.0.0")
         )
+
+    def test_cidr_error_does_not_log_the_value(self):
+        """The canonical-CIDR failure message must not echo the value."""
+        # The render error reaches the terminal and the CI logs, so the
+        # message keeps the field and the constraint but never the
+        # customer's CIDR value.
+        result = helm(self.defaults(virtualNetworkIPv4CIDR="10.200.0.1/16"))
+        self.assertNotEqual(result.returncode, 0, "non-canonical CIDR rendered")
+        self.assertIn(
+            f"{DEFAULTS_PATH}.virtualNetworkIPv4CIDR must be a canonical IPv4 CIDR",
+            result.stderr,
+        )
+        self.assertNotIn("10.200.0.1/16", result.stderr)
 
     def test_rule_shapes(self):
         cases = {

@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
@@ -77,6 +78,7 @@ type PrivateBareMetalInstancesServer struct {
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
+	guards                  *networkingGuards
 	secretStore             vault.SecretStore
 	settings                NetworkingSettings
 	lifecycle               *externalIPLifecycle
@@ -243,6 +245,11 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		return
 	}
 
+	guards, err := newNetworkingGuards(b.logger)
+	if err != nil {
+		return
+	}
+
 	generic, err := NewGenericServer[*privatev1.BareMetalInstance]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstances_ServiceDesc.ServiceName).
@@ -271,6 +278,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		externalIPDao:           externalIPDao,
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
+		guards:                  guards,
 		secretStore:             b.secretStore,
 		settings:                resolveNetworkingSettings(b.networkingSettings),
 	}
@@ -325,6 +333,10 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context, request *p
 // published Catalog Item or a direct Template, applies Catalog rules and Template defaults,
 // then checks the resulting image, network, and other required inputs.
 func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, candidate *privatev1.BareMetalInstance) (warnings []string, err error) {
+	cluster, isWorker, err := s.resolveClusterWorker(ctx, candidate)
+	if err != nil {
+		return nil, err
+	}
 	template, err := s.resolveCreationSource(ctx, candidate)
 	if err != nil {
 		return nil, err
@@ -355,41 +367,31 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	if err != nil {
 		return
 	}
-	if err = s.applyDefaultNetworkAttachments(ctx, candidate, instanceType); err != nil {
-		return
+	var workerNetworkAttachment *privatev1.BareMetalNetworkAttachment
+	if isWorker {
+		workerNetworkAttachment, err = s.validateClusterWorkerType(candidate, cluster, instanceType)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if err = s.applyDefaultNetworkAttachments(ctx, candidate, instanceType); err != nil {
+			return
+		}
 	}
 	if err = s.validateNetworkAttachments(candidate, instanceType); err != nil {
 		return
 	}
 	normalizeSoleBareMetalAttachmentPrimary(candidate.GetSpec().GetNetworkAttachments())
-	hubReferences := make([]networkingHubReference, 0, len(candidate.GetSpec().GetNetworkAttachments())*2)
-	for i, attachment := range candidate.GetSpec().GetNetworkAttachments() {
-		source := fmt.Sprintf(" in spec.network_attachments[%d]", i)
-		subnet, resolveErr := resolveNetworkingReference(ctx, s.subnetsDao, candidate.GetMetadata(), attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument, true)
-		if resolveErr != nil {
-			return nil, resolveErr
+	var hubReferences []networkingHubReference
+	if isWorker && s.settings.ProvisioningEnabled {
+		hubReferences, err = s.authorizeClusterWorkerNetwork(ctx, workerNetworkAttachment, cluster)
+		if err != nil {
+			return nil, err
 		}
-		if err = validateResolvedSubnetReady(subnet, refKey(attachment.GetSubnet()), source); err != nil {
-			return
-		}
-		hubReferences = append(hubReferences, networkingHubReference{
-			resourceType: "Subnet",
-			id:           subnet.GetId(),
-			hubID:        subnet.GetStatus().GetHub(),
-		})
-		for _, ref := range attachment.GetSecurityGroups() {
-			group, resolveErr := resolveNetworkingReference(ctx, s.securityGroupsDao, candidate.GetMetadata(), ref, "security group", grpccodes.InvalidArgument, true)
-			if resolveErr != nil {
-				return nil, resolveErr
-			}
-			if err = validateResolvedSecurityGroup(group, refKey(ref), source, refKey(subnet.GetSpec().GetVirtualNetwork())); err != nil {
-				return
-			}
-			hubReferences = append(hubReferences, networkingHubReference{
-				resourceType: "SecurityGroup",
-				id:           group.GetId(),
-				hubID:        group.GetStatus().GetHub(),
-			})
+	} else if !isWorker {
+		hubReferences, err = s.resolveBareMetalNetworkAttachments(ctx, candidate)
+		if err != nil {
+			return nil, err
 		}
 	}
 	if len(hubReferences) > 0 {
@@ -422,6 +424,211 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	}
 
 	return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "disk_image is mandatory")
+}
+
+func (s *PrivateBareMetalInstancesServer) resolveClusterWorker(
+	ctx context.Context, bmi *privatev1.BareMetalInstance,
+) (*privatev1.Cluster, bool, error) {
+	metadata := bmi.GetMetadata()
+	annotations := metadata.GetAnnotations()
+	clusterID, markerPresent := annotations[clusterAPIIDAnnotation]
+	statusClusterID := refKey(bmi.GetStatus().GetCluster())
+	worker := markerPresent || statusClusterID != "" || bmi.GetStatus().GetNodeSet() != ""
+	if !worker {
+		return nil, false, nil
+	}
+	if !markerPresent || strings.TrimSpace(clusterID) == "" {
+		return nil, true, grpcstatus.Error(grpccodes.InvalidArgument,
+			"CaaS worker requires the private Cluster marker")
+	}
+	if statusClusterID != "" && statusClusterID != clusterID {
+		return nil, true, grpcstatus.Error(grpccodes.InvalidArgument,
+			"CaaS worker Cluster marker does not match status.cluster")
+	}
+	response, err := s.guards.clusters.Get().SetId(clusterID).SetLock(true).Do(ctx)
+	if err != nil {
+		var notFound *dao.ErrNotFound
+		if errors.As(err, &notFound) {
+			return nil, true, grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"CaaS worker Cluster '%s' does not exist", clusterID)
+		}
+		return nil, true, ConvertDAOErrorToGRPC(err, "get", clusterID)
+	}
+	cluster := response.GetObject()
+	if cluster.GetMetadata().HasDeletionTimestamp() {
+		return nil, true, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"CaaS worker Cluster '%s' is being deleted", clusterID)
+	}
+	if metadata.GetTenant() != cluster.GetMetadata().GetTenant() ||
+		metadata.GetProject() != cluster.GetMetadata().GetProject() {
+		return nil, true, grpcstatus.Error(grpccodes.InvalidArgument,
+			"CaaS worker tenant and project must match its Cluster")
+	}
+	bmi.GetStatus().SetCluster(privatev1.ClusterLocalReference_builder{Id: cluster.GetId()}.Build())
+	return cluster, true, nil
+}
+
+func (s *PrivateBareMetalInstancesServer) validateClusterWorkerType(
+	bmi *privatev1.BareMetalInstance, cluster *privatev1.Cluster, instanceType *privatev1.BareMetalInstanceType,
+) (*privatev1.BareMetalNetworkAttachment, error) {
+	nodeSetName := bmi.GetStatus().GetNodeSet()
+	if nodeSetName == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "CaaS worker status.node_set is required")
+	}
+	nodeSet, ok := cluster.GetSpec().GetNodeSets()[nodeSetName]
+	if !ok || nodeSet == nil {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"CaaS worker node set '%s' does not exist in its Cluster", nodeSetName)
+	}
+	if refKey(nodeSet.GetBaremetalInstanceType()) != instanceType.GetId() {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"CaaS worker instance type does not match Cluster node set '%s'", nodeSetName)
+	}
+	fabricInterface := nodeSet.GetFabricInterface()
+	if fabricInterface != "" {
+		if errs := utilvalidation.IsDNS1123Label(fabricInterface); len(errs) > 0 {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"CaaS worker interface '%s' is not a valid DNS label: %s", fabricInterface, strings.Join(errs, ", "))
+		}
+	}
+	attachments := bmi.GetSpec().GetNetworkAttachments()
+	if len(attachments) > 0 {
+		if len(attachments) != 1 || attachments[0] == nil {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+				"CaaS worker requires the Cluster network attachment")
+		}
+		if attachments[0].GetInterface() != fabricInterface {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"CaaS worker interface must match Cluster node set '%s'", nodeSetName)
+		}
+	}
+	if s.settings.ProvisioningEnabled {
+		if fabricInterface == "" {
+			return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				"Cluster node set '%s' has no authorized fabric interface", nodeSetName)
+		}
+		if len(attachments) != 1 || attachments[0] == nil {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+				"CaaS worker requires the Cluster network attachment")
+		}
+		attachment := attachments[0]
+		return attachment, nil
+	}
+	// The current ClusterOrder sender still copies the Cluster attachment when
+	// provider networking is disabled. Keep that matching attachment for BMF's
+	// disabled-provider status path, but skip network-resource authorization.
+	return nil, nil
+}
+
+func (s *PrivateBareMetalInstancesServer) authorizeClusterWorkerNetwork(
+	ctx context.Context, attachment *privatev1.BareMetalNetworkAttachment, cluster *privatev1.Cluster,
+) ([]networkingHubReference, error) {
+	if attachment == nil {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "CaaS worker network attachment is required")
+	}
+	clusterAttachment := cluster.GetSpec().GetNetworkAttachment()
+	if clusterAttachment == nil {
+		return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "Cluster has no authorized network attachment")
+	}
+	if refKey(attachment.GetSubnet()) == "" || len(attachment.GetSecurityGroups()) == 0 {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+			"CaaS worker must specify the Cluster Subnet and SecurityGroups")
+	}
+	resolution, err := resolveNetworkAttachment(ctx, s.logger, s.guards, s.settings, networkAttachmentRequest{
+		tenant:              cluster.GetMetadata().GetTenant(),
+		project:             cluster.GetMetadata().GetProject(),
+		subnetsDao:          s.subnetsDao,
+		securityGroupsDao:   s.securityGroupsDao,
+		subnet:              attachment.GetSubnet(),
+		securityGroups:      attachment.GetSecurityGroups(),
+		automaticGroupOwner: cluster.GetId(),
+		source:              "spec.network_attachments[0]",
+	})
+	if err != nil {
+		return nil, err
+	}
+	expectedSubnet, err := resolveNetworkingReference(ctx, s.subnetsDao, cluster.GetMetadata(),
+		clusterAttachment.GetSubnet(), "subnet", grpccodes.InvalidArgument, true)
+	if err != nil {
+		return nil, err
+	}
+	if resolution.subnet.GetId() != expectedSubnet.GetId() {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+			"CaaS worker Subnet must match its Cluster network attachment")
+	}
+	expectedGroups := make(map[string]struct{}, len(clusterAttachment.GetSecurityGroups()))
+	for _, reference := range clusterAttachment.GetSecurityGroups() {
+		group, resolveErr := resolveNetworkingReference(ctx, s.securityGroupsDao, cluster.GetMetadata(),
+			reference, "security group", grpccodes.InvalidArgument, true)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		expectedGroups[group.GetId()] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(resolution.securityGroups))
+	automaticGroups := 0
+	for _, group := range resolution.securityGroups {
+		if _, ok := seen[group.GetId()]; ok {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument, "CaaS worker SecurityGroups must be unique")
+		}
+		seen[group.GetId()] = struct{}{}
+		if _, ok := expectedGroups[group.GetId()]; ok {
+			continue
+		}
+		if isAutomatic(group.GetMetadata()) && group.GetMetadata().GetLabels()[autoCreatedForLabel] == cluster.GetId() {
+			automaticGroups++
+			continue
+		}
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+			"CaaS worker SecurityGroups must match its Cluster network attachment")
+	}
+	for id := range expectedGroups {
+		if _, ok := seen[id]; !ok {
+			return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+				"CaaS worker SecurityGroups must include its Cluster network attachment groups")
+		}
+	}
+	if automaticGroups != 1 {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+			"CaaS worker requires exactly one Cluster automatic SecurityGroup")
+	}
+	attachment.SetSubnet(resolution.subnetReference())
+	attachment.SetSecurityGroups(resolution.securityGroupReferences())
+	return resolution.hubReferences(), nil
+}
+
+func (s *PrivateBareMetalInstancesServer) resolveBareMetalNetworkAttachments(
+	ctx context.Context, bmi *privatev1.BareMetalInstance,
+) ([]networkingHubReference, error) {
+	hubReferences := make([]networkingHubReference, 0, len(bmi.GetSpec().GetNetworkAttachments())*2)
+	for i, attachment := range bmi.GetSpec().GetNetworkAttachments() {
+		source := fmt.Sprintf(" in spec.network_attachments[%d]", i)
+		subnet, err := resolveNetworkingReference(ctx, s.subnetsDao, bmi.GetMetadata(),
+			attachment.GetSubnet(), "subnet", grpccodes.InvalidArgument, true)
+		if err != nil {
+			return nil, err
+		}
+		if err = validateResolvedSubnetReady(subnet, refKey(attachment.GetSubnet()), source); err != nil {
+			return nil, err
+		}
+		hubReferences = append(hubReferences, networkingHubReference{
+			resourceType: "Subnet", id: subnet.GetId(), hubID: subnet.GetStatus().GetHub(),
+		})
+		for _, ref := range attachment.GetSecurityGroups() {
+			group, resolveErr := resolveNetworkingReference(ctx, s.securityGroupsDao, bmi.GetMetadata(),
+				ref, "security group", grpccodes.InvalidArgument, true)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if err = validateResolvedSecurityGroup(group, refKey(ref), source, refKey(subnet.GetSpec().GetVirtualNetwork())); err != nil {
+				return nil, err
+			}
+			hubReferences = append(hubReferences, networkingHubReference{
+				resourceType: "SecurityGroup", id: group.GetId(), hubID: group.GetStatus().GetHub(),
+			})
+		}
+	}
+	return hubReferences, nil
 }
 
 // resolveCreationSource accepts exactly one provisioning source: spec.catalog_item or
@@ -518,6 +725,9 @@ func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 		return
 	}
 	if err = s.lifecycle.rejectManualAttachmentDelete(ctx, "BareMetalInstance", id, instance.GetMetadata()); err != nil {
+		return
+	}
+	if err = s.guards.rejectBareMetalInstanceDeleteIfFabricDomainReferencesHost(ctx, instance); err != nil {
 		return
 	}
 	if instance.GetSpec().GetAutoExternalIpAttachment() {
@@ -792,7 +1002,7 @@ func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(instanceType *
 			return port.GetName(), nil
 		}
 	}
-	return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
+	return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
 		"bare metal instance type '%s' has no fabric-role network port for default network attachment", instanceType.GetId())
 }
 
@@ -1074,21 +1284,26 @@ func validateBareMetalAttachmentsForInstanceType(
 
 	instanceTypeID := instanceType.GetId()
 	interfaceRoles := make(map[string]string)
-	validInterfaces := make(map[string]bool)
+	fabricInterfaces := make(map[string]bool)
 	for _, port := range instanceType.GetSpec().GetHardware().GetNetworkPorts() {
 		if port == nil {
 			continue
 		}
 		interfaceRoles[port.GetName()] = port.GetRole()
-		if !strings.EqualFold(port.GetRole(), "lifecycle") {
-			validInterfaces[port.GetName()] = true
+		if strings.EqualFold(port.GetRole(), "fabric") {
+			fabricInterfaces[port.GetName()] = true
 		}
 	}
 
-	if len(attachments) > len(validInterfaces) {
+	if len(attachments) > 0 && len(fabricInterfaces) == 0 {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"%snumber of network attachments (%d) exceeds available interfaces (%d) on instance type '%s'",
-			prefix, len(attachments), len(validInterfaces), instanceTypeID)
+			"%sbare metal instance type '%s' has no fabric-role network port for tenant networking",
+			prefix, instanceTypeID)
+	}
+	if len(attachments) > len(fabricInterfaces) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%snumber of network attachments (%d) exceeds available fabric interfaces (%d) on instance type '%s'",
+			prefix, len(attachments), len(fabricInterfaces), instanceTypeID)
 	}
 
 	for i, attachment := range attachments {
@@ -1096,12 +1311,18 @@ func validateBareMetalAttachmentsForInstanceType(
 		if iface == "" {
 			continue
 		}
+		if errs := utilvalidation.IsDNS1123Label(iface); len(errs) > 0 {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"%snetwork_attachments[%d]: interface '%s' is not a valid DNS label: %s",
+				prefix, i, iface, strings.Join(errs, ", "))
+		}
 		role, found := interfaceRoles[iface]
 		switch {
-		case found && strings.EqualFold(role, "lifecycle"):
+		case found && !strings.EqualFold(role, "fabric"):
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: interface '%s' has role 'lifecycle' and cannot be used for tenant networking", prefix, i, iface)
-		case !validInterfaces[iface]:
+				"%snetwork_attachments[%d]: interface '%s' has role '%s' and cannot be used for tenant networking; interface must have role 'fabric'",
+				prefix, i, iface, role)
+		case !found:
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"%snetwork_attachments[%d]: interface '%s' not found in instance type '%s'", prefix, i, iface, instanceTypeID)
 		}

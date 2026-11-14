@@ -123,7 +123,10 @@ func (r *Reconciler) buildBMICreateRequest(
 	workerName string, image *privatev1.DiskImageReference, ignitionRaw string,
 ) (*privatev1.BareMetalInstance, error) {
 	labels := map[string]string{clusterOrderLabel: co.Name}
-	annotations := map[string]string{ownerReferenceAnnotation: fmt.Sprintf("ClusterOrder/%s", co.Name)}
+	annotations := map[string]string{
+		ownerReferenceAnnotation: fmt.Sprintf("ClusterOrder/%s", co.Name),
+		clusterAPIIDAnnotation:   cluster.GetId(),
+	}
 
 	var netAttachments []*privatev1.BareMetalNetworkAttachment
 	if na := co.Spec.NetworkAttachment; na != nil && na.SubnetRef != "" {

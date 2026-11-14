@@ -63,7 +63,10 @@ const (
 	coordinateKey        = "key"
 )
 
-const systemCreator = "system"
+const (
+	systemCreator                       = "system"
+	automaticClusterSecurityGroupPrefix = "auto-sg-"
+)
 
 // errClusterVersionNotFound indicates the requested ClusterVersion does not exist.
 var errClusterVersionNotFound = errors.New("cluster version not found")
@@ -82,7 +85,7 @@ type function struct {
 	logger                *slog.Logger
 	hubCache              controllers.HubCache
 	networkingHubReader   controllers.NetworkingHubReader
-	networkingCleanup     controllers.WorkloadNetworkingCleanup
+	networkingCleanup     controllers.ClusterNetworkingCleanup
 	clustersClient        privatev1.ClustersClient
 	hubsClient            privatev1.HubsClient
 	clusterVersionsClient privatev1.ClusterVersionsClient
@@ -527,6 +530,10 @@ func (t *task) addExplicitFields(ctx context.Context, spec *osacv1alpha1.Cluster
 		for _, sg := range na.GetSecurityGroups() {
 			cna.SecurityGroupRefs = append(cna.SecurityGroupRefs, sg.GetName())
 		}
+		if clusterSpec.GetSupportsAutomaticCaasEndpoints() {
+			cna.SecurityGroupRefs = append(cna.SecurityGroupRefs,
+				automaticClusterSecurityGroupPrefix+t.cluster.GetId())
+		}
 		if cna.SubnetRef != "" {
 			spec.NetworkAttachment = cna
 		}
@@ -628,7 +635,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 	// No hub was assigned, so no ClusterOrder or hub secrets could have been created.
 	t.hubId = t.cluster.GetStatus().GetHub()
 	if t.hubId == "" {
-		if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+		if err = controllers.ReconcileClusterNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
 			return err
 		}
 		t.removeFinalizer()
@@ -639,7 +646,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 	if err != nil {
 		// Check if the hub has been decommissioned (deleted from database)
 		if errors.Is(err, controllers.ErrHubNotFound) {
-			if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+			if err = controllers.ReconcileClusterNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
 				return err
 			}
 			if err = t.deleteClusterSecrets(ctx); err != nil {
@@ -663,7 +670,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 			"Cluster order doesn't exist",
 			slog.String("id", t.cluster.GetId()),
 		)
-		if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+		if err = controllers.ReconcileClusterNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
 			return err
 		}
 		if err = t.deleteClusterSecrets(ctx); err != nil {
@@ -691,7 +698,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 		return nil
 	}
 
-	if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
+	if err = controllers.ReconcileClusterNetworkingCleanup(ctx, t.r.networkingCleanup, t.cluster.GetId()); err != nil {
 		return err
 	}
 	if err = t.deleteClusterSecrets(ctx); err != nil {

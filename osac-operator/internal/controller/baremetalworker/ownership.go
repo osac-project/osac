@@ -30,6 +30,7 @@ const (
 	clusterOrderIDLabel      = "osac.openshift.io/clusterorder-uuid"
 	clusterOrderLabel        = "osac.openshift.io/cluster-order"
 	ownerReferenceAnnotation = "osac.openshift.io/owner-reference"
+	clusterAPIIDAnnotation   = "osac.openshift.io/cluster-api-id"
 )
 
 // authoritativeCluster loads the fulfillment Cluster that owns this order's workers. Neither the

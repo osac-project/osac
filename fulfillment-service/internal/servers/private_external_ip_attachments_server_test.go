@@ -122,6 +122,35 @@ func createBareMetalInstanceInState(
 	return resp.GetObject()
 }
 
+func createClusterWorkerBareMetalInstanceInState(
+	ctx context.Context,
+	bareMetalInstanceDao *dao.GenericDAO[*privatev1.BareMetalInstance],
+	cluster *privatev1.Cluster,
+) *privatev1.BareMetalInstance {
+	resp, err := bareMetalInstanceDao.Create().SetObject(privatev1.BareMetalInstance_builder{
+		Metadata: privatev1.Metadata_builder{
+			Tenant: testTenant,
+			Name:   fmt.Sprintf("worker-%s", uuid.NewString()[:8]),
+			Annotations: map[string]string{
+				clusterAPIIDAnnotation: cluster.GetId(),
+			},
+		}.Build(),
+		Spec: privatev1.BareMetalInstanceSpec_builder{
+			CatalogItem: privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "bcm_h100"}.Build(),
+		}.Build(),
+		Status: privatev1.BareMetalInstanceStatus_builder{
+			Cluster: privatev1.ClusterLocalReference_builder{Id: cluster.GetId()}.Build(),
+			State:   privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING,
+			Hub:     "network-hub-a",
+			NetworkAttachmentStatuses: []*privatev1.BareMetalNetworkAttachmentStatus{
+				privatev1.BareMetalNetworkAttachmentStatus_builder{IpAddress: "10.0.0.31", Primary: true}.Build(),
+			},
+		}.Build(),
+	}.Build()).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	return resp.GetObject()
+}
+
 var _ = Describe("Private external IP attachments server", func() {
 	var (
 		server               *PrivateExternalIPAttachmentsServer
@@ -889,6 +918,25 @@ var _ = Describe("Private external IP attachments server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetSpec().GetBaremetalInstance().GetId()).To(Equal(bmi.GetId()))
+		})
+
+		It("rejects a CaaS worker BareMetalInstance target", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			cluster := createClusterInState(ctx, clusterDao)
+			worker := createClusterWorkerBareMetalInstanceInState(ctx, bareMetalInstanceDao, cluster)
+
+			_, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{Name: "worker-target"}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:        privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						BaremetalInstance: privatev1.BareMetalInstanceLocalReference_builder{Id: worker.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err).To(MatchError(ContainSubstring("use the Cluster target")))
 		})
 
 		It("Lists external IP attachments", func() {

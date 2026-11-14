@@ -634,6 +634,10 @@ func (s *PrivateExternalIPAttachmentsServer) validateBareMetalInstanceReference(
 	}
 	instance := response.GetObject()
 	spec.SetBaremetalInstance(privatev1.BareMetalInstanceLocalReference_builder{Id: instance.GetId()}.Build())
+	if clusterWorkerMarkerPresent(instance) || refKey(instance.GetStatus().GetCluster()) != "" {
+		return networkingHubReference{}, grpcstatus.Error(grpccodes.InvalidArgument,
+			"ExternalIPAttachment cannot target a CaaS worker BareMetalInstance; use the Cluster target")
+	}
 	if instance.GetMetadata().HasDeletionTimestamp() ||
 		instance.GetStatus().GetState() != privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING ||
 		!hasBareMetalInstanceIP(instance) {

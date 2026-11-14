@@ -94,3 +94,24 @@ var _ = Describe("Shared DAO page traversal", func() {
 		Expect(ids).To(ConsistOf(expected))
 	})
 })
+
+var _ = Describe("FabricDomain BareMetalInstance delete guard", func() {
+	It("ignores a same-named host in another tenant", func() {
+		createTenant("other-tenant")
+		instance := privatev1.BareMetalInstance_builder{
+			Id:       "tenant-bmi",
+			Metadata: privatev1.Metadata_builder{Name: "tenant-bmi", Tenant: testTenant}.Build(),
+			Status:   privatev1.BareMetalInstanceStatus_builder{ExternalHostName: "shared-host-name"}.Build(),
+		}.Build()
+		_, err := fixtureDAO[*privatev1.FabricDomain]().Create().SetObject(
+			privatev1.FabricDomain_builder{
+				Metadata: privatev1.Metadata_builder{Name: "foreign-domain", Tenant: "other-tenant"}.Build(),
+				Spec:     privatev1.FabricDomainSpec_builder{Servers: []string{"shared-host-name"}}.Build(),
+			}.Build()).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		guards, err := newNetworkingGuards(logger)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(guards.rejectBareMetalInstanceDeleteIfFabricDomainReferencesHost(ctx, instance)).To(Succeed())
+	})
+})

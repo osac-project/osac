@@ -32,6 +32,12 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
 
 ## Selecting coverage
 
+- CaaS worker automatic SecurityGroup handoff
+  ([OSAC-7152](https://redhat.atlassian.net/browse/OSAC-7152)): Unit coverage
+  checks group creation, ClusterOrder projection, worker request forwarding,
+  and Cluster deletion cleanup. Tests use a PostgreSQL testcontainer, fake
+  Kubernetes client, or client doubles; they do not prove the deployed
+  Fulfillment-to-worker handoff.
 - CLI/API-only contracts belong in `it/`; complete provisioning journeys across
   operators and providers belong in E2E. Use the suite setup and skip
   conditions to identify the actual boundary.

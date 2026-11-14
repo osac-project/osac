@@ -78,6 +78,36 @@ type fakeExternalIPsCleanupClient struct {
 	deleteErrBeforeAccept bool
 }
 
+type fakeSecurityGroupsCleanupClient struct {
+	items       []*privatev1.SecurityGroup
+	deleteCalls []string
+	listCalls   int
+}
+
+func (f *fakeSecurityGroupsCleanupClient) List(_ context.Context, request *privatev1.SecurityGroupsListRequest,
+	_ ...grpc.CallOption) (*privatev1.SecurityGroupsListResponse, error) {
+	f.listCalls++
+	if !strings.Contains(request.GetFilter(), "network-owner") ||
+		!strings.Contains(request.GetFilter(), "auto-created-kind") ||
+		!strings.Contains(request.GetFilter(), "cluster") {
+		return nil, status.Error(codes.InvalidArgument, "automatic Cluster SecurityGroup filter missing")
+	}
+	return &privatev1.SecurityGroupsListResponse{Items: f.items}, nil
+}
+
+func (f *fakeSecurityGroupsCleanupClient) Delete(_ context.Context, request *privatev1.SecurityGroupsDeleteRequest,
+	_ ...grpc.CallOption) (*privatev1.SecurityGroupsDeleteResponse, error) {
+	for _, group := range f.items {
+		if group.GetId() != request.GetId() {
+			continue
+		}
+		f.deleteCalls = append(f.deleteCalls, request.GetId())
+		group.GetMetadata().SetDeletionTimestamp(timestamppb.Now())
+		return &privatev1.SecurityGroupsDeleteResponse{}, nil
+	}
+	return nil, status.Error(codes.NotFound, "SecurityGroup not found")
+}
+
 func (f *fakeExternalIPsCleanupClient) List(_ context.Context, request *privatev1.ExternalIPsListRequest,
 	_ ...grpc.CallOption) (*privatev1.ExternalIPsListResponse, error) {
 	if !strings.Contains(request.GetFilter(), "network-owner") {
@@ -136,7 +166,11 @@ func TestWorkloadNetworkingCleanupWaitsForFinalizersAndDoesNotRepeatDeletes(t *t
 	}.Build()
 	attachments := &fakeExternalIPAttachmentsCleanupClient{items: []*privatev1.ExternalIPAttachment{attachment}}
 	externalIPs := &fakeExternalIPsCleanupClient{items: []*privatev1.ExternalIP{externalIP}}
-	cleanup := &workloadNetworkingCleanup{attachments: attachments, externalIPs: externalIPs}
+	cleanup := &workloadNetworkingCleanup{
+		attachments:    attachments,
+		externalIPs:    externalIPs,
+		securityGroups: &fakeSecurityGroupsCleanupClient{},
+	}
 
 	complete, err := cleanup.Cleanup(context.Background(), "network-owner")
 	if err != nil {
@@ -220,7 +254,11 @@ func TestWorkloadNetworkingCleanupResumesAfterRestartWhenDeleteResponseIsLost(t 
 	newCleanup := func() *workloadNetworkingCleanup {
 		// The clients represent persisted API state; constructing a new cleanup
 		// object models the controller restarting without in-memory progress.
-		return &workloadNetworkingCleanup{attachments: attachments, externalIPs: externalIPs}
+		return &workloadNetworkingCleanup{
+			attachments:    attachments,
+			externalIPs:    externalIPs,
+			securityGroups: &fakeSecurityGroupsCleanupClient{},
+		}
 	}
 
 	complete, err := newCleanup().Cleanup(context.Background(), "network-owner")
@@ -261,6 +299,80 @@ func TestWorkloadNetworkingCleanupResumesAfterRestartWhenDeleteResponseIsLost(t 
 	}
 }
 
+func TestWorkloadNetworkingCleanupDeletesAutomaticClusterSecurityGroupAfterExternalIPs(t *testing.T) {
+	externalIP := privatev1.ExternalIP_builder{
+		Id: "auto-ip-network-owner",
+		Metadata: privatev1.Metadata_builder{
+			Creator:    workloadSystemCreator,
+			Finalizers: []string{"test/hold"},
+			Labels: map[string]string{
+				workloadAutoCreatedLabel:    "true",
+				workloadAutoCreatedForLabel: "network-owner",
+			},
+		}.Build(),
+	}.Build()
+	group := privatev1.SecurityGroup_builder{
+		Id: "auto-sg-network-owner",
+		Metadata: privatev1.Metadata_builder{
+			Creator:    workloadSystemCreator,
+			Finalizers: []string{"test/hold"},
+			Labels: map[string]string{
+				workloadAutoCreatedLabel:              "true",
+				workloadAutoCreatedForLabel:           "network-owner",
+				"osac.openshift.io/auto-created-kind": "cluster",
+			},
+		}.Build(),
+	}.Build()
+	userGroup := privatev1.SecurityGroup_builder{
+		Id: "tenant-sg",
+		Metadata: privatev1.Metadata_builder{
+			Creator: "tenant-user",
+			Labels: map[string]string{
+				workloadAutoCreatedLabel:              "true",
+				workloadAutoCreatedForLabel:           "network-owner",
+				"osac.openshift.io/auto-created-kind": "cluster",
+			},
+		}.Build(),
+	}.Build()
+	securityGroups := &fakeSecurityGroupsCleanupClient{items: []*privatev1.SecurityGroup{group, userGroup}}
+	externalIPs := &fakeExternalIPsCleanupClient{items: []*privatev1.ExternalIP{externalIP}}
+	cleanup := &workloadNetworkingCleanup{
+		attachments:    &fakeExternalIPAttachmentsCleanupClient{},
+		externalIPs:    externalIPs,
+		securityGroups: securityGroups,
+	}
+
+	complete, err := cleanup.CleanupCluster(context.Background(), "network-owner")
+	if err != nil {
+		t.Fatalf("first cleanup returned error: %v", err)
+	}
+	if complete || len(securityGroups.deleteCalls) != 0 {
+		t.Fatalf("Cluster SecurityGroup cleanup started before the automatic ExternalIP was removed: complete=%t deletes=%v",
+			complete, securityGroups.deleteCalls)
+	}
+
+	externalIPs.items = nil
+	complete, err = cleanup.CleanupCluster(context.Background(), "network-owner")
+	if err != nil {
+		t.Fatalf("second cleanup returned error: %v", err)
+	}
+	if complete || len(securityGroups.deleteCalls) != 1 || securityGroups.deleteCalls[0] != group.GetId() {
+		t.Fatalf("expected automatic Cluster SecurityGroup deletion to remain pending: complete=%t deletes=%v",
+			complete, securityGroups.deleteCalls)
+	}
+
+	group.GetMetadata().SetFinalizers(nil)
+	securityGroups.items = []*privatev1.SecurityGroup{userGroup}
+	complete, err = cleanup.CleanupCluster(context.Background(), "network-owner")
+	if err != nil {
+		t.Fatalf("final cleanup returned error: %v", err)
+	}
+	if !complete || len(securityGroups.deleteCalls) != 1 {
+		t.Fatalf("expected cleanup to finish without deleting tenant SecurityGroups: complete=%t deletes=%v",
+			complete, securityGroups.deleteCalls)
+	}
+}
+
 func TestWorkloadNetworkingCleanupDoesNotDeleteNonSystemExternalIPWithCopiedOwnerLabels(t *testing.T) {
 	externalIP := privatev1.ExternalIP_builder{
 		Id: "tenant-external-ip",
@@ -273,9 +385,11 @@ func TestWorkloadNetworkingCleanupDoesNotDeleteNonSystemExternalIPWithCopiedOwne
 		}.Build(),
 	}.Build()
 	externalIPs := &fakeExternalIPsCleanupClient{items: []*privatev1.ExternalIP{externalIP}}
+	securityGroups := &fakeSecurityGroupsCleanupClient{}
 	cleanup := &workloadNetworkingCleanup{
-		attachments: &fakeExternalIPAttachmentsCleanupClient{},
-		externalIPs: externalIPs,
+		attachments:    &fakeExternalIPAttachmentsCleanupClient{},
+		externalIPs:    externalIPs,
+		securityGroups: securityGroups,
 	}
 
 	complete, err := cleanup.Cleanup(context.Background(), "network-owner")
@@ -287,6 +401,9 @@ func TestWorkloadNetworkingCleanupDoesNotDeleteNonSystemExternalIPWithCopiedOwne
 	}
 	if len(externalIPs.deleteCalls) != 0 {
 		t.Fatalf("cleanup deleted a tenant-created ExternalIP: %v", externalIPs.deleteCalls)
+	}
+	if securityGroups.listCalls != 0 {
+		t.Fatalf("generic workload cleanup must not look up Cluster SecurityGroups, got %d lists", securityGroups.listCalls)
 	}
 }
 
@@ -321,7 +438,11 @@ func TestWorkloadNetworkingCleanupRetriesDeleteFailuresBeforeAcceptance(t *testi
 		deleteErr:             errors.New("temporary IP release failure"),
 		deleteErrBeforeAccept: true,
 	}
-	cleanup := &workloadNetworkingCleanup{attachments: attachments, externalIPs: externalIPs}
+	cleanup := &workloadNetworkingCleanup{
+		attachments:    attachments,
+		externalIPs:    externalIPs,
+		securityGroups: &fakeSecurityGroupsCleanupClient{},
+	}
 
 	complete, err := cleanup.Cleanup(context.Background(), "network-owner")
 	if err == nil || complete {

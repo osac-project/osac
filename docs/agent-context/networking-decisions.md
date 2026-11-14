@@ -303,10 +303,14 @@ as follows:
   task path.
   Retry-safe persistence and orphan cleanup remain tracked by
   [OSAC-6655](https://redhat.atlassian.net/browse/OSAC-6655).
-- **CaaS workers:** worker BareMetalInstances live in tenant `system` and
-  record their Cluster in status. The agent registration timeout (30 minutes)
-  starts at the latest of the attempt start, the BMI network-ready time and
-  the management publication, so network setup time does not count against it.
+- **CaaS workers:** worker BareMetalInstances live in their Cluster's tenant
+  and project and record the Cluster API ID for private worker authorization.
+  Fulfillment creates one Cluster-owned automatic SecurityGroup and adds its
+  name last to the ClusterOrder attachment; the Cluster's stored attachment
+  continues to contain only tenant-selected groups. The agent registration
+  timeout (30 minutes) starts at the latest of the attempt start, the BMI
+  network-ready time and the management publication, so network setup time
+  does not count against it.
 
 ## Networking reference coverage boundaries
 

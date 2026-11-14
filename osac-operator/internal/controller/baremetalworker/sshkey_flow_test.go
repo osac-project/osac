@@ -164,6 +164,39 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 	})
 
 	Describe("buildBMICreateRequest", func() {
+		It("forwards the ClusterOrder automatic SecurityGroup to the BMI create request", func() {
+			co := &v1alpha1.ClusterOrder{
+				Spec: v1alpha1.ClusterOrderSpec{
+					NetworkAttachment: &v1alpha1.ClusterNetworkAttachment{
+						SubnetRef:         "cluster-subnet",
+						SecurityGroupRefs: []string{"tenant-web", "auto-sg-cluster-id"},
+					},
+				},
+			}
+			cluster := privatev1.Cluster_builder{
+				Id:       "cluster-id",
+				Metadata: privatev1.Metadata_builder{Tenant: "tenant", Project: "proj"}.Build(),
+				Spec:     privatev1.ClusterSpec_builder{}.Build(),
+			}.Build()
+			r := &Reconciler{}
+
+			request, err := r.buildBMICreateRequest(co, "tenant", cluster,
+				v1alpha1.NodeRequest{
+					NodeSet:         "workers",
+					BareMetal:       &v1alpha1.BareMetalNodeSpec{InstanceType: "standard"},
+					FabricInterface: "data-0",
+				},
+				"worker-slot-1", nil, "{}")
+			Expect(err).NotTo(HaveOccurred())
+			attachments := request.GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetSubnet().GetName()).To(Equal("cluster-subnet"))
+			groups := attachments[0].GetSecurityGroups()
+			Expect(groups).To(HaveLen(2))
+			Expect(groups[0].GetName()).To(Equal("tenant-web"))
+			Expect(groups[1].GetName()).To(Equal("auto-sg-cluster-id"))
+		})
+
 		It("carries the canonical reference with its project and no inline key", func() {
 			r, _, co, cluster := sshFlowHarness(
 				privatev1.SecretReference_builder{Id: "key-id", Name: "key-name", Project: "proj"}.Build(),
@@ -176,6 +209,7 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 			Expect(request.GetSpec().GetSshKey().GetId()).To(Equal("key-id"))
 			Expect(request.GetSpec().GetSshKey().GetName()).To(Equal("key-name"))
 			Expect(request.GetSpec().GetSshKey().GetProject()).To(Equal("proj"))
+			Expect(request.GetMetadata().GetAnnotations()[clusterAPIIDAnnotation]).To(Equal(cluster.GetId()))
 			Expect(request.GetSpec().GetSshKey()).NotTo(BeIdenticalTo(cluster.GetSpec().GetSshKey()),
 				"the reference must be cloned, not aliased")
 		})

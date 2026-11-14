@@ -20,10 +20,20 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const defaultLabel = "osac.openshift.io/default"
 const ownerReferenceAnnotation = "osac.openshift.io/owner-reference"
+const clusterAPIIDAnnotation = "osac.openshift.io/cluster-api-id"
+
+func clusterWorkerMarkerPresent(instance *privatev1.BareMetalInstance) bool {
+	if instance == nil || instance.GetMetadata() == nil {
+		return false
+	}
+	_, exists := instance.GetMetadata().GetAnnotations()[clusterAPIIDAnnotation]
+	return exists
+}
 
 // validateNotDefault prevents direct deletion of system-managed networking.
 // Only the authenticated fulfillment controller may delete these objects as

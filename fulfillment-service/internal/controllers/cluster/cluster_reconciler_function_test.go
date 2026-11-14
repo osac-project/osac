@@ -139,7 +139,8 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				Template:                       &privatev1.ClusterTemplateReference{Name: "test-template"},
+				SupportsAutomaticCaasEndpoints: true,
 				NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
 					Subnet:         &privatev1.SubnetLocalReference{Name: "created-subnet"},
 					SecurityGroups: []*privatev1.SecurityGroupLocalReference{{Name: "created-security-group"}},
@@ -180,7 +181,7 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(createdCR.Spec.AddOnOperators).To(Equal([]string{"operator-one", "operator-two"}))
 		Expect(createdCR.Spec.NetworkAttachment).To(Equal(&osacv1alpha1.ClusterNetworkAttachment{
 			SubnetRef:         "created-subnet",
-			SecurityGroupRefs: []string{"created-security-group"},
+			SecurityGroupRefs: []string{"created-security-group", automaticClusterSecurityGroupPrefix + clusterID},
 		}))
 	})
 
@@ -616,7 +617,8 @@ var _ = Describe("update tenant annotation", func() {
 				Tenant:     tenantName,
 			}.Build(),
 			Spec: privatev1.ClusterSpec_builder{
-				Template: &privatev1.ClusterTemplateReference{Name: "test-template"},
+				Template:                       &privatev1.ClusterTemplateReference{Name: "test-template"},
+				SupportsAutomaticCaasEndpoints: true,
 				NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
 					Subnet: privatev1.SubnetLocalReference_builder{
 						Name: "my-subnet",
@@ -653,7 +655,9 @@ var _ = Describe("update tenant annotation", func() {
 		createdCR := list.Items[0]
 		Expect(createdCR.Spec.NetworkAttachment).ToNot(BeNil())
 		Expect(createdCR.Spec.NetworkAttachment.SubnetRef).To(Equal("my-subnet"))
-		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-allow-ssh", "sg-allow-http"}))
+		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{
+			"sg-allow-ssh", "sg-allow-http", automaticClusterSecurityGroupPrefix + clusterID,
+		}))
 	})
 
 	It("should use GetName() not ID for SubnetRef and SecurityGroupRefs when both are set", func() {
@@ -1484,6 +1488,10 @@ func (f *fakeWorkloadNetworkingCleanup) Cleanup(_ context.Context, workloadID st
 	f.calls++
 	f.workloadID = workloadID
 	return f.complete, f.err
+}
+
+func (f *fakeWorkloadNetworkingCleanup) CleanupCluster(ctx context.Context, clusterID string) (bool, error) {
+	return f.Cleanup(ctx, clusterID)
 }
 
 // hasFinalizer checks if the fulfillment-controller finalizer is present on the cluster.

@@ -259,6 +259,67 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 		return grpcstatus.Error(grpccodes.InvalidArgument,
 			"the NetworkClass does not set east_west_capabilities.supports_east_west_ethernet")
 	}
+	servers := slices.Clone(spec.GetServers())
+	slices.Sort(servers)
+	for _, host := range servers {
+		if err := s.lockFabricDomainServerHost(ctx, object, host); err != nil {
+			return err
+		}
+	}
 
 	return nil
+}
+
+func (s *PrivateFabricDomainsServer) lockFabricDomainServerHost(
+	ctx context.Context, domain *privatev1.FabricDomain, host string,
+) error {
+	if strings.TrimSpace(host) == "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "FabricDomain server name must not be empty")
+	}
+	matchedID := ""
+	ambiguous := false
+	err := forEachRecord(ctx, s.guards.bareMetalInstances, func(instance *privatev1.BareMetalInstance) {
+		if instance.GetMetadata().GetTenant() != domain.GetMetadata().GetTenant() ||
+			instance.GetStatus().GetExternalHostName() != host {
+			return
+		}
+		if matchedID != "" && matchedID != instance.GetId() {
+			ambiguous = true
+			return
+		}
+		matchedID = instance.GetId()
+	})
+	if err != nil {
+		s.guards.logger.ErrorContext(ctx, "Failed to resolve FabricDomain server host", slog.Any("error", err))
+		return grpcstatus.Error(grpccodes.Internal, "failed to resolve FabricDomain server host")
+	}
+	if ambiguous || matchedID == "" {
+		return invalidFabricDomainServer(host)
+	}
+	response, err := s.guards.bareMetalInstances.Get().SetId(matchedID).SetLock(true).Do(ctx)
+	if err != nil {
+		var notFound *dao.ErrNotFound
+		if errors.As(err, &notFound) {
+			return invalidFabricDomainServer(host)
+		}
+		return ConvertDAOErrorToGRPC(err, "get", matchedID)
+	}
+	instance := response.GetObject()
+	if instance.GetMetadata().GetTenant() != domain.GetMetadata().GetTenant() ||
+		instance.GetStatus().GetExternalHostName() != host {
+		return invalidFabricDomainServer(host)
+	}
+	if instance.GetMetadata().HasDeletionTimestamp() {
+		return invalidFabricDomainServer(host)
+	}
+	if clusterWorkerMarkerPresent(instance) || refKey(instance.GetStatus().GetCluster()) != "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"FabricDomain server %s is a Cluster worker", host)
+	}
+	return nil
+}
+
+func invalidFabricDomainServer(host string) error {
+	return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		"FabricDomain server %s is not a bare-metal host of this tenant", host)
 }

@@ -208,6 +208,10 @@ func (s *BareMetalInstancesServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object is mandatory")
 		return
 	}
+	if _, exists := publicBMI.GetMetadata().GetAnnotations()[clusterAPIIDAnnotation]; exists {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+			"metadata.annotations[\"osac.openshift.io/cluster-api-id\"] is reserved for private CaaS worker creation")
+	}
 	privateBMI := &privatev1.BareMetalInstance{}
 	err = s.inMapper.Copy(ctx, publicBMI, privateBMI)
 	if err != nil {

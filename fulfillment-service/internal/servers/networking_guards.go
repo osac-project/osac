@@ -23,7 +23,6 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -124,8 +123,7 @@ func rejectGuardedDelete[O lifecycleResource](ctx context.Context, g *networking
 }
 
 // rejectDeleteIfWorkloadsReference rejects a delete while any workload (ComputeInstance, BareMetalInstance or Cluster)
-// whose stored network attachment field matches exists. For a CaaS worker BareMetalInstance (tenant system) the
-// message names the owning Cluster, never the worker.
+// whose stored network attachment field matches exists.
 func (g *networkingGuards) rejectDeleteIfWorkloadsReference(ctx context.Context, parentKind string,
 	parent lifecycleResource, matchSubnet func(*privatev1.SubnetLocalReference) bool,
 	matchGroups func([]*privatev1.SecurityGroupLocalReference) bool) error {
@@ -149,12 +147,7 @@ func (g *networkingGuards) rejectDeleteIfWorkloadsReference(ctx context.Context,
 		err = forEachRecord(ctx, g.bareMetalInstances, func(instance *privatev1.BareMetalInstance) {
 			for _, attachment := range instance.GetSpec().GetNetworkAttachments() {
 				if matchSubnet(attachment.GetSubnet()) || matchGroups(attachment.GetSecurityGroups()) {
-					if clusterID := instance.GetStatus().GetCluster().GetId(); clusterID != "" &&
-						instance.GetMetadata().GetTenant() == auth.SystemTenant {
-						note("Cluster '" + clusterID + "'")
-					} else {
-						note("BareMetalInstance '" + instance.GetId() + "'")
-					}
+					note("BareMetalInstance '" + instance.GetId() + "'")
 					return
 				}
 			}
@@ -181,6 +174,29 @@ func (g *networkingGuards) rejectDeleteIfWorkloadsReference(ctx context.Context,
 	return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 		"cannot delete %s '%s': %d workload(s) still reference it (including %s)",
 		parentKind, parent.GetId(), count, first)
+}
+
+// rejectBareMetalInstanceDeleteIfFabricDomainReferencesHost keeps an assigned host reserved while any
+// FabricDomain record still lists it, including FabricDomains with a deletion timestamp.
+func (g *networkingGuards) rejectBareMetalInstanceDeleteIfFabricDomainReferencesHost(
+	ctx context.Context, instance *privatev1.BareMetalInstance,
+) error {
+	host := instance.GetStatus().GetExternalHostName()
+	if host == "" {
+		return nil
+	}
+	return rejectGuardedDelete(ctx, g, g.fabricDomains, "FabricDomain", "BareMetalInstance", instance,
+		func(domain *privatev1.FabricDomain) bool {
+			if domain.GetMetadata().GetTenant() != instance.GetMetadata().GetTenant() {
+				return false
+			}
+			for _, server := range domain.GetSpec().GetServers() {
+				if server == host {
+					return true
+				}
+			}
+			return false
+		})
 }
 
 // forEachRecord calls the function for every record of the DAO, page by page.

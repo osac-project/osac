@@ -50,9 +50,70 @@ func seedProject(name string) {
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 }
 
+// seedProjectNetworking creates an authorized Subnet and SecurityGroup in a
+// specific tenant project for the Cluster's saved network attachment.
+func seedProjectNetworking(tenant, project string) (subnetID, securityGroupID string) {
+	cidr := "10.251.0.0/16"
+	subnetCIDR := "10.251.0.0/24"
+	if project == "other" {
+		cidr = "10.252.0.0/16"
+		subnetCIDR = "10.252.0.0/24"
+	}
+	virtualNetwork, err := fixtureDAO[*privatev1.VirtualNetwork]().Create().SetObject(
+		privatev1.VirtualNetwork_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:    fmt.Sprintf("test-vn-%s", uuid.NewString()[:8]),
+				Tenant:  tenant,
+				Project: project,
+			}.Build(),
+			Spec: privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: new(cidr)}.Build(),
+			Status: privatev1.VirtualNetworkStatus_builder{
+				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+				Hub:   "network-hub-a",
+			}.Build(),
+		}.Build()).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+
+	subnet, err := fixtureDAO[*privatev1.Subnet]().Create().SetObject(privatev1.Subnet_builder{
+		Metadata: privatev1.Metadata_builder{
+			Name:        fmt.Sprintf("test-subnet-%s", uuid.NewString()[:8]),
+			Tenant:      tenant,
+			Project:     project,
+			Annotations: map[string]string{ownerReferenceAnnotation: virtualNetwork.GetObject().GetId()},
+		}.Build(),
+		Spec: privatev1.SubnetSpec_builder{
+			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetwork.GetObject().GetId()}.Build(),
+			Ipv4Cidr:       new(subnetCIDR),
+		}.Build(),
+		Status: privatev1.SubnetStatus_builder{
+			State: privatev1.SubnetState_SUBNET_STATE_READY,
+			Hub:   "network-hub-a",
+		}.Build(),
+	}.Build()).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+
+	group, err := fixtureDAO[*privatev1.SecurityGroup]().Create().SetObject(privatev1.SecurityGroup_builder{
+		Metadata: privatev1.Metadata_builder{
+			Name:        fmt.Sprintf("test-sg-%s", uuid.NewString()[:8]),
+			Tenant:      tenant,
+			Project:     project,
+			Annotations: map[string]string{ownerReferenceAnnotation: virtualNetwork.GetObject().GetId()},
+		}.Build(),
+		Spec: privatev1.SecurityGroupSpec_builder{
+			VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetwork.GetObject().GetId()}.Build(),
+		}.Build(),
+		Status: privatev1.SecurityGroupStatus_builder{
+			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+			Hub:   "network-hub-a",
+		}.Build(),
+	}.Build()).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	return subnet.GetObject().GetId(), group.GetObject().GetId()
+}
+
 // seedClusterInProject creates a live Cluster in the given project through the DAO, as an
 // owner-reference target.
-func seedClusterInProject(project string) *privatev1.Cluster {
+func seedClusterInProject(project, subnetID, securityGroupID string) *privatev1.Cluster {
 	clustersDao, err := dao.NewGenericDAO[*privatev1.Cluster]().
 		SetLogger(logger).
 		SetTenancyLogic(tenancy).
@@ -65,27 +126,71 @@ func seedClusterInProject(project string) *privatev1.Cluster {
 				Tenant:  testTenant,
 				Project: project,
 			}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+						privatev1.SecurityGroupLocalReference_builder{Id: securityGroupID}.Build(),
+					},
+				}.Build(),
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"compute": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: bareMetalInstanceTypeReference("worker-type"),
+						FabricInterface:       "data-0",
+					}.Build(),
+				},
+			}.Build(),
 		}.Build(),
 	).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+
+	securityGroupResponse, err := fixtureDAO[*privatev1.SecurityGroup]().Get().SetId(securityGroupID).Do(ctx)
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	automaticGroupID := "auto-sg-" + resp.GetObject().GetId()
+	_, err = fixtureDAO[*privatev1.SecurityGroup]().Create().SetObject(privatev1.SecurityGroup_builder{
+		Id: automaticGroupID,
+		Metadata: privatev1.Metadata_builder{
+			Name:    automaticGroupID,
+			Tenant:  testTenant,
+			Project: project,
+			Creator: systemCreator,
+			Labels: map[string]string{
+				autoCreatedLabel:    "true",
+				autoCreatedForLabel: resp.GetObject().GetId(),
+			},
+			Annotations: map[string]string{ownerReferenceAnnotation: resp.GetObject().GetId()},
+		}.Build(),
+		Spec: privatev1.SecurityGroupSpec_builder{
+			VirtualNetwork: securityGroupResponse.GetObject().GetSpec().GetVirtualNetwork(),
+		}.Build(),
+		Status: privatev1.SecurityGroupStatus_builder{
+			State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+			Hub:   "network-hub-a",
+		}.Build(),
+	}.Build()).Do(ctx)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	return resp.GetObject()
 }
 
 var _ = Describe("Worker attribution", func() {
 	var (
-		privateServer *PrivateBareMetalInstancesServer
-		publicServer  *BareMetalInstancesServer
-		catalogItemID string
+		privateServer   *PrivateBareMetalInstancesServer
+		publicServer    *BareMetalInstancesServer
+		catalogItemID   string
+		subnetID        string
+		securityGroupID string
 	)
 
 	BeforeEach(func() {
 		var err error
 
 		seedProject("web")
-		seedTenantDefaultNetworking(testTenant, "web", new("netris"))
+		seedReadyDefaultNetworking(testTenant, 0)
+		subnetID, securityGroupID = seedProjectNetworking(testTenant, "web")
 		createDiskImageWithLifecycle("worker-disk-image",
 			privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
-		Expect(createTestBareMetalInstanceType(ctx, "worker-type", bareMetalNetworkPort("data-0", "fabric"))).To(Succeed())
+		Expect(createTestBareMetalInstanceType(ctx, "worker-type",
+			bareMetalNetworkPort("data-0", "fabric"), bareMetalNetworkPort("data-1", "fabric"))).To(Succeed())
 		Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", "worker-template",
 			bareMetalInstanceTypeReference("worker-type"))).To(Succeed())
 
@@ -127,15 +232,26 @@ var _ = Describe("Worker attribution", func() {
 		return privatev1.BareMetalInstancesCreateRequest_builder{
 			Object: privatev1.BareMetalInstance_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name:    fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					Tenant:  testTenant,
-					Project: project,
+					Name:        fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					Tenant:      testTenant,
+					Project:     project,
+					Annotations: map[string]string{clusterAPIIDAnnotation: refKey(ownerRef)},
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceSpec_builder{
 					DiskImage:      privatev1.DiskImageReference_builder{Id: "worker-disk-image"}.Build(),
 					CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					InstanceType:   bareMetalInstanceTypeReference("worker-type"),
 					UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+					NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+						privatev1.BareMetalNetworkAttachment_builder{
+							Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+							SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+								privatev1.SecurityGroupLocalReference_builder{Id: securityGroupID}.Build(),
+								privatev1.SecurityGroupLocalReference_builder{Id: "auto-sg-" + refKey(ownerRef)}.Build(),
+							},
+							Interface: new("data-0"),
+						}.Build(),
+					},
 				}.Build(),
 				Status: privatev1.BareMetalInstanceStatus_builder{
 					Cluster: ownerRef,
@@ -150,20 +266,32 @@ var _ = Describe("Worker attribution", func() {
 	}
 
 	It("records the cluster and node set at creation in the cluster's project", func() {
-		cluster := seedClusterInProject("web")
+		cluster := seedClusterInProject("web", subnetID, securityGroupID)
 		response, err := privateServer.Create(ctx, createWorker("web", clusterRef(cluster.GetId())))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetObject().GetMetadata().GetProject()).To(Equal("web"))
 		Expect(response.GetObject().GetStatus().GetCluster().GetId()).To(Equal(cluster.GetId()))
 		Expect(response.GetObject().GetStatus().GetNodeSet()).To(Equal("compute"))
+		Expect(response.GetObject().GetSpec().GetNetworkAttachments()[0].GetSubnet().GetId()).To(Equal(subnetID))
+		Expect(response.GetObject().GetSpec().GetNetworkAttachments()[0].GetInterface()).To(Equal("data-0"))
+	})
+
+	It("rejects a worker interface that differs from the Cluster node set", func() {
+		cluster := seedClusterInProject("web", subnetID, securityGroupID)
+		request := createWorker("web", clusterRef(cluster.GetId()))
+		request.GetObject().GetSpec().GetNetworkAttachments()[0].SetInterface("data-1")
+		_, err := privateServer.Create(ctx, request)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err).To(MatchError(ContainSubstring("must match Cluster node set")))
 	})
 
 	It("rejects a worker whose cluster is in another project", func() {
 		seedProject("other")
-		cluster := seedClusterInProject("other")
+		otherSubnet, otherSecurityGroup := seedProjectNetworking(testTenant, "other")
+		cluster := seedClusterInProject("other", otherSubnet, otherSecurityGroup)
 		_, err := privateServer.Create(ctx, createWorker("web", clusterRef(cluster.GetId())))
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err.Error()).To(ContainSubstring("same tenant and project"))
+		Expect(err.Error()).To(ContainSubstring("tenant and project must match"))
 	})
 
 	It("rejects a worker whose cluster is missing", func() {
@@ -173,8 +301,8 @@ var _ = Describe("Worker attribution", func() {
 	})
 
 	It("rejects changing an owner reference on update", func() {
-		cluster := seedClusterInProject("web")
-		other := seedClusterInProject("web")
+		cluster := seedClusterInProject("web", subnetID, securityGroupID)
+		other := seedClusterInProject("web", subnetID, securityGroupID)
 		response, err := privateServer.Create(ctx, createWorker("web", clusterRef(cluster.GetId())))
 		Expect(err).ToNot(HaveOccurred())
 		worker := response.GetObject()
@@ -192,7 +320,7 @@ var _ = Describe("Worker attribution", func() {
 	})
 
 	It("rejects clearing an owner reference on update", func() {
-		cluster := seedClusterInProject("web")
+		cluster := seedClusterInProject("web", subnetID, securityGroupID)
 		response, err := privateServer.Create(ctx, createWorker("web", clusterRef(cluster.GetId())))
 		Expect(err).ToNot(HaveOccurred())
 		worker := response.GetObject()
@@ -210,7 +338,7 @@ var _ = Describe("Worker attribution", func() {
 	})
 
 	It("allows updates that keep the owner reference unchanged", func() {
-		cluster := seedClusterInProject("web")
+		cluster := seedClusterInProject("web", subnetID, securityGroupID)
 		response, err := privateServer.Create(ctx, createWorker("web", clusterRef(cluster.GetId())))
 		Expect(err).ToNot(HaveOccurred())
 		worker := response.GetObject()
@@ -229,7 +357,7 @@ var _ = Describe("Worker attribution", func() {
 	})
 
 	It("ignores a user-supplied owner reference on public create", func() {
-		cluster := seedClusterInProject("web")
+		cluster := seedClusterInProject("web", subnetID, securityGroupID)
 		response, err := publicServer.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
 			Object: publicv1.BareMetalInstance_builder{
 				Metadata: publicv1.Metadata_builder{
@@ -264,7 +392,7 @@ var _ = Describe("Worker attribution", func() {
 	})
 
 	It("rejects a public update of the output-only node set field", func() {
-		cluster := seedClusterInProject("web")
+		cluster := seedClusterInProject("web", subnetID, securityGroupID)
 		response, err := privateServer.Create(ctx, createWorker("web", clusterRef(cluster.GetId())))
 		Expect(err).ToNot(HaveOccurred())
 
@@ -283,8 +411,21 @@ var _ = Describe("Worker attribution", func() {
 		Expect(err.Error()).To(ContainSubstring("status.node_set is output-only"))
 	})
 
+	It("rejects the private Cluster marker on public create", func() {
+		_, err := publicServer.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name:        fmt.Sprintf("test-%s", uuid.NewString()),
+					Annotations: map[string]string{clusterAPIIDAnnotation: "cluster-id"},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(err).To(MatchError(ContainSubstring("reserved for private CaaS worker creation")))
+	})
+
 	It("preserves the owner reference and node set on a public update without a mask", func() {
-		cluster := seedClusterInProject("web")
+		cluster := seedClusterInProject("web", subnetID, securityGroupID)
 		response, err := privateServer.Create(ctx, createWorker("web", clusterRef(cluster.GetId())))
 		Expect(err).ToNot(HaveOccurred())
 		workerID := response.GetObject().GetId()

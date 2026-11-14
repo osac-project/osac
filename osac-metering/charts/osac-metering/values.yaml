@@ -37,10 +37,11 @@ resources:
     cpu: 500m
     memory: 512Mi
 
-# Kafka connection. Override to point at a different Kafka cluster; the topic
-# names are fixed (the schema's events prefix), so every instance of a shared
-# cluster must use a separate KafkaUser but cannot rename its topics.
-# TLS trust uses certs.caBundle (the shared OSAC CA), not the Strimzi cluster CA.
+# Kafka connection. Override brokers to point at a different Kafka cluster.
+# Event topics are <global.eventTopicPrefix><tenant>, default osac.events.
+# The umbrella chart sets that prefix once for fulfillment, metering, and the
+# event-topic ACLs. TLS trust uses certs.caBundle (the shared OSAC CA), not
+# the Strimzi cluster CA.
 kafka:
   brokers: ""          # default: osac-kafka-kafka-bootstrap.osac-kafka.svc.cluster.local:9093
   clusterName: ""      # default: osac-kafka

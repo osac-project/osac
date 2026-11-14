@@ -91,6 +91,13 @@ type Progress struct {
 	HeartbeatOffset      int64
 	LastRoundTime        *time.Time
 	LastRoundEventOffset int64
+	// EventTopic is the Kafka topic EventOffset and LastRoundEventOffset were taken
+	// from. Empty means those offsets were stored before the topic was recorded.
+	EventTopic string
+	// TopicGeneration counts the event topics those offsets have belonged to,
+	// starting at zero. It advances when the topic changes. History facts written
+	// afterward carry the new value, so they sort ahead of the previous topic.
+	TopicGeneration int64
 }
 
 // LedgerKey identifies one meter: a resource, a meter definition and component, and one set of
@@ -215,6 +222,41 @@ func TakeTenantLock(ctx context.Context, q Querier, kind LockKind, tenant string
 	return nil
 }
 
+// NoteEventTopic records the event topic the tenant's event offsets belong to. It creates
+// the progress row when the tenant is new. An empty stored topic is an offset written
+// before topics were recorded, and those offsets belong to legacyTopic, the default event
+// topic. They stay when topic is that legacy topic, and they are cleared when it is not,
+// so an upgrade onto a new prefix reads that topic from the beginning. A stored topic that
+// differs from topic is a later prefix change and clears the offsets the same way. Either
+// change advances topic_generation, so facts the fold writes afterward sort ahead of the
+// previous topic. The heartbeat offset is a different topic and stays.
+func (s *Store) NoteEventTopic(ctx context.Context, tenant, topic, legacyTopic string) error {
+	_, err := s.pool.Exec(
+		ctx,
+		`INSERT INTO progress (tenant, event_topic) VALUES ($1, $2)
+		 ON CONFLICT (tenant) DO UPDATE SET
+		   event_offset = CASE
+		     WHEN COALESCE(NULLIF(progress.event_topic, ''), $3) <> EXCLUDED.event_topic THEN 0
+		     ELSE progress.event_offset
+		   END,
+		   last_round_event_offset = CASE
+		     WHEN COALESCE(NULLIF(progress.event_topic, ''), $3) <> EXCLUDED.event_topic THEN 0
+		     ELSE progress.last_round_event_offset
+		   END,
+		   topic_generation = CASE
+		     WHEN COALESCE(NULLIF(progress.event_topic, ''), $3) <> EXCLUDED.event_topic
+		       THEN progress.topic_generation + 1
+		     ELSE progress.topic_generation
+		   END,
+		   event_topic = EXCLUDED.event_topic`,
+		tenant, topic, legacyTopic,
+	)
+	if err != nil {
+		return fmt.Errorf("recording the event topic: %w", err)
+	}
+	return nil
+}
+
 // EnsureProgress creates the tenant's progress row if it does not exist yet. A new tenant starts
 // at offset 0 of both its topics.
 func (s *Store) EnsureProgress(ctx context.Context, tenant string) error {
@@ -235,10 +277,14 @@ func GetProgress(ctx context.Context, q Querier, tenant string) (Progress, error
 	var lastRound *time.Time
 	err := q.QueryRow(
 		ctx,
-		`SELECT tenant, event_offset, heartbeat_offset, last_round_time, last_round_event_offset
+		`SELECT tenant, event_offset, heartbeat_offset, last_round_time, last_round_event_offset,
+		        event_topic, topic_generation
 		 FROM progress WHERE tenant = $1`,
 		tenant,
-	).Scan(&p.Tenant, &p.EventOffset, &p.HeartbeatOffset, &lastRound, &p.LastRoundEventOffset)
+	).Scan(
+		&p.Tenant, &p.EventOffset, &p.HeartbeatOffset, &lastRound, &p.LastRoundEventOffset,
+		&p.EventTopic, &p.TopicGeneration,
+	)
 	if err != nil {
 		return Progress{}, fmt.Errorf("reading progress of tenant %s: %w", tenant, err)
 	}
@@ -254,10 +300,11 @@ func (s *Store) GetTenantProgress(ctx context.Context, tenant string) (Progress,
 }
 
 // InsertFacts writes facts that the tenant's event carries, and moves the tenant's event offset
-// to the given next offset, in the same transaction. The offset only moves forward. Facts are
-// consumed in log order, so a fact that exists already is updated to the arriving value: two
-// changes of one field within the same second collapse to the value the log carries last, and
-// replaying an event writes the value it already wrote.
+// to the given next offset, in the same transaction. The offset only moves forward. Each fact
+// records the progress row's topic generation, so a write after a prefix change sorts ahead of
+// the previous topic. Facts are consumed in log order, so a fact that exists already is updated
+// to the arriving value: two changes of one field within the same second collapse to the value
+// the log carries last, and replaying an event writes the value it already wrote.
 func InsertFacts(
 	ctx context.Context, q Querier, tenant string, facts []Fact, nextOffset int64,
 ) error {
@@ -265,10 +312,13 @@ func InsertFacts(
 	for _, fact := range facts {
 		batch.Queue(
 			`INSERT INTO history
-			     (tenant, resource_type, resource_id, field, since, value, event_offset)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)
+			     (tenant, resource_type, resource_id, field, since, value, event_offset,
+			      topic_generation)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7,
+			         (SELECT topic_generation FROM progress WHERE tenant = $1))
 			 ON CONFLICT (tenant, resource_type, resource_id, field, since)
-			 DO UPDATE SET value = EXCLUDED.value, event_offset = EXCLUDED.event_offset`,
+			 DO UPDATE SET value = EXCLUDED.value, event_offset = EXCLUDED.event_offset,
+			               topic_generation = EXCLUDED.topic_generation`,
 			tenant, fact.ResourceType, fact.ResourceID, fact.Field, fact.Since, fact.Value,
 			nextOffset,
 		)
@@ -346,8 +396,10 @@ func (s *Store) LastRoundTime(ctx context.Context) (time.Time, error) {
 }
 
 // LatestFactValue returns the history value last written in log order for this field.
-// ok is false when no row exists. event_offset is Kafka order; since is the event
-// timestamp and can run backwards relative to the log.
+// ok is false when no row exists. topic_generation orders successive event topics, so
+// a fact from the current topic sorts ahead of the previous one. event_offset is Kafka
+// order within that topic; since is the event timestamp and can run backwards relative
+// to the log.
 func LatestFactValue(
 	ctx context.Context, q Querier, tenant, resourceType, resourceID, field string,
 ) (value string, ok bool, err error) {
@@ -356,7 +408,7 @@ func LatestFactValue(
 		`SELECT value
 		 FROM history
 		 WHERE tenant = $1 AND resource_type = $2 AND resource_id = $3 AND field = $4
-		 ORDER BY event_offset DESC, since DESC
+		 ORDER BY topic_generation DESC, event_offset DESC, since DESC
 		 LIMIT 1`,
 		tenant, resourceType, resourceID, field,
 	).Scan(&value)

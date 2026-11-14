@@ -172,6 +172,10 @@ jobs:
       working-directory: osac-installer
       run: uv run --project .. python scripts/test-networking-values.py
 
+    - name: Test block filesystem rendering
+      working-directory: osac-installer
+      run: uv run --project .. python scripts/test-storage-fstype-render.py
+
     - name: Test the NetworkClass step
       working-directory: osac-installer
       run: python3 scripts/test-network-class-step.py

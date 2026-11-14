@@ -44,12 +44,21 @@
       - "app.kubernetes.io/managed-by=osac-aap"
   register: _vast_sc_checks
 
-- name: Determine if all StorageClasses already exist
+- name: Determine missing block tiers and whether all StorageClasses exist
   ansible.builtin.set_fact:
     _vast_all_sc_exist: >-
       {{ (_vast_expected_sc_names | difference(
             _vast_sc_checks.resources | map(attribute='metadata.name') | list
           ) | length) == 0 }}
+    _vast_missing_block_tiers: >-
+      {% set tiers = [] -%}
+      {% set existing_names = _vast_sc_checks.resources | map(attribute='metadata.name') | list -%}
+      {% for tier in _provider_tiers -%}
+      {% if tier.protocol == 'block' and 'vast-block-' ~ tenant_name ~ '-' ~ tier.name not in existing_names -%}
+      {% set _ = tiers.append(tier) -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ tiers }}
 
 - name: Set output facts and skip provisioning when all SCs exist
   when: _vast_all_sc_exist | bool
@@ -66,6 +75,14 @@
 - name: Provision StorageClasses and CSI resources
   when: not (_vast_all_sc_exist | bool)
   block:
+    - name: Validate filesystem type for block StorageClasses
+      ansible.builtin.assert:
+        that:
+          - storage_provider_block_fstype is defined
+          - storage_provider_block_fstype | length > 0
+        fail_msg: storage_provider_block_fstype must be defined and nonempty for block StorageClasses.
+      when: _vast_missing_block_tiers | length > 0
+
     - name: Discover cluster name from target cluster infrastructure
       when: _cluster_name is not defined or _cluster_name | length == 0
       block:
@@ -278,7 +295,7 @@
         label: "vast-{{ item.protocol }}-{{ tenant_name }}-{{ item.name }}"
 
     - name: Create block StorageClass per tier
-      when: _vast_block_tiers | length > 0
+      when: _vast_missing_block_tiers | length > 0
       kubernetes.core.k8s:
         state: present
         definition:
@@ -296,13 +313,14 @@
             {{ _vast_sc_base_params
                | combine({'subsystem': 'view-' ~ tenant_name ~ '-' ~ _vast_tenant_uid_hash ~ '-' ~ item.name,
                           'tenant_name': tenant_name})
+               | combine({'csi.storage.k8s.io/fstype': storage_provider_block_fstype})
                | combine({'volumeGroup': _cluster_name ~ '/{namespace}'})
                | combine({'csi.storage.k8s.io/node-stage-secret-name': _vast_csi_secret_ref.name})
                | combine({'csi.storage.k8s.io/node-stage-secret-namespace': _vast_csi_secret_ref.namespace})
                | combine(_vast_sc_block_encryption_params | default({})) }}
           reclaimPolicy: Delete
           volumeBindingMode: WaitForFirstConsumer
-      loop: "{{ _vast_block_tiers }}"
+      loop: "{{ _vast_missing_block_tiers }}"
       loop_control:
         label: "vast-{{ item.protocol }}-{{ tenant_name }}-{{ item.name }}"
 

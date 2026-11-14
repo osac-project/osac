@@ -210,6 +210,14 @@
            _lvms_sc_check.resources | map(attribute='metadata.name') | list
          ) }}
 
+- name: Validate filesystem type for missing block StorageClasses
+  ansible.builtin.assert:
+    that:
+      - storage_provider_block_fstype is defined
+      - storage_provider_block_fstype | length > 0
+    fail_msg: storage_provider_block_fstype must be defined and nonempty for block StorageClasses.
+  when: _lvms_missing_sc_names | length > 0
+
 - name: Create missing per-tenant StorageClasses
   kubernetes.core.k8s:
     kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit, true) }}"
@@ -227,6 +235,7 @@
       provisioner: "{{ lvms_storage_provisioner }}"
       parameters:
         "topolvm.io/device-class": "{{ lvms_storage_device_class }}"
+        "csi.storage.k8s.io/fstype": "{{ storage_provider_block_fstype | string }}"
       reclaimPolicy: Delete
       volumeBindingMode: WaitForFirstConsumer
   loop: "{{ _lvms_expected_sc_entries | selectattr('name', 'in', _lvms_missing_sc_names) | list }}"

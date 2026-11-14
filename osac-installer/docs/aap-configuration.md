@@ -1,5 +1,49 @@
 # AAP Configuration
 
+## Block StorageClass filesystem type
+
+Configure the filesystem type used for new AAP-managed VAST block and LVMS
+StorageClasses with:
+
+```yaml
+aap:
+  instanceGroups:
+    storageFulfillment:
+      enabled: true
+      config:
+        OSAC_STORAGE_BLOCK_FSTYPE: "ext4"
+```
+
+The default is `ext4`. The existing `storage-operations-ig` ConfigMap supplies
+the value to storage workers. Overrides are passed unchanged and must be
+nonempty when creating block classes; they are not restricted to an allowlist
+or normalized. NFS classes and teardown operations are unaffected.
+
+As with other instance-group ConfigMap entries, an empty Helm value is omitted,
+leaving the worker's `ext4` default in effect. An explicitly empty worker
+environment variable or Ansible override is rejected when a block class needs
+to be created.
+
+The setting applies to newly created classes, not existing classes or volumes.
+VAST creates only missing block classes, including on partial requests; an
+existing block class does not require a filesystem setting to create a missing
+NFS class. No existing classes or volumes are migrated.
+For example, after changing `ext4` to `xfs`, an existing class retains `ext4`;
+new PVCs naming that same class still use its old parameters, not the new
+worker setting. Only newly created class objects receive `xfs`, including
+missing block classes in a partial request. Existing classes without an
+`fstype` parameter are not backfilled, and bound PVCs, PVs, and their data
+are left unchanged.
+
+Plan a separately named or versioned StorageClass for future claims and a
+separate workload and data migration plan for existing workloads. This
+setting does not automate either rollout or migration. Do not assume that
+same-name class deletion and recreation is safe for all volume lifecycle
+operations.
+
+See the [AAP storage configuration](../../osac-aap/docs/aap-configuration.md#block-storageclass-filesystem-type)
+for existing-class selection and immutable-parameter limitations.
+
 The OSAC automation backend (AAP) receives its runtime configuration via
 Kubernetes ConfigMaps and Secrets that are mounted into AAP instance group
 execution pods via `envFrom`. This makes every key available as an environment

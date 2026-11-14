@@ -13,6 +13,7 @@ const id = (value: string): readonly [string] => [`#${value}`];
 
 export const StorageBackendsPage = {
   pageTitle: ['heading', { name: 'Storage Backends', exact: true }],
+  listView: ['#list-view'],
   backendsTable: ['grid', { name: 'Storage backends', exact: true }],
 } as const satisfies Record<string, StorageLocator>;
 

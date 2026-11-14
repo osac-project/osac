@@ -243,6 +243,12 @@ jobs:
           fi
           if [ -f "${d}infra.yaml" ]; then
             infra_args+=(--values "${d}infra.yaml")
+            # Profiles that defer secrets to a secrets overlay leave
+            # bundledVault.keycloakIssuerUrl empty; supply a placeholder so
+            # the chart's required guard does not abort the offline render.
+            if grep -q 'keycloakIssuerUrl: ""' "${d}infra.yaml" 2>/dev/null; then
+              infra_args+=(--set "bundledVault.keycloakIssuerUrl=https://keycloak.example.com/realms/osac")
+            fi
             helm template osac-deps charts/osac-deps/ "${infra_args[@]}"
             helm template osac-infra charts/osac-infra/ "${infra_args[@]}"
           fi

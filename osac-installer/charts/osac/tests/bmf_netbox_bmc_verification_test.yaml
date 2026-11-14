@@ -1,0 +1,29 @@
+suite: "bmf NetBox inventory: BMC certificate verification"
+templates:
+  - charts/bmf/templates/netbox-inventory-config.yaml
+values:
+  - ../ci/default-values.yaml
+set:
+  global.services.bmaas.enabled: true
+  bmf.netbox.enabled: true
+  bmf.netbox.bmhNamespace: host-inventory
+  bmf.netbox.url: https://netbox.example.org
+  bmf.netbox.tokenValue: placeholder-token
+  bmf.secretAPI.url: https://fulfillment-internal-api:8001
+release:
+  name: osac
+  namespace: osac
+tests:
+  - it: verifies BMC certificates by default
+    asserts:
+      - matchRegex:
+          path: stringData["inventory.yaml"]
+          pattern: "(?m)^    enableBMCCertificateVerification: true$"
+
+  - it: propagates the fleet-wide override to the inventory config
+    set:
+      bmf.netbox.enableBMCCertificateVerification: false
+    asserts:
+      - matchRegex:
+          path: stringData["inventory.yaml"]
+          pattern: "(?m)^    enableBMCCertificateVerification: false$"

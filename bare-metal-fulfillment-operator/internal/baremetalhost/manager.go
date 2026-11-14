@@ -31,6 +31,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
 // credentialsSecretSuffix is appended to the BareMetalHost name to name the
@@ -52,6 +54,40 @@ type CreateParams struct {
 	DisableCertificateVerification bool
 	ConsumerRef                    *corev1.ObjectReference
 	Labels                         map[string]string
+}
+
+// CreateOptions holds optional settings for a BareMetalHost created by the
+// operator.
+type CreateOptions struct {
+	// DisableCertificateVerification sets spec.bmc.disableCertificateVerification
+	// so BMO/Ironic skip TLS verification of the BMC certificate. It is stated
+	// negatively on purpose: the zero value must keep verification on, so a
+	// caller that omits this option can never silently weaken TLS. BMO
+	// propagates it into Ironic's driver_info.redfish_verify_ca only when the
+	// node is enrolled, so it must be correct at creation time.
+	DisableCertificateVerification bool
+}
+
+// NewCreateParams builds the creation parameters for a BareMetalHost claimed by
+// an OSAC BareMetalInstance. Namespace is intentionally omitted from ConsumerRef:
+// the consumer is identified by an opaque ID, not a resolvable namespace/name —
+// matching the Metal3 adapter's documented convention, which is sufficient for
+// BMO's claim mechanism.
+func NewCreateParams(name, bmcAddress, bootMAC, bareMetalInstanceID string, opts CreateOptions) CreateParams {
+	return CreateParams{
+		Name:                           name,
+		BMCAddress:                     bmcAddress,
+		BootMACAddress:                 bootMAC,
+		DisableCertificateVerification: opts.DisableCertificateVerification,
+		ConsumerRef: &corev1.ObjectReference{
+			APIVersion: "osac.openshift.io/v1alpha1",
+			Kind:       "BareMetalInstance",
+			Name:       bareMetalInstanceID,
+		},
+		Labels: map[string]string{
+			shared.OsacManagedByLabel: shared.OsacDefaultManagedByValue,
+		},
+	}
 }
 
 // Manager handles on-demand BareMetalHost CR creation, deletion, and

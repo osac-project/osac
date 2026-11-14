@@ -81,6 +81,35 @@ var _ = Describe("BareMetalHost Manager", func() {
 		})
 	})
 
+	Describe("NewCreateParams", func() {
+		It("builds OSAC-owned params that verify the BMC certificate by default", func() {
+			params := NewCreateParams(
+				"node001",
+				"redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1",
+				"aa:bb:cc:dd:ee:01",
+				"test-instance-uid",
+				CreateOptions{},
+			)
+
+			Expect(params.Name).To(Equal("node001"))
+			Expect(params.BMCAddress).To(Equal("redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1"))
+			Expect(params.BootMACAddress).To(Equal("aa:bb:cc:dd:ee:01"))
+			Expect(params.DisableCertificateVerification).To(BeFalse())
+			Expect(params.ConsumerRef).NotTo(BeNil())
+			Expect(params.ConsumerRef.APIVersion).To(Equal("osac.openshift.io/v1alpha1"))
+			Expect(params.ConsumerRef.Kind).To(Equal("BareMetalInstance"))
+			Expect(params.ConsumerRef.Name).To(Equal("test-instance-uid"))
+			Expect(params.Labels).To(Equal(map[string]string{"osac.openshift.io/managed-by": "baremetal"}))
+		})
+
+		It("carries the certificate-verification option", func() {
+			params := NewCreateParams("node001", "redfish+https://10.0.0.1", "aa:bb:cc:dd:ee:01", "uid",
+				CreateOptions{DisableCertificateVerification: true})
+
+			Expect(params.DisableCertificateVerification).To(BeTrue())
+		})
+	})
+
 	Describe("CreateBMH", func() {
 		It("should create a new BMH", func() {
 			mgr := newTestManager()
@@ -107,9 +136,28 @@ var _ = Describe("BareMetalHost Manager", func() {
 			Expect(bmh.Spec.BMC.CredentialsName).To(Equal("node001-bmc-secret"))
 			Expect(bmh.Spec.BootMACAddress).To(Equal("aa:bb:cc:dd:ee:01"))
 			Expect(bmh.Spec.Online).To(BeFalse())
+			Expect(bmh.Spec.BMC.DisableCertificateVerification).To(BeFalse())
 			Expect(bmh.Spec.ConsumerRef).NotTo(BeNil())
 			Expect(bmh.Spec.ConsumerRef.Name).To(Equal("test-instance-uid"))
 			Expect(bmh.Labels["osac.openshift.io/pool-id"]).To(Equal("pool1"))
+		})
+
+		It("should set disableCertificateVerification when requested", func() {
+			mgr := newTestManager()
+
+			err := mgr.CreateBMH(ctx, CreateParams{
+				Name:                           "node001",
+				BMCAddress:                     "redfish-virtualmedia+https://10.0.0.1/redfish/v1/Systems/1",
+				BootMACAddress:                 "aa:bb:cc:dd:ee:01",
+				DisableCertificateVerification: true,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			bmh := &metal3api.BareMetalHost{}
+			Expect(mgr.client.Get(ctx, client.ObjectKey{
+				Namespace: testNamespace, Name: "node001",
+			}, bmh)).To(Succeed())
+			Expect(bmh.Spec.BMC.DisableCertificateVerification).To(BeTrue())
 		})
 
 		It("should be idempotent with matching consumerRef", func() {

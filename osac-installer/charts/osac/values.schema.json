@@ -2276,6 +2276,11 @@
               "type": "boolean",
               "description": "Allow NetBox endpoint URLs using HTTP.",
               "default": false
+            },
+            "enableBMCCertificateVerification": {
+              "type": "boolean",
+              "description": "Verify BMC TLS certificates on the BareMetalHosts the NetBox inventory backend creates. The NetBox device custom field osac_bmc_certificate_verification overrides it per device.",
+              "default": true
             }
           },
           "additionalProperties": false

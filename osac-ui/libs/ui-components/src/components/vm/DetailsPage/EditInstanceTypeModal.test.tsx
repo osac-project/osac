@@ -26,6 +26,12 @@ const cpuLarge = {
   spec: { state: InstanceTypeState.ACTIVE, vcpus: 8, memoryGib: 16 },
 } as InstanceType;
 
+const a100Gpu = {
+  count: 1,
+  resourceName: 'nvidia.com/A100',
+  pciDeviceSelector: '10DE:20B0',
+};
+
 const gpu = {
   id: 'gpu-1',
   metadata: { name: 'GPU small' },
@@ -33,7 +39,33 @@ const gpu = {
     state: InstanceTypeState.ACTIVE,
     vcpus: 4,
     memoryGib: 16,
-    gpu: { count: 1, resourceName: 'nvidia.com/gpu' },
+    gpu: a100Gpu,
+  },
+} as InstanceType;
+
+const gpuMedium = {
+  id: 'gpu-2',
+  metadata: { name: 'GPU medium' },
+  spec: {
+    state: InstanceTypeState.ACTIVE,
+    vcpus: 8,
+    memoryGib: 32,
+    gpu: { ...a100Gpu },
+  },
+} as InstanceType;
+
+const gpuNegative = {
+  id: 'gpu-3',
+  metadata: { name: 'GPU negative' },
+  spec: {
+    state: InstanceTypeState.ACTIVE,
+    vcpus: 4,
+    memoryGib: 16,
+    gpu: {
+      count: 2,
+      resourceName: 'nvidia.com/Tesla-T4',
+      pciDeviceSelector: '10DE:1EB8',
+    },
   },
 } as InstanceType;
 
@@ -172,6 +204,40 @@ describe('EditInstanceTypeModal wrapper', () => {
     await user.click(await screen.findByRole('combobox'));
     expect(await screen.findByRole('option', { name: /GPU small/ })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /CPU small/ })).not.toBeInTheDocument();
+  });
+
+  it('offers only instance types with a matching GPU specification', async () => {
+    const { user } = renderWrapper({
+      instance: vm(ComputeInstanceState.RUNNING, 'gpu-1'),
+      types: [cpu, gpu, gpuMedium, gpuNegative],
+    });
+
+    await user.click(await screen.findByRole('combobox'));
+    expect(
+      await screen.findByRole('option', {
+        name: /GPU small — 4 vCPUs · 16 GiB · 1 GPU · nvidia\.com\/A100/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', {
+        name: /GPU medium — 8 vCPUs · 32 GiB · 1 GPU · nvidia\.com\/A100/,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /GPU negative/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /CPU small/ })).not.toBeInTheDocument();
+  });
+
+  it('explains that GPU configuration cannot change during resize', async () => {
+    renderWrapper({
+      instance: vm(ComputeInstanceState.RUNNING, 'gpu-1'),
+      types: [gpu, gpuMedium],
+    });
+
+    expect(
+      await screen.findByText(
+        'GPU configuration cannot change during resize. Only instance types with the same GPU configuration are listed.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('passes the next-start alert for a stopped VM after the selection changes', async () => {

@@ -1,9 +1,10 @@
 import { Route, Routes } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
-import { screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Architecture, type DiskImage, DiskImageLifecycle, DiskImageSchema } from '@osac/types';
+import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 import { mockQueryResult } from '@osac/ui-components/test-utils/query';
 
 import DiskImageListPage from './DiskImageListPage';
@@ -52,6 +53,10 @@ const renderPageWithCreateRoute = () =>
   );
 
 describe('DiskImageListPage', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   afterEach(() => {
     vi.mocked(useDiskImages).mockReset();
   });
@@ -77,12 +82,100 @@ describe('DiskImageListPage', () => {
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
   });
 
-  it('shows the empty state when no disk images are returned', () => {
+  it('shows the empty state when no disk images are returned', async () => {
     vi.mocked(useDiskImages).mockReturnValue(mockQueryResult<DiskImage[]>({ data: [] }));
 
     renderPage();
 
-    expect(screen.getByText('No disk images yet.')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', { name: 'No disk images found', level: 2 }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByText('No disk images are available yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('grid', { name: 'Disk images' })).not.toBeInTheDocument();
+  });
+
+  it('shows a filter-specific empty state when filters match nothing', async () => {
+    vi.mocked(useDiskImages).mockReturnValue(mockQueryResult<DiskImage[]>({ data: [] }));
+
+    renderWithProviders(<DiskImageListPage />, {
+      routerEntries: ['/admin/infrastructure/disk-images?search=missing'],
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', { name: 'No disk images match your filters', level: 2 }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(
+        /Try a different guest OS family, architecture, lifecycle, scope, or search term/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+  });
+
+  it('renders the list and card view switcher', () => {
+    vi.mocked(useDiskImages).mockReturnValue(mockQueryResult<DiskImage[]>({ data: [] }));
+
+    renderPage();
+
+    expect(screen.getByRole('button', { name: 'Card view' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'List view' })).toBeInTheDocument();
+  });
+
+  it('renders disk images as cards by default', async () => {
+    vi.mocked(useDiskImages).mockReturnValue(
+      mockQueryResult<DiskImage[]>({ data: [makeDiskImage('a')] }),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'disk-image-a' })).toBeInTheDocument();
+    });
+    expect(screen.getByText('Guest OS family')).toBeInTheDocument();
+    expect(screen.queryByRole('grid', { name: 'Disk images' })).not.toBeInTheDocument();
+  });
+
+  it('renders the table when list view is selected', async () => {
+    localStorage.setItem(getViewTypePrefKey('disk-images-view'), 'list');
+    vi.mocked(useDiskImages).mockReturnValue(
+      mockQueryResult<DiskImage[]>({ data: [makeDiskImage('a')] }),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('grid', { name: 'Disk images' })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('link', { name: 'disk-image-a' })).toBeInTheDocument();
+  });
+
+  it('clears URL filters from the empty state', async () => {
+    vi.mocked(useDiskImages).mockReturnValue(mockQueryResult<DiskImage[]>({ data: [] }));
+
+    const { user } = renderWithProviders(<DiskImageListPage />, {
+      routerEntries: ['/admin/infrastructure/disk-images?search=missing&guestOsFamily=linux'],
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Clear all filters' }));
+
+    expect(useDiskImages).toHaveBeenLastCalledWith({
+      filter: buildDiskImageListFilter({
+        search: '',
+        guestOsFamily: undefined,
+        architecture: [],
+        lifecycle: [],
+        showObsolete: false,
+        scope: undefined,
+      }),
+    });
   });
 
   it('uses the page-level error state when the query fails', () => {

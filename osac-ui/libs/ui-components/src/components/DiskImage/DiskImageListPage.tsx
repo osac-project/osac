@@ -1,11 +1,20 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
+  Badge,
+  Button,
   Checkbox,
+  EmptyState,
+  EmptyStateBody,
+  Gallery,
+  GalleryItem,
   MenuToggle,
   SearchInput,
   Select,
   SelectList,
   SelectOption,
+  Stack,
+  StackItem,
   Toolbar,
   ToolbarContent,
   ToolbarGroup,
@@ -14,7 +23,10 @@ import {
 
 import { Architecture, DiskImageLifecycle, DiskImages, GuestOSFamily } from '@osac/types';
 import { Tenants } from '@osac/types/private';
+import DiskImageCard from '@osac/ui-components/components/DiskImage/DiskImageCard';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
+import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
+import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 
 import DiskImageTable from './DiskImageTable';
 import { diskImageFieldIds } from './fieldIds';
@@ -96,7 +108,14 @@ const MultiSelectFilter = <T extends string>({
   onToggle,
 }: MultiSelectFilterProps<T>) => {
   const [isOpen, setIsOpen] = useState(false);
-  const toggleLabel = selected.length ? `${label} (${selected.length})` : label;
+  const toggleLabel = selected.length ? (
+    <span>
+      {`${label} `}
+      <Badge isRead>{selected.length}</Badge>{' '}
+    </span>
+  ) : (
+    label
+  );
 
   return (
     <Select
@@ -165,9 +184,10 @@ const isScopeFilterValue = (value: string): value is ScopeFilterValue =>
   value === 'global' || value === 'tenant';
 
 const SHOW_OBSOLETE_PARAM = 'showObsolete';
-
+const DISK_IMAGES_VIEW_KEY = 'disk-images-view';
 const DiskImageListPage = () => {
   const { t } = useTranslation();
+  const [, setSearchParams] = useSearchParams();
 
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
   const [guestOsFamilyParam, setGuestOsFamilyParam] = usePageFilter(GUEST_OS_FAMILY_PARAM);
@@ -189,6 +209,7 @@ const DiskImageListPage = () => {
   const lifecycle = lifecycleFilter.map((value) => LIFECYCLE_FILTER_TO_ENUM[value]);
   const scope = isScopeFilterValue(scopeParam) ? scopeParam : undefined;
   const showObsolete = showObsoleteParam === 'true';
+  const [viewType] = useViewType(DISK_IMAGES_VIEW_KEY);
 
   const filter = buildDiskImageListFilter({
     search,
@@ -202,7 +223,6 @@ const DiskImageListPage = () => {
   const { data: diskImages = [], isLoading, error } = useDiskImages({ filter });
   const { data: tenantsResponse } = useListResource(Tenants);
   const tenants = tenantsResponse?.items ?? [];
-
   const guestOsFamilyOptions: FilterOption<GuestOsFamilyFilterValue>[] = [
     { value: 'linux', label: t('Linux') },
     { value: 'windows', label: t('Windows') },
@@ -221,6 +241,45 @@ const DiskImageListPage = () => {
     { value: 'tenant', label: t('Tenant') },
   ];
 
+  const isFiltered =
+    Boolean(search) ||
+    Boolean(guestOsFamily) ||
+    architectureFilter.length > 0 ||
+    lifecycleFilter.length > 0 ||
+    Boolean(scope);
+
+  const showEmptyState = !isLoading && !error && diskImages.length === 0;
+
+  const clearAllFilters = () => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete(SEARCH_PARAM);
+        next.delete(GUEST_OS_FAMILY_PARAM);
+        next.delete(ARCHITECTURE_PARAM);
+        next.delete(LIFECYCLE_PARAM);
+        next.delete(SCOPE_PARAM);
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
+  const emptyState = !isFiltered ? (
+    <EmptyState titleText={t('No disk images found')} headingLevel="h2">
+      <EmptyStateBody>{t('No disk images are available yet.')}</EmptyStateBody>
+    </EmptyState>
+  ) : (
+    <EmptyState titleText={t('No disk images match your filters')} headingLevel="h2">
+      <EmptyStateBody>
+        {t('Try a different guest OS family, architecture, lifecycle, scope, or search term.')}{' '}
+        <Button variant="link" isInline onClick={clearAllFilters}>
+          {t('Clear all filters')}
+        </Button>
+      </EmptyStateBody>
+    </EmptyState>
+  );
+
   return (
     <ListPage
       title={t('Disk images')}
@@ -232,68 +291,93 @@ const DiskImageListPage = () => {
         </CreateButton>
       }
     >
-      <ListPageBody isLoading={isLoading} error={error}>
-        <Toolbar>
-          <ToolbarContent>
-            <ToolbarGroup>
-              <ToolbarItem>
-                <SearchInput
-                  placeholder={t('Search disk images by name…')}
-                  value={search}
-                  onChange={(_event, value) => setSearch(value)}
-                  onClear={() => setSearch('')}
-                  aria-label={t('Search disk images')}
-                />
-              </ToolbarItem>
-              <ToolbarItem>
-                <SingleSelectFilter
-                  label={t('Guest OS family')}
-                  allLabel={t('All guest OS families')}
-                  options={guestOsFamilyOptions}
-                  selected={
-                    isGuestOsFamilyFilterValue(guestOsFamilyParam) ? guestOsFamilyParam : undefined
-                  }
-                  onChange={(value) => setGuestOsFamilyParam(value ?? '')}
-                />
-              </ToolbarItem>
-              <ToolbarItem>
-                <MultiSelectFilter
-                  label={t('Architecture')}
-                  options={architectureOptions}
-                  selected={architectureFilter}
-                  onToggle={toggleArchitectureFilter}
-                />
-              </ToolbarItem>
-              <ToolbarItem>
-                <MultiSelectFilter
-                  label={t('Lifecycle')}
-                  options={lifecycleOptions}
-                  selected={lifecycleFilter}
-                  onToggle={toggleLifecycleFilter}
-                />
-              </ToolbarItem>
-              <ToolbarItem>
-                <SingleSelectFilter
-                  label={t('Scope')}
-                  allLabel={t('All scopes')}
-                  options={scopeOptions}
-                  selected={scope}
-                  onChange={(value) => setScopeParam(value ?? '')}
-                />
-              </ToolbarItem>
-              <ToolbarItem>
-                <Checkbox
-                  id={diskImageFieldIds.showObsolete}
-                  label={t('Show obsolete')}
-                  isChecked={showObsolete}
-                  onChange={(_event, checked) => setShowObsoleteParam(checked ? 'true' : '')}
-                />
-              </ToolbarItem>
-            </ToolbarGroup>
-          </ToolbarContent>
-        </Toolbar>
-        <DiskImageTable diskImages={diskImages} tenants={tenants} />
-      </ListPageBody>
+      <Stack hasGutter>
+        <StackItem>
+          <Toolbar>
+            <ToolbarContent>
+              <ToolbarGroup>
+                <ToolbarItem>
+                  <SearchInput
+                    placeholder={t('Search disk images by name…')}
+                    value={search}
+                    onChange={(_event, value) => setSearch(value)}
+                    onClear={() => setSearch('')}
+                    aria-label={t('Search disk images')}
+                  />
+                </ToolbarItem>
+                <ToolbarItem>
+                  <SingleSelectFilter
+                    label={t('Guest OS family')}
+                    allLabel={t('All guest OS families')}
+                    options={guestOsFamilyOptions}
+                    selected={
+                      isGuestOsFamilyFilterValue(guestOsFamilyParam)
+                        ? guestOsFamilyParam
+                        : undefined
+                    }
+                    onChange={(value) => setGuestOsFamilyParam(value ?? '')}
+                  />
+                </ToolbarItem>
+                <ToolbarItem>
+                  <MultiSelectFilter
+                    label={t('Architecture')}
+                    options={architectureOptions}
+                    selected={architectureFilter}
+                    onToggle={toggleArchitectureFilter}
+                  />
+                </ToolbarItem>
+                <ToolbarItem>
+                  <MultiSelectFilter
+                    label={t('Lifecycle')}
+                    options={lifecycleOptions}
+                    selected={lifecycleFilter}
+                    onToggle={toggleLifecycleFilter}
+                  />
+                </ToolbarItem>
+                <ToolbarItem>
+                  <SingleSelectFilter
+                    label={t('Scope')}
+                    allLabel={t('All scopes')}
+                    options={scopeOptions}
+                    selected={scope}
+                    onChange={(value) => setScopeParam(value ?? '')}
+                  />
+                </ToolbarItem>
+                <ToolbarItem>
+                  <Checkbox
+                    id={diskImageFieldIds.showObsolete}
+                    label={t('Show obsolete')}
+                    isChecked={showObsolete}
+                    onChange={(_event, checked) => setShowObsoleteParam(checked ? 'true' : '')}
+                  />
+                </ToolbarItem>
+              </ToolbarGroup>
+              <ToolbarGroup align={{ default: 'alignEnd' }}>
+                <ToolbarItem>
+                  <ViewSwitcher pageKey={DISK_IMAGES_VIEW_KEY} />
+                </ToolbarItem>
+              </ToolbarGroup>
+            </ToolbarContent>
+          </Toolbar>
+        </StackItem>
+        <StackItem>
+          <ListPageBody isLoading={isLoading} error={error}>
+            {showEmptyState ? (
+              emptyState
+            ) : viewType === 'cards' ? (
+              <Gallery hasGutter minWidths={{ default: '300px' }} maxWidths={{ default: '1fr' }}>
+                {diskImages.map((diskImage) => (
+                  <GalleryItem key={diskImage.id}>
+                    <DiskImageCard diskImage={diskImage} tenants={tenants} />
+                  </GalleryItem>
+                ))}
+              </Gallery>
+            ) : (
+              <DiskImageTable diskImages={diskImages} tenants={tenants} />
+            )}
+          </ListPageBody>
+        </StackItem>
+      </Stack>
     </ListPage>
   );
 };

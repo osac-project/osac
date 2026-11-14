@@ -297,6 +297,9 @@ class OsacCLI:
             args.extend(["-o", output])
         return self._run(*args)
 
+    def get_add_on_operator(self, *, name: str) -> str:
+        return self._run("get", "addonoperators", name, "-o", "json")
+
     def get_cluster_credential(self, credential: str, *, uuid: str) -> str:
         return self._run("get", credential, uuid)
 

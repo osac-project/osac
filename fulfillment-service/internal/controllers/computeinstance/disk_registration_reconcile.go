@@ -23,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 
@@ -477,7 +479,16 @@ func persistDiskRegistrationResolution(
 	return nil
 }
 
+const VolumeCreateNotPersistedReason = "VOLUME_CREATE_NOT_PERSISTED"
+const VolumeCreateErrorDomain = "osac.private.v1.Volumes"
+
 func isKnownNonCommittedVolumeCreateError(err error) bool {
+	for _, detail := range status.Convert(err).Details() {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok &&
+			info.GetReason() == VolumeCreateNotPersistedReason && info.GetDomain() == VolumeCreateErrorDomain {
+			return true
+		}
+	}
 	switch status.Code(err) {
 	case codes.InvalidArgument, codes.FailedPrecondition, codes.NotFound, codes.PermissionDenied, codes.Unauthenticated:
 		return true
@@ -528,10 +539,17 @@ func findDiskRegistrationVolume(
 }
 
 func diskRegistrationVolumeMatches(volume *privatev1.Volume, request *privatev1.VolumesCreateRequest) bool {
-	if volume == nil || volume.GetId() == "" || volume.GetMetadata() == nil || volume.GetSpec() == nil {
+	return volume.GetId() != "" && diskRegistrationRequestMatches(volume, request)
+}
+
+func diskRegistrationRequestMatches(volume *privatev1.Volume, request *privatev1.VolumesCreateRequest) bool {
+	if volume == nil || volume.GetMetadata() == nil || volume.GetSpec() == nil {
 		return false
 	}
 	expected := request.GetObject()
+	if expected.GetSpec() == nil {
+		return false
+	}
 	metadata := volume.GetMetadata()
 	expectedMetadata := expected.GetMetadata()
 	if metadata.GetName() != expectedMetadata.GetName() ||

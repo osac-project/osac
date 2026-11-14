@@ -10,7 +10,7 @@ from tests.e2e.core.helpers import assert_grpc_rejected, grpc_error_message, wai
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.vmaas.networking_lifecycle_helpers import create_and_wait_for_virtual_network
 
-pytestmark = pytest.mark.regression
+pytestmark = pytest.mark.sanity
 
 
 class TestVirtualNetworkProjectScopedUniqueness:

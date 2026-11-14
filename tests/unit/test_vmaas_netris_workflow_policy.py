@@ -62,6 +62,15 @@ def test_generic_workflows_cannot_select_networking_tests() -> None:
         assert "networking" not in expression and not (ROOT / "tests/e2e" / service / "networking").exists()
 
 
+def test_vmaas_manual_suite_choices_match_the_reclassified_layout() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/e2e-vmaas-full-install.yml").read_text())
+    triggers = workflow.get("on", workflow.get(True))
+    dispatch = triggers["workflow_dispatch"]["inputs"]["test-suite"]
+    assert dispatch["options"] == ["vmaas/sanity", "vmaas/serial", "vmaas"]
+    assert dispatch["default"] == "vmaas/sanity"
+    assert dispatch["description"] == "Suite relative to tests/e2e (vmaas/sanity, vmaas/serial, or vmaas for all)"
+
+
 def test_generic_vmaas_path_filter_skips_netris_only_tests() -> None:
     filters = yaml.safe_load((ROOT / ".github/filters/ci-filters.yml").read_text())
     assert f"!{NETWORKING_TESTS}" in filters["vmaas-outside-known-safe"]

@@ -27,7 +27,7 @@ from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until, run_unchecked
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
-pytestmark = pytest.mark.regression
+pytestmark = pytest.mark.sanity
 
 IT_VCPUS: int = 2
 IT_MEMORY_GIB: int = 4

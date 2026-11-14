@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.vmaas.regression import test_compute_instance_disk_image as disk_image
+from tests.e2e.vmaas.sanity import test_compute_instance_disk_image as disk_image
 
 
 @pytest.fixture

@@ -29,7 +29,7 @@ from tests.e2e.vmaas.networking_lifecycle_helpers import (
     delete_and_wait_for_virtual_network,
 )
 
-pytestmark = pytest.mark.regression
+pytestmark = pytest.mark.sanity
 
 SOURCE_REF = "quay.io/containerdisks/fedora:41"
 DELETION_TEST_FINALIZER = "osac-6513-e2e"

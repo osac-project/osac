@@ -1,0 +1,274 @@
+---
+# Early, CR-grounded input validation. Included (run-once via the
+# _maas_inputs_validated guard) at the top of every deploy/verify entry point so
+# bad params fail BEFORE any cluster mutation, on both the local `-e` path and the
+# AAP pipeline.
+#
+# Two layers:
+#   1. validate_argument_spec against meta/argument_specs.yaml — types, choices,
+#      and per-item structure (required sub-keys) for the list-of-dict params.
+#      The role has no tasks/main.yml, so automatic arg-spec validation never
+#      fires; this call makes the spec actually enforce, single-sourced.
+#   2. Explicit asserts for what arg-spec cannot express — formats, ranges, and
+#      cross-field rules. Every rule is grounded in the TARGET CR's live schema.
+#
+# CR constraints below were verified against the live CRD openAPIV3Schema on
+# cluster `osacmaas` 2026-08-29 (`oc get crd <name> -o json` →
+# pattern/enum/minimum/maximum/x-kubernetes-validations). Re-verify the same way
+# if the RHOAI/RHCL versions change. Only USER-supplied values are validated —
+# never role-owned constants (e.g. ExternalProvider auth.type=apikey is valid on
+# GA even though older docs list only simple/sigv4/oauth2).
+
+# --- Layer 1: argument spec (types, choices, item structure) ---
+
+- name: Validate role inputs against the argument spec (types, choices, item structure)
+  ansible.builtin.validate_argument_spec:
+    argument_spec: >-
+      {{ (lookup('ansible.builtin.file', role_path ~ '/meta/argument_specs.yaml')
+          | from_yaml).argument_specs.main.options }}
+
+# --- Layer 2: CR-grounded formats, ranges, cross-field ---
+
+# Regex patterns, set once (single-quoted YAML preserves backslashes literally).
+- name: Set validation patterns (from live CRD schemas)
+  ansible.builtin.set_fact:
+    _vi_re_dns_label: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'         # AITenant name / DNS-1123 label
+    _vi_re_window: '^[1-9]\d{0,3}(s|m|h)$'                       # MaaSSubscription tokenRateLimits[].window
+    _vi_re_https: '^https://\S+$'                                # AITenant oidc.issuerUrl
+    _vi_re_nows: '^\S+$'                                         # AITenant oidc.clientId
+    _vi_re_fqdn: '^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'  # ExternalProvider endpoint (no scheme/port/path)
+
+# Derived helper collections (computed here, before resolve_descriptors runs).
+- name: Compute validation helper collections
+  ansible.builtin.set_fact:
+    # Names of tenants that will be created (plural wins, else singular, else none).
+    _vi_tenant_names: >-
+      {{ (ocp_4_20_ai_maas_tenants | map(attribute='name', default='') | list)
+         if (ocp_4_20_ai_maas_tenants | length > 0)
+         else ([ocp_4_20_ai_maas_tenant_name]
+               if (ocp_4_20_ai_maas_tenant_name | default('', true) | length > 0) else []) }}
+    # Every tier that will be rendered: global tiers + any per-tenant tier overrides.
+    _vi_all_tiers: >-
+      {{ ocp_4_20_ai_maas_tiers
+         + (ocp_4_20_ai_maas_tenants | selectattr('tiers', 'defined')
+            | map(attribute='tiers') | list | flatten) }}
+    # Effective tier set per tenant that will be deployed (for subjects-coherence).
+    _vi_effective_tier_sets: >-
+      {{ (ocp_4_20_ai_maas_tenants | map(attribute='tiers', default=ocp_4_20_ai_maas_tiers) | list)
+         if (ocp_4_20_ai_maas_tenants | length > 0)
+         else [ocp_4_20_ai_maas_tiers] }}
+    # All admin groups supplied (singular + per-tenant), non-empty only.
+    _vi_admin_groups: >-
+      {{ ([ocp_4_20_ai_maas_tenant_admin_group]
+            if (ocp_4_20_ai_maas_tenant_admin_group | default('', true) | length > 0) else [])
+         + (ocp_4_20_ai_maas_tenants | map(attribute='admin_group', default='')
+            | select() | list) }}
+
+# --- Identity (AITenant.spec.oidc) ---
+
+- name: Validate OIDC issuer/clientId are provided together
+  ansible.builtin.assert:
+    that:
+      - (ocp_4_20_ai_maas_oidc_issuer | default('', true) | length > 0)
+        == (ocp_4_20_ai_maas_oidc_client_id | default('', true) | length > 0)
+    fail_msg: >-
+      ocp_4_20_ai_maas_oidc_issuer and ocp_4_20_ai_maas_oidc_client_id must be
+      set together (both or neither). When neither is set, tenants authenticate
+      via K8s ServiceAccount tokens (TokenReview) only.
+
+- name: Validate OIDC issuer/clientId formats (AITenant.spec.oidc CEL)
+  ansible.builtin.assert:
+    that:
+      # AITenant oidc.issuerUrl: pattern ^https://\S+$, length 9-2048.
+      - ocp_4_20_ai_maas_oidc_issuer is match(_vi_re_https)
+      - ocp_4_20_ai_maas_oidc_issuer | length >= 9
+      - ocp_4_20_ai_maas_oidc_issuer | length <= 2048
+      # AITenant oidc.clientId: pattern ^\S+$, length 1-256.
+      - ocp_4_20_ai_maas_oidc_client_id is match(_vi_re_nows)
+      - ocp_4_20_ai_maas_oidc_client_id | length <= 256
+    fail_msg: >-
+      Invalid OIDC config. issuerUrl must be an https:// URL (9-2048 chars) and
+      clientId must be non-whitespace (1-256 chars) — AITenant.spec.oidc rejects
+      otherwise. Got issuer='{{ ocp_4_20_ai_maas_oidc_issuer }}'.
+  when: ocp_4_20_ai_maas_oidc_issuer | default('', true) | length > 0
+
+# --- Tenant names (AITenant metadata.name CEL: DNS-1123 label AND size <= 41) ---
+
+- name: Validate tenant names (AITenant metadata.name CEL)
+  ansible.builtin.assert:
+    that:
+      - item | length > 0
+      - item | length <= 41
+      - item is match(_vi_re_dns_label)
+    fail_msg: >-
+      Tenant name '{{ item }}' is invalid. AITenant.metadata.name must match
+      ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ and be <= 41 chars (CEL). It also derives the
+      gateway (maas-{name}-gateway), host, and namespace (ai-tenant-{name}).
+  loop: "{{ _vi_tenant_names }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Validate tenant admin groups (AITenant rbac.admins[].name)
+  ansible.builtin.assert:
+    that:
+      - item | length > 0
+      - item | length <= 253
+    fail_msg: >-
+      Tenant admin group '{{ item }}' is invalid — AITenant.spec.rbac.admins[].name
+      must be 1-253 chars.
+  loop: "{{ _vi_admin_groups }}"
+  loop_control:
+    label: "{{ item }}"
+
+# --- Tiers (MaaSSubscription: name, tokenRateLimits[].{limit,window}, priority) ---
+
+- name: Validate subscription tiers (MaaSSubscription schema)
+  ansible.builtin.assert:
+    that:
+      # metadata.name (also builds SA testuser-{name}); DNS-1123 label, keep <= 54.
+      - item.name is defined and item.name | length > 0 and item.name | length <= 54
+      - item.name is match(_vi_re_dns_label)
+      # tokenRateLimits[].limit: int64, 1 - 1,000,000,000.
+      - item.token_limit is defined
+      - item.token_limit | int(-1) >= 1
+      - item.token_limit | int(-1) <= 1000000000
+      # tokenRateLimits[].window: pattern ^[1-9]\d{0,3}(s|m|h)$ (len 2-5).
+      - item.window is defined
+      - item.window | string is match(_vi_re_window)
+      # spec.priority: int32 (no CRD minimum; assert >= 0 as sanity).
+      - item.priority is defined
+      - item.priority | int(-1) >= 0
+    fail_msg: >-
+      Subscription tier '{{ item.name | default("unnamed") }}' is invalid. Required:
+      name (DNS-1123 label, <=54), token_limit (int 1-1000000000),
+      window (^[1-9]\d{0,3}(s|m|h)$ e.g. 1m/24h — NOT days, max 4 digits),
+      priority (int >=0). Got token_limit={{ item.token_limit | default('undef') }},
+      window={{ item.window | default('undef') }}, priority={{ item.priority | default('undef') }}.
+  loop: "{{ _vi_all_tiers }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+
+# MaaSAuthPolicy.spec.subjects CEL: size(groups) > 0 || size(users) > 0. A tenant
+# whose tiers ALL lack a group AND provision_test_identities=false would render an
+# empty subjects block -> the CR is rejected at apply time.
+- name: Validate MaaSAuthPolicy subjects will be non-empty per tenant
+  ansible.builtin.assert:
+    that:
+      - (item | map(attribute='group', default='') | map('trim') | select() | list | length) > 0
+        or (ocp_4_20_ai_maas_provision_test_identities | bool)
+    fail_msg: >-
+      A tenant's tiers have no non-empty 'group' and provision_test_identities is
+      false, so MaaSAuthPolicy.spec.subjects would be empty — the CR requires at
+      least one group or user (CEL). Set a tier 'group' or enable
+      provision_test_identities.
+  loop: "{{ _vi_effective_tier_sets }}"
+  loop_control:
+    index_var: _vi_idx
+    label: "tenant-set[{{ _vi_idx }}]"
+
+# --- External models (ExternalProvider/ExternalModel + external MaaSSubscription) ---
+
+- name: Validate external models require MaaS
+  ansible.builtin.assert:
+    that:
+      - ocp_4_20_ai_maas_enable_maas | bool
+    fail_msg: >-
+      external_models is configured but enable_maas=false. ExternalModel CRs route
+      through a MaaS gateway which only exists when MaaS is enabled.
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+# Loop over INDICES (not the dict) so a failure never dumps the item — which
+# contains upstream_credential (a secret). `_m` is a task var (not printed); the
+# assert output shows only the condition text + the index, so no_log is unneeded.
+- name: Validate external model entries (inference.opendatahub.io schema)
+  vars:
+    _m: "{{ ocp_4_20_ai_maas_external_models[item | int] }}"
+  ansible.builtin.assert:
+    that:
+      # Names build {name}-provider/{name}-key/etc.; DNS-1123 label, keep <= 240.
+      - _m.name is defined and _m.name | length > 0 and _m.name | length <= 240
+      - _m.name is match(_vi_re_dns_label)
+      # ExternalProvider.spec.endpoint: dotted FQDN, NO scheme/port/path.
+      - _m.upstream_endpoint is defined
+      - _m.upstream_endpoint | string is match(_vi_re_fqdn)
+      - _m.upstream_endpoint | length <= 253
+      # ExternalModel targetModel: 1-253.
+      - _m.model_id is defined and _m.model_id | length > 0 and _m.model_id | length <= 253
+      # Optional ExternalModel.spec.modelName override (defaults to model_id). Length
+      # only — NOT DNS-1123: the field exists precisely for client-facing names that a
+      # k8s object name cannot express (dots, colons, slashes, uppercase).
+      - (_m.client_model_id is not defined)
+        or (_m.client_model_id | length > 0 and _m.client_model_id | length <= 253)
+      # Secret stringData.api-key: non-empty (value never printed).
+      - _m.upstream_credential is defined and _m.upstream_credential | length > 0
+      # External MaaSSubscription rate-limit (same rules as tiers).
+      - _m.token_limit is defined and _m.token_limit | int(-1) >= 1 and _m.token_limit | int(-1) <= 1000000000
+      - _m.window is defined and (_m.window | string is match(_vi_re_window))
+      - _m.priority is defined and _m.priority | int(-1) >= 0
+      # secured gates the spoke-prefixed path; ns/name required ONLY when secured.
+      - (not (_m.secured | default(false) | bool))
+        or (_m.upstream_model_ns is defined and _m.upstream_model_ns | length > 0
+            and _m.upstream_model_name is defined and _m.upstream_model_name | length > 0)
+    fail_msg: >-
+      External model '{{ ocp_4_20_ai_maas_external_models[item | int].name | default("unnamed") }}'
+      is invalid. Required: name (DNS-1123 label), upstream_endpoint (FQDN with NO
+      http(s)://, port, or path — ExternalProvider.spec.endpoint), model_id,
+      upstream_credential, token_limit (1-1000000000), window
+      (^[1-9]\d{0,3}(s|m|h)$), priority (>=0). When secured=true, upstream_model_ns
+      and upstream_model_name are also required. Optional: client_model_id (1-253)
+      overrides ExternalModel.spec.modelName; it must not be an empty string.
+  loop: "{{ range(ocp_4_20_ai_maas_external_models | length) | list }}"
+  loop_control:
+    label: "{{ ocp_4_20_ai_maas_external_models[item | int].name | default('unnamed') }}"
+  when: ocp_4_20_ai_maas_external_models | length > 0
+
+# --- Hardware profiles (HardwareProfile identifiers) ---
+
+- name: Validate hardware profile entries (HardwareProfile schema + count ordering)
+  ansible.builtin.assert:
+    that:
+      - item.name is defined and item.name | length > 0 and item.name | length <= 63
+      - item.name is match(_vi_re_dns_label)
+      # identifiers[] required: minCount + defaultCount (maxCount CRD-optional, but
+      # the role's template renders it, so require it too).
+      - item.cpu_default is defined and item.cpu_min is defined and item.cpu_max is defined
+      - item.memory_default is defined and item.memory_min is defined and item.memory_max is defined
+      # Ordering min <= default <= max (not CRD-enforced) — only when integer-valued.
+      - >-
+        (not (item.cpu_min | string is match('^[0-9]+$') and item.cpu_default | string is match('^[0-9]+$')
+              and item.cpu_max | string is match('^[0-9]+$')))
+        or (item.cpu_min | int <= item.cpu_default | int and item.cpu_default | int <= item.cpu_max | int)
+      - >-
+        (not (item.memory_min | string is match('^[0-9]+$') and item.memory_default | string is match('^[0-9]+$')
+              and item.memory_max | string is match('^[0-9]+$')))
+        or (item.memory_min | int <= item.memory_default | int and item.memory_default | int <= item.memory_max | int)
+      # Accelerator count ordering when an accelerator identifier is present.
+      - (item.accelerator_id is not defined)
+        or (item.gpu_count | default(1) | int <= item.gpu_max | default(1) | int)
+    fail_msg: >-
+      Hardware profile '{{ item.name | default("unnamed") }}' is invalid. Required:
+      name (DNS-1123 label), cpu_{min,default,max}, memory_{min,default,max}, with
+      min <= default <= max (and gpu_count <= gpu_max when an accelerator is set).
+  loop: "{{ ocp_4_20_ai_maas_hardware_profiles }}"
+  loop_control:
+    label: "{{ item.name | default('unnamed') }}"
+  when: ocp_4_20_ai_maas_hardware_profiles | length > 0
+
+# --- Advisory (non-fatal): the one rule that cannot be hard-validated ---
+
+- name: Warn if tier groups may not match the IdP JWT groups claim
+  ansible.builtin.debug:
+    msg: >-
+      ADVISORY: an external OIDC issuer is configured. Each tier 'group' name must
+      exactly match a group value in the IdP's JWT `groups` claim, or real users get
+      401/403 at runtime while SA-token verification still passes (misleading). Tiers
+      still using the default tier-* group names alongside a custom issuer are a common
+      cause: {{ _vi_all_tiers | map(attribute='group', default='')
+                | select('match', '^tier-') | list }}
+  when:
+    - ocp_4_20_ai_maas_oidc_issuer | default('', true) | length > 0
+    - (_vi_all_tiers | map(attribute='group', default='') | select('match', '^tier-') | list | length) > 0
+
+- name: Mark inputs validated (run-once guard for subsequent entry points)
+  ansible.builtin.set_fact:
+    _maas_inputs_validated: true

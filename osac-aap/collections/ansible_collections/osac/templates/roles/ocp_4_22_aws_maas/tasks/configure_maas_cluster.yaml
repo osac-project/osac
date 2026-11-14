@@ -1,0 +1,271 @@
+---
+# Cluster-scoped MaaS setup — runs ONCE before any tenant onboarding.
+# Order matters (source of truth): gateways + parametersRef + routes -> PostgreSQL
+# + maas-db-config -> enable MaaS on DSC (default tenant then cascades to Active).
+# Consumes _gateway_specs / _cluster_domain / _cert_name.
+#
+# The Kuadrant CR + Authorino runtime this depends on is applied EARLIER (for every
+# use case) by configure_connectivity_link.yaml, invoked from configure_cluster.yaml
+# — so Kuadrant is already Ready by the time the maas gateways are created here.
+
+# --- Gateways (default first, then per-tenant) + options ConfigMap + Route ---
+# Must exist before models (KServe validates gateway.refs at apply time).
+
+- name: Create gateway parametersRef ConfigMaps (2Gi istio-proxy)
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'gateway-resources.yaml.j2') | from_yaml }}"
+  vars:
+    _gw_name: "{{ item.name }}"
+  loop: "{{ _gateway_specs }}"
+  loop_control:
+    label: "{{ item.name }}-options"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create MaaS gateways
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'gateway.yaml.j2') | from_yaml }}"
+  vars:
+    _gw_name: "{{ item.name }}"
+    _gw_host: "{{ item.host }}"
+  loop: "{{ _gateway_specs }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create passthrough Routes for MaaS gateways
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ lookup('ansible.builtin.template', 'passthrough-route.yaml.j2') | from_yaml }}"
+  vars:
+    _gw_name: "{{ item.name }}"
+    _gw_host: "{{ item.host }}"
+  loop: "{{ _gateway_specs }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for each gateway Programmed
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: gateway.networking.k8s.io/v1
+    kind: Gateway
+    name: "{{ item.name }}"
+    namespace: openshift-ingress
+  register: _gw_wait
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  loop: "{{ _gateway_specs }}"
+  loop_control:
+    label: "{{ item.name }}"
+  until:
+    - _gw_wait.resources is defined
+    - _gw_wait.resources | length > 0
+    - >-
+      _gw_wait.resources[0].status.conditions | default([])
+      | selectattr('type', 'equalto', 'Programmed')
+      | selectattr('status', 'equalto', 'True')
+      | list | length > 0
+
+- name: Fail if any gateway never became Programmed
+  ansible.builtin.fail:
+    msg: "Gateway {{ item.item.name }} did not become Programmed."
+  loop: "{{ _gw_wait.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: >-
+    item.resources is not defined
+    or item.resources | length == 0
+    or (item.resources[0].status.conditions | default([])
+        | selectattr('type', 'equalto', 'Programmed')
+        | selectattr('status', 'equalto', 'True')
+        | list | length) == 0
+
+# --- PostgreSQL (maas-api backing store) ---
+
+- name: Create maas-db namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: maas-db
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create maas-postgres PVC
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: maas-postgres-pvc
+        namespace: maas-db
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: "{{ ocp_4_20_ai_maas_db_storage }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Apply PostgreSQL for maas-api
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition: "{{ item }}"
+  loop: "{{ lookup('ansible.builtin.template', 'postgres-maas.yaml.j2') | from_yaml_all | list }}"
+  loop_control:
+    label: "{{ item.kind }}/{{ item.metadata.name }}"
+  no_log: true
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for maas-postgres
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: apps/v1
+    kind: Deployment
+    name: maas-postgres
+    namespace: maas-db
+  register: _maas_pg
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _maas_pg.resources is defined
+    - _maas_pg.resources | length > 0
+    - (_maas_pg.resources[0].status.availableReplicas | default(0)) > 0
+
+- name: Ensure DB secret namespace exists
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ ocp_4_20_ai_maas_db_secret_namespace }}"
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Create maas-db-config secret
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: maas-db-config
+        namespace: "{{ ocp_4_20_ai_maas_db_secret_namespace }}"
+      type: Opaque
+      stringData:
+        DB_CONNECTION_URL: >-
+          postgresql://{{ ocp_4_20_ai_maas_db_user }}:{{ ocp_4_20_ai_maas_db_password }}@maas-postgres.maas-db.svc.cluster.local:5432/{{ ocp_4_20_ai_maas_db_name }}?sslmode=disable
+  no_log: true
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+# --- Enable MaaS on the DSC (v2) ---
+# aigateway + modelsAsAService -> Managed. Applied with the v2 apiVersion (v1
+# silently prunes aigateway). Creates the MaaS CRDs + operator-owned default
+# tenant, which now cascades to Active (gateway + DB already exist).
+
+- name: Enable MaaS (aigateway) on the DataScienceCluster
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: datasciencecluster.opendatahub.io/v2
+      kind: DataScienceCluster
+      metadata:
+        name: default-dsc
+      spec:
+        components:
+          aigateway:
+            managementState: Managed
+            modelsAsAService:
+              managementState: Managed
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+
+- name: Wait for the default AITenant to become Active
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: maas.opendatahub.io/v1alpha1
+    kind: AITenant
+    name: models-as-a-service
+    namespace: ai-tenants
+  register: _default_ait
+  retries: "{{ ocp_4_20_ai_maas_dsc_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  ignore_errors: true
+  until:
+    - _default_ait.resources is defined
+    - _default_ait.resources | length > 0
+    - _default_ait.resources[0].status.phase | default('') == 'Active'
+
+- name: Fail if the default AITenant never became Active
+  ansible.builtin.fail:
+    msg: >-
+      Default AITenant models-as-a-service did not reach Active — check that MaaS
+      is enabled on the DSC and that maas-default-gateway + maas-db-config exist.
+  when: >-
+    _default_ait.resources is not defined
+    or _default_ait.resources | length == 0
+    or _default_ait.resources[0].status.phase | default('') != 'Active'
+
+# --- Dashboard MaaS flag ---
+# NOTE: maasAuthPolicies is webhook-rejected on GA — only modelAsService is set.
+
+- name: Patch OdhDashboardConfig with MaaS flag
+  kubernetes.core.k8s:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    state: present
+    merge_type: merge
+    definition:
+      apiVersion: opendatahub.io/v1alpha
+      kind: OdhDashboardConfig
+      metadata:
+        name: odh-dashboard-config
+        namespace: redhat-ods-applications
+      spec:
+        dashboardConfig:
+          modelAsService: true
+  register: _r
+  retries: 5
+  delay: 10
+  until: _r is not failed
+  when: ocp_4_20_ai_maas_enable_dashboard | bool

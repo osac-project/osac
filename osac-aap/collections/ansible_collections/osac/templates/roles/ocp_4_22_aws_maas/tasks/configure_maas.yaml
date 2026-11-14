@@ -1,0 +1,76 @@
+---
+# MaaS deployment orchestrator (RHOAI 3.5 GA, 0..n tenants, no Keycloak).
+#
+# Resolves the tenant set, runs the cluster-scoped setup once, then onboards
+# each in-scope tenant. When no custom tenant is given, the operator-created
+# default tenant (models-as-a-service / maas-default-gateway) is configured.
+#
+# _cluster_domain and _cert_name are set by configure_cluster.yaml.
+
+# --- Validate inputs (CR-grounded, run-once; covers --tags maas subset runs) ---
+
+- name: Validate role inputs (types, formats, ranges, cross-field vs CR schemas)
+  ansible.builtin.include_tasks: validate_inputs.yaml
+  when: not (_maas_inputs_validated | default(false))
+
+# --- Resolve the tenant set (shared with the verify playbook) ---
+
+- name: Resolve tenant descriptors and gateway specs
+  ansible.builtin.include_tasks: resolve_descriptors.yaml
+
+- name: Report resolved deployment shape
+  ansible.builtin.debug:
+    msg:
+      - "Tenants in scope: {{ _tenant_descriptors | map(attribute='name') | join(', ') }}"
+      - "Gateways: {{ _gateway_specs | map(attribute='name') | join(', ') }}"
+      - "OIDC: {{ 'external issuer' if (ocp_4_20_ai_maas_oidc_issuer | default('', true) | length > 0) else 'SA/TokenReview only' }}"
+
+# --- Cluster-scoped setup (once) ---
+
+- name: Configure MaaS cluster-scoped resources
+  ansible.builtin.include_tasks: configure_maas_cluster.yaml
+
+# --- Per-tenant onboarding (loop) ---
+
+- name: Onboard each in-scope tenant
+  ansible.builtin.include_tasks: configure_maas_tenant.yaml
+  loop: "{{ _tenant_descriptors }}"
+  loop_control:
+    loop_var: _t
+    label: "{{ _t.name }}"
+
+# --- Phase 3: reconciliation kick (once, after all tenants) ---
+# Restart maas-controller once so subscriptions reconcile cleanly. Restarting
+# during per-tenant onboarding would disrupt already-active tenants.
+# The aigateway operator may (re)create the maas-controller Deployment
+# asynchronously, so it can be transiently absent at this point — wait for it to
+# exist before restarting (a raw `oc rollout restart` hard-fails on NotFound).
+- name: Wait for maas-controller deployment to exist
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ admin_kubeconfig }}"
+    api_version: apps/v1
+    kind: Deployment
+    name: maas-controller
+    namespace: redhat-ods-applications
+  register: _maas_ctrl
+  retries: "{{ ocp_4_20_ai_maas_operator_retries }}"
+  delay: "{{ ocp_4_20_ai_maas_operator_delay }}"
+  until:
+    - _maas_ctrl.resources is defined
+    - _maas_ctrl.resources | length > 0
+
+- name: Restart maas-controller for subscription reconciliation
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig | expanduser }}"
+  ansible.builtin.shell: |
+    oc rollout restart deployment/maas-controller -n redhat-ods-applications
+    oc rollout status deployment/maas-controller -n redhat-ods-applications --timeout=180s
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Report MaaS configuration complete
+  ansible.builtin.debug:
+    msg:
+      - "MaaS deployment complete ({{ _tenant_descriptors | length }} tenant(s))"
+      - "{{ _tenant_descriptors | map(attribute='name') | zip(_tenant_descriptors | map(attribute='host')) | map('join', ' -> https://') | list }}"

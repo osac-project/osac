@@ -1,0 +1,19 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: AITenant
+metadata:
+  name: "{{ _t_name }}"
+  namespace: ai-tenants
+spec:
+  gateway:
+    name: "{{ _t_gateway }}"
+{% if ocp_4_20_ai_maas_oidc_issuer | default('', true) | length > 0 %}
+  oidc:
+    issuerUrl: "{{ ocp_4_20_ai_maas_oidc_issuer }}"
+    clientId: "{{ ocp_4_20_ai_maas_oidc_client_id }}"
+{% endif %}
+{% if _t_admin_group | default('', true) | length > 0 %}
+  rbac:
+    admins:
+    - kind: Group
+      name: "{{ _t_admin_group }}"
+{% endif %}

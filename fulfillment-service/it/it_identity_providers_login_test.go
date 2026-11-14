@@ -16,12 +16,14 @@ package it
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -193,6 +195,52 @@ var _ = Describe("Identity provider login flow", func() {
 	It("Allows an IdP-linked user to authenticate and obtain a token", func() {
 		token := provisionAndLogin(ctx, tenantName, idpAlias)
 		Expect(token).ToNot(BeEmpty(), "expected a non-empty KC access token from the full OIDC flow")
+	})
+
+	It("Uses only the configured authorization URL parameters", func() {
+		_, err := client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id: osacIdpID,
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Oidc: privatev1.OidcConfig_builder{
+						AuthorizationUrl: extRealm.AuthorizationURL() + "?acr_values=urn%3Aexample%3Aconfigured-mfa",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{
+				Paths: []string{"spec.oidc.authorization_url"},
+			},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			response, getErr := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: osacIdpID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetPhase()).To(
+				Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY),
+				"wait for the query-configured authorization URL to reconcile",
+			)
+		}, 2*time.Minute, time.Second).Should(Succeed())
+		Expect(tool.PatchKCIdPDisableTrustManager(ctx, idpAlias)).To(Succeed())
+
+		username := fmt.Sprintf("idp-user-%s", uuid.New())
+		password := uuid.New()
+		email := username + "@example.com"
+		extUserID, err := extRealm.AddUser(ctx, username, password, email)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tool.ProvisionOIDCUser(ctx, username, email, tenantName, idpAlias, extUserID)
+		Expect(err).ToNot(HaveOccurred())
+
+		const requestParamName = "osac_it_request_param"
+		token, upstreamQuery, err := tool.simulateOIDCLoginWithAuthorizationParams(
+			ctx, idpAlias, username, password, url.Values{
+				"acr_values":     {"urn:example:request-acr"},
+				requestParamName: {"must-not-forward"},
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(token).ToNot(BeEmpty())
+		Expect(upstreamQuery["acr_values"]).To(Equal([]string{"urn:example:configured-mfa"}))
+		Expect(upstreamQuery).ToNot(HaveKey(requestParamName))
 	})
 
 	It("Scopes IdP user access to their tenant", func() {

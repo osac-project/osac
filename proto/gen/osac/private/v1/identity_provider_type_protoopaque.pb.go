@@ -767,7 +767,32 @@ type OidcConfig_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
 	// Authorization endpoint URL where users are redirected to authenticate.
-	// Example: "https://accounts.google.com/o/oauth2/v2/auth"
+	//
+	// Query parameters are allowed for provider-specific authorization options. The following parameters are used
+	// internally by the OIDC broker and are therefore forbidden:
+	//
+	// - `client_id`
+	// - `code_challenge`
+	// - `code_challenge_method`
+	// - `login_hint`
+	// - `max_age`
+	// - `nonce`
+	// - `prompt`
+	// - `redirect_uri`
+	// - `response_type`
+	// - `scope`
+	// - `state`
+	//
+	// URL fragments are not allowed.
+	//
+	// Values must use URL encoding.
+	//
+	// For example, to ask the identity provider to require multi-factor authentication, use the `acr_values` query
+	// parameter with the value `mfa`:
+	//
+	// ```text
+	// https://oidc.example.com/authorize?acr_values=mfa
+	// ```
 	AuthorizationUrl string
 	// Token endpoint URL used to exchange authorization codes for access tokens.
 	// Example: "https://oauth2.googleapis.com/token"

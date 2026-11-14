@@ -6,6 +6,7 @@ metadata:
   namespace: osac-system
   annotations:
     osac.openshift.io/subnet-target-namespace: test-subnet
+    osac.openshift.io/tenant: test-tenant
 spec:
   templateID: osac.templates.ocp_virt_vm
   networkAttachments:

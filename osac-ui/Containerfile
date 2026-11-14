@@ -9,7 +9,7 @@
 #   podman run --rm -p 8080:8080 -e FULFILLMENT_API_URL=https://fulfillment.example.com osac:latest
 
 # ── Stage 1: install SPA workspace dependencies ───────────────────────────
-FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:9.8-1791835973 AS deps
+FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:9.8-1793616223 AS deps
 USER root
 WORKDIR /app
 
@@ -80,7 +80,7 @@ RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; pnpm --filter @osac/app-f
 # live network access to download a newer one, which hermetic builds don't
 # have. Confirmed live: 1.25.9 failed with "go.work requires go >= 1.26.3"
 # the moment go.work actually became reachable in this stage.
-FROM registry.access.redhat.com/ubi9/go-toolset:1.26-1791479310 AS proxy-builder
+FROM registry.access.redhat.com/ubi9/go-toolset:1.26.10-1793736700 AS proxy-builder
 USER root
 WORKDIR /build
 
@@ -124,7 +124,7 @@ WORKDIR /build/osac-ui/proxy
 RUN [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o osac-proxy .
 
 # ── Stage 4: production image ──────────────────────────────────────────────
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.5 AS production
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1793578971 AS production
 # Stamped to the real release version on osac-build-and-publish.yaml's
 # temp branch before tagging (same mechanism as Chart.yaml's own
 # version field) -- the committed default below is only ever what a

@@ -1,0 +1,161 @@
+---
+# One attempt to write the tenant's TridentBackendConfig (included by
+# _ensure_storage_class_backend.yaml once per attempt, with loop_var
+# _tbc_write_attempt). An attempt runs only while no earlier one was applied.
+#
+# A dispatch may name only some of the tenant's tiers on this backend: VM
+# creation dispatches just the tiers that have no StorageClass yet. spec.storage
+# is one list that a write replaces as a whole, so each attempt reads the object
+# and writes back every pool that is already on it:
+#   - a pool labeled for this backend and a dispatched tier is rebuilt in place
+#   - every other pool is kept unchanged and keeps its position (Trident names
+#     virtual pools <backendName>_pool_<index>)
+#   - a dispatched tier that has no pool yet is appended
+# Pools are removed only when teardown_cluster_storage deletes the object.
+#
+# Runs for the same tenant and backend can write at the same time, so a write
+# never replaces a pool list that this attempt did not read:
+#   - No object was read: server-side apply without force, under a field manager
+#     derived from the pool list. It creates the object. When another run created
+#     it since the read with a different pool list, that run's field manager owns
+#     spec.storage and the apply is rejected (HTTP 409).
+#   - An object was read: merge patch carrying the resourceVersion that was read.
+#     When the object changed since the read, the patch is rejected (HTTP 409).
+# A rejected write changes nothing, and the next attempt reads the object again.
+
+- name: Write the TridentBackendConfig for dispatched backend from its current state
+  when: not (_tbc_written | bool)
+  block:
+    - name: Wait before re-reading a TridentBackendConfig that another writer changed
+      ansible.builtin.pause:
+        seconds: 2
+      when: (_tbc_write_attempt | int) > 0
+
+    - name: Read the current TridentBackendConfig for dispatched backend
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "{{ _tbc_name }}"
+        namespace: "{{ netapp_storage_csi_operator_namespace }}"
+      register: _tbc_current
+      no_log: true
+
+    # Trident's OntapStorageDriverPool schema has `labels` and `defaults`
+    # (`encryption`, `qosPolicy`) and no `name` field. Each pool carries
+    # `osac_backend: <tbc_name>` and `tier: <tier.name>` labels so the tier's
+    # StorageClass can uniquely select it via parameters.selector.
+    - name: Build the TBC virtual pools for dispatched backend
+      ansible.builtin.set_fact:
+        _virtual_pools: >-
+          {% set _dispatched = {} -%}
+          {% for tier in _backend_tiers -%}
+          {% set _enc = (tier.encryption_enabled | default(false) | bool) | ternary('true', 'false') -%}
+          {% set _defaults = {'encryption': _enc} -%}
+          {% if tier.name in _netapp_qos_policies -%}
+          {% set _ = _defaults.update({'qosPolicy': _netapp_qos_policies[tier.name] | string}) -%}
+          {% endif -%}
+          {% set _ = _dispatched.update({
+               tier.name: {
+                 'labels': {
+                   'osac_backend': _tbc_name,
+                   'tier': tier.name
+                 },
+                 'defaults': _defaults
+               }
+             }) -%}
+          {% endfor -%}
+          {% set _current = (_tbc_current.resources | default([], true) | first | default({}, true)) -%}
+          {% set _pools = [] -%}
+          {% set _placed = [] -%}
+          {% for _pool in ((_current.spec | default({}, true)).storage | default([], true)) -%}
+          {% set _labels = (_pool.labels | default({}, true)) -%}
+          {% set _tier = (_labels.tier | default('')) -%}
+          {% if (_labels.osac_backend | default('') == _tbc_name) and (_tier in _dispatched) and (_tier not in _placed) -%}
+          {% set _ = _pools.append(_dispatched[_tier]) -%}
+          {% set _ = _placed.append(_tier) -%}
+          {% else -%}
+          {% set _ = _pools.append(_pool) -%}
+          {% endif -%}
+          {% endfor -%}
+          {% for tier in _backend_tiers -%}
+          {% if tier.name not in _placed -%}
+          {% set _ = _pools.append(_dispatched[tier.name]) -%}
+          {% set _ = _placed.append(tier.name) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ _pools }}
+      no_log: true
+
+    - name: Build the TridentBackendConfig definition for dispatched backend
+      ansible.builtin.set_fact:
+        _tbc_definition: >-
+          {{ {'apiVersion': 'trident.netapp.io/v1',
+              'kind': 'TridentBackendConfig',
+              'metadata': {
+                'name': _tbc_name,
+                'namespace': netapp_storage_csi_operator_namespace,
+                'labels': {
+                  'app.kubernetes.io/managed-by': 'osac-aap',
+                  'osac.openshift.io/tenant': tenant_name,
+                  'osac.openshift.io/storage-provider': 'netapp'
+                }
+              },
+              'spec': (
+                {
+                  'version': 1,
+                  'storageDriverName': 'ontap-san',
+                  'backendName': _tbc_name,
+                  'sanType': netapp_storage_san_type,
+                  'managementLIF': _management_lif,
+                  'svm': _svm_name,
+                  'useREST': True,
+                  'deletionPolicy': 'delete',
+                  'credentials': {'name': 'netapp-csi-' ~ _assignment_key},
+                  'storage': _virtual_pools
+                }
+                | combine({'trustedCACertificate': _trusted_ca_b64}
+                          if (_trusted_ca_b64 | default('') | length > 0) else {})
+              )
+            } }}
+      no_log: true
+
+    - name: Create the TridentBackendConfig for dispatched backend
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        server_side_apply:
+          field_manager: "osac-aap-netapp-{{ (_virtual_pools | to_json(sort_keys=true) | hash('sha256'))[:16] }}"
+          force_conflicts: false
+        definition: "{{ _tbc_definition }}"
+      register: _tbc_create
+      failed_when: >-
+        (_tbc_create.failed | default(false) | bool) and not (
+          (_tbc_create.reason | default('') == 'Conflict') or
+          ((_tbc_create.msg | default('') | string) is search('"reason":"Conflict"'))
+        )
+      when: (_tbc_current.resources | default([], true) | length) == 0
+      no_log: true
+
+    - name: Update the TridentBackendConfig for dispatched backend
+      kubernetes.core.k8s:
+        state: patched
+        definition: >-
+          {{ _tbc_definition | combine({
+               'metadata': {'resourceVersion': _tbc_current.resources[0].metadata.resourceVersion},
+               'spec': {'trustedCACertificate': (_tbc_definition.spec.trustedCACertificate | default(none))}
+             }, recursive=true) }}
+      register: _tbc_update
+      failed_when: >-
+        (_tbc_update.failed | default(false) | bool) and not (
+          (_tbc_update.reason | default('') == 'Conflict') or
+          ((_tbc_update.msg | default('') | string) is search('"reason":"Conflict"'))
+        )
+      when: (_tbc_current.resources | default([], true) | length) > 0
+      no_log: true
+
+    - name: Record whether the TridentBackendConfig write was applied
+      ansible.builtin.set_fact:
+        _tbc_written: >-
+          {{ (((_tbc_create.result | default({}, true)).metadata | default({}, true)).name | default('') == _tbc_name)
+             or (((_tbc_update.result | default({}, true)).metadata | default({}, true)).name | default('') == _tbc_name) }}
+      no_log: true

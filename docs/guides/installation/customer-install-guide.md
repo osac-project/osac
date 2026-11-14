@@ -47,7 +47,6 @@ For prerequisite setup instructions, see the
     - [6.1 Installing OSAC for VMaaS](#61-installing-osac-for-vmaas)
     - [6.2 Installing OSAC for CaaS](#62-installing-osac-for-caas)
     - [6.3 Installing OSAC for BMaaS](#63-installing-osac-for-bmaas)
-    - [6.4 Installing VMaaS on a separate workload cluster](#64-installing-vmaas-on-a-separate-workload-cluster)
 7. [Verifying the installation](#7-verifying-the-installation)
 8. [Postinstallation tasks](#8-postinstallation-tasks)
     - [8.1 Accessing the OSAC consoles](#81-accessing-the-osac-consoles)
@@ -212,6 +211,9 @@ To install with provider networking, see
 
   For more information, see
   [Changing the default storage class](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/storage/dynamic-provisioning#change-default-storage-class_dynamic-provisioning).
+  This platform prerequisite does not register an OSAC tenant storage
+  offering. Complete the storage handoff in
+  [Section 6.1](#61-installing-osac-for-vmaas) before requesting VM workloads.
 - The cluster pull secret (`openshift-config/pull-secret`) authenticates to
   `registry.redhat.io` and `quay.io`. To download a current pull secret, see
   the pull secret page in the
@@ -277,7 +279,6 @@ Platform 4.22.6 in September 2026 are listed in
 | [Red Hat Ansible Automation Platform Operator](https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/html/installing_on_openshift_container_platform/index) | `stable-2.6-cluster-scoped` | `ansible-aap` | All services |
 | [Streams for Apache Kafka](https://access.redhat.com/articles/6644711) | `stable` | Provider-defined | Fulfillment events and metering; see [Kafka configuration](kafka-configuration.md) for external broker requirements. |
 | [OpenShift Virtualization](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/virtualization/installing) | `stable` | `openshift-cnv` | VMaaS |
-| [LVM Storage](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/storage/index#persistent-storage-using-lvms) | `stable-<cluster_minor>` | `openshift-storage` | VMaaS | `lvms.enabled` | Development/CI VMaaS using OSAC-managed local storage |
 | [MetalLB Operator](https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/metallb-operator) | `stable` | `metallb-system` | CaaS |
 | [multicluster engine for Kubernetes Operator](https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.13/html/clusters/cluster_mce_overview) | `stable-2.17` | `multicluster-engine` | CaaS |
 | Kubernetes NMState Operator | `stable` | `openshift-nmstate` | VMaaS with provider networking |
@@ -329,9 +330,11 @@ Notes on individual components:
   are ready with your Kafka administrators.
 - **OpenShift Virtualization** was formerly named Container-native
   Virtualization (CNV).
-- **LVM Storage** uses a channel that tracks the OpenShift Container Platform
-  minor version. Another dynamic storage class can satisfy the VMaaS storage
-  prerequisite.
+- **Storage:** Your environment provides a dynamic storage class for VMaaS.
+  Complete the storage handoff in [Section 6.1](#61-installing-osac-for-vmaas)
+  before requesting VM workloads. In production, keep `lvms.enabled: false`
+  in the `osac` instance chart to disable only automatic local-storage
+  registration.
 - **MetalLB Operator** provides the CaaS API management VIPs on the hub. Ask
   your platform administrators for the reserved, free, routable address range
   and add a covering CIDR to `global.networking.excludedIpv4Cidrs` before
@@ -339,11 +342,6 @@ Notes on individual components:
 - **multicluster engine for Kubernetes Operator** is required for agent-based
   cluster provisioning. An existing standalone installation or Red Hat
   Advanced Cluster Management for Kubernetes (RHACM) can provide it.
-  minor version; the installation sets it. The OSAC-managed LVMS path is for
-  development and CI and uses an explicit `optionalPaths` allowlist; it does
-  not create devices. In production, disable `lvms.enabled` and configure the
-  customer-managed LVMS operator and its `LVMCluster` selector yourself; do not
-  rely on dynamic device discovery.
 - **MetalLB Operator** provides a `LoadBalancer`-class implementation. CaaS
   uses it on the hub to give each hosted cluster's API its management VIP.
   Only CaaS needs it. Any solution that provides one works if you disable
@@ -359,14 +357,6 @@ Notes on individual components:
   again after every infrastructure upgrade, add a CIDR that covers that range
   to `global.networking.excludedIpv4Cidrs`, and check the pool before you
   create Clusters.
-- **multicluster engine for Kubernetes Operator** is required for
-  agent-based cluster provisioning but is disabled by default. Set
-  `mce.enabled=true` when this installation owns standalone MCE; the `caas-ci`
-  infrastructure profile does so explicitly. Leave it `false` when Red Hat
-  Advanced Cluster Management for Kubernetes (RHACM) or another MCE
-  installation already owns it. The disabled state also prevents the phase-1
-  chart from applying its temporary Assisted image override `ConfigMap` and
-  compatibility RBAC.
 - **Kubernetes NMState Operator** sets the uplink and VTEP addresses of the
   VMaaS nodes. Your platform administrators prepare it for EVPN networking.
 - **EVPN host networking** needs OVN-Kubernetes and OpenShift Container
@@ -502,7 +492,7 @@ networking resources exist is not supported (see
 [Table 4.2](#table-42-settings-fixed-at-installation)).
 
 - **VMaaS** (`global.services.vmaas.enabled`) requires OpenShift Virtualization,
-  LVM Storage or another dynamic storage class, and OSAC's Kubernetes Manager
+  an environment-provided dynamic storage class, and OSAC's Kubernetes Manager
   `cudn_evpn`. With provider networking enabled, it also requires a Fabric
   Manager whose registration lists the `evpn` network type, EVPN host
   networking on the cluster that runs the VMs
@@ -707,12 +697,6 @@ addresses from the node; administrators remove stale addresses separately.
 Uninstalling OSAC leaves EVPN host resources and cluster-network settings in
 place.
 
-EVPN host networking can be prepared on a separate workload cluster, but
-OSAC provider networking with VMs on a separate cluster is not supported in
-this release (see [Section 9.4](#94-not-supported)). Use
-[Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster) with provider
-networking disabled.
-
 ---
 
 ## 3. OSAC component versions
@@ -732,7 +716,6 @@ that channel resolved to on OpenShift Container Platform 4.22.6 in September
 | `osac` umbrella chart | Selected in [Section 1.1](#11-what-is-released) | Release-specific |
 | cert-manager Operator for Red Hat OpenShift | `stable-v1` | `v1.20.0` |
 | Red Hat Ansible Automation Platform | `stable-2.6-cluster-scoped` | `v2.6.0` |
-| LVM Storage | `stable-<cluster_minor>` | `v4.22.0` |
 | MetalLB | `stable` | `v4.22.0` |
 | OpenShift Virtualization | `stable` | `v4.22.6` |
 | multicluster engine | `stable-2.17` | `v2.17.2` |
@@ -927,9 +910,9 @@ You create one values file for the `osac` chart, `my-values.yaml`.
    [Section 4.4.3](#443-setting-the-networking-helm-values).
 
 Any workflow that uses AAP for provisioning requires an Operator AAP token. This
-includes CaaS `ClusterOrder` and VMaaS `ComputeInstance` provisioning, including
-VMaaS on a separate workload cluster, as well as provider networking. The token
-is required even when provider networking is disabled.
+includes CaaS `ClusterOrder` and VMaaS `ComputeInstance` provisioning, as well
+as provider networking. The token is required even when provider networking is
+disabled.
 
 **Chart-managed AAP.** The `create-api-token` hook waits for the chart-managed
 AAP admin Secret and gateway, creates `osac-aap-api-token`, and restarts
@@ -1003,17 +986,14 @@ networking instance-group settings and secrets, also follow
 [Section 4.4.3](#443-setting-the-networking-helm-values). For VMaaS, the
 `aap.configAsCode.remoteClusterKubeconfigSecretName` setting configures only
 chart-managed AAP. External jobs in another cluster or namespace cannot mount a
-Secret from the OSAC release namespace. Follow
-[Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster) to provide a
-kubeconfig for the cluster that hosts the VMs to both external
-`compute-instance-operations` and `storage-operations` instance groups. Use the
-workload-cluster kubeconfig when VMs run on a separate workload cluster; if VMs
-remain on the management (hub) cluster while external AAP jobs run elsewhere,
-use the hub kubeconfig. The token must be authorized to launch and read those
-jobs. Because the chart's
-publication hook targets the chart-managed AAP instance, publish the required
-templates to Fulfillment separately. See
-[Section 5](#5-helm-chart-configuration-parameters) for the related values.
+Secret from the OSAC release namespace. For VMs on the management (hub) cluster,
+make the hub kubeconfig available to the external `compute-instance-operations`
+and `storage-operations` job pods. VMaaS with VMs on a separate workload cluster
+is not fully supported; see [Section 9.4](#94-not-supported). The token must be
+authorized to launch and read those jobs. Because the chart's publication hook
+targets the chart-managed AAP instance, publish the required templates to
+Fulfillment separately. See [Section 5](#5-helm-chart-configuration-parameters)
+for the related values.
 
 After rotating the external token in the Secret, restart the operators so they
 reload it from their environment:
@@ -1795,7 +1775,7 @@ subchart's own `values.yaml` file.
 | `operator.stall.preparingInfrastructureThreshold`, `operator.stall.controlPlaneStartingThreshold`, `operator.stall.workersJoiningThreshold` | schema | How long a cluster provisioning phase can wait before the Operator marks it stalled. |
 | `operator.tenants[]` | subchart | Tenants pre-created at installation. `shared` is the built-in tenant. |
 | `operator.networkManagers.enabled` | subchart | Controls legacy operator-subchart registrations. Set `false` in the Netris/CUDN EVPN examples to suppress those registrations. The umbrella chart automatically creates the selected `netris` and `cudn_evpn` registrations from `global.networking`; do not register those managers again here. |
-| `operator.remoteClusterKubeconfig`, `operator.remoteClusterKubeconfigSecretName`, `operator.remoteClusterKubeconfigSecretKey` | schema | Kubeconfig mount for VMaaS on a separate workload cluster. Set the path and Secret name together. The key defaults to `kubeconfig`. See [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster). |
+| `operator.remoteClusterKubeconfig`, `operator.remoteClusterKubeconfigSecretName`, `operator.remoteClusterKubeconfigSecretKey` | schema | Kubeconfig mount for VMaaS on a separate workload cluster. Set the path and Secret name together. The key defaults to `kubeconfig`. This scenario is not fully supported in this release; see [Section 9.4](#94-not-supported). |
 
 <a id="table-53-networking-globalnetworking"></a>
 **Table 5.3. Networking (`global.networking.*`)**
@@ -1873,7 +1853,7 @@ Helm directly; the installation command in Section 4.3 supplies both.
 | `aap.configAsCode.manifestSecret` | Secret that holds `license.zip`. |
 | `aap.configAsCode.secret` | Secret with config-as-code runtime flags. |
 | `aap.configAsCode.projectGitUri`, `aap.configAsCode.projectGitBranch` | Git source for the Ansible content that the bootstrap job imports. |
-| `aap.configAsCode.remoteClusterKubeconfigSecretName`, `aap.configAsCode.remoteClusterKubeconfigSecretKey` | Secret name and key that AAP config-as-code uses for VM operations on a separate workload cluster. The key defaults to `kubeconfig`. See [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster). |
+| `aap.configAsCode.remoteClusterKubeconfigSecretName`, `aap.configAsCode.remoteClusterKubeconfigSecretKey` | Secret name and key that AAP config-as-code uses for VM operations on a separate workload cluster. The key defaults to `kubeconfig`. This scenario is not fully supported in this release; see [Section 9.4](#94-not-supported). |
 | `aap.configAsCode.importAgentsEnabled`, `aap.configAsCode.importBcmAgentsEnabled` | Enable bare-metal agent import and the BCM inventory backend. |
 | `aap.instanceGroups.clusterFulfillment.enabled`, `aap.instanceGroups.clusterFulfillment.config`, `aap.instanceGroups.clusterFulfillment.secret` | The `cluster-fulfillment` instance group for CaaS provisioning. See [Section 6.2](#62-installing-osac-for-caas). |
 | `aap.instanceGroups.networkFulfillment.enabled`, `aap.instanceGroups.networkFulfillment.config`, `aap.instanceGroups.networkFulfillment.secret` | The Fabric Manager settings (`config`) and secrets (`secret`) exposed to networking jobs as environment variables. With chart-managed AAP, the chart writes the `network-fulfillment-ig` ConfigMap and Secret at every rollout. With external AAP, maintain copies in the external job cluster as described in [Section 4.4.3](#443-setting-the-networking-helm-values). Leave `enabled: true` (the default); `false` renders empty local resources and is rejected with provider networking enabled. |
@@ -1948,7 +1928,10 @@ override; publish the required templates to Fulfillment separately.
 **Prerequisites**
 
 - OpenShift Virtualization is installed.
-- LVM Storage is installed, or another dynamic storage class exists.
+- Your environment provides a dynamic storage class.
+  For storage prerequisites and tenant onboarding, see the
+  [Storage documentation](../../storage/README.md) for your selected provider
+  and ownership model.
 - With provider networking enabled, you have the provider's Fabric Manager,
   with `evpn` in the `network_types` of its registration.
 - With provider networking enabled, you completed
@@ -1994,15 +1977,28 @@ override; publish the required templates to Fulfillment separately.
    The `publishTemplates` hook publishes the compute instance templates that
    VMaaS needs. Disable it only if those templates are supplied separately.
 
-   For production, keep `lvms.enabled: false`, including when the workload
-   cluster uses LVMS. Have your storage administrators prepare the appropriate
-   CSI integration, StorageBackend, StorageTier, and tenant storage
-   configuration according to the [storage documentation](../../storage/README.md),
-   especially its [tenant storage onboarding
-   guide](../../storage/guides/tenant-onboarding.md).
-   Installing LVM Storage or another dynamic storage class alone does not
-   register an OSAC storage offering. The automatic LVMS registration hook is
-   for development and CI only; see [Section 9.2](#92-evaluation-only).
+   For production, keep `lvms.enabled: false` in the `osac` instance values,
+   including when the workload cluster uses LVMS. After installing OSAC in
+   step 3 below and before requesting VM workloads, have your storage
+   administrators register the
+   [StorageBackend](../../storage/concepts/storagebackend.md#managing-backends)
+   and [StorageTiers](../../storage/concepts/storagetier.md#managing-tiers)
+   in OSAC and complete
+   [tenant storage onboarding](../../storage/guides/tenant-onboarding.md).
+   A platform default StorageClass alone does not register these offerings.
+   Follow the [storage documentation](../../storage/README.md) for your
+   provider, ownership, and tenancy model. For CSP-managed NetApp with shared
+   tenancy on VMaaS, use the
+   [shared NetApp profile](../../storage/guides/csp-managed-netapp-shared.md)
+   (**Dev Preview**); the CSP prepares and operates Trident and the shared
+   storage resources before onboarding tenants.
+
+   Check the tenant's storage conditions and current `status.storageClasses`
+   mappings for every tier the VM will request. CSP-managed `StorageReady`
+   is a latched milestone, not a guarantee that tiers added later have
+   resolved. Incomplete tier resolution causes disk provisioning to fail;
+   a completed Helm install is not storage readiness. The onboarding guide
+   describes the checks for each ownership model.
 
    For Netris connection settings, see
    [CUDN EVPN with Netris](#cudn-evpn-with-netris).
@@ -2012,9 +2008,8 @@ override; publish the required templates to Fulfillment separately.
    This skips provider jobs and does not verify VM networking or connectivity.
    You cannot switch it to `true` later on the same deployment.
 
-   For virtual machines on a different cluster from the OSAC management
-   services, see
-   [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster).
+   VMaaS with VMs on a separate workload cluster is not fully supported in this
+   release; see [Section 9.4](#94-not-supported).
 
 2. Add the shared service, database, and secret store settings from
    [Section 4.2](#42-configuring-the-helm-values).
@@ -2132,8 +2127,8 @@ configure endpoint routes and DNS outside OSAC.
 **Prerequisites**
 
 - multicluster engine is installed (standalone, or provided by RHACM).
-- MetalLB (or another `LoadBalancer`-class implementation) and LVM Storage
-  (or another dynamic storage class) are installed.
+- MetalLB (or another `LoadBalancer`-class implementation) is installed,
+  and your environment provides a dynamic storage class.
 - The BMaaS prerequisites of [Section 6.3](#63-installing-osac-for-bmaas)
   are met.
 - The hub cluster has a default storage class (see
@@ -2441,175 +2436,6 @@ configure endpoint routes and DNS outside OSAC.
 
 - Create a `BareMetalPool` or `BareMetalInstance` custom resource and confirm
   that the Bare Metal Fulfillment Operator reconciles it.
-
-### 6.4 Installing VMaaS on a separate workload cluster
-
-Use this layout when OSAC management services run on one OpenShift cluster
-and virtual machines run on another. Disable CaaS and BMaaS: the operator
-refuses to start when either the ClusterOrder or BareMetalInstance controller
-is enabled with a remote kubeconfig. The `values-example.yaml` sets
-`operator.controllers.clusterOrder: true`, and explicit controller values
-override service toggles, so set both `clusterOrder` and `bareMetalInstance`
-to `false` in `my-values.yaml` as shown below. Provider networking across
-these clusters is not supported in this release; set
-`global.networking.provisioningEnabled: false` at the first installation.
-
-Your platform administrators must prepare the management cluster with the
-OSAC prerequisites and the workload cluster with OpenShift Virtualization,
-dynamic storage as described in
-[Section 2](#2-prerequisites).
-Create the workload kubeconfig Secret on the management cluster, including
-the console-proxy label, as described in
-[VMaaS dedicated cluster](https://github.com/osac-project/osac/blob/main/osac-operator/docs/vmaas-dedicated-cluster/README.md).
-
-The `kubevirt-crds` install preflight checks the cluster where Helm runs, which
-is the management cluster. After OpenShift Virtualization is installed on the
-workload cluster, point `KUBECONFIG` at that cluster and verify the CRD checked
-by the preflight:
-
-```console
-oc get crd kubevirts.kubevirt.io
-```
-
-Ensure OpenShift Virtualization is installed on the workload cluster. A
-separate workload cluster does not require removing an existing installation
-from the management cluster.
-
-If your platform administrators use Helm-based infrastructure charts, set
-`cnv.enabled: false` in the management cluster's infrastructure values, not
-in OSAC `my-values.yaml`, for a new release that should not manage OpenShift
-Virtualization. For an existing management-cluster release, keep its current
-setting unless its owner plans a migration. Changing `true` to `false` can remove release-managed resources,
-including the `openshift-cnv` namespace, and disrupt workloads. Check release
-ownership and plan how to preserve or migrate the resources before changing
-the value.
-
-On the workload cluster, set `cnv.enabled: true` in the infrastructure values
-only if those charts install and manage OpenShift Virtualization; keep it
-`false` when administrators manage an existing installation. In OSAC
-`my-values.yaml`, skip only the `kubevirt-crds` preflight check and give the
-verified reason shown below. Leave the remaining checks enabled.
-
-Start with the VMaaS values from [Section 6.1](#61-installing-osac-for-vmaas),
-including the storage registration and networking settings. Select storage
-based on the workload cluster, and put its values in `my-values.yaml` on the
-management cluster. For production, keep `lvms.enabled: false` for every
-storage provider, including LVMS. Have your storage administrators prepare
-that provider's StorageBackend, StorageTier, and tenant storage configuration
-as described in Section 6.1 and the [tenant storage onboarding
-guide](../../storage/guides/tenant-onboarding.md). For an overview of storage
-providers and ownership models, see the
-[storage documentation](../../storage/README.md).
-For development or CI with LVMS, see
-[Section 9.2](#92-evaluation-only).
-
-The chart still requires a non-empty `fabricManager` value when provider
-networking is disabled, and VMaaS requires `k8sManager: cudn_evpn`. No Fabric
-Manager registration or `evpn` network type is required for this layout. The
-`acme_fabric` value below is only a non-empty placeholder.
-
-Merge these values into `my-values.yaml` to enable VMaaS only and point the
-operator and AAP at the Secret:
-
-```yaml
-global:
-  services: { vmaas: { enabled: true }, caas: { enabled: false }, bmaas: { enabled: false }, maas: { enabled: false } }
-  networking:
-    provisioningEnabled: false
-    fabricManager: acme_fabric
-    k8sManager: cudn_evpn
-lvms:
-  enabled: false  # production storage registration is administrator-managed
-operator:
-  controllers:
-    clusterOrder: false
-    bareMetalInstance: false
-  remoteClusterKubeconfig: /var/run/secrets/remote/kubeconfig
-  remoteClusterKubeconfigSecretName: osac-remote-kubeconfig
-  remoteClusterKubeconfigSecretKey: kubeconfig
-aap:
-  configAsCode:
-    remoteClusterKubeconfigSecretName: osac-remote-kubeconfig
-    remoteClusterKubeconfigSecretKey: kubeconfig
-preflight:
-  skip:
-    kubevirt-crds: "OpenShift Virtualization CRD verified on workload cluster"
-```
-
-`remoteClusterKubeconfig` is the path inside the operator container. The
-Secret name and key must match the Secret on the management cluster. The
-chart default key is `kubeconfig`.
-The workload API endpoint in that kubeconfig must resolve and be reachable from
-the management-cluster workloads that use it, including the OSAC operator, AAP
-workers, and Console Proxy. Workstation-only access is insufficient; use direct
-connectivity or a supported proxy or tunnel configured for those workloads.
-
-The `aap.configAsCode.remoteClusterKubeconfigSecretName` values configure
-chart-managed AAP. For external AAP, ensure a Secret with the kubeconfig for the
-VM cluster is present in the cluster and namespace where the external compute
-and storage job pods run. Use the workload-cluster kubeconfig when VMs run on a
-separate workload cluster. If VMs remain on the management (hub) cluster while
-external AAP jobs run elsewhere, use the hub kubeconfig instead; the OSAC
-operator continues to use its in-cluster access. A Secret in
-another cluster or namespace cannot be mounted. Use the same name and key as
-the values above (`osac-remote-kubeconfig` and `kubeconfig` in this example),
-and keep the Secret current whenever the VM-cluster kubeconfig changes. Add the
-following entries to the
-`pod_spec_override` for both the `compute-instance-operations` and
-`storage-operations` instance groups so each job exposes the file at the path
-expected by `OSAC_REMOTE_CLUSTER_KUBECONFIG`:
-
-```yaml
-spec:
-  volumes:
-    - name: remote-cluster-kubeconfig
-      secret:
-        secretName: osac-remote-kubeconfig
-        items:
-          - key: kubeconfig
-            path: remote-cluster-kubeconfig
-  containers:
-    - name: worker
-      volumeMounts:
-        - name: remote-cluster-kubeconfig
-          mountPath: /etc/osac
-          readOnly: true
-      env:
-        - name: OSAC_REMOTE_CLUSTER_KUBECONFIG
-          value: /etc/osac/remote-cluster-kubeconfig
-```
-
-For example, apply the VM-cluster kubeconfig file as a Secret in the external
-job cluster. Keep the file protected and out of version control:
-
-```console
-AAP_CONTEXT="<external-aap-job-cluster-context>"
-AAP_NAMESPACE="<external-aap-job-namespace>"
-oc --context "$AAP_CONTEXT" create secret generic osac-remote-kubeconfig \
-  --namespace "$AAP_NAMESPACE" \
-  --from-file=kubeconfig=/path/to/workload-kubeconfig \
-  --dry-run=client -o yaml |
-  oc --context "$AAP_CONTEXT" apply -f -
-```
-
-Before installing OSAC, point `KUBECONFIG` back to the management cluster and
-confirm that the active API server is its endpoint. The OSAC Helm command uses
-the active cluster context:
-
-```console
-export KUBECONFIG=/path/to/management-kubeconfig
-oc whoami --show-server
-```
-
-Confirm that the server shown is the management cluster.
-
-Install OSAC on the management cluster. See
-[Section 4.3](#43-installing-osac). After installation, run the OSAC and
-preflight checks in [Section 7](#7-verifying-the-installation) on the
-management cluster. For VMaaS, check the OpenShift Virtualization CSV from
-Section 7 on the workload cluster. Check the LVM Storage and MetalLB CSVs on
-whichever cluster hosts those providers. Confirm that the virtual machine is
-created on the workload cluster.
 
 ---
 
@@ -3345,22 +3171,9 @@ reconciles the `ConfigMap` from those values.
 - Keycloak test fixtures and default administrator credentials.
 - Development or CI reference values files and `main`/`latest` image tags.
 
-**LVMS registration for evaluation**
-
-For a development or CI environment with LVMS already installed on the
-workload cluster, merge this override into `my-values.yaml`:
-
-```yaml
-lvms:
-  enabled: true
-```
-
-This enables the local-storage registration hook, which creates the `local`
-StorageBackend and StorageTier with provider `lvms` in Fulfillment. It does
-not install LVM Storage. For a separate workload cluster, pass the override
-to the OSAC release on the management cluster. Keep `lvms.enabled: false` in
-production and have your storage administrators prepare the StorageBackend,
-StorageTier, and tenant storage configuration as described in
+The automatic LVMS registration hook is for development and CI only, not
+production storage onboarding. Keep `lvms.enabled: false` in the `osac`
+instance values in production and follow the storage handoff in
 [Section 6.1](#61-installing-osac-for-vmaas).
 
 ### 9.3 Not covered by this guide
@@ -3376,14 +3189,8 @@ StorageTier, and tenant storage configuration as described in
 
 - OSAC networking in air-gapped or disconnected deployments, and IPv6 or
   dual-stack networking.
-- Provider networking for VMs in a cluster other than the hub. Platform
-  administrators can prepare EVPN host networking on a separate workload
-  cluster using the administrator procedure in the [Helm Deployment
-  Guide](helm-deployment-guide.md#evpn-host-networking-vmaas). This configures
-  host networking only; OSAC provider networking with VMs on a separate
-  cluster is not supported in this release. VMaaS with provider
-  networking disabled is supported as described in
-  [Section 6.4](#64-installing-vmaas-on-a-separate-workload-cluster).
+- VMaaS with VMs on a separate workload cluster is not fully supported in
+  this release. OSAC provider networking for that layout is not supported.
 - BMaaS-specific provider networking beyond the CaaS worker and endpoint flow
   described in [Section 6.2](#62-installing-osac-for-caas).
 - East-west FabricDomains with fabric configuration, which need BMaaS
@@ -3804,6 +3611,9 @@ values and run `helm upgrade` again.
   `oc get sc --show-labels` for the `osac.openshift.io/tenant` and
   `osac.openshift.io/storage-tier` labels and the `status.storageClasses` field
   of the `Tenant`, and align the requested tier with a labeled storage class.
+  Confirm backend/tier registration and tenant onboarding as described in
+  [Section 6.1](#61-installing-osac-for-vmaas); check current mappings even if
+  the CSP-managed `StorageReady` milestone is already `True`.
 - Networking resources stuck in `PENDING`: see
   [Section 11.13](#1113-networking-problems).
 - **CaaS:** watch the AAP `cluster-fulfillment` job for the failing task.

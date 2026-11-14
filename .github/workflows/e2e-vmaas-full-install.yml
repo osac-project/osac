@@ -43,6 +43,15 @@ on:
       CI_OBSERVE_OTLP_PASSWORD:
         description: The central ci-observe OTLP ingest password, used by the live telemetry push when ci-observe is on
         required: false
+      # The OSAC CI app (the organization secrets OSAC_CI_APP_ID and OSAC_CI_APP_PRIVATE_KEY). With both, the logs
+      # artifact of the job is kept in the private osac-project/osac-ci-artifacts repository instead of being
+      # downloadable from this public run; without them it is uploaded to the run as before.
+      OSAC_CI_APP_ID:
+        description: ID of the OSAC CI GitHub App, used to publish the logs artifact privately
+        required: false
+      OSAC_CI_APP_PRIVATE_KEY:
+        description: Private key of the OSAC CI GitHub App
+        required: false
   # 5x/day. Offset 7 minutes past the hour, not on the hour -- GitHub
   # Actions' shared cron scheduler queues everyone's on-the-hour
   # schedules together and can delay/drop them under load.
@@ -142,3 +151,5 @@ jobs:
       # push when the ci-observe input is on. The reusable workflow degrades
       # to running the test without telemetry when it is empty.
       ci-observe-otlp-password: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
+      osac-ci-app-id: ${{ secrets.OSAC_CI_APP_ID }}
+      osac-ci-app-private-key: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

@@ -28,8 +28,13 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
@@ -384,7 +389,504 @@ var _ = Describe("Interceptor", func() {
 		Expect(buffer.String()).ToNot(ContainSubstring("ssh-ed25519 AAAAsecret"))
 		Expect(string(request.GetObject().GetData()["public_key"])).To(Equal("ssh-ed25519 AAAAsecret"))
 	})
+
+	It("Redacts public and private permission rule values without modifying messages", func() {
+		permissionRules := []proto.Message{
+			publicv1.PermissionRule_builder{
+				Service: "osac.public.compute_instances",
+				Methods: []string{"get", "update"},
+			}.Build(),
+			privatev1.PermissionRule_builder{
+				Service: "osac.private.compute_instances",
+				Methods: []string{"get", "update"},
+			}.Build(),
+		}
+
+		for _, rule := range permissionRules {
+			original := proto.Clone(rule)
+			redacted := redactProtoMessage(rule).ProtoReflect()
+			fields := redacted.Descriptor().Fields()
+
+			Expect(redacted.Get(fields.ByName("service")).String()).To(Equal(redactMark))
+			methods := redacted.Get(fields.ByName("methods")).List()
+			Expect(methods.Len()).To(Equal(2))
+			for index := 0; index < methods.Len(); index++ {
+				Expect(methods.Get(index).String()).To(Equal(redactMark))
+			}
+			Expect(proto.Equal(rule, original)).To(BeTrue())
+		}
+	})
+
+	It("Redacts ComputeInstance customer data from unary client body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response, err := computeInstanceLogFixtures()
+		Expect(err).ToNot(HaveOccurred())
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+		responseTemplate := proto.Clone(response)
+
+		invoker := func(_ context.Context, _ string, _, response any, _ *grpc.ClientConn,
+			_ ...grpc.CallOption) error {
+			proto.Reset(response.(proto.Message))
+			proto.Merge(response.(proto.Message), responseTemplate)
+			return nil
+		}
+		err = redactedInterceptor.UnaryClient(ctx, "/osac.public.v1.ComputeInstances/Create",
+			request, response, conn, invoker)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("template-parameter-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("user-data-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.3"))
+		Expect(buffer.String()).ToNot(ContainSubstring("192.0.2.4"))
+		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.5"))
+		Expect(buffer.String()).ToNot(ContainSubstring("subnet-private-id"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-annotation"))
+		Expect(buffer.String()).ToNot(ContainSubstring("compute-instance-annotation-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-label"))
+		Expect(buffer.String()).ToNot(ContainSubstring("compute-instance-label-fixture-value"))
+		Expect(buffer.String()).To(ContainSubstring(redactMark))
+		expectComputeInstanceBodyLogs(buffer, "Sending unary request", "Received unary response")
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts ComputeInstance customer data from unary server body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response, err := computeInstanceLogFixtures()
+		Expect(err).ToNot(HaveOccurred())
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+
+		_, err = redactedInterceptor.UnaryServer(ctx, request,
+			&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.ComputeInstances/Create"},
+			func(context.Context, any) (any, error) { return response, nil })
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("template-parameter-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("user-data-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.3"))
+		Expect(buffer.String()).ToNot(ContainSubstring("192.0.2.4"))
+		Expect(buffer.String()).ToNot(ContainSubstring("10.1.2.5"))
+		Expect(buffer.String()).ToNot(ContainSubstring("subnet-private-id"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-annotation"))
+		Expect(buffer.String()).ToNot(ContainSubstring("compute-instance-annotation-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-label"))
+		Expect(buffer.String()).ToNot(ContainSubstring("compute-instance-label-fixture-value"))
+		Expect(buffer.String()).To(ContainSubstring(redactMark))
+		expectComputeInstanceBodyLogs(buffer, "Received unary request", "Sent unary response")
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	expectLifecycleUpdateCreatorRedacted := func(updatePath string) {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response := computeInstanceUpdateLogFixtures(updatePath)
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+		responseTemplate := proto.Clone(response)
+
+		invoker := func(_ context.Context, _ string, _, response any, _ *grpc.ClientConn,
+			_ ...grpc.CallOption) error {
+			proto.Reset(response.(proto.Message))
+			proto.Merge(response.(proto.Message), responseTemplate)
+			return nil
+		}
+		err = redactedInterceptor.UnaryClient(ctx, "/osac.public.v1.ComputeInstances/Update",
+			request, response, conn, invoker)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("mcp-owner@example.test"))
+		Expect(buffer.String()).To(ContainSubstring(redactMark))
+		messages := Parse(buffer)
+		responseLogs := Find(messages, "Received unary response")
+		Expect(responseLogs).To(HaveLen(1))
+		responseBody, ok := responseLogs[0]["response"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		object, ok := responseBody["object"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(object).To(HaveKeyWithValue("id", "compute-instance-fixture"))
+		metadata, ok := object["metadata"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(metadata).To(HaveKeyWithValue("creator", redactMark))
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	}
+
+	It("Redacts creator addresses from power update response body logs", func() {
+		expectLifecycleUpdateCreatorRedacted("spec.run_strategy")
+	})
+
+	It("Redacts creator addresses from restart update response body logs", func() {
+		expectLifecycleUpdateCreatorRedacted("spec.restart_requested_at")
+	})
+
+	It("Redacts customer values from ComputeInstances list client body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response := computeInstancesListLogFixtures()
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+		responseTemplate := proto.Clone(response)
+		invoker := func(_ context.Context, _ string, _, response any, _ *grpc.ClientConn,
+			_ ...grpc.CallOption) error {
+			proto.Reset(response.(proto.Message))
+			proto.Merge(response.(proto.Message), responseTemplate)
+			return nil
+		}
+		err = redactedInterceptor.UnaryClient(ctx, "/osac.public.v1.ComputeInstances/List",
+			request, response, conn, invoker)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-filter"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer-sensitive-filter-value"))
+		expectComputeInstancesListBodyLogs(buffer, "Sending unary request", "Received unary response")
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts customer values from ComputeInstances list server body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response := computeInstancesListLogFixtures()
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+		_, err = redactedInterceptor.UnaryServer(ctx, request,
+			&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.ComputeInstances/List"},
+			func(context.Context, any) (any, error) { return response, nil })
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-filter"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer-sensitive-filter-value"))
+		expectComputeInstancesListBodyLogs(buffer, "Received unary request", "Sent unary response")
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts ComputeInstance catalog policies and descriptions from unary client body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response, err := computeInstanceCatalogItemLogFixtures()
+		Expect(err).ToNot(HaveOccurred())
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+		responseTemplate := proto.Clone(response)
+
+		invoker := func(_ context.Context, _ string, _, response any, _ *grpc.ClientConn,
+			_ ...grpc.CallOption) error {
+			proto.Reset(response.(proto.Message))
+			proto.Merge(response.(proto.Message), responseTemplate)
+			return nil
+		}
+		err = redactedInterceptor.UnaryClient(ctx, "/osac.public.v1.ComputeInstanceCatalogItems/Get",
+			request, response, conn, invoker)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("locked-template-parameter-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("default-template-parameter-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("inline-user-data-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-description-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-annotation"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-annotation-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/catalog-private-label"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-label-fixture-value"))
+
+		messages := Parse(buffer)
+		requestLogs := Find(messages, "Sending unary request")
+		Expect(requestLogs).To(HaveLen(1))
+		Expect(requestLogs[0]).To(HaveKey("request"))
+		responseLogs := Find(messages, "Received unary response")
+		Expect(responseLogs).To(HaveLen(1))
+		responseBody, ok := responseLogs[0]["response"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		object, ok := responseBody["object"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(object).To(HaveKeyWithValue("id", "catalog-item-fixture"))
+		Expect(object).To(HaveKeyWithValue("description", redactMark))
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts ComputeInstance catalog policies and descriptions from unary server body logs", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response, err := computeInstanceCatalogItemLogFixtures()
+		Expect(err).ToNot(HaveOccurred())
+		originalRequest := proto.Clone(request)
+		originalResponse := proto.Clone(response)
+
+		_, err = redactedInterceptor.UnaryServer(ctx, request,
+			&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.ComputeInstanceCatalogItems/Get"},
+			func(context.Context, any) (any, error) { return response, nil })
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(buffer.String()).ToNot(ContainSubstring("locked-template-parameter-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("default-template-parameter-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("inline-user-data-fixture"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-description-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/private-annotation"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-annotation-fixture-value"))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer.example.test/catalog-private-label"))
+		Expect(buffer.String()).ToNot(ContainSubstring("catalog-item-label-fixture-value"))
+
+		messages := Parse(buffer)
+		requestLogs := Find(messages, "Received unary request")
+		Expect(requestLogs).To(HaveLen(1))
+		Expect(requestLogs[0]).To(HaveKey("request"))
+		responseLogs := Find(messages, "Sent unary response")
+		Expect(responseLogs).To(HaveLen(1))
+		responseBody, ok := responseLogs[0]["response"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		object, ok := responseBody["object"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(object).To(HaveKeyWithValue("id", "catalog-item-fixture"))
+		Expect(object).To(HaveKeyWithValue("description", redactMark))
+		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
+		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts private ComputeInstance catalog descriptions in copied messages", func() {
+		const description = "private-catalog-description-fixture-value"
+		response := privatev1.ComputeInstanceCatalogItemsGetResponse_builder{
+			Object: privatev1.ComputeInstanceCatalogItem_builder{
+				Id:          "private-catalog-item-fixture",
+				Description: description,
+			}.Build(),
+		}.Build()
+
+		redacted := redactProtoMessage(response).(*privatev1.ComputeInstanceCatalogItemsGetResponse)
+		Expect(redacted.GetObject().GetDescription()).To(Equal(redactMark))
+		Expect(response.GetObject().GetDescription()).To(Equal(description))
+	})
 })
+
+// computeInstanceLogFixtures returns public request and response bodies with private customer data.
+func computeInstanceLogFixtures() (
+	*publicv1.ComputeInstancesCreateRequest,
+	*publicv1.ComputeInstancesCreateResponse,
+	error,
+) {
+	fixtureTemplateParameter, err := anypb.New(wrapperspb.String("template-parameter-fixture-value"))
+	if err != nil {
+		return nil, nil, err
+	}
+	fixtureUserData := "user-data-fixture-value"
+	spec := publicv1.ComputeInstanceSpec_builder{
+		TemplateParameters: map[string]*anypb.Any{"fixture-param": fixtureTemplateParameter},
+		UserDataSource:     publicv1.UserDataSource_builder{Inline: &fixtureUserData}.Build(),
+	}.Build()
+	metadata := publicv1.Metadata_builder{
+		Labels: map[string]string{
+			"customer.example.test/private-label": "compute-instance-label-fixture-value",
+		},
+		Annotations: map[string]string{
+			"customer.example.test/private-annotation": "compute-instance-annotation-fixture-value",
+		},
+	}.Build()
+	request := publicv1.ComputeInstancesCreateRequest_builder{
+		Object: publicv1.ComputeInstance_builder{
+			Id: "compute-instance-fixture", Metadata: metadata, Spec: spec,
+		}.Build(),
+	}.Build()
+	response := publicv1.ComputeInstancesCreateResponse_builder{
+		Object: publicv1.ComputeInstance_builder{
+			Id:       "compute-instance-fixture",
+			Metadata: metadata,
+			Spec:     spec,
+			Status: publicv1.ComputeInstanceStatus_builder{
+				InternalIpAddress: "10.1.2.3",
+				ExternalIpAddress: "192.0.2.4",
+				ComputeNetworkAttachmentStatuses: []*publicv1.ComputeNetworkAttachmentStatus{
+					publicv1.ComputeNetworkAttachmentStatus_builder{
+						SubnetRef: "subnet-private-id",
+						IpAddress: "10.1.2.5",
+					}.Build(),
+				},
+			}.Build(),
+		}.Build(),
+	}.Build()
+	return request, response, nil
+}
+
+// computeInstanceUpdateLogFixtures returns update messages for testing body-log redaction.
+func computeInstanceUpdateLogFixtures(updatePath string) (
+	*publicv1.ComputeInstancesUpdateRequest,
+	*publicv1.ComputeInstancesUpdateResponse,
+) {
+	request := publicv1.ComputeInstancesUpdateRequest_builder{
+		Object: publicv1.ComputeInstance_builder{
+			Id: "compute-instance-fixture",
+			Metadata: publicv1.Metadata_builder{
+				Version: 1,
+			}.Build(),
+		}.Build(),
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{updatePath}},
+		Lock:       true,
+	}.Build()
+	response := publicv1.ComputeInstancesUpdateResponse_builder{
+		Object: publicv1.ComputeInstance_builder{
+			Id: "compute-instance-fixture",
+			Metadata: publicv1.Metadata_builder{
+				Creator: "mcp-owner@example.test",
+				Version: 2,
+			}.Build(),
+		}.Build(),
+	}.Build()
+	return request, response
+}
+
+// computeInstancesListLogFixtures returns list messages with a customer-controlled filter.
+func computeInstancesListLogFixtures() (
+	*publicv1.ComputeInstancesListRequest,
+	*publicv1.ComputeInstancesListResponse,
+) {
+	filter := `this.metadata.labels["customer.example.test/private-filter"] == "customer-sensitive-filter-value"`
+	limit := int32(25)
+	order := "metadata.name asc"
+	request := publicv1.ComputeInstancesListRequest_builder{
+		Filter: &filter,
+		Limit:  &limit,
+		Order:  &order,
+	}.Build()
+	response := publicv1.ComputeInstancesListResponse_builder{
+		Size:  1,
+		Total: 3,
+		Items: []*publicv1.ComputeInstance{
+			publicv1.ComputeInstance_builder{Id: "compute-instance-list-fixture"}.Build(),
+		},
+	}.Build()
+	return request, response
+}
+
+// expectComputeInstancesListBodyLogs checks redacted filters and retained list fields.
+func expectComputeInstancesListBodyLogs(buffer *bytes.Buffer, requestEvent, responseEvent string) {
+	messages := Parse(buffer)
+	requestLogs := Find(messages, requestEvent)
+	Expect(requestLogs).To(HaveLen(1))
+	requestBody, ok := requestLogs[0]["request"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(requestBody).To(HaveKeyWithValue("filter", redactMark))
+	Expect(requestBody["limit"]).To(BeNumerically("==", 25))
+	Expect(requestBody).To(HaveKeyWithValue("order", "metadata.name asc"))
+
+	responseLogs := Find(messages, responseEvent)
+	Expect(responseLogs).To(HaveLen(1))
+	responseBody, ok := responseLogs[0]["response"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(responseBody["size"]).To(BeNumerically("==", 1))
+	Expect(responseBody["total"]).To(BeNumerically("==", 3))
+	items, ok := responseBody["items"].([]any)
+	Expect(ok).To(BeTrue())
+	Expect(items).To(HaveLen(1))
+	Expect(items[0].(map[string]any)).To(HaveKeyWithValue("id", "compute-instance-list-fixture"))
+}
+
+// expectComputeInstanceBodyLogs checks that instance identifiers remain in body logs.
+func expectComputeInstanceBodyLogs(buffer *bytes.Buffer, requestEvent, responseEvent string) {
+	messages := Parse(buffer)
+	requestLogs := Find(messages, requestEvent)
+	Expect(requestLogs).To(HaveLen(1))
+	requestBody, ok := requestLogs[0]["request"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	requestObject, ok := requestBody["object"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(requestObject).To(HaveKeyWithValue("id", "compute-instance-fixture"))
+
+	responseLogs := Find(messages, responseEvent)
+	Expect(responseLogs).To(HaveLen(1))
+	responseBody, ok := responseLogs[0]["response"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	responseObject, ok := responseBody["object"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	Expect(responseObject).To(HaveKeyWithValue("id", "compute-instance-fixture"))
+}
+
+// computeInstanceCatalogItemLogFixtures returns catalog policies with fake sensitive values.
+func computeInstanceCatalogItemLogFixtures() (
+	*publicv1.ComputeInstanceCatalogItemsGetRequest,
+	*publicv1.ComputeInstanceCatalogItemsGetResponse,
+	error,
+) {
+	lockedTemplateParameter, err := anypb.New(wrapperspb.String("locked-template-parameter-fixture"))
+	if err != nil {
+		return nil, nil, err
+	}
+	defaultTemplateParameter, err := anypb.New(wrapperspb.String("default-template-parameter-fixture"))
+	if err != nil {
+		return nil, nil, err
+	}
+	inlineUserData := "inline-user-data-fixture"
+	metadata := publicv1.Metadata_builder{
+		Labels: map[string]string{
+			"customer.example.test/catalog-private-label": "catalog-item-label-fixture-value",
+		},
+		Annotations: map[string]string{
+			"customer.example.test/private-annotation": "catalog-item-annotation-fixture-value",
+		},
+	}.Build()
+	item := publicv1.ComputeInstanceCatalogItem_builder{
+		Id:          "catalog-item-fixture",
+		Description: "catalog-item-description-fixture-value",
+		Metadata:    metadata,
+		TemplateParameters: map[string]*publicv1.TemplateParameterPolicy{
+			"locked-param": publicv1.TemplateParameterPolicy_builder{
+				Locked: lockedTemplateParameter,
+			}.Build(),
+			"default-param": publicv1.TemplateParameterPolicy_builder{
+				Editable: publicv1.EditableTemplateParameter_builder{
+					DefaultValue: defaultTemplateParameter,
+				}.Build(),
+			}.Build(),
+		},
+		Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+			UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{
+				Editable: publicv1.EditableUserDataSourceField_builder{
+					DefaultValue: publicv1.UserDataSource_builder{Inline: &inlineUserData}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build(),
+	}.Build()
+	return publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: item.GetId()}.Build(),
+		publicv1.ComputeInstanceCatalogItemsGetResponse_builder{Object: item}.Build(), nil
+}
 
 type mockClientStream struct {
 	ctx context.Context

@@ -65,6 +65,14 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   host-driven stop behavior remain with
   [OSAC-5852](https://redhat.atlassian.net/browse/OSAC-5852). Provider
   provisioning is out of scope.
+- VM power and restart coverage
+  ([OSAC-5850](https://redhat.atlassian.net/browse/OSAC-5850)) uses
+  `it_mcp_server_test.go` through the deployed Fulfillment and PostgreSQL
+  boundary, including persisted run-strategy and restart-trigger state,
+  optimistic version conflicts, and cross-tenant rejection. The network
+  provider is omitted, so these cases do not prove VM execution; deployed
+  lifecycle behavior belongs to
+  [OSAC-5852](https://redhat.atlassian.net/browse/OSAC-5852).
 - FabricDomain setup and focused execution are documented in
   [the suite README](../../fulfillment-service/it/README.fabric-domain.md).
 - Deployed service-account journeys, secret rotation included, are the

@@ -319,6 +319,21 @@ if changed "$@"; then echo yes; else echo no; fi
         self.assertTrue(any(step.get("uses") == "./.github/actions/setup-python" for step in steps))
         self.assertTrue(any("agentic-ci-validation-smoke.py" in step.get("run", "") for step in steps))
 
+    def test_codeowners_and_dependabot_excluded_from_catch_all_filters(self) -> None:
+        filters = yaml.safe_load((ROOT / ".github/filters/ci-filters.yml").read_text())
+        catch_all = (
+            "code",
+            "e2e-code",
+            "vmaas-outside-known-safe",
+            "caas-outside-known-safe",
+            "bmaas-outside-known-safe",
+        )
+        for name in catch_all:
+            with self.subTest(filter=name):
+                entries = filters[name]
+                self.assertIn("!**/CODEOWNERS", entries)
+                self.assertIn("!.github/dependabot.yml", entries)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

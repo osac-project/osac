@@ -69,6 +69,52 @@ _WORKER_INSTALL_DELAY = 10
 _WORKER_AGGREGATE_RETRIES = 120
 _WORKER_AGGREGATE_DELAY = 10
 
+_TRANSIENT_KUBECTL_PATTERNS: tuple[str, ...] = (
+    "was refused",
+    "connection refused",
+    "i/o timeout",
+    "connection timed out",
+    "connection reset by peer",
+    "tls handshake timeout",
+    "client.timeout exceeded",
+    "context deadline exceeded",
+    "server is currently unable to handle the request",
+)
+"""Lowercase substrings that identify transient kubectl / API-server
+connectivity failures safe to retry.  Everything else -- invalid
+namespace, Forbidden, Unauthorized, unknown resource, etc. -- is
+treated as permanent and propagated immediately so the test fails
+fast with the original diagnostic."""
+
+
+def _is_transient_kubectl_error(exc: subprocess.CalledProcessError) -> bool:
+    """Return True only for known transient kubectl connectivity failures."""
+    combined = ((exc.stderr or "") + " " + (exc.stdout or "")).lower()
+    return any(p in combined for p in _TRANSIENT_KUBECTL_PATTERNS)
+
+
+_PERMANENT_ERROR_CATEGORIES: dict[str, str] = {
+    "not found": "not-found",
+    "forbidden": "forbidden",
+    "unauthorized": "unauthorized",
+    "doesn't have a resource type": "unknown-resource",
+}
+"""Safe category labels for permanent kubectl errors.
+
+Raw stderr/stdout may contain internal hostnames, namespace names,
+or other operational data that must not appear in exception messages
+(see runner.py's suppression policy).  This mapping classifies the
+error for diagnostics without leaking raw command output."""
+
+
+def _permanent_error_category(exc: subprocess.CalledProcessError) -> str:
+    """Classify a permanent kubectl error without leaking raw output."""
+    combined = ((exc.stderr or "") + " " + (exc.stdout or "")).lower()
+    for pattern, category in _PERMANENT_ERROR_CATEGORIES.items():
+        if pattern in combined:
+            return category
+    return "unclassified"
+
 
 def unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:8]}"
@@ -699,15 +745,15 @@ def wait_for_cluster_ready(*, k8s: K8sClient, name: str) -> None:
     # budget (60 min) plus earlier steps in the same AAP job (create hosted
     # cluster, retrieve kubeconfig, etc.), or this times out first with a
     # less useful error while the ClusterOrder is still legitimately Progressing.
-    def _check() -> str:
-        phase = k8s.get_cluster_order_phase(name=name, checked=False)
-        if phase == "Failed":
-            raise AssertionError(f"{name} entered Failed phase before becoming Ready")
-        return phase
-
+    #
+    # The operator retries provision with backoff after a failed AAP job
+    # (e.g. "container not found in pod", "0 agents available").  The phase
+    # goes Failed -> Progressing -> Ready on retry.  Treating Failed as
+    # terminal kills the test before the retry can land; let the timeout be
+    # the safety net instead (same approach as osac-test-infra PR #62).
     try:
         poll_until(
-            fn=_check,
+            fn=lambda: k8s.get_cluster_order_phase(name=name, checked=False),
             until=lambda v: v == "Ready",
             retries=480,
             delay=15,
@@ -832,13 +878,27 @@ def _progressing_phase(cluster_order: dict[str, Any]) -> str:
 
 
 def wait_for_worker_aggregates(*, k8s: K8sClient, co_name: str, expected_workers: int) -> None:
-    """Report the ClusterOrder's phase and worker counts while the workers join."""
+    """Report the ClusterOrder's phase and worker counts while the workers join.
+
+    Permanent kubectl failures (invalid namespace, authorization,
+    unknown resource) propagate immediately instead of being hidden
+    behind a ~20-minute poll_until timeout.
+    """
     logger.info("CaaS phase: waiting for workers to join")
     previous = ""
 
     def _check() -> bool:
         nonlocal previous
-        cluster_order = k8s.get_json(resource="clusterorder", name=co_name)
+        try:
+            cluster_order = k8s.get_json(resource="clusterorder", name=co_name)
+        except subprocess.CalledProcessError as exc:
+            if _is_transient_kubectl_error(exc):
+                raise  # poll_until catches and retries
+            # Suppress the chained CalledProcessError: its command
+            # and output may contain secrets (runner.py convention).
+            raise RuntimeError(
+                f"permanent kubectl failure (rc={exc.returncode}, category={_permanent_error_category(exc)})"
+            ) from None
         status = cluster_order.get("status", {})
         counts = tuple(int(status.get(key, -1)) for key in ("desiredWorkers", "currentWorkers", "readyWorkers"))
         observed = f"desired {counts[0]}, current {counts[1]}, ready {counts[2]} ({_progressing_phase(cluster_order)})"

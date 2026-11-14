@@ -104,7 +104,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(10))
+		Expect(response.Tools).To(HaveLen(14))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {
@@ -128,6 +128,10 @@ var _ = Describe("newServer", func() {
 		Expect(tools).To(HaveKey("delete_compute_instance"))
 		Expect(tools).To(HaveKey("create_project"))
 		Expect(tools).To(HaveKey("update_project"))
+		Expect(tools).To(HaveKey("create_catalog_offering"))
+		Expect(tools).To(HaveKey("update_catalog_offering"))
+		Expect(tools).To(HaveKey("publish_catalog_offering"))
+		Expect(tools).To(HaveKey("delete_catalog_offering"))
 		Expect(tools["list_resources"].Description).To(ContainSubstring("Use this tool to discover"))
 		Expect(tools["get_resource"].Description).To(ContainSubstring("Use this tool to inspect"))
 		Expect(tools["create_network_resource"].Description).To(ContainSubstring("only after the user confirms"))
@@ -148,6 +152,8 @@ var _ = Describe("newServer", func() {
 		Expect(tools["update_project"].Description).To(ContainSubstring("title"))
 		Expect(tools["update_project"].Description).To(ContainSubstring("description"))
 		Expect(tools["delete_compute_instance"].Description).To(ContainSubstring("only when the user explicitly requests"))
+		Expect(tools["create_catalog_offering"].Description).To(ContainSubstring("unpublished catalog offering"))
+		Expect(tools["publish_catalog_offering"].Description).To(ContainSubstring("separate from update and delete"))
 		expectToolAnnotations(tools["check_connection"], "Check OSAC MCP connection", true, false, true, true)
 		expectToolAnnotations(tools["list_resources"], "List OSAC deployment resources", true, false, true, true)
 		expectToolAnnotations(tools["get_resource"], "Get OSAC deployment resource", true, false, true, true)
@@ -158,6 +164,10 @@ var _ = Describe("newServer", func() {
 		expectToolAnnotations(tools["delete_compute_instance"], "Delete OSAC compute instance", false, true, false, true)
 		expectToolAnnotations(tools["create_project"], "Create OSAC project", false, false, false, true)
 		expectToolAnnotations(tools["update_project"], "Update OSAC project", false, true, false, true)
+		expectToolAnnotations(tools["create_catalog_offering"], "Create OSAC catalog offering", false, false, false, true)
+		expectToolAnnotations(tools["update_catalog_offering"], "Update OSAC catalog offering", false, true, false, true)
+		expectToolAnnotations(tools["publish_catalog_offering"], "Publish OSAC catalog offering", false, true, false, true)
+		expectToolAnnotations(tools["delete_catalog_offering"], "Delete OSAC catalog offering", false, true, false, true)
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
 		expectTypedWriteSchema(tools["create_network_resource"].InputSchema, "resource_type", "name")
 		expectNetworkCreateSchema(tools["create_network_resource"].InputSchema)
@@ -168,10 +178,32 @@ var _ = Describe("newServer", func() {
 		expectTypedWriteSchema(tools["delete_compute_instance"].InputSchema, "id")
 		expectTypedWriteSchema(tools["create_project"].InputSchema, "name")
 		expectTypedWriteSchema(tools["update_project"].InputSchema, "id")
+		expectTypedWriteSchema(tools["create_catalog_offering"].InputSchema, "kind", "name", "template_id")
+		expectTypedWriteSchema(tools["update_catalog_offering"].InputSchema, "kind", "id", "version")
+		expectTypedWriteSchema(tools["publish_catalog_offering"].InputSchema, "kind", "id", "version")
+		expectTypedWriteSchema(tools["delete_catalog_offering"].InputSchema, "kind", "id")
+		for _, toolName := range []string{
+			"create_catalog_offering", "update_catalog_offering",
+			"publish_catalog_offering", "delete_catalog_offering",
+		} {
+			schema, ok := tools[toolName].InputSchema.(map[string]any)
+			Expect(ok).To(BeTrue())
+			properties, ok := schema["properties"].(map[string]any)
+			Expect(ok).To(BeTrue())
+			kind, ok := properties["kind"].(map[string]any)
+			Expect(ok).To(BeTrue())
+			Expect(kind["enum"]).To(Equal([]any{
+				"compute_instance", "cluster", "bare_metal_instance",
+			}))
+		}
 		expectNullableArraySchema(tools["list_resources"].OutputSchema, "items")
 		expectResourceTypeSchema(tools["list_resources"].InputSchema, []ResourceType{
 			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeClusterCatalogItem,
+			ResourceTypeBareMetalInstanceCatalogItem,
 			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeClusterTemplate,
+			ResourceTypeBareMetalInstanceTemplate,
 			ResourceTypeInstanceType,
 			ResourceTypeDiskImage,
 			ResourceTypeStorageTier,
@@ -185,7 +217,11 @@ var _ = Describe("newServer", func() {
 		expectResourcePaginationSchema(tools["list_resources"].InputSchema)
 		expectResourceTypeSchema(tools["get_resource"].InputSchema, []ResourceType{
 			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeClusterCatalogItem,
+			ResourceTypeBareMetalInstanceCatalogItem,
 			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeClusterTemplate,
+			ResourceTypeBareMetalInstanceTemplate,
 			ResourceTypeInstanceType,
 			ResourceTypeDiskImage,
 			ResourceTypeStorageTier,
@@ -255,7 +291,11 @@ var _ = Describe("newServer", func() {
 		}
 		expectResourceTypeSchema(tools["get_resource"].InputSchema, []ResourceType{
 			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeClusterCatalogItem,
+			ResourceTypeBareMetalInstanceCatalogItem,
 			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeClusterTemplate,
+			ResourceTypeBareMetalInstanceTemplate,
 			ResourceTypeInstanceType,
 			ResourceTypeDiskImage,
 			ResourceTypeStorageTier,

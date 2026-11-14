@@ -417,7 +417,7 @@ var _ = Describe("MCP server", func() {
 		Expect(connection.Server.Version).ToNot(BeEmpty())
 		Expect(connection.Caller.Subject).ToNot(BeEmpty())
 		Expect(connection.Caller.Tenants).To(ContainElement(usersGroup))
-		Expect(connection.ResourceFamilies).To(HaveLen(11))
+		Expect(connection.ResourceFamilies).To(HaveLen(15))
 		Expect(connection.Tools).To(ConsistOf(expectedMCPServerToolNames))
 		Expect(connection.Permissions).To(ConsistOf(
 			mcpserver.CheckConnectionPermission{

@@ -108,38 +108,46 @@ type runnerContext struct {
 
 // ServerDeps contains the downstream clients used by MCP tool handlers.
 type ServerDeps struct {
-	ComputeInstanceCatalogItemsClient publicv1.ComputeInstanceCatalogItemsClient
-	ComputeInstanceTemplatesClient    publicv1.ComputeInstanceTemplatesClient
-	InstanceTypesClient               publicv1.InstanceTypesClient
-	DiskImagesClient                  publicv1.DiskImagesClient
-	ProjectsClient                    publicv1.ProjectsClient
-	StorageTiersClient                publicv1.StorageTiersClient
-	VirtualNetworksClient             publicv1.VirtualNetworksClient
-	SubnetsClient                     publicv1.SubnetsClient
-	SecurityGroupsClient              publicv1.SecurityGroupsClient
-	ComputeInstancesClient            publicv1.ComputeInstancesClient
-	SecretsClient                     publicv1.SecretsClient
-	TenantsClient                     publicv1.TenantsClient
-	SelfSubjectAccessReviewsClient    publicv1.SelfSubjectAccessReviewsClient
+	ComputeInstanceCatalogItemsClient   publicv1.ComputeInstanceCatalogItemsClient
+	ClusterCatalogItemsClient           publicv1.ClusterCatalogItemsClient
+	BareMetalInstanceCatalogItemsClient publicv1.BareMetalInstanceCatalogItemsClient
+	ComputeInstanceTemplatesClient      publicv1.ComputeInstanceTemplatesClient
+	ClusterTemplatesClient              publicv1.ClusterTemplatesClient
+	BareMetalInstanceTemplatesClient    publicv1.BareMetalInstanceTemplatesClient
+	InstanceTypesClient                 publicv1.InstanceTypesClient
+	DiskImagesClient                    publicv1.DiskImagesClient
+	ProjectsClient                      publicv1.ProjectsClient
+	StorageTiersClient                  publicv1.StorageTiersClient
+	VirtualNetworksClient               publicv1.VirtualNetworksClient
+	SubnetsClient                       publicv1.SubnetsClient
+	SecurityGroupsClient                publicv1.SecurityGroupsClient
+	ComputeInstancesClient              publicv1.ComputeInstancesClient
+	SecretsClient                       publicv1.SecretsClient
+	TenantsClient                       publicv1.TenantsClient
+	SelfSubjectAccessReviewsClient      publicv1.SelfSubjectAccessReviewsClient
 }
 
 // NewServerDeps creates the public API clients used by the MCP server. All
 // clients share the same underlying gRPC connection.
 func NewServerDeps(conn grpc.ClientConnInterface) ServerDeps {
 	return ServerDeps{
-		ComputeInstanceCatalogItemsClient: publicv1.NewComputeInstanceCatalogItemsClient(conn),
-		ComputeInstanceTemplatesClient:    publicv1.NewComputeInstanceTemplatesClient(conn),
-		InstanceTypesClient:               publicv1.NewInstanceTypesClient(conn),
-		DiskImagesClient:                  publicv1.NewDiskImagesClient(conn),
-		ProjectsClient:                    publicv1.NewProjectsClient(conn),
-		StorageTiersClient:                publicv1.NewStorageTiersClient(conn),
-		VirtualNetworksClient:             publicv1.NewVirtualNetworksClient(conn),
-		SubnetsClient:                     publicv1.NewSubnetsClient(conn),
-		SecurityGroupsClient:              publicv1.NewSecurityGroupsClient(conn),
-		ComputeInstancesClient:            publicv1.NewComputeInstancesClient(conn),
-		SecretsClient:                     publicv1.NewSecretsClient(conn),
-		TenantsClient:                     publicv1.NewTenantsClient(conn),
-		SelfSubjectAccessReviewsClient:    publicv1.NewSelfSubjectAccessReviewsClient(conn),
+		ComputeInstanceCatalogItemsClient:   publicv1.NewComputeInstanceCatalogItemsClient(conn),
+		ClusterCatalogItemsClient:           publicv1.NewClusterCatalogItemsClient(conn),
+		BareMetalInstanceCatalogItemsClient: publicv1.NewBareMetalInstanceCatalogItemsClient(conn),
+		ComputeInstanceTemplatesClient:      publicv1.NewComputeInstanceTemplatesClient(conn),
+		ClusterTemplatesClient:              publicv1.NewClusterTemplatesClient(conn),
+		BareMetalInstanceTemplatesClient:    publicv1.NewBareMetalInstanceTemplatesClient(conn),
+		InstanceTypesClient:                 publicv1.NewInstanceTypesClient(conn),
+		DiskImagesClient:                    publicv1.NewDiskImagesClient(conn),
+		ProjectsClient:                      publicv1.NewProjectsClient(conn),
+		StorageTiersClient:                  publicv1.NewStorageTiersClient(conn),
+		VirtualNetworksClient:               publicv1.NewVirtualNetworksClient(conn),
+		SubnetsClient:                       publicv1.NewSubnetsClient(conn),
+		SecurityGroupsClient:                publicv1.NewSecurityGroupsClient(conn),
+		ComputeInstancesClient:              publicv1.NewComputeInstancesClient(conn),
+		SecretsClient:                       publicv1.NewSecretsClient(conn),
+		TenantsClient:                       publicv1.NewTenantsClient(conn),
+		SelfSubjectAccessReviewsClient:      publicv1.NewSelfSubjectAccessReviewsClient(conn),
 	}
 }
 
@@ -534,6 +542,63 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		InputSchema:  compatibleToolSchema[UpdateProjectInput](),
 		OutputSchema: compatibleToolSchema[ProjectOutput](),
 	}, writeToolContract{Destructive: true, Idempotent: false}, handleUpdateProject(deps.ProjectsClient))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "create_catalog_offering",
+		Description: "Use this tool only after the user confirms the requested unpublished catalog offering. " +
+			"Supported kinds are compute_instance, cluster, and bare_metal_instance; the template ID must be " +
+			"caller-visible. Publication is a separate tool.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Create OSAC catalog offering",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(false),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  catalogOfferingToolSchema[CreateCatalogOfferingInput](),
+		OutputSchema: compatibleToolSchema[CatalogOfferingOutput](),
+	}, writeToolContract{Destructive: false, Idempotent: false}, handleCreateCatalogOffering(newCatalogOfferingClients(deps)))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "update_catalog_offering",
+		Description: "Use this tool only after the user confirms the requested catalog offering changes and has " +
+			"the current metadata.version. Supported fields are title and description; publication and deletion " +
+			"are separate tools.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Update OSAC catalog offering",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  catalogOfferingToolSchema[UpdateCatalogOfferingInput](),
+		OutputSchema: compatibleToolSchema[CatalogOfferingOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleUpdateCatalogOffering(newCatalogOfferingClients(deps)))
+	registerWriteTool(registry, &mcp.Tool{
+		Name: "publish_catalog_offering",
+		Description: "Use this tool only after the user explicitly confirms publication of the exact catalog " +
+			"offering. Publication changes what eligible callers may request and is separate from update and delete.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Publish OSAC catalog offering",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  catalogOfferingToolSchema[PublishCatalogOfferingInput](),
+		OutputSchema: compatibleToolSchema[CatalogOfferingOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handlePublishCatalogOffering(newCatalogOfferingClients(deps)))
+	registerWriteTool(registry, &mcp.Tool{
+		Name:        "delete_catalog_offering",
+		Description: "Use this tool only when the user explicitly requests deletion of the exact catalog offering.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Delete OSAC catalog offering",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  catalogOfferingToolSchema[DeleteCatalogOfferingInput](),
+		OutputSchema: compatibleToolSchema[DeleteCatalogOfferingOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleDeleteCatalogOffering(newCatalogOfferingClients(deps)))
 	return server
 }
 
@@ -698,6 +763,28 @@ func computeInstanceUpdateToolSchema() json.RawMessage {
 				panic("compute instance update tool schema has no version property")
 			}
 			version["minimum"] = 1
+		},
+	)
+}
+
+// catalogOfferingToolSchema constrains offering kinds and optimistic versions.
+func catalogOfferingToolSchema[T any]() json.RawMessage {
+	return withToolSchemaProperties(
+		compatibleToolSchema[T](),
+		"catalog offering",
+		func(properties map[string]any) {
+			kind, ok := properties["kind"].(map[string]any)
+			if !ok {
+				panic("catalog offering tool schema has no kind property")
+			}
+			kind["enum"] = []string{
+				string(CatalogOfferingKindComputeInstance),
+				string(CatalogOfferingKindCluster),
+				string(CatalogOfferingKindBareMetalInstance),
+			}
+			if version, ok := properties["version"].(map[string]any); ok {
+				version["minimum"] = 0
+			}
 		},
 	)
 }

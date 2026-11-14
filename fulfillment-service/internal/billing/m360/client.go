@@ -195,7 +195,7 @@ func (p pageData[T]) next() string {
 // getAllPages reads every page of a pricing collection, adding extra to each request.
 func getAllPages[T any](ctx context.Context, c *client, op, path string, extra url.Values) ([]T, error) {
 	var all []T
-	token := ""
+	var token string
 	for range maxPages {
 		query := url.Values{"size": {strconv.Itoa(maxPageSize)}}
 		for k, v := range extra {

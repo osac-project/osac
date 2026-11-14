@@ -64,8 +64,14 @@ var (
 	// osacStorageTierLabel is the label key that identifies the storage tier of a StorageClass
 	osacStorageTierLabel string = fmt.Sprintf("%s/storage-tier", osacPrefix)
 
-	// osacStorageProviderLabel is the label key that identifies the storage provider of a hub Secret
+	// osacStorageProviderLabel is the label key that identifies the storage provider of a hub Secret.
+	// Readiness is keyed on osacStorageBackendIDLabel instead, so this constant has no production
+	// reader here; osac-aap still writes the label for CSI vendor routing, so it must not be deleted
+	// as dead code. See docs/storage-backend-identity.md.
 	osacStorageProviderLabel string = fmt.Sprintf("%s/storage-provider", osacPrefix)
+
+	// osacStorageBackendIDLabel is the label key that identifies the backend ID of a hub Secret
+	osacStorageBackendIDLabel string = fmt.Sprintf("%s/storage-backend-id", osacPrefix)
 )
 
 func tenantNamespacePredicate(namespace string) predicate.Predicate {

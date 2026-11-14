@@ -17,7 +17,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-tenant-config-test-onboard"
+            name: "vast-tenant-config-test-onboard-be-test"
             namespace: "osac-system"
           failed_when: false
 
@@ -26,7 +26,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-csi-test-onboard"
+            name: "vast-csi-test-onboard-be-test"
             namespace: "osac-system"
           failed_when: false
 
@@ -56,6 +56,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
     vast_storage_config_namespace: osac-system
     tenant_name: "test-onboard"
     tenant_namespace: "osac-system"
@@ -70,7 +71,7 @@
       be-test:
         endpoint: "127.0.0.1:18443"
         username: "admin"
-        password: "mock-admin-password"
+        password: "{{ _mock_vast_password }}"
     vast_storage_validate_certs: false
 
   tasks:
@@ -99,15 +100,16 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-onboard"
+        name: "vast-tenant-config-test-onboard-be-test"
         namespace: "osac-system"
       register: _hub_secret
+      no_log: true
 
     - name: Assert hub Secret exists
       ansible.builtin.assert:
         that:
           - _hub_secret.resources | length == 1
-        fail_msg: "Hub Secret 'vast-tenant-config-test-onboard' was not created by setup"
+        fail_msg: "Hub Secret 'vast-tenant-config-test-onboard-be-test' was not created by setup"
         success_msg: "Hub Secret exists"
 
     - name: Decode hub Secret manager credentials
@@ -135,7 +137,7 @@
         that:
           - _sc_result.resources[0].parameters.vip_pool_name == "osac-test-onboard-vippool"
           - _sc_result.resources[0].parameters.root_export == "/osac-test-onboard-d0f7f176/default"
-          - "_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name'] == 'vast-csi-test-onboard'"
+          - "_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name'] == 'vast-csi-test-onboard-be-test'"
           - "_sc_result.resources[0].parameters['csi.storage.k8s.io/provisioner-secret-namespace'] == 'osac-system'"
         fail_msg: "StorageClass parameters incorrect: {{ _sc_result.resources[0].parameters }}"
         success_msg: "StorageClass parameters correct"
@@ -144,15 +146,16 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "vast-csi-test-onboard"
+        name: "vast-csi-test-onboard-be-test"
         namespace: "osac-system"
       register: _csi_secret
+      no_log: true
 
     - name: Assert CSI Secret exists
       ansible.builtin.assert:
         that:
           - _csi_secret.resources | length == 1
-        fail_msg: "CSI Secret 'vast-csi-test-onboard' was not created"
+        fail_msg: "CSI Secret 'vast-csi-test-onboard-be-test' was not created"
         success_msg: "CSI Secret exists"
 
     - name: Assert CSI Secret uses manager credentials from hub Secret (credential handoff)
@@ -205,7 +208,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-csi-test-onboard"
+        name: "vast-csi-test-onboard-be-test"
         namespace: "osac-system"
       failed_when: false
 
@@ -230,6 +233,428 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-onboard"
+        name: "vast-tenant-config-test-onboard-be-test"
         namespace: "osac-system"
+      failed_when: false
+
+# ── LVMS Setup: Reset state ──
+- name: "LVMS Storage Onboarding - Reset state"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete pre-existing LVMS test resources (clean slate)
+      block:
+        - name: Delete LVMS hub Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "lvms-tenant-config-test-lvms-onboard-be-lvms"
+            namespace: "osac-system"
+          failed_when: false
+
+# ── LVMS Test: Run setup ──
+- name: "LVMS Storage Onboarding - Run setup"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    lvms_storage_config_namespace: osac-system
+    tenant_name: "test-lvms-onboard"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-lvms-uid-12345"
+    storage_provider_tiers:
+      - name: default
+        protocol: file
+        provider: lvms
+        backend_id: be-lvms
+
+  tasks:
+    - name: Run LVMS storage provider setup
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+
+# ── LVMS Verify: Hub Secret exists with backend ID ──
+- name: "LVMS Storage Onboarding - Verify results"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    tenant_name: "test-lvms-onboard"
+
+  tasks:
+    - name: Read LVMS hub Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "lvms-tenant-config-test-lvms-onboard-be-lvms"
+        namespace: "osac-system"
+      register: _lvms_hub_secret
+      no_log: true
+
+    - name: Assert LVMS hub Secret exists
+      ansible.builtin.assert:
+        that:
+          - _lvms_hub_secret.resources | length == 1
+        fail_msg: "LVMS hub Secret 'lvms-tenant-config-test-lvms-onboard-be-lvms' was not created by setup"
+        success_msg: "LVMS hub Secret exists with per-backend name"
+
+    - name: Assert LVMS hub Secret has backend ID label
+      ansible.builtin.assert:
+        that:
+          - _lvms_hub_secret.resources[0].metadata.labels['osac.openshift.io/storage-backend-id'] == 'be-lvms'
+        fail_msg: "LVMS hub Secret missing or incorrect backend ID label"
+        success_msg: "LVMS hub Secret has correct backend ID label"
+
+    - name: Assert LVMS hub Secret has tenant label
+      ansible.builtin.assert:
+        that:
+          - _lvms_hub_secret.resources[0].metadata.labels['osac.openshift.io/tenant'] == 'test-lvms-onboard'
+        fail_msg: "LVMS hub Secret missing or incorrect tenant label"
+        success_msg: "LVMS hub Secret has correct tenant label"
+
+    - name: Assert LVMS hub Secret has storage-provider label
+      ansible.builtin.assert:
+        that:
+          - _lvms_hub_secret.resources[0].metadata.labels['osac.openshift.io/storage-provider'] == 'lvms'
+        fail_msg: "LVMS hub Secret missing or incorrect storage-provider label"
+        success_msg: "LVMS hub Secret has correct storage-provider label"
+
+# ── LVMS Cleanup ──
+- name: "LVMS Storage Onboarding - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete LVMS hub Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "lvms-tenant-config-test-lvms-onboard-be-lvms"
+        namespace: "osac-system"
+      failed_when: false
+
+# ══════════════════════════════════════════════════════════════
+# Multi-backend onboarding + idempotent retry (OSAC-6448):
+# one tenant, two VAST backends on two separate arrays, onboarded through
+# setup -> ensure_storage_class, then re-run end to end.
+#
+# This is the branch's headline claim: a tenant with two VAST backends can
+# onboard, and retrying is a no-op rather than a second provisioning pass or a
+# cross-backend overwrite.
+# ══════════════════════════════════════════════════════════════
+- name: "Multi-Backend Onboarding - Reset state"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete pre-existing multi-backend onboarding resources (clean slate)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace | default(omit) }}"
+      loop:
+        - {api_version: v1, kind: Secret, name: "vast-tenant-config-test-obmulti-be-one", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-tenant-config-test-obmulti-be-two", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-csi-test-obmulti-be-one", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-csi-test-obmulti-be-two", namespace: osac-system}
+        - {api_version: storage.k8s.io/v1, kind: StorageClass, name: "vast-nfs-test-obmulti-tier-one"}
+        - {api_version: storage.k8s.io/v1, kind: StorageClass, name: "vast-nfs-test-obmulti-tier-two"}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+      failed_when: false
+
+    - name: Record manager-call marks on both arrays
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ item }}/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      loop:
+        - 18443
+        - 18445
+      register: _obmulti_pre_calls
+
+    - name: Save per-array call log offsets
+      ansible.builtin.set_fact:
+        _obmulti_mark_one: "{{ _obmulti_pre_calls.results[0].json | length }}"
+        _obmulti_mark_two: "{{ _obmulti_pre_calls.results[1].json | length }}"
+
+- name: "Multi-Backend Onboarding - Run setup and ensure_storage_class twice"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-obmulti"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-obmulti"
+    _cluster_name: "test-cluster"
+    storage_provider_tiers:
+      - name: tier-one
+        protocol: nfs
+        provider: vast
+        backend_id: be-one
+      - name: tier-two
+        protocol: nfs
+        provider: vast
+        backend_id: be-two
+    storage_provider_backend_connections:
+      be-one:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "{{ _mock_vast_password }}"
+      be-two:
+        endpoint: "127.0.0.1:18445"
+        username: "admin"
+        password: "{{ _mock_vast_password }}"
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Run setup for both backends
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+
+    - name: Run ensure_storage_class for both backends
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+
+    - name: Re-run setup for both backends (idempotent retry)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+
+    - name: Re-run ensure_storage_class for both backends (idempotent retry)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+
+- name: "Multi-Backend Onboarding - Verify per-backend results after retry"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: List hub Secrets for the tenant
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "osac-system"
+        label_selectors:
+          - "osac.openshift.io/tenant=test-obmulti"
+          - "osac.openshift.io/storage-provider=vast"
+      register: _obmulti_hub_secrets
+      no_log: true
+
+    # Built with an explicit loop: map(attribute=...) splits the attribute string
+    # on dots, so it cannot address a label key that contains them.
+    - name: Collect hub Secret names and backend-id labels
+      ansible.builtin.set_fact:
+        _obmulti_names: "{{ _obmulti_hub_secrets.resources | map(attribute='metadata.name') | sort | list }}"
+        _obmulti_ids: >-
+          {% set _ids = [] -%}
+          {% for _s in _obmulti_hub_secrets.resources -%}
+          {% set _ = _ids.append(_s.metadata.labels['osac.openshift.io/storage-backend-id']
+                                 | default('<missing>')) -%}
+          {% endfor -%}
+          {{ _ids | sort | list }}
+
+    - name: Assert exactly one hub Secret per backend survived the retry
+      ansible.builtin.assert:
+        that:
+          - _obmulti_names == ['vast-tenant-config-test-obmulti-be-one', 'vast-tenant-config-test-obmulti-be-two']
+          - _obmulti_ids == ['be-one', 'be-two']
+        fail_msg: >-
+          Expected exactly one hub Secret per backend after the retry, got:
+          {{ _obmulti_names }} with backend ids {{ _obmulti_ids }}
+        success_msg: "One hub Secret per backend, each labelled with its own backend id"
+
+    - name: Read per-backend hub Secrets
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-obmulti-{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - be-one
+        - be-two
+      register: _obmulti_hub_each
+      no_log: true
+
+    - name: Assert each hub Secret records its own array's endpoint
+      vars:
+        _hub_one: "{{ _obmulti_hub_each.results[0].resources[0] }}"
+        _hub_two: "{{ _obmulti_hub_each.results[1].resources[0] }}"
+      ansible.builtin.assert:
+        that:
+          - (_hub_one.data.vast_endpoint | b64decode) == "127.0.0.1:18443"
+          - (_hub_two.data.vast_endpoint | b64decode) == "127.0.0.1:18445"
+          - (_hub_one.data.tenant_manager_password | b64decode)
+            != (_hub_two.data.tenant_manager_password | b64decode)
+        fail_msg: >-
+          A hub Secret carries the other backend's endpoint or credentials —
+          the second dispatch overwrote or reused the first backend's identity.
+        success_msg: "Each hub Secret holds its own array's endpoint and credentials"
+      no_log: true
+
+    - name: Read per-backend CSI Secrets
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-obmulti-{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - be-one
+        - be-two
+      register: _obmulti_csi_each
+      no_log: true
+
+    - name: Assert each CSI Secret matches its own backend's hub Secret
+      vars:
+        _hub_one: "{{ _obmulti_hub_each.results[0].resources[0] }}"
+        _hub_two: "{{ _obmulti_hub_each.results[1].resources[0] }}"
+        _csi_one: "{{ _obmulti_csi_each.results[0].resources[0] | default({}) }}"
+        _csi_two: "{{ _obmulti_csi_each.results[1].resources[0] | default({}) }}"
+      ansible.builtin.assert:
+        that:
+          - _obmulti_csi_each.results[0].resources | length == 1
+          - _obmulti_csi_each.results[1].resources | length == 1
+          - (_csi_one.data.password | b64decode) == (_hub_one.data.tenant_manager_password | b64decode)
+          - (_csi_two.data.password | b64decode) == (_hub_two.data.tenant_manager_password | b64decode)
+          - (_csi_one.data.endpoint | b64decode) == "127.0.0.1:18443"
+          - (_csi_two.data.endpoint | b64decode) == "127.0.0.1:18445"
+        fail_msg: "A CSI Secret does not carry its own backend's credentials"
+        success_msg: "Credential handoff is per backend across both arrays"
+      no_log: true
+
+    - name: Read per-backend StorageClasses
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "vast-nfs-test-obmulti-{{ item }}"
+      loop:
+        - tier-one
+        - tier-two
+      register: _obmulti_sc_each
+
+    - name: Assert each StorageClass references its own backend's CSI Secret
+      ansible.builtin.assert:
+        that:
+          - _obmulti_sc_each.results[0].resources | length == 1
+          - _obmulti_sc_each.results[1].resources | length == 1
+          - >-
+            _obmulti_sc_each.results[0].resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name']
+            == 'vast-csi-test-obmulti-be-one'
+          - >-
+            _obmulti_sc_each.results[1].resources[0].parameters['csi.storage.k8s.io/provisioner-secret-name']
+            == 'vast-csi-test-obmulti-be-two'
+        fail_msg: "A StorageClass references the wrong backend's CSI Secret"
+        success_msg: "Each backend's StorageClass references its own CSI Secret"
+
+    - name: Get post-run call logs from both arrays
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ item }}/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      loop:
+        - 18443
+        - 18445
+      register: _obmulti_post_calls
+
+    - name: Count tenant-manager POSTs per array across both runs
+      vars:
+        _window_one: "{{ _obmulti_post_calls.results[0].json[_obmulti_mark_one | int:] }}"
+        _window_two: "{{ _obmulti_post_calls.results[1].json[_obmulti_mark_two | int:] }}"
+      ansible.builtin.set_fact:
+        _obmulti_mgr_posts_one: >-
+          {% set _n = [] -%}
+          {% for _c in _window_one -%}
+          {% if _c.method == 'POST' and 'managers' in _c.path
+                and (_c.body | default({})).get('username', '').startswith('osac-test-obmulti-be-') -%}
+          {% set _ = _n.append(1) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ _n | length }}
+        _obmulti_mgr_posts_two: >-
+          {% set _n = [] -%}
+          {% for _c in _window_two -%}
+          {% if _c.method == 'POST' and 'managers' in _c.path
+                and (_c.body | default({})).get('username', '').startswith('osac-test-obmulti-be-') -%}
+          {% set _ = _n.append(1) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ _n | length }}
+
+    - name: Assert the retry created no second VMS manager on either array
+      ansible.builtin.assert:
+        that:
+          - _obmulti_mgr_posts_one | int == 1
+          - _obmulti_mgr_posts_two | int == 1
+        fail_msg: >-
+          Expected exactly one POST /api/managers/ per array across both onboarding
+          runs, got {{ _obmulti_mgr_posts_one }} on array one and
+          {{ _obmulti_mgr_posts_two }} on array two. The hub-Secret idempotency
+          check in create_tenant_manager.yaml must be per backend.
+        success_msg: "Retry across both backend IDs created no duplicate managers"
+
+- name: "Multi-Backend Onboarding - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete multi-backend onboarding resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace | default(omit) }}"
+      loop:
+        - {api_version: storage.k8s.io/v1, kind: StorageClass, name: "vast-nfs-test-obmulti-tier-one"}
+        - {api_version: storage.k8s.io/v1, kind: StorageClass, name: "vast-nfs-test-obmulti-tier-two"}
+        - {api_version: v1, kind: Secret, name: "vast-csi-test-obmulti-be-one", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-csi-test-obmulti-be-two", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-tenant-config-test-obmulti-be-one", namespace: osac-system}
+        - {api_version: v1, kind: Secret, name: "vast-tenant-config-test-obmulti-be-two", namespace: osac-system}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+      failed_when: false
+
+    - name: Check if VolumeSnapshotClass CRD exists for multi-backend cleanup
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: volumesnapshotclasses.snapshot.storage.k8s.io
+      register: _obmulti_cleanup_vsc_crd
+
+    - name: Delete multi-backend VolumeSnapshotClasses
+      when: _obmulti_cleanup_vsc_crd.resources | length > 0
+      kubernetes.core.k8s:
+        state: absent
+        api_version: snapshot.storage.k8s.io/v1
+        kind: VolumeSnapshotClass
+        name: "{{ item }}"
+      loop:
+        - "vast-snapshot-test-obmulti-tier-one"
+        - "vast-snapshot-test-obmulti-tier-two"
       failed_when: false

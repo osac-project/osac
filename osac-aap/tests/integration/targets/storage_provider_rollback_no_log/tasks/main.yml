@@ -1,0 +1,129 @@
+---
+- name: Rollback no_log - Prepare
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Delete any existing Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: vast-tenant-config-test-nolog-be-nolog
+        namespace: osac-system
+      failed_when: false
+
+    - name: Reset mock VMS state
+      ansible.builtin.uri:
+        url: https://127.0.0.1:18443/_reset
+        method: POST
+        validate_certs: false
+      failed_when: false
+
+    - name: Seed hub Secret with canary credentials
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: vast-tenant-config-test-nolog-be-nolog
+            namespace: osac-system
+            labels:
+              osac.openshift.io/tenant: test-nolog
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/storage-backend-id: be-nolog
+          stringData:
+            tenant_manager_password: OSAC-NO-LOG-CANARY-PASSWORD
+            block_encryption_passphrase: OSAC-NO-LOG-CANARY-PASSPHRASE
+            tenant_manager_name: osac-test-nolog-be-nolog
+            vast_tenant_id: "1"
+            vast_endpoint: "127.0.0.1:18443"
+      no_log: true
+
+    - name: Inject manager creation failure
+      ansible.builtin.uri:
+        url: https://127.0.0.1:18443/_inject_failure
+        method: POST
+        body_format: json
+        body:
+          resource: managers
+          method: POST
+          status: 500
+          body:
+            error: "injected: no_log canary test"
+        validate_certs: false
+
+- name: Rollback no_log - Run inner playbook with -vvv
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Run inner playbook with verbose output redirected to capture file
+      ansible.builtin.shell: |
+        ansible-playbook -vvv \
+          targets/storage_provider_rollback_no_log/tasks/inner_rollback.yml \
+          -e "@common_vars.yml" \
+          > /tmp/osac_nolog_capture.log 2>&1
+      args:
+        chdir: "{{ playbook_dir }}/../../.."
+      register: _inner_run
+      failed_when: false
+      changed_when: false
+
+- name: Rollback no_log - Verify no credential leak
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Check capture file exists
+      ansible.builtin.stat:
+        path: /tmp/osac_nolog_capture.log
+      register: _capture_stat
+
+    - name: Assert capture file is non-trivial
+      ansible.builtin.assert:
+        that:
+          - _capture_stat.stat.exists
+          - _capture_stat.stat.size > 1000
+        fail_msg: "Capture file missing or empty — the grep below would pass vacuously"
+
+    - name: Assert rollback marker is present in capture
+      ansible.builtin.assert:
+        that:
+          - "'Rollback - check if hub Secret exists before deletion' in lookup('file', '/tmp/osac_nolog_capture.log')"
+        fail_msg: "Rollback never reached the Secret read — test proves nothing"
+
+    - name: Grep capture for credential canaries (plaintext and base64)
+      ansible.builtin.shell: |
+        grep -c \
+          -e 'OSAC-NO-LOG-CANARY-PASSWORD' \
+          -e 'OSAC-NO-LOG-CANARY-PASSPHRASE' \
+          -e '{{ "OSAC-NO-LOG-CANARY-PASSWORD" | b64encode }}' \
+          -e '{{ "OSAC-NO-LOG-CANARY-PASSPHRASE" | b64encode }}' \
+          /tmp/osac_nolog_capture.log
+      register: _grep
+      failed_when: false
+      changed_when: false
+
+    - name: Assert no credentials in verbose output
+      ansible.builtin.assert:
+        that:
+          - _grep.stdout | int == 0
+        fail_msg: "SECURITY: {{ _grep.stdout }} credential occurrence(s) in verbose rollback output — no_log is not protecting the hub Secret"
+        success_msg: "No credential canaries in verbose rollback output"
+
+- name: Rollback no_log - Cleanup
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Delete test Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: vast-tenant-config-test-nolog-be-nolog
+        namespace: osac-system
+      failed_when: false
+
+    - name: Remove capture file
+      ansible.builtin.file:
+        path: /tmp/osac_nolog_capture.log
+        state: absent

@@ -306,12 +306,13 @@ class StorageMappingTests(unittest.TestCase):
         unwanted_fast_jit_class = f"osac-{self.namespace}-fast"
         self.owned_classes.extend([managed_class, unwanted_fast_jit_class])
         definitions = [
-            {"name": "fast", "provider": "lvms", "protocol": "block"},
-            {"name": "balanced", "provider": "lvms", "protocol": "block"},
+            {"name": "fast", "provider": "lvms", "protocol": "block", "backend_id": "lvms-backend-1"},
+            {"name": "balanced", "provider": "lvms", "protocol": "block", "backend_id": "lvms-backend-1"},
             {
                 "name": "not-requested",
                 "provider": "unused-provider",
                 "protocol": "block",
+                "backend_id": "unused-backend-1",
             },
         ]
         result = self._run_playbook(

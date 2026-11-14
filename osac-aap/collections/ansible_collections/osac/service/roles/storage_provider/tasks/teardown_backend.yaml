@@ -4,11 +4,11 @@
 # without touching cluster-side K8s resources.
 # Best-effort — ignore_errors so one provider's failure doesn't block others.
 
-- name: Dispatch teardown_backend to each provider
+- name: Dispatch teardown_backend to each provider backend pair
   block:
-    - name: Run teardown_backend per provider
+    - name: Run teardown_backend per provider backend pair
       ansible.builtin.include_tasks: _dispatch_provider.yaml
-      loop: "{{ _unique_providers }}"
+      loop: "{{ _provider_backend_pairs }}"
       loop_control:
-        loop_var: _current_provider
+        loop_var: _current_pair
       ignore_errors: true  # noqa: ignore-errors

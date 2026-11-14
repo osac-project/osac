@@ -1,0 +1,216 @@
+---
+# Verifies that when two backends share the same VMS endpoint, tearing down
+# backend B does not affect backend A's ability to provision storage via its
+# manager. This proves managers are backend-scoped, not shared.
+
+- name: Same-endpoint teardown - Setup backend A
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_name: test-sametd
+    tenant_namespace: osac-system
+    tenant_uid: "test-uid-sametd"
+    vast_storage_validate_certs: false
+    vast_storage_config_namespace: osac-system
+    storage_provider_backend_connections:
+      be-a:
+        endpoint: "127.0.0.1:18443"
+        username: admin
+        password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    storage_provider_tiers:
+      - name: nfs-tier-a
+        backend_id: be-a
+        protocol: nfs
+        provider: vast
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+  tasks:
+    - name: Reset mock VMS state
+      ansible.builtin.uri:
+        url: https://127.0.0.1:18443/_reset
+        method: POST
+        validate_certs: false
+      failed_when: false
+
+    - name: Delete any stale Secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        namespace: osac-system
+        label_selectors:
+          - "osac.openshift.io/tenant=test-sametd"
+      failed_when: false
+
+    - name: Setup backend A
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+
+    - name: Get backend A's hub Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: vast-tenant-config-test-sametd-be-a
+        namespace: osac-system
+      register: _sametd_a_secret
+
+    - name: Extract backend A's manager credentials
+      ansible.builtin.set_fact:
+        _sametd_a_endpoint: "{{ _sametd_a_secret.resources[0].data.vast_endpoint | b64decode }}"
+        _sametd_a_manager_user: "{{ _sametd_a_secret.resources[0].data.tenant_manager_username | b64decode }}"
+        _sametd_a_manager_pass: "{{ _sametd_a_secret.resources[0].data.tenant_manager_password | b64decode }}"
+        _sametd_a_tenant_id: "{{ _sametd_a_secret.resources[0].data.vast_tenant_id | b64decode }}"
+      no_log: true
+
+- name: Same-endpoint teardown - Setup backend B
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_name: test-sametd
+    tenant_namespace: osac-system
+    tenant_uid: "test-uid-sametd"
+    vast_storage_validate_certs: false
+    vast_storage_config_namespace: osac-system
+    storage_provider_backend_connections:
+      be-b:
+        endpoint: "127.0.0.1:18443"
+        username: admin
+        password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    storage_provider_tiers:
+      - name: nfs-tier-b
+        backend_id: be-b
+        protocol: nfs
+        provider: vast
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+  tasks:
+    - name: Setup backend B
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+
+- name: Same-endpoint teardown - Teardown backend B
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_name: test-sametd
+    tenant_namespace: osac-system
+    tenant_uid: "test-uid-sametd"
+    vast_storage_validate_certs: false
+    vast_storage_config_namespace: osac-system
+    storage_provider_backend_connections:
+      be-b:
+        endpoint: "127.0.0.1:18443"
+        username: admin
+        password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    storage_provider_tiers:
+      - name: nfs-tier-b
+        backend_id: be-b
+        protocol: nfs
+        provider: vast
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+  tasks:
+    - name: Teardown backend B
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_backend
+
+- name: Same-endpoint teardown - Verify backend A's manager still works
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Authenticate to VMS using backend A's manager credentials
+      ansible.builtin.uri:
+        url: "https://{{ _sametd_a_endpoint }}/api/token/"
+        method: POST
+        body_format: json
+        body:
+          username: "{{ _sametd_a_manager_user }}"
+          password: "{{ _sametd_a_manager_pass }}"
+        validate_certs: false
+      register: _sametd_a_manager_auth
+      no_log: true
+
+    - name: Assert backend A's manager can still authenticate
+      ansible.builtin.assert:
+        that:
+          - _sametd_a_manager_auth.status == 200
+        fail_msg: "Backend A's manager cannot authenticate after backend B teardown"
+        success_msg: "Backend A's manager can still authenticate"
+
+    - name: Create a test view using backend A's manager
+      ansible.builtin.uri:
+        url: "https://{{ _sametd_a_endpoint }}/api/views/"
+        method: POST
+        body_format: json
+        body:
+          name: "test-view-after-teardown"
+          path: "/test-view-after-teardown"
+          tenant_id: "{{ _sametd_a_tenant_id | int }}"
+          protocols: ["NFS"]
+        headers:
+          Authorization: "Bearer {{ _sametd_a_manager_auth.json.access }}"
+        validate_certs: false
+        status_code: [200, 201]
+      register: _sametd_test_view
+      no_log: true
+
+    - name: Assert backend A can create views after backend B teardown
+      ansible.builtin.assert:
+        that:
+          - _sametd_test_view.status in [200, 201]
+        fail_msg: "Backend A's manager cannot create views after backend B teardown — managers may be shared"
+        success_msg: "Backend A's manager can still create views — managers are correctly backend-scoped"
+
+- name: Same-endpoint teardown - Cleanup
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_name: test-sametd
+    tenant_namespace: osac-system
+    tenant_uid: "test-uid-sametd"
+    vast_storage_validate_certs: false
+    vast_storage_config_namespace: osac-system
+    storage_provider_backend_connections:
+      be-a:
+        endpoint: "127.0.0.1:18443"
+        username: admin
+        password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    storage_provider_tiers:
+      - name: nfs-tier-a
+        backend_id: be-a
+        protocol: nfs
+        provider: vast
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+  tasks:
+    - name: Teardown backend A to clean up
+      block:
+        - name: Teardown backend A
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: teardown_backend
+      rescue:
+        - name: Teardown failed in cleanup (ignored)
+          ansible.builtin.debug:
+            msg: "Backend A teardown failed but continuing"
+
+    - name: Delete any remaining test Secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        namespace: osac-system
+        label_selectors:
+          - "osac.openshift.io/tenant=test-sametd"
+      failed_when: false

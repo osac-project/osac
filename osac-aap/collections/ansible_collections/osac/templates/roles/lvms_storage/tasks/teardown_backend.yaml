@@ -12,7 +12,7 @@
     state: absent
     api_version: v1
     kind: Secret
-    name: "{{ lvms_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+    name: "{{ lvms_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _current_backend_id }}"
     namespace: "{{ lvms_storage_config_namespace }}"
   register: _lvms_teardown_secret_result
   failed_when: false

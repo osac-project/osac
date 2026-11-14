@@ -365,6 +365,11 @@ func (v *jwtValidator) translateError(ctx context.Context, token *jwt.Token, err
 			return errors.New("token does not contain the 'kid' claim")
 		}
 		return fmt.Errorf("there is no key '%s' for issuer URL '%s'", kid, iss)
+	case errors.Is(err, ErrIssuerUnavailable):
+		return fmt.Errorf(
+			"%w: identity provider is temporarily unavailable",
+			ErrIssuerUnavailable,
+		)
 	default:
 		v.logger.ErrorContext(
 			ctx,

@@ -1,0 +1,28 @@
+---
+- name: Run the existing workflow with malformed NodePool hook output
+  ansible.builtin.import_playbook: osac.workflows.cluster.create
+  vars:
+    osac_job_vars:
+      resource: "{{ upgrade_cluster_order }}"
+    cluster_working_namespace: "{{ fixture_namespace }}"
+    awx_job_id: "upgrade-malformed-{{ fixture_id }}"
+    cluster_order_label: "osac.openshift.io/clusterorder"
+    cluster_order_infrastructure_finalizer: "osac.openshift.io/infrastructure"
+    agent_instance_type_label: "osac.openshift.io/instance_type"
+    agent_node_set_label: "osac.openshift.io/node-set"
+    hosted_cluster_default_agent_namespace: "{{ fixture_namespace }}"
+    nodepool_modify_definitions_hook:
+      name: osac.test_overrides.hosted_cluster_malformed_nodepool_hook
+      tasks_from: main.yml
+    install_step_external_access_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_retrieve_kubeconfig_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_wait_for_nodes_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml
+    install_step_wait_for_cluster_operators_override:
+      name: osac.workflows.workflow_helpers
+      tasks_from: noop.yml

@@ -16,14 +16,21 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
+)
+
+const (
+	testRawBearerValue      = "raw-bearer-value"
+	testBearerAuthorization = "Bearer api-for-" + testRawBearerValue
 )
 
 func createPrerequisiteClients(instances *mockComputeInstancesClient) computeInstanceClients {
@@ -85,7 +92,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		}
 
 		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
 			Name:        "demo-vm",
 			CatalogItem: "catalog-item-1",
 		})
@@ -95,7 +102,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 			Version: 7,
 			State:   "COMPUTE_INSTANCE_STATE_STARTING",
 		}))
-		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(capturedToken).To(Equal(testBearerAuthorization))
 		Expect(capturedObject.GetMetadata().GetName()).To(Equal("demo-vm"))
 		Expect(capturedObject.GetMetadata().GetTenant()).To(BeEmpty())
 		Expect(capturedObject.GetSpec().GetCatalogItem().GetId()).To(Equal("catalog-item-1"))
@@ -113,11 +120,11 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		}
 
 		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+		_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
 			Name: "demo-vm-1", CatalogItem: "catalog-item-1",
 		})
 		Expect(err).ToNot(HaveOccurred())
-		_, _, err = handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+		_, _, err = handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
 			Name: "demo-vm-2", CatalogItem: "catalog-item-1",
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -171,7 +178,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 			}.Build(), nil
 		}}
 		handler := handleCreateComputeInstance(clients)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+		_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
 			Name:           "demo-vm",
 			CatalogItem:    "catalog-item-1",
 			InstanceTypeID: "u1-medium",
@@ -207,7 +214,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 			}
 
 			handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
-			_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), input)
+			_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), input)
 			Expect(err).To(MatchError(ContainSubstring(expectedError)))
 		},
 		Entry("an empty boot disk", CreateComputeInstanceInput{
@@ -258,7 +265,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 				},
 			}
 			handler := handleCreateComputeInstance(clients)
-			_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+			_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
 				Name: "demo-vm", CatalogItem: "catalog-item-1", NetworkAttachments: input,
 			})
 			Expect(err).ToNot(HaveOccurred())
@@ -283,7 +290,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		}
 
 		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+		_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
 			Name:        "demo-vm",
 			CatalogItem: "catalog-item-1",
 		})
@@ -303,7 +310,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		}
 
 		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
 			Name: "demo-vm", CatalogItem: "catalog-item-1",
 		})
 		envelope := decodeToolError(err)
@@ -347,7 +354,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		}}
 
 		handler := handleCreateComputeInstance(clients)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+		_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
 			Name: "demo-vm", CatalogItem: "catalog-item-1", DiskImageID: "image-1", ProjectID: "project-1",
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -372,7 +379,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		}}
 
 		handler := handleCreateComputeInstance(clients)
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
 			Name: "demo-vm", CatalogItem: "catalog-item-1", ProjectID: "missing-project",
 		})
 		envelope := decodeToolError(err)
@@ -429,7 +436,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		}}
 
 		handler := handleCreateComputeInstance(clients)
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
 			Name: "demo-vm", CatalogItem: "catalog-item-1", ProjectID: "project-1",
 		})
 		envelope := decodeToolError(err)
@@ -446,6 +453,46 @@ var _ = Describe("handleCreateComputeInstance", func() {
 func int32Pointer(value int32) *int32 {
 	return &value
 }
+
+// currentComputeInstance builds a catalog-backed instance at the given version.
+func currentComputeInstance(version int32) *publicv1.ComputeInstance {
+	return currentComputeInstanceWithRestart(version, nil)
+}
+
+// currentComputeInstanceWithRestart builds an instance with an optional restart signal.
+func currentComputeInstanceWithRestart(
+	version int32, restartRequestedAt *timestamppb.Timestamp,
+) *publicv1.ComputeInstance {
+	return publicv1.ComputeInstance_builder{
+		Id:       "instance-1",
+		Metadata: publicv1.Metadata_builder{Version: version}.Build(),
+		Spec: publicv1.ComputeInstanceSpec_builder{
+			CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: "catalog-item-1"}.Build(),
+			RestartRequestedAt: restartRequestedAt,
+		}.Build(),
+	}.Build()
+}
+
+// instancesWithCurrent returns a client that serves an instance at the given version.
+func instancesWithCurrent(version int32) *mockComputeInstancesClient {
+	return &mockComputeInstancesClient{
+		getFunc: func(
+			_ context.Context, _ *publicv1.ComputeInstancesGetRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesGetResponse, error) {
+			return publicv1.ComputeInstancesGetResponse_builder{Object: currentComputeInstance(version)}.Build(), nil
+		},
+	}
+}
+
+var _ = Describe("nextComputeInstanceRestartRequestedAt", func() {
+	It("Advances within the same persisted second", func() {
+		now := time.Date(2026, time.November, 11, 12, 0, 0, 900_000_000, time.UTC)
+		previous := timestamppb.New(time.Date(2026, time.November, 11, 12, 0, 0, 100_000_000, time.UTC))
+
+		requestedAt := nextComputeInstanceRestartRequestedAt(now, previous)
+		Expect(requestedAt.AsTime()).To(Equal(time.Date(2026, time.November, 11, 12, 0, 1, 0, time.UTC)))
+	})
+})
 
 var _ = Describe("handleUpdateComputeInstance", func() {
 	currentInstance := func(version int32) *publicv1.ComputeInstance {
@@ -501,7 +548,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		}}
 
 		handler := handleUpdateComputeInstance(clients)
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: 7, InstanceTypeID: "u1-large",
 			RunStrategy: "HALTED",
 		})
@@ -529,7 +576,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		}
 
 		handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: 7, RunStrategy: "HALTED",
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -556,7 +603,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		}
 
 		handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: 7, RunStrategy: "HALTED",
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -574,7 +621,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		}
 
 		handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: 6, RunStrategy: "HALTED",
 		})
 		envelope := decodeToolError(err)
@@ -585,7 +632,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 	})
 
 	It("Keeps an observed version stale while a next version can become current", func() {
-		const testToken = "raw-bearer-value"
+		const testToken = testRawBearerValue
 		currentVersion := int32(7)
 		instances := instancesWithCurrent(currentVersion)
 		instances.getFunc = func(
@@ -643,7 +690,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 		}
 
 		handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: 7, RunStrategy: "HALTED",
 		})
 		envelope := decodeToolError(err)
@@ -663,7 +710,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 			}
 
 			handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
-			_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+			_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), UpdateComputeInstanceInput{
 				ID: "instance-1", Version: 7, RunStrategy: "HALTED",
 			})
 			envelope := decodeToolError(err)
@@ -789,7 +836,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 				}}
 
 				_, output, err := handleUpdateComputeInstance(clients)(
-					context.Background(), requestWithToken("raw-bearer-value"), fieldCase.input,
+					context.Background(), requestWithToken(testRawBearerValue), fieldCase.input,
 				)
 				if variant.locked {
 					envelope := decodeToolError(err)
@@ -810,18 +857,335 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 	It("Requires a supported field and a current version", func() {
 		instances := &mockComputeInstancesClient{}
 		handler := handleUpdateComputeInstance(createPrerequisiteClients(instances))
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+		_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: 7,
 		})
 		Expect(decodeToolError(err).Details).To(ConsistOf("at least one supported update field is required"))
 
-		_, _, err = handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+		_, _, err = handler(context.Background(), requestWithToken(testRawBearerValue), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: -1, RunStrategy: "HALTED",
 		})
 		Expect(decodeToolError(err).Details).To(ConsistOf("version must be greater than zero"))
 
-		_, _, err = handler(context.Background(), requestWithToken("raw-bearer-value"), UpdateComputeInstanceInput{
+		_, _, err = handler(context.Background(), requestWithToken(testRawBearerValue), UpdateComputeInstanceInput{
 			ID: "instance-1", Version: 0, RunStrategy: "HALTED",
+		})
+		Expect(decodeToolError(err).Details).To(ConsistOf("version must be greater than zero"))
+	})
+})
+
+var _ = Describe("handleSetComputeInstancePower", func() {
+	DescribeTable("Applies a requested power action as the caller",
+		func(action string, expectedRunStrategy publicv1.ComputeInstanceRunStrategy, expectedOutput string) {
+			var capturedToken string
+			var capturedRequest *publicv1.ComputeInstancesUpdateRequest
+			instances := instancesWithCurrent(7)
+			instances.updateFunc = func(
+				ctx context.Context, request *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesUpdateResponse, error) {
+				capturedToken = forwardedToken(ctx)
+				capturedRequest = request
+				return publicv1.ComputeInstancesUpdateResponse_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Id:       "instance-1",
+						Metadata: publicv1.Metadata_builder{Version: 8}.Build(),
+						Spec:     publicv1.ComputeInstanceSpec_builder{RunStrategy: expectedRunStrategy.Enum()}.Build(),
+						Status: publicv1.ComputeInstanceStatus_builder{
+							State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPING,
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			}
+
+			handler := handleSetComputeInstancePower(createPrerequisiteClients(instances))
+			_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), SetComputeInstancePowerInput{
+				ID: "instance-1", Version: 7, Action: action,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(output).To(Equal(SetComputeInstancePowerOutput{
+				ID: "instance-1", Version: 8, State: "COMPUTE_INSTANCE_STATE_STOPPING",
+				RunStrategy: expectedOutput,
+			}))
+			Expect(capturedToken).To(Equal(testBearerAuthorization))
+			Expect(capturedRequest.GetLock()).To(BeTrue())
+			Expect(capturedRequest.GetObject().GetId()).To(Equal("instance-1"))
+			Expect(capturedRequest.GetObject().GetMetadata().GetVersion()).To(Equal(int32(7)))
+			Expect(capturedRequest.GetUpdateMask().GetPaths()).To(ConsistOf("spec.run_strategy"))
+			Expect(capturedRequest.GetObject().GetSpec().GetRunStrategy()).To(Equal(expectedRunStrategy))
+		},
+		Entry("start", "start", publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS, "ALWAYS"),
+		Entry("stop", "stop", publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED, "HALTED"),
+	)
+
+	It("Rejects power changes when the catalog item locks run strategy", func() {
+		updateCalls := 0
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			updateCalls++
+			return nil, errors.New("Update should not be called")
+		}
+		clients := createPrerequisiteClients(instances)
+		clients.catalogItems = &mockComputeInstanceCatalogItemsClient{
+			getFunc: func(
+				_ context.Context, _ *publicv1.ComputeInstanceCatalogItemsGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstanceCatalogItemsGetResponse, error) {
+				return publicv1.ComputeInstanceCatalogItemsGetResponse_builder{
+					Object: publicv1.ComputeInstanceCatalogItem_builder{
+						Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
+							RunStrategy: publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{
+								Locked: publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+							}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		_, output, err := handleSetComputeInstancePower(clients)(
+			context.Background(), requestWithToken(testRawBearerValue), SetComputeInstancePowerInput{
+				ID: "instance-1", Version: 7, Action: "stop",
+			},
+		)
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(updateCalls).To(BeZero())
+		Expect(envelope.Category).To(Equal("invalid_request"))
+		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+		Expect(envelope.Details).To(ConsistOf("run_strategy is locked by the selected catalog item"))
+	})
+
+	It("Returns the public update response without no-op special-casing", func() {
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			return publicv1.ComputeInstancesUpdateResponse_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Id:       "instance-1",
+					Metadata: publicv1.Metadata_builder{Version: 7}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						RunStrategy: publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED.Enum(),
+					}.Build(),
+					Status: publicv1.ComputeInstanceStatus_builder{
+						State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STOPPED,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil
+		}
+
+		handler := handleSetComputeInstancePower(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), SetComputeInstancePowerInput{
+			ID: "instance-1", Version: 7, Action: "stop",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output).To(Equal(SetComputeInstancePowerOutput{
+			ID: "instance-1", Version: 7, State: "COMPUTE_INSTANCE_STATE_STOPPED",
+			RunStrategy: "HALTED",
+		}))
+	})
+
+	It("Rejects a stale version before the public update", func() {
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			return nil, errors.New("Update should not be called")
+		}
+
+		handler := handleSetComputeInstancePower(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), SetComputeInstancePowerInput{
+			ID: "instance-1", Version: 6, Action: "start",
+		})
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(envelope.Category).To(Equal("conflict"))
+		Expect(envelope.GRPCCode).To(Equal("Aborted"))
+		Expect(envelope.Message).To(Equal("The resource version is stale. Retrieve the current version and retry."))
+	})
+
+	It("Maps a public optimistic-lock conflict to a stale version error", func() {
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			return nil, status.Error(codes.Aborted, "version changed")
+		}
+
+		handler := handleSetComputeInstancePower(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), SetComputeInstancePowerInput{
+			ID: "instance-1", Version: 7, Action: "start",
+		})
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(envelope.Category).To(Equal("conflict"))
+		Expect(envelope.GRPCCode).To(Equal("Aborted"))
+	})
+
+	It("Rejects invalid input before the public API", func() {
+		instances := &mockComputeInstancesClient{}
+		handler := handleSetComputeInstancePower(createPrerequisiteClients(instances))
+		_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), SetComputeInstancePowerInput{
+			ID: "instance-1", Version: 7, Action: "restart",
+		})
+		Expect(decodeToolError(err).Details).To(ConsistOf("action must be start or stop"))
+
+		_, _, err = handler(context.Background(), requestWithToken(testRawBearerValue), SetComputeInstancePowerInput{
+			ID: "instance-1", Version: 0, Action: "start",
+		})
+		Expect(decodeToolError(err).Details).To(ConsistOf("version must be greater than zero"))
+	})
+
+	It("Returns a safe authorization error when the public update is denied", func() {
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			return nil, status.Error(codes.PermissionDenied, "tenant is not allowed")
+		}
+
+		handler := handleSetComputeInstancePower(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), SetComputeInstancePowerInput{
+			ID: "instance-1", Version: 7, Action: "start",
+		})
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(envelope.Category).To(Equal("authorization"))
+		Expect(envelope.GRPCCode).To(Equal("PermissionDenied"))
+		Expect(err.Error()).ToNot(ContainSubstring("tenant is not allowed"))
+	})
+})
+
+var _ = Describe("handleRestartComputeInstance", func() {
+	It("Generates the restart timestamp at the edge and uses the caller token", func() {
+		var capturedToken string
+		var capturedRequest *publicv1.ComputeInstancesUpdateRequest
+		before := time.Now().UTC()
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			ctx context.Context, request *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			capturedToken = forwardedToken(ctx)
+			capturedRequest = request
+			return publicv1.ComputeInstancesUpdateResponse_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Id:       "instance-1",
+					Metadata: publicv1.Metadata_builder{Version: 8}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						RestartRequestedAt: request.GetObject().GetSpec().GetRestartRequestedAt(),
+					}.Build(),
+					Status: publicv1.ComputeInstanceStatus_builder{
+						State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil
+		}
+
+		handler := handleRestartComputeInstance(instances)
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), RestartComputeInstanceInput{
+			ID: "instance-1", Version: 7,
+		})
+		after := time.Now().UTC()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output.ID).To(Equal("instance-1"))
+		Expect(output.Version).To(Equal(int32(8)))
+		Expect(output.State).To(Equal("COMPUTE_INSTANCE_STATE_RUNNING"))
+		Expect(output.RestartRequestedAt).ToNot(BeEmpty())
+		acceptedAt, parseErr := time.Parse(time.RFC3339Nano, output.RestartRequestedAt)
+		Expect(parseErr).ToNot(HaveOccurred())
+		Expect(acceptedAt).To(BeTemporally(">=", before.Truncate(time.Second)))
+		Expect(acceptedAt).To(BeTemporally("<=", after))
+		Expect(capturedToken).To(Equal(testBearerAuthorization))
+		Expect(capturedRequest.GetLock()).To(BeTrue())
+		Expect(capturedRequest.GetObject().GetId()).To(Equal("instance-1"))
+		Expect(capturedRequest.GetObject().GetMetadata().GetVersion()).To(Equal(int32(7)))
+		Expect(capturedRequest.GetUpdateMask().GetPaths()).To(ConsistOf("spec.restart_requested_at"))
+		Expect(capturedRequest.GetObject().GetSpec().GetRestartRequestedAt().AsTime()).To(BeTemporally("~", acceptedAt))
+	})
+
+	It("Uses the current restart signal to choose a later whole-second timestamp", func() {
+		storedRestartRequest := time.Now().UTC().Add(time.Hour).Truncate(time.Second).Add(500 * time.Millisecond)
+		instances := instancesWithCurrent(7)
+		instances.getFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesGetRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesGetResponse, error) {
+			return publicv1.ComputeInstancesGetResponse_builder{
+				Object: currentComputeInstanceWithRestart(7, timestamppb.New(storedRestartRequest)),
+			}.Build(), nil
+		}
+		var capturedRestartRequest *timestamppb.Timestamp
+		instances.updateFunc = func(
+			_ context.Context, request *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			capturedRestartRequest = request.GetObject().GetSpec().GetRestartRequestedAt()
+			return publicv1.ComputeInstancesUpdateResponse_builder{
+				Object: publicv1.ComputeInstance_builder{
+					Id:       "instance-1",
+					Metadata: publicv1.Metadata_builder{Version: 8}.Build(),
+					Spec: publicv1.ComputeInstanceSpec_builder{
+						RestartRequestedAt: capturedRestartRequest,
+					}.Build(),
+				}.Build(),
+			}.Build(), nil
+		}
+
+		_, _, err := handleRestartComputeInstance(instances)(
+			context.Background(), requestWithToken(testRawBearerValue), RestartComputeInstanceInput{
+				ID: "instance-1", Version: 7,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(capturedRestartRequest.AsTime()).To(Equal(storedRestartRequest.Truncate(time.Second).Add(time.Second)))
+	})
+
+	It("Rejects a stale version before the public update", func() {
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			return nil, errors.New("Update should not be called")
+		}
+
+		handler := handleRestartComputeInstance(instances)
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), RestartComputeInstanceInput{
+			ID: "instance-1", Version: 6,
+		})
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(envelope.Category).To(Equal("conflict"))
+		Expect(envelope.GRPCCode).To(Equal("Aborted"))
+		Expect(envelope.Message).To(Equal("The resource version is stale. Retrieve the current version and retry."))
+	})
+
+	It("Maps a public optimistic-lock conflict to a stale version error", func() {
+		instances := instancesWithCurrent(7)
+		instances.updateFunc = func(
+			_ context.Context, _ *publicv1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstancesUpdateResponse, error) {
+			return nil, status.Error(codes.Aborted, "version changed")
+		}
+
+		handler := handleRestartComputeInstance(instances)
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), RestartComputeInstanceInput{
+			ID: "instance-1", Version: 7,
+		})
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(envelope.Category).To(Equal("conflict"))
+		Expect(envelope.GRPCCode).To(Equal("Aborted"))
+	})
+
+	It("Rejects invalid input before the public API", func() {
+		instances := &mockComputeInstancesClient{}
+		handler := handleRestartComputeInstance(instances)
+		_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), RestartComputeInstanceInput{
+			ID: " ", Version: 7,
+		})
+		Expect(decodeToolError(err).Details).To(ConsistOf("id is required"))
+
+		_, _, err = handler(context.Background(), requestWithToken(testRawBearerValue), RestartComputeInstanceInput{
+			ID: "instance-1", Version: 0,
 		})
 		Expect(decodeToolError(err).Details).To(ConsistOf("version must be greater than zero"))
 	})
@@ -841,10 +1205,10 @@ var _ = Describe("handleDeleteComputeInstance", func() {
 		}
 
 		handler := handleDeleteComputeInstance(instances)
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteComputeInstanceInput{ID: "instance-1"})
+		_, output, err := handler(context.Background(), requestWithToken(testRawBearerValue), DeleteComputeInstanceInput{ID: "instance-1"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output).To(Equal(DeleteComputeInstanceOutput{ID: "instance-1"}))
-		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(capturedToken).To(Equal(testBearerAuthorization))
 	})
 
 	It("Rejects a blank delete target before calling the public API", func() {
@@ -857,7 +1221,7 @@ var _ = Describe("handleDeleteComputeInstance", func() {
 		}
 
 		handler := handleDeleteComputeInstance(instances)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteComputeInstanceInput{ID: " "})
+		_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), DeleteComputeInstanceInput{ID: " "})
 		envelope := decodeToolError(err)
 		Expect(envelope.Category).To(Equal("invalid_request"))
 		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
@@ -873,7 +1237,7 @@ var _ = Describe("handleDeleteComputeInstance", func() {
 		}
 
 		handler := handleDeleteComputeInstance(instances)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteComputeInstanceInput{ID: "instance-1"})
+		_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), DeleteComputeInstanceInput{ID: "instance-1"})
 		envelope := decodeToolError(err)
 		Expect(envelope.Category).To(Equal("service_unavailable"))
 		Expect(envelope.GRPCCode).To(Equal("Unavailable"))

@@ -54,9 +54,13 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
 - The networking fixture uses distinct Hub entries/namespaces on one cluster;
   it does not establish isolation between separate Kubernetes clusters.
 - The MCP protocol suites in `it/` use the real MCP SDK against deployed
-  Fulfillment and PostgreSQL; the network provider is omitted, so that
-  coverage does not imply a provisioned VM or provider execution. Read the
-  fixtures before extending those cases.
+  Fulfillment and PostgreSQL. `it_mcp_server_test.go` covers the power and
+  restart tools through that boundary, including persisted run-strategy and
+  restart-trigger state, optimistic version conflicts, and cross-tenant
+  rejection. The network provider is omitted, so these cases do not prove VM
+  execution; deployed lifecycle behavior belongs to
+  [OSAC-5852](https://redhat.atlassian.net/browse/OSAC-5852). Read the fixtures
+  before extending those cases.
 - FabricDomain setup and focused execution are documented in
   [the suite README](../../fulfillment-service/it/README.fabric-domain.md).
 - Deployed service-account journeys, secret rotation included, are the

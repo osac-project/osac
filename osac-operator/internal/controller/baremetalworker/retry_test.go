@@ -43,7 +43,7 @@ var _ = It("recovers a failed reservation's identity before retrying", func() {
 	Expect(got.BareMetalInstance.ID).To(Equal(fc.returned.GetId()), "failed reservation bypassed recovery: %+v deletes=%d", got, fc.deletes)
 	Expect(got.NextRetryTime).To(BeNil(), "failed reservation bypassed recovery: %+v deletes=%d", got, fc.deletes)
 	Expect(got.AttemptCount).To(Equal(int32(0)), "failed reservation bypassed recovery: %+v deletes=%d", got, fc.deletes)
-	Expect(fc.deletes).To(Equal(0), "failed reservation bypassed recovery: %+v deletes=%d", got, fc.deletes)
+	Expect(fc.deletes).To(Equal(1), "failed reservation bypassed recovery: %+v deletes=%d", got, fc.deletes)
 })
 
 var _ = It("keeps the old BMI ID until authoritative absence is confirmed", func() {

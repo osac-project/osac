@@ -39,7 +39,15 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 			}
 			return true, nil
 		}
-		return false, r.recoverCleanupBMI(ctx, co, tenant, w)
+		if err := r.recoverCleanupBMI(ctx, co, tenant, w); err != nil {
+			return false, err
+		}
+		// recoverCleanupBMI completed without error: either it recovered
+		// the BMI's ID (continue cleanup with the discovered identity) or
+		// the authoritative List confirmed the BMI is absent.
+		if w.BareMetalInstance.ID == "" {
+			return true, nil
+		}
 	}
 	state, err := r.readCleanupBMI(ctx, co, tenant, *w)
 	if err != nil {
@@ -64,9 +72,11 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 	return false, r.fulfillment.DeleteBareMetalInstance(ctx, w.BareMetalInstance.ID)
 }
 
-// ID-less reservations may hide an accepted Create with a lost response. Even
-// empty List is not proof of absence. Recover the exact owned name and persist
-// its ID at a separate boundary before making any external mutation.
+// ID-less reservations may hide an accepted Create with a lost response.
+// Recover the exact owned name and persist its ID at a separate boundary
+// before making any external mutation. A successful List that does not
+// contain the BMI confirms absence: the caller treats a nil return with
+// an unchanged empty ID as permission to release the worker.
 func (r *Reconciler) recoverCleanupBMI(ctx context.Context, co *v1alpha1.ClusterOrder, tenant string, w *v1alpha1.WorkerStatus) error {
 	if w.BareMetalInstance.Name == "" {
 		return fmt.Errorf("worker %s has no recorded BMI name", w.Name)
@@ -81,7 +91,9 @@ func (r *Reconciler) recoverCleanupBMI(ctx context.Context, co *v1alpha1.Cluster
 		return r.rejectWorkerIdentity(co, err.Error())
 	}
 	if bmi == nil {
-		return fmt.Errorf("worker %s BMI reservation absence is unconfirmed", w.Name)
+		// The authoritative List succeeded and the BMI was not found.
+		// Leave the ID empty to signal confirmed absence to the caller.
+		return nil
 	}
 	candidate := *w
 	candidate.BareMetalInstance.ID = bmi.GetId()

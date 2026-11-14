@@ -264,11 +264,17 @@ def wait_for_new_vmi(*, k8s: K8sClient, vmi_namespace: str, compute_instance_nam
 
 
 def wait_for_deletion(*, k8s: K8sClient, name: str) -> None:
+    # 2700s (45min): ComputeInstance deprovisioning goes through
+    # osac-operator's shared pkg/provisioning.RunDeprovisioningLifecycle which
+    # retries failed AAP jobs with exponential backoff up to a 30-minute
+    # ceiling (BackoffMaxDelay).  The previous 600s (10min) window could time
+    # out while the operator was still correctly retrying.  45 minutes gives
+    # room for a worst-case backoff wait plus job execution time.
     poll_until(
         fn=lambda: not k8s.is_present(resource="computeinstance", name=name),
         until=lambda v: v is True,
-        retries=120,
-        delay=5,
+        retries=270,
+        delay=10,
         description=f"{name} deletion",
         resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
         resource_id=name,
@@ -322,11 +328,17 @@ def wait_for_virtual_network_ready(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_virtual_network_deletion(*, k8s: K8sClient, name: str) -> None:
+    # 2700s (45min): VirtualNetwork deprovisioning goes through
+    # osac-operator's shared pkg/provisioning.RunDeprovisioningLifecycle which
+    # retries failed AAP jobs with exponential backoff up to a 30-minute
+    # ceiling (BackoffMaxDelay).  The previous 600s (10min) window could time
+    # out while the operator was still correctly retrying.  45 minutes gives
+    # room for a worst-case backoff wait plus job execution time.
     poll_until(
         fn=lambda: not k8s.is_present(resource="virtualnetwork", name=name),
         until=lambda v: v is True,
-        retries=120,
-        delay=5,
+        retries=270,
+        delay=10,
         description=f"{name} VirtualNetwork deletion",
         resource_kind=WaitResourceKind.VIRTUAL_NETWORK,
         resource_id=name,
@@ -437,11 +449,17 @@ def wait_for_grpc_security_group_ready(*, grpc: GRPCClient, sg_id: str) -> None:
 
 
 def wait_for_subnet_deletion(*, k8s: K8sClient, name: str) -> None:
+    # 2700s (45min): Subnet deprovisioning goes through
+    # osac-operator's shared pkg/provisioning.RunDeprovisioningLifecycle which
+    # retries failed AAP jobs with exponential backoff up to a 30-minute
+    # ceiling (BackoffMaxDelay).  The previous 600s (10min) window could time
+    # out while the operator was still correctly retrying.  45 minutes gives
+    # room for a worst-case backoff wait plus job execution time.
     poll_until(
         fn=lambda: not k8s.is_present(resource="subnets.osac.openshift.io", name=name),
         until=lambda v: v is True,
-        retries=120,
-        delay=5,
+        retries=270,
+        delay=10,
         description=f"{name} Subnet deletion",
         resource_kind=WaitResourceKind.SUBNET,
         resource_id=name,
@@ -500,11 +518,17 @@ def wait_for_external_ip_pool_grpc_ready(*, private_grpc: GRPCClient, pool_id: s
 
 
 def wait_for_external_ip_pool_deletion(*, k8s: K8sClient, name: str) -> None:
+    # 2700s (45min): ExternalIPPool deprovisioning goes through
+    # osac-operator's shared pkg/provisioning.RunDeprovisioningLifecycle which
+    # retries failed AAP jobs with exponential backoff up to a 30-minute
+    # ceiling (BackoffMaxDelay).  The previous 600s (10min) window could time
+    # out while the operator was still correctly retrying.  45 minutes gives
+    # room for a worst-case backoff wait plus job execution time.
     poll_until(
         fn=lambda: not k8s.is_present(resource="externalippool", name=name),
         until=lambda v: v is True,
-        retries=120,
-        delay=5,
+        retries=270,
+        delay=10,
         description=f"{name} ExternalIPPool deletion",
         resource_kind=WaitResourceKind.EXTERNAL_IP_POOL,
         resource_id=name,
@@ -537,11 +561,17 @@ def wait_for_external_ip_allocated(*, k8s: K8sClient, name: str) -> None:
 
 def wait_for_external_ip_deletion(*, k8s: K8sClient, name: str) -> None:
     """Wait for the exact ExternalIP to be absent; propagate unconfirmed read errors."""
+    # 2700s (45min): ExternalIP deprovisioning goes through
+    # osac-operator's shared pkg/provisioning.RunDeprovisioningLifecycle which
+    # retries failed AAP jobs with exponential backoff up to a 30-minute
+    # ceiling (BackoffMaxDelay).  The previous 600s (10min) window could time
+    # out while the operator was still correctly retrying.  45 minutes gives
+    # room for a worst-case backoff wait plus job execution time.
     poll_until(
         fn=lambda: k8s.is_absent(resource="externalips.osac.openshift.io", name=name),
         until=lambda v: v is True,
-        retries=120,
-        delay=5,
+        retries=270,
+        delay=10,
         description=f"{name} ExternalIP deletion",
         resource_kind=WaitResourceKind.EXTERNAL_IP,
         resource_id=name,
@@ -573,11 +603,17 @@ def wait_for_external_ip_attachment_ready(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_external_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> None:
+    # 2700s (45min): ExternalIPAttachment deprovisioning goes through
+    # osac-operator's shared pkg/provisioning.RunDeprovisioningLifecycle which
+    # retries failed AAP jobs with exponential backoff up to a 30-minute
+    # ceiling (BackoffMaxDelay).  The previous 600s (10min) window could time
+    # out while the operator was still correctly retrying.  45 minutes gives
+    # room for a worst-case backoff wait plus job execution time.
     poll_until(
         fn=lambda: not k8s.is_present(resource="externalipattachment", name=name),
         until=lambda v: v is True,
-        retries=120,
-        delay=5,
+        retries=270,
+        delay=10,
         description=f"{name} ExternalIPAttachment deletion",
         resource_kind=WaitResourceKind.EXTERNAL_IP_ATTACHMENT,
         resource_id=name,
@@ -600,11 +636,17 @@ def wait_for_nat_gateway_ready(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_nat_gateway_deletion(*, k8s: K8sClient, name: str) -> None:
+    # 2700s (45min): NATGateway deprovisioning goes through
+    # osac-operator's shared pkg/provisioning.RunDeprovisioningLifecycle which
+    # retries failed AAP jobs with exponential backoff up to a 30-minute
+    # ceiling (BackoffMaxDelay).  The previous 600s (10min) window could time
+    # out while the operator was still correctly retrying.  45 minutes gives
+    # room for a worst-case backoff wait plus job execution time.
     poll_until(
         fn=lambda: not k8s.is_present(resource="natgateway", name=name),
         until=lambda v: v is True,
-        retries=120,
-        delay=5,
+        retries=270,
+        delay=10,
         description=f"{name} NATGateway deletion",
         resource_kind=WaitResourceKind.NAT_GATEWAY,
         resource_id=name,
@@ -1281,10 +1323,16 @@ def wait_for_cluster_deletion(*, k8s: K8sClient, name: str) -> None:
         _force_cleanup_machine_preterminate_hooks(k8s=k8s, name=name)
         return k8s.get_cluster_order_phase(name=name, checked=False) is None
 
+    # 2700s (45min): ClusterOrder deprovisioning goes through
+    # osac-operator's shared pkg/provisioning.RunDeprovisioningLifecycle which
+    # retries failed AAP jobs with exponential backoff up to a 30-minute
+    # ceiling (BackoffMaxDelay).  The previous 1200s (20min) window could time
+    # out while the operator was still correctly retrying.  45 minutes gives
+    # room for a worst-case backoff wait plus job execution time.
     poll_until(
         fn=_check_deleted,
         until=lambda v: v is True,
-        retries=120,
+        retries=270,
         delay=10,
         description=f"{name} ClusterOrder deletion",
         retry_on_error=True,
@@ -1488,11 +1536,17 @@ def wait_for_security_group_update(*, grpc: GRPCClient, sg_id: str) -> None:
 
 
 def wait_for_security_group_deletion(*, k8s: K8sClient, name: str) -> None:
+    # 2700s (45min): SecurityGroup deprovisioning goes through
+    # osac-operator's shared pkg/provisioning.RunDeprovisioningLifecycle which
+    # retries failed AAP jobs with exponential backoff up to a 30-minute
+    # ceiling (BackoffMaxDelay).  The previous 600s (10min) window could time
+    # out while the operator was still correctly retrying.  45 minutes gives
+    # room for a worst-case backoff wait plus job execution time.
     poll_until(
         fn=lambda: not k8s.is_present(resource="securitygroups.osac.openshift.io", name=name),
         until=lambda v: v is True,
-        retries=120,
-        delay=5,
+        retries=270,
+        delay=10,
         description=f"{name} SecurityGroup deletion",
         resource_kind=WaitResourceKind.SECURITY_GROUP,
         resource_id=name,

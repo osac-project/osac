@@ -38,7 +38,7 @@ RUN --mount=type=cache,id=osac-go-pkg,target=/opt/app-root/src/go/pkg,uid=1001,g
     --mount=type=cache,id=osac-go-build,target=/opt/app-root/src/.cache/go-build,uid=1001,gid=0 \
     [ -f /cachi2/cachi2.env ] && . /cachi2/cachi2.env; CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -o manager ./cmd
 
-FROM registry.access.redhat.com/ubi10-minimal:10.2-1793642335
+FROM registry.access.redhat.com/ubi10-minimal:10.3-1794499233
 # Stamped to the real release version on osac-build-and-publish.yaml's
 # temp branch before tagging (same mechanism as Chart.yaml's own
 # version field) -- the committed default below is only ever what a

@@ -57,6 +57,25 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   Fulfillment and PostgreSQL; the network provider is omitted, so that
   coverage does not imply a provisioned VM or provider execution. Read the
   fixtures before extending those cases.
+- MCP write safety ([DEV], [OSAC-5851](https://redhat.atlassian.net/browse/OSAC-5851)):
+  `internal/cmd/service/start/mcpserver/tool_compute_instances_test.go` covers
+  a definite Create failure without a follow-up Get, recovery of an uncertain
+  Create by its preassigned ID, a non-retryable `unknown_outcome` when Get
+  cannot confirm the result, and safe mapping of `Aborted`. The deployed cases
+  in `it/it_mcp_server_test.go` exercise the real MCP SDK and in-process server
+  through authenticated Fulfillment APIs and PostgreSQL. A typed client wrapper
+  injects a lost Create response, a failed lookup, and a duplicate-name failure;
+  the cases confirm the created object or report uncertainty without retrying,
+  and preserve the first successful object after a later call fails. The token
+  exchanger is a pass-through test double. These cases do not inject a real
+  transport fault, determine whether an MCP host makes a later call, or exercise
+  provider provisioning or VM readiness. Run them with
+  `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment`
+  from the repository root, or on a compatible deployed Kind environment run
+  `ginkgo run --timeout 20m --focus 'recovers a committed Create|reports unknown outcome|keeps prior success' it`
+  from `fulfillment-service/`. Focused unit coverage is
+  `ginkgo run --timeout 10m internal/cmd/service/start/mcpserver` from
+  `fulfillment-service/`.
 - FabricDomain setup and focused execution are documented in
   [the suite README](../../fulfillment-service/it/README.fabric-domain.md).
 - Deployed service-account journeys, secret rotation included, are the

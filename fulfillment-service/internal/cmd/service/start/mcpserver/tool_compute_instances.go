@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -138,13 +139,32 @@ func handleCreateComputeInstance(
 			metadata.Tenant = project.GetMetadata().GetTenant()
 			metadata.Project = project.GetMetadata().GetName()
 		}
+		createID := uuid.NewString()
 		response, err := clients.instances.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 			Object: publicv1.ComputeInstance_builder{
+				Id:       createID,
 				Metadata: metadata.Build(),
 				Spec:     spec,
 			}.Build(),
 		}.Build())
 		if err != nil {
+			if !isDefiniteComputeInstanceCreateError(err) {
+				verificationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), toolCallTimeout)
+				defer cancel()
+				verified, getErr := clients.instances.Get(verificationCtx,
+					publicv1.ComputeInstancesGetRequest_builder{Id: createID}.Build(),
+				)
+				if getErr == nil && verified != nil && verified.GetObject() != nil &&
+					verified.GetObject().GetId() == createID {
+					created := verified.GetObject()
+					return nil, CreateComputeInstanceOutput{
+						ID:      created.GetId(),
+						Version: created.GetMetadata().GetVersion(),
+						State:   created.GetStatus().GetState().String(),
+					}, nil
+				}
+				return nil, CreateComputeInstanceOutput{}, safeUnknownOutcomeError("ComputeInstance", createID)
+			}
 			return nil, CreateComputeInstanceOutput{}, safeComputeInstanceWriteAPIError(err)
 		}
 		created := response.GetObject()
@@ -153,6 +173,23 @@ func handleCreateComputeInstance(
 			Version: created.GetMetadata().GetVersion(),
 			State:   created.GetStatus().GetState().String(),
 		}, nil
+	}
+}
+
+func isDefiniteComputeInstanceCreateError(err error) bool {
+	switch status.Code(err) {
+	case codes.InvalidArgument,
+		codes.Unauthenticated,
+		codes.PermissionDenied,
+		codes.NotFound,
+		codes.AlreadyExists,
+		codes.Aborted,
+		codes.FailedPrecondition,
+		codes.ResourceExhausted,
+		codes.Unimplemented:
+		return true
+	default:
+		return false
 	}
 }
 

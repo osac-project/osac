@@ -39,10 +39,21 @@ that, which can take a few minutes, without holding the queue. Only the first fa
 running are cancelled, so a second failure shows on the next attempt. Workflows that provide no required check (CodeQL,
 dependency review) do not stop an entry. When every suite passed, `result` writes `E2E` as passed.
 
-## Optional: CaaS regression tests on a pull request
+## CaaS regression tests on a pull request
 
-A pull request gets the CaaS sanity tests (`tests/e2e/caas/sanity`); the regression tests (`tests/e2e/caas/regression`) run
-every 5 hours on `main`. To try a new or changed regression test before it merges, start CaaS with both: check
+A pull request that needs CaaS gets the sanity tests (`tests/e2e/caas/sanity`) by default. When any current or previous
+changed filename is under `tests/e2e/caas/regression/`, its CaaS run automatically selects sanity and regression together,
+with the CaaS references. This includes additions, modifications, deletions, and renames into or out of that directory.
+After the existing PR-input verification, `e2e-pr-caas.yml` reads the PR base SHA and checks the head is still current.
+Git compares the verified head with its merge-base against the immutable PR base SHA, restricting the diff to the
+fixed `tests/e2e/caas/regression/` directory pathspec. A nonempty NUL-separated filename list selects full, without
+parsing filenames, including names containing newlines. Only the workflow revision is checked out, never PR code;
+Git/API failures stop the suite instead of using sanity.
+This only selects tests: the existing approval, readiness, and fork authorization requirements still apply.
+The verified `selection` job is independent of telemetry: CaaS still captures telemetry unconditionally,
+as the full-install workflow does for other run types.
+
+The full suite also runs every 5 hours on `main`. To request it for another pull request, check
 **CaaS Full Install · sanity + regression** in the E2E comment of the pull request (any member of the organization, any
 approval state), or comment `/test caas-full`. It is a second box of the CaaS suite, not a suite of its own: the same job
 and the same line, `E2E / CaaS Full Install` (which then says `· full`), so the required `E2E` check counts it exactly
@@ -50,10 +61,12 @@ like the CaaS suite, and a CaaS run that passed this way satisfies it. It runs t
 regression, with the CaaS references).
 
 - Asking for the same thing while it runs does nothing. Asking for the other version of CaaS while one runs (the sanity
-  box while the full one runs, or the other way round) stops that run and starts the one asked for.
+  box while the full one runs, or the other way round) stops that run and starts the one asked for. A regression-changing
+  pull request still selects full even when started through the sanity box or `/test caas`.
 - A suite asked for by name runs again whatever it ended with; the bare `/test` only starts what has not passed.
-- The decision never chooses it, so a pull request still gets the CaaS sanity tests alone by default, and the merge queue
-  does not run it. VMaaS and BMaaS already run their regression tests on every pull request that needs their suite.
+- The decision still chooses the base CaaS suite, not its manual-only variant; the PR workflow resolves the tier.
+  Unrelated and sanity-only changes keep the sanity default unless full was explicitly requested. The merge queue
+  remains sanity-only. VMaaS and BMaaS already run their regression tests on every pull request that needs their suite.
 - In the policy it is `e2e-caas-full` (`variant_of: caas`, `tier: full`); the decision starts `e2e-pr-caas.yml` with the input
   `tier` (`full`), and that workflow passes it to the wrapper (`e2e-caas-full-install.yml`, input `tier`).
 

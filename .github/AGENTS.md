@@ -55,8 +55,15 @@ plus a native approval on the head commit, and the merge queue.
 
 ## CaaS suite selection and coverage
 
-The CaaS full-install caller runs only `caas/sanity` with `-m sanity` for PRs
-and merge queue. Periodics run `caas` (sanity + regression) and applicable
+The CaaS PR workflow defaults to `caas/sanity` with `-m sanity`. After verifying
+the PR inputs, it selects `caas` when a current or previous changed filename is
+under `tests/e2e/caas/regression/`, including deletions and renames out of that
+directory, or when full was explicitly requested. Git compares the verified head
+with its merge-base against the PR base SHA using a fixed directory pathspec.
+A nonempty NUL-separated filename list selects full without parsing filenames,
+including names containing newlines. It never checks out PR code;
+Git/API failures stop the suite rather than silently selecting sanity.
+The merge queue remains sanity-only. Periodics run `caas` and applicable
 reference tests with `-m 'sanity or regression or requires_caas or reference_common'`.
 Manual dispatch defaults to sanity and permits suite/filter/marker overrides.
 The test-infra reusable runner must not append references to sanity or widen
@@ -66,6 +73,13 @@ are independent of suite selection.
 | Area | Required coverage | Command (repository root) | Boundary |
 |---|---|---|---|
 | CaaS CI suite policy | [DEV] Unit/Contract selection checks | `OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra uv run pytest -n 0 tests/unit/test_caas_ci_suite_policy.py` | Evaluates caller YAML and executes reusable path-selection Bash locally. No deployed services; companion checks skip if the checkout is not specified. |
+
+Set `OSAC_CI_DIR=/path/to/osac-ci` as well to exercise the real parent suite
+decision, approval/draft/fork guards, and regression rename/deletion routing.
+That checkout must match the caller's pinned osac-ci commit; its test uses
+`uv run --project "$OSAC_CI_DIR" --no-dev python` locally, without GitHub access.
+The workflow's Git selection step runs against local addition/deletion/rename
+fixtures without Node or an action checkout.
 
 ## Component-hooks and sandbox regression smoke tests
 

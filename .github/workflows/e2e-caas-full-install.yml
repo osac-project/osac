@@ -38,9 +38,8 @@ on:
         default: ""
       tier:
         description: >-
-          Which tests to run on the commit: empty for the sanity tests (what every pull request gets), or "full" for
-          sanity and regression together, as the scheduled run does (started by hand from a pull request: the box "CaaS
-          Full Install · sanity + regression" of its E2E comment, see e2e-pr.yml)
+          Which tests to run on the commit: empty for sanity, or "full" for sanity and regression together.
+          The PR workflow selects full for changes under tests/e2e/caas/regression/ or an explicit full request.
         required: false
         type: string
         default: ""
@@ -92,9 +91,6 @@ jobs:
       id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-caas-full-install.yml@main
     with:
-      # test-source=osac prefixes tests/e2e/. PR/merge_group: full caas suite
-      # (sanity + regression). Schedule: regression. workflow_dispatch: honor
-      # input, else sanity (caas for the full suite).
       # Called for a pull request or a merge queue entry (inputs.sha is set): sanity only, or sanity + regression (what the
       # schedule runs) when `tier` is "full". Schedule: sanity + regression and applicable references. Manual dispatch:
       # honor overrides, else sanity.

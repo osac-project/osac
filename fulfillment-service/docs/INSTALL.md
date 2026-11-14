@@ -45,14 +45,12 @@ export DOMAIN=$(oc get ingresses.config.openshift.io cluster -o json | jq -r '.s
 All commands in this guide use `${DOMAIN}` to construct hostnames, so you only need to set this
 once.
 
-## Enable HTTP/2
+## TLS and gRPC routing
 
-The service uses gRPC, which requires HTTP/2. This is not enabled by default in OpenShift, so you
-need to enable it first:
-
-```shell
-oc annotate ingresses.config.openshift.io cluster ingress.operator.openshift.io/default-enable-http2=true
-```
+The fulfillment-service exposes its gRPC endpoints via OpenShift Routes with
+`tls.termination: passthrough`. The ingress controller forwards raw TCP to the pod,
+which negotiates HTTP/2 via TLS ALPN directly. No cluster-level HTTP/2 annotation is
+required.
 
 ## Install cert-manager
 

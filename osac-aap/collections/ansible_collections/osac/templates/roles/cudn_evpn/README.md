@@ -45,7 +45,6 @@ Every object is named from an API ID and carries
 | Namespace (VMs run here) | `osac-vn-<VN ID>` | VirtualNetwork | `create_virtual_network` / `delete_virtual_network` |
 | NetworkPolicy baseline deny | `osac-baseline-deny` in the namespace | VirtualNetwork | with the namespace |
 | ClusterUserDefinedNetwork | `osac-vn-<VN ID>` | the owner Subnet (`osac.openshift.io/owner-subnet`) | owner's `create_subnet` / `delete_subnet` |
-| FRRConfiguration (VRF BGP policy) | `osac-evpn-vrf-<VN ID>-<installer config>` in `openshift-frr-k8s` | the owner Subnet | owner's `create_subnet` / `delete_subnet` |
 | NetworkPolicy per SecurityGroup | `osac-sg-<SG ID>` in the namespace | SecurityGroup | `create_security_group` / `delete_security_group` |
 
 - **Namespace.** Created with `k8s.ovn.org/primary-user-defined-network: ""`
@@ -86,34 +85,6 @@ Every object is named from an API ID and carries
   `virtual_network.status.l3Vni` (EVPN handoff); `segment_vnis` is the only reader. `create_subnet` waits until the CUDN reports
   `TransportAccepted`, `NetworkCreated` and `NetworkAllocationSucceeded` True
   (OVN-Kubernetes 4.22 sets no `Ready` condition).
-- **VRF BGP multipath policy.** OVN-Kubernetes creates
-  `router bgp <asn> vrf <vrf-name>` from the installer's FRRConfiguration and
-  writes it as raw config with priority 10. Newer releases publish the name
-  as `ClusterUserDefinedNetwork.status.vrfName`; OVN-Kubernetes 4.22 publishes
-  only conditions and names the VRF `mp<network-id>-udn-vrf`, with the network
-  ID annotated on the network's NetworkAttachmentDefinition
-  (`k8s.ovn.org/network-id`), which `create_subnet` reads from the namespace
-  the CUDN selects (its own `osac-vn-<id>` namespace).
-  `create_subnet` reads the installer's per-node FRRConfigurations (label
-  `evpn: "true"`) and applies one companion FRRConfiguration per node at raw
-  priority 15, which FRR-k8s appends after the generated one:
-
-  ```text
-  router bgp <asn> vrf <vrf-name>
-   bgp bestpath as-path multipath-relax
-   address-family ipv4 unicast
-    maximum-paths 16
-   exit-address-family
-  exit
-  ```
-
-  The ASN is the source configuration's router for the network VRF, or its
-  underlay router. As in OVN-Kubernetes, when any source configuration defines
-  the VRF router, only the node of that configuration gets the companion.
-  The companions carry no `evpn: "true"` label on purpose: with it,
-  OVN-Kubernetes would treat them as source configurations and overwrite
-  their raw config. `delete_subnet` removes them by their owner labels before
-  deleting the CUDN.
 - **SecurityGroup policy.** Rules map to NetworkPolicy rules (`tcp`/`udp`
   with `port` and `endPort`, `all` without ports, the CIDR as `ipBlock`);
   `policyTypes` is always both. The podSelector holds the bound VMs
@@ -129,8 +100,8 @@ Every object is named from an API ID and carries
 |---|---|---|
 | `create_virtual_network` | Create or verify the namespace; create or restore the baseline deny. | none |
 | `delete_virtual_network` | Delete the namespace if it has this VirtualNetwork's owner labels; wait until gone. | none |
-| `create_subnet` | No CUDN: check the VTEP, claim it, wait until ready, apply the VRF multipath policy. Owned by this Subnet: check it matches, restore metadata and selector, wait until ready, reapply the VRF multipath policy. Owned by another Subnet: no change. Being deleted: retry. | `compute_instance_supported`, `compute_instance_unsupported_reason` |
-| `delete_subnet` | Owner: delete the VRF multipath configs, delete the CUDN, wait until gone. Otherwise nothing. Never deletes the namespace. | none |
+| `create_subnet` | No CUDN: check the VTEP, claim it, wait until ready. Owned by this Subnet: check it matches, restore metadata and selector, wait until ready. Owned by another Subnet: no change. Being deleted: retry. | `compute_instance_supported`, `compute_instance_unsupported_reason` |
+| `delete_subnet` | Owner: delete the CUDN, wait until gone. Otherwise nothing. Never deletes the namespace. | none |
 | `create_security_group` | Create the group policy, or replace its rules and keep its members. | none |
 | `delete_security_group` | Delete the group policy; wait until gone. | none |
 | `apply_network_attachment` | Check the namespace, that this Subnet owns a ready CUDN, and add `target.id` to each group policy of `security_group_ids`. Ignores `interface.ipv4_address`. | `vm_attachment: {namespace: osac-vn-<VN ID>}` |
@@ -155,8 +126,6 @@ status/reason; they never contain module arguments or tokens.
 | More than 25 `reservedSubnets` entries | Namespace, CUDN or group policy not there yet, being deleted, or not ready |
 | A hub object with our name but someone else's owner labels | |
 | An owned CUDN whose network spec no longer matches the Subnet | |
-| An installer FRRConfiguration without a BGP router ASN | No FRRConfiguration labeled `evpn: "true"` yet |
-| | A hub network without `status.vrfName` and without a NetworkAttachmentDefinition network ID yet |
 
 OSAC retries delete tasks after every failure, whatever `retryable` says.
 
@@ -174,9 +143,7 @@ service account on the hub cluster.
 - Hub permissions of the job service account (bound to `cluster-admin` by the
   installation): namespaces (get, create, patch, delete),
   clusteruserdefinednetworks.k8s.ovn.org (get, create, patch, delete),
-  networkpolicies (get, list, create, patch, delete), vteps.k8s.ovn.org (get),
-  frrconfigurations.frrk8s.metallb.io (get, list, create, patch, delete) in
-  `openshift-frr-k8s`.
+  networkpolicies (get, list, create, patch, delete), vteps.k8s.ovn.org (get).
 
 ## Known gaps
 

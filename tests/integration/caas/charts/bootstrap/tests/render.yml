@@ -1,0 +1,74 @@
+---
+- name: Exercise the bootstrap's production rendering tasks
+  ansible.builtin.import_playbook: ../files/configure-awx.yml
+
+- name: Verify the shared execution groups
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [bootstrap-render]
+  tasks:
+    - name: Verify selected production execution groups
+      ansible.builtin.assert:
+        that:
+          - >-
+            controller_instance_groups | map(attribute='name') | list | sort ==
+            ['osac-bare-metal-fulfillment-ig', 'osac-cluster-fulfillment-ig']
+        quiet: true
+
+    - name: Verify shared fulfillment Pod
+      ansible.builtin.assert:
+        that:
+          - runner_pod.spec.serviceAccountName == 'osac-sa'
+          - runner_pod.spec.containers | selectattr('name', 'equalto', 'worker') | list | length == 1
+          - worker.imagePullPolicy is not defined
+          - worker.volumeMounts | selectattr('name', 'equalto', 'kube-api-access') | list | length == 1
+          - token_sources | selectattr('serviceAccountToken', 'defined') | list | length == 1
+          - token_sources | selectattr('downwardAPI', 'defined') | list | length == 1
+          - >-
+            token_sources | selectattr('configMap', 'defined') | map(attribute='configMap.name') | list ==
+            ['kube-root-ca.crt', 'openshift-service-ca.crt']
+          - >-
+            (token_sources | selectattr('configMap', 'defined') | map(attribute='configMap')
+             | selectattr('name', 'equalto', 'openshift-service-ca.crt') | first)['items'] ==
+            [{'key': 'service-ca.crt', 'path': 'service-ca.crt'}]
+        quiet: true
+      vars:
+        runner_pod: "{{ item.pod_spec_override | from_yaml }}"
+        worker: "{{ runner_pod.spec.containers | selectattr('name', 'equalto', 'worker') | first }}"
+        token_volume: "{{ runner_pod.spec.volumes | selectattr('name', 'equalto', 'kube-api-access') | first }}"
+        token_sources: "{{ token_volume.projected.sources }}"
+      loop: "{{ controller_instance_groups }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+- name: Verify the selected controller completion policy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [bootstrap-configuration]
+  tasks:
+    - name: Verify shared inventory paths
+      ansible.builtin.assert:
+        that:
+          - item.source_path == 'osac-aap/inventory/localhost.yml'
+          - lookup('ansible.builtin.file', project_directory + '/' + item.source_path) | from_yaml is mapping
+        fail_msg: Shared inventory paths must resolve in the selected checkout.
+        quiet: true
+      loop: "{{ controller_inventory_sources }}"
+
+    - name: Verify completion policy
+      ansible.builtin.assert:
+        that:
+          - controller_templates | length == 4
+          - controller_execution_environments[0].pull == 'never'
+          - controller_projects | length == 1
+          - controller_projects[0].wait
+          - controller_projects[0].scm_clean
+          - controller_projects[0].scm_delete_on_update
+          - controller_projects[0].scm_branch == lookup('env', 'AAP_PROJECT_GIT_BRANCH')
+          - controller_projects[0].timeout == 300
+          - controller_inventory_sources | length == 2
+          - controller_inventory_sources | rejectattr('wait') | list | length == 0
+          - controller_inventory_sources | rejectattr('timeout', 'equalto', 120) | list | length == 0
+        quiet: true

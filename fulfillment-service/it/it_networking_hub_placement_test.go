@@ -19,7 +19,6 @@ package it
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -567,7 +566,7 @@ func createValidRoutingHub(ctx context.Context, hubsClient privatev1.HubsClient,
 	)
 	Expect(err).ToNot(HaveOccurred())
 
-	kubeconfig, err := os.ReadFile(tool.kcFile)
+	kubeconfig, err := tool.hubKubeconfig()
 	Expect(err).ToNot(HaveOccurred())
 	config, err := clientcmd.Load(kubeconfig)
 	Expect(err).ToNot(HaveOccurred())

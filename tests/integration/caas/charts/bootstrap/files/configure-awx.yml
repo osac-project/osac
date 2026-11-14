@@ -1,0 +1,244 @@
+---
+- name: Configure local AWX from the selected Git revision
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    project_directory: /tmp/osac-project
+    production_role: "{{ project_directory }}/osac-aap/collections/ansible_collections/osac/config_as_code/roles/aap"
+    selected_playbooks:
+      - osac-aap/playbook_osac_create_bare_metal_instance.yml
+      - osac-aap/playbook_osac_delete_bare_metal_instance.yml
+      - osac-aap/playbook_osac_create_hosted_cluster.yml
+      - osac-aap/playbook_osac_delete_hosted_cluster.yml
+    selected_groups:
+      - bare-metal-fulfillment
+      - cluster-fulfillment
+    selected_inventory_names: "{{ selected_groups | map('regex_replace', '^', aap_prefix + '-') | list }}"
+    selected_group_names: "{{ selected_inventory_names | map('regex_replace', '$', '-ig') | list }}"
+    project_sync_timeout: 300
+    inventory_sync_timeout: 120
+    # Collect the terminal module result after its deadline, within the 900-second hook.
+    controller_configuration_projects_async_delay: 5
+    controller_configuration_projects_async_retries: "{{ project_sync_timeout // 5 + 6 }}"
+    controller_configuration_inventory_source_update_async_delay: 5
+    controller_configuration_inventory_source_update_async_retries: "{{ inventory_sync_timeout // 5 + 6 }}"
+    aap_configuration_dispatcher_roles: >-
+      {{ controller_configuration_dispatcher_roles | selectattr('role', 'in', [
+         'controller_execution_environments', 'controller_instance_groups', 'controller_projects',
+         'controller_inventories', 'controller_inventory_sources', 'controller_inventory_source_update',
+         'controller_job_templates']) | list }}
+  tasks:
+    # Reuse Kind's CA for the OpenShift service-CA mount expected by shared Pods.
+    - name: Provide the local service-CA fixture
+      tags: [bootstrap-service-ca]
+      vars:
+        service_ca_namespace: "{{ lookup('env', 'NAMESPACE') }}"
+        service_ca_reference:
+          apiVersion: v1
+          kind: ConfigMap
+          name: caas-it-configuration
+          uid: "{{ service_ca_owner.resources[0].metadata.uid }}"
+      block:
+        - name: Read the namespace CA bundle
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ service_ca_namespace }}"
+            name: kube-root-ca.crt
+          register: service_ca_source
+
+        - name: Read the test installation owner
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ service_ca_namespace }}"
+            name: caas-it-configuration
+          register: service_ca_owner
+
+        - name: Read the existing service-CA fixture
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ service_ca_namespace }}"
+            name: openshift-service-ca.crt
+          register: service_ca_existing
+
+        - name: Verify the service-CA source and ownership
+          tags: [bootstrap-service-ca-validation]
+          ansible.builtin.assert:
+            that:
+              - service_ca_namespace | length > 0
+              - service_ca_source.resources | length == 1
+              - service_ca_source.resources[0].data['ca.crt'] | default('') | trim | length > 0
+              - service_ca_owner.resources | length == 1
+              - >-
+                service_ca_existing.resources | length == 0 or
+                service_ca_existing.resources[0].metadata.ownerReferences | default([]) == [service_ca_reference]
+            fail_msg: The service-CA fixture requires a namespace CA and test installation owner; foreign ConfigMaps are preserved.
+            quiet: true
+
+        - name: Publish the service-CA fixture
+          kubernetes.core.k8s:
+            state: present
+            merge_type: merge
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              # Preserve Kubernetes metadata strings when rendering numeric resource versions.
+              metadata: >-
+                {{ {'name': 'openshift-service-ca.crt', 'namespace': service_ca_namespace,
+                    'uid': service_ca_existing.resources[0].metadata.uid | default(omit),
+                    'resourceVersion': service_ca_existing.resources[0].metadata.resourceVersion | default(omit),
+                    'ownerReferences': [service_ca_reference]} }}
+              data:
+                service-ca.crt: "{{ service_ca_source.resources[0].data['ca.crt'] }}"
+
+    - name: Check out the selected playbook and controller-definition revision
+      ansible.builtin.git:
+        repo: "{{ lookup('env', 'AAP_PROJECT_GIT_URI') }}"
+        version: "{{ lookup('env', 'AAP_PROJECT_GIT_BRANCH') }}"
+        dest: "{{ project_directory }}"
+
+    - name: Load configuration from the selected revision
+      tags: [bootstrap-render, bootstrap-configuration]
+      ansible.builtin.include_vars: "{{ project_directory }}/osac-aap/collections/ansible_collections/osac/config_as_code/playbooks/vars/config.yml"
+
+    - name: Load production controller objects
+      tags: [bootstrap-render, bootstrap-configuration]
+      ansible.builtin.include_vars: "{{ production_role }}/vars/controller.yml"
+
+    - name: Create the production organization on the controller API
+      ansible.controller.organization:
+        name: "{{ aap_organization_name }}"
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: "{{ aap_validate_certs }}"
+      no_log: true
+
+    - name: Render the selected shared execution groups
+      tags: [bootstrap-render, bootstrap-configuration]
+      ansible.builtin.set_fact:
+        controller_instance_groups: >-
+          {{ lookup('ansible.builtin.template', playbook_dir + '/render-execution-groups.j2',
+                    template_vars={'ansible_search_path': [production_role]}) | from_yaml }}
+      no_log: true
+
+    - name: Verify the selected production execution groups
+      tags: [bootstrap-render, bootstrap-configuration]
+      ansible.builtin.assert:
+        that:
+          - controller_instance_groups | length > 0
+          - controller_instance_groups | map(attribute='name') | list | sort == selected_group_names | sort
+        fail_msg: >-
+          Expected exactly the selected production execution groups {{ selected_group_names | join(', ') }};
+          rendered {{ controller_instance_groups | map(attribute='name') | join(', ') }}.
+        quiet: true
+
+    - name: Select production controller objects
+      tags: [bootstrap-configuration]
+      ansible.builtin.set_fact:
+        controller_projects: >-
+          {{ controller_projects | map('combine', {'scm_delete_on_update': true,
+             'timeout': project_sync_timeout, 'wait': true}) | list }}
+        controller_templates: "{{ controller_templates | selectattr('playbook', 'in', selected_playbooks) | list }}"
+        controller_inventories: >-
+          {{ controller_inventories | selectattr('name', 'in', selected_inventory_names) | list }}
+        controller_inventory_sources: >-
+          {{ controller_inventory_sources | selectattr('inventory', 'in', selected_inventory_names)
+             | map('combine', {'wait': true, 'timeout': inventory_sync_timeout}) | list }}
+
+    - name: Report bounded AWX sync policy
+      tags: [bootstrap-configuration]
+      ansible.builtin.debug:
+        msg:
+          - >-
+            Project sync: timeout={{ project_sync_timeout }}s,
+            collector={{ controller_configuration_projects_async_retries }}x{{ controller_configuration_projects_async_delay }}s.
+          - >-
+            Inventory sync: timeout={{ inventory_sync_timeout }}s,
+            collector={{ controller_configuration_inventory_source_update_async_retries }}x{{ controller_configuration_inventory_source_update_async_delay }}s.
+
+    - name: Apply the shared configuration role
+      tags: [bootstrap-render, bootstrap-configuration]
+      ansible.builtin.include_role:
+        name: "{{ production_role }}"
+        apply:
+          tags: [bootstrap-render, bootstrap-configuration]
+
+    - name: Read the completed project
+      ansible.builtin.set_fact:
+        completed_projects: >-
+          {{ query('ansible.controller.controller_api', 'projects',
+                   query_params={'name': aap_prefix, 'organization__name': aap_organization_name},
+                   host=aap_hostname, username=aap_username, password=aap_password,
+                   verify_ssl=aap_validate_certs) }}
+      no_log: true
+
+    - name: Verify the completed project revision
+      tags: [bootstrap-ready]
+      ansible.builtin.assert:
+        that:
+          - completed_projects | length == 1
+          - completed_projects[0].status == 'successful'
+          - completed_projects[0].scm_revision == lookup('env', 'AAP_PROJECT_GIT_BRANCH')
+        fail_msg: The AWX project must complete successfully at the selected Git revision.
+        quiet: true
+
+    - name: Read the selected inventory sources
+      ansible.builtin.set_fact:
+        completed_inventory_sources: >-
+          {{ query('ansible.controller.controller_api', 'inventory_sources',
+                   query_params={'name__in': controller_inventory_sources | map(attribute='name') | join(','),
+                                 'source_project': completed_projects[0].id},
+                   host=aap_hostname, username=aap_username, password=aap_password,
+                   verify_ssl=aap_validate_certs) }}
+      no_log: true
+
+    - name: Verify the completed inventory syncs
+      tags: [bootstrap-ready]
+      ansible.builtin.assert:
+        that:
+          - completed_inventory_sources | length > 0
+          - >-
+            completed_inventory_sources | map(attribute='name') | list | sort ==
+            controller_inventory_sources | map(attribute='name') | list | sort
+          - completed_inventory_sources | rejectattr('status', 'equalto', 'successful') | list | length == 0
+        fail_msg: Every selected AWX inventory source must complete successfully.
+        quiet: true
+
+    - name: Look up the operator credential
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ current_namespace }}"
+        name: awx-token
+      register: operator_credential
+      no_log: true
+
+    - name: Create the operator token
+      ansible.controller.token:
+        description: Local CaaS operator
+        scope: write
+        state: present
+        controller_host: "{{ aap_hostname }}"
+        controller_username: "{{ aap_username }}"
+        controller_password: "{{ aap_password }}"
+        validate_certs: "{{ aap_validate_certs }}"
+      register: operator_token
+      when: operator_credential.resources | length == 0
+      no_log: true
+
+    - name: Store the operator token in Kubernetes
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: awx-token
+            namespace: "{{ current_namespace }}"
+          stringData:
+            token: "{{ operator_token.ansible_facts.controller_token.token }}"
+      when: operator_credential.resources | length == 0
+      no_log: true

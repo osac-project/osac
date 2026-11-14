@@ -1,0 +1,9 @@
+{{- if or (eq .Values.metal3.namespace .Release.Namespace) (has .Values.metal3.namespace .Values.namespaces) }}
+{{- fail "Metal3 inventory requires its own namespace" }}
+{{- end }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.metal3.namespace | quote }}
+  labels:
+    app.kubernetes.io/part-of: osac-provider-simulator

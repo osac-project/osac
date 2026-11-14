@@ -1,0 +1,311 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+    - golines
+  settings:
+    golines:
+      max-len: &go-line-length 120
+      tab-len: 1
+    goimports:
+      local-prefixes:
+        - github.com/osac-project/osac/tests/integration/caas
+  exclusions:
+    generated: strict
+
+run:
+  timeout: 10m
+
+issues:
+  uniq-by-line: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+      colors: true
+
+linters:
+  default: standard
+  enable:
+    - bidichk
+    - bodyclose
+    - containedctx
+    - contextcheck
+    - depguard
+    - dupl
+    - durationcheck
+    - errorlint
+    - exhaustive
+    - fatcontext
+    - forbidigo
+    - ginkgolinter
+    - gocognit
+    - gocritic
+    - gocyclo
+    - gosec
+    - iface
+    - lll
+    - loggercheck
+    - makezero
+    - misspell
+    - modernize
+    - nestif
+    - nilerr
+    - nilnesserr
+    - noctx
+    - nolintlint
+    - nonamedreturns
+    - reassign
+    - recvcheck
+    - revive
+    - thelper
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+    - wsl_v5
+  settings:
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: math/rand$
+              desc: Use math/rand/v2 instead
+            - pkg: k8s.io/apimachinery/pkg/apis/meta/v1/unstructured$
+              desc: Use upstream Kubernetes API types
+            - pkg: k8s.io/client-go/dynamic
+              desc: Use typed Kubernetes clients
+        unit-tests:
+          files:
+            - "**/internal/**_test.go"
+          list-mode: lax
+          deny:
+            - pkg: sigs.k8s.io/controller-runtime/pkg/envtest
+              desc: Unit suites use fake Kubernetes clients
+            - pkg: github.com/osac-project/osac/fulfillment-service/it
+              desc: Deployed application setup belongs in integration suites
+            - pkg: github.com/osac-project/osac/tests/integration/caas/suites
+              desc: Unit suites use package-local fixtures
+            - pkg: github.com/stretchr/testify/assert
+              desc: Unit suites use Ginkgo and Gomega
+            - pkg: github.com/stretchr/testify/require
+              desc: Unit suites use Ginkgo and Gomega
+        unit-specs:
+          files:
+            - "**/internal/**_test.go"
+            - "!**/*_suite_test.go"
+          list-mode: lax
+          deny:
+            - pkg: testing$
+              desc: Unit specs use Ginkgo; testing belongs in the package suite bootstrap
+        test-side:
+          files:
+            - "**/internal/harness/**"
+            - "**/internal/awx/**"
+            - "**/suites/**"
+          list-mode: lax
+          allow:
+            - github.com/osac-project/osac/tests/integration/caas/internal/simulator/scenario$
+            - github.com/osac-project/osac/tests/integration/caas/internal/simulator/host$
+          deny:
+            - pkg: github.com/osac-project/osac/tests/integration/caas/internal/simulator
+              desc: Integration cases use case controls and host operations, not native reconcilers
+        simulator-runtime:
+          files:
+            - "**/internal/simulator/**"
+            - "**/cmd/simulator/**"
+            - "**/internal/logging/**"
+            - "!$test"
+          list-mode: lax
+          allow:
+            - github.com/osac-project/osac/tests/integration/caas/internal/simulator
+            - github.com/osac-project/osac/tests/integration/caas/internal/logging$
+          deny:
+            - pkg: github.com/onsi/ginkgo
+              desc: Runtime code returns errors; Ginkgo belongs in test files
+            - pkg: github.com/onsi/gomega
+              desc: Runtime code returns errors; Gomega belongs in test files
+            - pkg: github.com/osac-project/osac/
+              desc: Simulator runtime is independent of application and test packages
+        native-components:
+          files:
+            - "**/internal/simulator/**"
+            - "!**/internal/simulator/*.go"
+            - "!**/internal/simulator/scenario/**"
+            - "!**/internal/simulator/kube/**"
+            - "!$test"
+          list-mode: lax
+          allow:
+            - github.com/osac-project/osac/tests/integration/caas/internal/simulator/kube$
+          deny:
+            - pkg: github.com/osac-project/osac/tests/integration/caas/internal/simulator
+              desc: Native components communicate through Kubernetes resources
+        scenario-boundary:
+          files:
+            - "**/internal/simulator/scenario/**"
+            - "!$test"
+          list-mode: lax
+          allow:
+            - github.com/osac-project/osac/tests/integration/caas/internal/simulator/kube$
+            - github.com/osac-project/osac/tests/integration/caas/internal/simulator/assisted$
+          deny:
+            - pkg: github.com/osac-project/osac/tests/integration/caas/internal/simulator
+              desc: Scenario adapts response inputs through native resources
+        shared-mechanics:
+          files:
+            - "**/internal/simulator/kube/**"
+            - "**/internal/logging/**"
+            - "!$test"
+          list-mode: lax
+          deny:
+            - pkg: github.com/osac-project/osac/tests/integration/caas
+              desc: Shared mechanics are independent of CaaS components
+        harness-operations:
+          files:
+            - "**/internal/harness/**"
+            - "!$test"
+          list-mode: lax
+          allow:
+            - github.com/osac-project/osac/tests/integration/caas/internal/simulator/host$
+            - github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1$
+            - github.com/osac-project/osac/osac-operator/api/v1alpha1$
+          deny:
+            - pkg: github.com/onsi/ginkgo
+              desc: Runtime operations return errors; Ginkgo belongs in test files
+            - pkg: github.com/onsi/gomega
+              desc: Runtime operations return errors; Gomega belongs in test files
+            - pkg: github.com/osac-project/osac/
+              desc: Native operations are independent of application setup and verification
+        awx-operations:
+          files:
+            - "**/internal/awx/**"
+          list-mode: lax
+          deny:
+            - pkg: github.com/osac-project/osac/tests/integration/caas/internal/simulator
+              desc: Automation verification is independent of provider simulation
+            - pkg: github.com/osac-project/osac/tests/integration/caas/suites
+              desc: Suite fixtures compose automation verification
+    dupl:
+      threshold: 200
+    forbidigo:
+      analyze-types: true
+      exclude-godoc-examples: false
+      forbid:
+        - pattern: '^(ginkgo|decorators)\.(Focus|Pending|Ordered|Serial|FlakeAttempts|MustPassRepeatedly)$'
+          pkg: '^github\.com/onsi/ginkgo/v2(/dsl/decorators)?$'
+          msg: Use independent tests without focus, skips or retries.
+        - pattern: '^ginkgo\.(GinkgoTInterface|FullGinkgoTInterface|GinkgoTBWrapper)\.Skip(f|Now)?$'
+          pkg: '^github\.com/onsi/ginkgo/v2$'
+          msg: Tests must run without skips.
+        - pattern: '^testing\.(T|B|F|TB)\.Skip(f|Now)?$'
+          pkg: '^testing$'
+          msg: Tests must run without skips.
+    ginkgolinter:
+      forbid-focus-container: true
+      forbid-spec-pollution: true
+      validate-async-intervals: true
+      force-succeed: true
+    gocognit:
+      min-complexity: 20
+    gocritic:
+      enabled-checks:
+        - boolExprSimplify
+    gocyclo:
+      min-complexity: 20
+    gosec:
+      excludes:
+        # G104 (unhandled errors) overlaps errcheck; the std-error-handling
+        # preset covers common Close/Flush/Print patterns.
+        - G104
+        # G101 (hardcoded credentials) uses a name heuristic that produces too many
+        # false positives on Go const/var names containing "Secret"/"Password"/"Token".
+        - G101
+        # G404 (weak RNG) flags math/rand/v2 which is the correct non-crypto RNG.
+        # depguard already bans math/rand (v1).
+        - G404
+    iface:
+      enable:
+        - identical
+    lll:
+      line-length: *go-line-length
+    nestif:
+      min-complexity: 4
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    nonamedreturns:
+      report-error-in-defer: true
+      allow-unused-named-returns: false
+    revive:
+      enable-default-rules: false
+      rules:
+        - name: early-return
+        - name: superfluous-else
+        - name: indent-error-flow
+        - name: if-return
+        - name: identical-branches
+        - name: identical-ifelseif-branches
+        - name: unnecessary-stmt
+        - name: empty-block
+        - name: confusing-naming
+        - name: filename-format
+          arguments:
+            - '^[_a-z][_a-z0-9]*\.go$'
+        - name: enforce-switch-style
+          arguments:
+            - allowNoDefault
+        - name: receiver-naming
+        - name: error-naming
+        - name: error-strings
+        - name: dot-imports
+          arguments:
+            - allowed-packages:
+                - github.com/onsi/ginkgo/v2
+                - github.com/onsi/ginkgo/v2/dsl/core
+                - github.com/onsi/gomega
+                - github.com/onsi/gomega/gbytes
+        - name: unconditional-recursion
+        - name: flag-parameter
+        - name: function-result-limit
+          arguments: [4]
+    staticcheck:
+      dot-import-whitelist:
+        - "github.com/onsi/ginkgo/v2"
+        - "github.com/onsi/ginkgo/v2/dsl/core"
+        - "github.com/onsi/gomega"
+        - "github.com/onsi/gomega/gbytes"
+    wsl_v5:
+      default: default
+      allow-first-in-block: true
+      allow-whole-block: false
+      branch-max-lines: 4
+      cuddle-max-statements: 2
+      enable:
+        - after-block
+        - after-decl
+  exclusions:
+    generated: strict
+    presets:
+      - comments
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+    rules:
+      - linters:
+          - gosec
+        path: _test\.go
+      - path: '(^|/)suites/cluster/.*_test\.go$'
+        linters:
+          - wsl_v5
+        text: '^missing whitespace above this line \(invalid statement above assign\)$'

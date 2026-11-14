@@ -70,8 +70,8 @@ __debug_bin*
 *.out
 
 # go.work.sum is a derived, workspace-level checksum cache regenerated
-# automatically by `go build`/`go mod download`/`go test` from the repo
-# root. It grows non-deterministically depending on what each contributor
+# automatically by `go build`/`go mod download`/`go test` in each workspace.
+# It grows non-deterministically depending on what each contributor
 # happens to build locally, which caused near-constant merge conflicts
 # unrelated to any actual code change. GitHub's default Go .gitignore
 # template excludes go.work/go.work.sum for this reason; the upstream
@@ -81,7 +81,7 @@ __debug_bin*
 # regenerates go.work.sum during its own `go mod download` step (see e.g.
 # fulfillment-service/Containerfile) rather than relying on a copied-in
 # committed copy.
-/go.work.sum
+go.work.sum
 
 # editor and IDE paraphernalia
 .idea
@@ -226,6 +226,10 @@ dmypy.json
 .pytype/
 cython_debug/
 *.iml
+
+# CaaS integration CRD downloads
+/tests/integration/caas/charts/bootstrap/crds/
+/tests/integration/caas/charts/providers/crds/
 
 # osac-installer
 /osac-installer/dist/

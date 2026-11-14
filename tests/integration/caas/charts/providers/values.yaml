@@ -1,0 +1,12 @@
+images:
+  simulator: localhost/osac-caas-simulator:dev
+  simulatorPullPolicy: Never
+  ignition: docker.io/library/python:3.13.9-alpine3.22
+  ignitionPullPolicy: IfNotPresent
+# Process logging for the native Go simulator.
+logLevel: info
+imagePullSecrets: []
+# Native Agent/InfraEnv namespace scope.
+namespaces: []
+metal3:
+  namespace: simulated-metal3

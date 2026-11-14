@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "logLevel": {
+      "type": "string",
+      "enum": ["debug", "info", "warn", "error"],
+      "description": "Log level for the native Go simulator."
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "simulator",
+        "simulatorPullPolicy",
+        "ignition",
+        "ignitionPullPolicy"
+      ],
+      "properties": {
+        "simulator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "simulatorPullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        },
+        "ignition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ignitionPullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "metal3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "namespace"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "maxLength": 63
+        }
+      }
+    },
+    "namespaces": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Native Agent/InfraEnv namespaces served by the simulator; empty selects the release namespace. HostedClusters select their Agent namespace through the Agent platform, with control-plane resources in their native namespaces."
+    }
+  },
+  "additionalProperties": false
+}

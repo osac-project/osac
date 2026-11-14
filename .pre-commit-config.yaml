@@ -51,7 +51,7 @@ repos:
       files: \.(yaml|yml)$
       types: [file, yaml]
       entry: yamllint --strict
-      exclude: ^(fulfillment-service/(charts|it/charts)/.*/templates/|osac-operator/(charts/.*/templates/|config/)|bare-metal-fulfillment-operator/(charts/.*/templates/|config/)|osac-csi-driver/charts/.*/templates/|osac-ui/charts/.*/templates/)
+      exclude: ^(fulfillment-service/(charts|it/charts)/.*/templates/|osac-operator/(charts/.*/templates/|config/)|bare-metal-fulfillment-operator/(charts/.*/templates/|config/)|osac-csi-driver/charts/.*/templates/|osac-ui/charts/.*/templates/|tests/integration/caas/charts/[^/]+/templates/)
 
 - repo: local
   hooks:

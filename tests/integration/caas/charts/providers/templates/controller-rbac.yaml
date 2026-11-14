@@ -1,0 +1,136 @@
+{{- $root := . }}
+{{- range (default (list .Release.Namespace) .Values.namespaces) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-provider-simulator
+  namespace: {{ . | quote }}
+rules:
+  - apiGroups: [agent-install.openshift.io]
+    resources: [infraenvs]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [agent-install.openshift.io]
+    resources: [infraenvs/status]
+    verbs: [patch]
+  - apiGroups: [agent-install.openshift.io]
+    resources: [agents]
+    verbs: [get, list, watch, update, patch, delete]
+  - apiGroups: [agent-install.openshift.io]
+    resources: [agents/status]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-provider-simulator
+  namespace: {{ . | quote }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: osac-provider-simulator}
+subjects:
+  - {kind: ServiceAccount, name: osac-provider-simulator, namespace: {{ $root.Release.Namespace | quote }}}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-provider-simulator-settings
+  namespace: {{ .Release.Namespace | quote }}
+rules:
+  - apiGroups: ['']
+    resources: [configmaps]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-provider-simulator-settings
+  namespace: {{ .Release.Namespace | quote }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: osac-provider-simulator-settings}
+subjects:
+  - {kind: ServiceAccount, name: osac-provider-simulator, namespace: {{ .Release.Namespace | quote }}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: osac-provider-simulator-fixtures
+rules:
+  # Blocking controller references require update on the owners' finalizers.
+  - apiGroups: [hypershift.openshift.io]
+    resources: [hostedclusters/finalizers, hostedcontrolplanes/finalizers]
+    verbs: [update]
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [clusters/finalizers, machinesets/finalizers, machines/finalizers]
+    verbs: [update]
+  - apiGroups: [capi-provider.agent-install.openshift.io]
+    resources: [agentclusters/finalizers]
+    verbs: [update]
+  - apiGroups: [hive.openshift.io]
+    resources: [clusterdeployments/finalizers]
+    verbs: [update]
+  - apiGroups: ['']
+    resources: [secrets/finalizers]
+    verbs: [update]
+  # Native HyperShift/CAPI relationships cross into control-plane namespaces.
+  - apiGroups: [hypershift.openshift.io]
+    resources: [hostedclusters, hostedcontrolplanes, nodepools]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [hypershift.openshift.io]
+    resources: [hostedclusters/status, hostedcontrolplanes/status, nodepools/status]
+    verbs: [patch]
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [clusters, machinesets, machines]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [clusters/status, machinesets/status, machines/status]
+    verbs: [patch]
+  - apiGroups: [capi-provider.agent-install.openshift.io]
+    resources: [agentclusters, agentmachines, agentmachinetemplates]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [capi-provider.agent-install.openshift.io]
+    resources: [agentclusters/status, agentmachines/status]
+    verbs: [patch]
+  - apiGroups: [hive.openshift.io]
+    resources: [clusterdeployments]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: [extensions.hive.openshift.io]
+    resources: [agentclusterinstalls]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: ['']
+    resources: [namespaces, services, secrets]
+    verbs: [get, list, watch, create, patch, delete]
+  - apiGroups: ['']
+    resources: [services]
+    verbs: [update]
+  - apiGroups: ['']
+    resources: [services/status]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: osac-provider-simulator-fixtures
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: osac-provider-simulator-fixtures}
+subjects:
+  - {kind: ServiceAccount, name: osac-provider-simulator, namespace: {{ .Release.Namespace | quote }}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-provider-simulator-metal3
+  namespace: {{ .Values.metal3.namespace | quote }}
+rules:
+  - apiGroups: [metal3.io]
+    resources: [baremetalhosts]
+    verbs: [get, list, watch, patch]
+  - apiGroups: [metal3.io]
+    resources: [baremetalhosts/status]
+    verbs: [update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-provider-simulator-metal3
+  namespace: {{ .Values.metal3.namespace | quote }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: osac-provider-simulator-metal3}
+subjects:
+  - {kind: ServiceAccount, name: osac-provider-simulator, namespace: {{ .Release.Namespace | quote }}}

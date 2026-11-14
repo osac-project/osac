@@ -1,0 +1,11 @@
+{{- if .Values.bootstrap.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caas-it-awx-bootstrap
+data:
+  configure-awx.yml: |
+{{ .Files.Get "files/configure-awx.yml" | indent 4 }}
+  render-execution-groups.j2: |
+{{ .Files.Get "files/render-execution-groups.j2" | indent 4 }}
+{{- end }}

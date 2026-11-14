@@ -22,6 +22,7 @@ package baremetalhost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -31,6 +32,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/directclient"
 )
 
 // credentialsSecretSuffix is appended to the BareMetalHost name to name the
@@ -58,24 +61,32 @@ type CreateParams struct {
 // readiness checking. Any inventory backend that needs BMH CRs can
 // use this utility.
 //
-// uncachedClient confirms BMH deletion directly with the API server.
+// direct confirms BMH deletion directly with the API server. Deletion
+// confirmation must observe current state, so it cannot be served from the
+// controller-runtime cache.
 type Manager struct {
-	client         client.Client
-	uncachedClient client.Client
-	namespace      string
+	client    client.Client
+	direct    directclient.Client
+	namespace string
 }
 
-// NewManager creates a manager for the given Metal3 namespace. uncachedClient
-// should be built with client.New; if nil, the cached client is used.
-func NewManager(k8sClient client.Client, uncachedClient client.Client, namespace string) *Manager {
-	if uncachedClient == nil {
-		uncachedClient = k8sClient
+// NewManager creates a manager for the given Metal3 namespace.
+//
+// direct must be built with directclient.New. It is required: NewManager returns
+// an error rather than falling back to k8sClient, because a cached client would
+// silently make deletion confirmation read stale state.
+func NewManager(k8sClient client.Client, direct directclient.Client, namespace string) (*Manager, error) {
+	if k8sClient == nil {
+		return nil, errors.New("cached client is required")
+	}
+	if direct == nil {
+		return nil, errors.New("direct client is required")
 	}
 	return &Manager{
-		client:         k8sClient,
-		uncachedClient: uncachedClient,
-		namespace:      namespace,
-	}
+		client:    k8sClient,
+		direct:    direct,
+		namespace: namespace,
+	}, nil
 }
 
 // Namespace returns the Metal3 namespace used for BareMetalHost CRs.
@@ -143,7 +154,7 @@ func (m *Manager) CreateBMH(ctx context.Context, params CreateParams) error {
 // BMHExists checks whether a BareMetalHost CR exists in the configured namespace.
 func (m *Manager) BMHExists(ctx context.Context, name string) (bool, error) {
 	bmh := &metal3api.BareMetalHost{}
-	err := m.uncachedClient.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, bmh)
+	err := m.direct.Get(ctx, client.ObjectKey{Namespace: m.namespace, Name: name}, bmh)
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
@@ -155,11 +166,11 @@ func (m *Manager) BMHExists(ctx context.Context, name string) (bool, error) {
 
 // DeleteBMH leaves a BMH with another consumerRef untouched.
 func (m *Manager) DeleteBMH(ctx context.Context, name, ownerUID string) error {
-	bmh, err := FindOwnedBMH(ctx, m.uncachedClient, m.namespace, name, ownerUID)
+	bmh, err := FindOwnedBMH(ctx, m.direct, m.namespace, name, ownerUID)
 	if err != nil || bmh == nil {
 		return err
 	}
-	err = m.uncachedClient.Delete(ctx, bmh, client.Preconditions{UID: &bmh.UID, ResourceVersion: &bmh.ResourceVersion})
+	err = m.direct.Delete(ctx, bmh, client.Preconditions{UID: &bmh.UID, ResourceVersion: &bmh.ResourceVersion})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete BareMetalHost %s/%s: %w", m.namespace, name, err)
 	}

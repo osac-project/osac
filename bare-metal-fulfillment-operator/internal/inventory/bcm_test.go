@@ -1185,14 +1185,14 @@ var _ = Describe("BCM Inventory Adapter", func() {
 			// Set status via status subresource
 			bmh.Status.HardwareDetails = &metal3api.HardwareDetails{NIC: nics}
 			Expect(k8sClient.Status().Update(context.Background(), bmh)).To(Succeed())
-			mgr := baremetalhost.NewManager(k8sClient, k8sClient, bmhNamespace)
+			mgr := newTestBMHManagerFor(k8sClient, bmhNamespace)
 			return NewBCMClient(mockAPI, mgr, nil, "bcm")
 		}
 
 		newClientNoBMH := func() *BCMClient {
 			scheme := newTestScheme()
 			k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-			mgr := baremetalhost.NewManager(k8sClient, k8sClient, bmhNamespace)
+			mgr := newTestBMHManagerFor(k8sClient, bmhNamespace)
 			return NewBCMClient(mockAPI, mgr, nil, "bcm")
 		}
 
@@ -1223,7 +1223,7 @@ var _ = Describe("BCM Inventory Adapter", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: "node001", Namespace: bmhNamespace},
 			}
 			k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bmh).Build()
-			mgr := baremetalhost.NewManager(k8sClient, k8sClient, bmhNamespace)
+			mgr := newTestBMHManagerFor(k8sClient, bmhNamespace)
 			client := NewBCMClient(mockAPI, mgr, nil, "bcm")
 			nics, err := client.GetHostNICs(ctx, "osac-baremetal/node001")
 			Expect(err).NotTo(HaveOccurred())

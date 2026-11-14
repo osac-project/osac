@@ -39,6 +39,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmh"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/directclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
@@ -119,7 +120,7 @@ var _ = Describe("NetBox inventory client", func() {
 			Expect(api).NotTo(BeNil())
 
 			ctrl := gomock.NewController(GinkgoT())
-			manager := baremetalhost.NewManager(nil, nil, "metal3-system")
+			manager := newTestBMHManager("metal3-system")
 			writer := NewMockWriter(ctrl)
 			credentialsReader := &fakeCredentialsReaderRepository{}
 			client := NewNetBoxClient(api, manager, writer, testNetBoxHostClass, credentialsReader)
@@ -190,7 +191,7 @@ var _ = Describe("NetBox inventory client", func() {
 				Spec:       metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-old"}},
 			}
 			manager, k8sClient := newNetBoxResourceManager(bareMetalHost)
-			writer := bmh.NewSecretWriter(k8sClient, "metal3-system")
+			writer := newTestSecretWriter(k8sClient, "metal3-system")
 			Expect(writer.Create(ctx, credentials.Reference{HostID: "netbox-5", BMIID: "bmi-old"}, credentials.BMC{
 				Username: []byte("admin"), Password: []byte("password"),
 			})).To(Succeed())
@@ -232,7 +233,7 @@ var _ = Describe("NetBox inventory client", func() {
 			}
 			manager, k8sClient := newNetBoxResourceManager(bareMetalHost)
 			secretKey := client.ObjectKey{Namespace: "metal3-system", Name: "netbox-46-bmc-secret"}
-			writer := bmh.NewSecretWriter(k8sClient, "metal3-system")
+			writer := newTestSecretWriter(k8sClient, "metal3-system")
 			Expect(writer.Create(ctx, credentials.Reference{HostID: "netbox-46", BMIID: "bmi-B"}, credentials.BMC{
 				Username: []byte("admin"), Password: []byte("password"),
 			})).To(Succeed())
@@ -249,7 +250,7 @@ var _ = Describe("NetBox inventory client", func() {
 			ctx := context.Background()
 			manager, k8sClient := newNetBoxResourceManager()
 			secretKey := client.ObjectKey{Namespace: "metal3-system", Name: "netbox-46-bmc-secret"}
-			writer := bmh.NewSecretWriter(k8sClient, "metal3-system")
+			writer := newTestSecretWriter(k8sClient, "metal3-system")
 			Expect(writer.Create(ctx, credentials.Reference{HostID: "netbox-46", BMIID: "bmi-A"}, credentials.BMC{
 				Username: []byte("admin"), Password: []byte("password"),
 			})).To(Succeed())
@@ -325,9 +326,9 @@ var _ = Describe("NetBox inventory client", func() {
 				Finalizers: []string{"test.osac.openshift.io/hold"},
 			}, Spec: metal3api.BareMetalHostSpec{ConsumerRef: &corev1.ObjectReference{Name: "bmi-123"}}}
 			k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(bareMetalHost).Build()
-			manager := baremetalhost.NewManager(k8sClient, k8sClient, "metal3-system")
+			manager := newTestBMHManagerFor(k8sClient, "metal3-system")
 			secretKey := client.ObjectKey{Namespace: "metal3-system", Name: "netbox-46-bmc-secret"}
-			writer := bmh.NewSecretWriter(k8sClient, "metal3-system")
+			writer := newTestSecretWriter(k8sClient, "metal3-system")
 			Expect(writer.Create(ctx, credentials.Reference{HostID: "netbox-46", BMIID: "bmi-123"}, credentials.BMC{
 				Username: []byte("admin"), Password: []byte("test-password"),
 			})).To(Succeed())
@@ -545,7 +546,7 @@ func newNetBoxResourceManager(objects ...client.Object) (*baremetalhost.Manager,
 	Expect(corev1.AddToScheme(scheme)).To(Succeed())
 	Expect(metal3api.AddToScheme(scheme)).To(Succeed())
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
-	return baremetalhost.NewManager(k8sClient, k8sClient, "metal3-system"), k8sClient
+	return newTestBMHManagerFor(k8sClient, "metal3-system"), k8sClient
 }
 
 func newTestNetBoxClientWithCredentials(api NetBoxAPI) *NetBoxClient {
@@ -561,7 +562,7 @@ var _ = Describe("NetBox selector query", func() {
 	Describe("FindFreeHost", func() {
 		It("returns an error when the Metal3 namespace is missing without querying NetBox", func() {
 			api := &selectorQueryTestAPI{}
-			client := newNetBoxClient(api, baremetalhost.NewManager(nil, nil, ""), testNetBoxHostClass, nil)
+			client := newNetBoxClient(api, newTestBMHManager(""), testNetBoxHostClass, nil)
 
 			host, err := client.FindFreeHost(context.Background(), nil)
 
@@ -1030,7 +1031,34 @@ func expectedTestNetBoxAssignedHost(instanceID string) *Host {
 }
 
 func testNetBoxSelectorBMHManager() *baremetalhost.Manager {
-	return baremetalhost.NewManager(nil, nil, "metal3-system")
+	return newTestBMHManager("metal3-system")
+}
+
+// newTestDirectClient wraps an already-uncached client as a direct client.
+func newTestDirectClient(c client.Client) directclient.Client {
+	direct, err := directclient.WrapForTest(c)
+	Expect(err).NotTo(HaveOccurred())
+	return direct
+}
+
+// newTestBMHManagerFor builds a BMH manager over the given client.
+func newTestBMHManagerFor(c client.Client, namespace string) *baremetalhost.Manager {
+	manager, err := baremetalhost.NewManager(c, newTestDirectClient(c), namespace)
+	Expect(err).NotTo(HaveOccurred())
+	return manager
+}
+
+// newTestSecretWriter builds a BMC Secret writer over the given client.
+func newTestSecretWriter(c client.Client, namespace string) *bmh.SecretWriter {
+	writer, err := bmh.NewSecretWriter(newTestDirectClient(c), namespace)
+	Expect(err).NotTo(HaveOccurred())
+	return writer
+}
+
+// newTestBMHManager returns a BMH manager backed by an empty fake client. It
+// is for tests that exercise wiring rather than BMH or Secret behavior.
+func newTestBMHManager(namespace string) *baremetalhost.Manager {
+	return newTestBMHManagerFor(fake.NewClientBuilder().WithScheme(newTestScheme()).Build(), namespace)
 }
 
 var _ = Describe("NetBox GetHostNICs", func() {

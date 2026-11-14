@@ -241,7 +241,8 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 			"FabricDomains need BMaaS, which is not enabled in this deployment")
 	}
 	// Hold the VirtualNetwork row lock, as VirtualNetworks.Delete does, until this request transaction finishes.
-	vn, err := lockParentVirtualNetwork(ctx, s.guards, s.virtualNetworks, spec.GetVirtualNetwork(), object.GetMetadata())
+	vn, err := lockParentVirtualNetwork(ctx, s.guards, s.virtualNetworks,
+		spec.GetVirtualNetwork(), "", object.GetMetadata())
 	if err != nil {
 		return err
 	}

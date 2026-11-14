@@ -74,6 +74,8 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   servers suite and the deployed public Create; provider provisioning remains
   E2E coverage.
 
+- **StorageTier/Volume reference guard ([OSAC-7049](https://redhat.atlassian.net/browse/OSAC-7049), DEV):** `internal/cmd/service/start/grpcserver`, `internal/servers` and `internal/database/migrations` exercise production DAOs and in-process handlers against temporary PostgreSQL, including concurrent access. Tenancy and attribution are controlled; deployed service, operator and provider behavior is not covered.
+
 ## Coverage gaps
 
 - Provider-enabled networking and FabricDomain-to-Netris lifecycle need their

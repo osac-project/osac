@@ -17,15 +17,20 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/computeinstance"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -60,9 +65,10 @@ var _ privatev1.VolumesServer = (*PrivateVolumesServer)(nil)
 type PrivateVolumesServer struct {
 	privatev1.UnimplementedVolumesServer
 
-	logger       *slog.Logger
-	generic      *GenericServer[*privatev1.Volume]
-	tierResolver TierResolverFunc
+	logger           *slog.Logger
+	generic          *GenericServer[*privatev1.Volume]
+	computeInstances *GenericServer[*privatev1.ComputeInstance]
+	tierResolver     TierResolverFunc
 }
 
 func NewPrivateVolumesServer() *PrivateVolumesServerBuilder {
@@ -127,10 +133,21 @@ func (b *PrivateVolumesServerBuilder) Build() (result *PrivateVolumesServer, err
 		return
 	}
 
+	computeInstances, err := NewGenericServer[*privatev1.ComputeInstance]().
+		SetLogger(b.logger).
+		SetService(privatev1.ComputeInstances_ServiceDesc.ServiceName).
+		SetAttributionLogic(b.attributionLogic).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
 	result = &PrivateVolumesServer{
-		logger:       b.logger,
-		generic:      generic,
-		tierResolver: b.tierResolver,
+		logger:           b.logger,
+		generic:          generic,
+		computeInstances: computeInstances,
+		tierResolver:     b.tierResolver,
 	}
 	return
 }
@@ -186,7 +203,47 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 
 	vol.SetId("")
 
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
+		func(ctx context.Context, _ *privatev1.Volume, candidate *privatev1.Volume) error {
+			inventory, err := computeinstance.IsComputeInstanceVolumeInventory(ctx,
+				func(ctx context.Context, id string) (*privatev1.ComputeInstance, error) {
+					var parent *privatev1.ComputeInstancesGetResponse
+					tx, err := database.TxFromContext(ctx)
+					if err != nil {
+						return nil, err
+					}
+					err = tx.Savepoint(ctx, func(ctx context.Context) error {
+						return s.computeInstances.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build(), &parent)
+					})
+					if err != nil {
+						failureStatus, ok := grpcstatus.FromError(err)
+						if !ok {
+							failureStatus = grpcstatus.FromContextError(err)
+						}
+						failure, detailErr := failureStatus.WithDetails(&errdetails.ErrorInfo{
+							Reason: computeinstance.VolumeCreateNotPersistedReason,
+							Domain: computeinstance.VolumeCreateErrorDomain,
+						})
+						if detailErr == nil {
+							err = failure.Err()
+						}
+					}
+					return parent.GetObject(), err
+				}, candidate)
+			if err != nil {
+				return err
+			}
+			if inventory {
+				// For 0.4 only: ticket - OSAC-7670
+				// AVAILABLE means inventory registration, not disk readiness or vendor provisioning.
+				candidate.SetStatus(privatev1.VolumeStatus_builder{
+					State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
+					StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
+					Provider:            resolved.Provider, Protocol: resolved.Protocol,
+				}.Build())
+			}
+			return nil
+		})
 	return
 }
 

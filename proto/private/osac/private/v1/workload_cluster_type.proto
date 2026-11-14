@@ -1,0 +1,70 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/private/v1/metadata_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// Represents a provider-managed cluster registered from an ACM Hub.
+message WorkloadCluster {
+  string id = 1;
+  Metadata metadata = 2;
+  WorkloadClusterSpec spec = 3 [(buf.validate.field).required = true];
+  WorkloadClusterStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Desired registration details for a WorkloadCluster.
+message WorkloadClusterSpec {
+  // Identifier of the OSAC Hub hosting the ManagedCluster resource.
+  string source_hub_id = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Name of the ManagedCluster resource on the Hub.
+  string managed_cluster_name = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  // Workload capabilities offered by the registered cluster.
+  repeated string supported_workloads = 3 [(buf.validate.field).repeated = {
+    min_items: 1
+    unique: true
+    items: {string: {in: ["maas"]}}
+  }];
+}
+
+// Observed registration state.
+message WorkloadClusterStatus {
+  repeated WorkloadClusterCondition conditions = 1;
+
+  // Stable identity claim from the Hub ManagedCluster. This is controller-owned.
+  string managed_cluster_uid = 2 [(cleanapi.field).private = true];
+}
+
+// Describes one aspect of Hub registration state.
+message WorkloadClusterCondition {
+  string type = 1 [(buf.validate.field).string.min_len = 1];
+  string status = 2 [(buf.validate.field).string = {in: ["True", "False", "Unknown"]}];
+  string reason = 3;
+  string message = 4;
+  google.protobuf.Timestamp last_transition_time = 5;
+  google.protobuf.Timestamp last_observed_time = 6;
+}

@@ -776,22 +776,36 @@ func (c *Reconciler[O]) watchEvents(ctx context.Context) error {
 }
 
 func (c *Reconciler[O]) syncObjects(ctx context.Context) error {
-	type requestIface interface {
+	const pageSize int32 = 100
+	for offset := int32(0); ; offset += pageSize {
+		requestMsg := proto.Clone(c.listRequest)
+		fields := requestMsg.ProtoReflect().Descriptor().Fields()
+		if offsetField := fields.ByName("offset"); offsetField != nil {
+			requestMsg.ProtoReflect().Set(offsetField, protoreflect.ValueOfInt32(offset))
+		}
+		if limitField := fields.ByName("limit"); limitField != nil {
+			requestMsg.ProtoReflect().Set(limitField, protoreflect.ValueOfInt32(pageSize))
+		}
+		responseMsg := proto.Clone(c.listResponse)
+		if err := c.grpcClient.Invoke(ctx, c.listMethod, requestMsg, responseMsg); err != nil {
+			return err
+		}
+		itemsField := responseMsg.ProtoReflect().Descriptor().Fields().ByName("items")
+		if itemsField == nil {
+			return errors.New("list response has no items field")
+		}
+		items := responseMsg.ProtoReflect().Get(itemsField).List()
+		for i := 0; i < items.Len(); i++ {
+			c.objectChannel <- items.Get(i).Message().Interface().(O)
+		}
+		total := int64(offset) + int64(items.Len())
+		if totalField := responseMsg.ProtoReflect().Descriptor().Fields().ByName("total"); totalField != nil {
+			total = responseMsg.ProtoReflect().Get(totalField).Int()
+		}
+		if items.Len() == 0 || int64(offset)+int64(items.Len()) >= total {
+			return nil
+		}
 	}
-	type responseIface interface {
-		GetItems() []O
-	}
-	requestMsg := proto.Clone(c.listRequest).(requestIface)
-	responseMsg := proto.Clone(c.listResponse).(responseIface)
-	err := c.grpcClient.Invoke(ctx, c.listMethod, requestMsg, responseMsg)
-	if err != nil {
-		return err
-	}
-	items := responseMsg.GetItems()
-	for _, item := range items {
-		c.objectChannel <- item
-	}
-	return nil
 }
 
 func (c *Reconciler[O]) reportHealth(ctx context.Context, status healthv1.HealthCheckResponse_ServingStatus) {

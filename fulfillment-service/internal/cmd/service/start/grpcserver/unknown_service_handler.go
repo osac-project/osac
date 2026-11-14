@@ -63,6 +63,10 @@ var disabledServicePrefixes = map[string][]string{
 		"/osac.private.v1.BareMetalInstances/",
 		"/osac.private.v1.BareMetalInstanceTypes/",
 	},
+	"MaaS": {
+		"/osac.public.v1.WorkloadClusters/",
+		"/osac.private.v1.WorkloadClusters/",
+	},
 }
 
 // diskImageServicePrefixes contains the services shared by VMaaS and BMaaS. They are disabled only when neither
@@ -80,6 +84,7 @@ func buildDisabledServiceMap(svcFlags *services.Flags) map[string]string {
 		"CaaS":  svcFlags.CaaS,
 		"VMaaS": svcFlags.VMaaS,
 		"BMaaS": svcFlags.BMaaS,
+		"MaaS":  svcFlags.MaaS,
 	}
 	for group, prefixes := range disabledServicePrefixes {
 		if !flagValues[group] {

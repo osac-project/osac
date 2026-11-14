@@ -28,12 +28,20 @@ import (
 // SignalRequest represents a request to signal an object by its identifier.
 type SignalRequest[O Object] struct {
 	request[O]
-	id string
+	id            string
+	eventReason   string
+	eventSeverity string
 }
 
 // SetId sets the identifier of the object to signal.
 func (r *SignalRequest[O]) SetId(value string) *SignalRequest[O] {
 	r.id = value
+	return r
+}
+
+func (r *SignalRequest[O]) SetEventMetadata(reason, severity string) *SignalRequest[O] {
+	r.eventReason = reason
+	r.eventSeverity = severity
 	return r
 }
 
@@ -77,6 +85,14 @@ func (r *SignalRequest[O]) do(ctx context.Context) (response *SignalResponse, er
 	// Mark the update as a signal for the change trigger. SET LOCAL limits the flag to the current transaction, and we
 	// clear it immediately after the update so that later operations in the same transaction remain regular updates.
 	_, err = r.exec(ctx, signalOpType, "set local osac.signal = 'on'")
+	if err != nil {
+		return
+	}
+	_, err = r.exec(ctx, signalOpType, "select set_config('osac.event_reason', $1, true)", r.eventReason)
+	if err != nil {
+		return
+	}
+	_, err = r.exec(ctx, signalOpType, "select set_config('osac.event_severity', $1, true)", r.eventSeverity)
 	if err != nil {
 		return
 	}

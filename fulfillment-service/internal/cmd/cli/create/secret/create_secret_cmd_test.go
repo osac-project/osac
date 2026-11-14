@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -182,7 +183,7 @@ var _ = Describe("parseFromFileFlags", func() {
 var _ = Describe("parseLabels", func() {
 	DescribeTable("valid cases",
 		func(labels []string, expected map[string]string) {
-			result, err := parseLabels(labels)
+			result, err := metautil.ParseLabels(labels)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(expected))
 		},
@@ -211,7 +212,7 @@ var _ = Describe("parseLabels", func() {
 
 	DescribeTable("error cases",
 		func(labels []string, errMatcher OmegaMatcher) {
-			_, err := parseLabels(labels)
+			_, err := metautil.ParseLabels(labels)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(errMatcher)
 		},

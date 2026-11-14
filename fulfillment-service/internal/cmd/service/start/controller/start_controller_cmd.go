@@ -64,6 +64,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/user"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/virtualnetwork"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/volume"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/workloadcluster"
 	internalhealth "github.com/osac-project/osac/fulfillment-service/internal/health"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
@@ -71,6 +72,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/networking"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
+	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	shtdwn "github.com/osac-project/osac/fulfillment-service/internal/shutdown"
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -189,6 +191,7 @@ func Cmd() *cobra.Command {
 		"Value of global.networking.excludedIpv4Cidrs. The controllers accept it for symmetry with the "+
 			"gRPC server, which checks it.",
 	)
+	runner.args.services = services.RegisterFlags(flags)
 	vault.AddBaseFlags(flags)
 	vault.AddLifecycleFlags(flags)
 	network.AddGrpcClientFlags(flags, network.GrpcClientName, network.DefaultGrpcAddress)
@@ -221,6 +224,7 @@ type runnerContext struct {
 
 		networkingProvisioningEnabled bool
 		networkingExcludedIPv4CIDRs   []string
+		services                      *services.Flags
 	}
 	client *grpc.ClientConn
 }
@@ -247,6 +251,10 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 
 	// Save the flags:
 	r.flags = cmd.Flags()
+	r.args.services.EnableAllIfNoneSet(cmd.Flags())
+	if err := r.args.services.Validate(); err != nil {
+		return err
+	}
 
 	// Check the flags:
 	if r.args.authIssuerUrl != "" && r.args.authIssuerUrlFile != "" {
@@ -502,6 +510,46 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			)
 		}
 	}()
+
+	if !r.args.services.MaaS {
+		r.logger.InfoContext(ctx, "Skipping workload cluster reconciler because MaaS is disabled")
+	} else {
+		// Create the WorkloadCluster observer. WorkloadCluster is provider-global
+		// and its API is registered whenever MaaS is enabled; the reconciler uses
+		// the same Hub cache and credentials as the other Hub-backed controllers.
+		r.logger.InfoContext(ctx, "Creating workload cluster reconciler")
+		workloadClusterReconcilerFunction, err := workloadcluster.NewFunction().
+			SetLogger(r.logger).
+			SetConnection(r.client).
+			SetHubCache(hubCache).
+			SetMetricsRegisterer(metricsRegisterer).
+			Build()
+		if err != nil {
+			return fmt.Errorf("failed to create workload cluster reconciler function: %w", err)
+		}
+		workloadClusterReconciler, err := controllers.NewReconciler[*privatev1.WorkloadCluster]().
+			SetSync(r.args.sync).
+			SetLogger(r.logger).
+			SetName("workload-cluster").
+			SetClient(r.client).
+			SetFunction(workloadClusterReconcilerFunction).
+			SetSyncInterval(5 * time.Minute).
+			SetEventFilter("has(event.workload_cluster) && event.type != EVENT_TYPE_OBJECT_UPDATED").
+			SetHealthReporter(healthAggregator).
+			Build()
+		if err != nil {
+			return fmt.Errorf("failed to create workload cluster reconciler: %w", err)
+		}
+		r.logger.InfoContext(ctx, "Starting workload cluster reconciler")
+		go func() {
+			err := workloadClusterReconciler.Start(ctx)
+			if err == nil || errors.Is(err, context.Canceled) {
+				r.logger.InfoContext(ctx, "Workload cluster reconciler finished")
+			} else {
+				r.logger.ErrorContext(ctx, "Workload cluster reconciler failed", slog.Any("error", err))
+			}
+		}()
+	}
 
 	// Create the compute instance reconciler:
 	r.logger.InfoContext(ctx, "Creating compute instance reconciler")

@@ -29,6 +29,7 @@ import "osac/public/v1/tenant_type.proto";
 import "osac/public/v1/role_binding_type.proto";
 import "osac/public/v1/role_type.proto";
 import "osac/public/v1/secret_type.proto";
+import "osac/public/v1/workload_cluster_type.proto";
 
 // Represents events delivered by the server.
 message Event {
@@ -37,6 +38,12 @@ message Event {
 
   // Type of event.
   EventType type = 2;
+
+  // Stable reason identifying the state transition that generated the event.
+  string reason = 42;
+
+  // Event severity, such as Normal or Warning.
+  string severity = 43;
 
   // Time at which the event was generated.
   //
@@ -60,6 +67,7 @@ message Event {
     RoleBinding role_binding = 14;
     Secret secret = 15;
     Tenant tenant = 16;
+    WorkloadCluster workload_cluster = 41;
   }
 
   reserved 10;

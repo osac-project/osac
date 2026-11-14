@@ -44,17 +44,19 @@ def _watch_lines(path: Path) -> list[str]:
 
 
 class K8sClient:
-    def __init__(self, *, namespace: str, kubeconfig: str | None = None, as_system_admin: bool = True) -> None:
+    def __init__(self, *, namespace: str, kubeconfig: str | None = None, as_system_admin: bool = True, impersonate: str | None = None) -> None:
         self.namespace: str = namespace
         self.kubeconfig: str | None = kubeconfig
         self.as_system_admin: bool = as_system_admin
+        self.impersonate: str | None = impersonate
 
     def _base(self) -> list[str]:
         args: list[str] = ["kubectl"]
         if self.kubeconfig is not None:
             args.extend(["--kubeconfig", self.kubeconfig])
-        if self.as_system_admin:
-            args.extend(["--as", "system:admin"])
+        identity = self.impersonate or ("system:admin" if self.as_system_admin else "")
+        if identity:
+            args.extend(["--as", identity])
         return args
 
     def base_args(self) -> list[str]:
@@ -204,8 +206,9 @@ class K8sClient:
         args: list[str] = [*self._base(), "apply", "-f", "-"]
         subprocess.run(args, input=manifest, capture_output=True, text=True, check=True)
 
-    def delete(self, *, resource: str, name: str, wait: bool = True) -> None:
-        args = [*self._base(), "delete", resource, name, "-n", self.namespace]
+    def delete(self, *, resource: str, name: str, namespace: str | None = None, wait: bool = True) -> None:
+        target_namespace = self.namespace if namespace is None else namespace
+        args = [*self._base(), "delete", resource, name, "-n", target_namespace]
         if not wait:
             args.append("--wait=false")
         run(*args, timeout=600)

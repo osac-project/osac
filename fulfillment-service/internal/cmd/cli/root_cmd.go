@@ -31,6 +31,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/edit"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/hub"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/label"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/login"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/logout"
@@ -41,6 +42,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/version"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/volumes"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/whoami"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/workloadcluster"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -125,6 +127,8 @@ func Root() (result *cobra.Command, err error) {
 	result.AddCommand(tenant.Cmd())
 	result.AddCommand(version.Cmd())
 	result.AddCommand(volumes.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(workloadcluster.Cmd()))
+	result.AddCommand(help.MarkPrivateAPI(hub.Cmd()))
 	result.AddCommand(whoami.Cmd())
 
 	// Configure the root command, and therefore all its subcommands, to use Markdown for their help output:

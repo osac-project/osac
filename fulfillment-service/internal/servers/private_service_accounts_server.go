@@ -239,23 +239,51 @@ func (s *PrivateServiceAccountsServer) update(ctx context.Context, request *priv
 		}
 		request.SetUpdateMask(mask)
 	}
-	for _, path := range mask.GetPaths() {
-		switch path {
-		case "metadata.name", "metadata.labels":
-		case "status.keycloak_client_uuid", "status.client_secret",
-			"status.state", "status.message", "status.registration_secret",
-			"status.secret_rotation_state", "status.secret_rotation_generation":
-			// GenericServer rejects public status writes; keep these paths writable for private callers.
-		case "metadata.finalizers":
-			if isPublicAPIView(ctx) {
-				return nil, status.Error(codes.InvalidArgument, "finalizers are server-owned")
+	validateMask := func() error {
+		for _, path := range mask.GetPaths() {
+			switch normalizeFieldMaskPath(path) {
+			case "metadata.name", "metadata.labels":
+			case "metadata":
+				if isPublicAPIView(ctx) {
+					return status.Errorf(codes.InvalidArgument, "field %q is not mutable", path)
+				}
+			case "metadata.creator":
+				if isPublicAPIView(ctx) {
+					return status.Errorf(codes.InvalidArgument, "field %q is not mutable", path)
+				}
+			case "status.keycloak_client_uuid", "status.client_secret",
+				"status.state", "status.message", "status.registration_secret",
+				"status.secret_rotation_state", "status.secret_rotation_generation":
+				// GenericServer rejects public status writes; keep these paths writable for private callers.
+			case "metadata.finalizers":
+				if isPublicAPIView(ctx) {
+					return status.Error(codes.InvalidArgument, "finalizers are server-owned")
+				}
+			default:
+				return status.Errorf(codes.InvalidArgument, "field %q is not mutable", path)
 			}
-		default:
-			return nil, status.Errorf(codes.InvalidArgument, "field %q is not mutable", path)
+		}
+		return nil
+	}
+	// Defer validation for creator-related masks until GenericServer has checked creator
+	// immutability. This preserves its shared error while still checking every other path.
+	creatorRelatedMask := !isPublicAPIView(ctx) && len(mask.GetPaths()) > 0 &&
+		updateIncludesField(mask, "metadata.creator")
+	if !creatorRelatedMask {
+		if err := validateMask(); err != nil {
+			return nil, err
 		}
 	}
 	var response *privatev1.ServiceAccountsUpdateResponse
 	prepare := s.prepareUpdate
+	if creatorRelatedMask {
+		prepare = func(ctx context.Context, current, candidate *privatev1.ServiceAccount) error {
+			if err := validateMask(); err != nil {
+				return err
+			}
+			return s.prepareUpdate(ctx, current, candidate)
+		}
+	}
 	if len(mask.GetPaths()) == 1 && mask.GetPaths()[0] == "metadata.finalizers" {
 		prepare = nil
 	}
@@ -266,6 +294,18 @@ func (s *PrivateServiceAccountsServer) update(ctx context.Context, request *priv
 func (s *PrivateServiceAccountsServer) prepareUpdate(_ context.Context, current, candidate *privatev1.ServiceAccount) error {
 	if current.GetMetadata().GetName() != candidate.GetMetadata().GetName() {
 		return status.Error(codes.InvalidArgument, "service-account name is immutable")
+	}
+
+	// GenericServer rejects direct creator selection and parent metadata updates that change
+	// creator. When creator is unchanged, still enforce this server's metadata allowlist.
+	// Labels and finalizers are the only metadata fields this API permits to change.
+	currentMetadata := current.GetMetadata()
+	candidateMetadata := candidate.GetMetadata()
+	allowedMetadata := proto.Clone(currentMetadata).(*privatev1.Metadata)
+	allowedMetadata.SetLabels(candidateMetadata.GetLabels())
+	allowedMetadata.SetFinalizers(candidateMetadata.GetFinalizers())
+	if !proto.Equal(allowedMetadata, candidateMetadata) {
+		return status.Error(codes.InvalidArgument, `field "metadata" is not mutable`)
 	}
 	return nil
 }

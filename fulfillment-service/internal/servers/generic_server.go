@@ -87,6 +87,14 @@ func metadataFinalizers(metadata metadataIface) []string {
 	return metadata.GetFinalizers()
 }
 
+// metadataCreator returns the creator of metadata, or an empty string if metadata is absent.
+func metadataCreator(metadata metadataIface) string {
+	if metadata == nil {
+		return ""
+	}
+	return metadata.GetCreator()
+}
+
 // sameFinalizers compares two finalizer lists as sets, the way the DAO stores them.
 func sameFinalizers(a, b []string) bool {
 	return collections.NewSet(a...).Equal(collections.NewSet(b...))
@@ -714,6 +722,8 @@ func (s *GenericServer[O]) applyMaskAndRestoreProtectedFields(
 	requestMask *fieldmaskpb.FieldMask,
 ) (O, error) {
 	var tmpObject O
+	// Private updates cannot select creator, even when the value is unchanged. Parent metadata
+	// masks are also used for finalizer updates, so reject those only when they change creator.
 
 	if requestMask != nil {
 		// Reject public API requests that attempt to modify status fields via update mask.
@@ -740,6 +750,20 @@ func (s *GenericServer[O]) applyMaskAndRestoreProtectedFields(
 		tmpObject = proto.Clone(tmpObject).(O)
 	} else {
 		tmpObject = proto.Clone(requestObject).(O)
+	}
+	if !isPublicAPIView(ctx) && requestMask != nil && len(requestMask.GetPaths()) > 0 &&
+		updateIncludesField(requestMask, "metadata.creator") {
+		creatorSelectedDirectly := false
+		for _, path := range requestMask.GetPaths() {
+			if normalizeFieldMaskPath(path) == "metadata.creator" {
+				creatorSelectedDirectly = true
+				break
+			}
+		}
+		if creatorSelectedDirectly ||
+			metadataCreator(s.getMetadata(tmpObject)) != metadataCreator(s.getMetadata(currentObject)) {
+			return tmpObject, grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.creator' is immutable")
+		}
 	}
 
 	// Restore protected fields based on API type

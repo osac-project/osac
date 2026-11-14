@@ -19,6 +19,18 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
+// normalizeFieldMaskPath matches the field-path compiler's whitespace and empty-segment handling.
+func normalizeFieldMaskPath(path string) string {
+	parts := strings.Split(path, ".")
+	normalizedParts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			normalizedParts = append(normalizedParts, part)
+		}
+	}
+	return strings.Join(normalizedParts, ".")
+}
+
 // updateIncludesField reports whether a field (or any of its children) is being
 // updated. When mask is nil or empty the caller is doing a full object
 // replacement, so every field is considered updated and the function returns
@@ -32,6 +44,7 @@ func updateIncludesField(mask *fieldmaskpb.FieldMask, prefixes ...string) bool {
 		return true
 	}
 	for _, path := range mask.GetPaths() {
+		path = normalizeFieldMaskPath(path)
 		for _, prefix := range prefixes {
 			if path == prefix || strings.HasPrefix(path, prefix+".") || strings.HasPrefix(prefix, path+".") {
 				return true

@@ -29,6 +29,20 @@ not prove the deployed path, and static CRDs or HTTP doubles do not satisfy
 Metal3/Ironic/BMC/power/hardware boundaries. Keep generated and Helm CRDs
 synchronized.
 
+## Selected-port MAC and DHCP discovery
+
+The installer Kind target enables BMF networking for the deployed controller
+test. It reads a logical-port MAC from the fake BareMetalHost annotation,
+checks that BMF persists the normalized MAC and creates a tenant
+NetworkAttachment, and exercises the BareMetalInstance status MAC pattern
+through the installed CRD. The test then patches accepted NetworkAttachment
+readiness, DHCP lease, and fake Metal3 power state to verify BMF mirrors the
+lease and query-job status. This covers the deployed BMF/API wiring; it does not
+run the Fabric Manager or AAP DHCP task, and it does not cover reusing a legacy
+NetworkAttachment. Unit and Envtest cases cover selection, reuse, diagnostics,
+and lease handling in isolation. Real provider and power behavior remains under
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+
 ## Networking cleanup ownership (NET-CLEAN-08)
 
 The deployed `test/integration/` suite exercises the installed BMF manager and

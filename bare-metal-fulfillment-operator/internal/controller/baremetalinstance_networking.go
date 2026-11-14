@@ -23,6 +23,7 @@ import (
 	"net"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -182,6 +183,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 		return ctrl.Result{}, nil
 	}
 
+	r.initNetworkAttachmentStatuses(bareMetalInstance)
 	na, err := r.getNetworkAttachment(ctx, key)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -195,14 +197,22 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 				fmt.Sprintf("the BareMetalInstance has no %s annotation", tenantAnnotation))
 			return ctrl.Result{}, nil
 		}
-		mac, err := r.selectedPortMAC(ctx, bareMetalInstance, attachment.Interface)
-		if errors.Is(err, errSelectedPortMACUnavailable) {
-			setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed,
-				fmt.Sprintf("cannot resolve the MAC address of interface %q: %v", attachment.Interface, err))
-			return ctrl.Result{}, nil
+		status := networkAttachmentStatusFor(bareMetalInstance, attachment.SubnetRef)
+		if status == nil {
+			return ctrl.Result{}, fmt.Errorf("network attachment status for subnet %s was not initialized", attachment.SubnetRef)
 		}
-		if err != nil {
-			return ctrl.Result{}, err
+		if status.MACAddress == "" {
+			mac, err := r.selectedPortMAC(ctx, bareMetalInstance, attachment.Interface)
+			if errors.Is(err, errSelectedPortMACUnavailable) {
+				return r.failSelectedPortMAC(bareMetalInstance, err.Error())
+			}
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			status.MACAddress = mac
+			setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+				"Recording the selected interface MAC before creating the network attachment")
+			return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 		}
 		na = &opv1alpha1.NetworkAttachment{
 			ObjectMeta: metav1.ObjectMeta{
@@ -220,7 +230,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 				Interface: opv1alpha1.NetworkAttachmentInterface{
 					Type:       opv1alpha1.NetworkInterfacePhysical,
 					Name:       attachment.Interface,
-					MACAddress: mac,
+					MACAddress: status.MACAddress,
 				},
 				SecurityGroups: attachment.SecurityGroupRefs,
 			},
@@ -235,13 +245,33 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 
+	// Mirror the selected port identity from the existing NetworkAttachment into
+	// status without changing the NetworkAttachment.
+	if status := networkAttachmentStatusFor(bareMetalInstance, attachment.SubnetRef); status != nil && status.MACAddress == "" {
+		mac, err := normalizeMAC(na.Spec.Interface.MACAddress)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("existing NetworkAttachment %s has invalid interface MAC: %w", key.Name, err)
+		}
+		status.MACAddress = mac
+	}
+
 	ready := meta.FindStatusCondition(na.Status.Conditions, opv1alpha1.NetworkConditionReady)
 	switch {
 	case ready != nil && ready.Status == metav1.ConditionTrue:
+		wasReady := bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionNetworkAttachmentsReady)
 		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionTrue, "Succeeded", "Network attachment is ready")
+		if !wasReady {
+			r.recordBMIEvent(bareMetalInstance, corev1.EventTypeNormal, "NetworkAttached", "Network attachment is ready")
+		}
 		return ctrl.Result{}, nil
 	case ready != nil && ready.Reason == opv1alpha1.ReasonFailed:
-		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed, ready.Message)
+		previous := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+		alreadyReported := previous != nil && previous.Reason == v1alpha1.HostConditionReasonNetworkAttachmentFailed
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonNetworkAttachmentFailed, ready.Message)
+		if !alreadyReported {
+			r.recordBMIEvent(bareMetalInstance, corev1.EventTypeWarning,
+				v1alpha1.HostConditionReasonNetworkAttachmentFailed, ready.Message)
+		}
 		return ctrl.Result{}, nil
 	default:
 		message := "Waiting for the network attachment"
@@ -251,6 +281,19 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing, message)
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
+}
+
+// failSelectedPortMAC leaves the assigned host in place and records a terminal
+// failure so operators can identify the host that needs its inventory fixed.
+func (r *BareMetalInstanceReconciler) failSelectedPortMAC(
+	bmi *v1alpha1.BareMetalInstance, diagnostic string,
+) (ctrl.Result, error) {
+	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+	bmi.SetStatusCondition(v1alpha1.HostConditionAllocated, metav1.ConditionFalse,
+		v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
+	r.recordBMIEvent(bmi, corev1.EventTypeWarning,
+		v1alpha1.HostConditionReasonSelectedPortMACUnavailable, diagnostic)
+	return ctrl.Result{}, nil
 }
 
 // reconcileNetworkingDeletion deletes the BareMetalInstance's NetworkAttachment

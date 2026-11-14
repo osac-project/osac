@@ -26,11 +26,127 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+const mockToken = "mock-token-value"
+
 type mockVirtualNetworksClient struct {
 	publicv1.VirtualNetworksClient
 	getFunc    func(context.Context, *publicv1.VirtualNetworksGetRequest, ...grpc.CallOption) (*publicv1.VirtualNetworksGetResponse, error)
 	createFunc func(context.Context, *publicv1.VirtualNetworksCreateRequest, ...grpc.CallOption) (*publicv1.VirtualNetworksCreateResponse, error)
 	deleteFunc func(context.Context, *publicv1.VirtualNetworksDeleteRequest, ...grpc.CallOption) (*publicv1.VirtualNetworksDeleteResponse, error)
+}
+
+type mockExternalIPsClient struct {
+	publicv1.ExternalIPsClient
+	listFunc   func(context.Context, *publicv1.ExternalIPsListRequest, ...grpc.CallOption) (*publicv1.ExternalIPsListResponse, error)
+	getFunc    func(context.Context, *publicv1.ExternalIPsGetRequest, ...grpc.CallOption) (*publicv1.ExternalIPsGetResponse, error)
+	createFunc func(context.Context, *publicv1.ExternalIPsCreateRequest, ...grpc.CallOption) (*publicv1.ExternalIPsCreateResponse, error)
+	deleteFunc func(context.Context, *publicv1.ExternalIPsDeleteRequest, ...grpc.CallOption) (*publicv1.ExternalIPsDeleteResponse, error)
+}
+
+type mockExternalIPPoolsClient struct {
+	publicv1.ExternalIPPoolsClient
+	listFunc func(context.Context, *publicv1.ExternalIPPoolsListRequest, ...grpc.CallOption) (*publicv1.ExternalIPPoolsListResponse, error)
+	getFunc  func(context.Context, *publicv1.ExternalIPPoolsGetRequest, ...grpc.CallOption) (*publicv1.ExternalIPPoolsGetResponse, error)
+}
+
+func (m *mockExternalIPPoolsClient) List(
+	ctx context.Context, request *publicv1.ExternalIPPoolsListRequest, options ...grpc.CallOption,
+) (*publicv1.ExternalIPPoolsListResponse, error) {
+	return m.listFunc(ctx, request, options...)
+}
+
+func (m *mockExternalIPPoolsClient) Get(
+	ctx context.Context, request *publicv1.ExternalIPPoolsGetRequest, options ...grpc.CallOption,
+) (*publicv1.ExternalIPPoolsGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+func (m *mockExternalIPsClient) List(
+	ctx context.Context, request *publicv1.ExternalIPsListRequest, options ...grpc.CallOption,
+) (*publicv1.ExternalIPsListResponse, error) {
+	return m.listFunc(ctx, request, options...)
+}
+
+func (m *mockExternalIPsClient) Get(
+	ctx context.Context, request *publicv1.ExternalIPsGetRequest, options ...grpc.CallOption,
+) (*publicv1.ExternalIPsGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+func (m *mockExternalIPsClient) Create(
+	ctx context.Context, request *publicv1.ExternalIPsCreateRequest, options ...grpc.CallOption,
+) (*publicv1.ExternalIPsCreateResponse, error) {
+	return m.createFunc(ctx, request, options...)
+}
+
+func (m *mockExternalIPsClient) Delete(
+	ctx context.Context, request *publicv1.ExternalIPsDeleteRequest, options ...grpc.CallOption,
+) (*publicv1.ExternalIPsDeleteResponse, error) {
+	return m.deleteFunc(ctx, request, options...)
+}
+
+type mockExternalIPAttachmentsClient struct {
+	publicv1.ExternalIPAttachmentsClient
+	listFunc   func(context.Context, *publicv1.ExternalIPAttachmentsListRequest, ...grpc.CallOption) (*publicv1.ExternalIPAttachmentsListResponse, error)
+	getFunc    func(context.Context, *publicv1.ExternalIPAttachmentsGetRequest, ...grpc.CallOption) (*publicv1.ExternalIPAttachmentsGetResponse, error)
+	createFunc func(context.Context, *publicv1.ExternalIPAttachmentsCreateRequest, ...grpc.CallOption) (*publicv1.ExternalIPAttachmentsCreateResponse, error)
+	deleteFunc func(context.Context, *publicv1.ExternalIPAttachmentsDeleteRequest, ...grpc.CallOption) (*publicv1.ExternalIPAttachmentsDeleteResponse, error)
+}
+
+func (m *mockExternalIPAttachmentsClient) List(
+	ctx context.Context, request *publicv1.ExternalIPAttachmentsListRequest, options ...grpc.CallOption,
+) (*publicv1.ExternalIPAttachmentsListResponse, error) {
+	return m.listFunc(ctx, request, options...)
+}
+
+func (m *mockExternalIPAttachmentsClient) Get(
+	ctx context.Context, request *publicv1.ExternalIPAttachmentsGetRequest, options ...grpc.CallOption,
+) (*publicv1.ExternalIPAttachmentsGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+func (m *mockExternalIPAttachmentsClient) Create(
+	ctx context.Context, request *publicv1.ExternalIPAttachmentsCreateRequest, options ...grpc.CallOption,
+) (*publicv1.ExternalIPAttachmentsCreateResponse, error) {
+	return m.createFunc(ctx, request, options...)
+}
+
+func (m *mockExternalIPAttachmentsClient) Delete(
+	ctx context.Context, request *publicv1.ExternalIPAttachmentsDeleteRequest, options ...grpc.CallOption,
+) (*publicv1.ExternalIPAttachmentsDeleteResponse, error) {
+	return m.deleteFunc(ctx, request, options...)
+}
+
+type mockNATGatewaysClient struct {
+	publicv1.NATGatewaysClient
+	listFunc   func(context.Context, *publicv1.NATGatewaysListRequest, ...grpc.CallOption) (*publicv1.NATGatewaysListResponse, error)
+	getFunc    func(context.Context, *publicv1.NATGatewaysGetRequest, ...grpc.CallOption) (*publicv1.NATGatewaysGetResponse, error)
+	createFunc func(context.Context, *publicv1.NATGatewaysCreateRequest, ...grpc.CallOption) (*publicv1.NATGatewaysCreateResponse, error)
+	deleteFunc func(context.Context, *publicv1.NATGatewaysDeleteRequest, ...grpc.CallOption) (*publicv1.NATGatewaysDeleteResponse, error)
+}
+
+func (m *mockNATGatewaysClient) List(
+	ctx context.Context, request *publicv1.NATGatewaysListRequest, options ...grpc.CallOption,
+) (*publicv1.NATGatewaysListResponse, error) {
+	return m.listFunc(ctx, request, options...)
+}
+
+func (m *mockNATGatewaysClient) Get(
+	ctx context.Context, request *publicv1.NATGatewaysGetRequest, options ...grpc.CallOption,
+) (*publicv1.NATGatewaysGetResponse, error) {
+	return m.getFunc(ctx, request, options...)
+}
+
+func (m *mockNATGatewaysClient) Create(
+	ctx context.Context, request *publicv1.NATGatewaysCreateRequest, options ...grpc.CallOption,
+) (*publicv1.NATGatewaysCreateResponse, error) {
+	return m.createFunc(ctx, request, options...)
+}
+
+func (m *mockNATGatewaysClient) Delete(
+	ctx context.Context, request *publicv1.NATGatewaysDeleteRequest, options ...grpc.CallOption,
+) (*publicv1.NATGatewaysDeleteResponse, error) {
+	return m.deleteFunc(ctx, request, options...)
 }
 
 func (m *mockVirtualNetworksClient) Get(
@@ -74,7 +190,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		}
 
 		handler := handleCreateNetworkResource(virtualNetworks, nil, nil)
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+		_, output, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
 			ResourceType: NetworkResourceTypeVirtualNetwork,
 			Name:         "demo-network",
 			IPv4Cidr:     "10.10.0.0/16",
@@ -86,7 +202,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 			Version:      4,
 			State:        "VIRTUAL_NETWORK_STATE_PENDING",
 		}))
-		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(capturedToken).To(Equal("Bearer api-for-" + mockToken))
 		Expect(capturedObject.GetMetadata().GetName()).To(Equal("demo-network"))
 		Expect(capturedObject.GetMetadata().GetTenant()).To(BeEmpty())
 		Expect(capturedObject.GetSpec().GetIpv4Cidr()).To(Equal("10.10.0.0/16"))
@@ -112,7 +228,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		}
 
 		handler := handleCreateNetworkResource(nil, subnets, nil)
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+		_, output, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
 			ResourceType:     NetworkResourceTypeSubnet,
 			Name:             "demo-subnet",
 			VirtualNetworkID: "virtual-network-1",
@@ -122,7 +238,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		Expect(output.ID).To(Equal("subnet-1"))
 		Expect(output.ResourceType).To(Equal(NetworkResourceTypeSubnet))
 		Expect(output.Version).To(Equal(int32(2)))
-		Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(capturedToken).To(Equal("Bearer api-for-" + mockToken))
 		Expect(capturedObject.GetMetadata().GetTenant()).To(BeEmpty())
 		Expect(capturedObject.GetSpec().GetVirtualNetwork().GetId()).To(Equal("virtual-network-1"))
 		Expect(capturedObject.GetSpec().GetIpv4Cidr()).To(Equal("10.10.1.0/24"))
@@ -148,7 +264,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		}
 
 		handler := handleCreateNetworkResource(nil, nil, securityGroups)
-		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+		_, output, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
 			ResourceType:     NetworkResourceTypeSecurityGroup,
 			Name:             "demo-security-group",
 			VirtualNetworkID: "virtual-network-1",
@@ -190,7 +306,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		}
 
 		handler := handleCreateNetworkResource(virtualNetworks, subnets, nil)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
 			ID:           "virtual-network-1",
 			ResourceType: NetworkResourceTypeVirtualNetwork,
 			Name:         "demo-network",
@@ -210,7 +326,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		}
 
 		handler := handleCreateNetworkResource(nil, nil, securityGroups)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
 			ResourceType:     NetworkResourceTypeSecurityGroup,
 			Name:             "demo-security-group",
 			VirtualNetworkID: "virtual-network-1",
@@ -230,7 +346,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		}
 
 		handler := handleCreateNetworkResource(nil, nil, securityGroups)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
 			ResourceType:     NetworkResourceTypeSecurityGroup,
 			Name:             "demo-security-group",
 			VirtualNetworkID: "virtual-network-1",
@@ -252,7 +368,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		}
 
 		handler := handleCreateNetworkResource(virtualNetworks, nil, nil)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
 			ResourceType: "external_ip",
 			Name:         "demo-address",
 		})
@@ -271,7 +387,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 			}
 
 			handler := handleCreateNetworkResource(virtualNetworks, nil, nil)
-			_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+			_, _, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
 				ResourceType: NetworkResourceTypeVirtualNetwork,
 				Name:         "demo-network",
 				IPv4Cidr:     cidr,
@@ -296,7 +412,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 			}
 
 			handler := handleCreateNetworkResource(nil, nil, securityGroups)
-			_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+			_, _, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
 				ResourceType:     NetworkResourceTypeSecurityGroup,
 				Name:             "demo-security-group",
 				VirtualNetworkID: "virtual-network-1",
@@ -352,7 +468,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 			if resourceType == NetworkResourceTypeSubnet {
 				input.IPv4Cidr = "10.10.1.0/24"
 			}
-			_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), input)
+			_, _, err := handler(context.Background(), requestWithToken(mockToken), input)
 			envelope := decodeToolError(err)
 			Expect(envelope.Category).To(Equal(expectedCategory))
 			Expect(envelope.Details).To(ContainElement(ContainSubstring("VirtualNetwork virtual-network-1")))
@@ -395,7 +511,7 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		}
 
 		handler := handleCreateNetworkResource(virtualNetworks, nil, nil)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateNetworkResourceInput{
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), CreateNetworkResourceInput{
 			ResourceType: NetworkResourceTypeVirtualNetwork,
 			Name:         "demo-network",
 			IPv4Cidr:     "10.10.0.0/16",
@@ -403,7 +519,251 @@ var _ = Describe("handleCreateNetworkResource", func() {
 		envelope := decodeToolError(err)
 		Expect(envelope.Category).To(Equal("not_found"))
 		Expect(envelope.GRPCCode).To(Equal("NotFound"))
-		Expect(envelope.Details).To(ContainElement("NetworkClass  is missing"))
+		Expect(envelope.Details).To(ContainElement("NetworkClass is not configured"))
+	})
+})
+
+var _ = Describe("handleExposeNetworkResource", func() {
+	It("Discovers an eligible ExternalIPPool and creates an ExternalIP as the caller", func() {
+		var listToken string
+		var capturedFilter string
+		var capturedOffset, capturedLimit int32
+		pools := &mockExternalIPPoolsClient{
+			listFunc: func(
+				ctx context.Context, request *publicv1.ExternalIPPoolsListRequest, _ ...grpc.CallOption,
+			) (*publicv1.ExternalIPPoolsListResponse, error) {
+				listToken = forwardedToken(ctx)
+				capturedFilter = request.GetFilter()
+				capturedOffset = request.GetOffset()
+				capturedLimit = request.GetLimit()
+				return publicv1.ExternalIPPoolsListResponse_builder{
+					Size:  1,
+					Total: 1,
+					Items: []*publicv1.ExternalIPPool{publicv1.ExternalIPPool_builder{
+						Id:       "external-ip-pool-1",
+						Metadata: publicv1.Metadata_builder{Name: "provider-pool"}.Build(),
+						Status:   publicv1.ExternalIPPoolStatus_builder{Available: 4}.Build(),
+					}.Build()},
+				}.Build(), nil
+			},
+		}
+		var capturedToken string
+		var capturedObject *publicv1.ExternalIP
+		externalIPs := &mockExternalIPsClient{
+			createFunc: func(
+				ctx context.Context, request *publicv1.ExternalIPsCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ExternalIPsCreateResponse, error) {
+				capturedToken = forwardedToken(ctx)
+				capturedObject = request.GetObject()
+				return publicv1.ExternalIPsCreateResponse_builder{
+					Object: publicv1.ExternalIP_builder{
+						Id:       "external-ip-1",
+						Metadata: publicv1.Metadata_builder{Version: 3}.Build(),
+						Status: publicv1.ExternalIPStatus_builder{
+							State: publicv1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		listHandler := handleListResources(newResourceRegistry(ServerDeps{ExternalIPPoolsClient: pools}))
+		_, discovery, err := listHandler(context.Background(), requestWithToken(mockToken), ListResourcesInput{
+			ResourceType: ResourceTypeExternalIPPool,
+			Filter:       `this.id == "external-ip-pool-1"`,
+			Offset:       2,
+			PageSize:     20,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(discovery).To(Equal(ListResourcesOutput{
+			Offset: 2,
+			Size:   1,
+			Total:  1,
+			Items:  []ResourceSummary{{ID: "external-ip-pool-1", Name: "provider-pool"}},
+		}))
+		Expect(listToken).To(Equal("Bearer api-for-" + mockToken))
+		Expect(capturedFilter).To(Equal(`this.id == "external-ip-pool-1"`))
+		Expect(capturedOffset).To(Equal(int32(2)))
+		Expect(capturedLimit).To(Equal(int32(20)))
+
+		handler := handleExposeNetworkResource(externalIPs, nil, nil)
+		_, output, err := handler(context.Background(), requestWithToken(mockToken), ExposeNetworkResourceInput{
+			ResourceType:     NetworkResourceTypeExternalIP,
+			Name:             "demo-address",
+			ExternalIPPoolID: discovery.Items[0].ID,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output).To(Equal(ExposeNetworkResourceOutput{
+			ResourceType: NetworkResourceTypeExternalIP,
+			ID:           "external-ip-1",
+			Version:      3,
+			State:        "EXTERNAL_IP_STATE_PENDING",
+		}))
+		Expect(capturedToken).To(Equal("Bearer api-for-" + mockToken))
+		Expect(capturedObject.GetMetadata().GetName()).To(Equal("demo-address"))
+		Expect(capturedObject.GetMetadata().GetTenant()).To(BeEmpty())
+		Expect(capturedObject.GetSpec().GetPool().GetId()).To(Equal("external-ip-pool-1"))
+	})
+
+	It("Creates a cluster ExternalIPAttachment through the public API", func() {
+		var capturedObject *publicv1.ExternalIPAttachment
+		attachments := &mockExternalIPAttachmentsClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.ExternalIPAttachmentsCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ExternalIPAttachmentsCreateResponse, error) {
+				capturedObject = request.GetObject()
+				return publicv1.ExternalIPAttachmentsCreateResponse_builder{
+					Object: publicv1.ExternalIPAttachment_builder{
+						Id:       "external-ip-attachment-1",
+						Metadata: publicv1.Metadata_builder{Version: 2}.Build(),
+						Status: publicv1.ExternalIPAttachmentStatus_builder{
+							State: publicv1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		handler := handleExposeNetworkResource(nil, attachments, nil)
+		_, output, err := handler(context.Background(), requestWithToken(mockToken), ExposeNetworkResourceInput{
+			ResourceType:    NetworkResourceTypeExternalIPAttachment,
+			Name:            "demo-attachment",
+			ExternalIPID:    "external-ip-1",
+			ClusterID:       "cluster-1",
+			ClusterEndpoint: NetworkClusterEndpointAPI,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output.ID).To(Equal("external-ip-attachment-1"))
+		Expect(output.State).To(Equal("EXTERNAL_IP_ATTACHMENT_STATE_PENDING"))
+		Expect(capturedObject.GetMetadata().GetTenant()).To(BeEmpty())
+		Expect(capturedObject.GetSpec().GetExternalIp().GetId()).To(Equal("external-ip-1"))
+		Expect(capturedObject.GetSpec().GetCluster().GetId()).To(Equal("cluster-1"))
+		Expect(capturedObject.GetSpec().GetTargetEndpoint()).To(Equal(
+			publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
+		))
+	})
+
+	It("Creates a NATGateway through the public API", func() {
+		var capturedObject *publicv1.NATGateway
+		natGateways := &mockNATGatewaysClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.NATGatewaysCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.NATGatewaysCreateResponse, error) {
+				capturedObject = request.GetObject()
+				return publicv1.NATGatewaysCreateResponse_builder{
+					Object: publicv1.NATGateway_builder{
+						Id:       "nat-gateway-1",
+						Metadata: publicv1.Metadata_builder{Version: 5}.Build(),
+						Status: publicv1.NATGatewayStatus_builder{
+							State: publicv1.NATGatewayState_NAT_GATEWAY_STATE_PENDING,
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		handler := handleExposeNetworkResource(nil, nil, natGateways)
+		_, output, err := handler(context.Background(), requestWithToken(mockToken), ExposeNetworkResourceInput{
+			ResourceType:     NetworkResourceTypeNATGateway,
+			Name:             "demo-nat-gateway",
+			VirtualNetworkID: "virtual-network-1",
+			ExternalIPID:     "external-ip-1",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(output.ID).To(Equal("nat-gateway-1"))
+		Expect(output.State).To(Equal("NAT_GATEWAY_STATE_PENDING"))
+		Expect(capturedObject.GetMetadata().GetTenant()).To(BeEmpty())
+		Expect(capturedObject.GetSpec().GetVirtualNetwork().GetId()).To(Equal("virtual-network-1"))
+		Expect(capturedObject.GetSpec().GetExternalIp().GetId()).To(Equal("external-ip-1"))
+	})
+
+	It("Rejects an edit-shaped exposure before any public API call", func() {
+		publicCall := func() error { return errors.New("Create should not be called") }
+		externalIPs := &mockExternalIPsClient{
+			createFunc: func(context.Context, *publicv1.ExternalIPsCreateRequest, ...grpc.CallOption) (*publicv1.ExternalIPsCreateResponse, error) {
+				return nil, publicCall()
+			},
+		}
+
+		handler := handleExposeNetworkResource(externalIPs, nil, nil)
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), ExposeNetworkResourceInput{
+			ID:               "external-ip-1",
+			ResourceType:     NetworkResourceTypeExternalIP,
+			Name:             "demo-address",
+			ExternalIPPoolID: "external-ip-pool-1",
+		})
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("invalid_request"))
+		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+		Expect(envelope.Details).To(ContainElement(ContainSubstring("unsupported_in_place")))
+	})
+
+	It("Rejects an ambiguous ExternalIPAttachment target before dispatch", func() {
+		attachments := &mockExternalIPAttachmentsClient{
+			createFunc: func(context.Context, *publicv1.ExternalIPAttachmentsCreateRequest, ...grpc.CallOption) (*publicv1.ExternalIPAttachmentsCreateResponse, error) {
+				return nil, errors.New("Create should not be called")
+			},
+		}
+
+		handler := handleExposeNetworkResource(nil, attachments, nil)
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), ExposeNetworkResourceInput{
+			ResourceType:      NetworkResourceTypeExternalIPAttachment,
+			Name:              "demo-attachment",
+			ExternalIPID:      "external-ip-1",
+			ComputeInstanceID: "compute-instance-1",
+			ClusterID:         "cluster-1",
+		})
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("invalid_request"))
+		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+		Expect(envelope.Details[0]).To(ContainSubstring("exactly one target"))
+	})
+
+	It("Maps a missing ExternalIPPool to a named prerequisite error", func() {
+		externalIPs := &mockExternalIPsClient{
+			createFunc: func(
+				context.Context, *publicv1.ExternalIPsCreateRequest, ...grpc.CallOption,
+			) (*publicv1.ExternalIPsCreateResponse, error) {
+				return nil, status.Error(codes.InvalidArgument, "pool 'missing-pool' does not exist")
+			},
+		}
+
+		handler := handleExposeNetworkResource(externalIPs, nil, nil)
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), ExposeNetworkResourceInput{
+			ResourceType:     NetworkResourceTypeExternalIP,
+			Name:             "demo-address",
+			ExternalIPPoolID: "missing-pool",
+		})
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("not_found"))
+		Expect(envelope.GRPCCode).To(Equal("NotFound"))
+		Expect(envelope.Details).To(ContainElement("ExternalIPPool missing-pool is missing"))
+		Expect(err.Error()).ToNot(ContainSubstring("does not exist"))
+	})
+
+	It("Maps a missing ExternalIP attachment dependency to a named prerequisite error", func() {
+		attachments := &mockExternalIPAttachmentsClient{
+			createFunc: func(
+				context.Context, *publicv1.ExternalIPAttachmentsCreateRequest, ...grpc.CallOption,
+			) (*publicv1.ExternalIPAttachmentsCreateResponse, error) {
+				return nil, status.Error(
+					codes.InvalidArgument,
+					`reference validation failed: object.spec.external_ip: ExternalIP "missing-ip" not found`,
+				)
+			},
+		}
+
+		handler := handleExposeNetworkResource(nil, attachments, nil)
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), ExposeNetworkResourceInput{
+			ResourceType:    NetworkResourceTypeExternalIPAttachment,
+			Name:            "demo-attachment",
+			ExternalIPID:    "missing-ip",
+			ClusterID:       "cluster-1",
+			ClusterEndpoint: NetworkClusterEndpointIngress,
+		})
+		envelope := decodeToolError(err)
+		Expect(envelope.Category).To(Equal("not_found"))
+		Expect(envelope.Details).To(ContainElement("ExternalIP missing-ip is missing"))
 	})
 })
 
@@ -433,24 +793,51 @@ var _ = Describe("handleDeleteNetworkResource", func() {
 				capturedID = request.GetId()
 				return publicv1.SecurityGroupsDeleteResponse_builder{}.Build(), nil
 			}
+			deleteExternalIP := func(
+				ctx context.Context, request *publicv1.ExternalIPsDeleteRequest, _ ...grpc.CallOption,
+			) (*publicv1.ExternalIPsDeleteResponse, error) {
+				capturedToken = forwardedToken(ctx)
+				capturedID = request.GetId()
+				return publicv1.ExternalIPsDeleteResponse_builder{}.Build(), nil
+			}
+			deleteExternalIPAttachment := func(
+				ctx context.Context, request *publicv1.ExternalIPAttachmentsDeleteRequest, _ ...grpc.CallOption,
+			) (*publicv1.ExternalIPAttachmentsDeleteResponse, error) {
+				capturedToken = forwardedToken(ctx)
+				capturedID = request.GetId()
+				return publicv1.ExternalIPAttachmentsDeleteResponse_builder{}.Build(), nil
+			}
+			deleteNATGateway := func(
+				ctx context.Context, request *publicv1.NATGatewaysDeleteRequest, _ ...grpc.CallOption,
+			) (*publicv1.NATGatewaysDeleteResponse, error) {
+				capturedToken = forwardedToken(ctx)
+				capturedID = request.GetId()
+				return publicv1.NATGatewaysDeleteResponse_builder{}.Build(), nil
+			}
 
 			handler := handleDeleteNetworkResource(
 				&mockVirtualNetworksClient{deleteFunc: deleteVirtualNetwork},
 				&mockSubnetsClient{deleteFunc: deleteSubnet},
 				&mockSecurityGroupsClient{deleteFunc: deleteSecurityGroup},
+				&mockExternalIPsClient{deleteFunc: deleteExternalIP},
+				&mockExternalIPAttachmentsClient{deleteFunc: deleteExternalIPAttachment},
+				&mockNATGatewaysClient{deleteFunc: deleteNATGateway},
 			)
-			_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteNetworkResourceInput{
+			_, output, err := handler(context.Background(), requestWithToken(mockToken), DeleteNetworkResourceInput{
 				ResourceType: resourceType,
 				ID:           expectedID,
 			})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(output).To(Equal(DeleteNetworkResourceOutput{ResourceType: resourceType, ID: expectedID}))
 			Expect(capturedID).To(Equal(expectedID))
-			Expect(capturedToken).To(Equal("Bearer api-for-raw-bearer-value"))
+			Expect(capturedToken).To(Equal("Bearer api-for-" + mockToken))
 		},
 		Entry("VirtualNetwork", NetworkResourceTypeVirtualNetwork, "virtual-network-1"),
 		Entry("Subnet", NetworkResourceTypeSubnet, "subnet-1"),
 		Entry("SecurityGroup", NetworkResourceTypeSecurityGroup, "security-group-1"),
+		Entry("ExternalIP", NetworkResourceTypeExternalIP, "external-ip-1"),
+		Entry("ExternalIPAttachment", NetworkResourceTypeExternalIPAttachment, "external-ip-attachment-1"),
+		Entry("NATGateway", NetworkResourceTypeNATGateway, "nat-gateway-1"),
 	)
 
 	It("Rejects a blank target before calling the public API", func() {
@@ -460,8 +847,8 @@ var _ = Describe("handleDeleteNetworkResource", func() {
 			},
 		}
 
-		handler := handleDeleteNetworkResource(virtualNetworks, nil, nil)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteNetworkResourceInput{
+		handler := handleDeleteNetworkResource(virtualNetworks, nil, nil, nil, nil, nil)
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), DeleteNetworkResourceInput{
 			ResourceType: NetworkResourceTypeVirtualNetwork,
 			ID:           " ",
 		})
@@ -477,8 +864,8 @@ var _ = Describe("handleDeleteNetworkResource", func() {
 			},
 		}
 
-		handler := handleDeleteNetworkResource(virtualNetworks, nil, nil)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteNetworkResourceInput{
+		handler := handleDeleteNetworkResource(virtualNetworks, nil, nil, nil, nil, nil)
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), DeleteNetworkResourceInput{
 			ResourceType: "network_class",
 			ID:           "network-class-1",
 		})
@@ -497,14 +884,14 @@ var _ = Describe("handleDeleteNetworkResource", func() {
 			},
 		}
 
-		handler := handleDeleteNetworkResource(virtualNetworks, nil, nil)
-		_, _, err := handler(context.Background(), requestWithToken("raw-bearer-value"), DeleteNetworkResourceInput{
+		handler := handleDeleteNetworkResource(virtualNetworks, nil, nil, nil, nil, nil)
+		_, _, err := handler(context.Background(), requestWithToken(mockToken), DeleteNetworkResourceInput{
 			ResourceType: NetworkResourceTypeVirtualNetwork,
 			ID:           "virtual-network-1",
 		})
 		envelope := decodeToolError(err)
 		Expect(envelope.Category).To(Equal("conflict"))
-		Expect(envelope.GRPCCode).To(Equal("Aborted"))
+		Expect(envelope.GRPCCode).To(Equal("FailedPrecondition"))
 		Expect(envelope.Retryable).To(BeFalse())
 		Expect(envelope.Message).To(ContainSubstring("active dependencies"))
 		Expect(err.Error()).ToNot(ContainSubstring("subnet-1"))

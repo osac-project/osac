@@ -166,6 +166,10 @@ var _ = Describe("handleCheckConnection", func() {
 			ResourceTypeVirtualNetwork,
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
+			ResourceTypeExternalIP,
+			ResourceTypeExternalIPPool,
+			ResourceTypeExternalIPAttachment,
+			ResourceTypeNATGateway,
 			ResourceTypeComputeInstance,
 			ResourceTypeSecretReference,
 		))

@@ -1754,6 +1754,12 @@ var _ = Describe("Private external IP attachments server", func() {
 			}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 			Expect(err).To(MatchError(ContainSubstring("belongs to tenant")))
+
+			attachments, listErr := server.List(ctx, privatev1.ExternalIPAttachmentsListRequest_builder{
+				Filter: proto.String(`this.metadata.name == "cross-tenant-attachment"`),
+			}.Build())
+			Expect(listErr).ToNot(HaveOccurred())
+			Expect(attachments.GetItems()).To(BeEmpty())
 		})
 	})
 })

@@ -26,6 +26,7 @@ var expectedMCPServerToolNames = []string{
 	"update_compute_instance",
 	"delete_compute_instance",
 	"create_network_resource",
+	"expose_network_resource",
 	"delete_network_resource",
 	"create_project",
 	"update_project",

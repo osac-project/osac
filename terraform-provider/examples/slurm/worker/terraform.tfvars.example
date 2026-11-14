@@ -1,0 +1,16 @@
+# Copy to terraform.tfvars and adjust. The key file variables and head IP are
+# mandatory. For additional workers, copy this directory and change the resource
+# name in main.tf (or use separate workspaces), one state per worker node.
+
+tenant        = "tenant1"
+catalog_item  = "slurm-node"
+instance_type = "e2e-bmi-type-4eceda2c"
+# disk_image = ""
+
+# From the output of the head template:
+head_ip = "10.100.1.10"
+
+ssh_user = "fedora"
+
+ssh_public_key_file        = "~/.ssh/slurm-cluster.pub"
+ssh_work_private_key_file  = "~/.ssh/slurm-work"

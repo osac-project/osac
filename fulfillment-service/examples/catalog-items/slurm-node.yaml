@@ -1,0 +1,34 @@
+'@type': type.googleapis.com/osac.public.v1.BareMetalInstanceCatalogItem
+metadata:
+  name: slurm-node
+title: Slurm Cluster Node
+description: |
+  Bare metal instance for Slurm HPC cluster. Configure as head node (controller) or
+  compute node (worker) via cloud-init user-data. Create multiple instances to form
+  a complete cluster: 1 head + N workers.
+
+  All nodes must be in the same VirtualNetwork/Subnet with a SecurityGroup allowing
+  Slurm ports (TCP 6817-6819) and SSH (TCP 22) for daemon communication.
+template:
+  id: osac.templates.bm_host_provisioning
+  shared: true
+published: true
+fields:
+  ssh_public_key:
+    editable: {}
+  user_data_source:
+    editable: {}
+  network_attachments:
+    editable: {}
+  instance_type:
+    editable: {}
+  disk_image:
+    locked:
+      name: fedora
+      shared: true
+  run_strategy:
+    editable:
+      default_value: BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS
+  auto_external_ip_attachment:
+    editable:
+      default_value: false

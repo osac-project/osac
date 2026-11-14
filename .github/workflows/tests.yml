@@ -280,7 +280,7 @@ jobs:
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
-          uv run --project . python osac-installer/scripts/test-bmf-netbox-render.py --live-lookup-only
+          uv run --project . python osac-installer/scripts/helm-validate/tests/test_bmf-netbox-render.py --live-lookup-only
 
       - name: Run integration tests
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
@@ -391,10 +391,14 @@ jobs:
           helm lint charts/osac-infra/ --values values/dev/infra.yaml
           helm lint charts/osac/ --values values/dev/kind-instance.yaml
 
+      - name: Set up Python
+        if: inputs.kind == 'it-osac-installer'
+        uses: ./.github/actions/setup-python
+
       - name: Validate Helm networking values
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer
-        run: make helm-networking-test
+        run: uv run --project .. pytest scripts/helm-validate/tests/network
 
       - name: Template charts (dry-run validation)
         if: inputs.kind == 'it-osac-installer'
@@ -556,11 +560,11 @@ jobs:
       - name: Test preflight harness
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
-        run: uv run --script scripts/test-preflight-harness.py
+        run: uv run pytest scripts/helm-validate/tests/test_preflight-harness.py
       - name: Test Kind runtime and suite runner
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
-        run: make kind-runtime-test
+        run: uv run pytest scripts/helm-validate/tests/test_kind-runtime.py
       - name: Build chart dependencies
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
@@ -594,7 +598,7 @@ jobs:
       - name: Test preflight rendering
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
-        run: uv run --script scripts/test-preflight-render.py
+        run: uv run pytest scripts/helm-validate/tests/test_preflight-render.py
 
       # --- integration test: osac-installer install preflight on Kind. Helm 3.18.0 is the oldest Helm that prints a
       # failed hook's log (helm.sh/hook-output-log-policy); 4.2.2 is the Helm 4 line.
@@ -622,4 +626,4 @@ jobs:
       - name: Test the install preflight
         if: startsWith(inputs.kind, 'it-osac-installer-preflight')
         working-directory: osac-installer
-        run: uv run --script scripts/test-preflight-kind.py
+        run: uv run --script scripts/helm-validate/preflight-kind.py

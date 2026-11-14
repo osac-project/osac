@@ -21,21 +21,13 @@ import os
 import pathlib
 import re
 import subprocess
-import sys
-import tempfile
 
-try:
-    import yaml
-except ImportError:
-    sys.exit(
-        "ERROR: PyYAML is required to run this script (used to extract the\n"
-        "realm ConfigMap and container env from rendered/static manifests).\n"
-        "Install it with: pip install pyyaml"
-    )
+import pytest
+import yaml
 
-SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
-CHART_DIR = SCRIPT_DIR.parent / "charts" / "osac-infra"
-PREREQ_DIR = SCRIPT_DIR.parent / "prerequisites" / "keycloak" / "service"
+INSTALLER = pathlib.Path(__file__).resolve().parents[4]
+CHART_DIR = INSTALLER / "charts" / "osac-infra"
+PREREQ_DIR = INSTALLER / "prerequisites" / "keycloak" / "service"
 CHART_REALM = CHART_DIR / "files" / "realm.json"
 PREREQ_REALM = PREREQ_DIR / "files" / "realm.json"
 RESOLVE_HOOK = CHART_DIR / "files" / "hooks" / "resolve-realm-secrets.sh"
@@ -64,13 +56,19 @@ esac
 # keycloak.uiUrl (plain HTTP would carry the authorization code in the clear).
 UI_URL_RE = re.compile(r"^https?://[A-Za-z0-9._-]+(:[0-9]+)?$")
 
-failures = 0
-
-
 def fail(message: str) -> None:
-    global failures
-    print(f"FAIL: {message}", file=sys.stderr)
-    failures += 1
+    raise AssertionError(message)
+
+
+@pytest.fixture()
+def bin_dir(tmp_path: pathlib.Path) -> pathlib.Path:
+    """A stub `oc` so the hook's client-secret bootstrap runs without a cluster."""
+    directory = tmp_path / "bin"
+    directory.mkdir()
+    stub = directory / "oc"
+    stub.write_text(OC_STUB)
+    stub.chmod(0o755)
+    return directory
 
 
 def ui_url_is_valid(url: str) -> bool:
@@ -213,11 +211,11 @@ def test_chart_feeds_a_ui_url() -> None:
         fail(f"keycloak.uiUrl override must reach OSAC_UI_URL, got '{override_url}'")
 
 
-def test_hook_produces_absolute_redirects(tmp: pathlib.Path, bin_dir: pathlib.Path) -> None:
+def test_hook_produces_absolute_redirects(tmp_path: pathlib.Path, bin_dir: pathlib.Path) -> None:
     print("=== Test 3: the chart's resolver hook produces absolute osac-ui redirect URIs ===")
 
     def accepts(url: str, description: str, slug: str) -> None:
-        out = tmp / f"resolved-{slug}.json"
+        out = tmp_path / f"resolved-{slug}.json"
         env = resolver_env(
             bin_dir,
             REALM_RAW_PATH=str(CHART_REALM),
@@ -238,7 +236,7 @@ def test_hook_produces_absolute_redirects(tmp: pathlib.Path, bin_dir: pathlib.Pa
     accepts(TEST_LOCAL_UI_URL, "a local-development http", "local-http")
 
 
-def test_hook_rejects_bad_urls(tmp: pathlib.Path, bin_dir: pathlib.Path) -> None:
+def test_hook_rejects_bad_urls(tmp_path: pathlib.Path, bin_dir: pathlib.Path) -> None:
     print("=== Test 4: the resolver rejects a relative, missing, or insecure UI URL ===")
     cases = [
         ("", "resolve-realm-secrets.sh must reject an unset OSAC_UI_URL"),
@@ -259,14 +257,14 @@ def test_hook_rejects_bad_urls(tmp: pathlib.Path, bin_dir: pathlib.Path) -> None
         env = resolver_env(
             bin_dir,
             REALM_RAW_PATH=str(CHART_REALM),
-            REALM_OUTPUT_PATH=str(tmp / "rejected-realm.json"),
+            REALM_OUTPUT_PATH=str(tmp_path / "rejected-realm.json"),
             OSAC_UI_URL=url,
         )
         if run_script(RESOLVE_HOOK, env) == 0:
             fail(description)
 
 
-def test_static_manifest_matches(tmp: pathlib.Path, bin_dir: pathlib.Path) -> None:
+def test_static_manifest_matches(tmp_path: pathlib.Path, bin_dir: pathlib.Path) -> None:
     print("=== Test 5: the static reference manifest resolves the UI URL the same way ===")
     # prerequisites/keycloak/service/deployment.yaml carries its own hand-maintained
     # copy of the resolver (no shared script file to reference), so it needs direct
@@ -276,7 +274,7 @@ def test_static_manifest_matches(tmp: pathlib.Path, bin_dir: pathlib.Path) -> No
         fail("Could not extract resolve-realm-secrets from the static Deployment manifest")
         return
 
-    resolved_out = tmp / "static-realm-resolved.json"
+    resolved_out = tmp_path / "static-realm-resolved.json"
     # The static copy hardcodes /realm-raw and /realm paths; redirect them into
     # the temp dir for this run only. The committed file is never touched.
     script = (
@@ -284,7 +282,7 @@ def test_static_manifest_matches(tmp: pathlib.Path, bin_dir: pathlib.Path) -> No
         .replace("/realm-raw/realm.json", str(PREREQ_REALM))
         .replace("/realm/realm.json", str(resolved_out))
     )
-    extracted = tmp / "extracted-static-resolve.sh"
+    extracted = tmp_path / "extracted-static-resolve.sh"
     extracted.write_text(script)
 
     if run_script(extracted, resolver_env(bin_dir, OSAC_UI_URL=TEST_UI_URL)) != 0:
@@ -321,30 +319,3 @@ def test_static_manifest_matches(tmp: pathlib.Path, bin_dir: pathlib.Path) -> No
             "accepts; it must be empty so an unedited apply fails instead of importing "
             "a placeholder URL"
         )
-
-
-def main() -> int:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = pathlib.Path(tmpdir)
-        bin_dir = tmp / "bin"
-        bin_dir.mkdir()
-        oc_stub = bin_dir / "oc"
-        oc_stub.write_text(OC_STUB)
-        oc_stub.chmod(0o755)
-
-        test_committed_realms_template_the_url()
-        test_chart_feeds_a_ui_url()
-        test_hook_produces_absolute_redirects(tmp, bin_dir)
-        test_hook_rejects_bad_urls(tmp, bin_dir)
-        test_static_manifest_matches(tmp, bin_dir)
-
-    print()
-    if failures:
-        print(f"{failures} check(s) failed.")
-        return 1
-    print("All Keycloak osac-ui redirect URI checks passed.")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

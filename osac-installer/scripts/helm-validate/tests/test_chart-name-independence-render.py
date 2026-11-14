@@ -23,7 +23,7 @@ from typing import Any
 
 import yaml
 
-CHART = pathlib.Path(__file__).resolve().parents[1] / "charts/osac"
+CHART = pathlib.Path(__file__).resolve().parents[3] / "charts/osac"
 # "**/" (not "*/", which Helm's --show-only glob does not match across the
 # chart-name/templates boundary) so this matches regardless of the chart's
 # own declared name -- exactly the thing this test varies.
@@ -72,7 +72,7 @@ def check_producing_resources(docs: list[dict[str, Any]], context: str) -> None:
         )
 
 
-def main() -> None:
+def test_main() -> None:
     docs = render(CHART)
     check_producing_resources(docs, "real chart name (osac)")
 
@@ -89,7 +89,3 @@ def main() -> None:
         check_producing_resources(renamed_docs, "simulated published chart name (osac-chart)")
 
     print("Chart name independence render checks passed.")
-
-
-if __name__ == "__main__":
-    main()

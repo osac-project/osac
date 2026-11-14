@@ -14,7 +14,7 @@ import unittest
 import yaml
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[5]
 UMBRELLA = ROOT / "osac-installer/charts/osac"
 OPERATOR = ROOT / "osac-operator/charts/operator"
 INVENTORY_NAME = "osac-fabric-domain-inventory"
@@ -157,7 +157,3 @@ class FabricDomainValuesTest(unittest.TestCase):
             doc["metadata"].get("name") == "fabricdomains.osac.openshift.io"
             for doc in docs
         ))
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

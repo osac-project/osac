@@ -758,7 +758,6 @@ make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration test
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage # API/operator disk handoff
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
-make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```

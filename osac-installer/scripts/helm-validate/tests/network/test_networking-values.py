@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-INSTALLER = pathlib.Path(__file__).resolve().parents[1]
+INSTALLER = pathlib.Path(__file__).resolve().parents[4]
 CHART = INSTALLER / "charts/osac"
 DEFAULT_VALUES = CHART / "ci/default-values.yaml"
 HELM = os.environ.get("HELM_BIN", "helm")
@@ -901,7 +901,3 @@ class NetrisOverlayTest(unittest.TestCase):
                     if env["name"] == "OSAC_AAP_STATUS_POLL_INTERVAL":
                         values[doc["metadata"]["name"]] = env["value"]
         self.assertEqual(list(values.values()), ["5s"], values)
-
-
-if __name__ == "__main__":
-    unittest.main()

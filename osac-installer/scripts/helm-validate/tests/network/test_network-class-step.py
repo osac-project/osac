@@ -11,7 +11,7 @@ import pathlib
 import threading
 import unittest
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "charts/osac/files/network-class-step.py"
+SCRIPT = pathlib.Path(__file__).resolve().parents[4] / "charts/osac/files/network-class-step.py"
 spec = importlib.util.spec_from_file_location("network_class_step", SCRIPT)
 step = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(step)
@@ -330,7 +330,3 @@ class ValidationTest(unittest.TestCase):
             {"protocol": "PROTOCOL_TCP", "ipv4_cidr": "0.0.0.0/0", "port_from": 80, "port_to": 79}
         ]
         self.assert_invalid(f"{step.DEFAULTS_PATH}.ingressRules[0]: portFrom (80) must be <= portTo (79)")
-
-
-if __name__ == "__main__":
-    unittest.main()

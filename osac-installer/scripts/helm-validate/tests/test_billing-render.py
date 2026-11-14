@@ -309,7 +309,7 @@ def check_standalone_base_url_schema() -> None:
         assert "baseUrl" in result.stderr, result.stderr
 
 
-if __name__ == "__main__":
+def test_main() -> None:
     check_disabled()
     check_configured()
     check_ca_secret()

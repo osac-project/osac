@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import textwrap
 
-INSTALLER = Path(__file__).resolve().parents[1]
+INSTALLER = Path(__file__).resolve().parents[3]
 SERVICE = INSTALLER.parent / "fulfillment-service/charts/service"
 STATIC_REALM = INSTALLER / "prerequisites/keycloak/service/files/realm.json"
 
@@ -106,5 +106,5 @@ def check():
     print("Service-account IDP rendering passed.")
 
 
-if __name__ == "__main__":
+def test_main() -> None:
     check()

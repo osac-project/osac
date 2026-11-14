@@ -852,5 +852,5 @@ check_postgres_prerequisites() {
     echo "PostgreSQL prerequisites satisfied."
 }
 
-_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
 source "${_LIB_DIR}/oc.sh"

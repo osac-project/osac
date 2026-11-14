@@ -12,7 +12,7 @@ from typing import Any
 import yaml
 
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[4]
 DEPS_CHART = ROOT / "charts/osac-deps"
 INFRA_CHART = ROOT / "charts/osac-infra"
 HOOK_SCRIPT = INFRA_CHART / "files/hooks/configure-evpn.sh"
@@ -489,21 +489,3 @@ def test_invalid_values() -> None:
         for index, values in enumerate(invalid):
             values_file = write_values(directory, f"invalid-{index}.yaml", values)
             expect_render_failure(INFRA_CHART, values_file)
-
-
-def main() -> None:
-    test_defaults()
-    test_granted_verbs_aggregates_rules_and_wildcards()
-    test_readiness_uses_operator_labels()
-    test_job_deadline_covers_bgp_wait()
-    test_prune_listing_failure_is_fatal()
-    test_single_node()
-    test_multiple_nodes()
-    test_uplink_without_address()
-    test_nmstate_install_disabled()
-    test_invalid_values()
-    print("EVPN host networking Helm render contract passed.")
-
-
-if __name__ == "__main__":
-    main()

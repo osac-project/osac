@@ -78,7 +78,7 @@ def check_retention_values() -> None:
             )
 
 
-if __name__ == "__main__":
+def test_main() -> None:
     for profile in PROFILES:
         check_profile(profile)
     check_retention_values()

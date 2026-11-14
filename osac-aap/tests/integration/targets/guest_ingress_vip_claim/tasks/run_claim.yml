@@ -1,0 +1,32 @@
+---
+# Child process: one claim or release of a guest ingress VIP against the hub
+# registry, with its outcome written to vip_result_path so the parent can
+# assert on it instead of parsing module output.
+- name: Claim or release a guest ingress VIP in a child process
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run the guest ingress VIP claim module
+      osac.service.ingress_vip_claim:
+        state: "{{ vip_state }}"
+        ip_range: "{{ vip_range | default(omit) }}"
+        registry_namespace: "{{ vip_registry_namespace }}"
+        registry_name: "{{ vip_registry_name }}"
+        owner_uid: "{{ vip_owner_uid }}"
+        owner_namespace: "{{ vip_registry_namespace }}"
+        owner_name: "{{ vip_owner_uid }}"
+      register: vip_claim
+      ignore_errors: true
+
+    - name: Write the guest ingress VIP claim result
+      ansible.builtin.copy:
+        dest: "{{ vip_result_path }}"
+        mode: "0600"
+        content: >-
+          {{ {
+            'failed': vip_claim is failed,
+            'changed': vip_claim is changed,
+            'address': vip_claim.address | default(''),
+            'msg': vip_claim.msg | default('')
+          } | to_nice_json }}

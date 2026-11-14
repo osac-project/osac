@@ -1,5 +1,5 @@
 ---
-- name: Remove shared CaaS DNS records
+- name: Remove CaaS DNS and release the guest ingress VIP
   ansible.builtin.include_role:
     name: osac.service.external_access
-    tasks_from: caas_dns_delete.yaml
+    tasks_from: caas_delete.yaml

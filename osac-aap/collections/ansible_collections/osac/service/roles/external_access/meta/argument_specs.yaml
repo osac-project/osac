@@ -11,7 +11,15 @@ argument_specs:
       external_access_name:
         type: str
         required: true
-      external_access_agent_namespace:
+      external_access_metallb_ingress_range:
+        description: Provider-reserved CI guest IPv4 range; defaults to CI_GUEST_INGRESS_IP_RANGE.
+        type: str
+        required: false
+      external_access_vip_registry_namespace:
+        description: Shared claim registry namespace; defaults to the AAP pod namespace.
+        type: str
+        required: false
+      external_access_vip_registry_name:
         type: str
         required: false
       external_access_resource_wait_retries:

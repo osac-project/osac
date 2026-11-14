@@ -1,4 +1,6 @@
 external_access_resource_wait_retries: 360
 external_access_resource_wait_delay: 5
 external_access_dns_ttl: 1800
-external_access_agent_namespace: "hardware-inventory"
+# All jobs sharing the CI guest range use one registry in the AAP namespace.
+external_access_vip_registry_namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+external_access_vip_registry_name: osac-ci-guest-ingress-vip-claims

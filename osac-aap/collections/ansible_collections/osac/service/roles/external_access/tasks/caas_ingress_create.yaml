@@ -1,0 +1,80 @@
+---
+# Configure the guest router to serve the cluster's reserved ingress VIP.
+#
+# The provider-reserved VIP remains stable as workers and router pods move.
+# Wildcard DNS bootstraps worker installation; endpoint annotations follow
+# confirmation of the guest Service address and a ready router backend.
+- name: Reserve the guest ingress VIP
+  ansible.builtin.include_tasks: caas_vip_reserve.yaml
+
+- name: Publish the wildcard ingress DNS record
+  ansible.builtin.include_tasks: caas_dns_publish.yaml
+  vars:
+    external_access_dns_records:
+      - name: "*.{{ external_access_ingress_domain }}"
+        wait_name: "default-router.{{ external_access_ingress_domain }}"
+        addr: "{{ external_access_metallb_ingress_ip }}"
+
+- name: Get managed cluster admin kubeconfig secret
+  ansible.builtin.include_role:
+    name: osac.service.retrieve_kubeconfig
+  vars:
+    retrieve_kubeconfig_namespace: "{{ external_access_namespace }}"
+    retrieve_kubeconfig_cluster_name: "{{ external_access_name }}"
+
+- name: Wait for the requested guest workers to become ready
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_nodes.yaml
+  vars:
+    wait_for_kubeconfig: "{{ admin_kubeconfig }}"
+    # Guest MetalLB speakers and router backends require Ready workers.
+    wait_for_nodes_expected_count: >-
+      {{ [cluster_order.spec.nodeRequests | default([])
+          | map(attribute='numberOfNodes') | map('int') | sum, 1] | max }}
+
+- name: Configure MetalLB for ingress
+  ansible.builtin.include_role:
+    name: osac.service.metallb_ingress
+    tasks_from: configure_metallb_ingress
+  vars:
+    metallb_ingress_admin_kubeconfig: "{{ admin_kubeconfig }}"
+    metallb_ingress_ip: "{{ external_access_metallb_ingress_ip }}"
+
+- name: Get the guest ingress service
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: openshift-ingress
+    name: external-ingress
+    kubeconfig: "{{ admin_kubeconfig }}"
+  register: external_access_guest_ingress_service
+  until:
+    - external_access_guest_ingress_service.resources | length > 0
+    - >-
+      external_access_guest_ingress_service.resources[0].status.loadBalancer.ingress
+      | default([]) | length > 0
+    - >-
+      external_access_guest_ingress_service.resources[0].status.loadBalancer.ingress[0].ip
+      | default('') == external_access_metallb_ingress_ip
+  retries: "{{ external_access_resource_wait_retries }}"
+  delay: "{{ external_access_resource_wait_delay }}"
+  no_log: true
+
+- name: Wait for ready guest ingress backends
+  kubernetes.core.k8s_info:
+    api_version: discovery.k8s.io/v1
+    kind: EndpointSlice
+    namespace: openshift-ingress
+    label_selectors:
+      - kubernetes.io/service-name=external-ingress
+    kubeconfig: "{{ admin_kubeconfig }}"
+  register: external_access_guest_ingress_endpoints
+  until: >-
+    external_access_guest_ingress_endpoints.resources | default([])
+    | map(attribute='endpoints', default=[]) | flatten
+    | map(attribute='conditions.ready', default=true)
+    | reject('sameas', false) | list | length > 0
+  retries: "{{ external_access_resource_wait_retries }}"
+  delay: "{{ external_access_resource_wait_delay }}"
+  no_log: true

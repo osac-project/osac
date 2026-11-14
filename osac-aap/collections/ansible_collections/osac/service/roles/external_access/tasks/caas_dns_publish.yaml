@@ -1,0 +1,60 @@
+---
+# Publish A records for one stage of the guest cluster's endpoints, then wait
+# until the resolvers return the expected answer.
+#
+# Callers pass external_access_dns_records: one entry per record, with name,
+# addr and an optional wait_name. A wildcard record is queried through a
+# concrete host, because a literal "*" label is not resolvable by all resolvers.
+#
+# Each wait requires the exact A-record value supplied by its caller.
+- name: Create DNS records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: "{{ dns_class }}"
+    tasks_from: create
+  vars:
+    dns_zone: "{{ lookup('env', 'DNS_ZONE') | default(external_access_base_domain, true) }}"
+    dns_record_name: "{{ item.name }}"
+    dns_record_type: A
+    dns_record_ttl: "{{ external_access_dns_ttl }}"
+    dns_record_value: "{{ item.addr }}"
+    dns_record_overwrite: true
+  loop: "{{ external_access_dns_records }}"
+  loop_control:
+    label: dns-record
+  no_log: true
+
+- name: Resolve authoritative nameserver for DNS zone
+  ansible.builtin.command: >-
+    dig +short NS {{ lookup('env', 'DNS_ZONE') | default(external_access_base_domain, true) }}
+  register: _external_access_zone_ns
+  changed_when: false
+  failed_when: false
+  no_log: true
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+    and external_access_dns_wait_use_authoritative | bool
+    and (dns_server | default('') | length == 0)
+
+- name: Wait for DNS records
+  when: >-
+    external_access_base_domain in external_access_supported_base_domains | default([])
+  ansible.builtin.include_role:
+    name: osac.service.wait_for
+    tasks_from: wait_for_dns
+  vars:
+    wait_for_dns_record: "{{ item.wait_name | default(item.name, true) }}"
+    wait_for_dns_expected_value: "{{ item.addr }}"
+    wait_for_dns_server: >-
+      {{
+        dns_server if (dns_server | default('') | length > 0)
+        else (
+          (_external_access_zone_ns.stdout_lines | default([]))
+          | first | default('') | regex_replace('\.$', '')
+        )
+      }}
+  loop: "{{ external_access_dns_records }}"
+  loop_control:
+    label: dns-record
+  no_log: true

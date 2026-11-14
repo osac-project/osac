@@ -153,6 +153,9 @@ service:
           param: client-secret
 
 # --- AAP ---
+# The CI provider injects CI_GUEST_INGRESS_IP_RANGE into cluster-fulfillment-ig
+# before provisioning. Reserve it exclusively for guest MetalLB ingress;
+# the provider network owns the range, so this profile supplies no fixed pool.
 aap:
   aap:
     instance:

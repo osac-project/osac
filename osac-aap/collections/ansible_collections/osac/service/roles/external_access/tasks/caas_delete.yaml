@@ -4,3 +4,6 @@
 
 - name: Clear published CaaS endpoints from ClusterOrder
   ansible.builtin.include_tasks: clear.yaml
+
+- name: Release the guest ingress VIP after verified teardown
+  ansible.builtin.include_tasks: caas_vip_release.yaml

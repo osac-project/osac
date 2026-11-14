@@ -1,14 +1,7 @@
-- name: Run shared CaaS DNS discovery and record lifecycle
+- name: Configure CaaS DNS and guest ingress
   ansible.builtin.include_role:
     name: osac.service.external_access
-    tasks_from: caas_dns_create.yaml
-
-- name: Get managed cluster admin kubeconfig secret
-  ansible.builtin.include_role:
-    name: osac.service.retrieve_kubeconfig
-  vars:
-    retrieve_kubeconfig_namespace: "{{ cluster_working_namespace }}"
-    retrieve_kubeconfig_cluster_name: "{{ cluster_order.metadata.name }}"
+    tasks_from: caas_create.yaml
 
 - name: Wait for cluster network operator to become ready
   when: not (external_access_skip_network_operator_wait | default(false))

@@ -1,0 +1,37 @@
+---
+# Publish the API bootstrap records before any guest-side wait.
+#
+# api.<cluster> and api-int.<cluster> must resolve as soon as the kube-apiserver
+# Service has an address: the guest kubeconfig and every later API call use that
+# name, so a guest readiness wait placed first would wait on a name that cannot
+# resolve yet. The ingress record is published by caas_ingress_create.yaml,
+# after the guest router owns its address.
+- name: Get kube-apiserver service
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: "{{ external_access_namespace }}-{{ external_access_name }}"
+    name: kube-apiserver
+  register: external_access_kube_apiserver_service
+  until:
+    - external_access_kube_apiserver_service.resources | length > 0
+    - external_access_kube_apiserver_service.resources[0].status.loadBalancer.ingress | default([]) | length > 0
+    - external_access_kube_apiserver_service.resources[0].status.loadBalancer.ingress[0].ip is defined
+  retries: "{{ external_access_resource_wait_retries }}"
+  delay: "{{ external_access_resource_wait_delay }}"
+  no_log: true
+
+- name: Set API IP
+  ansible.builtin.set_fact:
+    external_access_api_internal_ip: "{{ external_access_kube_apiserver_service.resources[0].status.loadBalancer.ingress[0].ip }}"
+    external_access_api_ip: "{{ external_access_kube_apiserver_service.resources[0].status.loadBalancer.ingress[0].ip }}"
+  no_log: true
+
+- name: Publish API bootstrap DNS records
+  ansible.builtin.include_tasks: caas_dns_publish.yaml
+  vars:
+    external_access_dns_records:
+      - name: "{{ external_access_api_domain }}"
+        addr: "{{ external_access_api_ip }}"
+      - name: "{{ external_access_api_int_domain }}"
+        addr: "{{ external_access_api_ip }}"

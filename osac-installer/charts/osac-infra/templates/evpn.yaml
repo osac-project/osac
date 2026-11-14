@@ -1,19 +1,19 @@
 {{- if .Values.evpn.enabled }}
 {{- $seenNames := dict }}
 {{- $seenVTEPs := dict }}
-{{- range $node := .Values.evpn.nodes }}
+{{- range $index, $node := .Values.evpn.nodes }}
   {{- if hasKey $seenNames $node.name }}
-    {{- fail (printf "evpn.nodes: duplicate node name %s" $node.name) }}
+    {{- fail (printf "evpn.nodes: duplicate node name at index %d" $index) }}
   {{- end }}
   {{- $_ := set $seenNames $node.name true }}
   {{- if hasKey $seenVTEPs $node.vtepIP }}
-    {{- fail (printf "evpn.nodes: duplicate vtepIP %s" $node.vtepIP) }}
+    {{- fail (printf "evpn.nodes: duplicate vtepIP at index %d" $index) }}
   {{- end }}
   {{- $_ := set $seenVTEPs $node.vtepIP true }}
   {{- $seenPeers := dict }}
   {{- range $uplink := $node.uplinks }}
     {{- if hasKey $seenPeers $uplink.peerAddress }}
-      {{- fail (printf "evpn.nodes: node %s has duplicate peerAddress %s" $node.name $uplink.peerAddress) }}
+      {{- fail (printf "evpn.nodes: duplicate peerAddress in uplinks of node index %d" $index) }}
     {{- end }}
     {{- $_ := set $seenPeers $uplink.peerAddress true }}
   {{- end }}

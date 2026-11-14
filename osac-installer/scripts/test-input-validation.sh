@@ -1,0 +1,1953 @@
+#!/usr/bin/env bash
+
+# The installer must reject invalid inputs before any cluster mutation or
+# readiness wait, naming the offending field and an actionable remedy.
+#
+# Section A proves the wiring with stubbed helm/oc/kubectl/kind binaries: the
+# offline render runs first, and a failing render aborts the install with no
+# mutating command invoked -- including under `make -j`. It runs against a
+# throwaway copy of the installer so chart-dependency recipes cannot touch
+# this checkout's build artifacts.
+#
+# Section B proves the schema rejections with a real Helm render, asserting
+# the offending field and the violated constraint so an unrelated rendering
+# failure cannot satisfy a negative test.
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+INSTALLER_DIR=$(cd -- "${SCRIPT_DIR}/.." && pwd)
+OSAC_CHART_DIR="${INSTALLER_DIR}/charts/osac"
+INFRA_CHART_DIR="${INSTALLER_DIR}/charts/osac-infra"
+DEVSTACK_CHART_DIR="${INSTALLER_DIR}/charts/osac-devstack"
+HELM_BIN=${HELM_BIN:-helm}
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "${TMP_DIR}"' EXIT
+
+python3 "${SCRIPT_DIR}/test-validation-diagnostics.py"
+
+# Print an error to stderr and abort the suite with a non-zero status.
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Section A: gate ordering and no-mutation-on-failure (stubbed commands)
+# ---------------------------------------------------------------------------
+
+SANDBOX="${TMP_DIR}/installer"
+STUB_BIN="${TMP_DIR}/bin"
+LOG="${TMP_DIR}/commands.log"
+cp -a "${INSTALLER_DIR}" "${SANDBOX}"
+mkdir -p "${STUB_BIN}"
+: >"${LOG}"
+
+# Write an executable stub binary named $1 whose body is the heredoc on stdin.
+write_stub() {
+  local name=$1
+  {
+    echo '#!/usr/bin/env bash'
+    cat
+  } >"${STUB_BIN}/${name}"
+  chmod +x "${STUB_BIN}/${name}"
+}
+
+# Shared stub logger: append "name arg..." to MOCK_LOG. When MOCK_ARGV_LOG
+# is set, also record one "name<TAB>arg" line per argument, so a caller's
+# argument grouping can be asserted where the space-joined form cannot
+# distinguish one argument from two.
+write_stub mock-log <<'STUB'
+#!/usr/bin/env bash
+set -eu
+name=$1
+shift
+printf '%s %s\n' "${name}" "$*" >>"${MOCK_LOG}"
+if [ -n "${MOCK_ARGV_LOG:-}" ]; then
+  for arg in "$@"; do
+    printf '%s\t%s\n' "${name}" "${arg}" >>"${MOCK_ARGV_LOG}"
+  done
+fi
+STUB
+
+# helm: log every invocation; MOCK_TEMPLATE_FAIL=1 makes offline renders fail
+# the way a schema violation would. `version` feeds the Makefile's Helm
+# major/minor detection.
+write_stub helm <<'STUB'
+mock-log helm "$@"
+# Record one line per argument for the osac-chart render, so a test can
+# assert the order Helm actually receives the flag groups in.
+if [ -n "${MOCK_OSAC_ARGV_LOG:-}" ] && [ "$1" = template ] && [ "$2" = osac ]; then
+  printf '%s\n' "$@" >>"${MOCK_OSAC_ARGV_LOG}"
+fi
+case "$1" in
+  version) echo "v3.18.0+gstub" ;;
+  template)
+    if [ "${MOCK_TEMPLATE_FAIL:-0}" = 1 ]; then
+      echo "Error: values don't meet the specifications of the schema" >&2
+      exit 1
+    fi
+    ;;
+esac
+exit 0
+STUB
+
+# oc: read-only lookups the gate performs before rendering (cluster version
+# and ingress domain). Everything else is logged and succeeds.
+write_stub oc <<'STUB'
+mock-log oc "$@"
+case "$*" in
+  *clusterversion*) echo "4.22.14" ;;
+  *ingresses.config/cluster*) echo "apps.example.com" ;;
+esac
+exit 0
+STUB
+
+write_stub kubectl <<'STUB'
+mock-log kubectl "$@"
+exit 0
+STUB
+
+write_stub kind <<'STUB'
+mock-log kind "$@"
+exit 0
+STUB
+
+mutation_commands='helm upgrade|kind create|kubectl apply|oc create|oc apply'
+
+assert_prevalidation_commands() {
+  local label=$1 command
+  while IFS= read -r command; do
+    case "${command}" in
+      'helm version '*|'helm dependency build '*|'helm template '*) ;;
+      'helm --repository-config /dev/null dependency build charts/osac') ;;
+      'helm repo add topolvm https://topolvm.github.io/topolvm/ --force-update') ;;
+      'helm repo add netbox https://netbox-community.github.io/netbox-chart/ --force-update') ;;
+      'helm repo add awx-operator https://ansible-community.github.io/awx-operator-helm/ --force-update') ;;
+      'oc get clusterversion version -o jsonpath={.status.desired.version}') ;;
+      'oc get ingresses.config/cluster -o jsonpath={.spec.domain}') ;;
+      *) fail "${label}: command not permitted before validation: ${command}" ;;
+    esac
+  done <"${LOG}"
+}
+
+# The first chart render must precede the first mutating command in every
+# supported installation entry point's expansion.
+assert_renders_first() {
+  local target=$1
+  shift
+  local plan="${TMP_DIR}/${target//\//_}.plan"
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -n "${target}" "$@" \
+    >"${plan}" 2>"${TMP_DIR}/plan.err" || fail "make -n ${target} $* failed"
+  local first_render first_mutation
+  first_render=$(grep -nE 'helm template|render_chart_offline' "${plan}" \
+    | head -1 | cut -d: -f1)
+  first_mutation=$(grep -nE "${mutation_commands}" "${plan}" | head -1 | cut -d: -f1)
+  [ -n "${first_render}" ] || fail "${target} ($*): no offline render in the plan"
+  if [ -n "${first_mutation}" ] && [ "${first_mutation}" -lt "${first_render}" ]; then
+    fail "${target} ($*): a cluster mutation precedes the input validation render"
+  fi
+}
+
+assert_renders_first install PLATFORM=kind PROFILE=dev NS=osac
+assert_renders_first install PLATFORM=openshift PROFILE=dev NS=osac
+assert_renders_first install-infra PLATFORM=kind PROFILE=dev NS=osac
+assert_renders_first install-infra PLATFORM=openshift PROFILE=dev NS=osac
+assert_renders_first install-osac PLATFORM=kind PROFILE=dev NS=osac
+assert_renders_first install-osac PLATFORM=openshift PROFILE=dev NS=osac
+assert_renders_first install-devstack PLATFORM=kind PROFILE=dev-full NS=osac
+# install-multicluster guards its profile and remote kubeconfig at parse time.
+REMOTE_KUBECONFIG="${LOG}" assert_renders_first install-multicluster \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac
+
+# Entry points that never render the devstack chart must not build its
+# external (awx-operator) dependencies: the gate adds no network dependency
+# the entry point did not already have.
+assert_no_devstack_deps() {
+  local label=$1
+  shift
+  local plan="${TMP_DIR}/no-devstack-${label}.plan"
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -n "$@" \
+    >"${plan}" 2>"${TMP_DIR}/no-devstack-${label}.err" \
+    || fail "make -n $* failed"
+  if grep -Eq 'awx-operator|helm-devstack-deps' "${plan}"; then
+    fail "${label}: the gate builds devstack dependencies it never renders"
+  fi
+}
+
+assert_no_devstack_deps kind-dev install PLATFORM=kind PROFILE=dev NS=osac
+assert_no_devstack_deps openshift-osac install-osac PLATFORM=openshift \
+  PROFILE=caas-ci NS=osac
+assert_no_devstack_deps multicluster install-multicluster \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac REMOTE_KUBECONFIG="${LOG}"
+
+# The AAP license and the remote API address are static OSAC-install
+# inputs: their checks must precede the first cluster mutation in every
+# entry point that installs OSAC, including the composed `make install`
+# (infra first), while install-infra alone must not require a license.
+assert_static_inputs_first() {
+  local target=$1
+  shift
+  local plan="${TMP_DIR}/${target//\//_}-static.plan"
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -n "${target}" "$@" \
+    >"${plan}" 2>"${TMP_DIR}/static-plan.err" \
+    || fail "make -n ${target} $* failed"
+  local license_line address_line first_mutation
+  license_line=$(grep -n 'AAP_LICENSE_FILE is required' "${plan}" | head -1 | cut -d: -f1)
+  address_line=$(grep -n 'REMOTE_API_ADDRESS must use https' "${plan}" | head -1 | cut -d: -f1)
+  first_mutation=$(grep -nE "${mutation_commands}" "${plan}" | head -1 | cut -d: -f1)
+  [ -n "${license_line}" ] \
+    || fail "${target} ($*): no license check in the plan"
+  if [ -n "${first_mutation}" ] && [ "${license_line}" -gt "${first_mutation}" ]; then
+    fail "${target} ($*): the license check follows a cluster mutation"
+  fi
+  if [ -n "${address_line}" ] && [ -n "${first_mutation}" ] \
+    && [ "${address_line}" -gt "${first_mutation}" ]; then
+    fail "${target} ($*): the remote address check follows a cluster mutation"
+  fi
+}
+
+assert_static_inputs_first install PLATFORM=openshift PROFILE=dev NS=osac
+assert_static_inputs_first install-osac PLATFORM=openshift PROFILE=dev NS=osac
+
+# install-infra alone must not require the license: the check belongs to
+# the OSAC install only.
+infra_static_plan="${TMP_DIR}/infra-static.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-infra \
+  PLATFORM=openshift PROFILE=dev NS=osac \
+  >"${infra_static_plan}" 2>/dev/null \
+  || fail "infra-static: the install-infra plan failed"
+grep -q 'AAP_LICENSE_FILE' "${infra_static_plan}" \
+  && fail "infra-static: install-infra requires the AAP license"
+
+# install-multicluster's gate must validate the multicluster infra overlay
+# too: the recipe only passes it to the recursive install-infra, which runs
+# after prepare-remote-cluster has already changed the remote cluster.
+# Continuation lines are joined so the render command and its values flags
+# match on one line, and only the plan region before the first recursive
+# make is checked -- that is the gate, not the sub-make's own renders.
+# Join make -n recipe continuation lines (trailing backslash) so a command
+# and its flag lines can be matched as one logical line.
+join_continuations() {
+  awk '/\\$/ { sub(/\\$/, ""); acc = acc $0 " "; next }
+       { print acc $0; acc = "" }'
+}
+
+mc_plan="${TMP_DIR}/multicluster.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-multicluster \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    >"${mc_plan}" 2>/dev/null || fail "make -n install-multicluster failed"
+# The values list reaches recipes through the environment, so the plan
+# shows the $${INFRA_VALUES_EXTRA} token; the exported value itself (the
+# vmaas-ci base plus the multicluster overlay) is asserted from the make
+# database, proving the gate's osac-infra render applies the overlay.
+sed -n '1,/prepare-remote-cluster/p' "${mc_plan}" | join_continuations \
+  | grep -E '(helm template|render_chart_offline) osac-infra' \
+  | grep -Fq '${INFRA_VALUES_EXTRA}' \
+  || fail "install-multicluster: the gate render omits the values-list token"
+mc_db="${TMP_DIR}/multicluster.db"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory -p -n install-multicluster \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    >"${mc_db}" 2>/dev/null || fail "make -p -n install-multicluster failed"
+grep -q '^INFRA_VALUES_EXTRA := .*multicluster-infra.yaml' "${mc_db}" \
+  || fail "install-multicluster: the exported values list lacks the overlay"
+
+# The workload-cluster render (setup-remote-cluster.sh) uses the raw infra
+# values only, without INFRA_VALUES_EXTRA or INFRA_HELM_ARGS, and it runs
+# after LVMS/CNV are provisioned and ready. The parent gate applies those
+# inputs, so an override that corrects a base value passes it and would fail
+# only after the remote cluster changed. The separate render must therefore
+# use exactly the raw inputs and run before preparation starts.
+mc_joined="${TMP_DIR}/multicluster.joined"
+join_continuations <"${mc_plan}" >"${mc_joined}"
+for render_cmd in 'render_chart_offline osac-deps charts/osac-deps' \
+  'render_chart_offline osac-infra charts/osac-infra'; do
+  render_line=$(grep -F "${render_cmd}" "${mc_joined}" \
+    | grep -F -- '-f values/vmaas-ci/infra.yaml' | head -1)
+  [ -n "${render_line}" ] \
+    || fail "install-multicluster: no raw-infra-values render for ${render_cmd}"
+  case "${render_line}" in
+    *'${INFRA_VALUES_EXTRA}'*|*'INFRA_HELM_ARGS'*)
+      fail "install-multicluster: ${render_cmd} applies inputs setup-remote-cluster.sh does not"
+      ;;
+  esac
+done
+render_pos=$(grep -nF 'workload-cluster osac-infra render' "${mc_joined}" \
+  | head -1 | cut -d: -f1)
+prepare_pos=$(grep -nF 'setup-remote-cluster.sh prepare' "${mc_joined}" \
+  | head -1 | cut -d: -f1)
+[ -n "${render_pos}" ] && [ -n "${prepare_pos}" ] \
+  || fail "install-multicluster: the plan lacks the workload-cluster render or the preparation step"
+[ "${render_pos}" -lt "${prepare_pos}" ] \
+  || fail "install-multicluster: the workload-cluster render follows preparation"
+
+# install-multicluster reads both kubeconfigs with oc before it changes
+# anything. The readability checks do not prove a kubeconfig parses, and oc
+# names the file in its own error, so each of those calls discards stderr and
+# relies on a value-free failure message. Fail the stub at each stage in turn
+# and require the canary path to stay out of the output; a stage that no
+# longer stops the recipe, or stops it without a diagnostic, also fails here.
+echo "checking multicluster-oc-error-path (oc's kubeconfig path stays out of the install checks)"
+mc_oc_bin="${TMP_DIR}/bin-mc-oc-error"
+cp -a "${STUB_BIN}" "${mc_oc_bin}"
+cat >"${mc_oc_bin}/oc" <<'STUB'
+#!/usr/bin/env bash
+kubeconfig=$2
+case "$*" in
+  *"get clusterversion version"*jsonpath*) echo "4.22.14"; exit 0 ;;
+  *"ingresses.config/cluster"*) echo "apps.example.com"; exit 0 ;;
+esac
+case "${STUB_FAIL_AT:-}:$*" in
+  clusterversion:*"get clusterversion version"*|\
+  can-i:*"auth can-i"*|config-view:*"config view"*)
+    echo "error: error loading config file \"${kubeconfig}\": yaml: bad input" >&2
+    exit 1 ;;
+esac
+case "$*" in
+  *"auth can-i"*) echo yes ;;
+  *"config view"*) echo "https://api.example:6443" ;;
+esac
+exit 0
+STUB
+chmod +x "${mc_oc_bin}/oc"
+mkdir -p "${TMP_DIR}/canary"
+mc_hub_kubeconfig="${TMP_DIR}/canary/customer-name-hub-config"
+mc_remote_kubeconfig="${TMP_DIR}/canary/customer-name-remote-config"
+mc_license_file="${TMP_DIR}/canary/customer-name-license.zip"
+printf 'stub\n' >"${mc_hub_kubeconfig}"
+printf 'stub\n' >"${mc_remote_kubeconfig}"
+printf 'stub\n' >"${mc_license_file}"
+for mc_stage in clusterversion can-i config-view; do
+  mc_out="${TMP_DIR}/mc-oc-${mc_stage}.out"
+  mc_err="${TMP_DIR}/mc-oc-${mc_stage}.err"
+  if MOCK_LOG="${LOG}" STUB_FAIL_AT="${mc_stage}" PATH="${mc_oc_bin}:${PATH}" \
+    AAP_LICENSE_FILE="${mc_license_file}" KUBECONFIG="${mc_hub_kubeconfig}" \
+    make -C "${SANDBOX}" --no-print-directory install-multicluster \
+      PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+      REMOTE_KUBECONFIG="${mc_remote_kubeconfig}" \
+      >"${mc_out}" 2>"${mc_err}"; then
+    fail "multicluster-oc-error-path (${mc_stage}): the install proceeded after oc failed"
+  fi
+  grep -q '^ERROR: ' "${mc_err}" \
+    || fail "multicluster-oc-error-path (${mc_stage}): the failure lost its value-free diagnostic"
+  if grep -Fq 'customer-name-' "${mc_out}" "${mc_err}"; then
+    fail "multicluster-oc-error-path (${mc_stage}): oc's kubeconfig path reached the output"
+  fi
+done
+# prepare-remote-cluster is a separate entry point with the same access
+# check, so it is guarded the same way.
+mc_out="${TMP_DIR}/mc-oc-prepare.out"
+mc_err="${TMP_DIR}/mc-oc-prepare.err"
+if MOCK_LOG="${LOG}" STUB_FAIL_AT=clusterversion PATH="${mc_oc_bin}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory prepare-remote-cluster NS=osac \
+    REMOTE_KUBECONFIG="${mc_remote_kubeconfig}" \
+    >"${mc_out}" 2>"${mc_err}"; then
+  fail "multicluster-oc-error-path (prepare-remote-cluster): the preparation proceeded after oc failed"
+fi
+grep -q '^ERROR: ' "${mc_err}" \
+  || fail "multicluster-oc-error-path (prepare-remote-cluster): the failure lost its value-free diagnostic"
+if grep -Fq 'customer-name-' "${mc_out}" "${mc_err}"; then
+  fail "multicluster-oc-error-path (prepare-remote-cluster): oc's kubeconfig path reached the output"
+fi
+
+# Gate/install parity for INFRA_HELM_ARGS: every helm command touching
+# osac-infra or osac-deps in the OpenShift install plan -- the gate's
+# renders, the EVPN deadline render, and the upgrades -- must apply the
+# variable, like the Kind branch already does. Without it, the gate would
+# validate a different value set than the install applies (e.g. an overlay
+# at an invalid value overridden by INFRA_HELM_ARGS would pass the gate and
+# fail the install).
+infra_args_plan="${TMP_DIR}/infra-args.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-infra \
+    PLATFORM=openshift PROFILE=caas-ci NS=osac \
+    INFRA_HELM_ARGS='--set topolvm.enabled=true' \
+    >"${infra_args_plan}" 2>/dev/null || fail "make -n install-infra (openshift) failed"
+infra_arg_cmds=$(join_continuations <"${infra_args_plan}" \
+  | sed -E 's/(helm (template|upgrade)|render_chart_offline)/\n\1/g' \
+  | grep -E '(helm (template|upgrade)|render_chart_offline).* osac-(infra|deps) ' \
+  || true)
+[ -n "${infra_arg_cmds}" ] \
+  || fail "install-infra (openshift): no osac-infra/osac-deps helm commands in the plan"
+while IFS= read -r infra_cmd; do
+  case "${infra_cmd}" in
+    *topolvm.enabled=true*) ;;
+    *) fail "install-infra (openshift): INFRA_HELM_ARGS missing from: ${infra_cmd}" ;;
+  esac
+done <<<"${infra_arg_cmds}"
+
+# Gate/install parity for OIDC_IDP_CA_HELM_ARGS: every helm command
+# touching osac-infra in the install plan -- the gate's render, the
+# seed-check render, the EVPN deadline render, and the upgrade -- must
+# apply the same CA input in the same order, so a CA file (or a
+# values-file caPem it overrides) is validated identically everywhere and
+# an unreadable or schema-breaking input fails before any cluster change.
+# Helm applies repeated --set-file values in argument order and the last
+# one wins, so the order relative to INFRA_HELM_ARGS decides which caPem
+# is installed: OpenShift passes the CA input first and INFRA_HELM_ARGS
+# last, Kind the other way round.
+assert_ca_order() { # platform command label
+  local platform="$1" cmd="$2" label="$3"
+  local ca_before="${cmd%%--set-file keycloak.oidcIdpTrust.caPem*}"
+  local infra_before="${cmd%%--set topolvm.enabled=true*}"
+  [ "${ca_before}" != "${cmd}" ] && [ "${infra_before}" != "${cmd}" ] \
+    || fail "${label}: the CA input or INFRA_HELM_ARGS is missing from: ${cmd}"
+  if [ "${platform}" = openshift ]; then
+    [ "${#ca_before}" -lt "${#infra_before}" ] \
+      || fail "${label}: the CA input is applied after INFRA_HELM_ARGS: ${cmd}"
+  else
+    [ "${#ca_before}" -gt "${#infra_before}" ] \
+      || fail "${label}: the CA input is applied before INFRA_HELM_ARGS: ${cmd}"
+  fi
+}
+for ca_platform in kind openshift; do
+  ca_plan="${TMP_DIR}/oidc-ca-${ca_platform}.plan"
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -n install-infra \
+    PLATFORM="${ca_platform}" PROFILE=dev NS=osac \
+    OIDC_IDP_CA_FILE=/nonexistent-ca.pem \
+    INFRA_HELM_ARGS='--set topolvm.enabled=true' \
+    >"${ca_plan}" 2>/dev/null || fail "make -n install-infra (${ca_platform}) failed"
+  ca_cmds=$(join_continuations <"${ca_plan}" \
+    | sed -E 's/(helm (template|upgrade)|render_chart_offline)/\n\1/g' \
+    | grep -E '(helm (template|upgrade)|render_chart_offline).* osac-infra ' \
+    || true)
+  [ -n "${ca_cmds}" ] \
+    || fail "install-infra (${ca_platform}): no osac-infra helm commands in the plan"
+  while IFS= read -r ca_cmd; do
+    case "${ca_cmd}" in
+      *--set-file\ keycloak.oidcIdpTrust.caPem*) ;;
+      *) fail "install-infra (${ca_platform}): OIDC IdP CA input missing from: ${ca_cmd}" ;;
+    esac
+    assert_ca_order "${ca_platform}" "${ca_cmd}" "install-infra (${ca_platform})"
+  done <<<"${ca_cmds}"
+  ca_seed_line=$(join_continuations <"${ca_plan}" \
+    | grep 'netbox_seed_check osac-infra' | head -1)
+  [ -n "${ca_seed_line}" ] \
+    || fail "install-infra (${ca_platform}): the plan lacks the seed-check render"
+  assert_ca_order "${ca_platform}" "${ca_seed_line}" \
+    "install-infra (${ca_platform}) seed check"
+done
+
+# OIDC_IDP_CA_FILE must be a reusable source. Helm reads "--set-file name=-"
+# from stdin, and the gate renders the same argument more than once, so later
+# renders would see an empty caPem. The gate must reject the spelling before
+# the first render, and the diagnostic must not echo the value.
+: >"${LOG}"
+ca_stdin_err="${TMP_DIR}/oidc-ca-stdin.err"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac OIDC_IDP_CA_FILE=- \
+    >"${TMP_DIR}/oidc-ca-stdin.out" 2>"${ca_stdin_err}"; then
+  fail "validate-inputs accepted OIDC_IDP_CA_FILE=- (stdin)"
+fi
+grep -q 'OIDC_IDP_CA_FILE must be a regular file path' "${ca_stdin_err}" \
+  || fail "validate-inputs did not name the OIDC IdP CA input requirement"
+grep -q 'no cluster changes were made' "${ca_stdin_err}" \
+  || fail "the OIDC IdP CA failure did not state that no cluster changes were made"
+if grep -q 'helm template' "${LOG}"; then
+  fail "validate-inputs rendered a chart before rejecting a stdin OIDC IdP CA input"
+fi
+
+# A FIFO is drained like stdin: the first render consumes it and every later
+# render sees an empty caPem. The gate must reject any existing path that is
+# not a regular file before the first render, not only the literal '-'.
+ca_fifo="${TMP_DIR}/oidc-ca.fifo"
+rm -f "${ca_fifo}"
+mkfifo "${ca_fifo}"
+: >"${LOG}"
+ca_fifo_err="${TMP_DIR}/oidc-ca-fifo.err"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac OIDC_IDP_CA_FILE="${ca_fifo}" \
+    >"${TMP_DIR}/oidc-ca-fifo.out" 2>"${ca_fifo_err}"; then
+  fail "validate-inputs accepted a FIFO OIDC_IDP_CA_FILE"
+fi
+grep -q 'OIDC_IDP_CA_FILE must be a regular file path' "${ca_fifo_err}" \
+  || fail "validate-inputs did not reject a FIFO OIDC IdP CA input"
+grep -q 'no cluster changes were made' "${ca_fifo_err}" \
+  || fail "the FIFO OIDC IdP CA failure did not state that no cluster changes were made"
+if grep -q 'helm template' "${LOG}"; then
+  fail "validate-inputs rendered a chart before rejecting a FIFO OIDC IdP CA input"
+fi
+
+# OIDC_IDP_CA_FILE is frozen verbatim like EXTRA_HELM_ARGS: a Make expression
+# in a caller value must not run at export or recipe-expansion time. The
+# literal path exists and carries no slash inside the expression, so the
+# render reads it; an expansion would run its touch in the sandbox instead.
+oidc_literal_sentinel="oidc-ca-make-sentinel"
+oidc_ca_literal="${TMP_DIR}/ca-$(date +%s)-\$(shell touch ${oidc_literal_sentinel})"
+printf 'pem\n' >"${oidc_ca_literal}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    "OIDC_IDP_CA_FILE=${oidc_ca_literal}" \
+    >"${TMP_DIR}/oidc-ca-make.out" 2>"${TMP_DIR}/oidc-ca-make.err"; then
+  :
+else
+  fail "oidc-ca-file-injection-make: the gate rejected a valid CA file path"
+fi
+[ ! -e "${SANDBOX}/${oidc_literal_sentinel}" ] \
+  || fail "oidc-ca-file-injection-make: a Make expression in OIDC_IDP_CA_FILE executed"
+
+# Cluster-lookup output must reach Make only through a validating filter:
+# the lookups feed $(eval), so a compromised or misbehaving API response
+# carrying Make syntax must fail the gate instead of executing. The
+# sentinel file proves no injection ran.
+echo "checking injection (Make syntax in cluster lookups fails the gate)"
+inj_bin="${TMP_DIR}/inj-bin"
+cp -a "${STUB_BIN}" "${inj_bin}"
+inj_sentinel="${TMP_DIR}/injection-ran"
+cat >"${inj_bin}/oc" <<STUB
+#!/usr/bin/env bash
+case "\$*" in
+  *clusterversion*) printf '4\$(shell touch \${INJECTION_SENTINEL}).22.14\n' ;;
+  *ingresses.config/cluster*) printf '\$(shell touch \${INJECTION_SENTINEL})apps.example.com\n' ;;
+esac
+exit 0
+STUB
+chmod +x "${inj_bin}/oc"
+: >"${LOG}"
+if INJECTION_SENTINEL="${inj_sentinel}" MOCK_LOG="${LOG}" PATH="${inj_bin}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=openshift PROFILE=dev NS=osac \
+  >"${TMP_DIR}/inj.out" 2>"${TMP_DIR}/inj.err"; then
+  fail "injection: the gate accepted Make-syntax-bearing cluster lookups"
+fi
+[ ! -e "${inj_sentinel}" ] \
+  || fail "injection: cluster-lookup output executed as Make code"
+grep -q 'could not determine the OpenShift version' "${TMP_DIR}/inj.err" \
+  || fail "injection: the failure did not name the version lookup"
+assert_prevalidation_commands injection
+
+# NS is interpolated into recipe command text after the gate, so the gate
+# must reject a namespace carrying shell metacharacters before any of that
+# text is expanded. The sentinel file proves nothing executed.
+echo "checking ns-injection (metacharacters in NS fail the gate)"
+ns_sentinel="${TMP_DIR}/ns-injection-ran"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=kind PROFILE=dev "NS=osac;touch ${ns_sentinel}" \
+  >"${TMP_DIR}/ns.out" 2>"${TMP_DIR}/ns.err"; then
+  fail "ns-injection: the gate accepted a metacharacter-bearing NS"
+fi
+[ ! -e "${ns_sentinel}" ] \
+  || fail "ns-injection: NS executed as shell code"
+grep -q 'NS must be a lowercase DNS label' "${TMP_DIR}/ns.err" \
+  || fail "ns-injection: the failure did not name the namespace rule"
+assert_prevalidation_commands ns-injection
+
+# NS is frozen verbatim before it is exported, so a Make expression in a
+# caller value must not expand at parse time -- before the gate can reject
+# the value. The sentinel file proves no $(shell ...) side effect ran, and
+# the gate must reject the raw expression as an invalid namespace.
+echo "checking ns-injection-make (Make expressions in NS stay data)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=kind PROFILE=dev "NS=osac\$(shell touch ${ns_sentinel}-make)" \
+  >"${TMP_DIR}/nsmake.out" 2>"${TMP_DIR}/nsmake.err"; then
+  fail "ns-injection-make: the gate accepted a Make-expression-bearing NS"
+fi
+[ ! -e "${ns_sentinel}-make" ] \
+  || fail "ns-injection-make: a Make expression in NS executed"
+grep -q 'NS must be a lowercase DNS label' "${TMP_DIR}/nsmake.err" \
+  || fail "ns-injection-make: the failure did not name the namespace rule"
+assert_prevalidation_commands ns-injection-make
+
+# The NS freeze sits outside the parse-time MAKECMDGOALS gate: make
+# auto-exports command-line variables by expanding them, so a goal the
+# gate does not cover (install-dry-run) would otherwise run a Make
+# expression in an unvalidated NS at recipe-launch time. The sentinel
+# proves the expression never executed and the gate rejected the raw
+# value instead, before any render ran.
+echo "checking ns-injection-ungated (goals outside the parse-time gate)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-dry-run \
+  PLATFORM=kind PROFILE=dev "NS=osac\$(shell touch ${ns_sentinel}-ungated)" \
+  >"${TMP_DIR}/nsung.out" 2>"${TMP_DIR}/nsung.err"; then
+  fail "ns-injection-ungated: the gate accepted a Make-expression-bearing NS"
+fi
+[ ! -e "${ns_sentinel}-ungated" ] \
+  || fail "ns-injection-ungated: a Make expression in NS executed"
+grep -q 'NS must be a lowercase DNS label' "${TMP_DIR}/nsung.err" \
+  || fail "ns-injection-ungated: the failure did not name the namespace rule"
+assert_prevalidation_commands ns-injection-ungated
+
+# install-dry-run expands REMOTE_CLUSTER_HELM_ARGS into recipe text, so it
+# must validate the Secret name/key before that line. The frozen value stays
+# literal at parse time, but once it reaches the shell a value such as
+# 'k$(touch ...)' would run as command substitution. The sentinel proves the
+# expression never executed and no render ran before the rejection.
+echo "checking remote-secret-key-injection (dry-run validates before the render)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-dry-run \
+  PLATFORM=kind PROFILE=dev NS=osac REMOTE_KUBECONFIG="${TMP_DIR}/dry-run-kubeconfig" \
+  "REMOTE_KUBECONFIG_SECRET_KEY=k\$(touch ${ns_sentinel}-secret-key)" \
+  >"${TMP_DIR}/secretkey.out" 2>"${TMP_DIR}/secretkey.err"; then
+  fail "remote-secret-key-injection: the dry-run accepted a Make-expression-bearing Secret key"
+fi
+[ ! -e "${ns_sentinel}-secret-key" ] \
+  || fail "remote-secret-key-injection: a Make expression in the Secret key executed"
+grep -q 'REMOTE_KUBECONFIG_SECRET_KEY must be a valid Secret data key' "${TMP_DIR}/secretkey.err" \
+  || fail "remote-secret-key-injection: the failure did not name the Secret-key rule"
+assert_prevalidation_commands remote-secret-key-injection
+
+# validate-remote-cluster-render interpolates NS into the osac-infra render
+# (--set osacNamespace=$(NS)), so it must validate NS first, like every goal
+# the parse-time gate covers. The sentinel proves a metacharacter-bearing NS
+# never became recipe text and no render ran before the rejection.
+echo "checking ns-injection-remote-render (validate-ns covers the new goal)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-remote-cluster-render \
+  PLATFORM=openshift PROFILE=vmaas-ci \
+  "NS=osac;touch ${ns_sentinel}-remote-render" \
+  >"${TMP_DIR}/nsrr.out" 2>"${TMP_DIR}/nsrr.err"; then
+  fail "ns-injection-remote-render: the goal accepted a metacharacter-bearing NS"
+fi
+[ ! -e "${ns_sentinel}-remote-render" ] \
+  || fail "ns-injection-remote-render: NS executed as shell code"
+grep -q 'NS must be a lowercase DNS label' "${TMP_DIR}/nsrr.err" \
+  || fail "ns-injection-remote-render: the failure did not name the namespace rule"
+assert_prevalidation_commands ns-injection-remote-render
+
+# OSAC_CHART_OCI_REF/OSAC_CHART_OCI_VERSION are caller-supplied data that
+# reach Helm as separate arguments read from the exported environment. Shell
+# metacharacters in them must not become recipe text: the render still runs
+# (the validator checks only the ref/version pairing) and Helm receives the
+# values literally. The sentinels prove nothing executed.
+echo "checking oci-ref-injection (chart ref values stay data)"
+oci_sentinel="${TMP_DIR}/oci-injection-ran"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=kind PROFILE=dev NS=osac \
+  "OSAC_CHART_OCI_REF=oci://example.test/osac;touch ${oci_sentinel}" \
+  "OSAC_CHART_OCI_VERSION=1.2.3;touch ${oci_sentinel}-version" \
+  >"${TMP_DIR}/oci.out" 2>"${TMP_DIR}/oci.err"; then
+  :
+else
+  fail "oci-ref-injection: the gate rejected a well-formed ref/version pair"
+fi
+[ ! -e "${oci_sentinel}" ] \
+  || fail "oci-ref-injection: the chart ref executed as shell code"
+[ ! -e "${oci_sentinel}-version" ] \
+  || fail "oci-ref-injection: the chart version executed as shell code"
+grep -qF "oci://example.test/osac;touch ${oci_sentinel}" "${LOG}" \
+  || fail "oci-ref-injection: Helm did not receive the chart ref literally"
+assert_prevalidation_commands oci-ref-injection
+
+# Both values are frozen verbatim, so a Make expression in a caller value
+# must not expand at parse or export time -- before any recipe can reject
+# it. The sentinel proves no $(shell ...) side effect ran.
+echo "checking oci-ref-injection-make (Make expressions in chart refs stay data)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-osac-chart-oci-ref \
+  "OSAC_CHART_OCI_REF=oci://example.test/osac\$(shell touch ${oci_sentinel}-make)" \
+  OSAC_CHART_OCI_VERSION=1.2.3 \
+  >"${TMP_DIR}/ocimake.out" 2>"${TMP_DIR}/ocimake.err"; then
+  :
+else
+  fail "oci-ref-injection-make: the validator rejected a well-formed ref/version pair"
+fi
+[ ! -e "${oci_sentinel}-make" ] \
+  || fail "oci-ref-injection-make: a Make expression in the chart ref executed"
+
+# Kubeconfig paths are caller-supplied data too: REMOTE_KUBECONFIG is
+# frozen verbatim before the parse-time remote conditionals and
+# REMOTE_CLUSTER_HELM_ARGS expand, and KUBECONFIG is frozen under an origin
+# guard before the kind-file default expands it. Both reach recipes through
+# the exported environment. The sentinel files prove no $(shell ...) side
+# effect ran at parse or export time; the values stay valid inputs. The gate
+# rejects an unreadable REMOTE_KUBECONFIG, so its literal path is created
+# first; the expression carries no slash so the whole value is one filename,
+# and an expansion would run its touch in the sandbox instead.
+echo "checking kubeconfig-injection-make (Make expressions in kubeconfigs stay data)"
+remote_literal_sentinel="remote-kubeconfig-make-sentinel"
+remote_kubeconfig_literal="${TMP_DIR}/remote-$(date +%s)-\$(shell touch ${remote_literal_sentinel})"
+: >"${remote_kubeconfig_literal}"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  "KUBECONFIG=/tmp/hub-$(date +%s)-$$\$(shell touch ${ns_sentinel}-kubeconfig)" \
+  "REMOTE_KUBECONFIG=${remote_kubeconfig_literal}" \
+  >"${TMP_DIR}/kubeconfig.out" 2>"${TMP_DIR}/kubeconfig.err"; then
+  :
+else
+  fail "kubeconfig-injection-make: the gate rejected valid kubeconfig paths"
+fi
+[ ! -e "${ns_sentinel}-kubeconfig" ] \
+  || fail "kubeconfig-injection-make: a Make expression in KUBECONFIG executed"
+[ ! -e "${SANDBOX}/${remote_literal_sentinel}" ] \
+  || fail "kubeconfig-injection-make: a Make expression in REMOTE_KUBECONFIG executed"
+grep -q 'Installer input validation passed' "${TMP_DIR}/kubeconfig.out" \
+  || fail "kubeconfig-injection-make: the gate did not complete"
+assert_prevalidation_commands kubeconfig-injection-make
+
+# oc names the kubeconfig file in its own errors when it cannot read it, and
+# the gate's clusterversion and ingress-domain lookups run before the first
+# path-free check. Those lookups capture stdout only, so their stderr must be
+# discarded: the value-free guard ("Is oc logged in?") is the whole
+# diagnostic, because a path can carry user or customer names and this output
+# reaches terminals and CI logs. The canary path proves the filename stays
+# out; a failure that no longer names the remedy means the lookup broke.
+echo "checking kubeconfig-error-path (oc's kubeconfig path stays out of the gate output)"
+oc_error_bin="${TMP_DIR}/bin-oc-error"
+cp -a "${STUB_BIN}" "${oc_error_bin}"
+canary_kubeconfig="${TMP_DIR}/canary/customer-name-hub-config"
+{
+  echo '#!/usr/bin/env bash'
+  printf 'echo "error: stat %s: no such file or directory" >&2\n' \
+    "${canary_kubeconfig}"
+  echo 'exit 1'
+} >"${oc_error_bin}/oc"
+chmod +x "${oc_error_bin}/oc"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${oc_error_bin}:${PATH}" \
+  KUBECONFIG="${canary_kubeconfig}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  >"${TMP_DIR}/kubeconfig-error.out" 2>"${TMP_DIR}/kubeconfig-error.err"; then
+  fail "kubeconfig-error-path: the gate passed without a readable kubeconfig"
+fi
+grep -q 'could not determine the OpenShift version for input validation' \
+  "${TMP_DIR}/kubeconfig-error.err" \
+  || fail "kubeconfig-error-path: the gate lost its value-free diagnostic"
+if grep -Fq "${canary_kubeconfig}" "${TMP_DIR}/kubeconfig-error.out" \
+  "${TMP_DIR}/kubeconfig-error.err"; then
+  fail "kubeconfig-error-path: oc's kubeconfig path reached the gate output"
+fi
+
+# Caller-supplied values lists are command-line variables, and make
+# auto-exports command-line variables by expanding them -- GNU Make 4.4+
+# does so when it builds the environment for a parse-time $(shell ...) call,
+# such as the dependency lookups above. Both lists stay unexported until
+# they are frozen, so a Make expression in a caller value must not run at
+# parse or export time; the values still reach Helm as literal argument
+# text instead.
+echo "checking values-extra-injection-make (Make expressions in values lists stay data)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=kind PROFILE=dev NS=osac \
+  "INFRA_VALUES_EXTRA=\$(shell touch ${ns_sentinel}-values-extra)" \
+  "INSTANCE_VALUES_EXTRA=\$(shell touch ${ns_sentinel}-instance-values-extra)" \
+  >"${TMP_DIR}/valuesextra.out" 2>"${TMP_DIR}/valuesextra.err"; then
+  :
+else
+  fail "values-extra-injection-make: the gate rejected valid values lists"
+fi
+[ ! -e "${ns_sentinel}-values-extra" ] \
+  || fail "values-extra-injection-make: a Make expression in INFRA_VALUES_EXTRA executed"
+[ ! -e "${ns_sentinel}-instance-values-extra" ] \
+  || fail "values-extra-injection-make: a Make expression in INSTANCE_VALUES_EXTRA executed"
+
+# A missing path is not a valid remote-cluster input: install-osac would
+# create the namespace before its own readability check, so the gate must
+# reject it before any render or cluster change.
+echo "checking remote-kubeconfig-missing (the gate rejects an unreadable file)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+  REMOTE_KUBECONFIG="${TMP_DIR}/absent-kubeconfig" \
+  >"${TMP_DIR}/kubeconfig-missing.out" 2>"${TMP_DIR}/kubeconfig-missing.err"; then
+  fail "validate-inputs accepted an unreadable REMOTE_KUBECONFIG"
+fi
+grep -q 'REMOTE_KUBECONFIG is not readable' "${TMP_DIR}/kubeconfig-missing.err" \
+  || fail "validate-inputs did not name the REMOTE_KUBECONFIG readability requirement"
+grep -q 'no cluster changes were made' "${TMP_DIR}/kubeconfig-missing.err" \
+  || fail "the REMOTE_KUBECONFIG failure did not state that no cluster changes were made"
+if grep -q 'helm template' "${LOG}"; then
+  fail "validate-inputs rendered a chart before rejecting an unreadable REMOTE_KUBECONFIG"
+fi
+
+# An empty caller KUBECONFIG is not a path: the Makefile must fall back to a
+# real kubeconfig so helm never silently uses localhost:8080. The default is
+# the kind file on PLATFORM=kind and ~/.kube/config on OpenShift. The frozen
+# value has origin "override", so the fallback assignments must be overrides
+# too; a plain assignment would leave the value empty. The probe rule is a
+# second makefile rather than --eval, which needs GNU Make 3.82: Apple's
+# /usr/bin/make is 3.81, and these recipes call the literal make, so a
+# gmake on PATH would not help.
+echo "checking kubeconfig-empty-fallback (an empty KUBECONFIG uses the kind file)"
+probe_makefile="${TMP_DIR}/print-kubeconfig.mk"
+printf 'print-kubeconfig:\n\t@echo $(KUBECONFIG)\n' >"${probe_makefile}"
+if ! KUBECONFIG= make -C "${SANDBOX}" --no-print-directory \
+    -f Makefile -f "${probe_makefile}" \
+    print-kubeconfig PLATFORM=kind PROFILE=dev NS=osac \
+    >"${TMP_DIR}/kubeconfig-empty.out" 2>"${TMP_DIR}/kubeconfig-empty.err"; then
+  fail "kubeconfig-empty-fallback: make rejected an empty KUBECONFIG"
+fi
+grep -q -- '-kind\.kubeconfig$' "${TMP_DIR}/kubeconfig-empty.out" \
+  || fail "kubeconfig-empty-fallback: an empty KUBECONFIG did not use the kind file"
+
+# The non-kind default is the caller's own home kubeconfig, so an OpenShift
+# caller who exported an empty KUBECONFIG still reaches the cluster oc and
+# helm would use on their own.
+if ! KUBECONFIG= make -C "${SANDBOX}" --no-print-directory \
+    -f Makefile -f "${probe_makefile}" \
+    print-kubeconfig PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    >"${TMP_DIR}/kubeconfig-empty-openshift.out" \
+    2>"${TMP_DIR}/kubeconfig-empty-openshift.err"; then
+  fail "kubeconfig-empty-fallback: make rejected an empty KUBECONFIG"
+fi
+grep -Fxq "${HOME}/.kube/config" "${TMP_DIR}/kubeconfig-empty-openshift.out" \
+  || fail "kubeconfig-empty-fallback: OpenShift did not use ~/.kube/config"
+
+# Caller-supplied Helm args are data, never command text: EXTRA_HELM_ARGS
+# is frozen verbatim (no Make expression in it expands, including at
+# export time) and reaches recipes through the environment, so both Make
+# syntax and shell metacharacters in a caller value must reach Helm as
+# argument text instead of executing. The sentinel files prove nothing ran.
+echo "checking extra-args-injection (metacharacters in EXTRA_HELM_ARGS stay data)"
+extra_sentinel="${TMP_DIR}/extra-args-injection-ran"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    EXTRA_HELM_ARGS='--set operator.fulfillment.serverAddress=ok$(touch '"${extra_sentinel}"')-$$(touch '"${extra_sentinel}"'-2)' \
+    >"${TMP_DIR}/extra-args.out" 2>"${TMP_DIR}/extra-args.err"; then
+  :
+else
+  fail "extra-args-injection: the gate rejected a valid EXTRA_HELM_ARGS value"
+fi
+[ ! -e "${extra_sentinel}" ] \
+  || fail "extra-args-injection: Make syntax in EXTRA_HELM_ARGS executed"
+[ ! -e "${extra_sentinel}-2" ] \
+  || fail "extra-args-injection: shell metacharacters in EXTRA_HELM_ARGS executed"
+grep -q 'helm template osac ' "${LOG}" \
+  || fail "extra-args-injection: the gate render never ran"
+assert_prevalidation_commands extra-args-injection
+
+# Caller-supplied Helm args keep shell-style grouping without shell-style
+# evaluation: double-quoted, single-quoted, and backslash-escaped
+# whitespace must reach Helm inside one argument, not split into a stray
+# positional argument. The argv log records each argument on its own line,
+# because the space-joined command log cannot show the difference.
+echo "checking extra-args-quoting (quoted and escaped whitespace stay grouped)"
+extra_argv_log="${TMP_DIR}/extra-args-argv.log"
+: >"${LOG}"
+: >"${extra_argv_log}"
+if MOCK_LOG="${LOG}" MOCK_ARGV_LOG="${extra_argv_log}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    EXTRA_HELM_ARGS="--set-string operator.networkManagers.fabricManagers.cudn_net.description=\"two words\" --set-string operator.vendorControllers.acme.description=two\ escaped --set-string operator.vendorControllers.other.description='three word value'" \
+    >"${TMP_DIR}/extra-quoting.out" 2>"${TMP_DIR}/extra-quoting.err"; then
+  :
+else
+  fail "extra-args-quoting: the gate rejected a valid quoted EXTRA_HELM_ARGS value"
+fi
+grep -Fxq $'helm\toperator.networkManagers.fabricManagers.cudn_net.description=two words' \
+  "${extra_argv_log}" \
+  || fail "extra-args-quoting: a double-quoted value did not reach Helm as one argument"
+grep -Fxq $'helm\toperator.vendorControllers.acme.description=two escaped' \
+  "${extra_argv_log}" \
+  || fail "extra-args-quoting: a backslash-escaped value did not reach Helm as one argument"
+grep -Fxq $'helm\toperator.vendorControllers.other.description=three word value' \
+  "${extra_argv_log}" \
+  || fail "extra-args-quoting: a single-quoted value did not reach Helm as one argument"
+assert_prevalidation_commands extra-args-quoting
+
+# A backslash-newline is removed before word splitting, so it must not
+# start a word: a value wrapped across lines (as a caller writes it in a
+# shell fragment) reaches Helm as the same arguments as the one-line form,
+# with no empty positional argument in between.
+echo "checking extra-args-continuation (a wrapped value keeps its boundaries)"
+extra_continuation_argv_log="${TMP_DIR}/extra-args-continuation-argv.log"
+: >"${LOG}"
+: >"${extra_continuation_argv_log}"
+continuation_args=$(printf '%s \\\n %s' \
+  '--set-string operator.vendorControllers.acme.description=api.example.test' \
+  '--set-string operator.vendorControllers.other.description=internal.example.test')
+if MOCK_LOG="${LOG}" MOCK_ARGV_LOG="${extra_continuation_argv_log}" \
+  PATH="${STUB_BIN}:${PATH}" REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    EXTRA_HELM_ARGS="${continuation_args}" \
+    >"${TMP_DIR}/extra-continuation.out" \
+    2>"${TMP_DIR}/extra-continuation.err"; then
+  :
+else
+  fail "extra-args-continuation: the gate rejected a wrapped EXTRA_HELM_ARGS value"
+fi
+grep -Fxq $'helm\toperator.vendorControllers.acme.description=api.example.test' \
+  "${extra_continuation_argv_log}" \
+  || fail "extra-args-continuation: the first option did not reach Helm as one argument"
+grep -Fxq $'helm\toperator.vendorControllers.other.description=internal.example.test' \
+  "${extra_continuation_argv_log}" \
+  || fail "extra-args-continuation: the wrapped option did not reach Helm as one argument"
+grep -Fxq $'helm\t' "${extra_continuation_argv_log}" \
+  && fail "extra-args-continuation: the continuation inserted an empty argument"
+assert_prevalidation_commands extra-args-continuation
+
+# Continuation-only input contains no words at all: the gate renders
+# without extra arguments instead of handing Helm an empty positional.
+echo "checking extra-args-continuation-only (only a continuation, no words)"
+extra_continuation_only_argv_log="${TMP_DIR}/extra-continuation-only-argv.log"
+: >"${LOG}"
+: >"${extra_continuation_only_argv_log}"
+if MOCK_LOG="${LOG}" MOCK_ARGV_LOG="${extra_continuation_only_argv_log}" \
+  PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  EXTRA_HELM_ARGS=$'\\\n' \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    >"${TMP_DIR}/extra-continuation-only.out" \
+    2>"${TMP_DIR}/extra-continuation-only.err"; then
+  :
+else
+  fail "extra-args-continuation-only: the gate rejected continuation-only input"
+fi
+grep -q 'helm template osac ' "${LOG}" \
+  || fail "extra-args-continuation-only: the gate render never ran"
+grep -Fxq $'helm\t' "${extra_continuation_only_argv_log}" \
+  && fail "extra-args-continuation-only: continuation-only input passed an empty argument"
+assert_prevalidation_commands extra-args-continuation-only
+
+# The dry-run path parses the same input the same way: `make install
+# DRY_RUN=1` must not fail on a value that the gate accepted.
+echo "checking extra-args-quoting-dry-run (quoted whitespace in the dry-run path)"
+extra_dry_argv_log="${TMP_DIR}/extra-args-dry-run-argv.log"
+: >"${LOG}"
+: >"${extra_dry_argv_log}"
+if MOCK_LOG="${LOG}" MOCK_ARGV_LOG="${extra_dry_argv_log}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-dry-run \
+    PLATFORM=kind PROFILE=dev NS=osac \
+    EXTRA_HELM_ARGS='--set-string operator.vendorControllers.acme.description="two words"' \
+    >"${TMP_DIR}/extra-dry.out" 2>"${TMP_DIR}/extra-dry.err"; then
+  :
+else
+  fail "extra-args-quoting-dry-run: the dry-run render rejected a quoted EXTRA_HELM_ARGS value"
+fi
+grep -Fxq $'helm\toperator.vendorControllers.acme.description=two words' \
+  "${extra_dry_argv_log}" \
+  || fail "extra-args-quoting-dry-run: the value did not reach Helm as one argument"
+
+# An unterminated quote is a caller error with a value-free diagnostic: the
+# gate must fail before any render, and the message must not echo the value
+# (the argument may carry customer data).
+echo "checking extra-args-quoting-error (an unbalanced quote fails safely)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=kind PROFILE=dev NS=osac \
+    EXTRA_HELM_ARGS='--set-string operator.vendorControllers.acme.description="unterminated SECRETVALUE' \
+    >"${TMP_DIR}/extra-quote-error.out" 2>"${TMP_DIR}/extra-quote-error.err"; then
+  fail "extra-args-quoting-error: the gate accepted an unbalanced quote"
+fi
+grep -q 'EXTRA_HELM_ARGS has an unterminated quote' "${TMP_DIR}/extra-quote-error.err" \
+  || fail "extra-args-quoting-error: the failure did not name the unbalanced quote"
+grep -q 'SECRETVALUE' "${TMP_DIR}/extra-quote-error.err" \
+  && fail "extra-args-quoting-error: the diagnostic echoed the caller value"
+grep -q 'helm template osac ' "${LOG}" \
+  && fail "extra-args-quoting-error: the OSAC chart render ran despite the bad input"
+assert_prevalidation_commands extra-args-quoting-error
+
+# Caller-supplied values lists are data too: INFRA_VALUES_EXTRA is frozen
+# and env-passed, so shell metacharacters in it word-split into Helm
+# argument text (visible in the stub log) instead of executing.
+echo "checking infra-values-injection (metacharacters in INFRA_VALUES_EXTRA stay data)"
+infra_sentinel="${TMP_DIR}/infra-values-injection-ran"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=dev NS=osac \
+    "INFRA_VALUES_EXTRA=-f values/dev/infra.yaml; touch ${infra_sentinel}" \
+    >"${TMP_DIR}/infra-args.out" 2>"${TMP_DIR}/infra-args.err"; then
+  :
+else
+  fail "infra-values-injection: the gate rejected a valid INFRA_VALUES_EXTRA value"
+fi
+[ ! -e "${infra_sentinel}" ] \
+  || fail "infra-values-injection: shell metacharacters in INFRA_VALUES_EXTRA executed"
+grep -q -- '-f values/dev/infra.yaml; touch' "${LOG}" \
+  || fail "infra-values-injection: the metacharacter-bearing list did not reach Helm as data"
+assert_prevalidation_commands infra-values-injection
+
+# Remote-cluster inputs: the gate must reject invalid static identifiers
+# before any cluster mutation -- install-osac's own re-check runs only after
+# install-infra and namespace creation have already changed the cluster.
+remote_bad_out="${TMP_DIR}/remote-bad.out" remote_bad_err="${TMP_DIR}/remote-bad.err"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-osac \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    REMOTE_KUBECONFIG="${LOG}" REMOTE_KUBECONFIG_SECRET_NAME='Bad_Name' \
+    >"${remote_bad_out}" 2>"${remote_bad_err}"; then
+  fail "remote-identifier: install-osac succeeded with an invalid secret name"
+fi
+grep -q 'REMOTE_KUBECONFIG_SECRET_NAME must be a DNS subdomain' "${remote_bad_err}" \
+  || fail "remote-identifier: the failure did not name the identifier rule"
+assert_prevalidation_commands remote-identifier
+
+# The identifiers reach the gate's validator through the environment, not
+# through Make expansion into its quoted bash -c string: a quote-bearing
+# value is rejected as an invalid DNS subdomain instead of breaking out of
+# the quoting and running as shell code. The mutation log doubles as the
+# canary: the injected command is an oc create, so execution would show.
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-osac \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    REMOTE_KUBECONFIG="${LOG}" \
+    REMOTE_KUBECONFIG_SECRET_NAME="a'; oc create namespace pwned; '" \
+    >"${TMP_DIR}/remote-inj.out" 2>"${TMP_DIR}/remote-inj.err"; then
+  fail "remote-injection: install-osac succeeded with a quote-bearing name"
+fi
+grep -q 'REMOTE_KUBECONFIG_SECRET_NAME must be a DNS subdomain' "${TMP_DIR}/remote-inj.err" \
+  || fail "remote-injection: the value did not reach the validator as a literal"
+assert_prevalidation_commands remote-injection
+
+# The AAP license is a static input to the OSAC install only: `make
+# install` composes install-infra before install-osac, so a missing
+# license must be rejected before install-infra creates namespaces and
+# waits for readiness.
+echo "checking license-before-infra (a missing license fails before install-infra)"
+: >"${LOG}"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install \
+    PLATFORM=openshift PROFILE=dev NS=osac \
+    AAP_LICENSE_FILE="${TMP_DIR}/missing-license.zip" \
+    >"${TMP_DIR}/license-missing.out" 2>"${TMP_DIR}/license-missing.err"; then
+  fail "license-before-infra: make install succeeded with a missing license"
+fi
+grep -q 'AAP_LICENSE_FILE not found' "${TMP_DIR}/license-missing.err" \
+  || fail "license-before-infra: the failure did not name the license"
+if grep -Eq "${mutation_commands}" "${LOG}"; then
+  fail "license-before-infra: a cluster mutation ran before the license check"
+fi
+
+# The remote API address is static too: a non-https value must fail in
+# validate-osac-inputs, before install-osac creates the namespace (the
+# kubeconfig readability and Secret staging stay at install time).
+echo "checking remote-address-scheme (a non-https remote address fails before mutations)"
+: >"${LOG}"
+: >"${TMP_DIR}/license.zip"
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-osac \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    AAP_LICENSE_FILE="${TMP_DIR}/license.zip" \
+    REMOTE_KUBECONFIG="${LOG}" \
+    REMOTE_API_ADDRESS="http://insecure.internal.example.com" \
+    >"${TMP_DIR}/addr-bad.out" 2>"${TMP_DIR}/addr-bad.err"; then
+  fail "remote-address-scheme: install-osac succeeded with a non-https address"
+fi
+grep -q 'REMOTE_API_ADDRESS must use https' "${TMP_DIR}/addr-bad.err" \
+  || fail "remote-address-scheme: the failure did not name the address rule"
+if grep -Eq "${mutation_commands}" "${LOG}"; then
+  fail "remote-address-scheme: a cluster mutation ran before the address check"
+fi
+assert_prevalidation_commands remote-address-scheme
+
+# The gate's osac-chart render and install-osac's upgrade share the same
+# remote-cluster kubeconfig argument construction (REMOTE_CLUSTER_HELM_ARGS),
+# so the gate validates the final merged values the install applies.
+remote_plan="${TMP_DIR}/remote-args.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-osac \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    >"${remote_plan}" 2>/dev/null || fail "make -n install-osac (remote) failed"
+join_continuations <"${remote_plan}" | grep 'render_osac_chart_offline' \
+  | grep -Fq 'operator.remoteClusterKubeconfigSecretName=${REMOTE_KUBECONFIG_SECRET_NAME}' \
+  || fail "validate-inputs: the gate render omits the remote-cluster args"
+join_continuations <"${remote_plan}" | grep 'helm upgrade --install osac ' \
+  | grep -Fq 'operator.remoteClusterKubeconfigSecretName=${REMOTE_KUBECONFIG_SECRET_NAME}' \
+  || fail "install-osac: the upgrade omits the remote-cluster args"
+# Make echoes recipe text, so the plan must carry the shell references and
+# never the resolved identifier values.
+if join_continuations <"${remote_plan}" \
+  | grep -q 'remoteClusterKubeconfigSecretName=osac-remote-kubeconfig'; then
+  fail "validate-inputs: the plan echoes the resolved Secret identifier"
+fi
+
+# The remote-cluster flags must also resolve in the same order everywhere:
+# the gate's render applies them after EXTRA_HELM_ARGS like install-osac's
+# upgrade does, so a caller overriding a remote-cluster flag through
+# EXTRA_HELM_ARGS sees the gate validate exactly what the install applies
+# (Helm's last --set-string for a key wins). Match the expansion token, not
+# the split_argv parser input: that call carries the same text earlier on
+# the joined line but never reaches Helm.
+remote_order_plan="${TMP_DIR}/remote-order.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-osac \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    EXTRA_HELM_ARGS='--set-string operator.remoteClusterKubeconfigSecretName=caller-override' \
+    >"${remote_order_plan}" 2>/dev/null || fail "make -n install-osac (remote order) failed"
+for remote_cmd in 'render_osac_chart_offline' 'helm upgrade --install osac '; do
+  join_continuations <"${remote_order_plan}" | grep "${remote_cmd}" \
+    | grep -Eq '\$\{ARGV\[@\]\+"\$\{ARGV\[@\]\}"\}.*operator\.remoteClusterKubeconfigSecretName=\$\{REMOTE_KUBECONFIG_SECRET_NAME\}' \
+    || fail "remote-flag order: ${remote_cmd} does not expand EXTRA_HELM_ARGS before the remote-cluster flags"
+done
+# At runtime the override must reach Helm before the remote-cluster flags:
+# the stub records the osac render's argv, and the first occurrence of each
+# token is its position in the Helm invocation. Reversing the two groups in
+# the recipe fails this check even though the plan text still has both.
+osac_argv="${TMP_DIR}/osac-argv.log"
+: >"${LOG}"; : >"${osac_argv}"
+MOCK_LOG="${LOG}" MOCK_OSAC_ARGV_LOG="${osac_argv}" PATH="${STUB_BIN}:${PATH}" \
+  REMOTE_KUBECONFIG="${LOG}" \
+  make -C "${SANDBOX}" --no-print-directory validate-inputs \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
+    EXTRA_HELM_ARGS='--set-string operator.remoteClusterKubeconfigSecretName=caller-override' \
+    >"${TMP_DIR}/remote-order.out" 2>"${TMP_DIR}/remote-order.err" \
+    || fail "remote-flag order: the gate rejected a valid EXTRA_HELM_ARGS override"
+grep -q 'helm template osac ' "${LOG}" \
+  || fail "remote-flag order: the gate render never ran with the override"
+caller_pos=$(grep -n 'operator.remoteClusterKubeconfigSecretName=caller-override' \
+  "${osac_argv}" | head -1 | cut -d: -f1)
+remote_pos=$(grep -n 'operator.remoteClusterKubeconfigSecretName=osac-remote-kubeconfig' \
+  "${osac_argv}" | head -1 | cut -d: -f1)
+[ -n "${caller_pos}" ] && [ -n "${remote_pos}" ] \
+  || fail "remote-flag order: the osac render argv omits the caller override or the remote-cluster flag"
+[ "${caller_pos}" -lt "${remote_pos}" ] \
+  || fail "remote-flag order: the gate render applies the remote-cluster flags before EXTRA_HELM_ARGS"
+
+# Make echoes every recipe line it runs without an @ prefix, so the
+# remote-cluster flags must stay shell references in that text. Distinct
+# canary identifiers make any leak unambiguous, and the stub prints
+# nothing, making the recipe echo the only possible source of them in this
+# dry-run's stdout. The argv log proves Helm still received the values.
+echo "checking remote-args-log-hygiene (dry-run output omits the identifiers)"
+canary_name='hygiene-canary-name'
+canary_key='hygiene-canary-key'
+hygiene_argv="${TMP_DIR}/hygiene-argv.log"
+: >"${LOG}"; : >"${hygiene_argv}"
+MOCK_LOG="${LOG}" MOCK_OSAC_ARGV_LOG="${hygiene_argv}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory install-dry-run \
+  PLATFORM=kind PROFILE=dev NS=osac REMOTE_KUBECONFIG="${LOG}" \
+  REMOTE_KUBECONFIG_SECRET_NAME="${canary_name}" \
+  REMOTE_KUBECONFIG_SECRET_KEY="${canary_key}" \
+  >"${TMP_DIR}/remote-hygiene.out" 2>"${TMP_DIR}/remote-hygiene.err" \
+  || fail "remote-args-log-hygiene: install-dry-run failed for valid canaries"
+grep -Fq 'operator.remoteClusterKubeconfigSecretName=${REMOTE_KUBECONFIG_SECRET_NAME}' \
+  "${TMP_DIR}/remote-hygiene.out" \
+  || fail "remote-args-log-hygiene: the dry-run output omits the remote-cluster args"
+if grep -q "${canary_name}" "${TMP_DIR}/remote-hygiene.out"; then
+  fail "remote-args-log-hygiene: the dry-run output echoes the Secret name"
+fi
+if grep -q "${canary_key}" "${TMP_DIR}/remote-hygiene.out"; then
+  fail "remote-args-log-hygiene: the dry-run output echoes the Secret key"
+fi
+grep -Fq "operator.remoteClusterKubeconfigSecretName=${canary_name}" "${hygiene_argv}" \
+  || fail "remote-args-log-hygiene: Helm did not receive the Secret name"
+grep -Fq "operator.remoteClusterKubeconfigSecretKey=${canary_key}" "${hygiene_argv}" \
+  || fail "remote-args-log-hygiene: Helm did not receive the Secret key"
+
+# The gate's osac-chart render goes through render_osac_chart_offline with
+# the render-only placeholder token: the function applies the placeholder
+# only when the merged render has no NetBox token at all, never over a
+# caller-supplied value from --set, --set-string, or a values file. The
+# bridge is legitimate only when this install's infra values deploy the
+# netbox-token-seed hook, so the gate runs netbox_seed_check first, in the
+# same recipe line (make recipe lines are separate shells).
+join_continuations <"${remote_plan}" | grep 'render_osac_chart_offline' \
+  | grep -q 'offline-validation-placeholder' \
+  || fail "validate-inputs: the gate render must bridge the NetBox token via render_osac_chart_offline"
+join_continuations <"${remote_plan}" | grep 'netbox_seed_check osac-infra' \
+  | grep -q 'render_osac_chart_offline' \
+  || fail "validate-inputs: the gate must run netbox_seed_check before the bridged render"
+# The seed-check render must apply the same cluster-specific overrides as
+# the gate's own osac-infra render (and install-infra's upgrade): an
+# overlay value the install overrides on the command line -- for example
+# an empty bundledVault.keycloakIssuerUrl filled in with the cluster
+# domain -- must not fail the seed check alone, which would silently
+# disable the token bridge and reject a valid seeded install with a
+# misleading missing-token error. Make expands the cluster lookups into
+# the printed recipe (the stubbed oc answers 4.22.14 and
+# apps.example.com), so the expected values are the expanded ones.
+for seed_override in \
+  '--set lvms.channel=stable-4.22' \
+  '--set keycloak.hostname=https://keycloak-keycloak.apps.example.com' \
+  '--set keycloak.route.hostname=keycloak-keycloak.apps.example.com' \
+  '--set keycloak.uiUrl=https://osac-ui-osac.apps.example.com' \
+  '--set "bundledVault.keycloakIssuerUrl=https://keycloak-keycloak.apps.example.com/realms/osac"'; do
+  join_continuations <"${remote_plan}" | grep 'netbox_seed_check osac-infra' \
+    | grep -Fq -- "${seed_override}" \
+    || fail "validate-inputs: the seed-check render omits ${seed_override}"
+done
+
+# The seed hook runs only when this invocation installs the infra chart, so
+# the gate must trust it for install/install-infra and refuse it for a
+# standalone install-osac, which would otherwise pass and then fail at helm
+# upgrade after the namespace and license Secret were written.
+for seed_goal in install install-infra; do
+  seed_plan="${TMP_DIR}/netbox-seed-${seed_goal}.plan"
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -n "${seed_goal}" \
+      PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac \
+      >"${seed_plan}" 2>/dev/null \
+    || fail "make -n ${seed_goal} (bmaas-netbox-ci) failed"
+  join_continuations <"${seed_plan}" | grep -q 'export NETBOX_SEED_WILL_RUN=1' \
+    || fail "${seed_goal}: the gate must trust the infra seed hook"
+done
+standalone_plan="${TMP_DIR}/netbox-seed-install-osac.plan"
+MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-osac \
+    PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac \
+    >"${standalone_plan}" 2>/dev/null \
+  || fail "make -n install-osac (bmaas-netbox-ci) failed"
+join_continuations <"${standalone_plan}" \
+  | grep -q 'export NETBOX_SEED_WILL_RUN=0' \
+  || fail "install-osac: the gate must not trust a seed hook that will not run"
+
+# Under `make -j install` prerequisites without a dependency edge run in
+# parallel. install-osac's chart looks up the NetBox token Secret, which the
+# infra seed hook creates before install-infra's own upgrade returns
+# (--wait-for-jobs), so the composite goal must order install-osac after
+# install-infra; otherwise the osac upgrade can render before the Secret
+# exists and fail after the namespace and license Secret were written.
+# A standalone install-osac keeps its independence from install-infra.
+assert_install_osac_order() {
+  local label=$1 target=$2 expect=$3
+  shift 3
+  local db="${TMP_DIR}/order-${label}.db" prereqs
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -p -n "${target}" "$@" \
+    >"${db}" 2>/dev/null \
+    || fail "make -p -n ${target} (${label}) failed"
+  prereqs=$(grep -E '^install-osac:' "${db}" | grep -v ':=' | head -1)
+  [ -n "${prereqs}" ] || fail "${label}: no install-osac rule in the database"
+  case " ${prereqs#install-osac: } " in
+    *" install-infra "*)
+      [ "${expect}" = after ] \
+        || fail "${label}: standalone install-osac must not depend on install-infra"
+      ;;
+    *)
+      [ "${expect}" = independent ] \
+        || fail "${label}: install-osac must be ordered after install-infra"
+      ;;
+  esac
+}
+
+assert_install_osac_order composite install after \
+  PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
+assert_install_osac_order standalone install-osac independent \
+  PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
+# NETBOX_SEED_WILL_RUN follows the goals, not the execution order: with both
+# targets as goals the gate trusts the seed hook. `make install-osac
+# install-infra` would run install-osac first (and `make -j` beside it), so
+# the upgrade could fail after the namespace and license Secret were written.
+assert_install_osac_order reversed install-osac after \
+  install-infra PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
+
+# Paired goals must also validate the OSAC-only inputs before the cluster
+# changes: under `make -j install-infra install-osac` install-infra's own
+# prerequisite is only the shared gate, so it could create namespaces and run
+# readiness waits while validate-osac-inputs is still rejecting a missing AAP
+# license. A standalone install-infra must stay license-free.
+assert_install_infra_prereqs() {
+  local label=$1 expect=$2
+  shift 2
+  local db="${TMP_DIR}/infra-prereqs-${label}.db" prereqs
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -p -n "$@" \
+    >"${db}" 2>/dev/null \
+    || fail "make -p -n $* (${label}) failed"
+  prereqs=$(grep -E '^install-infra:' "${db}" | grep -v ':=' | head -1)
+  [ -n "${prereqs}" ] || fail "${label}: no install-infra rule in the database"
+  case "${prereqs}" in
+    *validate-osac-inputs*)
+      [ "${expect}" = gated ] \
+        || fail "${label}: standalone install-infra must not require the OSAC-only inputs"
+      ;;
+    *)
+      [ "${expect}" = license-free ] \
+        || fail "${label}: paired install-infra must wait for validate-osac-inputs"
+      ;;
+  esac
+}
+
+assert_install_infra_prereqs paired gated \
+  install-infra install-osac PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
+assert_install_infra_prereqs standalone license-free \
+  install-infra PLATFORM=openshift PROFILE=bmaas-netbox-ci NS=osac
+
+# install-devstack has the same composite-only ordering requirement: under
+# `make -j install` on dev-full its cluster check and node setup could run
+# before install-infra creates the Kind cluster, and its seeded catalog and
+# UI route before install-osac. A standalone install-devstack keeps no edge
+# to the other targets.
+# The plan request pins HOST_IS_MAC_ARM=false: on an Apple Silicon host make
+# would otherwise select the ARM composite plan, whose recipe recurses into
+# ../fulfillment-service, which this sandbox copy does not contain.
+assert_install_devstack_order() {
+  local label=$1 target=$2 expect=$3
+  shift 3
+  local db="${TMP_DIR}/order-${label}.db" prereqs
+  MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory -p -n "${target}" \
+      HOST_IS_MAC_ARM=false "$@" \
+    >"${db}" 2>/dev/null \
+    || fail "make -p -n ${target} (${label}) failed"
+  prereqs=$(grep -E '^install-devstack:' "${db}" | grep -v ':=' | head -1)
+  [ -n "${prereqs}" ] || fail "${label}: no install-devstack rule in the database"
+  case " ${prereqs#install-devstack: } " in
+    *" install-osac "*)
+      [ "${expect}" = after ] \
+        || fail "${label}: standalone install-devstack must not depend on install-osac"
+      ;;
+    *)
+      [ "${expect}" = independent ] \
+        || fail "${label}: install-devstack must be ordered after install-osac"
+      ;;
+  esac
+}
+
+assert_install_devstack_order composite install after \
+  PLATFORM=kind PROFILE=dev-full NS=osac
+assert_install_devstack_order standalone install-devstack independent \
+  PLATFORM=kind PROFILE=dev-full NS=osac
+
+# install-devstack rejects a wrong profile at parse time, before the gate's
+# cluster lookups or renders, so the user sees the actual mistake.
+if MOCK_LOG="${LOG}" PATH="${STUB_BIN}:${PATH}" \
+  make -C "${SANDBOX}" --no-print-directory -n install-devstack \
+    PLATFORM=kind PROFILE=dev NS=osac \
+    >"${TMP_DIR}/devstack-guard.out" 2>"${TMP_DIR}/devstack-guard.err"; then
+  fail "install-devstack accepted PROFILE=dev"
+fi
+grep -q 'install-devstack requires PROFILE=dev-full' \
+  "${TMP_DIR}/devstack-guard.err" \
+  || fail "install-devstack did not name the profile requirement"
+
+# An invalid configuration must abort the install before any cluster
+# mutation -- serially and in parallel.
+assert_no_mutation_on_failure() {
+  local label=$1
+  shift
+  : >"${LOG}"
+  local out="${TMP_DIR}/fail-${label}.out" err="${TMP_DIR}/fail-${label}.err"
+  if MOCK_LOG="${LOG}" MOCK_TEMPLATE_FAIL=1 PATH="${STUB_BIN}:${PATH}" \
+    make -C "${SANDBOX}" --no-print-directory "$@" \
+    >"${out}" 2>"${err}"; then
+    fail "${label}: install succeeded despite invalid inputs"
+  fi
+  grep -q 'helm template' "${LOG}" || fail "${label}: the offline render never ran"
+  assert_prevalidation_commands "${label}"
+  grep -q 'no cluster changes were made' "${err}" \
+    || fail "${label}: the failure did not state that no cluster changes were made"
+}
+
+assert_no_mutation_on_failure serial install PLATFORM=kind PROFILE=dev NS=osac
+assert_no_mutation_on_failure parallel install -j4 PLATFORM=kind PROFILE=dev NS=osac
+assert_no_mutation_on_failure openshift install PLATFORM=openshift PROFILE=dev NS=osac
+assert_no_mutation_on_failure direct-infra install-infra PLATFORM=openshift PROFILE=dev NS=osac
+assert_no_mutation_on_failure direct-osac install-osac PLATFORM=kind PROFILE=dev NS=osac
+assert_no_mutation_on_failure multicluster install-multicluster \
+  PLATFORM=openshift PROFILE=vmaas-ci NS=osac REMOTE_KUBECONFIG="${LOG}"
+
+echo "input-validation gate wiring passed"
+
+# ---------------------------------------------------------------------------
+# Section B: schema rejections with a real Helm render
+# ---------------------------------------------------------------------------
+
+# The library helpers exercised below (render_chart_offline,
+# render_osac_chart_offline, netbox_seed_check) call `helm` by name, while
+# the direct renders use ${HELM_BIN}. Put the selected executable first on
+# PATH so both halves of the suite test the same Helm: when HELM_BIN names
+# a real Helm 4 that is not the `helm` on PATH, the helpers would
+# otherwise fail to find it or silently test a different version. Section
+# A is unaffected -- each of its commands prepends STUB_BIN, so its
+# stubbed Helm still wins.
+selected_helm=$(command -v -- "${HELM_BIN}") \
+  || fail "HELM_BIN (${HELM_BIN}) does not resolve to an executable"
+selected_helm=$(readlink -f -- "${selected_helm}") \
+  || fail "HELM_BIN (${HELM_BIN}) cannot be resolved to a real path"
+helm_shim_dir="${TMP_DIR}/helm-bin"
+mkdir -p "${helm_shim_dir}"
+ln -sf -- "${selected_helm}" "${helm_shim_dir}/helm"
+PATH="${helm_shim_dir}:${PATH}"
+
+COMMON_ARGS=(template osac "${OSAC_CHART_DIR}"
+  --values "${OSAC_CHART_DIR}/ci/default-values.yaml")
+INFRA_ARGS=(template osac-infra "${INFRA_CHART_DIR}"
+  --values "${INSTALLER_DIR}/values/dev/kind-infra.yaml")
+
+# Render the osac chart with the given extra helm args and expect success.
+render_success() {
+  local name=$1
+  shift
+  echo "checking ${name} (expected success)"
+  "${HELM_BIN}" "${COMMON_ARGS[@]}" "$@" >/dev/null
+}
+
+# Render the osac-infra chart with the given extra helm args; expect success.
+render_infra_success() {
+  local name=$1
+  shift
+  echo "checking ${name} (expected success)"
+  "${HELM_BIN}" "${INFRA_ARGS[@]}" "$@" >/dev/null
+}
+
+# Render the osac chart expecting failure, requiring stderr to match the
+# pattern (the offending field and violated constraint) so an unrelated
+# rendering failure cannot satisfy a negative test.
+render_failure_matching() {
+  local name=$1 pattern=$2
+  shift 2
+  local error="${TMP_DIR}/${name}.stderr"
+  echo "checking ${name} (expected failure matching '${pattern}')"
+  if "${HELM_BIN}" "${COMMON_ARGS[@]}" "$@" >/dev/null 2>"${error}"; then
+    echo "ERROR: ${name} unexpectedly rendered successfully" >&2
+    exit 1
+  fi
+  if ! grep -Eiq -- "${pattern}" "${error}"; then
+    echo "ERROR: ${name} failed without the expected message pattern" >&2
+    cat "${error}" >&2
+    exit 1
+  fi
+}
+
+# Render the osac-infra chart expecting failure with stderr matching the
+# pattern; the infra counterpart of render_failure_matching.
+render_infra_failure_matching() {
+  local name=$1 pattern=$2
+  shift 2
+  local error="${TMP_DIR}/${name}.stderr"
+  echo "checking ${name} (expected failure matching '${pattern}')"
+  if "${HELM_BIN}" "${INFRA_ARGS[@]}" "$@" >/dev/null 2>"${error}"; then
+    echo "ERROR: ${name} unexpectedly rendered successfully" >&2
+    exit 1
+  fi
+  if ! grep -Eiq -- "${pattern}" "${error}"; then
+    echo "ERROR: ${name} failed without the expected message pattern" >&2
+    cat "${error}" >&2
+    exit 1
+  fi
+}
+
+# A valid configuration still renders end to end (AC: supported valid
+# configurations are unaffected by the gate).
+render_success valid-defaults
+render_infra_success infra-valid-defaults
+
+# Retry counts and POSIX IDs accept zero (no retries, root) but never
+# negative values. Minimum-constraint wording differs across Helm
+# versions: 3.18 prints "Must be greater than or equal to 0" while 3.22
+# (what CI installs) prints "minimum: got -1, want 0"; patterns accept
+# both, in the dotted-path (Helm 3) and JSON-pointer (newer) spellings.
+render_failure_matching \
+  backoff-limit-negative \
+  '(aap\.bootstrap\.backoffLimit|/aap/bootstrap/backoffLimit).*(greater than or equal to 0|minimum: got -1, want 0)' \
+  --set aap.bootstrap.backoffLimit=-1
+
+render_success \
+  backoff-limit-zero \
+  --set aap.bootstrap.backoffLimit=0
+
+for field in runAsUser runAsGroup fsGroup; do
+  render_infra_failure_matching \
+    "vault-${field}-negative" \
+    "(bundledVault\\.podSecurityContext\\.${field}|/bundledVault/podSecurityContext/${field}).*(greater than or equal to 0|minimum: got -1, want 0)" \
+    --set "bundledVault.podSecurityContext.${field}=-1"
+done
+
+# runAsUser 0 with the default runAsNonRoot true only fails at
+# provisioning -- the kubelet refuses to start a root container flagged
+# non-root -- so the schema rejects the combination up front. UID 0
+# stays allowed when runAsNonRoot is explicitly false. The `not` keyword
+# wording differs by Helm version: 3.18 prints "Must not validate the
+# schema (not)" with the dotted path while 3.22 (what CI installs)
+# prints "'not' failed" with a JSON-pointer path; the pattern accepts
+# both, in the dotted-path (Helm 3) and JSON-pointer (newer) spellings.
+render_infra_failure_matching \
+  vault-runasuser-zero-nonroot \
+  '(bundledVault\.podSecurityContext|/bundledVault/podSecurityContext).*(not validate|not. failed)' \
+  --set bundledVault.podSecurityContext.runAsUser=0
+
+render_infra_success \
+  vault-runasuser-zero-root \
+  --set bundledVault.podSecurityContext.runAsUser=0 \
+  --set bundledVault.podSecurityContext.runAsNonRoot=false
+
+render_infra_success \
+  vault-runasgroup-zero \
+  --set bundledVault.podSecurityContext.runAsGroup=0
+
+render_infra_success \
+  vault-fsgroup-zero \
+  --set bundledVault.podSecurityContext.fsGroup=0
+
+# Chart-owned objects are closed: an unknown key is rejected instead of
+# being silently ignored.
+render_failure_matching \
+  fulfillment-trust-unknown-key \
+  '(global\.fulfillmentTrust|/global/fulfillmentTrust).*additional propert(y|ies).*unknownKey.*(is )?not allowed' \
+  --set global.fulfillmentTrust.unknownKey=1
+
+# bmaas-netbox-ci is a valid profile the gate must not block: it relies on
+# the infra chart's netbox-token-seed hook to create the NetBox token Secret
+# during a real install, and offline rendering cannot see cluster Secrets
+# (helm template's lookup returns nil), so the raw render fails the
+# lookup-dependent branch. The gate bridges exactly that failure through
+# render_osac_chart_offline (scripts/lib.sh) with a render-only placeholder
+# (NETBOX_OFFLINE_PLACEHOLDER in the Makefile, generated at runtime there;
+# the plan assertion above matches only its prefix) that is never passed to
+# an installation -- and only when
+# netbox_seed_check first saw this install's infra values deploy the seed
+# hook. The hostname --sets mirror the OpenShift gate branch -- the
+# profile's supported platform; on Kind the install itself rejects the
+# profile's empty hostnames, gate and install alike.
+NETBOX_PROFILE_ARGS=(
+  -f "${INSTALLER_DIR}/values/bmaas-ci/instance.yaml"
+  -f "${INSTALLER_DIR}/values/bmaas-netbox-ci/instance.yaml"
+  --set service.externalHostname=fulfillment-api-osac.example.com
+  --set service.internalHostname=fulfillment-internal-api-osac.example.com
+  --set global.clusterDomain=example.com
+)
+
+render_failure_matching \
+  netbox-profile-raw-render \
+  'netbox\.tokenValue is required when Secret' \
+  "${NETBOX_PROFILE_ARGS[@]}"
+
+# The gate's osac-chart render goes through render_osac_chart_offline, so
+# the tests below exercise the same code path the gate uses.
+source "${SCRIPT_DIR}/lib.sh"
+
+# The raw messages above are not what the installer prints: the gate
+# suppresses Helm's text (it can echo the rejected value) and reports the
+# field plus the constraint the installer's schemas add. These cases pin
+# the printed text, so a suppression change cannot silently drop the
+# constraint and leave the caller guessing which rule was broken.
+# render_chart_offline takes the arguments after `helm template`.
+GATE_OSAC_ARGS=("osac" "${OSAC_CHART_DIR}"
+  --values "${OSAC_CHART_DIR}/ci/default-values.yaml")
+GATE_INFRA_ARGS=("osac-infra" "${INFRA_CHART_DIR}"
+  --values "${INSTALLER_DIR}/values/dev/kind-infra.yaml")
+
+# Usage: gate_failure_matching NAME PATTERN [HELM_ARGS...]
+# The chart's arguments come after the pattern, so the helper needs no
+# nameref (`local -n` is Bash 4.3 only) and stays a plain positional API.
+gate_failure_matching() {
+  local name=$1 pattern=$2
+  shift 2
+  local error="${TMP_DIR}/${name}.gate.stderr"
+  echo "checking ${name} (gate output matching '${pattern}')"
+  if render_chart_offline "$@" >/dev/null 2>"${error}"; then
+    echo "ERROR: ${name}: the gate unexpectedly rendered successfully" >&2
+    exit 1
+  fi
+  if ! grep -Eq -- "${pattern}" "${error}"; then
+    echo "ERROR: ${name}: the gate failure omitted the expected text" >&2
+    cat "${error}" >&2
+    exit 1
+  fi
+}
+
+echo "checking gate-valid-defaults (the gate renders the defaults)"
+render_chart_offline "${GATE_OSAC_ARGS[@]}" >/dev/null \
+  || fail "gate-valid-defaults: the gate rejected the default values"
+
+# Helm 3 prints a dotted path and Helm 4 a slash-separated one; both are
+# accepted because the gate keeps whichever form Helm produced. The numeric
+# fields carry a type and a minimum, and the printed text covers both: the
+# gate cannot tell from the field path which one failed.
+gate_failure_matching backoff-limit-negative-gate \
+  '^(aap\.bootstrap\.backoffLimit|aap/bootstrap/backoffLimit): violates the values schema: must be an integer greater than or equal to 0$' \
+  "${GATE_OSAC_ARGS[@]}" --set aap.bootstrap.backoffLimit=-1
+
+gate_failure_matching backoff-limit-type-gate \
+  '^(aap\.bootstrap\.backoffLimit|aap/bootstrap/backoffLimit): violates the values schema: must be an integer greater than or equal to 0$' \
+  "${GATE_OSAC_ARGS[@]}" --set-string aap.bootstrap.backoffLimit=zero
+
+gate_failure_matching vault-runasuser-negative-gate \
+  '^(bundledVault\.podSecurityContext\.runAsUser|bundledVault/podSecurityContext/runAsUser): violates the values schema: must be an integer greater than or equal to 0$' \
+  "${GATE_INFRA_ARGS[@]}" --set bundledVault.podSecurityContext.runAsUser=-1
+
+gate_failure_matching vault-runasuser-zero-nonroot-gate \
+  '^(bundledVault\.podSecurityContext|bundledVault/podSecurityContext): violates the values schema: must be an object; runAsUser must not be 0 when runAsNonRoot is true$' \
+  "${GATE_INFRA_ARGS[@]}" --set bundledVault.podSecurityContext.runAsUser=0
+
+# A non-object value fails the same object path on its type, not on the
+# `not` rule, and the printed text covers both so the caller is not sent to
+# the wrong field.
+gate_failure_matching vault-runasuser-type-gate \
+  '^(bundledVault\.podSecurityContext|bundledVault/podSecurityContext): violates the values schema: must be an object; runAsUser must not be 0 when runAsNonRoot is true$' \
+  "${GATE_INFRA_ARGS[@]}" --set bundledVault.podSecurityContext=1
+
+gate_failure_matching fulfillment-trust-unknown-key-gate \
+  '^(global\.fulfillmentTrust|global/fulfillmentTrust): violates the values schema: must be an object; unknown keys are not allowed$' \
+  "${GATE_OSAC_ARGS[@]}" --set global.fulfillmentTrust.unknownKey=1
+
+gate_failure_matching fulfillment-trust-type-gate \
+  '^(global\.fulfillmentTrust|global/fulfillmentTrust): violates the values schema: must be an object; unknown keys are not allowed$' \
+  "${GATE_OSAC_ARGS[@]}" --set global.fulfillmentTrust=1
+
+netbox_gate_err="${TMP_DIR}/netbox-gate.err"
+# The render-only placeholder mirrors the Makefile's runtime-generated
+# NETBOX_OFFLINE_PLACEHOLDER; only its prefix is asserted against the
+# gate's plan above, so the two values need not match. Generated here so
+# no token-shaped literal sits in the script.
+offline_token="offline-validation-placeholder-$(date +%s)-$$"
+
+# The unseeded bridge path (a pre-existing token Secret) is tested
+# hermetically: stub CLIs stand in for the cluster lookup, so no developer
+# cluster or login state can flip the result. The kubectl stub logs every
+# invocation and answers "present" only for the exact Secret identity and
+# key the lookup asks for; the oc stub never answers, so the kubectl path
+# is what runs (lib.sh falls back to oc only when kubectl is unavailable).
+netbox_cli_bin="${TMP_DIR}/netbox-cli"
+mkdir -p "${netbox_cli_bin}"
+netbox_cli_log="${TMP_DIR}/netbox-cli.log"
+cat >"${netbox_cli_bin}/kubectl" <<'STUB'
+#!/usr/bin/env bash
+printf 'kubectl %s\n' "$*" >>"${NETBOX_CLI_LOG}"
+[ "${NETBOX_CLI_SECRET_PRESENT:-0}" = "1" ] || exit 0
+[ "$1 $2 $3 $4 $5" = "get secret ${NETBOX_CLI_NAME} -n ${NETBOX_CLI_NS}" ] || exit 0
+for arg in "$@"; do
+  case "${arg}" in
+    *"index .data \"${NETBOX_CLI_KEY}\""*) echo present; exit 0 ;;
+  esac
+done
+exit 0
+STUB
+cat >"${netbox_cli_bin}/oc" <<'STUB'
+#!/usr/bin/env bash
+printf 'oc %s\n' "$*" >>"${NETBOX_CLI_LOG}"
+exit 1
+STUB
+chmod +x "${netbox_cli_bin}/kubectl" "${netbox_cli_bin}/oc"
+
+# netbox_seed_check decides whether the bridge is legitimate at all: the
+# netbox profile's infra values deploy the seed hook, bmaas-ci's do not, and
+# the hook is trusted only when the same invocation installs the infra chart
+# (NETBOX_SEED_WILL_RUN, exported by the gate recipes).
+echo "checking netbox-seed-hook-present (the netbox profile's infra deploys it)"
+NETBOX_SEED_WILL_RUN=1 netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+  --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
+  --values "${INSTALLER_DIR}/values/bmaas-netbox-ci/infra.yaml" \
+  --set osacNamespace=osac
+[ "${NETBOX_TOKEN_SEEDED}" = "1" ] \
+  || fail "netbox-seed-hook-present: the netbox profile's infra render deploys no netbox-token-seed"
+[ "${NETBOX_SEED_SECRET_NAME}" = "netbox-api-token" ] \
+  || fail "netbox-seed-hook-present: wrong seed Secret name ${NETBOX_SEED_SECRET_NAME}"
+[ "${NETBOX_SEED_SECRET_NS}" = "osac" ] \
+  || fail "netbox-seed-hook-present: wrong seed Secret namespace ${NETBOX_SEED_SECRET_NS}"
+[ "${NETBOX_SEED_SECRET_KEY}" = "token" ] \
+  || fail "netbox-seed-hook-present: wrong seed Secret key ${NETBOX_SEED_SECRET_KEY}"
+
+echo "checking netbox-seed-hook-absent (bmaas-ci infra deploys none)"
+NETBOX_SEED_WILL_RUN=1 netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+  --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
+  --set osacNamespace=osac
+[ "${NETBOX_TOKEN_SEEDED}" = "0" ] \
+  || fail "netbox-seed-hook-absent: bmaas-ci infra unexpectedly seeds the token"
+
+# A standalone install-osac does not install the infra chart, so its seed
+# hook never runs: the check must report not seeded even though the values
+# deploy the hook, leaving the read-only Secret lookup as the only bridge.
+echo "checking netbox-seed-hook-not-in-this-invocation (standalone install-osac)"
+netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+  --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
+  --values "${INSTALLER_DIR}/values/bmaas-netbox-ci/infra.yaml" \
+  --set osacNamespace=osac
+[ "${NETBOX_TOKEN_SEEDED}" = "0" ] \
+  || fail "netbox-seed-hook-not-in-this-invocation: the hook was trusted without an infra install"
+
+# The bridge: only the specific lookup failure above is retried with the
+# placeholder, and only for a seeded install whose seed-hook Secret
+# identity matches what the osac chart reads, so the profile renders like
+# the gate does. The render runs in the osac namespace like the gate's
+# own --namespace $(NS).
+echo "checking netbox-profile-gate-placeholder (bridged render)"
+NETBOX_SEED_WILL_RUN=1 netbox_seed_check osac-infra "${INFRA_CHART_DIR}" \
+  --values "${INSTALLER_DIR}/values/bmaas-ci/infra.yaml" \
+  --values "${INSTALLER_DIR}/values/bmaas-netbox-ci/infra.yaml" \
+  --set osacNamespace=osac
+render_osac_chart_offline "${offline_token}" \
+  osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+  --namespace osac \
+  "${NETBOX_PROFILE_ARGS[@]}" \
+  || fail "netbox-profile-gate-placeholder: the bridged render failed"
+
+# An explicitly empty caller token is the same as none: the chart needs a
+# value only when the Secret is absent, and the install-time lookup finds
+# the seeded one. Helm merges --set-string after --set regardless of
+# argument order, so the bridge's placeholder must be a --set-string as
+# well; a --set placeholder is overridden by the caller's empty value, the
+# retry repeats the lookup failure, and the gate rejects a valid install.
+echo "checking netbox-empty-set-string-token (bridged render, empty caller token)"
+NETBOX_TOKEN_SEEDED=1 render_osac_chart_offline "${offline_token}" \
+  osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+  --namespace osac \
+  "${NETBOX_PROFILE_ARGS[@]}" \
+  --set-string bmf.netbox.tokenValue= \
+  || fail "netbox-empty-set-string-token: the bridge did not survive an empty token"
+
+# The bridge must verify the seed hook's Secret identity: a caller override
+# that diverges from the seeded Secret (here the key, via
+# bmf.netbox.tokenSecretKey) would pass a bridged render yet fail the real
+# install only after install-infra changed the cluster. The gate fails
+# instead, naming the differing identity fields. The mismatching values
+# are internal-hostname-shaped on purpose: Secret names and keys are
+# customer-supplied identifiers, and the gate's errors reach the terminal
+# and CI logs, so the values themselves must stay out of the message.
+echo "checking netbox-key-mismatch (seeded key differs from the chart's key)"
+: >"${netbox_cli_log}"
+if PATH="${netbox_cli_bin}:${PATH}" NETBOX_CLI_LOG="${netbox_cli_log}" \
+    NETBOX_TOKEN_SEEDED=1 render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    --set bmf.netbox.tokenSecretKey=token.netbox.internal.example.com \
+    2>"${netbox_gate_err}"; then
+  fail "netbox-key-mismatch: the gate bridged a mismatched Secret key"
+fi
+grep -q 'identity mismatch' "${netbox_gate_err}" \
+  || fail "netbox-key-mismatch: the failure did not name the identity mismatch"
+grep -Fq 'differing: key' "${netbox_gate_err}" \
+  || fail "netbox-key-mismatch: the failure did not name the differing field"
+grep -Fq 'token.netbox.internal.example.com' "${netbox_gate_err}" \
+  && fail "netbox-key-mismatch: the failure echoed the divergent key"
+
+echo "checking netbox-name-mismatch (seeded name differs from the chart's name)"
+: >"${netbox_cli_log}"
+if PATH="${netbox_cli_bin}:${PATH}" NETBOX_CLI_LOG="${netbox_cli_log}" \
+    NETBOX_TOKEN_SEEDED=1 render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    --set bmf.secrets.netboxToken=netbox.internal.example.com \
+    2>"${netbox_gate_err}"; then
+  fail "netbox-name-mismatch: the gate bridged a mismatched Secret name"
+fi
+grep -q 'identity mismatch' "${netbox_gate_err}" \
+  || fail "netbox-name-mismatch: the failure did not name the identity mismatch"
+grep -Fq 'differing: name' "${netbox_gate_err}" \
+  || fail "netbox-name-mismatch: the failure did not name the differing field"
+grep -Fq 'netbox.internal.example.com' "${netbox_gate_err}" \
+  && fail "netbox-name-mismatch: the failure echoed the divergent Secret name"
+
+# A diverging seed identity is not fatal when the Secret the chart reads
+# already exists with the required key: `helm upgrade` reads that Secret
+# through lookup, so the install succeeds even though the infra hook seeds
+# a different one. The stub answers for the chart's identity, not the seed
+# hook's, so the lookup alone decides it.
+echo "checking netbox-seed-existing-secret (a pre-existing chart Secret saves a mismatch)"
+: >"${netbox_cli_log}"
+if ! PATH="${netbox_cli_bin}:${PATH}" NETBOX_CLI_LOG="${netbox_cli_log}" \
+    NETBOX_CLI_SECRET_PRESENT=1 NETBOX_CLI_NAME=netbox.internal.example.com \
+    NETBOX_CLI_NS=osac NETBOX_CLI_KEY=token NETBOX_TOKEN_SEEDED=1 \
+    render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    --set bmf.secrets.netboxToken=netbox.internal.example.com \
+    2>"${netbox_gate_err}"; then
+  fail "netbox-seed-existing-secret: the gate rejected an existing chart Secret"
+fi
+grep -q 'kubectl get secret netbox.internal.example.com -n osac' \
+  "${netbox_cli_log}" \
+  || fail "netbox-seed-existing-secret: the lookup did not use the chart's Secret identity"
+grep -Eq 'kubectl (apply|create|delete|patch|replace|edit)' "${netbox_cli_log}" \
+  && fail "netbox-seed-existing-secret: the gate mutated the cluster"
+
+# Without the seed hook nothing creates the token Secret, so the same
+# lookup failure is a real input error unless the Secret already exists in
+# the cluster: the bridge must not paper over a genuinely missing token,
+# or the gate would pass an install that fails only after install-infra
+# changed the cluster. The stub CLIs answer nothing here (no Secret). The
+# gate names the constraint without the chart's raw error, which embeds
+# the customer-supplied Secret name and key.
+echo "checking netbox-unseeded-bridge (no seed hook and no Secret: the token error is real)"
+if PATH="${netbox_cli_bin}:${PATH}" NETBOX_CLI_LOG="${netbox_cli_log}" \
+    NETBOX_TOKEN_SEEDED=0 render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    --set bmf.secrets.netboxToken=netbox.internal.example.com \
+    2>"${netbox_gate_err}"; then
+  fail "netbox-unseeded-bridge: the gate bridged a missing token with no seed hook"
+fi
+grep -Eiq 'netbox\.tokenValue is required when the NetBox token Secret' \
+  "${netbox_gate_err}" \
+  || fail "netbox-unseeded-bridge: the failure did not name the missing token"
+grep -Fq 'netbox.internal.example.com' "${netbox_gate_err}" \
+  && fail "netbox-unseeded-bridge: the failure echoed the Secret name"
+
+# A token Secret that already exists in the cluster is the other
+# legitimate unseeded source: `helm upgrade` reads it through lookup at
+# install time even though `helm template` cannot see it offline, so the
+# gate verifies it with a read-only cluster lookup instead of rejecting a
+# valid install. The stub answers only for the exact identity the chart
+# renders (netbox-api-token in osac, key token), proving the lookup uses
+# the effective values, and the log proves it is read-only.
+echo "checking netbox-existing-secret (a pre-existing token Secret passes the gate)"
+: >"${netbox_cli_log}"
+if ! PATH="${netbox_cli_bin}:${PATH}" NETBOX_CLI_LOG="${netbox_cli_log}" \
+    NETBOX_CLI_SECRET_PRESENT=1 NETBOX_CLI_NAME=netbox-api-token \
+    NETBOX_CLI_NS=osac NETBOX_CLI_KEY=token NETBOX_TOKEN_SEEDED=0 \
+    render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    2>"${netbox_gate_err}"; then
+  fail "netbox-existing-secret: the gate rejected an install whose token Secret exists"
+fi
+grep -q 'kubectl get secret netbox-api-token -n osac' "${netbox_cli_log}" \
+  || fail "netbox-existing-secret: the lookup did not use the rendered Secret identity"
+grep -q -- '-o go-template' "${netbox_cli_log}" \
+  || fail "netbox-existing-secret: the lookup was not the read-only template check"
+grep -Eq 'kubectl (apply|create|delete|patch|replace|edit)' "${netbox_cli_log}" \
+  && fail "netbox-existing-secret: the gate mutated the cluster"
+
+# A Secret that exists under a different key than the chart reads is still
+# a real input error: the caller overrode bmf.netbox.tokenSecretKey, so
+# the lookup asks for that key and nothing answers.
+echo "checking netbox-existing-secret-wrong-key (a Secret missing the chart's key fails)"
+if PATH="${netbox_cli_bin}:${PATH}" NETBOX_CLI_LOG="${netbox_cli_log}" \
+    NETBOX_CLI_SECRET_PRESENT=1 NETBOX_CLI_NAME=netbox-api-token \
+    NETBOX_CLI_NS=osac NETBOX_CLI_KEY=token NETBOX_TOKEN_SEEDED=0 \
+    render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    --set bmf.netbox.tokenSecretKey=api-token \
+    2>"${netbox_gate_err}"; then
+  fail "netbox-existing-secret-wrong-key: the gate bridged a Secret without the chart's key"
+fi
+grep -Eiq 'netbox\.tokenValue is required when the NetBox token Secret' \
+  "${netbox_gate_err}" \
+  || fail "netbox-existing-secret-wrong-key: the failure did not name the missing token"
+
+# A caller-supplied token must reach the gate's render, never be masked by
+# the placeholder: the placeholder applies only when the merged render has
+# no token at all, so a token from --set, --set-string, or a values file is
+# validated itself. A numeric token fails the schema in the gate, before
+# any cluster change, exactly as it would fail the install. Type-error
+# wording differs across Helm versions like the minimum constraints above:
+# 3.18 prints "Invalid type. Expected: string, given: integer" while 3.22
+# (what CI installs) prints "got number, want string".
+numeric_token_pattern='(bmf\.netbox\.tokenValue|/bmf/netbox/tokenValue).*(Invalid type|got number, want string)'
+echo "checking netbox-caller-numeric-token (expected failure naming the token type)"
+if render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    --set bmf.netbox.tokenValue=123 \
+    >"${TMP_DIR}/netbox-set-numeric.out" 2>"${netbox_gate_err}"; then
+  fail "netbox-caller-numeric-token: the gate accepted a numeric --set token"
+fi
+grep -Eiq "${numeric_token_pattern}" "${netbox_gate_err}" \
+  || fail "netbox-caller-numeric-token: the failure did not name the token type"
+
+# The same through a values file: a --set placeholder would mask a
+# file-supplied token (Helm applies --set after values files), so the
+# bridge must render the file's value itself.
+printf 'bmf:\n  netbox:\n    tokenValue: 123\n' >"${TMP_DIR}/netbox-numeric.yaml"
+echo "checking netbox-file-numeric-token (expected failure naming the token type)"
+if render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    "${NETBOX_PROFILE_ARGS[@]}" \
+    -f "${TMP_DIR}/netbox-numeric.yaml" \
+    >"${TMP_DIR}/netbox-file-numeric.out" 2>"${netbox_gate_err}"; then
+  fail "netbox-file-numeric-token: the gate accepted a numeric file token"
+fi
+grep -Eiq "${numeric_token_pattern}" "${netbox_gate_err}" \
+  || fail "netbox-file-numeric-token: the failure did not name the token type"
+
+# A valid file-supplied token renders unmasked (the bridge is not taken).
+# The token is generated at runtime so no credential-looking literal
+# lives in this suite.
+file_supplied_token="file-supplied-token-$(date +%s)-$$"
+printf 'bmf:\n  netbox:\n    tokenValue: %s\n' "${file_supplied_token}" \
+  >"${TMP_DIR}/netbox-token.yaml"
+echo "checking netbox-file-string-token (expected success)"
+render_osac_chart_offline "${offline_token}" \
+  osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+  "${NETBOX_PROFILE_ARGS[@]}" \
+  -f "${TMP_DIR}/netbox-token.yaml" \
+  || fail "netbox-file-string-token: a valid file-supplied token must render"
+
+# A duplicate metering reader name must fail the gate's own render (the
+# umbrella chart carries the readers into the metering subchart) without
+# echoing the name: reader names are customer-supplied infrastructure
+# identifiers -- often internal hostnames -- and the gate's error text
+# reaches the terminal and CI logs.
+echo "checking metering-reader-duplicate (duplicate names fail the gate without the name)"
+if render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    --set 'metering.readers[0].name=metrics-reader.internal.example.com' \
+    --set 'metering.readers[1].name=metrics-reader.internal.example.com' \
+    >/dev/null 2>"${netbox_gate_err}"; then
+  fail "metering-reader-duplicate: the gate accepted a duplicate reader name"
+fi
+grep -Eiq 'duplicate metering reader' "${netbox_gate_err}" \
+  || fail "metering-reader-duplicate: the failure did not name the constraint"
+grep -Fq 'metrics-reader.internal.example.com' "${netbox_gate_err}" \
+  && fail "metering-reader-duplicate: the failure echoed the reader name"
+
+# The reader name's schema rule covers its type, its DNS-name shape and its
+# length, so every rejection of the field names all three rather than
+# leaving the caller to guess which one applies.
+metering_reader_gate_err="${TMP_DIR}/metering-reader-gate.err"
+reader_name_rule='^(metering\.readers\.0\.name|metering/readers/0/name):'
+reader_name_rule+=' violates the values schema: must be a string;'
+reader_name_rule+=' must be a lowercase DNS name of at most 253 characters$'
+
+echo "checking metering-reader-dns-name (bad DNS names fail the gate naming the rule)"
+if render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    --set 'metering.readers[0].name=NotADnsName' \
+    >/dev/null 2>"${metering_reader_gate_err}"; then
+  fail "metering-reader-dns-name: the gate accepted a non-DNS reader name"
+fi
+grep -Eq "${reader_name_rule}" "${metering_reader_gate_err}" \
+  || fail "metering-reader-dns-name: the failure did not name the field and rule"
+grep -Fq 'NotADnsName' "${metering_reader_gate_err}" \
+  && fail "metering-reader-dns-name: the failure echoed the reader name"
+
+long_reader_name=$(printf 'a%.0s' {1..254})
+echo "checking metering-reader-too-long (overlong names fail the gate naming the rule)"
+if render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    --set "metering.readers[0].name=${long_reader_name}" \
+    >/dev/null 2>"${metering_reader_gate_err}"; then
+  fail "metering-reader-too-long: the gate accepted an overlong reader name"
+fi
+grep -Eq "${reader_name_rule}" "${metering_reader_gate_err}" \
+  || fail "metering-reader-too-long: the failure did not name the field and rule"
+grep -Fq "${long_reader_name}" "${metering_reader_gate_err}" \
+  && fail "metering-reader-too-long: the failure echoed the reader name"
+
+# The template's own reserved-name rejections are index-only, so the gate
+# maps them as well: Helm's template location alone would not tell the
+# caller which rule the name broke.
+echo "checking metering-reader-reserved (reserved names fail the gate naming the rule)"
+if render_osac_chart_offline "${offline_token}" \
+    osac "${OSAC_CHART_DIR}" --values "${OSAC_CHART_DIR}/ci/default-values.yaml" \
+    --namespace osac \
+    --set 'metering.readers[0].name=osac-reserved.example.com' \
+    >/dev/null 2>"${metering_reader_gate_err}"; then
+  fail "metering-reader-reserved: the gate accepted a reserved reader name"
+fi
+grep -Fq 'metering reader at index 0 uses the reserved osac- or osac. name prefix' \
+  "${metering_reader_gate_err}" \
+  || fail "metering-reader-reserved: the failure did not name the entry and rule"
+grep -Fq 'osac-reserved.example.com' "${metering_reader_gate_err}" \
+  && fail "metering-reader-reserved: the failure echoed the reader name"
+
+echo "input validation passed"

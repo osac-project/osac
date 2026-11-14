@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { type MessageInitShape } from '@bufbuild/protobuf';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { useMutation } from '@tanstack/react-query';
 
 import {
@@ -22,6 +23,7 @@ import {
   VirtualNetworks,
 } from '@osac/types';
 
+import { useTranslation } from '../../hooks/useTranslation';
 import { useApiFetch } from '../api-context';
 import { type CelFilter, cel } from '../cel';
 import { type ListParams, apiQueryKey } from '../types';
@@ -375,9 +377,32 @@ export const useCreateSecurityGroup = () => {
 export const useUpdateSecurityGroup = () => {
   const client = useApiFetch(SecurityGroups);
   const qc = useApiQueryClient();
+  const { t } = useTranslation();
   return useMutation({
     mutationFn: ({ object }: { object: MessageInitShape<typeof SecurityGroupSchema> }) => {
-      return client.update({ object });
+      const id = object.id;
+      if (!id || !/\S/.test(id)) {
+        throw new ConnectError(
+          t('Network configuration cannot be changed after creation.'),
+          Code.FailedPrecondition,
+        );
+      }
+
+      const spec = object.spec;
+      if (!spec || !Array.isArray(spec.ingress) || !Array.isArray(spec.egress)) {
+        throw new ConnectError(t('Security group rules are incomplete.'), Code.FailedPrecondition);
+      }
+
+      const projected = {
+        object: {
+          id,
+          spec: {
+            ingress: spec.ingress,
+            egress: spec.egress,
+          },
+        },
+      };
+      return client.update(projected);
     },
     onSuccess: () => invalidateSecurityGroupsQueries(qc),
   });

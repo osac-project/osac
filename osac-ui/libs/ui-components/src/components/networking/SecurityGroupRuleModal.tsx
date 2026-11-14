@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { MessageInitShape } from '@bufbuild/protobuf';
 import {
   Alert,
@@ -46,6 +47,7 @@ interface SecurityGroupRuleModalProps {
   onClose: () => void;
   securityGroup: SecurityGroup;
   direction: 'ingress' | 'egress';
+  editingDisabledReason?: string;
   ruleIndex?: number;
 }
 
@@ -53,10 +55,17 @@ export const SecurityGroupRuleModal = ({
   onClose,
   securityGroup,
   direction,
+  editingDisabledReason,
   ruleIndex,
 }: SecurityGroupRuleModalProps) => {
   const { t } = useTranslation();
   const updateSecurityGroup = useUpdateSecurityGroup();
+
+  useEffect(() => {
+    if (editingDisabledReason && !updateSecurityGroup.isPending) {
+      onClose();
+    }
+  }, [editingDisabledReason, onClose, updateSecurityGroup.isPending]);
 
   const mode: 'add' | 'edit' = ruleIndex === undefined ? 'add' : 'edit';
   const initialValues: SecurityRule | undefined =

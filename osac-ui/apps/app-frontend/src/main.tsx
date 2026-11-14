@@ -12,14 +12,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
 
 import { ApiProvider, connectErrorInterceptor } from '@osac/ui-components/api/api-context';
+import { createNetworkingImmutabilityInterceptor } from '@osac/ui-components/api/networking-immutability';
 import ToastProvider from '@osac/ui-components/components/Toast/ToastProvider';
 
 import App from './App';
-import './i18n';
+import i18n from './i18n';
 
 const connectTransport = createConnectTransport({
   baseUrl: '/api/fulfillment',
-  interceptors: [connectErrorInterceptor],
+  interceptors: [
+    connectErrorInterceptor,
+    createNetworkingImmutabilityInterceptor(i18n.t.bind(i18n)),
+  ],
   jsonOptions: {
     registry: createRegistry(
       file_google_protobuf_wrappers,

@@ -189,4 +189,97 @@ describe('SecurityGroupRulesTable', () => {
     await user.click(deleteButtons[2]);
     expect(onDeleteRule).toHaveBeenCalledWith(2);
   });
+
+  it('supports keyboard activation for allowed rule actions', async () => {
+    const user = userEvent.setup();
+    const onAddRule = vi.fn();
+    const onEditRule = vi.fn();
+    const onDeleteRule = vi.fn();
+    render(
+      <SecurityGroupRulesTable
+        rules={mockRules}
+        direction="ingress"
+        onAddRule={onAddRule}
+        onEditRule={onEditRule}
+        onDeleteRule={onDeleteRule}
+      />,
+    );
+
+    screen.getByRole('button', { name: /Add rule/i }).focus();
+    await user.keyboard('{Enter}');
+    screen.getAllByRole('button', { name: /Edit/i })[0].focus();
+    await user.keyboard('{Enter}');
+    screen.getAllByRole('button', { name: /Delete/i })[0].focus();
+    await user.keyboard('{Enter}');
+
+    expect(onAddRule).toHaveBeenCalledTimes(1);
+    expect(onEditRule).toHaveBeenCalledWith(0);
+    expect(onDeleteRule).toHaveBeenCalledWith(0);
+  });
+
+  describe('when editing is unavailable', () => {
+    const reason = 'Automatic security group rules cannot be edited.';
+
+    it('shows a neutral empty state and no Add action', () => {
+      render(
+        <SecurityGroupRulesTable
+          rules={[]}
+          direction="ingress"
+          editingDisabledReason={reason}
+          onAddRule={vi.fn()}
+          onEditRule={vi.fn()}
+          onDeleteRule={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.getByRole('heading', { name: /Automatic security group rules cannot be edited/ }),
+      ).toBeInTheDocument();
+      expect(screen.getByText('No inbound rules')).toBeInTheDocument();
+      expect(screen.queryByText(/No inbound rules yet/)).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Add rule/i })).not.toBeInTheDocument();
+    });
+
+    it('prevents rule callbacks by pointer and keyboard', async () => {
+      const user = userEvent.setup();
+      const onAddRule = vi.fn();
+      const onEditRule = vi.fn();
+      const onDeleteRule = vi.fn();
+      render(
+        <SecurityGroupRulesTable
+          rules={mockRules}
+          direction="ingress"
+          editingDisabledReason={reason}
+          onAddRule={onAddRule}
+          onEditRule={onEditRule}
+          onDeleteRule={onDeleteRule}
+        />,
+      );
+
+      expect(
+        screen.getByRole('heading', { name: /Automatic security group rules cannot be edited/ }),
+      ).toBeInTheDocument();
+      const add = screen.getByRole('button', { name: /Add rule/i });
+      const edit = screen.getAllByRole('button', { name: /Edit/i })[0];
+      const remove = screen.getAllByRole('button', { name: /Delete/i })[0];
+
+      expect(add).toHaveAttribute('aria-disabled', 'true');
+      expect(edit).toHaveAttribute('aria-disabled', 'true');
+      expect(remove).toHaveAttribute('aria-disabled', 'true');
+
+      await user.click(add);
+      await user.click(edit);
+      await user.click(remove);
+      add.focus();
+      await user.keyboard('{Enter}');
+      edit.focus();
+      await user.keyboard(' ');
+      remove.focus();
+      await user.keyboard('{Enter}');
+
+      expect(onAddRule).not.toHaveBeenCalled();
+      expect(onEditRule).not.toHaveBeenCalled();
+      expect(onDeleteRule).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { type MessageInitShape } from '@bufbuild/protobuf';
 import {
@@ -17,6 +17,7 @@ import {
   TabTitleText,
   Tabs,
 } from '@patternfly/react-core';
+import type { TFunction } from 'i18next';
 
 import { type SecurityGroup, SecurityGroupSchema, SecurityGroupState } from '@osac/types';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
@@ -56,6 +57,43 @@ const securityGroupWithoutRule = (
   };
 };
 
+export const securityGroupRuleEditingDisabledReason = (
+  securityGroup: SecurityGroup | undefined,
+  ruleMutationPending: boolean,
+  t: TFunction,
+): string | undefined => {
+  if (!securityGroup) {
+    return undefined;
+  }
+
+  const labels = securityGroup.metadata?.labels;
+  if (
+    labels?.['osac.openshift.io/auto-created'] === 'true' ||
+    securityGroup.metadata?.name?.startsWith('auto-sg-')
+  ) {
+    return t('Automatic security group rules cannot be edited.');
+  }
+
+  const state = securityGroup.status?.state;
+  if (state === SecurityGroupState.PENDING || state === SecurityGroupState.DELETING) {
+    return t('Rules cannot be edited while the security group is being provisioned or deleted.');
+  }
+
+  if (ruleMutationPending) {
+    return t('Rules cannot be edited while a rule change is in progress.');
+  }
+
+  if (state === SecurityGroupState.READY && securityGroup.status?.message?.startsWith('Updating')) {
+    return t('Rules cannot be edited while the security group is updating.');
+  }
+
+  if (state !== SecurityGroupState.READY && state !== SecurityGroupState.FAILED) {
+    return t('Rules cannot be edited while the security group is not ready.');
+  }
+
+  return undefined;
+};
+
 export const SecurityGroupDetailPage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -69,6 +107,29 @@ export const SecurityGroupDetailPage = () => {
   const { data: virtualNetworks = [] } = useVirtualNetworks();
   const deleteSecurityGroup = useDeleteSecurityGroup();
   const updateSecurityGroup = useUpdateSecurityGroup();
+  const editingDisabledReason = securityGroupRuleEditingDisabledReason(
+    sg,
+    updateSecurityGroup.isPending,
+    t,
+  );
+
+  useEffect(() => {
+    if (editingDisabledReason && !updateSecurityGroup.isPending) {
+      setDeleteRuleTarget(null);
+    }
+  }, [editingDisabledReason, updateSecurityGroup.isPending]);
+
+  const canEditRules = editingDisabledReason === undefined;
+  const openRuleEditor = (target: RuleTarget) => {
+    if (canEditRules) {
+      setRuleEditor(target);
+    }
+  };
+  const openDeleteRule = (target: Required<RuleTarget>) => {
+    if (canEditRules) {
+      setDeleteRuleTarget(target);
+    }
+  };
 
   const sgName = sg?.metadata?.name ?? id;
   const isFailed = sg?.status?.state === SecurityGroupState.FAILED;
@@ -157,35 +218,25 @@ export const SecurityGroupDetailPage = () => {
           </Tab>
 
           <Tab eventKey={1} title={<TabTitleText>{t('Inbound Rules')}</TabTitleText>}>
-            <Card>
-              <CardBody>
-                <SecurityGroupRulesTable
-                  rules={sg?.spec?.ingress ?? []}
-                  direction="ingress"
-                  onAddRule={() => setRuleEditor({ direction: 'ingress' })}
-                  onEditRule={(ruleIndex) => setRuleEditor({ direction: 'ingress', ruleIndex })}
-                  onDeleteRule={(ruleIndex) =>
-                    setDeleteRuleTarget({ direction: 'ingress', ruleIndex })
-                  }
-                />
-              </CardBody>
-            </Card>
+            <SecurityGroupRulesTable
+              rules={sg?.spec?.ingress ?? []}
+              direction="ingress"
+              editingDisabledReason={editingDisabledReason}
+              onAddRule={() => openRuleEditor({ direction: 'ingress' })}
+              onEditRule={(ruleIndex) => openRuleEditor({ direction: 'ingress', ruleIndex })}
+              onDeleteRule={(ruleIndex) => openDeleteRule({ direction: 'ingress', ruleIndex })}
+            />
           </Tab>
 
           <Tab eventKey={2} title={<TabTitleText>{t('Outbound Rules')}</TabTitleText>}>
-            <Card>
-              <CardBody>
-                <SecurityGroupRulesTable
-                  rules={sg?.spec?.egress ?? []}
-                  direction="egress"
-                  onAddRule={() => setRuleEditor({ direction: 'egress' })}
-                  onEditRule={(ruleIndex) => setRuleEditor({ direction: 'egress', ruleIndex })}
-                  onDeleteRule={(ruleIndex) =>
-                    setDeleteRuleTarget({ direction: 'egress', ruleIndex })
-                  }
-                />
-              </CardBody>
-            </Card>
+            <SecurityGroupRulesTable
+              rules={sg?.spec?.egress ?? []}
+              direction="egress"
+              editingDisabledReason={editingDisabledReason}
+              onAddRule={() => openRuleEditor({ direction: 'egress' })}
+              onEditRule={(ruleIndex) => openRuleEditor({ direction: 'egress', ruleIndex })}
+              onDeleteRule={(ruleIndex) => openDeleteRule({ direction: 'egress', ruleIndex })}
+            />
           </Tab>
         </Tabs>
       </ListPageBody>
@@ -195,6 +246,7 @@ export const SecurityGroupDetailPage = () => {
           onClose={() => setRuleEditor(null)}
           securityGroup={sg}
           direction={ruleEditor.direction}
+          editingDisabledReason={editingDisabledReason}
           ruleIndex={ruleEditor.ruleIndex}
         />
       )}

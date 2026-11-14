@@ -229,6 +229,8 @@ describe('buildBareMetalInstanceCreatePayload — useDefaultNetwork', () => {
       subnet: { id: 'subnet-1' },
       securityGroups: [{ id: 'sg-1' }],
     });
+    expect(payload.spec?.networkAttachments?.[0]).not.toHaveProperty('interface');
+    expect(payload.spec?.networkAttachments?.[0]).not.toHaveProperty('primary');
   });
 });
 

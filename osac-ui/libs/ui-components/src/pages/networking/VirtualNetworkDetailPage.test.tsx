@@ -121,6 +121,17 @@ describe('VirtualNetworkDetailPage', () => {
     expect(await screen.findByText(/No security groups yet/i)).toBeInTheDocument();
   });
 
+  it('keeps the virtual network and its child rows read-only', async () => {
+    renderPage();
+
+    expect(await screen.findByText('subnet-a')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'sg-web' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create subnet' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create security group' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^(Edit|Update)/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /^(Edit|Update)/ })).not.toBeInTheDocument();
+  });
+
   it('opens the create modal with the current virtual network pre-selected and locked', async () => {
     const { user } = renderPage();
 

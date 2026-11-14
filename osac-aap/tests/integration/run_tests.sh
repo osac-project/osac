@@ -79,6 +79,7 @@ ROLE_TESTS=(
 
 ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_not_found"
+  "cluster_working_namespace:test_not_found_allow_missing"
   "cluster_working_namespace:test_predefined"
   "cluster_working_namespace:test_found"
   "caas_core_lifecycle:install"

@@ -1,0 +1,36 @@
+---
+- name: "ClusterWorkingNamespace - Test not found with allow_missing"
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../../../common_vars.yml
+
+  tasks:
+    - name: Run allow-missing success test
+      block:
+        - name: Precondition — cluster_working_namespace is undefined
+          ansible.builtin.assert:
+            that:
+              - cluster_working_namespace is not defined
+            fail_msg: >-
+              Precondition failed: cluster_working_namespace
+              is already set
+
+        - name: Run role with nonexistent order (allow missing)
+          ansible.builtin.include_role:
+            name: osac.service.cluster_working_namespace
+          vars:
+            cluster_working_namespace_cluster_order_name: >-
+              nonexistent-order
+            cluster_working_namespace_allow_missing: true
+
+        - name: Verify role succeeded without setting namespace
+          ansible.builtin.assert:
+            that:
+              - cluster_working_namespace is not defined
+            fail_msg: >-
+              Expected cluster_working_namespace to remain
+              undefined, got
+              '{{ cluster_working_namespace | default("") }}'
+            success_msg: >-
+              Not found with allow_missing: passed

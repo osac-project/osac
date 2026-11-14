@@ -1,5 +1,7 @@
-# No-AAP scenario: AAP managed externally, bootstrap and validation disabled.
-# Exercises the disabled-AAP template branches.
+# External-AAP scenario: the AAP instance runs outside this release, its
+# controller API reached at the URL below; bootstrap disabled, the jobs it
+# would run are the outer cluster's concern. Exercises the disabled-instance
+# template branches.
 
 global:
   osacDeploymentId: "ci/osac"
@@ -63,6 +65,7 @@ service:
           param: client-secret
 
 aap:
+  controllerUrl: "https://aap.example.com"
   aap:
     instance:
       enabled: false

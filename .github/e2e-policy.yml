@@ -46,6 +46,13 @@ jobs:
     workflow: e2e-pr-bmaas.yml  # a run of its own, started by the decision (see CI.md)
     filters: [bmaas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
+  # The NetBox flavor is not validated end to end yet: started only by hand, never blocking the E2E check.
+  e2e-bmaas-netbox:
+    kind: e2e
+    check: "E2E / BMaaS NetBox Full Install"
+    suite: bmaas-netbox
+    workflow: e2e-pr-bmaas-netbox.yml
+    manual_only: true
   # Netris suites use a real lab, so they are started only by hand and do not block the E2E check.
   e2e-bmaas-netris:
     kind: e2e

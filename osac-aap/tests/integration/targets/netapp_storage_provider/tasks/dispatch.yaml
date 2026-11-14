@@ -13,6 +13,14 @@
 # Inputs (play or include vars): storage_provider_action, storage_provider_tiers,
 # storage_provider_backend_connections, tenant_name.
 
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      tenant_name '{{ tenant_name }}' is not a valid DNS label.
+      Must be 1-63 lowercase alphanumeric characters or hyphens,
+      cannot start or end with a hyphen.
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
 - name: Reset provider role outputs from previous invocations
   ansible.builtin.set_fact:
     storage_provider_tenant_config: {}

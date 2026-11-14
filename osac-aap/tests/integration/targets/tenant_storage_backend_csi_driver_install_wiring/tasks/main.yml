@@ -29,12 +29,12 @@
     # boundary. `environment:` is a stricter trap than vars: -- it only wraps
     # module subprocess execution, so it never affects lookup('env', ...)
     # calls at all (those read the controller process's real OS environment
-    # directly), even within the SAME play. vast_storage_config_namespace's
+    # directly), even within the SAME play. storage_provider_config_namespace's
     # default is exactly such a lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
     # expression, so an `environment:` block setting that var name is silently
     # a no-op -- discovered via this test's own hub Secret creation failing
     # with "Namespace is required for v1.Secret" (an empty
-    # vast_storage_config_namespace) despite the (ineffective) environment:
+    # storage_provider_config_namespace) despite the (ineffective) environment:
     # block appearing to set it.
     - name: Set vast_storage_* config as cross-play facts
       ansible.builtin.set_fact:
@@ -42,7 +42,7 @@
         vast_storage_vip_pool_name: "osac-test-pool"
         vast_storage_vip_pool_ip_ranges: '[["10.0.0.10","10.0.0.50"]]'
         vast_storage_vip_pool_subnet_cidr: "24"
-        vast_storage_config_namespace: "osac-system"
+        storage_provider_config_namespace: "osac-system"
         csi_driver_install_enabled: true
         csi_driver_install_lvms_storage_class_enabled: true
     - name: Delete any pre-existing hub Secret (clean slate)

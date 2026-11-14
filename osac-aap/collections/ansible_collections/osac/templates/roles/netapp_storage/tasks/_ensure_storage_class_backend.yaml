@@ -297,7 +297,7 @@
       when: not (_netapp_is_shared_tbc | bool)
       no_log: true
 
-    # Resolve the CA bundle from netapp_storage_ca_bundle_path to pass as TBC
+    # Resolve the CA bundle from storage_provider_ca_bundle_path to pass as TBC
     # spec.trustedCACertificate (base64 of PEM) when netapp_storage_validate_certs
     # is enabled. When netapp_storage_validate_certs is false, omit
     # trustedCACertificate so Trident does not reject self-signed/expired lab certs.
@@ -305,7 +305,7 @@
       ansible.builtin.set_fact:
         _trusted_ca_b64: >-
           {% if netapp_storage_validate_certs | bool -%}
-          {% set _ca_pem = lookup('file', netapp_storage_ca_bundle_path, errors='ignore') | default('', true) -%}
+          {% set _ca_pem = (lookup('file', storage_provider_ca_bundle_path, errors='ignore') | default('', true)) if (storage_provider_ca_bundle_path is defined and (storage_provider_ca_bundle_path | string | length > 0)) else '' -%}
           {{ (_ca_pem | b64encode) if (_ca_pem | length > 0) else '' }}
           {%- else -%}
           {{ '' }}
@@ -316,7 +316,7 @@
     - name: Fail when certificate validation is enabled without a CA bundle
       ansible.builtin.fail:
         msg: >-
-          Certificate validation is enabled, but netapp_storage_ca_bundle_path is
+          Certificate validation is enabled, but storage_provider_ca_bundle_path is
           missing, unreadable, or empty. Provide a CA bundle or explicitly
           disable validation with NETAPP_VALIDATE_CERTS=false.
       when: >-

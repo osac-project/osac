@@ -138,7 +138,7 @@ spec:
         - name: resolve
           # Same image build-helm-chart-oci-ta's own "package-and-push" step
           # uses -- already has git.
-          image: quay.io/konflux-ci/tools@sha256:2112b51ba80d1041c120c32b67b871d371fde4e5775b32a3c7bf01a2f9ec0964
+          image: quay.io/konflux-ci/tools@sha256:bb162e0bc0cee9100e59ee97bfa65b16c530a56ca2e322cbb8b8f4edbf5c58b7
           env:
           - name: TRIGGER_REF
             value: $(params.trigger-ref)

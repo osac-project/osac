@@ -29,6 +29,12 @@ on:
         description: The pull request number
         required: true
         type: string
+      tier:
+        description: >-
+          "full" when the VMaaS sanity + regression variant started this run, empty for sanity tests
+        required: false
+        type: string
+        default: ""
       # The decision sends these two with every suite. They are not used: `verify` reads the author and association from
       # the pull request, so a dispatch cannot claim to be a member.
       fork-pr-author:
@@ -57,12 +63,13 @@ jobs:
 
   # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
   vmaas:
-    needs: [verify]
+    needs: verify
     permissions:
       contents: read
       id-token: write
     uses: ./.github/workflows/e2e-vmaas-full-install.yml
     with:
+      tier: ${{ inputs.tier }}
       repo: ${{ inputs.repo }}
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}

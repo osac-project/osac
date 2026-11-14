@@ -341,6 +341,10 @@ unit-tests-osac-metering-adapters:
   - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering-schema:
   - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
+# The selector policy tests read this repository's workflow callers and the
+# companion runner/decision implementations used by those callers.
+unit-tests-e2e-policy:
+  - '{.github/AGENTS.md,.github/CI.md,.github/ci-tests.yml,.github/e2e-policy.yml,.github/filters/ci-filters.yml,.github/workflows/e2e-*.yml,.github/workflows/tests.yml,.github/actions/setup-python/**,pyproject.toml,tests/e2e/vmaas/test_disabled_services.py,tests/e2e/vmaas/test_self_subject_access_review.py,tests/unit/_workflow_selector.py,tests/unit/test_caas_ci_suite_policy.py,tests/unit/test_caas_full_variant.py}'
 # The osac chart's unit tests, offline preflight rendering, and stubbed Kind runner tests, plus the metering
 # chart's reader-grant suites and the infra chart's Kafka exporter suites. Preflight rendering also covers the
 # osac-aap and osac-csi-driver hook Jobs.

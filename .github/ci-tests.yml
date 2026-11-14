@@ -48,6 +48,10 @@
   kind: ui-unit
   # not `code`: that filter leaves osac-ui out on purpose, so an osac-ui-only change runs just this leg
   filters: [ui]
+- id: Unit tests (E2E workflow policy)
+  group: unit
+  kind: e2e-workflow-policy
+  filters: [unit-tests-e2e-policy]
 - id: Unit tests (osac-installer)
   group: unit
   kind: helm-unit

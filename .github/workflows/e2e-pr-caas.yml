@@ -64,7 +64,7 @@ jobs:
 
   # Named after the suite id of .github/e2e-policy.yml: the line of the suite follows the deepest job of this run.
   caas:
-    needs: [verify]
+    needs: verify
     permissions:
       contents: read
       id-token: write

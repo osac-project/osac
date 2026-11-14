@@ -39,23 +39,27 @@ that, which can take a few minutes, without holding the queue. Only the first fa
 running are cancelled, so a second failure shows on the next attempt. Workflows that provide no required check (CodeQL,
 dependency review) do not stop an entry. When every suite passed, `result` writes `E2E` as passed.
 
-## Optional: CaaS regression tests on a pull request
+## Optional: full regression tests on a pull request
 
-A pull request gets the CaaS sanity tests (`tests/e2e/caas/sanity`); the regression tests (`tests/e2e/caas/regression`) run
-every 5 hours on `main`. To try a new or changed regression test before it merges, start CaaS with both: check
-**CaaS Full Install · sanity + regression** in the E2E comment of the pull request (any member of the organization, any
-approval state), or comment `/test caas-full`. It is a second box of the CaaS suite, not a suite of its own: the same job
-and the same line, `E2E / CaaS Full Install` (which then says `· full`), so the required `E2E` check counts it exactly
-like the CaaS suite, and a CaaS run that passed this way satisfies it. It runs the same tests as the schedule (sanity and
-regression, with the CaaS references).
+A pull request and merge queue entry get the sanity tests for VMaaS, CaaS, and BMaaS. The scheduled jobs run sanity and
+regression every 5 hours on `main`, with each service's applicable reference tests. BMaaS runs its full service root
+serially (`-n 0`), including sanity, regression, serial, and reference-marked tests. To validate a new or changed
+regression test before it merges, select **<service> Full Install · sanity + regression** in the E2E comment or comment
+`/test vmaas-full`, `/test caas-full`, or `/test bmaas-full`. The full selection uses the same suite job and check line as
+the sanity selection, and it runs the same cohort as the service's schedule.
 
-- Asking for the same thing while it runs does nothing. Asking for the other version of CaaS while one runs (the sanity
-  box while the full one runs, or the other way round) stops that run and starts the one asked for.
+Scheduled runs are non-gating and send a Slack notification on failure. `wg-infra` owns workflow and runner failures; the
+working group for the affected service owns test failures and their follow-up. The expanded BMaaS schedule's duration and
+overlap behavior still need to be confirmed from a full run; the workflow does not currently serialize it against other
+scheduled suites.
+
+- Asking for the same thing while it runs does nothing. Asking for the other tier while one runs stops that run and starts
+  the tier requested.
 - A suite asked for by name runs again whatever it ended with; the bare `/test` only starts what has not passed.
-- The decision never chooses it, so a pull request still gets the CaaS sanity tests alone by default, and the merge queue
-  does not run it. VMaaS and BMaaS already run their regression tests on every pull request that needs their suite.
-- In the policy it is `e2e-caas-full` (`variant_of: caas`, `tier: full`); the decision starts `e2e-pr-caas.yml` with the input
-  `tier` (`full`), and that workflow passes it to the wrapper (`e2e-caas-full-install.yml`, input `tier`).
+- The decision never chooses a full variant, and the merge queue has no full-variant jobs. Automatic runs remain sanity
+  only.
+- Each policy variant uses `variant_of: <service>` and `tier: full`; the service's PR workflow passes the tier to its
+  full-install wrapper.
 
 ## Optional: VMaaS Netris
 

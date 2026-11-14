@@ -36,6 +36,12 @@ on:
         required: false
         type: string
         default: ""
+      tier:
+        description: >-
+          Which tests to run on the commit: empty for sanity, or "full" for sanity and regression together
+        required: false
+        type: string
+        default: ""
     secrets:
       # Passed by a caller (the merge queue, for its ci-observe capture).
       # Empty when the workflow runs on its own schedule; a run without the
@@ -74,7 +80,7 @@ on:
         required: false
         default: ""
       test-marker:
-        description: "pytest -m marker expression (empty uses BMaaS and common reference tests)"
+        description: "pytest -m marker expression. Empty selects the marker matching test-suite."
         required: false
         default: ""
       test-infra-ref:
@@ -90,19 +96,29 @@ jobs:
       id-token: write
     uses: osac-project/osac-test-infra/.github/workflows/e2e-bmaas-full-install.yml@main
     with:
-      # PR/merge_group: full bmaas service suite. Schedule: serial (-n 0,
-      # inventory exhaust). workflow_dispatch: honor input, else sanity.
+      # PR/merge queue: service root with the sanity marker. Schedule: full
+      # service suite, including serial and reference coverage. The service
+      # root forces -n 0 in tests/e2e/conftest.py. Manual: selected tier.
       test-suite: >-
         ${{
-          inputs.test-suite != '' && inputs.test-suite ||
           inputs.sha != '' && 'bmaas' ||
-          github.event_name == 'schedule' && 'bmaas/serial' ||
+          github.event_name == 'schedule' && 'bmaas' ||
+          inputs.test-suite != '' && inputs.test-suite ||
           'bmaas/sanity'
         }}
       # The generic BMaaS suite selects tests/e2e/bmaas. Netris networking
       # tests live under tests/e2e/networking/bmaas and use their own workflow.
       test-filter: ${{ inputs.test-filter || '' }}
-      test-marker: ${{ inputs.test-marker || 'sanity or regression or serial or requires_bmaas or reference_common or reference_networking' }}
+      test-marker: >-
+        ${{
+          inputs.sha != '' && inputs.tier == 'full' && 'sanity or regression or serial or requires_bmaas or reference_common or reference_networking' ||
+          inputs.sha != '' && 'sanity' ||
+          inputs.test-marker != '' && inputs.test-marker ||
+          inputs.test-suite == 'bmaas/regression' && 'regression' ||
+          inputs.test-suite == 'bmaas/serial' && 'serial' ||
+          inputs.test-suite == 'bmaas/sanity' && 'sanity' ||
+          'sanity or regression or serial or requires_bmaas or reference_common or reference_networking'
+        }}
       # osac-installer now lives as a subdirectory of this same monorepo checkout
       # (its Chart.yaml deps resolve fulfillment-service/osac-operator/osac-aap/BMF
       # as ../../../<name> siblings within it), so a PR touching those components

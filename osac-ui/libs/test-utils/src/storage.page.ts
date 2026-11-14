@@ -37,14 +37,63 @@ const storageTierRow = (page: Page, name: string) =>
     .filter({ has: page.getByRole('link', { name, exact: true }) });
 
 const storageTierEmptyState = (page: Page) =>
-  page.getByText('No storage tiers yet. Create one to get started.', { exact: true });
+  page.getByRole('heading', { name: 'No storage tiers found', level: 2 });
+
+const storageTierFilteredEmptyState = (page: Page) =>
+  page.getByRole('heading', { name: 'No storage tiers match your filters', level: 2 });
+
+const storageTierSearchInput = (page: Page) =>
+  page.getByRole('searchbox', { name: 'Search storage tiers', exact: true });
+
+const storageTierSearchActive = async (page: Page): Promise<boolean> => {
+  const urlSearch = new URL(page.url()).searchParams.get('search');
+  if (urlSearch?.trim()) {
+    return true;
+  }
+  const searchInput = storageTierSearchInput(page);
+  if ((await searchInput.count()) === 0) {
+    return false;
+  }
+  return (await searchInput.inputValue()).trim().length > 0;
+};
+
+const clearStorageTierSearch = async (page: Page): Promise<void> => {
+  if (!(await storageTierSearchActive(page))) {
+    return;
+  }
+
+  const clearFilters = page.getByRole('button', { name: 'Clear all filters', exact: true });
+  if ((await clearFilters.count()) > 0) {
+    await clearFilters.first().click();
+  } else {
+    await storageTierSearchInput(page).fill('');
+  }
+
+  await expect
+    .poll(async () => !(await storageTierSearchActive(page)), {
+      timeout: 5_000,
+      message: 'Storage tier search filter did not clear.',
+    })
+    .toBe(true);
+};
 
 const waitForStorageTierList = async (page: Page): Promise<void> => {
+  await page.getByRole('button', { name: 'List view', exact: true }).click();
+  await clearStorageTierSearch(page);
   await expect
     .poll(
-      async () =>
-        (await storageTierTable(page).count()) > 0 ||
-        (await storageTierEmptyState(page).count()) > 0,
+      async () => {
+        if (await storageTierSearchActive(page)) {
+          return false;
+        }
+        if ((await storageTierFilteredEmptyState(page).count()) > 0) {
+          return false;
+        }
+        return (
+          (await storageTierTable(page).count()) > 0 ||
+          (await storageTierEmptyState(page).count()) > 0
+        );
+      },
       { timeout: 15_000, message: 'Storage tier list did not finish loading.' },
     )
     .toBe(true);
@@ -99,6 +148,7 @@ export const openStorageTierListPage = async (page: Page): Promise<void> => {
   const tiersListBreadcrumb = page.getByRole(...StorageTierDetailsPage.tiersListBreadcrumb);
   await expect(tiersListBreadcrumb).toBeVisible();
   await tiersListBreadcrumb.click();
+  await page.getByRole('button', { name: 'List view', exact: true }).click();
   await expect(storageTierTable(page)).toBeVisible();
 };
 

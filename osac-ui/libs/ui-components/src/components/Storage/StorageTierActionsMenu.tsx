@@ -5,6 +5,7 @@ import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v
 
 import type { StorageTier } from '@osac/types/private';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
+import { storageTierDetailsPath } from '@osac/ui-components/components/Storage/utils';
 
 import StorageTierDeleteConfirmModal from './StorageTierDeleteConfirmModal';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -44,9 +45,10 @@ const StorageTierActionsMenu = ({ tier }: StorageTierActionsMenuProps) => {
         popperProps={{ position: 'right' }}
       >
         <DropdownList>
-          <DropdownItem
-            onClick={() => navigate(`/admin/infrastructure/storage/tiers/${tier.id}/edit`)}
-          >
+          <DropdownItem onClick={() => navigate(storageTierDetailsPath(tier.id))}>
+            {t('View details')}
+          </DropdownItem>
+          <DropdownItem onClick={() => navigate(`${storageTierDetailsPath(tier.id)}/edit`)}>
             {t('Edit')}
           </DropdownItem>
           <DeleteResourceButton

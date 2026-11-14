@@ -1,30 +1,62 @@
-import { useMemo } from 'react';
-import { Alert, Stack, StackItem } from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import {
+  Alert,
+  Button,
+  EmptyState,
+  EmptyStateBody,
+  Gallery,
+  GalleryItem,
+  Stack,
+  StackItem,
+  Toolbar,
+  ToolbarContent,
+  ToolbarGroup,
+  ToolbarItem,
+} from '@patternfly/react-core';
 
 import { StorageBackend, StorageBackends, StorageTiers } from '@osac/types/private';
 import { cel } from '@osac/ui-components/api/cel';
 import { useListResource } from '@osac/ui-components/api/use-resource';
+import ListPage from '@osac/ui-components/components/Page/ListPage';
+import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
+import ListPageToolbar from '@osac/ui-components/components/Page/ListPageToolbar';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
-import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
-
-import ListPage from '../../components/Page/ListPage';
-import ListPageBody from '../../components/Page/ListPageBody';
-import StorageTierActionsMenu from '../../components/Storage/StorageTierActionsMenu';
+import DebounceSearchInput from '@osac/ui-components/components/Primitives/DebounceSearchInput';
+import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
+import { uniqueBackendIds } from '@osac/ui-components/components/Storage/storageTierBackendResolution';
+import StorageTierCard from '@osac/ui-components/components/Storage/StorageTierCard';
+import { StorageTiersTable } from '@osac/ui-components/components/Storage/StorageTiersTable';
 import {
-  protocolLabel,
-  uniqueBackendIds,
-} from '../../components/Storage/storageTierBackendResolution';
-import { StorageTierStatusLabel } from '../../components/Storage/StorageTierStatusLabel';
-import { SubtleContent } from '../../components/SubtleContent/SubtleContent';
-import { useTranslation } from '../../hooks/useTranslation';
+  STORAGE_TIERS_LIST_PATH,
+  buildStorageTierListFilter,
+} from '@osac/ui-components/components/Storage/utils';
+import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter';
+import { useViewType } from '@osac/ui-components/hooks/use-view-type';
+import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
+
+const STORAGE_TIERS_VIEW_KEY = 'storage-tiers';
 
 export const StorageTiersListPage = () => {
   const { t } = useTranslation();
+  const [, setSearchParams] = useSearchParams();
+  const [search, setSearch] = usePageFilter(SEARCH_PARAM);
+  const [viewType] = useViewType(STORAGE_TIERS_VIEW_KEY);
+  const [searchResetKey, setSearchResetKey] = useState(0);
 
-  const { data: tiers, isLoading, error } = useListResource(StorageTiers);
+  const filter = useMemo(() => buildStorageTierListFilter(search.trim()), [search]);
 
-  const backendIds = useMemo(() => uniqueBackendIds(tiers?.items || []), [tiers?.items]);
+  const { data, isLoading, error } = useListResource(StorageTiers, { filter });
+
+  const { data: totalsData, error: totalsError } = useListResource(StorageTiers, {
+    limit: 0,
+  });
+
+  const items = useMemo(() => data?.items ?? [], [data?.items]);
+  const totalItems = totalsData?.total ?? 0;
+  const hasTotals = totalsData !== undefined && !totalsError;
+
+  const backendIds = useMemo(() => uniqueBackendIds(items), [items]);
 
   const { data: backends, error: backendsError } = useListResource(
     StorageBackends,
@@ -37,85 +69,123 @@ export const StorageTiersListPage = () => {
     [backends?.items],
   );
 
-  const protocolLabels = protocolLabel(t);
+  const isFiltered = Boolean(search);
+  const showEmptyState = !isLoading && !error && items.length === 0;
+
+  const clearAllFilters = () => {
+    setSearchResetKey((key) => key + 1);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete(SEARCH_PARAM);
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
+  const emptyState =
+    totalItems === 0 && !isFiltered ? (
+      <EmptyState titleText={t('No storage tiers found')} headingLevel="h2">
+        <EmptyStateBody>{t('No storage tiers are available yet.')}</EmptyStateBody>
+      </EmptyState>
+    ) : (
+      <EmptyState titleText={t('No storage tiers match your filters')} headingLevel="h2">
+        <EmptyStateBody>
+          {t('Try a different search term.')}{' '}
+          <Button variant="link" isInline onClick={clearAllFilters}>
+            {t('Clear all filters')}
+          </Button>
+        </EmptyStateBody>
+      </EmptyState>
+    );
+
+  const filteredText = hasTotals
+    ? items.length === totalItems
+      ? t('{{count}} storage tier', { count: totalItems })
+      : t('{{shown}} of {{count}} storage tier', {
+          shown: items.length,
+          count: totalItems,
+        })
+    : undefined;
 
   return (
     <ListPage
       title={t('Storage Tiers')}
       description={t('Manage storage tiers for this cloud platform.')}
+      error={error}
       actions={
-        <CreateButton service={StorageTiers} to="/admin/infrastructure/storage/tiers/create">
+        <CreateButton service={StorageTiers} to={`${STORAGE_TIERS_LIST_PATH}/create`}>
           {t('Create tier')}
         </CreateButton>
       }
     >
-      <ListPageBody isLoading={isLoading} error={error}>
-        <Stack hasGutter>
-          {Boolean(backendsError) && (
-            <StackItem>
-              <Alert variant="warning" isInline title={t('Unable to resolve backend names')}>
-                {t(
-                  'Backend IDs are shown in place of names until this recovers. This is separate from the normal fallback shown when a tier references a backend that no longer exists.',
-                )}
-              </Alert>
-            </StackItem>
-          )}
-          <StackItem>
-            {!tiers?.items.length ? (
-              <SubtleContent component="p">
-                {t('No storage tiers yet. Create one to get started.')}
-              </SubtleContent>
+      <Stack hasGutter>
+        <StackItem>
+          <ListPageToolbar
+            filteredText={showEmptyState ? undefined : filteredText}
+            isFiltered={isFiltered}
+            onClearAllFilters={clearAllFilters}
+          >
+            <Toolbar>
+              <ToolbarContent>
+                <ToolbarGroup>
+                  <ToolbarItem>
+                    <DebounceSearchInput
+                      placeholder={t('Search storage tiers')}
+                      value={search}
+                      onChange={(v) => setSearch(v)}
+                      resetKey={searchResetKey}
+                      aria-label={t('Search storage tiers')}
+                    />
+                  </ToolbarItem>
+                </ToolbarGroup>
+                <ToolbarGroup align={{ default: 'alignEnd' }}>
+                  <ToolbarItem>
+                    <ViewSwitcher pageKey={STORAGE_TIERS_VIEW_KEY} />
+                  </ToolbarItem>
+                </ToolbarGroup>
+              </ToolbarContent>
+            </Toolbar>
+          </ListPageToolbar>
+        </StackItem>
+        <StackItem>
+          <ListPageBody isLoading={isLoading} error={error}>
+            {showEmptyState ? (
+              emptyState
             ) : (
-              <Table aria-label={t('Storage tiers')} variant="compact">
-                <Thead>
-                  <Tr>
-                    <Th>{t('Name')}</Th>
-                    <Th>{t('Status')}</Th>
-                    <Th>{t('Backends')}</Th>
-                    <Th>{t('Protocol')}</Th>
-                    <Th aria-label={t('Actions')} />
-                  </Tr>
-                </Thead>
-                <Tbody>
-                  {(tiers?.items || []).map((tier) => {
-                    const backendAssociations = tier.spec?.backends ?? [];
-                    return (
-                      <Tr key={tier.id}>
-                        <Td dataLabel={t('Name')}>
-                          <ResourceNameField
-                            resource={tier}
-                            detailsUrl={`/admin/infrastructure/storage/tiers/${tier.id}`}
-                          />
-                        </Td>
-                        <Td dataLabel={t('Status')}>
-                          <StorageTierStatusLabel state={tier.status?.state} />
-                        </Td>
-                        <Td dataLabel={t('Backends')}>
-                          {backendAssociations
-                            .map(
-                              (association) =>
-                                backendsById.get(association.backendId)?.metadata?.name ??
-                                association.backendId,
-                            )
-                            .join(', ')}
-                        </Td>
-                        <Td dataLabel={t('Protocol')}>
-                          {tier.spec?.protocol !== undefined
-                            ? protocolLabels[tier.spec.protocol]
-                            : '—'}
-                        </Td>
-                        <Td dataLabel={t('Actions')} isActionCell>
-                          <StorageTierActionsMenu tier={tier} />
-                        </Td>
-                      </Tr>
-                    );
-                  })}
-                </Tbody>
-              </Table>
+              <Stack hasGutter>
+                {Boolean(backendsError) && (
+                  <StackItem>
+                    <Alert variant="warning" isInline title={t('Unable to resolve backend names')}>
+                      {t(
+                        'Backend IDs are shown in place of names until this recovers. This is separate from the normal fallback shown when a tier references a backend that no longer exists.',
+                      )}
+                    </Alert>
+                  </StackItem>
+                )}
+                <StackItem>
+                  {viewType === 'cards' ? (
+                    <Gallery
+                      hasGutter
+                      minWidths={{ default: '300px' }}
+                      maxWidths={{ default: '1fr' }}
+                    >
+                      {items.map((tier) => (
+                        <GalleryItem key={tier.id}>
+                          <StorageTierCard tier={tier} backendsById={backendsById} />
+                        </GalleryItem>
+                      ))}
+                    </Gallery>
+                  ) : (
+                    <StorageTiersTable tiers={items} backendsById={backendsById} />
+                  )}
+                </StackItem>
+              </Stack>
             )}
-          </StackItem>
-        </Stack>
-      </ListPageBody>
+          </ListPageBody>
+        </StackItem>
+      </Stack>
     </ListPage>
   );
 };

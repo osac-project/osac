@@ -45,6 +45,18 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+// publicClustersOutMapper creates the private to public cluster mapper used by ad-hoc public
+// cluster server constructions in these tests.
+func publicClustersOutMapper() *GenericMapper[*privatev1.Cluster, *publicv1.Cluster] {
+	GinkgoHelper()
+	mapper, err := NewGenericMapper[*privatev1.Cluster, *publicv1.Cluster]().
+		SetLogger(logger).
+		SetStrict(false).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+	return mapper
+}
+
 func seedClusterVersion(ctx context.Context, cv *privatev1.ClusterVersion) {
 	GinkgoHelper()
 	cv = proto.Clone(cv).(*privatev1.ClusterVersion)
@@ -1199,7 +1211,7 @@ var _ = Describe("Private clusters server", func() {
 			}.Build()).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
 
-			publicServer := &ClustersServer{private: server}
+			publicServer := &ClustersServer{private: server, logger: logger, outMapper: publicClustersOutMapper()}
 			_, err = publicServer.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: clusterID}.Build())
 			Expect(err).NotTo(HaveOccurred())
 

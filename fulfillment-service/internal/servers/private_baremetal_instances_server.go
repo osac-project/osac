@@ -530,7 +530,11 @@ func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 			return
 		}
 	}
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.BareMetalInstancesDeleteResponse{Object: object}
 	return
 }
 
@@ -563,7 +567,7 @@ func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Cont
 			s.logger.InfoContext(ctx, "Auto-EIP cleanup: deleted attachment and EIP",
 				slog.String("attachment_id", attachmentID), slog.String("eip_id", eipID))
 		} else {
-			if err = s.lifecycle.deleteAttachment(ctx, attachmentID); err != nil {
+			if _, err = s.lifecycle.deleteAttachment(ctx, attachmentID); err != nil {
 				return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
 			}
 		}

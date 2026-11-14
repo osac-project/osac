@@ -1086,22 +1086,10 @@ func (s *GenericServer[O]) compilePath(path string) (result *masks.Path[O], err 
 }
 
 func (s *GenericServer[O]) Delete(ctx context.Context, request any, response any) error {
-	// Extract object identifier from the request:
-	type requestIface interface {
-		GetId() string
-	}
-	requestMsg := request.(requestIface)
-	requestId := requestMsg.GetId()
-	if requestId == "" {
-		return grpcstatus.Errorf(grpccodes.Internal, "object identifier is mandatory")
-	}
-
 	// Delete the object:
-	_, err := s.dao.Delete().
-		SetId(requestId).
-		Do(ctx)
+	_, err := s.deleteObject(ctx, request)
 	if err != nil {
-		return ConvertDAOErrorToGRPC(err, "delete", requestId)
+		return err
 	}
 
 	// Create the response message:
@@ -1109,6 +1097,34 @@ func (s *GenericServer[O]) Delete(ctx context.Context, request any, response any
 	s.setPointer(response, responseMsg)
 
 	return nil
+}
+
+// deleteObject deletes the object and returns it as it was when the deletion
+// was requested. Objects with pending finalizers are returned with their
+// deletion timestamp set and remain visible until the finalizers clear; the
+// object is archived and removed otherwise.
+func (s *GenericServer[O]) deleteObject(ctx context.Context, request any) (object O, err error) {
+	// Extract object identifier from the request:
+	type requestIface interface {
+		GetId() string
+	}
+	requestMsg := request.(requestIface)
+	requestId := requestMsg.GetId()
+	if requestId == "" {
+		err = grpcstatus.Errorf(grpccodes.Internal, "object identifier is mandatory")
+		return
+	}
+
+	// Delete the object:
+	daoResponse, err := s.dao.Delete().
+		SetId(requestId).
+		Do(ctx)
+	if err != nil {
+		err = ConvertDAOErrorToGRPC(err, "delete", requestId)
+		return
+	}
+	object = daoResponse.GetObject()
+	return
 }
 
 func (s *GenericServer[O]) Signal(ctx context.Context, request any, response any) error {

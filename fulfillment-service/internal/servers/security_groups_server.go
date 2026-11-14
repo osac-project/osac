@@ -327,12 +327,25 @@ func (s *SecurityGroupsServer) Delete(ctx context.Context,
 	privateRequest.SetId(request.GetId())
 
 	// Delegate to private server:
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateSecurityGroup := privateResponse.GetObject()
+	publicSecurityGroup := &publicv1.SecurityGroup{}
+	err = s.outMapper.Copy(ctx, privateSecurityGroup, publicSecurityGroup)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private security group to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process security group")
+	}
+
 	// Create the public response:
 	response = &publicv1.SecurityGroupsDeleteResponse{}
+	response.SetObject(publicSecurityGroup)
 	return
 }

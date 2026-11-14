@@ -1261,6 +1261,44 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(getResponse).To(BeNil())
 		})
 
+		It("keeps a DELETING ComputeInstance unchanged on a repeated delete", func() {
+			createTemplate("general.small")
+
+			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+				Object: privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:       fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Finalizers: []string{"test/hold"},
+					}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+							privatev1.ComputeNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			first, err := server.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			before, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			second, err := server.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(second.GetObject().GetId()).To(Equal(id))
+			Expect(second.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(proto.Equal(first.GetObject(), second.GetObject())).To(BeTrue())
+
+			after, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(before.GetObject(), after.GetObject())).To(BeTrue())
+		})
+
 		It("Handles non-existent object", func() {
 			// Try to get a non-existent object:
 			getResponse, err := server.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{

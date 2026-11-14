@@ -304,7 +304,7 @@ func (s *PrivateExternalIPsServer) Delete(ctx context.Context,
 	}
 	existingExternalIP := getResponse.GetObject()
 	if deleteAlreadyAccepted(existingExternalIP.GetMetadata()) {
-		response = &privatev1.ExternalIPsDeleteResponse{}
+		response = &privatev1.ExternalIPsDeleteResponse{Object: existingExternalIP}
 		return
 	}
 	if isAutomatic(existingExternalIP.GetMetadata()) && !auth.IsControllerServiceAccount(ctx) {
@@ -315,9 +315,10 @@ func (s *PrivateExternalIPsServer) Delete(ctx context.Context,
 	if err = validateNotDefault(ctx, existingExternalIP.GetMetadata().GetLabels(), "external IP"); err != nil {
 		return
 	}
-	err = translateLifecycleError(s.lifecycle.deleteExternalIP(ctx, id))
+	deletedExternalIP, lifecycleErr := s.lifecycle.deleteExternalIP(ctx, id)
+	err = translateLifecycleError(lifecycleErr)
 	if err == nil {
-		response = &privatev1.ExternalIPsDeleteResponse{}
+		response = &privatev1.ExternalIPsDeleteResponse{Object: deletedExternalIP}
 	}
 	return
 }

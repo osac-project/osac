@@ -450,12 +450,25 @@ func (s *ComputeInstancesServer) Delete(ctx context.Context,
 	privateRequest.SetId(request.GetId())
 
 	// Delegate to private server:
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateComputeInstance := privateResponse.GetObject()
+	publicComputeInstance := &publicv1.ComputeInstance{}
+	err = s.outMapper.Copy(ctx, privateComputeInstance, publicComputeInstance)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private compute instance to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process compute instance")
+	}
+
 	// Create the public response:
 	response = &publicv1.ComputeInstancesDeleteResponse{}
+	response.SetObject(publicComputeInstance)
 	return
 }

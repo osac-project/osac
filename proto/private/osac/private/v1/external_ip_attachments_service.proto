@@ -104,7 +104,7 @@ message ExternalIPAttachmentsDeleteRequest {
   string id = 1;
 }
 
-message ExternalIPAttachmentsDeleteResponse {}
+message ExternalIPAttachmentsDeleteResponse { ExternalIPAttachment object = 1; }
 
 message ExternalIPAttachmentsSignalRequest {
   option (cleanapi.message).private = true;
@@ -150,7 +150,7 @@ service ExternalIPAttachments {
 
   // Deletes an external IP attachment. Triggers the detach workflow to unbind the ExternalIP from the target.
   rpc Delete(ExternalIPAttachmentsDeleteRequest) returns (ExternalIPAttachmentsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/external_ip_attachments/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/external_ip_attachments/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

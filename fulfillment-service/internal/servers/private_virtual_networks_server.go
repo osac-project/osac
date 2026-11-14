@@ -189,7 +189,7 @@ func (s *PrivateVirtualNetworksServer) Delete(ctx context.Context,
 		return nil, err
 	}
 	if deleteAlreadyAccepted(virtualNetwork.GetMetadata()) {
-		return &privatev1.VirtualNetworksDeleteResponse{}, nil
+		return &privatev1.VirtualNetworksDeleteResponse{Object: virtualNetwork}, nil
 	}
 	if err = validateNotDefault(ctx, virtualNetwork.GetMetadata().GetLabels(), "virtual network"); err != nil {
 		return
@@ -222,7 +222,11 @@ func (s *PrivateVirtualNetworksServer) Delete(ctx context.Context,
 	if err = markDeleting(ctx, s.generic.dao, virtualNetwork); err != nil {
 		return
 	}
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.VirtualNetworksDeleteResponse{Object: object}
 	return
 }
 

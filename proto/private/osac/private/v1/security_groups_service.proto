@@ -109,7 +109,7 @@ message SecurityGroupsDeleteRequest {
   string id = 1;
 }
 
-message SecurityGroupsDeleteResponse {}
+message SecurityGroupsDeleteResponse { SecurityGroup object = 1; }
 
 message SecurityGroupsSignalRequest {
   option (cleanapi.message).private = true;
@@ -155,7 +155,7 @@ service SecurityGroups {
 
   // Deletes a security group.
   rpc Delete(SecurityGroupsDeleteRequest) returns (SecurityGroupsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/security_groups/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/security_groups/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

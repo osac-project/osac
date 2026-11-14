@@ -244,11 +244,25 @@ func (s *ExternalIPsServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.ExternalIPsDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateExternalIP := privateResponse.GetObject()
+	publicExternalIP := &publicv1.ExternalIP{}
+	err = s.outMapper.Copy(ctx, privateExternalIP, publicExternalIP)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private external IP to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process external IP")
+	}
+
+	// Create the public response:
 	response = &publicv1.ExternalIPsDeleteResponse{}
+	response.SetObject(publicExternalIP)
 	return
 }

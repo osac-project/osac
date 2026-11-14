@@ -148,7 +148,8 @@ ensure_inotify_instances() {
              2>&1 >/dev/null) || write_failed=true
     fi
     if [[ "${write_failed}" == true ]]; then
-        local normalized="${diagnostic,,}" category="write command failed"
+        local normalized category="write command failed"
+        normalized=$(printf '%s' "${diagnostic}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
         if [[ "${use_sudo}" == true && "${normalized}" == *"sudo: a password is required"* ]]; then
             category="passwordless sudo required; prepare the host manually if not authorized"
         elif [[ "${use_sudo}" == true && "${normalized}" == *"unable to initialize policy plugin"* ]]; then

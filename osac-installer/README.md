@@ -343,6 +343,30 @@ loading checks the required tools and cluster availability without requiring
 KVM or the virtualization install tools. `CONTAINER_TOOL` selects the runtime
 unless `KIND_EXPERIMENTAL_PROVIDER` is set.
 
+Mac `dev-full` also prepares a separate ARM64 Fedora guest disk from a pinned
+upstream container-disk digest. Its boot configuration includes `pci=nomsi` to
+avoid the PCI interrupt hang seen with nested virtualization on Apple Silicon.
+The build customizes the disk offline using a software-emulated libguestfs
+appliance; it does not need working nested KVM. The first build downloads the
+image and customization tools. Later builds reuse the container build cache.
+
+`kind-build-load-images` and `install-devstack` both prepare and load
+`localhost/osac-dev/fedora-arm64:pci-nomsi-v1` into every Kind node. CDI's node
+pull method uses the loaded image with its `IfNotPresent` policy. The local
+catalog registers it as `fedora-mac-arm64`, advertising ARM64 only, and makes it
+the editable default for `linux-vm`. Rerunning the catalog hook updates this
+default on an existing deployment; it does not replace existing VM disks.
+To refresh only the development guest image:
+
+```bash
+make kind-prepare-fedora-image PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+This preparation runs only for Apple Silicon `kind/dev-full`. Linux development
+and product deployments keep their existing images. Custom images selected by
+the user are not modified. A running guest still requires nested KVM support
+from the Mac container runtime; the image workaround does not provide it.
+
 #### Netris + CUDN EVPN CI overlays
 
 Netris networking is an overlay on the service profile, not a separate
@@ -481,6 +505,18 @@ export KIND_EXPERIMENTAL_PROVIDER=podman
 make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
+On Apple Silicon, the container runtime's Linux VM may not expose `/dev/kvm`.
+In that case the launcher remains Pending with
+`Insufficient devices.kubevirt.io/kvm`. Check the runtime before testing VMs:
+
+```bash
+podman machine ssh -- ls -l /dev/kvm
+```
+
+The runtime must expose working nested virtualization. KubeVirt v1.9.1 on
+ARM64 permits only the `host-passthrough` CPU model, so enabling software
+emulation does not provide a working fallback for that version.
+
 `dev-full` installs TopoLVM as the tenant `local` storage backend. Before Kind
 is created, `kind-runtime.sh` prepares a disposable sparse disk (20 GiB by
 default), the `vg1` volume group, and an external `lvmd` process. Set
@@ -524,7 +560,12 @@ The `topolvm-provisioner` StorageClass is not the cluster default. Kind's
 `standard` class remains the default for dev-stack components such as AWX
 PostgreSQL. OSAC registers the existing `local` storage tier. AWX's storage
 templates create a tenant-labeled class for that tier, and the operator passes
-the tenant's resolved class to compute provisioning.
+the tenant's resolved class to compute provisioning. When reusing storage after
+a container-runtime reboot, the setup helper reactivates the existing logical
+volumes after checking that the volume group belongs to its backing file.
+The devstack grants CDI read-only access to Kind's placeholder OpenShift Route
+API. Without that permission, CDI's informer cache cannot synchronize and
+DataVolumes remain without PVCs, leaving VMs in `ErrorPvcNotFound`.
 Local AWX jobs receive `OSAC_STORAGE_CONFIG_NAMESPACE` from the selected OSAC
 namespace so they can find storage config Secrets without a mounted
 service-account namespace file.

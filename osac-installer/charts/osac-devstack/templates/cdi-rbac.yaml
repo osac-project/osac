@@ -1,0 +1,33 @@
+{{- if and .Values.virt.enabled .Values.rbac.create }}
+{{/*
+Kind has a placeholder Route API for OSAC. CDI watches that API when present,
+but its Kubernetes installation omits the OpenShift Route reader permissions.
+Without them CDI's cache never syncs and DataVolumes never get PVCs.
+*/}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "osac-devstack.fullname" . }}-cdi-route-reader
+  labels:
+    {{- include "osac-devstack.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "osac-devstack.fullname" . }}-cdi-route-reader
+  labels:
+    {{- include "osac-devstack.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "osac-devstack.fullname" . }}-cdi-route-reader
+subjects:
+- kind: ServiceAccount
+  name: cdi-sa
+  namespace: cdi
+{{- end }}

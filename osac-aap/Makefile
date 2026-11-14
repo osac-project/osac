@@ -53,6 +53,7 @@ EE_CONTAINER_PLATFORM ?=
 
 EE_PLATFORM_ARGS = $(if $(EE_CONTAINER_PLATFORM),--extra-build-cli-args="--platform=$(EE_CONTAINER_PLATFORM)",)
 
+# ansible-builder accepts a runtime name and resolves its executable via PATH.
 execution-environment-build:
 	uv sync --locked --all-extras --group development
 	@case "$(EE_CONTAINER_PLATFORM)" in \
@@ -65,8 +66,9 @@ execution-environment-build:
 				-f context/Containerfile context; \
 			;; \
 		*) \
+			PATH="$$(dirname "$$(command -v "$(CONTAINER_TOOL)")"):$$PATH" \
 			uv tool run ansible-builder build -vvv \
-				--container-runtime $(CONTAINER_TOOL) \
+				--container-runtime $(notdir $(CONTAINER_TOOL)) \
 				--tag "$(EE_LOCAL_TAG)" \
 				$(EE_PLATFORM_ARGS) \
 				-f "./execution-environment/execution-environment.yaml"; \

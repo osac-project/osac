@@ -25,6 +25,35 @@ Deployments, so infra dependencies can still be starting when
 `make install-osac` begins; the `infra-ready-wait-test` suite guards that
 gap.
 
+## Dev-full virtualization
+
+Dev-full CDI Route permissions are checked by
+`bash scripts/test-dev-full-render.sh`. The Helm contract requires
+exactly `get`, `list`, and `watch` on `routes.route.openshift.io`, bound only to
+`cdi:cdi-sa`, and suppresses these resources when virtualization or RBAC creation
+is disabled. On a deployed Kind dev-full cluster, verify those permissions with
+`kubectl -n cdi auth can-i list routes.route.openshift.io --as=system:serviceaccount:cdi:cdi-sa --all-namespaces`
+and observe a real DataVolume create its PVC. The Route API is an OSAC
+placeholder; this check does not exercise an OpenShift router, guest boot, or
+disk I/O.
+
+The same dev-full render suite checks the ARM VM compatibility policy and its
+`osac.openshift.io/tenant-ref` namespace selector. Deployed admission evidence
+requires a server-side VM update in a real tenant namespace, verifying removal
+of the x86-only SMM and Hyper-V fields. VM boot remains a separate boundary.
+
+Mac dev-full Fedora disk preparation and catalog migration have command-stub
+coverage in `make dev-full-fedora-test`. It checks build/save/load
+ordering, failure propagation and archive cleanup, default versus Mac catalog
+payloads, and an existing catalog item's version-locked disk-default update.
+`bash scripts/test-dev-full-render.sh` checks Mac-only Make wiring,
+the selected image/architecture passed to the seed hook, and unchanged Linux
+and ordinary dev behavior. These checks do not run libguestfs, CDI, or a guest.
+Deployed evidence requires building/loading the prepared image, executing the
+catalog hook, and creating a fresh OSAC VM from `linux-vm`; verify DataVolume
+import, guest-agent connection, and successful guest execution with `pci=nomsi`
+in the kernel command line. Repairing an existing disk does not cover this path.
+
 ## Install preflight (OSAC-6561)
 
 Preflight runs while Helm renders the chart. The unit/render/Kind tiers are

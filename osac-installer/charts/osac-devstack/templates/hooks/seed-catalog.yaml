@@ -56,6 +56,13 @@ spec:
           value: {{ .Values.catalog.internalApiPort | quote }}
         - name: CATALOG_YAML
           value: "/config/catalog-seed.yaml"
+        {{- $disk := first .Values.catalog.diskImages }}
+        - name: DEV_FEDORA_IMAGE_NAME
+          value: {{ required "catalog.diskImages[0].name is required" $disk.name | quote }}
+        - name: DEV_FEDORA_IMAGE_SOURCE
+          value: {{ required "catalog.diskImages[0].sourceRef is required" $disk.sourceRef | quote }}
+        - name: DEV_FEDORA_IMAGE_ARCHITECTURES
+          value: {{ $disk.architecture | default (list "ARCHITECTURE_AMD64" "ARCHITECTURE_ARM64") | toJson | quote }}
         {{- include "osac-devstack.fulfillmentAuthEnv" . | nindent 8 }}
         volumeMounts:
         - name: scripts

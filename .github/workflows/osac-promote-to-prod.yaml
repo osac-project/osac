@@ -74,7 +74,8 @@ on:
           The exact image Snapshot name to promote (e.g.
           osac-release-v0-4-0-attempt1) -- copy this verbatim from the
           "Image Snapshot (for prod promotion)" line in the Slack message
-          osac-release.yaml posted for this release.
+          osac-release.yaml posted for this release. Enter "none" when
+          that line says the release built no image.
         type: string
         required: true
       chart_snapshot:
@@ -107,6 +108,8 @@ jobs:
       image-snapshot: ${{ steps.validate.outputs.image-snapshot }}
       chart-snapshot: ${{ steps.validate.outputs.chart-snapshot }}
       image-ready: ${{ steps.verify.outputs.image-ready }}
+      image-omitted: ${{ steps.validate.outputs.image-omitted }}
+      chart-components: ${{ steps.verify.outputs.chart-components }}
       chart-ready: ${{ steps.verify.outputs.chart-ready }}
     env:
       RELEASE_VERSION: ${{ github.event.inputs.release_version }}
@@ -148,7 +151,17 @@ jobs:
             exit 1
           fi
         }
-        validate_name "${IMAGE_SNAPSHOT_INPUT}" "image" "osac-release"
+        # A release that built no Konflux image has no image Snapshot. That
+        # must be stated explicitly: an input left empty by mistake would
+        # otherwise promote charts with no images behind them.
+        IMAGE_OMITTED=false
+        if [[ "${IMAGE_SNAPSHOT_INPUT}" == "none" ]]; then
+          IMAGE_OMITTED=true
+          IMAGE_SNAPSHOT_INPUT=""
+        else
+          validate_name "${IMAGE_SNAPSHOT_INPUT}" "image" "osac-release"
+        fi
+        echo "image-omitted=${IMAGE_OMITTED}" >> "$GITHUB_OUTPUT"
         validate_name "${CHART_SNAPSHOT_INPUT}" "chart" "osac-charts-release"
         echo "image-snapshot=${IMAGE_SNAPSHOT_INPUT}" >> "$GITHUB_OUTPUT"
         echo "chart-snapshot=${CHART_SNAPSHOT_INPUT}" >> "$GITHUB_OUTPUT"
@@ -164,6 +177,7 @@ jobs:
       id: verify
       env:
         IMAGE_SNAPSHOT: ${{ steps.validate.outputs.image-snapshot }}
+        IMAGE_OMITTED: ${{ steps.validate.outputs.image-omitted }}
         CHART_SNAPSHOT: ${{ steps.validate.outputs.chart-snapshot }}
       run: |
         set -euo pipefail
@@ -267,7 +281,12 @@ jobs:
           fi
         }
 
-        image_snapshot_ok=$(check_snapshot "${IMAGE_SNAPSHOT}" "image" "cloud-extensions-stage")
+        if [[ -n "${IMAGE_SNAPSHOT}" ]]; then
+          image_snapshot_ok=$(check_snapshot "${IMAGE_SNAPSHOT}" "image" "cloud-extensions-stage")
+        else
+          echo "::notice::image_snapshot is \"none\" -- this release built no image, image promotion is skipped" >&2
+          image_snapshot_ok=false
+        fi
         chart_snapshot_ok=$(check_snapshot "${CHART_SNAPSHOT}" "chart" "osac-charts-stage")
         image_plan_ok=$(check_releaseplan "cloud-extensions-prod" "image")
         chart_plan_ok=$(check_releaseplan "osac-charts-prod" "chart")
@@ -290,6 +309,27 @@ jobs:
 
         echo "image-ready=${image_ready}" >> "$GITHUB_OUTPUT"
         echo "chart-ready=${chart_ready}" >> "$GITHUB_OUTPUT"
+
+        # The staged chart Snapshot holds exactly the charts that release
+        # built. Production rebuilds and releases that same set, nothing
+        # else: a chart the release only pinned is already published.
+        chart_components="[]"
+        if [[ "${chart_ready}" == "true" ]]; then
+          chart_components=$(oc get snapshot "${CHART_SNAPSHOT}" -n "${NAMESPACE}" -o json | jq -c '[.spec.components[].name]')
+          if [[ "$(jq 'index("osac-chart") != null' <<<"${chart_components}")" != "true" ]]; then
+            echo "::error::chart Snapshot '${CHART_SNAPSHOT}' does not contain the umbrella chart (osac-chart)" >&2
+            exit 1
+          fi
+        fi
+        # Every component has an image, so a staged chart set with more
+        # than the umbrella means that release built images too.
+        if [[ "${IMAGE_OMITTED}" == "true" && "${chart_ready}" == "true" \
+          && "${chart_components}" != '["osac-chart"]' ]]; then
+          echo "::error::image_snapshot is \"none\", but chart Snapshot '${CHART_SNAPSHOT}' holds component charts (${chart_components}) -- that release built images. Enter its image Snapshot name." >&2
+          exit 1
+        fi
+        echo "chart-components=${chart_components}" >> "$GITHUB_OUTPUT"
+        echo "Charts to promote: ${chart_components}"
 
         if [[ "${image_ready}" != "true" && "${chart_ready}" != "true" ]]; then
           echo "::error::Neither image (${IMAGE_SNAPSHOT}) nor chart (${CHART_SNAPSHOT}) promotion is possible -- see warnings above" >&2
@@ -697,7 +737,7 @@ jobs:
     # Gated on stamp-prod-chart's own explicit tag-pushed output, not its
     # job result -- same reasoning as wait-for-konflux-chart-build's
     # identical gating on stamp-and-release-charts.
-    needs: stamp-prod-chart
+    needs: [resolve-and-verify, stamp-prod-chart]
     if: |
       always() && !cancelled() &&
       needs.stamp-prod-chart.outputs.tag-pushed == 'true'
@@ -724,6 +764,7 @@ jobs:
 
     steps:
     - name: Log in to Konflux cluster
+      if: contains(fromJSON(needs.resolve-and-verify.outputs.chart-components), matrix.component)
       uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
       with:
         openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
@@ -736,6 +777,7 @@ jobs:
     # checkout+rev-parse, since no later step in this job needs the
     # repository checked out at all.
     - name: Wait for chart component's Konflux build
+      if: contains(fromJSON(needs.resolve-and-verify.outputs.chart-components), matrix.component)
       env:
         COMMIT_SHA: ${{ needs.stamp-prod-chart.outputs.commit-sha }}
         COMPONENT: ${{ matrix.component }}
@@ -887,6 +929,7 @@ jobs:
         PYEOF
 
     - name: Upload chart component build fragment
+      if: contains(fromJSON(needs.resolve-and-verify.outputs.chart-components), matrix.component)
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
       with:
         name: konflux-prod-chart-build-${{ matrix.component }}
@@ -898,7 +941,7 @@ jobs:
     # Gated on stamp-prod-chart actually having pushed its tag (not just
     # its job result, same reasoning as the staging pipeline's identical
     # tag-pushed gating) and on wait-for-prod-chart-build having
-    # produced all 11 fragments.
+    # produced a fragment for every chart of the staged release.
     needs: [resolve-and-verify, stamp-prod-chart, wait-for-prod-chart-build]
     if: |
       always() && !cancelled() &&
@@ -914,11 +957,13 @@ jobs:
       release-outcome: ${{ steps.release.outcome }}
     env:
       RELEASE_VERSION: ${{ github.event.inputs.release_version }}
+      CHART_COMPONENTS: ${{ needs.resolve-and-verify.outputs.chart-components }}
 
     steps:
     # One fragment per component, each written by wait-for-prod-chart-
     # build's own matrix row -- a job that succeeded (this job's own
-    # needs: above requires it) produced exactly 11.
+    # needs: above requires it) produced one per chart of the staged
+    # release (resolve-and-verify's chart-components).
     - name: Download chart component build fragments
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
       with:
@@ -933,7 +978,7 @@ jobs:
         namespace: osac-tenant
 
     # Identical logic to trigger-konflux-chart-staging-release's own
-    # step (assemble an override Snapshot from the 11 fragments, wait
+    # step (assemble an override Snapshot from the fragments, wait
     # for its own integration test, then create+poll a Release) --
     # targeting osac-charts-prod instead of osac-charts-stage, and
     # naming the Snapshot/Release off this run's own id/attempt rather
@@ -981,13 +1026,7 @@ jobs:
                 component = json.load(f)
             found[component["name"]] = component
 
-        EXPECTED = {
-            "osac-chart", "osac-operator-chart", "osac-operator-crds-chart",
-            "fulfillment-service-chart", "osac-aap-chart",
-            "bare-metal-fulfillment-operator-chart",
-            "bare-metal-fulfillment-operator-crds-chart", "osac-metering-chart",
-            "osac-csi-driver-chart", "osac-csi-backends-chart", "osac-ui-chart",
-        }
+        EXPECTED = set(json.loads(os.environ["CHART_COMPONENTS"]))
         missing = EXPECTED - found.keys()
         unexpected = found.keys() - EXPECTED
         if missing or unexpected:
@@ -1195,6 +1234,7 @@ jobs:
         SLACK_WEBHOOK_URL: ${{ steps.vault.outputs.webhook-url }}
         VERSION: ${{ github.event.inputs.release_version }}
         IMAGE_READY: ${{ needs.resolve-and-verify.outputs.image-ready }}
+        IMAGE_OMITTED: ${{ needs.resolve-and-verify.outputs.image-omitted }}
         CHART_READY: ${{ needs.resolve-and-verify.outputs.chart-ready }}
         IMAGE_RESULT: ${{ needs.promote-image.result }}
         ALREADY_RELEASED: ${{ needs.stamp-prod-chart.outputs.already-released }}
@@ -1213,6 +1253,14 @@ jobs:
         set -euo pipefail
         IMAGE_TEXT="${IMAGE_RESULT}"
         [[ "${IMAGE_READY}" != "true" ]] && IMAGE_TEXT="skipped (Snapshot or ReleasePlan not found)"
+        # A release that built no image has nothing to promote on this
+        # side; that is not an incomplete promotion.
+        IMAGE_SUCCESS=false
+        [[ "${IMAGE_TEXT}" == "success" ]] && IMAGE_SUCCESS=true
+        if [[ "${IMAGE_OMITTED}" == "true" ]]; then
+          IMAGE_TEXT="not required (this release built no image)"
+          IMAGE_SUCCESS=true
+        fi
         CHART_TEXT="${CHART_RESULT}"
         [[ "${CHART_READY}" != "true" ]] && CHART_TEXT="skipped (Snapshot or ReleasePlan not found)"
         # stamp-prod-chart has continue-on-error: true, so its own
@@ -1239,7 +1287,7 @@ jobs:
         fi
 
         HEADER_TEXT=":warning: ${VERSION} - Production promotion incomplete"
-        if [[ "${IMAGE_TEXT}" == "success" && "${CHART_SUCCESS}" == "true" ]]; then
+        if [[ "${IMAGE_SUCCESS}" == "true" && "${CHART_SUCCESS}" == "true" ]]; then
           HEADER_TEXT=":white_check_mark: ${VERSION} - Promoted to production"
         elif [[ "${IMAGE_TEXT}" == "failure" ]]; then
           HEADER_TEXT=":x: ${VERSION} - Production promotion failed"

@@ -128,6 +128,10 @@ release_version=<version>`), selecting the branch/ref you want to release
 from GitHub's own "Use workflow from" selector — there is no separate
 ref input.
 
+Only one release runs per branch at a time; a second dispatch waits for the
+first to finish. GitHub keeps a single waiting run per branch, so a third
+dispatch replaces the one already waiting.
+
 **Required input:** `release_version` — `X.Y.Z` or `X.Y.Z-rc.N` in the
 dispatched branch's release line (e.g. `0.5.0-rc.2`, no leading `v`), higher
 than the line's latest umbrella version. The run fails immediately (in the `prepare` job,
@@ -278,17 +282,41 @@ re-deriving a new branch from the tag.
 ## Staging release (Konflux)
 
 Every release run also triggers a separate, independent build through
-Konflux, Red Hat's internal build/release system. `osac-release.yaml`'s
-final job, `trigger-konflux-staging-release`, waits for a fixed set of
-eight Konflux image components — `fulfillment-service`, `osac-operator`,
-`osac-csi-driver`, `bare-metal-fulfillment-operator`, `osac-ui`,
-`metering-service`, `metering-m360-adapter`, and `metering-echo-adapter`
-— to finish building and pass their policy gates, then releases that
-whole set together to the **staging** registry
+Konflux, Red Hat's internal build/release system. Only what the run itself
+builds is released through it:
+
+- **Images** of the components bumped in this run, out of the nine Konflux
+  image components (`fulfillment-service`, `osac-operator`, `osac-aap`,
+  `osac-csi-driver`, `bare-metal-fulfillment-operator`, `osac-ui`, and
+  `osac-metering`'s `metering-service`, `metering-m360-adapter` and
+  `metering-echo-adapter`).
+- **Charts** of those same components, plus the umbrella chart, which is
+  new in every release.
+
+`trigger-konflux-staging-release` waits for those builds to finish and pass
+their policy gates, then releases them together to the **staging** registry
 (`registry.stage.redhat.io`, under `cloud-extensions/<component>-rhel10`).
-This wait set is fixed regardless of what `component_versions` actually
-bumped this run; `osac-aap` has no Konflux image component yet and is
-never included.
+A release that bumps no component creates no image Snapshot; the Slack
+message then gives `none` as the image Snapshot, which is what
+`osac-promote-to-prod.yaml`'s `image_snapshot` input expects in that case.
+
+A version is never built twice, so a pinned version must already be on the
+registry, and its tag alone does not prove that: a Konflux build or a
+staging release can fail and leave the version tags behind. Each staging job
+therefore records what it released with a `konflux-staged/<name>-v<version>`
+tag (image and chart component names). A release that pins a version with no
+such record stops in `prepare` and lists it. Either release a new version of
+that component, or, if the version is confirmed on the staging registry,
+push the missing `konflux-staged/` tag by hand. Versions released before
+this record existed need that tag pushed once.
+
+A pinned component is not released again: its version is already on the
+registry from the release that built it. Konflux still starts a build for
+every component on the release tag, but a pinned component's rebuild has no
+version of its own and would be published as `dev`, and a pinned chart
+would be pushed again over its released version, so neither is released.
+This means a pinned version is in production only if the release that built
+it was promoted — promote stable releases in order.
 
 A separate, manually-dispatched workflow, `osac-promote-to-prod.yaml`,
 promotes an already-staged release to `registry.redhat.io` once it's

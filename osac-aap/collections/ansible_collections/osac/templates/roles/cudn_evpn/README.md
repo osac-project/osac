@@ -73,8 +73,9 @@ Every object is named from an API ID and carries
     symmetric IRB) and uses network + 2 as its management-port address; both
     are excluded from VM allocation. The fabric need not serve the VM
     gateway; the Netris V-Net is also configured to serve it;
-  - has `reservedSubnets` = the Subnet minus `ipam.overlay_ipv4_cidrs`, as the fewest CIDRs, so VMs get addresses only from the overlay
-    range (at most 25 entries; more fails as final);
+  - serves VM DHCP from `overlay_ipv4_cidrs`. `reservedSubnets` is every part
+    of the Subnet outside those ranges and the infrastructure addresses, as
+    the fewest CIDRs (at most 25 entries; more fails as final);
   - carries the label `evpn: "true"` (selected by the installer's
     RouteAdvertisements `osac-evpn`) and `evpn.vtep: tenant-vtep`,
     `macVRF {vni: l2_vni, routeTarget: "0:<l2_vni>"}`,
@@ -147,10 +148,13 @@ service account on the hub cluster.
 
 ## Known gaps
 
-- **DNS.** A VM on a primary Layer2 UDN gets the ClusterIP of the cluster-wide
-  DNS Service (`dns-service-namespace` / `dns-service-name` of ovnkube) as its
-  DHCP `dns_server`. The CUDN has no DNS field and OSAC configures no
-  per-resource DNS.
+- **DNS.** OVN-Kubernetes's DHCP response gives a VM the ClusterIP of the
+  cluster-wide DNS Service (`dns-service-namespace` / `dns-service-name` of
+  ovnkube). Netris enables DHCP over `physical_ipv4_cidrs` when the Fabric
+  Manager creates the Subnet's V-Net and that range is non-empty, and repairs
+  it on rerun; a physical attachment also enables it. Netris cannot filter
+  offers by MAC, so a physical-range offer can reach VMs; whether a VM accepts
+  it remains an open lab check.
 - **ICMP.** `icmp` rules fail `create_security_group` as final; `all` for the
   CIDR allows ICMP with everything else.
 - **Claim during the owner's delete.** A Subnet created while the owner Subnet
@@ -159,7 +163,13 @@ service account on the hub cluster.
   the OSAC Subnet CR (contract Edge case "Kubernetes Manager hub network").
 - **Rogue DHCP replies.** The baseline accepts UDP 68 from any source in the
   VirtualNetwork, so a VM could answer another VM's DHCP within the same
-  VirtualNetwork.
+  VirtualNetwork. Netris DHCP also serves any MAC on the EVPN segment. Its
+  physical range is outside OVN's overlay pool, but which DHCP offer a VM
+  accepts remains a data-plane lab check.
+- **Owned CUDN drift.** `create_subnet` fails when the owned CUDN's network or
+  address layout differs from the Subnet input. It does not mutate a network
+  that workloads may be using; reconcile the Subnet and CUDN through the
+  dependency-ordered delete and recreate flow.
 - **Node reachability.** With a SecurityGroup that allows all egress, a VM can
   ping the node that hosts it. Node services stay out of reach: see
   [networking decisions](../../../../../../../docs/agent-context/networking-decisions.md).

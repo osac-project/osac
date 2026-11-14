@@ -48,6 +48,8 @@ in `osac-aap/Makefile`.
   Netris is a stateful in-process fake; CUDN/VTEP CRDs are minimal schemas
   with fixture-supplied readiness — no OVN, real CRD validation, data plane or
   AAP server. The CUDN target refuses pre-existing CUDN/VTEP CRDs.
+  The Netris fake covers EVPN physical-range DHCP creation and repair; live
+  DHCP leases and port behavior remain [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 - `config_as_code_job_templates`, `config_as_code_pod_specs`: rendered AAP
   template/pod configuration only; no controller, Kubernetes objects or live
   provider.

@@ -1,6 +1,6 @@
 ---
 # Cases 5 and the attachment part of 10: physical attachment on an EVPN Subnet
-# moves the host port, switches DHCP on over the physical range, query_dhcp_lease
+# moves the host port, keeps DHCP on over the physical range, query_dhcp_lease
 # finds the lease, delete moves the port back. Overlay attachments are no-ops.
 - name: Attachment - start with a host, a VirtualNetwork and an EVPN Subnet
   ansible.builtin.include_tasks: admin.yaml
@@ -47,8 +47,12 @@
     nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
 
 - name: Attachment - nothing was written for the unknown interface
+  vars:
+    _vnet: "{{ nf_state.vnets | selectattr('name', 'equalto', nf_sn_name) | first }}"
   ansible.builtin.assert:
-    that: nf_writes == []
+    that:
+      - nf_writes == []
+      - _vnet.gateways[0].dhcpEnabled
     quiet: true
 
 - name: Attachment - a Subnet without a physical range cannot serve DHCP (final, no write)
@@ -83,8 +87,8 @@
       - _prov.ports | default([]) | length == 0
       - _vnet.gateways[0].prefix == '10.20.1.1/24'
       - _vnet.gateways[0].dhcpEnabled
-      - _vnet.gateways[0].dhcpStartIp == '10.20.1.8'
-      - _vnet.gateways[0].dhcpEndIp == '10.20.1.31'
+      - _vnet.gateways[0].dhcpStartIp == '10.20.1.192'
+      - _vnet.gateways[0].dhcpEndIp == '10.20.1.254'
     quiet: true
 
 - name: Attachment - a rerun of the apply writes nothing
@@ -101,7 +105,7 @@
     that: nf_writes == []
     quiet: true
 
-- name: Attachment - a rerun of create_subnet keeps the DHCP the attachment switched on
+- name: Attachment - a rerun of create_subnet keeps the physical DHCP enabled
   ansible.builtin.include_tasks: run_task.yaml
   vars:
     nf_task: create_subnet
@@ -128,7 +132,7 @@
     sft_label: att-query-lease
     sft_expect: success
     nf_job: "{{ nf_na_job | combine(nf_evpn) }}"
-    nf_result: {dhcp_lease: {ip_address: 10.20.1.10, mac_address: "{{ nf_mac }}"}}
+    nf_result: {dhcp_lease: {ip_address: 10.20.1.193, mac_address: "{{ nf_mac }}"}}
 
 - name: Attachment - a lease of another MAC is not returned
   ansible.builtin.include_tasks: run_task.yaml

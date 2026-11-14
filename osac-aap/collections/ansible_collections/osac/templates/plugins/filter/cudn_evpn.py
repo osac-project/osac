@@ -216,15 +216,17 @@ def _subtract(base: list[ipaddress.IPv4Network], remove: list[ipaddress.IPv4Netw
 def layer2_addressing(subnet_cidr: str, ipam: dict) -> dict:
     """The CUDN Layer2 addressing of a Subnet from its recorded layout.
 
-    VMs get addresses only from the overlay ranges. OVN-Kubernetes serves the
+    OVN-Kubernetes serves VM DHCP from the overlay ranges. It serves the
     gateway (defaultGatewayIPs) and uses network + 2 as its management-port
-    address; both are infrastructure addresses (EP #427), so OVN excludes them
-    from VM allocation. The layout places the overlay range first, so both lie
-    inside it. reservedSubnets is every other part of the Subnet: the physical
-    and LB VIP ranges and anything the layout leaves out; the CRD forbids an
-    overlap with infrastructureSubnets.
+    address; both are infrastructure addresses (EP #427), so OVN excludes
+    them from VM allocation. reservedSubnets is every part of the Subnet
+    outside the overlay ranges and infrastructure addresses, including the
+    physical and LB VIP ranges. The CRD forbids an overlap with
+    infrastructureSubnets.
     """
     subnet = ipaddress.ip_network(subnet_cidr)
+    if subnet.version != 4 or subnet.prefixlen > 29:
+        raise _InputError("cudn_evpn EVPN requires an IPv4 Subnet with prefix length /29 or shorter")
     gateway = ipaddress.ip_network(f"{ipam['gateway_ipv4']}/32")
     management = ipaddress.ip_network(f"{subnet.network_address + 2}/32")
     overlay = [ipaddress.ip_network(c) for c in ipam["overlay_ipv4_cidrs"]]

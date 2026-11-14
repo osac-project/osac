@@ -79,7 +79,7 @@
     nf_job: "{{ nf_subnet_job | combine(nf_evpn) }}"
     nf_result: {network_segment: {type: evpn, l2_vni: 5000001}}
 
-- name: Subnet - l2_vni is the vxlanID of the V-Net, which has the gateway and no DHCP
+- name: Subnet - l2_vni is the vxlanID, with DHCP over the physical range
   vars:
     _vnet: "{{ nf_state.vnets | selectattr('name', 'equalto', nf_sn_name) | first }}"
     _ipam: "{{ nf_state.ipam_subnets | selectattr('name', 'equalto', nf_sn_name) | first }}"
@@ -92,8 +92,9 @@
       - _vnet.tenant.id == 2
       - _vnet.gateways | length == 1
       - _vnet.gateways[0].prefix == nf_ipam.gateway_ipv4 ~ '/24'
-      - not (_vnet.gateways[0].dhcpEnabled | default(false))
-      - _vnet.gateways[0].dhcpStartIp is not defined
+      - _vnet.gateways[0].dhcpEnabled
+      - _vnet.gateways[0].dhcpStartIp == '10.20.1.192'
+      - _vnet.gateways[0].dhcpEndIp == '10.20.1.254'
       - _ipam.prefix == nf_subnet_cidr
       - _ipam.vpc.id == 101
       - _vnet.vxlanID != nf_state.vpcs[0].vni
@@ -116,12 +117,13 @@
       - nf_state.ipam_subnets | length == 1
     quiet: true
 
-- name: Subnet - a drifted gateway is corrected with one PUT, DHCP stays off
+- name: Subnet - a drifted gateway and EVPN pool are corrected with one PUT
   ansible.builtin.include_tasks: admin.yaml
   vars:
     nf_steps:
       - path: update
-        body: {collection: vnets, id: 401, fields: {gateways: [{id: 7, prefix: 10.20.1.9/24, dhcpEnabled: false}]}}
+        body: {collection: vnets, id: 401, fields: {gateways: [{id: 7, prefix: 10.20.1.9/24, dhcpEnabled: true,
+                                                                dhcpStartIp: 10.20.1.3, dhcpEndIp: 10.20.1.127}]}}
 
 - name: Subnet - rerun after the gateway drift
   ansible.builtin.include_tasks: run_task.yaml
@@ -137,6 +139,9 @@
     that:
       - nf_write_kinds == ['PUT /api/v2/vnet']
       - nf_state.vnets[0].gateways[0].prefix == '10.20.1.1/24'
+      - nf_state.vnets[0].gateways[0].dhcpEnabled
+      - nf_state.vnets[0].gateways[0].dhcpStartIp == '10.20.1.192'
+      - nf_state.vnets[0].gateways[0].dhcpEndIp == '10.20.1.254'
     quiet: true
 
 # Subnet without a network type: the V-Net body as the role builds it.
@@ -168,8 +173,8 @@
     that:
       - _gw.prefix == '10.20.1.1/24'
       - _gw.dhcpEnabled
-      - _gw.dhcpStartIp == '10.20.1.8'
-      - _gw.dhcpEndIp == '10.20.1.31'
+      - _gw.dhcpStartIp == '10.20.1.192'
+      - _gw.dhcpEndIp == '10.20.1.254'
     quiet: true
 
 - name: Subnet - rerun of the plain Subnet writes nothing

@@ -69,7 +69,8 @@
           message: >-
             cudn_evpn create_subnet: ClusterUserDefinedNetwork {{ cudn_evpn.cudn_name }} differs from
             this Subnet's address layout or network segment ({{ _cudn_evpn_assess.drift | join(', ') }}).
-            cudn_evpn does not change a network that VMs may use; a cluster administrator must restore it.
+            cudn_evpn does not change an owned network that workloads may be using; reconcile the
+            Subnet and CUDN through the dependency-ordered delete and recreate flow.
           retryable: false
 
     - name: Check the hub prerequisites before claiming or reconciling the network

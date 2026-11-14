@@ -30,6 +30,11 @@ a recording double; no provider, CSI, or VM execution. The operator-side
 boundary is in the [osac-operator guide](osac-operator.md); deployed disk
 identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
 
+The capture-only AAP recorder is written in Go. Run its protocol and race tests
+from `fulfillment-service/` with
+`go test -race ./it/testdata/computestorageaap`. The deployed suite builds it
+for the scheduled node and stages it in an unprivileged test Pod.
+
 ## Selecting coverage
 
 - CLI/API-only contracts belong in `it/`; complete provisioning journeys across

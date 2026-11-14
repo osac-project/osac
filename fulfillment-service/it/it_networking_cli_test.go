@@ -256,7 +256,7 @@ var _ = Describe("Networking CLI", Label("cli", "networking-cli"), func() {
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 
 			By("refusing the other tenant's Subnet name before creating anything")
-			name := catalogItemFixtureName()
+			name := resourceFixtureName()
 			_, stderr := cli(ctx, 1, "create", "computeinstance", "--template", template, "--name", name,
 				"--network-attachment", "subnet="+otherSubnet.GetMetadata().GetName())
 			Expect(stderr).To(ContainSubstring(fmt.Sprintf("subnet %q not found", otherSubnet.GetMetadata().GetName())))

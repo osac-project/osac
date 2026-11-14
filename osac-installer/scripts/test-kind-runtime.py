@@ -997,7 +997,7 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
         self.assertIn("operator.controllers.tenant=false", result.stdout)
         self.assertIn("operator.aap.url=http://compute-storage-aap.osac.svc.cluster.local:8080/api", result.stdout)
         self.assertIn("IT_TEST_SUITE=compute-storage", result.stdout)
-        self.assertIn("-p test_compute_storage_aap.py", result.stdout)
+        self.assertIn("cd ../fulfillment-service && go test -race ./it/testdata/computestorageaap", result.stdout)
         self.assertIn("--label-filter 'compute-storage'", result.stdout)
         self.assertNotIn("service.enabled=false", result.stdout)
 

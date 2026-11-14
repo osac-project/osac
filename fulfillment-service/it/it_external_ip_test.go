@@ -829,7 +829,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		attachmentIDs           []string
 		additionalExternalIPIDs []string
 		networkClassHubID       string
-		network                 catalogItemNetworkFixture
+		network                 resourceNetworkFixture
 	)
 
 	BeforeEach(func() {
@@ -855,7 +855,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		Expect(err).ToNot(HaveOccurred())
 		networkClassHubID = networkClassResponse.GetObject().GetStatus().GetHub()
 		Expect(networkClassHubID).ToNot(BeEmpty())
-		network = createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
+		network = createNetworkInClassFixture(ctx, usersGroup, "", networkClassID)
 
 		poolId = fmt.Sprintf("test-pool-%s", uuid.New())
 		_, err = poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{

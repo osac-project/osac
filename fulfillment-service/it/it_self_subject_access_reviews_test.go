@@ -41,7 +41,7 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 		tenantName                string
 		templateID                string
 		instanceTypeID            string
-		tenantNetwork             catalogItemNetworkFixture
+		tenantNetwork             resourceNetworkFixture
 	)
 
 	BeforeEach(func() {

@@ -27,11 +27,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func TestCatalogItemDeletionProbe(t *testing.T) {
+func TestResourceDeletionProbe(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		reads, signals := 0, 0
 		deleted := false
-		probe := catalogItemDeletionProbe(func(context.Context) error {
+		probe := resourceDeletionProbe(func(context.Context) error {
 			reads++
 			if deleted {
 				return status.Error(codes.NotFound, "archived")
@@ -60,11 +60,11 @@ func TestCatalogItemDeletionProbe(t *testing.T) {
 	})
 }
 
-func TestCatalogItemDeletionProbeErrors(t *testing.T) {
+func TestResourceDeletionProbeErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	called := false
-	probe := catalogItemDeletionProbe(func(context.Context) error {
+	probe := resourceDeletionProbe(func(context.Context) error {
 		called = true
 		return nil
 	}, func(context.Context) error {
@@ -75,14 +75,14 @@ func TestCatalogItemDeletionProbeErrors(t *testing.T) {
 		t.Fatalf("cancellation lost: done=%v err=%v called=%v", done, err, called)
 	}
 	transient := status.Error(codes.Unavailable, "temporarily unavailable")
-	probe = catalogItemDeletionProbe(func(context.Context) error { return transient }, func(context.Context) error {
+	probe = resourceDeletionProbe(func(context.Context) error { return transient }, func(context.Context) error {
 		t.Fatal("failed Get must not signal")
 		return nil
 	})
 	if done, err := probe(context.Background()); done || !errors.Is(err, transient) {
 		t.Fatalf("failed observation treated as gone: done=%v err=%v", done, err)
 	}
-	probe = catalogItemDeletionProbe(func(context.Context) error { return nil }, func(context.Context) error {
+	probe = resourceDeletionProbe(func(context.Context) error { return nil }, func(context.Context) error {
 		return status.Error(codes.NotFound, "archived between Get and Signal")
 	})
 	if done, err := probe(context.Background()); !done || err != nil {

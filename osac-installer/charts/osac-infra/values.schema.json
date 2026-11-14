@@ -245,6 +245,16 @@
               },
               "default": []
             },
+            "activeActive": {
+              "type": "boolean",
+              "description": "Allow up to 16 eligible IPv4 BGP paths for active-active forwarding.",
+              "default": false
+            },
+            "activeBackup": {
+              "type": "boolean",
+              "description": "Use each uplink's role to prefer active neighbors and prepend the node ASN on backup neighbors in the IPv4 unicast and L2VPN EVPN address families. Requires one active and at least one backup uplink per node.",
+              "default": false
+            },
             "waitForEstablished": {
               "type": "boolean",
               "description": "Fail installation unless every configured BGP session is Established.",
@@ -255,9 +265,42 @@
               "minimum": 60,
               "description": "Maximum wait for each BGP session to become Established.",
               "default": 900
+            },
+            "bfdProfile": {
+              "type": "string",
+              "description": "Optional FRR-K8s BFD profile name; empty disables BFD.",
+              "default": ""
+            },
+            "bfdReceiveInterval": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 60000,
+              "description": "BFD receive interval in milliseconds.",
+              "default": 300
+            },
+            "bfdTransmitInterval": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 60000,
+              "description": "BFD transmit interval in milliseconds.",
+              "default": 300
+            },
+            "bfdDetectMultiplier": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 255,
+              "description": "BFD detection multiplier.",
+              "default": 3
             }
           },
-          "required": ["asn", "acceptPrefixes", "waitForEstablished", "timeoutSeconds"]
+          "required": ["asn", "acceptPrefixes", "waitForEstablished", "timeoutSeconds"],
+          "not": {
+            "required": ["activeActive", "activeBackup"],
+            "properties": {
+              "activeActive": {"const": true},
+              "activeBackup": {"const": true}
+            }
+          }
         },
         "nodes": {
           "type": "array",
@@ -304,14 +347,47 @@
                       "format": "ipv4",
                       "description": "Fabric leaf BGP peer IPv4 address."
                     },
+                    "unnumbered": {
+                      "type": "boolean",
+                      "description": "Use FRR's interface-based unnumbered BGP neighbor; omit address and peerAddress.",
+                      "default": false
+                    },
                     "peerASN": {
                       "type": "integer",
                       "minimum": 1,
                       "maximum": 4294967294,
                       "description": "Fabric leaf BGP ASN."
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": ["active", "backup"],
+                      "description": "Neighbor role for active-backup BGP; required when evpn.bgp.activeBackup is true."
                     }
                   },
-                  "required": ["interface", "peerAddress", "peerASN"]
+                  "required": ["interface", "peerASN"],
+                  "oneOf": [
+                    {
+                      "required": ["peerAddress"],
+                      "not": {
+                        "required": ["unnumbered"],
+                        "properties": {
+                          "unnumbered": {"const": true}
+                        }
+                      }
+                    },
+                    {
+                      "required": ["unnumbered"],
+                      "properties": {
+                        "unnumbered": {"const": true}
+                      },
+                      "not": {
+                        "anyOf": [
+                          {"required": ["address"]},
+                          {"required": ["peerAddress"]}
+                        ]
+                      }
+                    }
+                  ]
                 }
               }
             },

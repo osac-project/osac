@@ -20,8 +20,49 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+var _ = Describe("Add-on operator reference scope", func() {
+	It("defaults a name-only reference to the shared tenant", func() {
+		reference := privatev1.AddOnOperatorReference_builder{Name: "operator"}.Build()
+
+		defaultAddOnOperatorReferenceScope(reference)
+
+		Expect(reference.GetTenant()).To(Equal(auth.SharedTenant))
+		Expect(reference.GetShared()).To(BeFalse())
+	})
+
+	It("preserves an explicit tenant selector", func() {
+		reference := privatev1.AddOnOperatorReference_builder{Name: "operator", Tenant: "tenant-a"}.Build()
+
+		defaultAddOnOperatorReferenceScope(reference)
+
+		Expect(reference.GetTenant()).To(Equal("tenant-a"))
+		Expect(reference.GetShared()).To(BeFalse())
+	})
+
+	It("preserves a legacy shared selector", func() {
+		reference := privatev1.AddOnOperatorReference_builder{Name: "operator", Shared: true}.Build()
+
+		defaultAddOnOperatorReferenceScope(reference)
+
+		Expect(reference.GetTenant()).To(BeEmpty())
+		Expect(reference.GetShared()).To(BeTrue())
+	})
+
+	It("clears the owner project for an explicitly shared-tenant reference", func() {
+		ownerMetadata := privatev1.Metadata_builder{Tenant: "tenant-a", Project: "workloads"}.Build()
+		reference := privatev1.AddOnOperatorReference_builder{Name: "operator", Tenant: auth.SharedTenant}.Build()
+
+		resolvedOwnerMetadata := addOnOperatorOwnerMetadata(ownerMetadata, reference)
+
+		Expect(resolvedOwnerMetadata).ToNot(BeIdenticalTo(ownerMetadata))
+		Expect(resolvedOwnerMetadata.GetProject()).To(BeEmpty())
+		Expect(ownerMetadata.GetProject()).To(Equal("workloads"))
+	})
+})
 
 var _ = Describe("Add-on operator graph", func() {
 	It("expands dependencies first and deduplicates shared dependencies", func() {

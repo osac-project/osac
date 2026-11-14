@@ -9,7 +9,7 @@ description: An OpenShift 4.20 cluster with RHOAI 3.4, Models-as-a-Service, Keyc
   for AI/ML workloads.
 template:
   id: osac.templates.ocp_4_20_ai_maas
-  shared: true
+  tenant: shared
 published: true
 fields:
   network:

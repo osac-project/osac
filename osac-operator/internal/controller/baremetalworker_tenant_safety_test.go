@@ -371,7 +371,8 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 			Expect(workers[0].LastFailureMessage).To(ContainSubstring("shared template "+reason), "template rejection reason lost: %+v", workers[0])
 			Expect(workers[0].BareMetalInstance.ID).To(BeEmpty())
 			Expect(fc.CreateCalls()).To(HaveLen(1))
-			Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetShared()).To(BeTrue())
+			Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetTenant()).To(Equal("shared"))
+			Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetShared()).To(BeFalse())
 			Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
 		})
 	}

@@ -10,7 +10,7 @@ description: An OpenShift 4.20 cluster on NICo bare metal infrastructure with DG
   and high-performance computing.
 template:
   id: osac.templates.ocp_4_20_small_nico
-  shared: true
+  tenant: shared
 published: true
 fields:
   network:

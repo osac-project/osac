@@ -33,6 +33,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
@@ -993,7 +994,7 @@ func parseClusterNodeSetFlag(s string) (string, *publicv1.ClusterNodeSet, error)
 
 	if bmitName := values["baremetal-instance-type"]; bmitName != "" {
 		builder.BaremetalInstanceType = publicv1.BareMetalInstanceTypeReference_builder{
-			Name: bmitName,
+			Name: bmitName, Tenant: auth.SharedTenant, Shared: true,
 		}.Build()
 	}
 

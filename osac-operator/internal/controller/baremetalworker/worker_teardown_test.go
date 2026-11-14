@@ -128,7 +128,7 @@ var _ = It("retains a failed worker slot during scale-down", func() {
 })
 
 var _ = Describe("Worker retention when cleanup evidence is unknown", func() {
-	for _, scenario := range []string{"outage", "denied", "foreign-tenant", "foreign-owner", "idless"} {
+	for _, scenario := range []string{"outage", "denied", "foreign-tenant", "foreign-owner"} {
 		It(scenario, func() {
 			r, base, co := workerReadHarness()
 			fc := &teardownReadClient{workerReadClient: base}
@@ -147,8 +147,6 @@ var _ = Describe("Worker retention when cleanup evidence is unknown", func() {
 				} else {
 					fc.returned.GetMetadata().SetAnnotations(map[string]string{ownerReferenceAnnotation: "ClusterOrder/foreign"})
 				}
-			case "idless":
-				w.BareMetalInstance.ID = ""
 			}
 			o := indexWorkerBMIs(nil)
 			o.agents = &unstructured.UnstructuredList{}

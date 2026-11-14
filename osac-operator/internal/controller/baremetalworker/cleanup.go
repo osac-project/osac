@@ -16,6 +16,15 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+// cleanupAbsenceGrace is the grace window after a recorded Create
+// attempt during which an empty List does not conclude BMI absence.
+// The production fulfillment-service uses a single Postgres database
+// (strong read-after-write consistency), so this window is defensive
+// rather than necessary. Five minutes is far beyond any conceivable
+// commit-visibility latency and short enough to restore teardown
+// liveness.
+const cleanupAbsenceGrace = 5 * time.Minute
+
 // cleanupWorker retains the incarnation until both its old Agent and BMI are
 // authoritatively absent. A successful Delete is pending, never completion.
 // Failed callers keep their disposition; retiring callers advance to Deleting.
@@ -39,7 +48,38 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 			}
 			return true, nil
 		}
-		return false, r.recoverCleanupBMI(ctx, co, tenant, w)
+		if err := r.recoverCleanupBMI(ctx, co, tenant, w); err != nil {
+			return false, err
+		}
+		if w.BareMetalInstance.ID != "" {
+			// ID recovered from the filtered List; end this
+			// invocation so the caller persists the identity.
+			return false, nil
+		}
+		// A recently-attempted Create may have succeeded with a
+		// lost response. The fulfillment-service's Postgres
+		// backend is strongly consistent, but we defer cleanup
+		// for an additional grace window as defense-in-depth so
+		// the BMI can appear in the List before we conclude it
+		// was never created. Once the grace expires, proceed
+		// with Agent-only cleanup — no external BMI mutation is
+		// possible without a recovered ID.
+		if w.BMICreateState == v1alpha1.WorkerBMICreateStateAttempted &&
+			w.AttemptStartedAt != nil &&
+			time.Since(w.AttemptStartedAt.Time) < cleanupAbsenceGrace {
+			return false, nil
+		}
+		agent, err := r.cleanupAgent(ctx, co, *w, nil)
+		if err != nil {
+			return false, err
+		}
+		if agent != nil {
+			return false, r.requestCleanupAgent(ctx, co, w, agent)
+		}
+		if w.Phase == workerPhaseUnbinding {
+			w.Phase = workerPhaseDeleting
+		}
+		return true, nil
 	}
 	state, err := r.readCleanupBMI(ctx, co, tenant, *w)
 	if err != nil {
@@ -64,9 +104,10 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 	return false, r.fulfillment.DeleteBareMetalInstance(ctx, w.BareMetalInstance.ID)
 }
 
-// ID-less reservations may hide an accepted Create with a lost response. Even
-// empty List is not proof of absence. Recover the exact owned name and persist
-// its ID at a separate boundary before making any external mutation.
+// ID-less reservations may hide an accepted Create with a lost response.
+// Recover the exact owned name when present; when the List returns no
+// match, a nil error with an unset ID tells the caller to proceed with
+// Agent-only cleanup instead of blocking indefinitely.
 func (r *Reconciler) recoverCleanupBMI(ctx context.Context, co *v1alpha1.ClusterOrder, tenant string, w *v1alpha1.WorkerStatus) error {
 	if w.BareMetalInstance.Name == "" {
 		return fmt.Errorf("worker %s has no recorded BMI name", w.Name)
@@ -81,7 +122,7 @@ func (r *Reconciler) recoverCleanupBMI(ctx context.Context, co *v1alpha1.Cluster
 		return r.rejectWorkerIdentity(co, err.Error())
 	}
 	if bmi == nil {
-		return fmt.Errorf("worker %s BMI reservation absence is unconfirmed", w.Name)
+		return nil
 	}
 	candidate := *w
 	candidate.BareMetalInstance.ID = bmi.GetId()

@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "osac-e2e"
 version = "0.1.0"
@@ -10,11 +14,27 @@ dependencies = [
     "websocket-client>=1.6",
 ]
 
+[project.scripts]
+osac-conformance = "tests.conformance.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["tests*"]
 
+[tool.setuptools.package-data]
+"tests.conformance" = ["*.yaml", "areas/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "conformance_generic: test selected by the generic selector",
+    "conformance_vmaas: test selected by the vmaas selector",
+    "conformance_bmaas: test selected by the bmaas selector",
+    "conformance_caas: test selected by the caas selector",
+    "conformance_netris: test selected by the netris selector",
+    "conformance_blocking: blocking conformance test",
+    "conformance_informing: informing conformance test",
+    "sig_networking: test belongs to the networking domain",
+]
 pythonpath = ["."]
 addopts = "-n 4 --dist loadfile"
 log_level = "INFO"

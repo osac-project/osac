@@ -138,7 +138,11 @@ func (s *PrivateProjectMembershipsServer) Update(ctx context.Context,
 
 func (s *PrivateProjectMembershipsServer) Delete(ctx context.Context,
 	request *privatev1.ProjectMembershipsDeleteRequest) (response *privatev1.ProjectMembershipsDeleteResponse, err error) {
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.ProjectMembershipsDeleteResponse{Object: object}
 	return
 }
 

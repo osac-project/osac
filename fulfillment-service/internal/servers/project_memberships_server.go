@@ -322,11 +322,25 @@ func (s *ProjectMembershipsServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.ProjectMembershipsDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateProjectMembership := privateResponse.GetObject()
+	publicProjectMembership := &publicv1.ProjectMembership{}
+	err = s.outMapper.Copy(ctx, privateProjectMembership, publicProjectMembership)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private project membership to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process project membership")
+	}
+
+	// Create the public response:
 	response = &publicv1.ProjectMembershipsDeleteResponse{}
+	response.SetObject(publicProjectMembership)
 	return
 }

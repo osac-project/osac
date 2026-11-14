@@ -95,6 +95,7 @@ message AddOnOperatorsDeleteRequest {
 
 message AddOnOperatorsDeleteResponse {
   option (cleanapi.message).private = true;
+  AddOnOperator object = 1;
 }
 
 message AddOnOperatorsUpdateRequest {
@@ -149,7 +150,7 @@ service AddOnOperators {
   // Deletes an add-on operator.
   rpc Delete(AddOnOperatorsDeleteRequest) returns (AddOnOperatorsDeleteResponse) {
     option (cleanapi.method).private = true;
-    option (google.api.http) = {delete: "/api/private/v1/add_on_operators/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/add_on_operators/{id}" response_body: "object"};
   }
 
   // Updates an existing add-on operator.

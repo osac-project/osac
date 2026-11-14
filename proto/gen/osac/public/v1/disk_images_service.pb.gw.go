@@ -345,7 +345,7 @@ func RegisterDiskImagesHandlerServer(ctx context.Context, mux *runtime.ServeMux,
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_DiskImages_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_DiskImages_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_DiskImages_Delete_0{resp.(*DiskImagesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterDiskImagesHandlerClient(ctx context.Context, mux *runtime.ServeMux,
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_DiskImages_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_DiskImages_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_DiskImages_Delete_0{resp.(*DiskImagesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_DiskImages_Update_0 struct {
 }
 
 func (m response_DiskImages_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_DiskImages_Delete_0 struct {
+	*DiskImagesDeleteResponse
+}
+
+func (m response_DiskImages_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

@@ -332,7 +332,11 @@ func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 
 func (s *PrivateVolumesServer) Delete(ctx context.Context,
 	request *privatev1.VolumesDeleteRequest) (response *privatev1.VolumesDeleteResponse, err error) {
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.VolumesDeleteResponse{Object: object}
 	return
 }
 

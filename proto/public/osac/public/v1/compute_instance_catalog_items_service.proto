@@ -79,7 +79,7 @@ message ComputeInstanceCatalogItemsDeleteRequest {
   string id = 1;
 }
 
-message ComputeInstanceCatalogItemsDeleteResponse {}
+message ComputeInstanceCatalogItemsDeleteResponse { ComputeInstanceCatalogItem object = 1; }
 
 service ComputeInstanceCatalogItems {
   // Retrieves the list of compute instance catalog items.
@@ -115,6 +115,6 @@ service ComputeInstanceCatalogItems {
 
   // Deletes a compute instance catalog item.
   rpc Delete(ComputeInstanceCatalogItemsDeleteRequest) returns (ComputeInstanceCatalogItemsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/compute_instance_catalog_items/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/compute_instance_catalog_items/{id}" response_body: "object"};
   }
 }

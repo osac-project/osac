@@ -345,7 +345,7 @@ func RegisterStorageTiersHandlerServer(ctx context.Context, mux *runtime.ServeMu
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_StorageTiers_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_StorageTiers_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_StorageTiers_Delete_0{resp.(*StorageTiersDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterStorageTiersHandlerClient(ctx context.Context, mux *runtime.ServeMu
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_StorageTiers_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_StorageTiers_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_StorageTiers_Delete_0{resp.(*StorageTiersDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_StorageTiers_Update_0 struct {
 }
 
 func (m response_StorageTiers_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_StorageTiers_Delete_0 struct {
+	*StorageTiersDeleteResponse
+}
+
+func (m response_StorageTiers_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

@@ -209,7 +209,11 @@ func (s *PrivateComputeInstanceTemplatesServer) Update(ctx context.Context,
 
 func (s *PrivateComputeInstanceTemplatesServer) Delete(ctx context.Context,
 	request *privatev1.ComputeInstanceTemplatesDeleteRequest) (response *privatev1.ComputeInstanceTemplatesDeleteResponse, err error) {
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.ComputeInstanceTemplatesDeleteResponse{Object: object}
 	return
 }
 

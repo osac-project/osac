@@ -102,7 +102,7 @@ message DiskImagesDeleteRequest {
   string id = 1;
 }
 
-message DiskImagesDeleteResponse {}
+message DiskImagesDeleteResponse { DiskImage object = 1; }
 
 service DiskImages {
   // Retrieves the list of disk images.
@@ -138,6 +138,6 @@ service DiskImages {
 
   // Deletes a disk image.
   rpc Delete(DiskImagesDeleteRequest) returns (DiskImagesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/disk_images/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/disk_images/{id}" response_body: "object"};
   }
 }

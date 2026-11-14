@@ -325,7 +325,7 @@ func RegisterUsersHandlerServer(ctx context.Context, mux *runtime.ServeMux, serv
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Users_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Users_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Users_Delete_0{resp.(*UsersDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPatch, pattern_Users_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -453,7 +453,7 @@ func RegisterUsersHandlerClient(ctx context.Context, mux *runtime.ServeMux, clie
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Users_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Users_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Users_Delete_0{resp.(*UsersDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPatch, pattern_Users_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -488,6 +488,14 @@ type response_Users_Create_0 struct {
 }
 
 func (m response_Users_Create_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_Users_Delete_0 struct {
+	*UsersDeleteResponse
+}
+
+func (m response_Users_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

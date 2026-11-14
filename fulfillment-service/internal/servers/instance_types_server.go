@@ -341,12 +341,25 @@ func (s *InstanceTypesServer) Delete(ctx context.Context,
 	privateRequest.SetId(request.GetId())
 
 	// Delegate to private server:
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateInstanceType := privateResponse.GetObject()
+	publicInstanceType := &publicv1.InstanceType{}
+	err = s.outMapper.Copy(ctx, privateInstanceType, publicInstanceType)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private instance type to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process instance type")
+	}
+
 	// Create the public response:
 	response = &publicv1.InstanceTypesDeleteResponse{}
+	response.SetObject(publicInstanceType)
 	return
 }

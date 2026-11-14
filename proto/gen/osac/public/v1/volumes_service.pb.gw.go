@@ -345,7 +345,7 @@ func RegisterVolumesHandlerServer(ctx context.Context, mux *runtime.ServeMux, se
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Volumes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Volumes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Volumes_Delete_0{resp.(*VolumesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterVolumesHandlerClient(ctx context.Context, mux *runtime.ServeMux, cl
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_Volumes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_Volumes_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_Volumes_Delete_0{resp.(*VolumesDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_Volumes_Update_0 struct {
 }
 
 func (m response_Volumes_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_Volumes_Delete_0 struct {
+	*VolumesDeleteResponse
+}
+
+func (m response_Volumes_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

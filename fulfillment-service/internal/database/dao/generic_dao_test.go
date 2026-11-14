@@ -693,10 +693,18 @@ var _ = Describe("Generic DAO", func() {
 			object := response.GetObject()
 
 			// Delete the object:
-			_, err = generic.Delete().
+			deleteResponse, err := generic.Delete().
 				SetId(object.GetId()).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+
+			// Verify that the response contains the deleted object with its deletion timestamp
+			// set, even though the deletion was immediate:
+			deleted := deleteResponse.GetObject()
+			Expect(deleted).ToNot(BeNil())
+			Expect(deleted.GetId()).To(Equal(object.GetId()))
+			Expect(deleted.GetMyString()).To(Equal("my value"))
+			Expect(deleted.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 
 			// Verify that the object has been deleted and the data copied to the archive table:
 			row := tx.QueryRow(ctx, `select count(*) from objects where id = $1`, object.GetId())
@@ -764,10 +772,18 @@ var _ = Describe("Generic DAO", func() {
 			object := response.GetObject()
 
 			// Delete the object:
-			_, err = generic.Delete().
+			deleteResponse, err := generic.Delete().
 				SetId(object.GetId()).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+
+			// Verify that the response contains the deleted object, still carrying its
+			// finalizers and its newly set deletion timestamp:
+			deleted := deleteResponse.GetObject()
+			Expect(deleted).ToNot(BeNil())
+			Expect(deleted.GetId()).To(Equal(object.GetId()))
+			Expect(deleted.GetMetadata().GetFinalizers()).To(ConsistOf("a"))
+			Expect(deleted.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 
 			// Verify that it hasn't been archived:
 			row := tx.QueryRow(ctx, `select count(*) from archived_objects where id = $1`, object.GetId())

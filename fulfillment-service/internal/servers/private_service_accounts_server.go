@@ -161,7 +161,11 @@ func (s *PrivateServiceAccountsServer) Update(ctx context.Context,
 
 func (s *PrivateServiceAccountsServer) Delete(ctx context.Context,
 	request *privatev1.ServiceAccountsDeleteRequest) (response *privatev1.ServiceAccountsDeleteResponse, err error) {
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.ServiceAccountsDeleteResponse{Object: object}
 	return
 }
 

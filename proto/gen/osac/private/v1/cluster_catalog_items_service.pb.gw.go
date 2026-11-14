@@ -325,7 +325,7 @@ func RegisterClusterCatalogItemsHandlerServer(ctx context.Context, mux *runtime.
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ClusterCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ClusterCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ClusterCatalogItems_Delete_0{resp.(*ClusterCatalogItemsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPatch, pattern_ClusterCatalogItems_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -453,7 +453,7 @@ func RegisterClusterCatalogItemsHandlerClient(ctx context.Context, mux *runtime.
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ClusterCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ClusterCatalogItems_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ClusterCatalogItems_Delete_0{resp.(*ClusterCatalogItemsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPatch, pattern_ClusterCatalogItems_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -488,6 +488,14 @@ type response_ClusterCatalogItems_Create_0 struct {
 }
 
 func (m response_ClusterCatalogItems_Create_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_ClusterCatalogItems_Delete_0 struct {
+	*ClusterCatalogItemsDeleteResponse
+}
+
+func (m response_ClusterCatalogItems_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

@@ -82,7 +82,7 @@ message UsersDeleteRequest {
   string id = 1;
 }
 
-message UsersDeleteResponse {}
+message UsersDeleteResponse { User object = 1; }
 
 message UsersUpdateRequest {
   User object = 1;
@@ -132,7 +132,7 @@ service Users {
 
   // Deletes a user.
   rpc Delete(UsersDeleteRequest) returns (UsersDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/users/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/users/{id}" response_body: "object"};
   }
 
   // Updates an existing user.

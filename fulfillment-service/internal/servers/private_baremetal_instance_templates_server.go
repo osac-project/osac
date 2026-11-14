@@ -187,7 +187,11 @@ func (s *PrivateBareMetalInstanceTemplatesServer) validateArchitectureUpdate(
 
 func (s *PrivateBareMetalInstanceTemplatesServer) Delete(ctx context.Context,
 	request *privatev1.BareMetalInstanceTemplatesDeleteRequest) (response *privatev1.BareMetalInstanceTemplatesDeleteResponse, err error) {
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.BareMetalInstanceTemplatesDeleteResponse{Object: object}
 	return
 }
 

@@ -166,7 +166,7 @@
           Storage operations must mount and export the configured remote kubeconfig
           without including compute-instance credentials.
 
-- name: Networking operations pod spec carries no Netris facade
+- name: Networking operations pod spec mounts the Netris CA without manager settings
   hosts: localhost
   gather_facts: false
   vars:
@@ -175,7 +175,7 @@
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
     remote_cluster_kubeconfig_secret_key: kubeconfig
     # Config-as-code defines these for cluster fulfillment; the networking
-    # pod spec must ignore them.
+    # pod spec must ignore them and mount only the CA bundle.
     netris_controller_url: https://managed.example
     netris_ca_config_map_name: customer-netris-ca
     netris_validate_certs: true
@@ -210,18 +210,76 @@
           - _networking_pod.spec.serviceAccountName == 'osac-sa'
         fail_msg: Networking jobs must read the ConfigMap (optional) and the required Secret network-fulfillment-ig.
 
-    - name: Assert the networking pod spec keeps no Netris facade or remote cluster kubeconfig
+    - name: Assert networking jobs mount the configured CA and keep manager settings out
       ansible.builtin.assert:
         that:
-          - "_networking_pod_spec is not search('NETRIS_')"
-          - "_networking_pod_spec is not search('netris')"
+          - >-
+            _networking_pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
+            | selectattr('value', 'equalto', '/etc/netris/ca/bundle.pem')
+            | list | length == 1
+          - >-
+            _networking_pod.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'netris-ca-bundle')
+            | selectattr('mountPath', 'equalto', '/etc/netris/ca/bundle.pem')
+            | selectattr('readOnly', 'equalto', true)
+            | list | length == 1
+          - >-
+            (_networking_pod.spec.volumes
+             | selectattr('name', 'equalto', 'netris-ca-bundle')
+             | list | first).configMap.name == 'customer-netris-ca'
+          - >-
+            (_networking_pod.spec.volumes
+             | selectattr('name', 'equalto', 'netris-ca-bundle')
+             | list | first).configMap['items'][0].key == 'bundle.pem'
+          - >-
+            (_networking_pod.spec.volumes
+             | selectattr('name', 'equalto', 'netris-ca-bundle')
+             | list | first).configMap['items'][0].path == 'bundle.pem'
+          - >-
+            (_networking_pod.spec.volumes
+             | selectattr('name', 'equalto', 'netris-ca-bundle')
+             | list | first).configMap.optional == false
+          - "_networking_pod_spec is not search('NETRIS_CONTROLLER_URL')"
+          - "_networking_pod_spec is not search('NETRIS_VALIDATE_CERTS')"
           - "_networking_pod_spec is not search('protected_linear')"
           - "_networking_pod_spec is not search('OSAC_LAUNCH_EXTRA_VARS_PATH')"
           - "_networking_pod_spec is not search('agentless-net-inventory')"
           - "_networking_pod_spec is not search('remote-cluster-kubeconfig')"
         fail_msg: >-
-          Networking jobs must not carry Netris or AgentlessNet settings and
-          must reach only the hub.
+          Networking jobs must mount the configured Netris CA and must not carry
+          manager settings, a protected strategy or AgentlessNet state.
+
+- name: Networking operations pod spec without a Netris CA
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
+    netris_ca_config_map_name: ""
+    netris_ca_path: ""
+    _template_path: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/networking-operations-ig.j2
+
+  tasks:
+    - name: Render networking pod spec without a Netris CA
+      ansible.builtin.set_fact:
+        _networking_pod_no_ca: "{{ lookup('ansible.builtin.template', _template_path) | from_yaml }}"
+
+    - name: Assert networking has no CA mount when none is configured
+      ansible.builtin.assert:
+        that:
+          - >-
+            _networking_pod_no_ca.spec.containers[0].env
+            | selectattr('name', 'equalto', 'NETRIS_CA_PATH')
+            | list | length == 0
+          - >-
+            _networking_pod_no_ca.spec.volumes
+            | selectattr('name', 'equalto', 'netris-ca-bundle')
+            | list | length == 0
+        fail_msg: >-
+          Networking jobs without a configured CA must not set NETRIS_CA_PATH
+          and must omit the CA volume.
 
 - name: Cluster fulfillment pod spec without a Netris CA
   hosts: localhost

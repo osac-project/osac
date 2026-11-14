@@ -143,18 +143,19 @@ environment variables of the cluster-fulfillment container group, which runs
 with the `netris.controller.protected_linear` strategy so that launch-time
 `extra_vars` cannot override them:
 
-| Key under `networkFulfillment.config` | Cluster-fulfillment effect |
+| Key under `networkFulfillment.config` | Cluster-fulfillment and networking effect |
 |---|---|
 | `NETRIS_CONTROLLER_URL` | `NETRIS_CONTROLLER_URL` |
 | `NETRIS_VALIDATE_CERTS` | `NETRIS_VALIDATE_CERTS` (default `true`) |
-| `NETRIS_CA_CONFIGMAP` | Mounts `bundle.pem` of this customer-created ConfigMap in the AAP namespace read-only at `/etc/netris/ca/bundle.pem` and sets `NETRIS_CA_PATH`. The ConfigMap is required at pod start. |
+| `NETRIS_CA_CONFIGMAP` | Mounts `bundle.pem` of this customer-created ConfigMap in the AAP namespace read-only at `/etc/netris/ca/bundle.pem` and sets `NETRIS_CA_PATH` in the cluster-fulfillment and networking-operations pod specs. The ConfigMap is required at pod start. |
 
 The installer renders these keys only when they are set, and the render fails
 unless `NETRIS_CONTROLLER_URL` is an `https://` URL and `NETRIS_VALIDATE_CERTS`
 is `"true"` or `"false"`. The installer reads them even when
-`networkFulfillment.enabled` is `false`. `NETRIS_CA_CONFIGMAP` applies only to
-cluster-fulfillment (CaaS) jobs: it is also written to `network-fulfillment-ig`,
-but networking jobs neither mount nor read it. The three keys cannot be set in
+`networkFulfillment.enabled` is `false`. `NETRIS_CA_CONFIGMAP` also applies to
+networking-operations jobs: config-as-code mounts the same `bundle.pem` in their
+pod spec and sets `NETRIS_CA_PATH`, so Fabric Manager calls to Netris verify the
+private CA. The three keys cannot be set in
 `aap.instanceGroups.clusterFulfillment.config`.
 The other CaaS Netris settings go in the cluster-fulfillment instance group:
 

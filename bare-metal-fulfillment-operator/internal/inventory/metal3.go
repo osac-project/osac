@@ -389,15 +389,13 @@ func (m *Metal3Client) GetHostLogicalPortMACs(ctx context.Context, inventoryHost
 }
 
 func metal3HostNICs(details *metal3api.HardwareDetails) []HostNIC {
-	if details == nil || len(details.NIC) == 0 {
+	macs := baremetalhost.HardwareMACs(details)
+	if len(macs) == 0 {
 		return nil
 	}
-	nics := make([]HostNIC, 0, len(details.NIC))
-	for _, n := range details.NIC {
-		if n.MAC == "" {
-			continue
-		}
-		nics = append(nics, HostNIC{MAC: strings.ToLower(n.MAC)})
+	nics := make([]HostNIC, 0, len(macs))
+	for _, mac := range macs {
+		nics = append(nics, HostNIC{MAC: mac})
 	}
 	return nics
 }

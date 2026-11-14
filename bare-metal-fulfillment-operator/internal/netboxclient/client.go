@@ -119,13 +119,17 @@ func New(config Config) (*Client, error) {
 		},
 	}
 
+	return &Client{api: newAPIClient(endpoint, token, httpClient)}, nil
+}
+
+// newAPIClient builds the generated SDK client shared by production and tests.
+func newAPIClient(endpoint, token string, httpClient *http.Client) *netbox.APIClient {
 	configuration := netbox.NewConfiguration()
 	configuration.Servers[0].URL = endpoint
 	configuration.Debug = false
 	configuration.AddDefaultHeader("Authorization", netBoxAuthorizationHeader(token))
 	configuration.HTTPClient = httpClient
-
-	return &Client{api: netbox.NewAPIClient(configuration)}, nil
+	return netbox.NewAPIClient(configuration)
 }
 
 const netBoxV1TokenLength = 40

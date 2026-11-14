@@ -36,7 +36,6 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/bcmclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmh"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
@@ -192,11 +191,6 @@ func (m *mockBCM) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
-}
-
 // newBCMReconciler wires a BareMetalInstance reconciler with the BCM inventory
 // backend pointed at the mock server, a real (envtest-backed) BMH manager, and
 // the Metal3 management client.
@@ -204,17 +198,7 @@ func newBCMReconciler(mock *mockBCM) *BareMetalInstanceReconciler {
 	bcmAPI := bcmclient.NewClientForTest(mock.server.Client(), mock.server.URL)
 	bmhMgr := baremetalhost.NewManager(k8sClient, k8sClient, bcmTestNS)
 	secretWriter := bmh.NewSecretWriter(k8sClient, bcmTestNS)
-	invClient := inventory.NewBCMClient(bcmAPI, bmhMgr, secretWriter, bcmHostClass)
-	mgmtClient := management.NewMetal3ClientForTest(k8sClient, bcmTestNS)
-	return NewBareMetalInstanceReconciler(
-		k8sClient,
-		k8sClient.Scheme(),
-		invClient,
-		mgmtClient,
-		nil,   // provisioning provider
-		false, // networking namespace (networking disabled)
-		0, 0, 0, 0, 0,
-	)
+	return newTestReconciler(inventory.NewBCMClient(bcmAPI, bmhMgr, secretWriter, bcmHostClass), bcmTestNS)
 }
 
 // These are thin, namespace-bound aliases over the shared integration helpers
@@ -233,21 +217,6 @@ func getBCMBMI(name string) *v1alpha1.BareMetalInstance { return getBMIInNS(bcmT
 func cleanupBCMBMI(name string) { cleanupBMIInNS(bcmTestNS, name) }
 
 func cleanupBCMBMH(name string) { cleanupBMHInNS(bcmTestNS, name) }
-
-// markBMHReady flips a BMH's status to available+OK so IsBMHAvailable returns true.
-// It stands in for the Metal3 baremetal-operator, which is not running in
-// envtest (mirrors the Metal3 suite's "simulate BMO reconciliation" step).
-func markBMHReady(name string) {
-	bmh := getBMHInNS(bcmTestNS, name)
-	bmh.Status.OperationalStatus = metal3api.OperationalStatusOK
-	bmh.Status.Provisioning.State = metal3api.StateAvailable
-	ExpectWithOffset(1, k8sClient.Status().Update(ctx, bmh)).To(Succeed())
-}
-
-func bmhExistsInNS(name string) bool {
-	err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: bcmTestNS}, &metal3api.BareMetalHost{})
-	return err == nil
-}
 
 func createBCMBMI(name, resourceClass string) {
 	bmi := &v1alpha1.BareMetalInstance{
@@ -270,12 +239,7 @@ func createBCMBMI(name, resourceClass string) {
 // finalizer → FindFreeHost → AssignHost(create BMH, not ready) and then, after
 // the BMH is marked ready, one more reconcile to reach HostClass/Progressing.
 func driveToAllocated(reconciler *BareMetalInstanceReconciler, bmiName, hostname string) {
-	// finalizer, FindFreeHost (sets ExternalHostID), AssignHost (creates BMH, Available=false)
-	reconcileBCM(reconciler, bmiName, 3)
-	ExpectWithOffset(1, bmhExistsInNS(hostname)).To(BeTrue(), "AssignHost should have created the BMH")
-	markBMHReady(hostname)
-	// AssignHost again: IsBMHAvailable=true → HostClass set → Progressing
-	reconcileBCM(reconciler, bmiName, 1)
+	driveToAllocatedIn(reconciler, bcmTestNS, bmiName, hostname)
 }
 
 var _ = Describe("BareMetalInstance BCM Integration", func() {
@@ -314,7 +278,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 
 			// Reconcile 3: AssignHost → BCM write + BMH created, but not ready yet
 			reconcileBCM(reconciler, bmiName, 1)
-			Expect(bmhExistsInNS(hostname)).To(BeTrue())
+			Expect(bmhExistsInNS(bcmTestNS, hostname)).To(BeTrue())
 			Expect(getBCMBMI(bmiName).Spec.HostClass).To(BeEmpty(), "HostClass not set until BMH ready")
 
 			// BCM device now carries osac_instance_id
@@ -330,7 +294,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 			Expect(secret.Data).To(HaveKeyWithValue("password", []byte("calvin")))
 
 			// Mark BMH ready → next reconcile sets HostClass and Progressing
-			markBMHReady(hostname)
+			markBMHReadyInNS(bcmTestNS, hostname)
 			reconcileBCM(reconciler, bmiName, 1)
 			bmi := getBCMBMI(bmiName)
 			Expect(bmi.Spec.HostClass).To(Equal(bcmHostClass))
@@ -361,7 +325,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 
 			// finalizer + FindFreeHost + AssignHost(create BMH, not ready)
 			reconcileBCM(reconciler, bmiName, 3)
-			Expect(bmhExistsInNS(hostname)).To(BeTrue())
+			Expect(bmhExistsInNS(bcmTestNS, hostname)).To(BeTrue())
 
 			// Poll while not ready: HostClass stays empty and reconcile requeues
 			result := reconcileBCM(reconciler, bmiName, 1)
@@ -369,7 +333,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 			Expect(result.RequeueAfter).To(Equal(DefaultHostAvailabilityPollIntervalDuration))
 
 			// Transition the BMH to ready → allocation completes
-			markBMHReady(hostname)
+			markBMHReadyInNS(bcmTestNS, hostname)
 			reconcileBCM(reconciler, bmiName, 1)
 			Expect(getBCMBMI(bmiName).Spec.HostClass).To(Equal(bcmHostClass))
 		})
@@ -402,7 +366,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 			Expect(ok).To(BeTrue(), "extra_values should be a map")
 			Expect(ev).NotTo(HaveKey("osac_instance_id"))
 			// BMH and operator secret deleted
-			Expect(bmhExistsInNS(hostname)).To(BeFalse())
+			Expect(bmhExistsInNS(bcmTestNS, hostname)).To(BeFalse())
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: baremetalhost.CredentialsSecretName(hostname), Namespace: bcmTestNS}, &corev1.Secret{})
 			Expect(client.IgnoreNotFound(err)).To(Succeed())
 			Expect(err).To(HaveOccurred())
@@ -539,12 +503,12 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 			// BCM down → deallocation errors and retries; BMH is not deleted yet.
 			mock.setDown(true)
 			Expect(reconcileBCMExpectErr(reconciler, bmiName)).To(HaveOccurred())
-			Expect(bmhExistsInNS(hostname)).To(BeTrue())
+			Expect(bmhExistsInNS(bcmTestNS, hostname)).To(BeTrue())
 
 			// BCM recovers → cleanup completes.
 			mock.setDown(false)
 			reconcileBCM(reconciler, bmiName, 3)
-			Expect(bmhExistsInNS(hostname)).To(BeFalse())
+			Expect(bmhExistsInNS(bcmTestNS, hostname)).To(BeFalse())
 		})
 	})
 
@@ -564,7 +528,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 
 			// finalizer + FindFreeHost + AssignHost (BMH created, not yet ready)
 			reconcileBCM(reconciler, bmiName, 3)
-			Expect(bmhExistsInNS(hostname)).To(BeTrue())
+			Expect(bmhExistsInNS(bcmTestNS, hostname)).To(BeTrue())
 
 			// The BCM device disappears while we're still polling for readiness.
 			mock.removeDevice(hostname)
@@ -596,7 +560,7 @@ var _ = Describe("BareMetalInstance BCM Integration", func() {
 
 			// Cleanup proceeds without error (missing device treated as done).
 			reconcileBCM(reconciler, bmiName, 3)
-			Expect(bmhExistsInNS(hostname)).To(BeFalse())
+			Expect(bmhExistsInNS(bcmTestNS, hostname)).To(BeFalse())
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: bmiName, Namespace: bcmTestNS}, &v1alpha1.BareMetalInstance{})
 			Expect(client.IgnoreNotFound(err)).To(Succeed())
 			Expect(err).To(HaveOccurred(), "BareMetalInstance should be garbage-collected after cleanup")

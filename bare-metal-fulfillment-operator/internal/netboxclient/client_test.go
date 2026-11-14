@@ -208,12 +208,12 @@ var _ = Describe("NetBox client", func() {
 
 	It("encodes status and custom-field filters for device queries", func() {
 		longFieldName := strings.Repeat("x", 51)
-		freeDevice := strings.Replace(
-			deviceResponse(42, "host-42", "staged"),
-			`"custom_fields": {"osac_instance_id": "instance-42"}`,
-			`"custom_fields": {"osac_managed": true, "osac_instance_id": ""}`,
-			1,
-		)
+		freeDevicePayload, err := json.Marshal(DevicePayloadForTest(
+			42, "host-42", "staged",
+			map[string]interface{}{"osac_managed": true, "osac_instance_id": ""},
+		))
+		Expect(err).NotTo(HaveOccurred())
+		freeDevice := string(freeDevicePayload)
 		_, client := newTrustedClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			Expect(r.Method).To(Equal(http.MethodGet))
 			Expect(r.URL.Path).To(Equal("/api/dcim/devices/"))
@@ -237,7 +237,7 @@ var _ = Describe("NetBox client", func() {
 		}))
 
 		var devices []Device
-		err := client.ForEachDevice(context.Background(), DeviceQuery{
+		err = client.ForEachDevice(context.Background(), DeviceQuery{
 			"status":                     "staged",
 			"cf_osac_managed":            "true",
 			"cf_osac_instance_id__empty": "true",
@@ -705,9 +705,11 @@ var _ = Describe("NetBox client", func() {
 		}))
 		DeferCleanup(destination.Close)
 
-		_, client := newTrustedClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, destination.URL+"/api/dcim/devices/42/", http.StatusFound)
 		}))
+		DeferCleanup(server.Close)
+		client := newClientWithCAFile(server)
 		_, err := client.GetDevice(context.Background(), "42")
 		expectAPIError(err, ErrorKindRedirect, http.StatusFound)
 		Expect(destinationCalls.Load()).To(Equal(int32(0)))
@@ -747,6 +749,16 @@ var _ = Describe("NetBox client", func() {
 	)
 })
 
+// newClientWithCAFile builds a production client trusting the test server.
+func newClientWithCAFile(server *httptest.Server) *Client {
+	caFile := filepath.Join(GinkgoT().TempDir(), "netbox-ca.pem")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	Expect(os.WriteFile(caFile, caPEM, 0o600)).To(Succeed())
+	client, err := New(Config{Endpoint: server.URL + "/", TokenFile: writeTestToken(), CAFile: caFile})
+	Expect(err).NotTo(HaveOccurred())
+	return client
+}
+
 func newTrustedClient(handler http.Handler) (*httptest.Server, *Client) {
 	return newTrustedClientWithToken(handler, testToken)
 }
@@ -754,14 +766,7 @@ func newTrustedClient(handler http.Handler) (*httptest.Server, *Client) {
 func newTrustedClientWithToken(handler http.Handler, token string) (*httptest.Server, *Client) {
 	server := httptest.NewTLSServer(ginkgoRequestHandler(handler))
 	DeferCleanup(server.Close)
-
-	caFile := filepath.Join(GinkgoT().TempDir(), "netbox-ca.pem")
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
-	Expect(os.WriteFile(caFile, caPEM, 0o600)).To(Succeed())
-
-	client, err := New(Config{Endpoint: server.URL + "/", TokenFile: writeToken(token), CAFile: caFile})
-	Expect(err).NotTo(HaveOccurred())
-	return server, client
+	return server, NewClientForTest(server.Client(), server.URL, token)
 }
 
 func ginkgoRequestHandler(handler http.Handler) http.Handler {
@@ -788,33 +793,10 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func deviceResponse(id int, name, status string) string {
-	return fmt.Sprintf(`{
-		"id": %d,
-		"url": "/api/dcim/devices/%d/",
-		"display": %q,
-		"name": %q,
-		"device_type": {
-			"id": 1,
-			"url": "/api/dcim/device-types/1/",
-			"display": "Test device type",
-			"manufacturer": {"id": 1, "url": "/api/dcim/manufacturers/1/", "display": "Test manufacturer", "name": "Test manufacturer", "slug": "test-manufacturer"},
-			"model": "Test model",
-			"slug": "test-device-type"
-		},
-		"role": {"id": 1, "url": "/api/dcim/device-roles/1/", "display": "Server", "name": "Server", "slug": "server", "_depth": 0},
-		"site": {"id": 1, "url": "/api/dcim/sites/1/", "display": "Test site", "name": "Test site", "slug": "test-site"},
-		"status": {"value": %q, "label": "Active"},
-		"custom_fields": {"osac_instance_id": "instance-42"},
-		"console_port_count": 0,
-		"console_server_port_count": 0,
-		"power_port_count": 0,
-		"power_outlet_count": 0,
-		"front_port_count": 0,
-		"rear_port_count": 0,
-		"device_bay_count": 0,
-		"module_bay_count": 0,
-		"inventory_item_count": 0
-	}`, id, id, name, name, status)
+	payload := DevicePayloadForTest(id, name, status, map[string]interface{}{"osac_instance_id": "instance-42"})
+	encoded, err := json.Marshal(payload)
+	Expect(err).NotTo(HaveOccurred())
+	return string(encoded)
 }
 
 func interfacePage(results ...map[string]any) map[string]any {

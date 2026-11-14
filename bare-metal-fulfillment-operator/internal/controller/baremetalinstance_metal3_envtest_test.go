@@ -89,16 +89,7 @@ func createMetal3BMH(name string, labels map[string]string, opStatus metal3api.O
 
 func newMetal3Reconciler() *BareMetalInstanceReconciler {
 	invClient := inventory.NewMetal3ClientForTest(k8sClient, metal3TestNS, metal3HostClass)
-	mgmtClient := management.NewMetal3ClientForTest(k8sClient, metal3TestNS)
-	return NewBareMetalInstanceReconciler(
-		k8sClient,
-		k8sClient.Scheme(),
-		invClient,
-		mgmtClient,
-		nil,   // provisioning provider
-		false, // networking namespace (networking disabled)
-		0, 0, 0, 0, 0,
-	)
+	return newTestReconciler(invClient, metal3TestNS)
 }
 
 // These are thin, namespace-bound aliases over the shared integration helpers

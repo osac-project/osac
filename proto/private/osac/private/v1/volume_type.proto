@@ -21,6 +21,7 @@ import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/metering_type.proto";
+import "osac/private/v1/quota_type.proto";
 import "osac/private/v1/storage_common_type.proto";
 
 option (cleanapi.file).private = true;
@@ -83,6 +84,12 @@ enum VolumeState {
 // access mode), while the status tracks the system-resolved state (vendor volume ID, provider,
 // protocol).
 message Volume {
+  // Quota: one volume, and a VM's disk volume is named "ci-", the VM's ID, then the disk.
+  option (osac.private.v1.quota_message) = {
+    dimension: "storage.volumes"
+    created_for: {parent: "ComputeInstance", name_prefix: "ci-{parent}-"}
+  };
+
   // Unique identifier of the volume.
   string id = 1;
 
@@ -108,7 +115,7 @@ message VolumeSpec {
   string storage_tier = 1 [(buf.validate.field).string.min_len = 1, (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}];
 
   // Requested storage capacity in gibibytes (GiB).
-  int64 size_gib = 2 [(buf.validate.field).int64.gt = 0];
+  int64 size_gib = 2 [(buf.validate.field).int64.gt = 0, (osac.private.v1.quota) = {dimension: "storage.{spec.storage_tier}.gib"}];
 
   // Kubernetes access mode for the volume.
   VolumeAccessMode access_mode = 3 [(buf.validate.field).enum.defined_only = true];

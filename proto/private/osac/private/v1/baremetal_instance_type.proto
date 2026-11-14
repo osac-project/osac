@@ -29,6 +29,7 @@ import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/disk_image_type.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/metering_type.proto";
+import "osac/private/v1/quota_type.proto";
 import "osac/private/v1/secret_type.proto";
 import "osac/private/v1/user_data_source_type.proto";
 
@@ -133,7 +134,9 @@ message BareMetalInstanceSpec {
   // When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
   // with an ExternalIPAttachment for this instance atomically during creation.
   // Immutable after creation.
-  optional bool auto_external_ip_attachment = 9 [(google.api.field_behavior) = IMMUTABLE];
+  //
+  // Quota: one external IP address, when the field is true.
+  optional bool auto_external_ip_attachment = 9 [(google.api.field_behavior) = IMMUTABLE, (osac.private.v1.quota) = {creates: {kind: "ExternalIP"}}];
 
   // Reference to the bare metal instance template. Either `template` or `catalog_item` is required on create.
   //
@@ -145,7 +148,7 @@ message BareMetalInstanceSpec {
   // Reference to the BareMetalInstanceType used for hardware placement.
   // If omitted from the create request, a catalog item or template may provide it.
   // The resolved reference is immutable after creation.
-  BareMetalInstanceTypeReference instance_type = 11 [(google.api.field_behavior) = IMMUTABLE, (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}];
+  BareMetalInstanceTypeReference instance_type = 11 [(google.api.field_behavior) = IMMUTABLE, (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}, (osac.private.v1.quota) = {through: "BareMetalInstanceType"}];
 
   // Reference to a DiskImage resource, selected by ID or name. The reference is immutable after creation.
   // Catalog items can provide a default when callers omit it. The reference must resolve to an image in the instance
@@ -201,7 +204,7 @@ message BareMetalInstanceStatus {
   // For a cluster worker this names the cluster the worker serves for its whole life. Empty for
   // standalone instances. The system sets it once, at creation, and it never changes; users can't
   // set or change it.
-  ClusterLocalReference cluster = 8 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_FIXED_ONCE_SET, owner_resource: "Cluster"}];
+  ClusterLocalReference cluster = 8 [(osac.private.v1.metering) = {kind: METERING_FIELD_KIND_FIXED_ONCE_SET, owner_resource: "Cluster"}, (osac.private.v1.quota) = {created_for: {parent: "Cluster"}}];
 
   // The node set that the bare metal instance serves within its cluster. For a cluster worker
   // this is the identifier of the node set in the cluster's spec that the worker belongs to.

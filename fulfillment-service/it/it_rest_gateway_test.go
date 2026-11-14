@@ -21,7 +21,7 @@ import (
 	"net/http"
 	"time"
 
-	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -211,5 +211,29 @@ var _ = Describe("REST gateway", func() {
 		body, err := io.ReadAll(response.Body)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(string(body)).To(ContainSubstring("token expired"))
+	})
+
+	// The dev deployment configures no billing provider, so the billing REST routes carry the disabled-mode
+	// error: FAILED_PRECONDITION over gRPC maps to HTTP 400 here. The loop covers the public routes through the
+	// external view and the private routes through the internal view, so both surfaces' disabled-mode contract
+	// is pinned at the route level.
+	It("Should reject the billing routes with 400 when billing is not configured", Label("billing"), func() {
+		public := map[string]func(*http.Request) (*http.Response, error){
+			"/api/fulfillment/v1/billing/accounts":                   tool.ExternalView().AdminClient().Do,
+			"/api/fulfillment/v1/billing/tenant_billing_assignments": tool.ExternalView().AdminClient().Do,
+			"/api/private/v1/billing/accounts":                       tool.InternalView().AdminClient().Do,
+			"/api/private/v1/billing/tenant_billing_assignments":     tool.InternalView().AdminClient().Do,
+		}
+		for path, do := range public {
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+			Expect(err).ToNot(HaveOccurred())
+			response, err := do(request)
+			Expect(err).ToNot(HaveOccurred())
+			data, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.StatusCode).To(Equal(http.StatusBadRequest), path)
+			Expect(string(data)).To(ContainSubstring("billing is not configured"), path)
+		}
 	})
 })

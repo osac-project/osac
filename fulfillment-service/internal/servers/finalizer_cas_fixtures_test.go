@@ -58,7 +58,9 @@ const (
 	finalizerForeign = "test.osac.io/foreign"
 )
 
-// finalizerBearingServices returns the private services whose Update object has metadata.finalizers.
+// finalizerBearingServices returns the private services whose Update object has metadata.finalizers and that can be
+// deleted. Finalizers only matter when a Delete consumes them, so a service without Delete never uses them, even when
+// its Update object carries the field.
 func finalizerBearingServices() []string {
 	var result []string
 	packageName := (privatev1.EventType)(0).Descriptor().FullName().Parent()
@@ -66,6 +68,9 @@ func finalizerBearingServices() []string {
 		services := file.Services()
 		for i := range services.Len() {
 			service := services.Get(i)
+			if service.Methods().ByName("Delete") == nil {
+				continue
+			}
 			update := service.Methods().ByName("Update")
 			if update == nil {
 				continue

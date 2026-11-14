@@ -222,7 +222,7 @@ is_reader_only if {
   not is_csi
 }
 
-# Check if an account is a regular client (no admin, tenant management, or CSI roles):
+# Check if an account is a regular client (no admin, tenant management, CSI, or reader roles):
 default is_client = false
 is_client if {
   not is_admin
@@ -574,9 +574,61 @@ legacy_allow if {
   }
 }
 
-# Allow everything to admins:
+# Billing services use a closed, reviewed method allow-list: every billing method must be granted explicitly.
+# The billing service namespaces are excluded from the legacy admin catch-all below, so an unknown or newly added
+# method cannot silently become reachable.
+billing_service_namespaces := {
+  "/osac.public.v1.BillingAccounts/",
+  "/osac.private.v1.BillingAccounts/",
+  "/osac.public.v1.BillingProviderStatuses/",
+  "/osac.private.v1.BillingProviderStatuses/",
+  "/osac.public.v1.TenantBillingAssignments/",
+  "/osac.private.v1.TenantBillingAssignments/",
+}
+
+default is_billing_method = false
+is_billing_method if {
+  some namespace in billing_service_namespaces
+  startswith(grpc_method, namespace)
+}
+
+# The closed billing method allow-list. Only platform admins (is_admin) may use exactly these methods; any other
+# billing method is denied for everyone, so a new one must be reviewed and added here.
+billing_allowed_methods := {
+  "/osac.public.v1.BillingAccounts/List",
+  "/osac.private.v1.BillingAccounts/List",
+  "/osac.public.v1.BillingProviderStatuses/Get",
+  "/osac.private.v1.BillingProviderStatuses/Get",
+  "/osac.public.v1.TenantBillingAssignments/List",
+  "/osac.public.v1.TenantBillingAssignments/Get",
+  "/osac.public.v1.TenantBillingAssignments/Create",
+  "/osac.public.v1.TenantBillingAssignments/Update",
+  "/osac.private.v1.TenantBillingAssignments/List",
+  "/osac.private.v1.TenantBillingAssignments/Get",
+  "/osac.private.v1.TenantBillingAssignments/Create",
+  "/osac.private.v1.TenantBillingAssignments/Update",
+}
+
+# Billing methods reserved for platform admins and controllers only. No non-admin role grants these.
+billing_admin_only_methods := {
+  "/osac.private.v1.TenantBillingAssignments/Signal",
+}
+
 legacy_allow if {
   is_admin
+  grpc_method in billing_allowed_methods
+}
+
+legacy_allow if {
+  is_admin
+  grpc_method in billing_admin_only_methods
+}
+
+# Allow everything to admins, except the billing services, which are governed by the closed allow-list above so
+# no billing method can bypass review through this catch-all.
+legacy_allow if {
+  is_admin
+  not is_billing_method
 }
 
 # The CSI driver identity may only manage volumes through the private Volume API

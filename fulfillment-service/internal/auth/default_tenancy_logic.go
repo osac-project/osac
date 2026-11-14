@@ -25,13 +25,15 @@ import (
 
 // DefaultTenancyLogicBuilder contains the data and logic needed to create default tenancy logic.
 type DefaultTenancyLogicBuilder struct {
-	logger *slog.Logger
+	logger         *slog.Logger
+	tenantResolver TenantResolver
 }
 
-// DefaultTenancyLogic is the default implementation of TenancyLogic. It reads the tenants directly from the subject,
-// which are expected to have been populated by the external authentication and authorization service.
+// DefaultTenancyLogic starts from the authenticated subject and intersects finite tenant scope with the configured
+// authoritative resolver before assigning tenants or deciding resource visibility.
 type DefaultTenancyLogic struct {
-	logger *slog.Logger
+	logger         *slog.Logger
+	tenantResolver TenantResolver
 }
 
 // NewDefaultTenancyLogic creates a new builder for default tenancy logic.
@@ -45,6 +47,11 @@ func (b *DefaultTenancyLogicBuilder) SetLogger(value *slog.Logger) *DefaultTenan
 	return b
 }
 
+func (b *DefaultTenancyLogicBuilder) SetTenantResolver(value TenantResolver) *DefaultTenancyLogicBuilder {
+	b.tenantResolver = value
+	return b
+}
+
 // Build creates the default tenancy logic that extracts the subject from the auth context and returns the identifiers
 // of the tenants.
 func (b *DefaultTenancyLogicBuilder) Build() (result *DefaultTenancyLogic, err error) {
@@ -53,7 +60,8 @@ func (b *DefaultTenancyLogicBuilder) Build() (result *DefaultTenancyLogic, err e
 		return
 	}
 	result = &DefaultTenancyLogic{
-		logger: b.logger,
+		logger:         b.logger,
+		tenantResolver: b.tenantResolver,
 	}
 	return
 }
@@ -64,6 +72,14 @@ func (p *DefaultTenancyLogic) DetermineAssignableTenants(ctx context.Context) (r
 	err error) {
 	subject := SubjectFromContext(ctx)
 	result = subject.Tenants
+	if result.Finite() && p.tenantResolver != nil {
+		var names []string
+		names, err = p.tenantResolver(ctx, result.Inclusions())
+		if err != nil {
+			return
+		}
+		result = collections.NewSet(names...)
+	}
 	if result.Empty() {
 		p.logger.ErrorContext(
 			ctx,
@@ -107,14 +123,29 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 		result = TotalVisibility()
 		return
 	}
+	// Streams carry a manager, never a transaction held for the stream lifetime.
+	// Each visibility decision uses a fresh short transaction.
+	if p.tenantResolver != nil || !subject.ManagedServiceAccount {
+		if _, txErr := database.TxFromContext(ctx); txErr != nil {
+			return database.WithNewTx(ctx, p.DetermineVisibility)
+		}
+	}
+	tenants := subject.Tenants
+	if p.tenantResolver != nil {
+		names, resolveErr := p.tenantResolver(ctx, tenants.Inclusions())
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		tenants = collections.NewSet(names...)
+	}
 
 	// Start by adding the shared tenant and the tenants from the subject. Tenants from the subject are visible even
 	// when the user has no project memberships in them; memberships only grant additional projects.
 	builder := NewVisibility()
 	builder.AddVisibleTenant(SharedTenant)
-	builder.AddVisibleTenants(subject.Tenants.Inclusions()...)
+	builder.AddVisibleTenants(tenants.Inclusions()...)
 	if subject.ManagedServiceAccount {
-		for _, tenant := range subject.Tenants.Inclusions() {
+		for _, tenant := range tenants.Inclusions() {
 			builder.SetTotalProjectVisibility(tenant)
 		}
 		result, err = builder.Build()
@@ -123,7 +154,7 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 
 	// Check if the user has the tenant-admin role. If so, grant full access to all projects in their tenants.
 	if IsTenantAdmin(ctx) {
-		for _, tenant := range subject.Tenants.Inclusions() {
+		for _, tenant := range tenants.Inclusions() {
 			builder.SetTotalProjectVisibility(tenant)
 		}
 	}
@@ -131,7 +162,7 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 	// Add the projects that the user has access to according to the Keycloak groups in the JWT token.
 	// This ensures that users who are added to project manager/viewer groups via the project reconciler
 	// can see those projects even if no ProjectMembership object exists yet.
-	p.addProjectsFromToken(ctx, builder)
+	p.addProjectsFromToken(ctx, builder, tenants)
 
 	// Add the projects that the user has access to according to the project membership table:
 	tx, err := database.TxFromContext(ctx)
@@ -150,7 +181,7 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 			tenant = any($1) and
 			"user" = $2
 		`,
-		subject.Tenants.Inclusions(),
+		tenants.Inclusions(),
 		subject.User,
 	)
 	if err != nil {
@@ -176,7 +207,7 @@ func (p *DefaultTenancyLogic) DetermineVisibility(ctx context.Context) (result *
 }
 
 // addProjectsFromToken extracts project visibility from Keycloak groups in the JWT token.
-func (p *DefaultTenancyLogic) addProjectsFromToken(ctx context.Context, builder *VisibilityBuilder) {
+func (p *DefaultTenancyLogic) addProjectsFromToken(ctx context.Context, builder *VisibilityBuilder, tenants collections.Set[string]) {
 	token := TokenFromContext(ctx)
 	if token == nil {
 		return
@@ -194,7 +225,9 @@ func (p *DefaultTenancyLogic) addProjectsFromToken(ctx context.Context, builder 
 	}
 
 	for tenant, value := range orgMap {
-		p.addProjectsFromTenantGroups(tenant, value, builder)
+		if tenants.Contains(tenant) {
+			p.addProjectsFromTenantGroups(tenant, value, builder)
+		}
 	}
 }
 

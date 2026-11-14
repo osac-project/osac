@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
@@ -34,6 +35,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/kafka"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -203,7 +205,7 @@ var _ = Describe("Events server visibility", Ordered, func() {
 	}
 
 	// startServer creates a Kafka-backed events server behind a bufconn gRPC server.
-	startServer := func(tenancy auth.TenancyLogic) (*EventsServer, publicv1.EventsClient) {
+	startServer := func(tenancy auth.TenancyLogic, options ...grpc.ServerOption) (*EventsServer, publicv1.EventsClient) {
 		eventsServer, err := NewEventsServer().
 			SetLogger(logger).
 			SetKafkaConfig(kafkaConfig).
@@ -215,7 +217,7 @@ var _ = Describe("Events server visibility", Ordered, func() {
 
 		// Create the gRPC server using bufconn:
 		grpcListener := bufconn.Listen(1024 * 1024)
-		grpcServer := grpc.NewServer()
+		grpcServer := grpc.NewServer(options...)
 		publicv1.RegisterEventsServer(grpcServer, eventsServer)
 		go func() {
 			defer GinkgoRecover()
@@ -332,6 +334,64 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		Expect(collector.Events()[0].GetId()).To(Equal(eventID))
 		Expect(collector.Events()[0].GetCluster().GetMetadata().GetTenant()).To(Equal("tenant-a"))
 		Expect(collector.Events()[0].GetTimestamp().AsTime()).To(Equal(timestamp.AsTime()))
+	})
+
+	It("rechecks PostgreSQL liveness on an already open Watch after tenant deletion", func() {
+		seedAuthorizationTenant(ctx, "tenant-a")
+		seedAuthorizationBillingAssignment(ctx, "tenant-a")
+		// The stream and deletion use independent transactions, like production.
+		Expect(suiteTx.End(ctx)).To(Succeed())
+		suiteTx = nil
+		managerCtx := database.TxManagerIntoContext(context.Background(), tm)
+		logic, err := auth.NewDefaultTenancyLogic().SetLogger(logger).
+			SetTenantResolver(database.ResolveLiveTenantNames).Build()
+		Expect(err).ToNot(HaveOccurred())
+		evaluator, err := auth.NewEvaluator().SetTenantResolver(database.ResolveLiveTenantNames).Build()
+		Expect(err).ToNot(HaveOccurred())
+		authz, err := auth.NewGrpcAuthzInterceptor().SetLogger(logger).SetEvaluator(evaluator).Build()
+		Expect(err).ToNot(HaveOccurred())
+		txInterceptor, err := database.NewTxInterceptor().SetLogger(logger).SetManager(tm).Build()
+		Expect(err).ToNot(HaveOccurred())
+		// Signature verification is outside this component test. Everything after
+		// token validation uses the production transaction/authz/tenancy path.
+		token := &jwt.Token{Claims: jwt.MapClaims{
+			"preferred_username": "alice", "organization": []any{"tenant-a"},
+			"exp": time.Now().Add(time.Hour).Unix(),
+		}}
+		injectToken := func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+			return handler(srv, &tenantAuthorizationStream{ServerStream: stream,
+				ctx: auth.ContextWithToken(stream.Context(), token)})
+		}
+		server, client := startServer(logic, grpc.ChainStreamInterceptor(txInterceptor.StreamServer, injectToken, authz.StreamServer))
+		collector, cancel := startWatch(server, client)
+		defer cancel()
+		event := func(tenant string) *privatev1.Event {
+			return privatev1.Event_builder{Id: uuid.New(), Type: privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+				Cluster: privatev1.Cluster_builder{Id: uuid.New(),
+					Metadata: privatev1.Metadata_builder{Tenant: tenant}.Build()}.Build()}.Build()
+		}
+		sendEvent(event("tenant-a"))
+		Eventually(collector.Events, 10*time.Second).Should(HaveLen(1))
+		_, err = database.WithNewTx(managerCtx, func(c context.Context) (struct{}, error) {
+			tenants, err := NewPrivateTenantsServer().SetLogger(logger).SetTenancyLogic(tenancy).
+				SetAttributionLogic(attribution).Build()
+			if err != nil {
+				return struct{}{}, err
+			}
+			_, err = tenants.Delete(c, privatev1.TenantsDeleteRequest_builder{Id: "tenant-a"}.Build())
+			return struct{}{}, err
+		})
+		Expect(err).ToNot(HaveOccurred())
+		var retained, closed bool
+		Expect(testPool.QueryRow(managerCtx, `select deletion_timestamp <> 'epoch' from tenants where name='tenant-a'`).Scan(&retained)).To(Succeed())
+		Expect(testPool.QueryRow(managerCtx, `select effective_to is not null from tenant_billing_assignments where tenant_id='tenant-a'`).Scan(&closed)).To(Succeed())
+		Expect(retained).To(BeTrue())
+		Expect(closed).To(BeTrue())
+		sendEvent(event("tenant-a"))
+		sendEvent(event(auth.SharedTenant))
+		Eventually(collector.Events, 10*time.Second).Should(HaveLen(2))
+		Consistently(collector.Events, time.Second).Should(HaveLen(2))
+		Expect(collector.Events()[1].GetCluster().GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
 	})
 
 	It("Delivers events from the shared tenant", func() {

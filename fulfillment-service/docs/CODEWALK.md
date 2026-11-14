@@ -71,7 +71,7 @@ per resource purely through Go generics plus protobuf reflection over the resour
 
 `TxInterceptor.UnaryServer`
 ([`internal/database/database_tx_interceptor.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/database/database_tx_interceptor.go))
-wraps every unary gRPC call: it begins a transaction before the handler runs, injects it into the
+normally wraps unary gRPC calls: it begins a transaction before the handler runs, injects it into the
 context (`TxIntoContext`), and commits or rolls back in a deferred block after the handler returns.
 Any code downstream retrieves the current transaction with
 `database.TxFromContext(ctx)` instead of receiving it as a parameter.
@@ -93,6 +93,15 @@ mitigate this here:
   Event emission is therefore atomic with the request: an event is never published for a change
   that rolls back.
 
+Generic DAO creation checks the normalized owning tenant under a transaction-held
+`FOR SHARE` row lock. A create waiting behind tenant deletion rechecks the committed
+deletion state instead of treating a retained billing-history tenant as live merely
+because its foreign key still resolves. Tenant self-bootstrap is exempt. Existing
+controller cleanup updates remain available; this application guard does not constrain
+direct SQL writers that bypass the DAO. Tenant archival takes `FOR UPDATE` outside
+its archive savepoint and, when billing history retains the identity, checks every
+other restrictive tenant foreign key before accepting the tombstone.
+
 Known footgun: rollback is driven by `Tx.ReportError(&err)`
 ([`internal/database/database_tx.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/database/database_tx.go)),
 which must be called (typically via `defer`) by any code path that can produce an error inside the
@@ -101,6 +110,21 @@ by the type system. A handler that panics is rolled back before the panic propag
 
 Use `Tx.OnCommit` for work that must only happen once a change is stored, such as logging it. It
 never runs after a rollback or a failed commit.
+
+**Provider-backed billing RPCs are an explicit exception.** Account discovery (`BillingAccounts.List`)
+and assignment writes/revalidation (`TenantBillingAssignments.Create`, `Update`, and private `Signal`)
+are configured with `TxInterceptorBuilder.AddManagerOnlyMethods`. The interceptor supplies the transaction
+manager but no ambient transaction; managed-service-account authorization and JIT provisioning use their
+existing independent transaction paths. Billing handlers use short `database.WithNewTx` scopes, with no
+transaction or pooled connection held during provider I/O. Discovery fetches before its atomic store and
+opens its freshness window only after commit. Assignment operations commit expiring account/tenant/correlation
+leases before provider work and revalidate ownership and current state in the final commit transaction.
+The lease fences local finalization, not the external provider: a provider write and PostgreSQL commit
+cannot be atomic, and a paused owner is not remotely fenced after lease expiry.
+
+Streaming RPCs use `TxInterceptor.StreamServer`, which supplies a manager-only context and
+shadows any ambient transaction. Authorization, JIT, and each Watch visibility check can use
+short `WithNewTx` scopes without pinning a connection for the lifetime of the stream.
 
 ### Event delivery and reconciliation recovery
 

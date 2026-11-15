@@ -7,9 +7,12 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Protocol
 
+from tests.conformance.errors import ConfigError
+from tests.conformance.interrupt import Interrupted
 from tests.conformance.model import Classification, Plan, Result, RunContext, TestIdentity, TestOutcome
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +48,25 @@ class PytestTestTree:
             env["OSAC_CONFORMANCE_TENANT"] = context.tenant
         return env
 
+    def _absolute_nodeid(self, nodeid: str) -> str:
+        file_part, separator, rest = nodeid.partition("::")
+        if not separator:
+            return nodeid
+        path = Path(file_part)
+        absolute = path if path.is_absolute() else (self.root / path).resolve()
+        return f"{absolute}::{rest}"
+
+    def _canonical_id(self, nodeid: str) -> str:
+        absolute = self._absolute_nodeid(nodeid)
+        file_part, separator, rest = absolute.partition("::")
+        if not separator:
+            return absolute
+        try:
+            relative = Path(file_part).relative_to(self.root.resolve())
+        except ValueError:
+            relative = Path(file_part)
+        return f"{relative.as_posix()}::{rest}"
+
     def collect(self) -> tuple[TestIdentity, ...]:
         import tempfile
 
@@ -74,16 +96,19 @@ class PytestTestTree:
             if proc.returncode == 5:
                 return ()
             if proc.returncode != 0 or not manifest.exists():
-                raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "pytest collection failed")
+                detail = proc.stderr.strip() or proc.stdout.strip() or "no output"
+                raise ConfigError([f"pytest collection failed: {detail}"])
             items = json.loads(manifest.read_text())
-        return tuple(self._identity(item) for item in items)
+        tests = tuple(self._identity(item) for item in items)
+        duplicates = sorted(item for item, count in Counter(test.id for test in tests).items() if count > 1)
+        if duplicates:
+            raise ConfigError([f"duplicate conformance test id {item}" for item in duplicates])
+        return tests
 
     def _identity(self, item: dict[str, object]) -> TestIdentity:
         name = str(item["name"])
-        nodeid = str(item["nodeid"])
-        file_part, separator, rest = nodeid.partition("::")
-        if separator and not Path(file_part).is_absolute():
-            nodeid = f"{(self.root / file_part).resolve()}::{rest}"
+        manifest_nodeid = str(item["nodeid"])
+        nodeid = self._absolute_nodeid(manifest_nodeid)
         markers = frozenset(str(marker) for marker in item.get("markers", []))
         classification = (
             Classification.INFORMING
@@ -91,7 +116,12 @@ class PytestTestTree:
             else Classification.BLOCKING
         )
         return TestIdentity(
-            id=name, name=name, nodeid=nodeid, labels=markers, profiles=(), classification=classification
+            id=self._canonical_id(manifest_nodeid),
+            name=name,
+            nodeid=nodeid,
+            labels=markers,
+            profiles=(),
+            classification=classification,
         )
 
     def run(self, plan: Plan, context: RunContext, *, keep: bool) -> tuple[TestOutcome, ...]:
@@ -121,33 +151,39 @@ class PytestTestTree:
                 capture_output=True,
                 check=False,
             )
+            if proc.returncode == 2:
+                raise Interrupted
+            if proc.returncode not in (0, 1):
+                detail = proc.stderr.strip() or proc.stdout.strip() or "no output"
+                raise ConfigError([f"pytest exited {proc.returncode}: {detail}"])
             if context.output is not None:
                 for line in (proc.stdout + proc.stderr).splitlines():
                     context.output.line(line)
-            entries: dict[str, dict[str, object]] = {}
-            by_name: dict[str, dict[str, object]] = {}
+            entries: dict[str, list[dict[str, object]]] = {}
             if results_path.exists():
                 for line in results_path.read_text().splitlines():
                     entry = json.loads(line)
-                    entries[str(entry["nodeid"])] = entry
-                    by_name[str(entry["name"])] = entry
+                    entries.setdefault(self._canonical_id(str(entry["nodeid"])), []).append(entry)
         outcomes: list[TestOutcome] = []
         for test in plan.tests:
-            entry = entries.get(test.nodeid) or by_name.get(test.id)
+            group = entries.get(test.id, [])
             evidence = context.results_dir / "tests" / _safe_component(test.id)
             evidence.mkdir(parents=True, exist_ok=True)
-            if entry is None:
+            if not group:
                 outcome = Result.SKIP
                 message = "did not run"
                 duration = 0.0
             else:
-                raw = str(entry.get("outcome", "failed"))
-                outcome = {"passed": Result.PASS, "failed": Result.FAIL, "skipped": Result.SKIP}.get(raw, Result.FAIL)
-                message = str(entry.get("message", ""))
-                duration = float(entry.get("duration", 0.0))
+                failed = [entry for entry in group if entry.get("outcome") == "failed"]
+                skipped = [entry for entry in group if entry.get("outcome") == "skipped"]
+                outcome = Result.FAIL if failed else Result.SKIP if skipped else Result.PASS
+                messages = [
+                    str(entry.get("message", "")) for entry in (failed or skipped or group) if entry.get("message")
+                ]
+                message = "\n".join(dict.fromkeys(messages))
+                duration = sum(float(entry.get("duration", 0.0)) for entry in group)
                 if context.output is not None:
-                    context.output.evidence(
-                        test, Path("test.log"), str(entry.get("stdout", "")) + str(entry.get("stderr", ""))
-                    )
+                    log = "".join(str(entry.get("stdout", "")) + str(entry.get("stderr", "")) for entry in group)
+                    context.output.evidence(test, Path("test.log"), log)
             outcomes.append(TestOutcome(test, outcome, duration, message, evidence))
         return tuple(outcomes)

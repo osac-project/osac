@@ -129,9 +129,21 @@ status entry; KubeVirt feedback population is tracked by
 [OSAC-2479](https://redhat.atlassian.net/browse/OSAC-2479).
 
 An omitted attachment requests tenant defaults; a supplied attachment resolves
-missing fields individually. Consult the unified/default designs for validation
-of tenant ownership, subnet/security-group VirtualNetwork alignment, readiness,
-and BMaaS interface selection. Do not interchange these message types.
+missing fields individually. Because tenant defaults are tenant-wide,
+attachment resolution finds a supplied reference to the tenant's default Subnet
+or SecurityGroup from any project of the tenant; other cross-project references
+do not resolve. An exact ID of a default wins over a local resource with that
+name, and a local resource wins over a default with the same name. This extends
+the OSAC-1433 default-networking omitted-attachment rule to supplied references
+(OSAC-6312). ID references always reach this resolution. For ComputeInstance
+and Cluster create, a name-only reference reaches it only when the request
+omits `metadata.tenant`: with the tenant set, the request validator looks the
+name up only in `metadata.project` and rejects a default of another project.
+The `DefaultNetworkingReady` gate applies only to fields filled from tenant
+defaults, not to a supplied reference to a default. Consult the unified/default
+designs for validation of tenant ownership, subnet/security-group
+VirtualNetwork alignment, readiness, and BMaaS interface selection. Do not
+interchange these message types.
 
 ## Auto-created resource deletion
 

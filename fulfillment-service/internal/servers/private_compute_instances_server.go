@@ -680,7 +680,8 @@ func computeInstanceNetworkResourceInScope(owner, resource *privatev1.Metadata) 
 	if owner == nil || resource == nil || resource.GetTenant() != owner.GetTenant() {
 		return false
 	}
-	return resource.GetProject() == owner.GetProject() || resource.GetLabels()[defaultLabel] == "true"
+	return resource.GetProject() == owner.GetProject() ||
+		(resource.GetLabels()[defaultLabel] == "true" && resource.GetProject() == "")
 }
 
 func onlyInstanceTypeMask(mask *fieldmaskpb.FieldMask) bool {

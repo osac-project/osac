@@ -197,12 +197,47 @@ var _ = Describe("ExternalIPAttachment and NATGateway controllers", func() {
 		reconcileNet(eipas, eipa)
 		expectReady(eipa, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
 
+		latestCI := &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(ci), latestCI)).To(Succeed())
+		Expect(latestCI.Status.ExternalIPAddress).To(Equal("198.51.100.19"))
+
 		deleteNet(eipa)
 		reconcileNet(eipas, eipa)
 		Expect(h.aap.latest(networktask.DetachExternalIP, netFabric).vars["destination"]).To(Equal(launch.vars["destination"]))
 		h.aap.succeed(networktask.DetachExternalIP, netFabric)
 		_, exists := reconcileNet(eipas, eipa)
 		Expect(exists).To(BeFalse())
+
+		latestCI = &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(ci), latestCI)).To(Succeed())
+		Expect(latestCI.Status.ExternalIPAddress).To(BeEmpty())
+	})
+
+	It("clears the ComputeInstance external IP after its attachment detaches", func() {
+		ci := h.computeInstance(ciID, "sn-1", "10.0.1.17")
+		ci.Status.ExternalIPAddress = "198.51.100.19"
+		Expect(k8sClient.Status().Update(ctx, ci)).To(Succeed())
+
+		eipa := attachment(func(s *v1alpha1.ExternalIPAttachmentSpec) { s.ComputeInstance = ptr.To(ciID) })
+		reconcileNet(eipas, eipa)
+		h.aap.succeed(networktask.AttachExternalIP, netFabric)
+		reconcileNet(eipas, eipa)
+		expectReady(eipa, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
+
+		deleteNet(eipa)
+		reconcileNet(eipas, eipa)
+		Expect(h.aap.latest(networktask.DetachExternalIP, netFabric).vars["destination"]).To(Equal(
+			map[string]any{"address": "10.0.1.17", "routing_domain": map[string]any{
+				"type": "tenant_virtual_network", "virtual_network_id": "vn-1", "subnet_id": "sn-1",
+			}},
+		))
+		h.aap.succeed(networktask.DetachExternalIP, netFabric)
+		_, exists := reconcileNet(eipas, eipa)
+		Expect(exists).To(BeFalse())
+
+		latestCI := &v1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(ci), latestCI)).To(Succeed())
+		Expect(latestCI.Status.ExternalIPAddress).To(BeEmpty())
 	})
 
 	It("attaches a Cluster API endpoint on the provider management network", func() {

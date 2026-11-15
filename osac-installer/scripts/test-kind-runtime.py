@@ -1547,6 +1547,10 @@ echo 'stub archive' > "$4"
         devstack_install = output.find("helm upgrade --install osac-devstack ")
         self.assertGreater(osac_install, max(build_positions), output)
         self.assertGreater(devstack_install, osac_install, output)
+        fedora_prepare = "bash scripts/dev-full/build-fedora-image.sh "
+        self.assertEqual(output.count(fedora_prepare), 1, output)
+        self.assertGreater(output.find(fedora_prepare), osac_install, output)
+        self.assertLess(output.find(fedora_prepare), devstack_install, output)
         self.assertIn("kind-build-load-images", output)
         self.assertIn("KIND_REQUIRE_UV=true", output)
         self.assertNotIn("container save quay.io/openshift/origin-cli:4.19", output)
@@ -1593,6 +1597,7 @@ echo 'stub archive' > "$4"
         )
         self.assert_success(mixed_runtime_result)
         mixed_output = mixed_runtime_result.stdout
+        self.assertEqual(mixed_output.count(fedora_prepare), 1, mixed_output)
         copy_out = mixed_output.find("container save quay.io/openshift/origin-cli:4.19")
         copy_in = mixed_output.find("docker load -i")
         mixed_aap_build = mixed_output.find(

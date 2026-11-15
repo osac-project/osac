@@ -392,7 +392,7 @@ The build customizes the disk offline using a software-emulated libguestfs
 appliance; it does not need working nested KVM. The first build downloads the
 image and customization tools. Later builds reuse the container build cache.
 
-`kind-build-load-images` and `install-devstack` both prepare and load
+`install-devstack`, including when run by `install`, prepares and loads
 `localhost/osac-dev/fedora-arm64:pci-nomsi-v1` into every Kind node. CDI's node
 pull method uses the loaded image with its `IfNotPresent` policy. The local
 catalog registers it as `fedora-mac-arm64`, advertising ARM64 only, and makes it

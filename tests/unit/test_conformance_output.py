@@ -11,7 +11,7 @@ from tests.conformance.model import Classification, Plan, Selector, TestIdentity
 from tests.conformance.output import OutputSink, new_run_id, write_plan
 from tests.conformance.redact import Redactor
 
-_FAKE_SECRET = "not-a-real-secret"
+_REDACTION_MARKER = "redaction-marker"
 
 
 def _test() -> TestIdentity:
@@ -30,20 +30,20 @@ def test_run_id_is_eight_lowercase_alphanumeric() -> None:
 
 
 def test_output_sink_writes_stdout_and_log_with_timestamp_and_redaction(tmp_path: Path) -> None:
-    sink = OutputSink(tmp_path, Redactor(secrets=(_FAKE_SECRET,)))
+    sink = OutputSink(tmp_path, Redactor(secrets=(_REDACTION_MARKER,)))
 
-    sink.line(f"token {_FAKE_SECRET}")
+    sink.line(f"token {_REDACTION_MARKER}")
 
     log = (tmp_path / "conformance.log").read_text()
-    assert _FAKE_SECRET not in log
+    assert _REDACTION_MARKER not in log
     assert "<redacted>" in log
     assert re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", log)
 
 
 def test_evidence_is_redacted_and_confined(tmp_path: Path) -> None:
-    sink = OutputSink(tmp_path, Redactor(secrets=(_FAKE_SECRET,)))
+    sink = OutputSink(tmp_path, Redactor(secrets=(_REDACTION_MARKER,)))
 
-    path = sink.evidence(_test(), Path("api.log"), f"token {_FAKE_SECRET}")
+    path = sink.evidence(_test(), Path("api.log"), f"token {_REDACTION_MARKER}")
 
     assert path.read_text() == "token <redacted>"
     with pytest.raises(ValueError):

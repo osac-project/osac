@@ -11,7 +11,7 @@ from tests.conformance.redact import Redactor
 from tests.conformance.selection import compute_plan
 from tests.conformance.testtree import PytestTestTree
 
-_FAKE_API_KEY = "not-a-real-api-key"
+_REDACTION_MARKER_C = "redaction-marker-c"
 
 
 def _tree(tmp_path: Path) -> Path:
@@ -23,7 +23,7 @@ def _tree(tmp_path: Path) -> Path:
         "@pytest.mark.conformance_blocking\n"
         "def test_passes():\n"
         "    print('pass output')\n"
-        f"    print('api_key={_FAKE_API_KEY}')\n"
+        f"    print('api_key={_REDACTION_MARKER_C}')\n"
         "@pytest.mark.conformance_generic\n"
         "@pytest.mark.conformance_blocking\n"
         "def test_fails():\n"
@@ -71,5 +71,5 @@ def test_captured_test_output_is_redacted_in_evidence(tmp_path: Path) -> None:
     tree.run(plan, context, keep=False)
 
     log = (results / "tests" / "test_passes" / "test.log").read_text()
-    assert _FAKE_API_KEY not in log
+    assert _REDACTION_MARKER_C not in log
     assert "<redacted>" in log

@@ -15,7 +15,7 @@ from tests.conformance.output import OutputSink
 from tests.conformance.redact import Redactor
 from tests.conformance.testtree import PytestTestTree
 
-_FAKE_SECRET = "not-a-real-secret"
+_REDACTION_MARKER = "redaction-marker"
 
 
 def _config(path: Path, token: Path, ca: Path, hub: Path) -> Path:
@@ -55,12 +55,12 @@ def _tree(path: Path) -> Path:
         "@pytest.mark.conformance_vmaas\n"
         "@pytest.mark.conformance_blocking\n"
         "def test_passes():\n"
-        f"    print('{_FAKE_SECRET}')\n"
+        f"    print('{_REDACTION_MARKER}')\n"
         "@pytest.mark.conformance_generic\n"
         "@pytest.mark.conformance_vmaas\n"
         "@pytest.mark.conformance_blocking\n"
         "def test_also_passes():\n"
-        f"    print('{_FAKE_SECRET}')\n"
+        f"    print('{_REDACTION_MARKER}')\n"
     )
     return path
 
@@ -73,7 +73,7 @@ def _runtime(tmp_path: Path, results: Path, tree_dir: Path) -> Runtime:
     hub = tmp_path / "hub"
     hub.write_text("hub")
     config = load_config(_config(tmp_path / "conformance.yaml", token, ca, hub))
-    redactor = Redactor(secrets=(_FAKE_SECRET,))
+    redactor = Redactor(secrets=(_REDACTION_MARKER,))
     return Runtime(
         config=config,
         catalog=_catalog(),
@@ -104,7 +104,7 @@ def test_list_and_run_the_core_against_a_synthetic_tree(tmp_path: Path) -> None:
     assert report["tests"][0]["result"] == "pass"
     assert [check["id"] for check in report["checks"]] == ["all-blocking-tests-pass", "no-leftovers", "complete-plan"]
     assert (results / "junit.xml").exists()
-    assert _FAKE_SECRET not in (results / "conformance.log").read_text()
+    assert _REDACTION_MARKER not in (results / "conformance.log").read_text()
 
     focused_results = tmp_path / "focused-results"
     focused_results.mkdir()
@@ -119,7 +119,7 @@ def test_list_and_run_the_core_against_a_synthetic_tree(tmp_path: Path) -> None:
     assert focused_report["complete"] is False
     for path in results.rglob("*"):
         if path.is_file():
-            assert _FAKE_SECRET not in path.read_text(errors="ignore")
+            assert _REDACTION_MARKER not in path.read_text(errors="ignore")
 
 
 def test_empty_plan_is_a_config_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

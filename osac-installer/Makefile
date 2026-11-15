@@ -539,9 +539,6 @@ kind-load-images: validate-ns ## Load previously built dev-full images into Kind
 	$(call kind-load-local-image,$(KIND_UI_IMAGE))
 
 .PHONY: kind-build-load-images
-ifeq ($(PLATFORM)/$(PROFILE)/$(HOST_IS_MAC_ARM),kind/dev-full/true)
-kind-build-load-images: kind-prepare-fedora-image
-endif
 kind-build-load-images: ## Build and load dev-full images into Kind (PLATFORM=kind PROFILE=dev-full NS= required)
 	@if [ "$(PLATFORM)/$(PROFILE)" != "kind/dev-full" ]; then \
 		echo "ERROR: kind-build-load-images requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1; \

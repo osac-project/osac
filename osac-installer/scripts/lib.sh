@@ -188,6 +188,7 @@ ensure_inotify_instances() {
 
 ensure_podman_pid_limits() {
     local cluster="$1" kind_command="$2" podman_command="$3" nodes node limit
+    local limit_pattern='^(-1|0|[1-9][0-9]*)$'
     if ! nodes=$("${kind_command}" get nodes --name "${cluster}") || [[ -z "${nodes}" ]]; then
         echo "ERROR: Could not list Podman Kind nodes for '${cluster}'; check the selected connection." >&2
         return 1
@@ -195,7 +196,7 @@ ensure_podman_pid_limits() {
     while IFS= read -r node; do
         [[ -n "${node}" ]] || continue
         if ! limit=$("${podman_command}" inspect --format '{{.HostConfig.PidsLimit}}' "${node}") ||
-           [[ ! "${limit}" =~ ^(-1|0|[1-9][0-9]*)$ ]]; then
+           [[ ! "${limit}" =~ ${limit_pattern} ]]; then
             echo "ERROR: Could not inspect configured Podman PID limit for '${node}'; check the selected connection." >&2
             return 1
         fi
@@ -205,7 +206,7 @@ ensure_podman_pid_limits() {
                 return 1
             fi
             if ! limit=$("${podman_command}" inspect --format '{{.HostConfig.PidsLimit}}' "${node}") ||
-               [[ ! "${limit}" =~ ^(-1|0|[1-9][0-9]*)$ ]] ||
+               [[ ! "${limit}" =~ ${limit_pattern} ]] ||
                { [[ "${limit}" != -1 && "${limit}" != 0 ]] && (( limit < 65536 )); }; then
                 echo "ERROR: Podman PID limit verification failed for '${node}' (reported '${limit}'); expected at least 65536 or unlimited." >&2
                 return 1
@@ -219,10 +220,11 @@ ensure_podman_pid_limits() {
 validate_remote_kubeconfig_secret() {
     local secret_name="$1"
     local secret_key="$2"
+    local secret_name_pattern='^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
     local LC_ALL=C
 
     if (( ${#secret_name} > 253 )) || \
-        [[ ! "${secret_name}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$ ]]; then
+        [[ ! "${secret_name}" =~ ${secret_name_pattern} ]]; then
         echo "ERROR: REMOTE_KUBECONFIG_SECRET_NAME must be a DNS subdomain of at most 253 characters" >&2
         return 2
     fi
@@ -234,6 +236,688 @@ validate_remote_kubeconfig_secret() {
     fi
 
     return 0
+}
+
+# Validate the target namespace before NS is interpolated into any later
+# recipe command text. The value reaches this validator through the
+# exported environment (never through Make expansion into command text),
+# so it cannot break out of this quoting either; once it passes, every
+# later $(NS) interpolation is known to carry namespace-safe characters.
+# The value itself is deliberately not echoed back: a rejected name could
+# carry control characters that corrupt the log.
+validate_namespace() {
+    local ns="$1"
+    local namespace_pattern='^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+    local LC_ALL=C
+
+    if (( ${#ns} == 0 || ${#ns} > 63 )) || \
+        [[ ! "${ns}" =~ ${namespace_pattern} ]]; then
+        echo "ERROR: NS must be a valid namespace name: a lowercase DNS label of at most 63 characters (a-z, 0-9, and '-', starting and ending with a-z or 0-9)." >&2
+        return 1
+    fi
+
+    return 0
+}
+
+# Helm treats "--set-file name=-" as stdin, and the gate and install-infra
+# render the same argument more than once. A single stream is consumed by the
+# first render, so every later render would see an empty caPem and could drop
+# the OIDC IdP trust Secret. The same holds for any single-read source: a
+# process substitution (/dev/fd/N), a FIFO, or /dev/stdin on a pipe. Reject
+# those before the first render; a regular file stays reusable, and the render
+# itself validates that it can be read. A path that does not exist yet (or a
+# URL) is left to the render, so URL inputs keep working. The value is not
+# echoed, so a rejected input cannot reach the log.
+validate_oidc_idp_ca_file() {
+    local ca_file="$1"
+
+    if [ "${ca_file}" = '-' ] \
+        || { [ -e "${ca_file}" ] && [ ! -f "${ca_file}" ]; }; then
+        echo "ERROR: OIDC_IDP_CA_FILE must be a regular file path, not '-' (stdin) or a pipe, FIFO, or process substitution: every render applies the same --set-file argument, so the first render would consume the stream and later ones would see an empty caPem." >&2
+        return 1
+    fi
+
+    return 0
+}
+
+# Split a caller-supplied argument string into argv words the way a POSIX
+# shell would, without evaluating it. Whitespace separates words; single
+# quotes, double quotes, and backslashes group and escape characters; word
+# expansions, command substitution, and globs stay literal data. Recipes
+# call this once per invocation and expand the global ARGV array quoted, so
+# a value such as `--set-string k="two words"` reaches Helm as one argument
+# instead of losing its quotes to word splitting and arriving as
+# `k="two` plus a stray positional `words"`.
+#
+# Usage: split_argv NAME STRING
+# NAME labels the variable in diagnostics. Only the quote shape is
+# reported: the value itself may carry caller data.
+split_argv() {
+    local name="$1" input="$2"
+    local word='' have_word=0 quote='' ch nxt i n
+    n=${#input}
+    ARGV=()
+    for ((i = 0; i < n; i++)); do
+        ch=${input:i:1}
+        nxt=''
+        if ((i + 1 < n)); then
+            nxt=${input:i+1:1}
+        fi
+        if [[ -n ${quote} ]]; then
+            if [[ ${ch} == "${quote}" ]]; then
+                quote=''
+            elif [[ ${quote} == '"' && ${ch} == '\' ]]; then
+                # Inside double quotes a backslash only escapes what the
+                # shell treats as special there; any other backslash is
+                # literal.
+                case ${nxt} in
+                    '$'|'`'|'"'|'\')
+                        word+=${nxt}
+                        i=$((i + 1))
+                        ;;
+                    $'\n')
+                        i=$((i + 1))
+                        ;;
+                    *)
+                        word+='\'
+                        ;;
+                esac
+            else
+                word+=${ch}
+            fi
+            have_word=1
+            continue
+        fi
+        case ${ch} in
+            ' '|$'\t'|$'\n')
+                if ((have_word)); then
+                    ARGV+=("${word}")
+                    word=''
+                    have_word=0
+                fi
+                ;;
+            "'"|'"')
+                quote=${ch}
+                have_word=1
+                ;;
+            '\')
+                if [[ -n ${nxt} ]]; then
+                    i=$((i + 1))
+                    # A backslash-newline is removed before tokenization, so
+                    # it must not start a word; every other escaped character
+                    # is part of the current word.
+                    if [[ ${nxt} != $'\n' ]]; then
+                        word+=${nxt}
+                        have_word=1
+                    fi
+                else
+                    word+='\'
+                    have_word=1
+                fi
+                ;;
+            *)
+                word+=${ch}
+                have_word=1
+                ;;
+        esac
+    done
+    if [[ -n ${quote} ]]; then
+        echo "ERROR: ${name} has an unterminated quote; pair every quote or escape it." >&2
+        return 1
+    fi
+    if ((have_word)); then
+        ARGV+=("${word}")
+    fi
+    return 0
+}
+
+# Render the osac chart offline for the input-validation gate, bridging the
+# NetBox lookup branch. helm template cannot see cluster Secrets (lookup
+# returns nil offline), so a profile relying on the install-time
+# netbox-token-seed hook to create the token Secret fails the render with a
+# specific "tokenValue is required" error. Only that failure is retried with
+# a render-only placeholder token (never passed to an installation). Two
+# bridges exist, and each is legitimate only under a verified condition:
+#
+# Seeded (netbox_seed_check, same shell, exported NETBOX_TOKEN_SEEDED=1):
+# the seed hook creates the token Secret during install-infra, before
+# install-osac renders. The bridge holds only when the seed hook's Secret
+# identity -- name, namespace, and key, recorded by netbox_seed_check from
+# the rendered hook -- matches the Secret the osac chart reads: a caller
+# override that diverges (for example bmf.netbox.tokenSecretKey) would
+# pass a bridged render yet fail the real install only after
+# install-infra changed the cluster. A mismatch is still accepted when the
+# diverging Secret already exists with the required key: `helm upgrade`
+# then reads that Secret through lookup, so the install succeeds even
+# though the seeded one goes unused.
+#
+# Pre-existing (not seeded): the token Secret can already exist in the
+# cluster -- created by a prior install or an operator -- and helm upgrade
+# reads it through lookup at install time even though helm template
+# cannot. netbox_existing_secret_matches verifies the Secret the osac
+# chart reads, with its key, through a read-only cluster lookup; a missing
+# Secret or key stays a real input error that fails the gate.
+#
+# Every other failure -- including a caller-supplied non-empty token that
+# violates the schema, however it was supplied (--set, --set-string, or a
+# values file) -- aborts with safe diagnostics, so the gate validates the
+# caller's actual merged value whenever one exists, never a placeholder
+# masking it. An explicitly empty caller token (--set-string
+# bmf.netbox.tokenValue=) means the same as none: the chart needs a value
+# only when the Secret is absent, and the install-time lookup finds the
+# seeded or pre-existing one. The placeholder must therefore also be
+# applied with --set-string, because Helm merges --set-string after --set
+# regardless of argument order; a --set placeholder would be overridden
+# by the caller's empty value, the retry would fail the same way, and the
+# gate would reject a valid install.
+#
+# Usage: render_osac_chart_offline PLACEHOLDER_TOKEN RELEASE CHART [HELM_ARGS...]
+render_osac_chart_offline() {
+    local placeholder_token="$1"
+    shift
+    local err bridged bridged_err_file differing
+    if err=$(helm template "$@" 2>&1 >/dev/null); then
+        return 0
+    fi
+    case "${err}" in
+        *"netbox.tokenValue is required when Secret"*)
+            bridged_err_file=$(mktemp)
+            if ! bridged=$(helm template "$@" \
+                --set-string "bmf.netbox.tokenValue=${placeholder_token}" \
+                2>"${bridged_err_file}"); then
+                offline_render_error "$(cat "${bridged_err_file}")"
+                rm -f "${bridged_err_file}"
+                return 1
+            fi
+            rm -f "${bridged_err_file}"
+            if [ "${NETBOX_TOKEN_SEEDED:-0}" = "1" ]; then
+                if differing=$(netbox_seed_identity_differing "${bridged}" \
+                    "${placeholder_token}") && [ -z "${differing}" ]; then
+                    return 0
+                fi
+                # A caller override can point the osac chart at a different
+                # token Secret while the infra hook seeds its own. When that
+                # Secret already exists with the required key, helm upgrade
+                # reads it through lookup and the install succeeds, so the
+                # pre-existing Secret is the second legitimate source.
+                if netbox_existing_secret_matches "${bridged}" \
+                    "${placeholder_token}"; then
+                    return 0
+                fi
+                netbox_seed_identity_matches "${bridged}" \
+                    "${placeholder_token}"
+                return
+            fi
+            if ! netbox_existing_secret_matches "${bridged}" \
+                "${placeholder_token}"; then
+                echo "ERROR: netbox.tokenValue is required when the NetBox token Secret is neither seeded by the infra hook nor present in the cluster; no cluster changes were made. Supply bmf.netbox.tokenValue, pre-create the Secret the osac chart reads (bmf.secrets.netboxToken, bmf.netbox.tokenSecretKey), or install the netbox profile's infra release first. The Secret name and key are deliberately not printed: they are customer-supplied identifiers that can carry internal hostnames." >&2
+                return 1
+            fi
+            return 0
+            ;;
+    esac
+    offline_render_error "${err}"
+    return 1
+}
+
+# Dotted paths of the values-schema maps whose entry names come from the
+# caller: JSON-schema objects that validate their unknown keys, so Helm
+# echoes such a key in a schema error path (a serviceMonitor label that
+# is a hostname, for example). A failure under one of these maps reports only
+# the map root. The validation diagnostics tests derive the same set from
+# every charts/*/values.schema.json and from the schemas vendored in the
+# dependency archives, and fail when this list and the schemas drift, so a
+# new open map cannot start printing caller-supplied keys unnoticed. A root
+# from a dependency chart is relative to that subchart's values, because Helm
+# validates and reports that chart's schema on its own. A map that accepts
+# any additional property (`"additionalProperties": true`) is deliberately
+# absent: it validates no unknown key, so no key can reach a path through it.
+_LIB_OPEN_SCHEMA_MAPS=(
+    # netbox (an osac-infra dependency): its pepper version keys reach the
+    # subchart-relative path of a schema failure.
+    apiTokenPeppers
+    aap.instanceGroups.networkFulfillment.config
+    aap.instanceGroups.networkFulfillment.secret
+    metering.prometheusRule.labels
+    metering.serviceMonitor.labels
+    operator.fabricDomainInventory
+    operator.networkManagers.fabricManagers
+    operator.networkManagers.k8sManagers
+    operator.stall.workersJoiningByInstanceType
+    operator.vendorControllers
+    preflight.skip
+)
+
+# Constraints the installer's own schemas add, so a rejected value names the
+# rule it broke and not only the field. Helm's wording is suppressed wholesale
+# because some versions echo the rejected value, and a bare field path would
+# leave the caller to guess which constraint applies. Only these rules are
+# listed: each text is static and value-free, and the schemas' ordinary
+# constraints (type, pattern, other maxima) keep the generic message. Helm
+# releases spell a path dotted or slash-separated, so the lookup normalizes
+# to the dotted form. A path under a list carries its entry index, which is
+# a position and not caller data: that rule is listed once for the field, the
+# lookup strips the index to match it, and the printed path keeps it. Keep in
+# step with the schemas and the input-validation tests.
+#
+# A path alone cannot say which constraint failed on it -- the same field
+# can fail its type or its minimum -- so each text names the complete static
+# requirement, and holds for every failure the field can produce. The
+# numeric fields are integers with minimum 0, so a string value (for
+# example from --set-string) and a negative number report the same accurate
+# text. The two object-level entries carry their type requirement for the
+# same reason: an integer there fails the object type check, not the rule
+# named after it.
+_LIB_SCHEMA_CONSTRAINTS=(
+    "aap.bootstrap.backoffLimit|must be an integer greater than or equal to 0"
+    "bundledVault.podSecurityContext.runAsUser|must be an integer greater than or equal to 0"
+    "bundledVault.podSecurityContext.runAsGroup|must be an integer greater than or equal to 0"
+    "bundledVault.podSecurityContext.fsGroup|must be an integer greater than or equal to 0"
+    "bundledVault.podSecurityContext|must be an object; runAsUser must not be 0 when runAsNonRoot is true"
+    "global.fulfillmentTrust|must be an object; unknown keys are not allowed"
+    "metering.readers.name|must be a string; must be a lowercase DNS name of at most 253 characters"
+)
+
+# Render a chart offline and report only value-free diagnostics on failure.
+# The arguments pass through to helm template unchanged, so every gate keeps
+# its own release name, values files, and --set inputs. Helm echoes the
+# offending value in some schema errors (Helm 3.22 and later print it for
+# pattern failures) and in template fail/required messages, so the raw
+# diagnostics never reach the terminal or the collected CI logs.
+# Usage: render_chart_offline [HELM_ARGS...]
+render_chart_offline() {
+    local err
+    if err=$(helm template "$@" 2>&1 >/dev/null); then
+        return 0
+    fi
+    offline_render_error "${err}"
+    return 1
+}
+
+offline_render_error() {
+    echo "ERROR: offline chart rendering failed; check chart dependencies, values schema and template requirements. Helm diagnostics are suppressed because they may contain sensitive input values." >&2
+    case "$1" in
+        *bmf.netbox.tokenValue*"Invalid type"*|*/bmf/netbox/tokenValue*"got number, want string"*)
+            echo "bmf.netbox.tokenValue: Invalid type; expected string" >&2 ;;
+        # The reader template identifies a rejected entry by its index and
+        # never by its name, so these texts stay value-free too. Keep the
+        # integer index: with several readers, the rule alone does not say
+        # which entry failed. As with EVPN below, echo only the fixed
+        # phrase, so caller text on the same error line cannot reach the
+        # output.
+        *"duplicate metering reader"*)
+            echo "duplicate metering reader: each reader name must be unique" >&2 ;;
+        *"is a KafkaUser OSAC owns"*|*"uses the reserved osac- or osac. name prefix"*)
+            printf '%s\n' "$1" | LC_ALL=C awk '
+                !seen && /^Error: / {
+                    seen = 1
+                    if (match($0, /metering reader at index [0-9]+ (is a KafkaUser OSAC owns|uses the reserved osac- or osac\. name prefix)/))
+                        print substr($0, RSTART, RLENGTH)
+                }' >&2 ;;
+        # The AAP chart's NETRIS rules name the rejected field and its
+        # constraint and never the value, so these arms echo fixed text:
+        # the schema path plus the chart-authored phrase.
+        *"NETRIS_CONTROLLER_URL must be an https:// URL"*)
+            echo "instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL must be an https:// URL" >&2 ;;
+        *'NETRIS_VALIDATE_CERTS must be "true" or "false"'*)
+            echo 'instanceGroups.networkFulfillment.config.NETRIS_VALIDATE_CERTS must be "true" or "false"' >&2 ;;
+        *"NETRIS_CA_CONFIGMAP must be a ConfigMap name"*)
+            echo "instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP must be a ConfigMap name" >&2 ;;
+        # The EVPN duplicate checks name the rejected entry by its index
+        # and never by its node name or addresses, so their fail text is
+        # chart-authored and value-free. Echo only the matched phrase, so
+        # caller text on the same error line cannot reach the output. The
+        # phrase set is the chart's three fixed messages: a wildcard span
+        # between "duplicate" and "index" would echo any words a caller
+        # placed there, such as a --set-file path fragment.
+        *"evpn.nodes: duplicate"*)
+            printf '%s\n' "$1" | LC_ALL=C awk '
+                !seen && /^Error: / {
+                    seen = 1
+                    if (match($0, /evpn\.nodes: duplicate (node name at|vtepIP at|peerAddress in uplinks of node) index [0-9]+/))
+                        print substr($0, RSTART, RLENGTH)
+                    next
+                }' >&2 ;;
+        *)
+            # Any other failure keeps the generic line above. Only the
+            # diagnostics Helm itself writes are echoed back: the
+            # chart-relative template location, or the first values
+            # schema field path. Both are read from the first "Error: "
+            # line, because a fail/required message or a rejected value
+            # can hold a newline followed by text shaped like a second
+            # error or schema item. Helm prints chart warnings before the
+            # error, so the scan starts at the first error line rather
+            # than the first line of output. Nothing is read past the
+            # first schema item: later items cannot be told apart from
+            # such echoed text. A failure without a recognizable marker
+            # keeps the generic line alone. An open schema map in
+            # _LIB_OPEN_SCHEMA_MAPS carries caller-supplied entry keys (a
+            # serviceMonitor label that is a hostname, for example), and
+            # such a key can appear in the path, so the path is printed
+            # as the map root without the entry key.
+            # A path that matches a rule in _LIB_SCHEMA_CONSTRAINTS also
+            # gets that rule's value-free constraint text.
+            local maps="${_LIB_OPEN_SCHEMA_MAPS[*]}" constraints=''
+            printf -v constraints '%s\n' "${_LIB_SCHEMA_CONSTRAINTS[@]}"
+            # The rule table spans lines, and an awk -v value is escape
+            # processed and interpreted by the host's awk: pass it through
+            # the environment so every awk reads it verbatim.
+            printf '%s\n' "$1" | LC_ALL=C OSAC_SCHEMA_CONSTRAINTS="${constraints}" \
+                awk -v q="'" -v maps="${maps}" '
+                BEGIN {
+                    constraints = ENVIRON["OSAC_SCHEMA_CONSTRAINTS"]
+                    n_maps = split(maps, map_path, " ")
+                    n_rules = split(constraints, rule, "\n")
+                    for (i = 1; i <= n_rules; i++) {
+                        sep = index(rule[i], "|")
+                        if (sep > 0) {
+                            r_path[i] = substr(rule[i], 1, sep - 1)
+                            r_text[i] = substr(rule[i], sep + 1)
+                        }
+                    }
+                }
+                # Constraint text for a rejected path, or "" when the path
+                # is not one of the rules listed above.
+                function constraint(path,    dot, i) {
+                    dot = path
+                    gsub(/\//, ".", dot)
+                    # Reader names are validated per entry, so the path
+                    # from Helm carries the index; match it without one.
+                    if (dot ~ /^metering\.readers\.[0-9]+\.name$/)
+                        dot = "metering.readers.name"
+                    for (i = 1; i <= n_rules; i++)
+                        if (dot == r_path[i])
+                            return r_text[i]
+                    return ""
+                }
+                # The field path plus, when known, the violated constraint.
+                function schema_error(path,    text) {
+                    text = constraint(path)
+                    if (text != "")
+                        print path ": violates the values schema: " text
+                    else
+                        print path ": violates the values schema"
+                }
+                # Dotted name of the open values-schema map the path
+                # enters, or "" when it enters none. The segment after the
+                # map name is a caller-supplied key; Helm 4 separates
+                # path segments with a slash and Helm 3 with a dot.
+                function open_map(path,    slash, i) {
+                    slash = path
+                    gsub(/\//, ".", slash)
+                    for (i = 1; i <= n_maps; i++)
+                        if (index(slash, map_path[i] ".") == 1)
+                            return map_path[i]
+                    return ""
+                }
+                !seen && /^Error: / {
+                    seen = 1
+                    if ($0 ~ /^Error: execution error at \(/) {
+                        loc = $0
+                        sub(/^Error: execution error at \(/, "", loc)
+                        sub(/\):.*/, "", loc)
+                        if (loc ~ /^[A-Za-z0-9_.\/-]+:[0-9]+:[0-9]+$/)
+                            print "template check failed in " loc \
+                                " (message suppressed)"
+                    } else if ($0 ~ /^Error: failed parsing --set-file data:/) {
+                        # Helm names the file it could not read; the path
+                        # can carry customer data, so only the argument is
+                        # reported.
+                        print "--set-file input could not be read; check" \
+                            " OIDC_IDP_CA_FILE and other --set-file" \
+                            " arguments"
+                    } else if ($0 ~ /^Error: open / \
+                        || $0 ~ /^Error: failed to parse /) {
+                        # Helm names the file it could not read or parse
+                        # and may add a reason that can quote a caller
+                        # value, so only the input class is reported.
+                        print "a values file (-f/--values) could not be" \
+                            " read or parsed; check INFRA_VALUES_EXTRA," \
+                            " INSTANCE_VALUES_EXTRA and EXTRA_HELM_ARGS"
+                    } else if ($0 ~ /^Error: unknown (shorthand )?flag/) {
+                        # Helm echoes the rejected flag, which is caller
+                        # input, so only the input class is reported.
+                        print "an unknown Helm flag was passed; check" \
+                            " EXTRA_HELM_ARGS and other *_HELM_ARGS inputs"
+                    } else if ($0 ~ /^Error: values don/) {
+                        schema = 1
+                    }
+                    next
+                }
+                schema && !done {
+                    done = 1
+                    if (match($0, "^- at " q "[^" q "]*" q ":")) {
+                        path = substr($0, RSTART + 6, RLENGTH - 8)
+                        # Helm 4 writes the path with a leading slash; drop
+                        # it so both schema error formats name the field the
+                        # same way.
+                        sub(/^\//, "", path)
+                        map = open_map(path)
+                        if (map != "")
+                            print map ": violates the values schema"
+                        else if (path ~ /^[A-Za-z0-9_.~\/-]+$/)
+                            schema_error(path)
+                    } else if (match($0, "^- [A-Za-z0-9_.()-]+: ")) {
+                        path = substr($0, RSTART + 2, RLENGTH - 4)
+                        map = open_map(path)
+                        if (map != "")
+                            print map ": violates the values schema"
+                        else
+                            schema_error(path)
+                    } else if ($0 !~ /^- /) {
+                        # Only the chart-name line precedes the first item;
+                        # any other non-item line means the schema block
+                        # ended. A `- ` line that no branch recognizes is
+                        # still an item (a Helm 3 path can hold characters
+                        # outside the pattern), so scanning stays stopped:
+                        # a line after it could be echoed rejected input.
+                        done = 0
+                    }
+                }' >&2 ;;
+    esac
+}
+
+# Extract the NetBox token Secret identity the osac chart renders for the
+# bridged placeholder token: the Secret whose stringData carries the
+# placeholder is the one the bmf subchart creates from
+# bmf.secrets.netboxToken / bmf.netbox.tokenSecretKey. Prints the name,
+# namespace, and key, one per line.
+# Usage: netbox_render_secret_identity RENDER PLACEHOLDER_TOKEN
+netbox_render_secret_identity() {
+    local render="$1" placeholder="$2"
+    printf '%s\n' "${render}" | awk -v ph="${placeholder}" '
+        /^---$/ { kind = ""; name = ""; ns = ""; next }
+        /^kind: / { kind = $2 }
+        /^  name: / { if (name == "") name = $2 }
+        /^  namespace: / { if (ns == "") ns = $2 }
+        index($0, ph) != 0 && kind == "Secret" && !done {
+            key = $1
+            sub(/:$/, "", key)
+            gsub(/"/, "", key)
+            gsub(/"/, "", name)
+            gsub(/"/, "", ns)
+            print name
+            print ns
+            print key
+            done = 1
+        }'
+}
+
+# Verify read-only, against the cluster, that the NetBox token Secret the
+# osac chart reads already exists with the right key: with no seed hook,
+# the token can only come from a Secret created outside this install
+# (which `helm upgrade` reads through lookup even though `helm template`
+# cannot). The lookup prints no Secret content -- only whether the key
+# exists -- so the gate accepts exactly the installs that would succeed
+# and still rejects a missing Secret or key before any cluster change.
+# The identity fields are restricted to a safe charset because they are
+# interpolated into the kubectl go-template; anything else cannot be
+# verified safely, so it fails closed with the underlying token error.
+# Tries kubectl, then oc; with neither available, or no reachable
+# cluster, the lookup fails closed the same way.
+# Usage: netbox_existing_secret_matches RENDER PLACEHOLDER_TOKEN
+netbox_existing_secret_matches() {
+    local render="$1" placeholder="$2"
+    local identity name ns key cli out
+    identity=$(netbox_render_secret_identity "${render}" "${placeholder}")
+    name=$(printf '%s\n' "${identity}" | sed -n 1p)
+    ns=$(printf '%s\n' "${identity}" | sed -n 2p)
+    key=$(printf '%s\n' "${identity}" | sed -n 3p)
+    [ -n "${name}" ] && [ -n "${ns}" ] && [ -n "${key}" ] || return 1
+    case "${name}${ns}${key}" in
+        *[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+    for cli in kubectl oc; do
+        command -v "${cli}" >/dev/null 2>&1 || continue
+        # The gate runs before any cluster change, so a kubeconfig that
+        # names an unreachable cluster must not hold it open indefinitely.
+        if out=$("${cli}" get secret "${name}" -n "${ns}" --request-timeout=15s \
+            -o go-template="{{if index .data \"${key}\"}}present{{end}}" \
+            2>/dev/null); then
+            [ "${out}" = "present" ]
+            return
+        fi
+    done
+    return 1
+}
+
+# Print the NetBox token Secret identity fields where the osac chart's
+# render diverges from the seed hook's (empty when they match), and return
+# 1 when the chart's identity cannot be determined. Callers decide whether
+# a difference is fatal: a pre-existing Secret under the chart's identity
+# still makes the install work, so render_osac_chart_offline tries that
+# before reporting a mismatch.
+# Usage: netbox_seed_identity_differing RENDER PLACEHOLDER_TOKEN
+netbox_seed_identity_differing() {
+    local render="$1" placeholder="$2"
+    local identity bmf_name bmf_ns bmf_key differing=""
+    identity=$(netbox_render_secret_identity "${render}" "${placeholder}")
+    bmf_name=$(printf '%s\n' "${identity}" | sed -n 1p)
+    bmf_ns=$(printf '%s\n' "${identity}" | sed -n 2p)
+    bmf_key=$(printf '%s\n' "${identity}" | sed -n 3p)
+    [ -n "${bmf_name}" ] && [ -n "${bmf_key}" ] || return 1
+    [ "${bmf_name}" != "${NETBOX_SEED_SECRET_NAME}" ] && differing="name"
+    [ "${bmf_ns}" != "${NETBOX_SEED_SECRET_NS}" ] \
+        && differing="${differing:+${differing}, }namespace"
+    [ "${bmf_key}" != "${NETBOX_SEED_SECRET_KEY}" ] \
+        && differing="${differing:+${differing}, }key"
+    printf '%s\n' "${differing}"
+}
+
+# Compare the NetBox token Secret identity the osac chart renders with the
+# seed hook's identity exported by netbox_seed_check, after
+# render_osac_chart_offline has ruled out a pre-existing Secret. Any
+# remaining mismatch fails the gate before a cluster change; the message
+# names which identity fields differ, never their values -- Secret names
+# and keys are customer-supplied and can carry internal identifiers, and
+# the gate's errors reach the terminal and CI logs.
+# Usage: netbox_seed_identity_matches RENDER PLACEHOLDER_TOKEN
+netbox_seed_identity_matches() {
+    local render="$1" placeholder="$2"
+    local differing
+    if ! differing=$(netbox_seed_identity_differing "${render}" \
+        "${placeholder}"); then
+        echo "ERROR: could not determine which NetBox token Secret the osac chart reads; no cluster changes were made." >&2
+        return 1
+    fi
+    if [ -n "${differing}" ]; then
+        echo "ERROR: NetBox token Secret identity mismatch (differing: ${differing}): the osac chart's NetBox token Secret settings (bmf.secrets.netboxToken, bmf.netbox.tokenSecretKey, and the release namespace) do not match the infra seed hook's (netbox.apiTokenSecret, osacNamespace); no cluster changes were made. Align the osac chart settings with the seed hook and retry, or pre-create the chart's Secret with the required key. The differing values are deliberately not printed: they are customer-supplied Secret names and keys that can carry internal identifiers." >&2
+        return 1
+    fi
+    return 0
+}
+
+# Export NETBOX_TOKEN_SEEDED=1 plus the seed hook's Secret identity --
+# NETBOX_SEED_SECRET_NAME, NETBOX_SEED_SECRET_NS, and NETBOX_SEED_SECRET_KEY
+# -- when the given infra-chart render deploys the netbox-token-seed hook:
+# the post-install Job that creates the NetBox token Secret during
+# install-infra, before install-osac renders. render_osac_chart_offline may
+# bridge a missing NetBox token only when this is set and the identity
+# matches the Secret the osac chart reads. Never fails: the gate renders
+# the infra chart itself with full error reporting right before this runs,
+# so here a render failure simply counts as not seeded. Must run in the
+# same shell as render_osac_chart_offline -- make recipe lines are separate
+# shells, so the gate calls both in one recipe line.
+#
+# The release-prefixed names ("-netbox-token-seed", from
+# {{ .Release.Name }}-netbox-token-seed) are the discriminator: the hook's
+# script ConfigMap key "netbox-token-seed.sh" renders unconditionally, while
+# the Job, ServiceAccount, and RBAC carrying the prefixed name are gated on
+# netbox.enabled.
+#
+# The identity is read from the rendered hook itself -- the Job's OPERATOR_NS
+# and SECRET_NAME env values and the Secret key in the seed script's
+# `oc create secret --from-literal=<key>=` call -- so it follows the values
+# this install actually renders instead of assuming defaults. The key is
+# extracted only from the netbox-token-seed.sh block of the hook-scripts
+# ConfigMap: other hook scripts create Secrets of their own. If any part of
+# the identity cannot be extracted the hook counts as not seeded, leaving
+# the bridge off so the gate reports the underlying token error rather than
+# bridging an unverifiable identity.
+#
+# The bridge is accepted only when the same make invocation installs the
+# infra chart: NETBOX_SEED_WILL_RUN=1, exported by the Makefile's gate
+# recipes for install, install-infra, and install-multicluster. A
+# standalone `make install-osac` never runs the seed hook, so there the
+# hook counts as not seeded and render_osac_chart_offline falls back to the
+# read-only Secret lookup; otherwise the gate would pass an install that
+# fails only after the namespace and license Secret are written.
+#
+# Usage: netbox_seed_check RELEASE CHART [HELM_ARGS...]
+netbox_seed_check() {
+    local render
+    NETBOX_TOKEN_SEEDED=0
+    NETBOX_SEED_SECRET_NAME=""
+    NETBOX_SEED_SECRET_NS=""
+    NETBOX_SEED_SECRET_KEY=""
+    if [ "${NETBOX_SEED_WILL_RUN:-0}" != "1" ]; then
+        export NETBOX_TOKEN_SEEDED NETBOX_SEED_SECRET_NAME \
+            NETBOX_SEED_SECRET_NS NETBOX_SEED_SECRET_KEY
+        return 0
+    fi
+    if render=$(helm template "$@" 2>/dev/null); then
+        case "${render}" in
+            *-netbox-token-seed*)
+                # Scoped to the seed Job's own document: other rendered
+                # resources (e.g. the NetBox Deployment's extraEnvs) can
+                # carry env entries named SECRET_NAME or OPERATOR_NS, and
+                # search state must not leak across document boundaries.
+                NETBOX_SEED_SECRET_NS=$(printf '%s\n' "${render}" \
+                    | awk '/^---$/ { in_seed = 0; want = 0; kind = ""; next }
+                           /^kind: / { kind = $2 }
+                           /^  name: / && kind == "Job" \
+                               && /-netbox-token-seed$/ { in_seed = 1; next }
+                           in_seed && /^ *- name: OPERATOR_NS$/ { want = 1; next }
+                           in_seed && want && /^ *value: / && !done {
+                               gsub(/"/, "", $2); print $2; done = 1 }')
+                NETBOX_SEED_SECRET_NAME=$(printf '%s\n' "${render}" \
+                    | awk '/^---$/ { in_seed = 0; want = 0; kind = ""; next }
+                           /^kind: / { kind = $2 }
+                           /^  name: / && kind == "Job" \
+                               && /-netbox-token-seed$/ { in_seed = 1; next }
+                           in_seed && /^ *- name: SECRET_NAME$/ { want = 1; next }
+                           in_seed && want && /^ *value: / && !done {
+                               gsub(/"/, "", $2); print $2; done = 1 }')
+                NETBOX_SEED_SECRET_KEY=$(printf '%s\n' "${render}" \
+                    | awk '/^  netbox-token-seed\.sh:/ { in_script = 1; next }
+                           in_script && /^  [^ ]/ { in_script = 0 }
+                           in_script && /--from-literal=/ && !done {
+                               line = $0
+                               sub(/^.*--from-literal=/, "", line)
+                               sub(/=.*/, "", line)
+                               print line
+                               done = 1
+                           }')
+                if [ -n "${NETBOX_SEED_SECRET_NAME}" ] \
+                    && [ -n "${NETBOX_SEED_SECRET_NS}" ] \
+                    && [ -n "${NETBOX_SEED_SECRET_KEY}" ]; then
+                    NETBOX_TOKEN_SEEDED=1
+                fi
+                ;;
+        esac
+    fi
+    export NETBOX_TOKEN_SEEDED NETBOX_SEED_SECRET_NAME \
+        NETBOX_SEED_SECRET_NS NETBOX_SEED_SECRET_KEY
 }
 
 # Retry a condition until it succeeds or times out, optionally running a command each iteration

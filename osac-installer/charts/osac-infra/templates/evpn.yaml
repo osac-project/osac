@@ -47,23 +47,23 @@
     {{- end }}
   {{- end }}
   {{- $seenPeers := dict }}
+  {{- $seenInterfaces := dict }}
   {{- range $uplink := $node.uplinks }}
+    {{- if not $uplink.interface }}
+      {{- fail (printf "evpn.nodes: uplink without interface on node index %d" $index) }}
+    {{- end }}
+    {{- if hasKey $seenInterfaces $uplink.interface }}
+      {{- fail (printf "evpn.nodes: duplicate interface %s in uplinks of node index %d" $uplink.interface $index) }}
+    {{- end }}
+    {{- $_ := set $seenInterfaces $uplink.interface true }}
     {{- $unnumbered := $uplink.unnumbered | default false }}
     {{- if $unnumbered }}
-      {{- if not $uplink.interface }}
-        {{- fail (printf "evpn.nodes: node %s has an unnumbered uplink without interface" $node.name) }}
-      {{- end }}
       {{- if hasKey $uplink "peerAddress" }}
         {{- fail (printf "evpn.nodes: node %s unnumbered uplink %s must omit peerAddress" $node.name $uplink.interface) }}
       {{- end }}
       {{- if hasKey $uplink "address" }}
         {{- fail (printf "evpn.nodes: node %s unnumbered uplink %s must omit address" $node.name $uplink.interface) }}
       {{- end }}
-      {{- $peerID := $uplink.interface }}
-      {{- if hasKey $seenPeers $peerID }}
-        {{- fail (printf "evpn.nodes: node %s has duplicate unnumbered interface %s" $node.name $peerID) }}
-      {{- end }}
-      {{- $_ := set $seenPeers $peerID true }}
     {{- else }}
       {{- if not $uplink.peerAddress }}
         {{- fail (printf "evpn.nodes: node %s numbered uplink %s requires peerAddress" $node.name $uplink.interface) }}

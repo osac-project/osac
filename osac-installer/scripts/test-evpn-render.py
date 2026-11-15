@@ -738,6 +738,71 @@ def test_unnumbered_uplink() -> None:
     assert "neighbor ens6 activate" in raw["spec"]["raw"]["rawConfig"]
 
 
+def test_uplinks_reject_duplicate_interface() -> None:
+    # Interface identity is independent of peer identity. A numbered and an
+    # unnumbered uplink, or two numbered uplinks, must not share a physical
+    # interface: NMState keeps the last entry for a name, so the earlier
+    # interface entry (and the addressing its BGP peer needs) is dropped.
+    duplicate_interface = [
+        (
+            "numbered-then-unnumbered.yaml",
+            base_values(
+                [
+                    node(
+                        "worker-0",
+                        "10.200.255.1",
+                        [
+                            uplink("ens6", "169.254.133.1"),
+                            uplink("ens6", None, peer_asn=4200300003, unnumbered=True),
+                        ],
+                    )
+                ]
+            ),
+        ),
+        (
+            "unnumbered-then-numbered.yaml",
+            base_values(
+                [
+                    node(
+                        "worker-0",
+                        "10.200.255.1",
+                        [
+                            uplink("ens6", None, peer_asn=4200300003, unnumbered=True),
+                            uplink("ens6", "169.254.133.1"),
+                        ],
+                    )
+                ]
+            ),
+        ),
+        (
+            "two-numbered.yaml",
+            base_values(
+                [
+                    node(
+                        "worker-0",
+                        "10.200.255.1",
+                        [
+                            uplink("ens6", "169.254.133.1"),
+                            uplink("ens6", "169.254.134.1", peer_asn=4200300003),
+                        ],
+                    )
+                ]
+            ),
+        ),
+    ]
+    with tempfile.TemporaryDirectory(prefix="evpn-duplicate-interface-") as temp:
+        directory = pathlib.Path(temp)
+        for name, values in duplicate_interface:
+            values_file = write_values(directory, name, values)
+            result = render_failure_result(INFRA_CHART, values_file)
+            assert result.returncode != 0, (
+                f"{name}: duplicate interface unexpectedly rendered"
+            )
+            assert "duplicate interface ens6" in result.stderr, (
+                f"{name}: the failure did not identify the duplicate interface"
+            )
+
+
 def test_nmstate_install_disabled() -> None:
     values = base_values([node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")])])
     values["evpn"]["nmstate"]["install"] = False
@@ -888,6 +953,7 @@ def main() -> None:
     test_active_backup_is_mutually_exclusive_with_active_active()
     test_uplink_without_address()
     test_unnumbered_uplink()
+    test_uplinks_reject_duplicate_interface()
     test_nmstate_install_disabled()
     test_invalid_values()
     test_validation_errors_do_not_log_node_names()

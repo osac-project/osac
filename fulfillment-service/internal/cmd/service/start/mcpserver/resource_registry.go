@@ -91,6 +91,74 @@ func projectResourceOperations(deps ServerDeps) resourceOperations {
 	}
 }
 
+func externalIPResourceOperations(deps ServerDeps) resourceOperations {
+	list := func(ctx context.Context, request *publicv1.ExternalIPsListRequest) (*publicv1.ExternalIPsListResponse, error) {
+		return deps.ExternalIPsClient.List(ctx, request)
+	}
+	get := func(ctx context.Context, request *publicv1.ExternalIPsGetRequest) (*publicv1.ExternalIPsGetResponse, error) {
+		return deps.ExternalIPsClient.Get(ctx, request)
+	}
+	return resourceOperations{
+		label: "external IP",
+		list:  typedResourceList("external IPs", list, externalIPListRequest, externalIPSummary),
+		get:   typedResourceGet("external IP", get, externalIPGetRequest, externalIPSummary),
+	}
+}
+
+func externalIPPoolResourceOperations(deps ServerDeps) resourceOperations {
+	list := func(
+		ctx context.Context, request *publicv1.ExternalIPPoolsListRequest,
+	) (*publicv1.ExternalIPPoolsListResponse, error) {
+		return deps.ExternalIPPoolsClient.List(ctx, request)
+	}
+	get := func(
+		ctx context.Context, request *publicv1.ExternalIPPoolsGetRequest,
+	) (*publicv1.ExternalIPPoolsGetResponse, error) {
+		return deps.ExternalIPPoolsClient.Get(ctx, request)
+	}
+	return resourceOperations{
+		label: "external IP pool",
+		list:  typedResourceList("external IP pools", list, externalIPPoolListRequest, externalIPPoolSummary),
+		get:   typedResourceGet("external IP pool", get, externalIPPoolGetRequest, externalIPPoolSummary),
+	}
+}
+
+func externalIPAttachmentResourceOperations(deps ServerDeps) resourceOperations {
+	list := func(
+		ctx context.Context, request *publicv1.ExternalIPAttachmentsListRequest,
+	) (*publicv1.ExternalIPAttachmentsListResponse, error) {
+		return deps.ExternalIPAttachmentsClient.List(ctx, request)
+	}
+	get := func(
+		ctx context.Context, request *publicv1.ExternalIPAttachmentsGetRequest,
+	) (*publicv1.ExternalIPAttachmentsGetResponse, error) {
+		return deps.ExternalIPAttachmentsClient.Get(ctx, request)
+	}
+	return resourceOperations{
+		label: "external IP attachment",
+		list: typedResourceList(
+			"external IP attachments", list, externalIPAttachmentListRequest, externalIPAttachmentSummary,
+		),
+		get: typedResourceGet(
+			"external IP attachment", get, externalIPAttachmentGetRequest, externalIPAttachmentSummary,
+		),
+	}
+}
+
+func natGatewayResourceOperations(deps ServerDeps) resourceOperations {
+	list := func(ctx context.Context, request *publicv1.NATGatewaysListRequest) (*publicv1.NATGatewaysListResponse, error) {
+		return deps.NATGatewaysClient.List(ctx, request)
+	}
+	get := func(ctx context.Context, request *publicv1.NATGatewaysGetRequest) (*publicv1.NATGatewaysGetResponse, error) {
+		return deps.NATGatewaysClient.Get(ctx, request)
+	}
+	return resourceOperations{
+		label: "NAT gateway",
+		list:  typedResourceList("NAT gateways", list, natGatewayListRequest, natGatewaySummary),
+		get:   typedResourceGet("NAT gateway", get, natGatewayGetRequest, natGatewaySummary),
+	}
+}
+
 func secretReferenceResourceOperations(deps ServerDeps) resourceOperations {
 	list := func(ctx context.Context, request *publicv1.SecretsListRequest) (*publicv1.SecretsListResponse, error) {
 		return deps.SecretsClient.List(ctx, request)
@@ -156,6 +224,103 @@ func projectGetRequest(id string) *publicv1.ProjectsGetRequest {
 }
 
 func projectSummary(item *publicv1.Project) ResourceSummary {
+	return ResourceSummary{
+		ID:      item.GetId(),
+		Name:    item.GetMetadata().GetName(),
+		Version: item.GetMetadata().GetVersion(),
+		State:   item.GetStatus().GetState().String(),
+	}
+}
+
+func externalIPListRequest(filter string, page resourcePageRequest) *publicv1.ExternalIPsListRequest {
+	request := publicv1.ExternalIPsListRequest_builder{
+		Offset: &page.offset,
+		Limit:  &page.limit,
+	}
+	if filter != "" {
+		request.Filter = &filter
+	}
+	return request.Build()
+}
+
+func externalIPGetRequest(id string) *publicv1.ExternalIPsGetRequest {
+	return publicv1.ExternalIPsGetRequest_builder{Id: id}.Build()
+}
+
+func externalIPSummary(item *publicv1.ExternalIP) ResourceSummary {
+	return ResourceSummary{
+		ID:      item.GetId(),
+		Name:    item.GetMetadata().GetName(),
+		Version: item.GetMetadata().GetVersion(),
+		State:   item.GetStatus().GetState().String(),
+	}
+}
+
+func externalIPPoolListRequest(filter string, page resourcePageRequest) *publicv1.ExternalIPPoolsListRequest {
+	request := publicv1.ExternalIPPoolsListRequest_builder{
+		Offset: &page.offset,
+		Limit:  &page.limit,
+	}
+	if filter != "" {
+		request.Filter = &filter
+	}
+	return request.Build()
+}
+
+func externalIPPoolGetRequest(id string) *publicv1.ExternalIPPoolsGetRequest {
+	return publicv1.ExternalIPPoolsGetRequest_builder{Id: id}.Build()
+}
+
+func externalIPPoolSummary(item *publicv1.ExternalIPPool) ResourceSummary {
+	return ResourceSummary{
+		ID:      item.GetId(),
+		Name:    item.GetMetadata().GetName(),
+		Version: item.GetMetadata().GetVersion(),
+	}
+}
+
+func externalIPAttachmentListRequest(
+	filter string, page resourcePageRequest,
+) *publicv1.ExternalIPAttachmentsListRequest {
+	request := publicv1.ExternalIPAttachmentsListRequest_builder{
+		Offset: &page.offset,
+		Limit:  &page.limit,
+	}
+	if filter != "" {
+		request.Filter = &filter
+	}
+	return request.Build()
+}
+
+func externalIPAttachmentGetRequest(id string) *publicv1.ExternalIPAttachmentsGetRequest {
+	return publicv1.ExternalIPAttachmentsGetRequest_builder{Id: id}.Build()
+}
+
+func externalIPAttachmentSummary(item *publicv1.ExternalIPAttachment) ResourceSummary {
+	return ResourceSummary{
+		ID:      item.GetId(),
+		Name:    item.GetMetadata().GetName(),
+		Version: item.GetMetadata().GetVersion(),
+		State:   item.GetStatus().GetState().String(),
+	}
+}
+
+func natGatewayListRequest(filter string, page resourcePageRequest) *publicv1.NATGatewaysListRequest {
+	request := publicv1.NATGatewaysListRequest_builder{
+		Offset: &page.offset,
+		Limit:  &page.limit,
+	}
+	if filter != "" {
+		request.Filter = &filter
+	}
+	return request.Build()
+}
+
+func natGatewayGetRequest(id string) *publicv1.NATGatewaysGetRequest {
+	return publicv1.NATGatewaysGetRequest_builder{Id: id}.Build()
+}
+
+func natGatewaySummary(item *publicv1.NATGateway) ResourceSummary {
 	return ResourceSummary{
 		ID:      item.GetId(),
 		Name:    item.GetMetadata().GetName(),
@@ -595,6 +760,10 @@ func newResourceRegistry(deps ServerDeps) resourceRegistry {
 		ResourceTypeSubnet:                     subnetResourceOperations(deps),
 		ResourceTypeSecurityGroup:              securityGroupResourceOperations(deps),
 		ResourceTypeComputeInstance:            computeInstanceResourceOperations(deps),
+		ResourceTypeExternalIP:                 externalIPResourceOperations(deps),
+		ResourceTypeExternalIPPool:             externalIPPoolResourceOperations(deps),
+		ResourceTypeExternalIPAttachment:       externalIPAttachmentResourceOperations(deps),
+		ResourceTypeNATGateway:                 natGatewayResourceOperations(deps),
 	}
 }
 

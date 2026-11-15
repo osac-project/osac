@@ -9,7 +9,8 @@ authorization boundary.
 ## Supported resources
 
 `list_resources` supports the baseline compute and networking prerequisites,
-`project`, and `secret_reference`.
+public exposure resources, the provider-managed `external_ip_pool`, `project`,
+and `secret_reference`.
 
 `get_resource` accepts only:
 
@@ -22,6 +23,10 @@ authorization boundary.
 - `virtual_network`
 - `subnet`
 - `security_group`
+- `external_ip`
+- `external_ip_pool`
+- `external_ip_attachment`
+- `nat_gateway`
 - `compute_instance`
 
 Secret references are list-only: MCP returns the reference's ID, name, and
@@ -64,8 +69,22 @@ across `ingress_rules` and `egress_rules`, with the same per-direction schema
 limit.
 
 `delete_network_resource` deletes exactly one explicitly named eligible
-resource. It does not cascade: a parent with active dependents returns a
-conflict, and callers must delete dependents first.
+network resource: VirtualNetwork, Subnet, SecurityGroup, ExternalIP,
+ExternalIPAttachment, or NATGateway. It does not cascade: a parent with active
+dependents returns a conflict, and callers must delete dependents first.
+
+`expose_network_resource` creates exactly one `external_ip`,
+`external_ip_attachment`, or `nat_gateway` through the existing public Create
+API as the MCP caller. ExternalIP allocation selects an existing
+provider-managed ExternalIPPool discovered with the read-only public List/Get
+API; MCP does not create or edit pools. An
+ExternalIPAttachment is inbound DNAT and requires one ComputeInstance, Cluster,
+or BareMetalInstance target, with `api` or `ingress` required for Cluster
+targets. A NATGateway is outbound SNAT and requires a VirtualNetwork and an
+ExternalIP. The typed input rejects edit-shaped IDs, ambiguous targets, and
+fields from another resource variant before dispatch. Missing or inaccessible
+dependencies return a named safe prerequisite error, and the public API remains
+the authorization and dependency boundary.
 
 ## Registry extension contract
 

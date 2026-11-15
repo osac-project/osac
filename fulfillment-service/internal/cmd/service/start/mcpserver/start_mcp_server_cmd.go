@@ -117,6 +117,10 @@ type ServerDeps struct {
 	VirtualNetworksClient             publicv1.VirtualNetworksClient
 	SubnetsClient                     publicv1.SubnetsClient
 	SecurityGroupsClient              publicv1.SecurityGroupsClient
+	ExternalIPsClient                 publicv1.ExternalIPsClient
+	ExternalIPPoolsClient             publicv1.ExternalIPPoolsClient
+	ExternalIPAttachmentsClient       publicv1.ExternalIPAttachmentsClient
+	NATGatewaysClient                 publicv1.NATGatewaysClient
 	ComputeInstancesClient            publicv1.ComputeInstancesClient
 	SecretsClient                     publicv1.SecretsClient
 	TenantsClient                     publicv1.TenantsClient
@@ -136,6 +140,10 @@ func NewServerDeps(conn grpc.ClientConnInterface) ServerDeps {
 		VirtualNetworksClient:             publicv1.NewVirtualNetworksClient(conn),
 		SubnetsClient:                     publicv1.NewSubnetsClient(conn),
 		SecurityGroupsClient:              publicv1.NewSecurityGroupsClient(conn),
+		ExternalIPsClient:                 publicv1.NewExternalIPsClient(conn),
+		ExternalIPPoolsClient:             publicv1.NewExternalIPPoolsClient(conn),
+		ExternalIPAttachmentsClient:       publicv1.NewExternalIPAttachmentsClient(conn),
+		NATGatewaysClient:                 publicv1.NewNATGatewaysClient(conn),
 		ComputeInstancesClient:            publicv1.NewComputeInstancesClient(conn),
 		SecretsClient:                     publicv1.NewSecretsClient(conn),
 		TenantsClient:                     publicv1.NewTenantsClient(conn),
@@ -438,9 +446,30 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		deps.VirtualNetworksClient, deps.SubnetsClient, deps.SecurityGroupsClient,
 	))
 	registerWriteTool(registry, &mcp.Tool{
+		Name: "expose_network_resource",
+		Description: "Use this tool only after the user confirms the exact public exposure or outbound NAT change. " +
+			"Create an external_ip from a provider-managed external_ip_pool_id, an external_ip_attachment for inbound " +
+			"DNAT to exactly one compute_instance, cluster, or baremetal_instance, or a nat_gateway for outbound SNAT " +
+			"from a virtual_network. Cluster attachments require cluster_endpoint api or ingress. Use IDs from " +
+			"list_resources, snake_case fields, and canonical IPv4-capable resources only. Supplying id requests an " +
+			"unsupported in-place edit. Creation is asynchronous and acceptance does not mean exposure is ready.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Expose OSAC network resource",
+			ReadOnlyHint:    false,
+			DestructiveHint: toolAnnotationBool(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  compatibleToolSchema[ExposeNetworkResourceInput](),
+		OutputSchema: compatibleToolSchema[ExposeNetworkResourceOutput](),
+	}, writeToolContract{Destructive: true, Idempotent: false}, handleExposeNetworkResource(
+		deps.ExternalIPsClient, deps.ExternalIPAttachmentsClient, deps.NATGatewaysClient,
+	))
+	registerWriteTool(registry, &mcp.Tool{
 		Name: "delete_network_resource",
 		Description: "Use this tool only when the user explicitly requests deletion or cleanup. Deletes exactly one named " +
-			"virtual_network, subnet, or security_group by ID. Dependencies must be removed first; this tool never cascades.",
+			"virtual_network, subnet, security_group, external_ip, external_ip_attachment, or nat_gateway by ID. " +
+			"Dependencies must be removed first; this tool never cascades.",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Delete OSAC network resource",
 			ReadOnlyHint:    false,
@@ -452,6 +481,7 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		OutputSchema: compatibleToolSchema[DeleteNetworkResourceOutput](),
 	}, writeToolContract{Destructive: true, Idempotent: false}, handleDeleteNetworkResource(
 		deps.VirtualNetworksClient, deps.SubnetsClient, deps.SecurityGroupsClient,
+		deps.ExternalIPsClient, deps.ExternalIPAttachmentsClient, deps.NATGatewaysClient,
 	))
 	registerWriteTool(registry, &mcp.Tool{
 		Name: "create_compute_instance",

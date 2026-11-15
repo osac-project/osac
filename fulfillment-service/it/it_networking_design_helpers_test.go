@@ -563,6 +563,38 @@ func ndCreatePool(ctx context.Context, c ndClients, cidr string) *privatev1.Exte
 	return object
 }
 
+// cleanupExternalIPsForPool prevents provider-enabled default networking from keeping a test pool alive.
+func cleanupExternalIPsForPool(ctx context.Context, c ndClients, poolID string) error {
+	ndSetPoolState(ctx, c, poolID, privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
+
+	ips, err := c.externalIPs.List(ctx, privatev1.ExternalIPsListRequest_builder{}.Build())
+	if err != nil {
+		return fmt.Errorf("failed to list ExternalIPs for pool %s: %w", poolID, err)
+	}
+	gateways, err := c.natGateways.List(ctx, privatev1.NATGatewaysListRequest_builder{}.Build())
+	if err != nil {
+		return fmt.Errorf("failed to list NATGateways for pool %s: %w", poolID, err)
+	}
+	adminPublicNATGateways := publicv1.NewNATGatewaysClient(tool.ExternalView().AdminConn())
+	for _, externalIP := range ips.GetItems() {
+		if externalIP.GetSpec().GetPool().GetId() != poolID {
+			continue
+		}
+		for _, gateway := range gateways.GetItems() {
+			if gateway.GetSpec().GetExternalIp().GetId() != externalIP.GetId() {
+				continue
+			}
+			if err := cleanupNATGatewayFixture(ctx, adminPublicNATGateways, c.natGateways, gateway.GetId()); err != nil {
+				return fmt.Errorf("failed to cleanup NATGateway %s: %w", gateway.GetId(), err)
+			}
+		}
+		if err := cleanupExternalIPFixture(ctx, c.externalIPs, externalIP.GetId()); err != nil {
+			return fmt.Errorf("failed to cleanup ExternalIP %s: %w", externalIP.GetId(), err)
+		}
+	}
+	return nil
+}
+
 // ndSetPoolState waits until the controller placed the pool, then writes its state through the private API.
 func ndSetPoolState(ctx context.Context, c ndClients, id string, state privatev1.ExternalIPPoolState) {
 	GinkgoHelper()

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import os
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ from tests.conformance.catalog import Catalog, ProfileDefinition, expand_profile
 from tests.conformance.config import Config, load_config
 from tests.conformance.diagnostics import DiagnosticsCollector
 from tests.conformance.errors import CommandLineError, ConfigError
+from tests.conformance.image import suite_image_digest
 from tests.conformance.interrupt import Interrupted, InterruptGate
 from tests.conformance.model import Classification, Plan, ProfileResult, Result, RunContext, TestIdentity, TestOutcome
 from tests.conformance.output import OutputSink, new_run_id, write_plan
@@ -52,6 +52,7 @@ def _parser() -> argparse.ArgumentParser:
     parent.add_argument("--results", default="/results")
     parent.add_argument("--catalog", default=str(_DEFAULT_CATALOG))
     parent.add_argument("--tree", default="tests/e2e")
+    parent.add_argument("--podman-socket", default="/run/podman/podman.sock")
 
     parser = _Parser(prog="osac-conformance", add_help=True)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -154,7 +155,7 @@ def _build_runtime(args: argparse.Namespace) -> Runtime:
         results=results,
         redactor=redactor,
         output=OutputSink(results, redactor),
-        suite_image_digest=os.environ.get("OSAC_CONFORMANCE_SUITE_IMAGE_DIGEST", ""),
+        suite_image_digest=suite_image_digest(Path(args.podman_socket)),
     )
 
 

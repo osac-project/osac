@@ -9,6 +9,11 @@ and no way to run this hermetically — it exists for AI agents to manually conf
 change actually works end-to-end against a real deployment, the way you'd
 otherwise do by hand in a browser.
 
+The committed UI journeys live in
+[`apps/e2e-tests/README.md`](../e2e-tests/README.md). Read that guide when
+adding a new non-VMaaS test; this document focuses on running the browser
+harness and the existing VMaaS flows.
+
 ## Prerequisites
 
 - A reachable `osac-ui` deployment (any HTTPS URL that serves it).

@@ -343,6 +343,12 @@ const diskImageTestName = rawDiskImage.name ? indexedResourceName(rawDiskImage.n
 const storageTierTestName = rawStorageTier.name
   ? indexedResourceName(rawStorageTier.name)
   : undefined;
+const resizeInstanceTypeTestName = rawResizeInstanceType.name
+  ? indexedResourceName(rawResizeInstanceType.name)
+  : undefined;
+const resizeCpuUpMemoryDownInstanceTypeTestName = rawResizeCpuUpMemoryDownInstanceType.name
+  ? indexedResourceName(rawResizeCpuUpMemoryDownInstanceType.name)
+  : undefined;
 const catalogName = indexedResourceName(rawCatalog.name);
 const catalogInstanceTypeName = indexedResourceName(rawCatalog.fields.instance_type.name);
 const catalogDiskImageName = indexedResourceName(rawCatalog.fields.disk_image.name);
@@ -431,14 +437,14 @@ export const instanceTypeTestData: InstanceTypeTestData = {
 };
 
 export const resizeInstanceTypeTestData: ResizeInstanceTypeTestData = {
-  name: rawResizeInstanceType.name ?? '',
+  name: resizeInstanceTypeTestName ?? '',
   description: rawResizeInstanceType.description,
   vcpus: rawResizeInstanceType.vcpus,
   memoryGib: rawResizeInstanceType.memory_gib,
 };
 
 export const resizeCpuUpMemoryDownInstanceTypeTestData: ResizeInstanceTypeTestData = {
-  name: rawResizeCpuUpMemoryDownInstanceType.name ?? '',
+  name: resizeCpuUpMemoryDownInstanceTypeTestName ?? '',
   description: rawResizeCpuUpMemoryDownInstanceType.description,
   vcpus: rawResizeCpuUpMemoryDownInstanceType.vcpus,
   memoryGib: rawResizeCpuUpMemoryDownInstanceType.memory_gib,

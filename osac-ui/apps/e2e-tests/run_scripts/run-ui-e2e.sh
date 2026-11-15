@@ -484,7 +484,9 @@ HTTP_STATUS="${HTTP_STATUS: -3}"
 
 export_test_environment
 if [[ "$RUN_SMOKE" == true ]]; then
-  pnpm --filter @osac/playwright exec playwright test --project=setup --project=smoke
+  SMOKE_ARGS=(--project=setup --project=smoke)
+  [[ -n "$PW_REPORTER" ]] && SMOKE_ARGS+=(--reporter="$PW_REPORTER")
+  pnpm --filter @osac/playwright exec playwright test "${SMOKE_ARGS[@]}"
 fi
 
 if [[ "$RUN_SMOKE" == true && "$PW_LIST" == false && -z "$PW_PROJECT" &&

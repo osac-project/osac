@@ -481,10 +481,6 @@ def test_active_backup_bgp() -> None:
         "ip prefix-list EVPN-REMOTE-VTEPS seq 1 "
         "permit 10.200.0.0/16 ge 32 le 32" in raw_config
     )
-    assert (
-        "ip prefix-list EVPN-LOCAL-VTEP seq 10 "
-        "permit 10.200.255.1/32" in raw_config
-    )
     assert "set local-preference 200" in raw_config
     assert "set local-preference 100" in raw_config
 
@@ -497,7 +493,7 @@ def test_active_backup_bgp() -> None:
     )[1].split("route-map EVPN-BACKUP-OUT permit 10", 1)[0]
     backup_out = raw_config.split(
         "route-map EVPN-BACKUP-OUT permit 10\n", 1
-    )[1].split("route-map EVPN-ACTIVE-IPV4-IN permit 10", 1)[0]
+    )[1].split("route-map ", 1)[0]
     assert "set local-preference 200" in active_in
     assert "set local-preference 100" in backup_in
     assert "set local-preference" not in backup_out
@@ -506,48 +502,8 @@ def test_active_backup_bgp() -> None:
     assert "match " not in backup_in
     assert "match " not in backup_out
 
-    # IPv4 unicast route-maps match VTEP /32 routes only.
-    ipv4_active_in = raw_config.split(
-        "route-map EVPN-ACTIVE-IPV4-IN permit 10\n", 1
-    )[1].split(
-        "route-map EVPN-ACTIVE-IPV4-IN permit 100", 1
-    )[0]
-    ipv4_backup_in = raw_config.split(
-        "route-map EVPN-BACKUP-IPV4-IN permit 10\n", 1
-    )[1].split(
-        "route-map EVPN-BACKUP-IPV4-IN permit 100", 1
-    )[0]
-    ipv4_backup_out = raw_config.split(
-        "route-map EVPN-BACKUP-IPV4-OUT permit 10\n", 1
-    )[1].split(
-        "route-map EVPN-BACKUP-IPV4-OUT permit 100", 1
-    )[0]
-    for route_map in (ipv4_active_in, ipv4_backup_in):
-        assert (
-            "match ip address prefix-list "
-            "EVPN-REMOTE-VTEPS" in route_map
-        )
-    assert "set local-preference 200" in ipv4_active_in
-    assert "set local-preference 100" in ipv4_backup_in
-    assert (
-        "match ip address prefix-list EVPN-LOCAL-VTEP"
-        in ipv4_backup_out
-    )
-    assert "set as-path prepend 4209999999 4209999999 4209999999" in ipv4_backup_out
-    assert (
-        "route-map EVPN-ACTIVE-IPV4-IN permit 100"
-        in raw_config
-    )
-    assert (
-        "route-map EVPN-BACKUP-IPV4-IN permit 100"
-        in raw_config
-    )
-    assert (
-        "route-map EVPN-BACKUP-IPV4-OUT permit 100"
-        in raw_config
-    )
-    # frr-k8s owns the per-neighbor route-maps, so the policy is attached by
-    # extending them instead of overriding the neighbor attachment.
+    # frr-k8s owns the per-neighbor route-maps, so the IPv4 policy extends
+    # them with a low sequence that runs before the generated filter.
     active_peer_in = raw_config.split(
         "route-map 169.254.133.1-in permit 1\n", 1
     )[1].split("route-map", 1)[0]
@@ -558,18 +514,13 @@ def test_active_backup_bgp() -> None:
         "route-map 169.254.133.3-out permit 1\n", 1
     )[1].split("route-map", 1)[0]
     assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in active_peer_in
-    assert "call EVPN-ACTIVE-IPV4-IN" in active_peer_in
+    assert "set local-preference 200" in active_peer_in
     assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in backup_peer_in
-    assert "call EVPN-BACKUP-IPV4-IN" in backup_peer_in
-    assert "call EVPN-BACKUP-IPV4-OUT" in backup_peer_out
+    assert "set local-preference 100" in backup_peer_in
+    assert "set as-path prepend 4209999999 4209999999 4209999999" in backup_peer_out
+    assert "match " not in backup_peer_out
     assert "route-map 169.254.133.1-out permit 1" not in raw_config
     assert "address-family ipv4 unicast" not in raw_config
-    assert raw_config.index(
-        "route-map EVPN-ACTIVE-IPV4-IN permit 10"
-    ) < raw_config.index("route-map 169.254.133.1-in permit 1")
-    assert raw_config.index(
-        "route-map EVPN-BACKUP-IPV4-OUT permit 10"
-    ) < raw_config.index("route-map 169.254.133.3-out permit 1")
 
     l2vpn_af = raw_config.split("address-family l2vpn evpn\n", 1)[1].split(
         "exit-address-family", 1
@@ -614,12 +565,22 @@ def test_unnumbered_active_backup_bgp() -> None:
         "osac-evpn-raw-worker-0",
     )
     raw_config = raw["spec"]["raw"]["rawConfig"]
-    assert "route-map ens5f0-in permit 1" in raw_config
-    assert "call EVPN-ACTIVE-IPV4-IN" in raw_config
-    assert "route-map ens5f1-in permit 1" in raw_config
-    assert "call EVPN-BACKUP-IPV4-IN" in raw_config
-    assert "route-map ens5f1-out permit 1" in raw_config
-    assert "call EVPN-BACKUP-IPV4-OUT" in raw_config
+    active_peer_in = raw_config.split(
+        "route-map ens5f0-in permit 1\n", 1
+    )[1].split("route-map", 1)[0]
+    backup_peer_in = raw_config.split(
+        "route-map ens5f1-in permit 1\n", 1
+    )[1].split("route-map", 1)[0]
+    backup_peer_out = raw_config.split(
+        "route-map ens5f1-out permit 1\n", 1
+    )[1].split("route-map", 1)[0]
+    assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in active_peer_in
+    assert "set local-preference 200" in active_peer_in
+    assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in backup_peer_in
+    assert "set local-preference 100" in backup_peer_in
+    assert "set as-path prepend 4209999999 4209999999 4209999999" in backup_peer_out
+    assert "match " not in backup_peer_out
+    assert "route-map ens5f0-out permit 1" not in raw_config
     assert "neighbor ens5f0 route-map EVPN-ACTIVE-IN in" in raw_config
     assert "neighbor ens5f1 route-map EVPN-BACKUP-IN in" in raw_config
     assert "neighbor ens5f1 route-map EVPN-BACKUP-OUT out" in raw_config

@@ -430,8 +430,10 @@ these entries sit below the generated `permit 3` filter, the receive and
 transmit filters remain in effect. L2VPN EVPN route-maps apply the same
 preferences without prefix matching so they cover every EVPN route. The L2VPN
 EVPN address family also activates the EVPN neighbors and advertises VNIs.
-The chart also permits `fe80::/10` in the frr-k8s-generated IPv6 prefix-lists
-so RFC 5549 IPv6 link-local next hops that carry IPv4 routes are accepted.
+For interface-based unnumbered neighbors, the chart also permits `fe80::/10`
+in the frr-k8s-generated IPv6 prefix-lists so the RFC 5549 IPv6 link-local
+next hops that carry IPv4 routes are accepted. Numbered peers keep the
+generated deny-any IPv6 lists, so IPv6 routes stay filtered.
 
 ```yaml
 evpn:

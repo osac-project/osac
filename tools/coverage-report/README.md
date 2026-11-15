@@ -143,7 +143,7 @@ flag is consulted, so it cannot stand in for the checkout itself.
 - `insufficient evidence` - otherwise, any metric is `unavailable`, `blocked`,
   `na`, or `zero` (a `none` tier is neutral). A `zero` tier says whether it
   reflects drafted links pending review or no reviewed test links yet.
-- `ready` - otherwise.
+- `no blocking gaps` - otherwise; coverage depth is not judged.
 
 Each area and overview row also carries `verdict_reason`, the strongest cause
 in one sentence.

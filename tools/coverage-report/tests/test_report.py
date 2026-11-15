@@ -133,8 +133,9 @@ class MappingTests(unittest.TestCase):
             report = build_feature_report(feature(), root, "abc", measured())
         self.assertEqual(report["metrics"]["e2e"]["state"], "none")
         self.assertEqual(report["metrics"]["e2e"]["display"], "no cases at this tier")
-        self.assertEqual(report["verdict"], "ready")
-        self.assertEqual(report["verdict_reason"], "All tiers measured, no critical or high gaps")
+        self.assertEqual(report["verdict"], "no blocking gaps")
+        self.assertEqual(report["verdict_reason"],
+                         "No critical or high gaps and every tier has evidence; coverage depth is not judged")
 
     def test_proposed_path_is_a_gap(self):
         plan = case("TC-FR1-01", tier="Component integration / [DEV]", execution="proposed `it/new_test.go`")
@@ -256,11 +257,11 @@ class VerdictTests(unittest.TestCase):
         return _verdict(metrics, gaps, {})[0]
 
     def test_rules(self):
-        self.assertEqual(self.verdict(self.metrics(), []), "ready")
+        self.assertEqual(self.verdict(self.metrics(), []), "no blocking gaps")
         self.assertEqual(self.verdict(self.metrics(), [{"priority": "critical"}]), "not ready")
-        self.assertEqual(self.verdict(self.metrics(), [{"priority": "low"}]), "ready")
+        self.assertEqual(self.verdict(self.metrics(), [{"priority": "low"}]), "no blocking gaps")
         self.assertEqual(self.verdict(self.metrics(e2e="zero"), []), "insufficient evidence")
-        self.assertEqual(self.verdict(self.metrics(e2e="none"), []), "ready")
+        self.assertEqual(self.verdict(self.metrics(e2e="none"), []), "no blocking gaps")
         self.assertEqual(self.verdict(self.metrics(unit="unavailable"), []), "insufficient evidence")
         self.assertEqual(self.verdict(self.metrics(integration="blocked"), []), "insufficient evidence")
         self.assertEqual(self.verdict(self.metrics(integration="na"), []), "insufficient evidence")

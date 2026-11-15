@@ -35,7 +35,7 @@ PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 INSUFFICIENT_STATES = {"unavailable", "blocked", "na"}
 VERDICT_INSUFFICIENT = "insufficient evidence"
 VERDICT_NOT_READY = "not ready"
-VERDICT_READY = "ready"
+VERDICT_NO_BLOCKING = "no blocking gaps"
 TIER_LABELS = {UNIT: "Unit", INTEGRATION: "Integration", E2E: "E2E"}
 
 
@@ -328,7 +328,7 @@ def _verdict(
     parts = zero_parts + other_parts
     if parts:
         return VERDICT_INSUFFICIENT, "; ".join(parts)
-    return VERDICT_READY, "All tiers measured, no critical or high gaps"
+    return VERDICT_NO_BLOCKING, "No critical or high gaps and every tier has evidence; coverage depth is not judged"
 
 
 # --- Markdown ---------------------------------------------------------------

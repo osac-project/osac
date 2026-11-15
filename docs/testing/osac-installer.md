@@ -11,14 +11,8 @@ Run `make help` to list the test targets.
 |---|---|---|---|
 | Unit | `make kind-runtime-test` | Makefile/runtime routing and shell behavior | Container engines, Helm, host privilege changes and downloads are command stubs |
 | Unit | `make infra-ready-wait-test` | The readiness waits that end `make install-infra` fail the step naming a dependency that never becomes ready | Commands and time are mocked through a stub `kubectl`; no cluster is started |
-| Contract (Helm render) | `make mce-render-test`, `make fulfillment-trust-render-test`, `make helm-networking-test`, `make certificate-validation-render-test` | Production chart templates and their configuration contracts | No Kubernetes API, running hooks, MCE catalog, deployed TLS or provider calls |
+| Contract (Helm render) | `make mce-render-test`, `make fulfillment-trust-render-test`, `make helm-networking-test` | Production chart templates and their configuration contracts | No Kubernetes API, running hooks, MCE catalog, deployed TLS or provider calls |
 | Component integration | `make test` (suite selection in `make help`) | Current images and chart wiring in Kind | Depends on the selected suite; provider networking is disabled in the standard profile |
-
-The `certificate-validation-render-test` contract renders the AAP storage
-instance-group ConfigMap and the dev-full AWX configuration hook with the
-secure default and the development overrides. It proves rendered
-configuration only; the storage role's Ansible client behavior is covered by
-the [osac-aap guide](osac-aap.md), not a deployed controller.
 
 The installer networking checks script under `scripts/` runs against the
 deployed installer release and its idempotent upgrade: Kubernetes/API

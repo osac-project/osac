@@ -48,12 +48,14 @@ in `osac-aap/Makefile`.
   (`tests/unit/test_storage_certificate_validation.py`, and the storage
   targets in `STORAGE_TESTS_ENABLED=true make test`): the unit tier renders
   the `vast_storage` role defaults and proves the secure default,
-  environment parsing, and the wiring of every storage-role TLS option and
-  `validate_certs` task flag to the shared policy, without any HTTP request;
-  the storage integration targets deliberately omit
-  `vast_storage_validate_certs` and exercise the worker's
-  `ENABLE_CERTIFICATE_VALIDATION` environment against the self-signed mock
-  VMS service. No deployed AAP/AWX job receiving the rendered environment is
+  `VAST_VALIDATE_CERTS` parsing (the provider-scoped worker contract; the
+  generic `ENABLE_CERTIFICATE_VALIDATION` is not consumed), and that the
+  role's HTTP clients wire every `validate_certs` task flag to the shared
+  `vast_storage_validate_certs` setting, without any HTTP request; the
+  storage integration targets deliberately omit
+  `vast_storage_validate_certs` and exercise the provider-scoped
+  `VAST_VALIDATE_CERTS` environment against the self-signed mock VMS
+  service. No deployed AAP/AWX job receiving the rendered environment is
   proven ([OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843)).
 - `network_task_playbook`, `netris_fabric`, `cudn_evpn` (also in `make test`):
   Netris is a stateful in-process fake; CUDN/VTEP CRDs are minimal schemas

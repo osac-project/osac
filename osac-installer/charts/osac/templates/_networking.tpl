@@ -125,7 +125,9 @@ address as an integer, the prefix length, and whether the host bits are zero.
   {{- $value := index $defaults $field -}}
   {{- $cidr := include "osac.networking.parseCidr" $value | fromJson -}}
   {{- if not $cidr.canonical -}}
-    {{- fail (printf "%s.%s must be a canonical IPv4 CIDR (got %s)" $defaultsPath $field $value) -}}
+    {{- /* The value stays out of the message: the render error reaches the
+    terminal and CI logs, and the CIDR is customer infrastructure data. */}}
+    {{- fail (printf "%s.%s must be a canonical IPv4 CIDR (host bits must be zero)" $defaultsPath $field) -}}
   {{- end -}}
   {{- $_ := set $cidrs $field $cidr -}}
 {{- end -}}

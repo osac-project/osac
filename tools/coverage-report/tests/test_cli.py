@@ -133,6 +133,15 @@ class CliTests(unittest.TestCase):
             self.assertEqual(previous, handle.read())
         self.assertFalse(os.path.exists(os.path.join(directory, "report.md.tmp")))
 
+    def test_write_failure_reports_the_error_once(self):
+        blocker = os.path.join(self.root, "blocker")
+        with open(blocker, "w", encoding="utf-8") as handle:
+            handle.write("not a directory")
+        self.out = os.path.join(blocker, "nested")
+        code, _stdout, stderr = self.run_cli(["dm"])
+        self.assertEqual(code, 2)
+        self.assertEqual(stderr.count("cannot write report to"), 1)
+
     def test_all_features_writes_all_directory(self):
         code, _stdout, _stderr = self.run_cli([])
         self.assertEqual(code, 0)

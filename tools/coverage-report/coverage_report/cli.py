@@ -76,7 +76,6 @@ def _restore(path: str, previous: Optional[bytes]) -> None:
 
 def _write_report(directory: str, report: dict) -> None:
     """Publish ``report.json`` and ``report.md`` together, or neither."""
-    os.makedirs(directory, exist_ok=True)
     json_path = os.path.join(directory, "report.json")
     markdown_path = os.path.join(directory, "report.md")
     staged = [
@@ -85,6 +84,7 @@ def _write_report(directory: str, report: dict) -> None:
     ]
     published = []
     try:
+        os.makedirs(directory, exist_ok=True)
         for path, text in staged:
             with open(path + ".tmp", "w", encoding="utf-8") as handle:
                 handle.write(text)
@@ -184,7 +184,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         _write_report(directory, report)
     except OSError as exc:
-        print("coverage-report: cannot write report to {0}: {1}".format(directory, exc), file=sys.stderr)
+        print("coverage-report: {0}".format(exc), file=sys.stderr)
         return 2
     return 0
 

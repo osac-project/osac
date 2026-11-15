@@ -30,9 +30,11 @@ def pytest_collection_finish(session: Any) -> None:  # noqa: ANN401
 
 def pytest_runtest_logreport(report: Any) -> None:  # noqa: ANN401
     path = os.environ.get("OSAC_CONFORMANCE_RESULTS")
-    if not path or report.when not in ("call", "setup"):
+    if not path or report.when not in ("call", "setup", "teardown"):
         return
     if report.when == "setup" and not (report.failed or report.skipped):
+        return
+    if report.when == "teardown" and not report.failed:
         return
     message = ""
     if report.failed or report.skipped:
@@ -42,6 +44,7 @@ def pytest_runtest_logreport(report: Any) -> None:  # noqa: ANN401
         {
             "nodeid": report.nodeid,
             "name": report.nodeid.rsplit("::", 1)[-1],
+            "when": report.when,
             "outcome": report.outcome,
             "duration": float(report.duration),
             "message": message,

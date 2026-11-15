@@ -121,3 +121,33 @@ def test_junit_marks_a_failure(tmp_path: Path) -> None:
     failure = root.find("testcase/failure")
     assert failure is not None
     assert failure.attrib["message"] == "boom"
+
+
+def test_junit_failure_body_uses_the_test_log(tmp_path: Path) -> None:
+    report = _report("boom")
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "test.log").write_text("captured log body")
+    failed = Report(
+        **{**report.__dict__, "tests": (TestOutcome(report.tests[0].identity, Result.FAIL, 1.0, "boom", evidence),)}
+    )
+
+    path = write_junit(failed, tmp_path, Redactor())
+
+    root = ElementTree.parse(path).getroot()
+    failure = root.find("testcase/failure")
+    assert failure is not None
+    assert failure.text == "captured log body"
+
+
+def test_report_redacts_check_messages_and_leftovers(tmp_path: Path) -> None:
+    marker = "redaction-marker-z"
+    report = _report()
+    check = Check("extra", "extra", "rule", "remedy", CheckResult.FAIL, f"failed {marker}")
+    report = Report(**{**report.__dict__, "checks": (*report.checks, check), "leftovers": (f"kind/{marker}",)})
+
+    path = write_report(report, tmp_path, Redactor(secrets=(marker,)))
+
+    text = path.read_text()
+    assert marker not in text
+    assert "<redacted>" in text

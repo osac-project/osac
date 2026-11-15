@@ -61,7 +61,8 @@ def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:
 def write_report(report: Report, results_dir: Path, redactor: Redactor) -> Path:
     results_dir.mkdir(parents=True, exist_ok=True)
     path = results_dir / "conformance-report.yaml"
-    path.write_text(yaml.safe_dump(report_document(report, redactor), sort_keys=False), encoding="utf-8")
+    document = redactor.obj(report_document(report, redactor))
+    path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     return path
 
 
@@ -84,8 +85,10 @@ def write_junit(report: Report, results_dir: Path, redactor: Redactor) -> Path:
             {"name": redactor.text(test.identity.name), "classname": "conformance", "time": str(test.duration_seconds)},
         )
         if test.result is Result.FAIL:
+            log_path = test.evidence_dir / "test.log"
+            body = log_path.read_text(encoding="utf-8") if log_path.is_file() else test.message
             failure = ElementTree.SubElement(case, "failure", {"message": redactor.text(test.message)})
-            failure.text = redactor.text(test.message)
+            failure.text = redactor.text(body)
         elif test.result is Result.SKIP:
             ElementTree.SubElement(case, "skipped", {"message": redactor.text(test.message)})
     tree = ElementTree.ElementTree(suite)

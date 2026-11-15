@@ -110,7 +110,7 @@ def test_list_and_run_the_core_against_a_synthetic_tree(tmp_path: Path) -> None:
     focused_results.mkdir()
     focused_runtime = _runtime(tmp_path, focused_results, tree_dir)
     focused_plan = focused_results / "conformance-plan.yaml"
-    focused_plan.write_text("tests:\n  - id: test_passes\n")
+    focused_plan.write_text("tests:\n  - id: test_sample.py::test_passes\n")
     assert main(["run", "--plan", str(focused_plan)], runtime=focused_runtime) == 0
     focused_report = yaml.safe_load((focused_results / "conformance-report.yaml").read_text())
     vm = next(profile for profile in focused_report["profiles"] if profile["id"] == "vm")

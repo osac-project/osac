@@ -47,5 +47,21 @@ describe('ClusterDetailsSummary', () => {
 
     expect(screen.getByText('https://api.example.com:6443')).toBeInTheDocument();
     expect(screen.getByText('https://console.example.com')).toBeInTheDocument();
+    expect(screen.getByText('https://api.example.com:6443').closest('a')).toBeNull();
+    expect(screen.getByText('https://console.example.com').closest('a')).toBeNull();
+  });
+
+  it('keeps catalog ID and empty value fallbacks without card wrappers', () => {
+    const { container } = renderSummary(
+      create(ClusterSchema, {
+        id: 'empty',
+        spec: { catalogItem: { id: 'catalog-id' } },
+      }),
+    );
+
+    expect(screen.getByText('catalog-id')).toBeInTheDocument();
+    expect(screen.getByText('0')).toBeInTheDocument();
+    expect(screen.getAllByText('—')).toHaveLength(2);
+    expect(container.querySelector('.pf-v6-c-card')).toBeNull();
   });
 });

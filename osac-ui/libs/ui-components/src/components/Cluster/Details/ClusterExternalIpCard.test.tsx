@@ -111,8 +111,10 @@ describe('ClusterExternalIpCard', () => {
       <ClusterExternalIpCard cluster={makeCluster()} onAttach={onAttach} onDetach={onDetach} />,
     );
 
-    expect(screen.getByText('External IP endpoints')).toBeInTheDocument();
-    expect(container.querySelector('.pf-v6-c-card.pf-m-secondary')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 3, name: 'External IP endpoints' }),
+    ).toBeInTheDocument();
+    expect(container.querySelector('.pf-v6-c-card')).toBeNull();
     expect(screen.getByText('api.example.com')).toBeInTheDocument();
     expect(screen.getByText('apps.example.com')).toBeInTheDocument();
     expect(screen.queryByText('Not attached')).not.toBeInTheDocument();
@@ -284,7 +286,7 @@ describe('ClusterExternalIpCard', () => {
     expect(screen.getByText('Auto attaching in progress')).toBeInTheDocument();
   });
 
-  it('sends the endpoint-specific action to the details tab', async () => {
+  it('sends the endpoint-specific action to the networking section', async () => {
     const onAttach = vi.fn();
     const onDetach = vi.fn();
     const user = userEvent.setup();

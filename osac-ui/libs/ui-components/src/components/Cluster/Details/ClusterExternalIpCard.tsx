@@ -1,18 +1,16 @@
 import {
   Bullseye,
   Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
-  Divider,
   Flex,
   FlexItem,
   Spinner,
+  Stack,
+  StackItem,
+  Title,
 } from '@patternfly/react-core';
 
 import {
@@ -178,12 +176,13 @@ const ClusterExternalIpCard = ({ cluster, onAttach, onDetach }: ClusterExternalI
   ];
 
   return (
-    <Card variant="secondary">
-      <CardHeader>
-        <CardTitle>{t('External IP endpoints')}</CardTitle>
-      </CardHeader>
-      <Divider />
-      <CardBody>
+    <Stack hasGutter>
+      <StackItem>
+        <Title headingLevel="h3" size="md">
+          {t('External IP endpoints')}
+        </Title>
+      </StackItem>
+      <StackItem>
         {isLoading ? (
           <Bullseye>
             <Spinner aria-label={t('Loading external IP attachments')} />
@@ -203,8 +202,8 @@ const ClusterExternalIpCard = ({ cluster, onAttach, onDetach }: ClusterExternalI
             ))}
           </DescriptionList>
         )}
-      </CardBody>
-    </Card>
+      </StackItem>
+    </Stack>
   );
 };
 

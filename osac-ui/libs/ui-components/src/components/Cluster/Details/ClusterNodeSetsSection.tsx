@@ -1,4 +1,4 @@
-import { Card, CardBody, CardTitle, Content } from '@patternfly/react-core';
+import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import type { Cluster } from '@osac/types';
@@ -6,19 +6,23 @@ import type { Cluster } from '@osac/types';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 
-interface ClusterNodeSetsTabProps {
+interface ClusterNodeSetsSectionProps {
   cluster: Cluster;
 }
 
-const ClusterNodeSetsTab = ({ cluster }: ClusterNodeSetsTabProps) => {
+const ClusterNodeSetsSection = ({ cluster }: ClusterNodeSetsSectionProps) => {
   const { t } = useTranslation();
 
   const nodeSetEntries = Object.entries(cluster.spec?.nodeSets ?? {});
 
   return (
-    <Card isFullHeight>
-      <CardTitle>{t('Node sets')}</CardTitle>
-      <CardBody>
+    <Stack hasGutter>
+      <StackItem>
+        <Title headingLevel="h2" size="lg">
+          {t('Node sets')}
+        </Title>
+      </StackItem>
+      <StackItem>
         {nodeSetEntries.length > 0 ? (
           <Table aria-label={t('Cluster node sets')} variant="compact">
             <Thead>
@@ -43,9 +47,9 @@ const ClusterNodeSetsTab = ({ cluster }: ClusterNodeSetsTabProps) => {
         ) : (
           <Content component="p">{t('No node sets configured.')}</Content>
         )}
-      </CardBody>
-    </Card>
+      </StackItem>
+    </Stack>
   );
 };
 
-export default ClusterNodeSetsTab;
+export default ClusterNodeSetsSection;

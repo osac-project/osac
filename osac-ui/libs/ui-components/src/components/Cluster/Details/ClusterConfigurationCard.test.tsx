@@ -51,7 +51,9 @@ describe('ClusterConfigurationCard', () => {
       apiFixtures: { clusterVersions: [currentVersion, targetVersion] },
     });
 
-    expect(screen.getByText('Cluster configuration')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Lifecycle' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Version' })).toBeInTheDocument();
     expect(screen.getByText('Standard')).toBeInTheDocument();
     expect(screen.getByText('Creator')).toBeInTheDocument();
     expect(screen.getByText('alice')).toBeInTheDocument();

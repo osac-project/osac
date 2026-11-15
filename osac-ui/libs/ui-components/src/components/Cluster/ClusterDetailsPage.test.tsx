@@ -73,6 +73,44 @@ const renderPage = (
   );
 
 describe('ClusterDetailsPage upgrade availability', () => {
+  it('keeps the loading header without obsolete tab placeholders, then shows all sections', async () => {
+    renderPage(readyCluster, []);
+
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Download kubeconfig' })).not.toBeInTheDocument();
+    await screen.findByRole('heading', { name: 'cluster-one', level: 1 });
+    expect(screen.getByRole('heading', { name: 'Networking', level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Conditions', level: 2 })).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+  });
+
+  it('retains the not-found state without mounting detail actions', async () => {
+    renderPage(create(ClusterSchema, { id: 'another-cluster' }), []);
+
+    await screen.findByRole('heading', { name: 'Cluster not found' });
+    expect(screen.getByRole('button', { name: 'Return to clusters' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Download kubeconfig' })).not.toBeInTheDocument();
+  });
+
+  it('retains load-error retry and renders the continuous page after recovery', async () => {
+    let attempts = 0;
+    const { user } = renderPage(readyCluster, [], {
+      onClusterGet: () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new ConnectError('cluster unavailable', Code.Unavailable);
+        }
+        return { object: readyCluster };
+      },
+    });
+
+    await screen.findByRole('heading', { name: 'Could not load cluster' });
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByRole('heading', { name: 'cluster-one' });
+    expect(attempts).toBe(2);
+    expect(screen.getByRole('heading', { name: 'Node sets' })).toBeInTheDocument();
+  });
+
   it('offers the upgrade after resolving the configured version and catalog targets', async () => {
     renderPage(readyCluster, [currentVersion, targetVersion]);
 

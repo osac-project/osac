@@ -225,6 +225,7 @@ type mockSecurityGroupsClient struct {
 	publicv1.SecurityGroupsClient
 	listFunc   func(context.Context, *publicv1.SecurityGroupsListRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsListResponse, error)
 	createFunc func(context.Context, *publicv1.SecurityGroupsCreateRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsCreateResponse, error)
+	updateFunc func(context.Context, *publicv1.SecurityGroupsUpdateRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsUpdateResponse, error)
 	deleteFunc func(context.Context, *publicv1.SecurityGroupsDeleteRequest, ...grpc.CallOption) (*publicv1.SecurityGroupsDeleteResponse, error)
 }
 
@@ -238,6 +239,12 @@ func (m *mockSecurityGroupsClient) Create(
 	ctx context.Context, request *publicv1.SecurityGroupsCreateRequest, options ...grpc.CallOption,
 ) (*publicv1.SecurityGroupsCreateResponse, error) {
 	return m.createFunc(ctx, request, options...)
+}
+
+func (m *mockSecurityGroupsClient) Update(
+	ctx context.Context, request *publicv1.SecurityGroupsUpdateRequest, options ...grpc.CallOption,
+) (*publicv1.SecurityGroupsUpdateResponse, error) {
+	return m.updateFunc(ctx, request, options...)
 }
 
 func (m *mockSecurityGroupsClient) Delete(

@@ -4,39 +4,47 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conformance.domain import DomainDeclaration
+from tests.conformance.catalog import Catalog, ProfileDefinition, expand_profiles
 from tests.conformance.errors import ConfigError
-from tests.conformance.model import Classification, Layer, TestIdentity
-from tests.conformance.profiles import ProfileDefinition, expand_profiles
-from tests.conformance.selection import compute_plan, enrich_identities, plan_from_names
+from tests.conformance.model import Classification, Selector, TestIdentity
+from tests.conformance.selection import assign_profiles, compute_plan, plan_from_names
 
 
-def _test(test_id: str, *labels: str, domain: str = "networking") -> TestIdentity:
+def _test(test_id: str, *labels: str) -> TestIdentity:
     return TestIdentity(
         id=test_id,
-        name=f"[{domain}][component] {test_id}: test",
+        name=f"{test_id}: test",
         nodeid=f"tests/e2e/test_{test_id}.py::test_{test_id}",
         labels=frozenset(labels),
-        domain=domain,
-        layer=Layer.COMPONENT,
         profiles=(),
         classification=Classification.BLOCKING,
     )
 
 
-def _catalog() -> dict[str, ProfileDefinition]:
-    return {
+def _catalog() -> Catalog:
+    selectors = {
+        "generic": Selector("generic", "marker", ("conformance_generic",)),
+        "vmaas": Selector("vmaas", "marker", ("conformance_vmaas",)),
+        "netris": Selector("netris", "marker", ("conformance_netris",)),
+    }
+    profiles = {
         "generic": ProfileDefinition("generic", ("generic",)),
         "vm": ProfileDefinition("vm", ("vmaas",)),
         "netris": ProfileDefinition("netris", ("netris",)),
     }
+    return Catalog(selectors=selectors, profiles=profiles)
+
+
+def _selector_ids(catalog: Catalog, selector_ids: tuple[str, ...]) -> tuple[Selector, ...]:
+    return tuple(catalog.selectors[selector_id] for selector_id in selector_ids)
 
 
 def test_expand_profiles_adds_generic_and_unions_selectors() -> None:
-    names, selectors = expand_profiles(["vm", "netris"], _catalog())
+    catalog = _catalog()
+    names, selectors = expand_profiles(["vm", "netris"], catalog)
 
     assert names == ("generic", "vm", "netris")
-    assert selectors == ("generic", "vmaas", "netris")
+    assert tuple(selector.id for selector in selectors) == ("generic", "vmaas", "netris")
 
 
 def test_unknown_profile_is_a_config_error() -> None:
@@ -47,33 +55,37 @@ def test_unknown_profile_is_a_config_error() -> None:
 
 
 def test_plan_is_the_union_with_generic_first_and_deduplicated() -> None:
+    catalog = _catalog()
     tests = [
         _test("A", "conformance_generic"),
         _test("B", "conformance_generic", "conformance_vmaas"),
         _test("C", "conformance_netris"),
     ]
 
-    plan = compute_plan(tests, ["generic", "vmaas", "netris"], ("generic", "vm", "netris"))
+    plan = compute_plan(tests, _selector_ids(catalog, ("generic", "vmaas", "netris")), ("generic", "vm", "netris"))
 
     assert tuple(t.id for t in plan.tests) == ("A", "B", "C")
     assert plan.profiles == ("generic", "vm", "netris")
-    assert plan.selectors == ("generic", "vmaas", "netris")
+    assert tuple(selector.id for selector in plan.selectors) == ("generic", "vmaas", "netris")
     assert plan.complete is True
 
 
 def test_selectors_do_not_imply_one_another() -> None:
+    catalog = _catalog()
     tests = [_test("A", "conformance_generic"), _test("B", "conformance_netris")]
 
-    plan = compute_plan(tests, ["generic", "vmaas"], ("generic", "vm"))
+    plan = compute_plan(tests, _selector_ids(catalog, ("generic", "vmaas")), ("generic", "vm"))
 
     assert tuple(t.id for t in plan.tests) == ("A",)
 
 
 def test_plan_from_names_marks_a_subset_incomplete() -> None:
+    catalog = _catalog()
     tests = [_test("A", "conformance_generic"), _test("B", "conformance_vmaas")]
+    selectors = _selector_ids(catalog, ("generic", "vmaas"))
 
-    full = compute_plan(tests, ["generic", "vmaas"], ("generic", "vm"))
-    subset = plan_from_names(tests, ["A"], ["generic", "vmaas"], ("generic", "vm"))
+    full = compute_plan(tests, selectors, ("generic", "vm"))
+    subset = plan_from_names(tests, ["A"], selectors, ("generic", "vm"))
 
     assert tuple(t.id for t in full.tests) == ("A", "B")
     assert tuple(t.id for t in subset.tests) == ("A",)
@@ -81,58 +93,40 @@ def test_plan_from_names_marks_a_subset_incomplete() -> None:
 
 
 def test_plan_from_names_rejects_an_unknown_test() -> None:
+    catalog = _catalog()
     with pytest.raises(ConfigError) as exc:
-        plan_from_names([_test("A", "conformance_generic")], ["MISSING"], ["generic"], ("generic",))
+        plan_from_names(
+            [_test("A", "conformance_generic")], ["MISSING"], _selector_ids(catalog, ("generic",)), ("generic",)
+        )
 
     assert "MISSING" in "\n".join(exc.value.checks)
 
 
 def test_plan_from_names_rejects_a_test_no_selected_profile_selects() -> None:
+    catalog = _catalog()
     tests = [_test("A", "conformance_generic"), _test("B", "conformance_netris")]
 
     with pytest.raises(ConfigError) as exc:
-        plan_from_names(tests, ["B"], ["generic", "vmaas"], ("generic", "vm"))
+        plan_from_names(tests, ["B"], _selector_ids(catalog, ("generic", "vmaas")), ("generic", "vm"))
 
     assert "B" in "\n".join(exc.value.checks)
 
 
-def test_enrich_identities_uses_the_catalog_for_layer_and_profiles() -> None:
-    domain = DomainDeclaration(
-        name="networking",
-        component_tests=("TC-COMP-01",),
-        identity_fields=("name",),
-        configuration_errors=(),
-        support_condition="",
-        registration_source="",
-        titles={},
-        selectors={"generic": ("TC-COMP-01",), "vmaas": ("TC-PROFILE-01",)},
-        checks=(),
-        timeout_defaults={},
-        component_job_timeout="60m",
-        settings_source="",
-        evidence=(),
-        reference_components=(),
-    )
-    raw = [
-        _test("TC-COMP-01", "sig_networking", "conformance_generic"),
-        _test("TC-PROFILE-01", "sig_networking", "conformance_vmaas"),
-    ]
-
-    enriched = enrich_identities(raw, {"networking": domain}, _catalog(), ("generic", "vm"))
-
-    assert enriched[0].layer is Layer.COMPONENT
-    assert enriched[1].layer is Layer.PROFILE
-    assert enriched[1].profiles == ("vm",)
-
-
 def test_a_test_can_count_toward_multiple_profiles() -> None:
-    catalog = {
-        "generic": ProfileDefinition("generic", ("generic",)),
-        "vm": ProfileDefinition("vm", ("vmaas",)),
-        "full": ProfileDefinition("full", ("vmaas", "storage")),
-    }
-    raw = [_test("TC-1", "sig_networking", "conformance_vmaas")]
+    catalog = Catalog(
+        selectors={
+            "generic": Selector("generic", "marker", ("conformance_generic",)),
+            "vmaas": Selector("vmaas", "marker", ("conformance_vmaas",)),
+            "storage": Selector("storage", "marker", ("conformance_storage",)),
+        },
+        profiles={
+            "generic": ProfileDefinition("generic", ("generic",)),
+            "vm": ProfileDefinition("vm", ("vmaas",)),
+            "full": ProfileDefinition("full", ("vmaas", "storage")),
+        },
+    )
+    raw = [_test("TC-1", "conformance_vmaas")]
 
-    enriched = enrich_identities(raw, {}, catalog, ("generic", "vm", "full"))
+    enriched = assign_profiles(raw, catalog, ("generic", "vm", "full"))
 
     assert enriched[0].profiles == ("vm", "full")

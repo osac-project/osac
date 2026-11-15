@@ -51,23 +51,28 @@ class OutputSink:
         return candidate
 
 
-def _test_selectors(test: TestIdentity) -> list[str]:
-    selectors: list[str] = []
+def _test_markers(test: TestIdentity) -> list[str]:
+    markers: list[str] = []
     for label in sorted(test.labels):
-        if label.startswith("conformance/"):
-            selectors.append(label.split("/", 1)[1])
-        elif label.startswith("conformance_") and not label.startswith(
-            ("conformance_blocking", "conformance_informing")
+        if (
+            label.startswith("conformance/") and not label.startswith(("conformance/blocking", "conformance/informing"))
+        ) or (
+            label.startswith("conformance_") and not label.startswith(("conformance_blocking", "conformance_informing"))
         ):
-            selectors.append(label.removeprefix("conformance_"))
-    return selectors
+            markers.append(label)
+    return markers
 
 
 def plan_document(plan: Plan) -> dict[str, object]:
     return {
         "profiles": list(plan.profiles),
-        "selectors": list(plan.selectors),
-        "tests": [{"id": test.id, "name": test.name, "selectors": _test_selectors(test)} for test in plan.tests],
+        "selectors": [
+            {"id": selector.id, "type": selector.type, "markers": list(selector.markers)} for selector in plan.selectors
+        ],
+        "tests": [
+            {"id": test.id, "name": test.name, "profiles": list(test.profiles), "markers": _test_markers(test)}
+            for test in plan.tests
+        ],
         "complete": plan.complete,
     }
 

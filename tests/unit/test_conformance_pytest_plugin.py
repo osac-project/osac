@@ -42,17 +42,14 @@ def _tree(tmp_path: Path) -> Path:
     (tree / "test_sample.py").write_text(
         "import pytest\n"
         "@pytest.mark.conformance_generic\n"
-        "@pytest.mark.sig_networking\n"
         "@pytest.mark.conformance_blocking\n"
         "def test_passes():\n"
         "    assert True\n"
         "@pytest.mark.conformance_netris\n"
-        "@pytest.mark.sig_networking\n"
         "@pytest.mark.conformance_informing\n"
         "def test_fails():\n"
         "    assert False\n"
         "@pytest.mark.conformance_generic\n"
-        "@pytest.mark.sig_networking\n"
         "@pytest.mark.conformance_blocking\n"
         "def test_skips():\n"
         "    pytest.skip('optional')\n"
@@ -68,7 +65,6 @@ def test_collection_writes_a_marker_manifest(tmp_path: Path) -> None:
     manifest = json.loads((tmp_path / "manifest.json").read_text())
     assert {item["name"] for item in manifest} == {"test_passes", "test_fails", "test_skips"}
     assert "conformance_generic" in manifest[0]["markers"]
-    assert "sig_networking" in manifest[0]["markers"]
 
 
 def test_run_writes_pass_fail_and_skip_outcomes(tmp_path: Path) -> None:

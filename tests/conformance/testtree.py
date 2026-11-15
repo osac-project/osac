@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Protocol
 
-from tests.conformance.model import Classification, Layer, Plan, Result, RunContext, TestIdentity, TestOutcome
+from tests.conformance.model import Classification, Plan, Result, RunContext, TestIdentity, TestOutcome
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -85,26 +85,13 @@ class PytestTestTree:
         if separator and not Path(file_part).is_absolute():
             nodeid = f"{(self.root / file_part).resolve()}::{rest}"
         markers = frozenset(str(marker) for marker in item.get("markers", []))
-        domain = "unknown"
-        for marker in markers:
-            if marker.startswith("sig/"):
-                domain = marker.split("/", 1)[1]
-            elif marker.startswith("sig_"):
-                domain = marker.removeprefix("sig_")
         classification = (
             Classification.INFORMING
             if {"conformance_informing", "conformance/informing"} & markers
             else Classification.BLOCKING
         )
         return TestIdentity(
-            id=name,
-            name=name,
-            nodeid=nodeid,
-            labels=markers,
-            domain=domain,
-            layer=Layer.COMPONENT,
-            profiles=(),
-            classification=classification,
+            id=name, name=name, nodeid=nodeid, labels=markers, profiles=(), classification=classification
         )
 
     def run(self, plan: Plan, context: RunContext, *, keep: bool) -> tuple[TestOutcome, ...]:

@@ -7,12 +7,11 @@ from pathlib import Path
 from tests.conformance.model import (
     CheckResult,
     Classification,
-    ComponentResult,
-    Layer,
     Plan,
     ProfileResult,
     Report,
     Result,
+    Selector,
     TestIdentity,
     TestOutcome,
     Verdict,
@@ -23,12 +22,10 @@ from tests.conformance.verdict import evaluate, exit_code
 def _test(test_id: str, classification: Classification = Classification.BLOCKING) -> TestIdentity:
     return TestIdentity(
         id=test_id,
-        name=f"[networking][component] {test_id}: test",
+        name=f"{test_id}: test",
         nodeid=f"tests/e2e/test_{test_id}.py::test_{test_id}",
         labels=frozenset({"conformance_generic"}),
-        domain="networking",
-        layer=Layer.COMPONENT,
-        profiles=(),
+        profiles=("generic",),
         classification=classification,
     )
 
@@ -42,37 +39,29 @@ def _evaluate(
     *,
     complete: bool = True,
     leftovers: tuple[str, ...] = (),
-    components: tuple[ComponentResult, ...] | None = None,
     profiles: tuple[ProfileResult, ...] = (),
 ) -> Report:
-    plan = Plan(tuple(outcome.identity for outcome in outcomes), ("generic",), ("generic",), complete)
-    if components is None:
-        components = (ComponentResult("networking", {"name": "mock"}, Verdict.CONFORMANT),)
-    return evaluate(
-        plan,
-        outcomes,
-        profiles,
-        components,
-        leftovers,
-        osac_release="1.4.0",
-        suite_image_digest="sha256:test",
-        enabled_services=("vmaas",),
+    plan = Plan(
+        tuple(outcome.identity for outcome in outcomes),
+        ("generic",),
+        (Selector("generic", "marker", ("conformance_generic",)),),
+        complete,
     )
+    return evaluate(plan, outcomes, profiles, leftovers, osac_release="1.4.0", suite_image_digest="sha256:test")
 
 
 def test_all_passing_checks_are_conformant() -> None:
     report = _evaluate([_outcome(_test("A"), Result.PASS)])
 
-    assert [check.result for check in report.checks] == [CheckResult.PASS] * 4
+    assert [check.result for check in report.checks] == [CheckResult.PASS] * 3
     assert report.checks[0].message == "1 blocking test passed"
-    assert report.checks[1].message == "1 component conformant"
-    assert report.checks[2].message == "no leftovers"
-    assert report.checks[3].message == "plan contained all 1 selected test"
+    assert report.checks[1].message == "no leftovers"
+    assert report.checks[2].message == "plan contained all 1 selected test"
     assert report.result is Verdict.CONFORMANT
     assert exit_code(report) == 0
 
 
-def test_a_blocking_failure_fails_check_1() -> None:
+def test_a_blocking_failure_fails_all_blocking_tests_pass() -> None:
     report = _evaluate([_outcome(_test("A"), Result.FAIL, "boom")])
 
     assert report.checks[0].result is CheckResult.FAIL
@@ -96,39 +85,20 @@ def test_an_informing_failure_does_not_fail_a_check() -> None:
     assert report.result is Verdict.CONFORMANT
 
 
-def test_a_leftover_fails_check_3() -> None:
+def test_a_leftover_fails_no_leftovers() -> None:
     report = _evaluate([_outcome(_test("A"), Result.PASS)], leftovers=("vm/abc",))
 
-    assert report.checks[2].result is CheckResult.FAIL
-    assert report.checks[2].message == "1 leftover: vm/abc"
+    assert report.checks[1].result is CheckResult.FAIL
+    assert report.checks[1].message == "1 leftover: vm/abc"
     assert report.result is Verdict.IN_PROGRESS
 
 
-def test_an_incomplete_plan_fails_check_4() -> None:
+def test_an_incomplete_plan_fails_complete_plan() -> None:
     report = _evaluate([_outcome(_test("A"), Result.PASS)], complete=False)
 
-    assert report.checks[3].result is CheckResult.FAIL
-    assert report.checks[3].message == "the plan is a focused subset and is not a conformance verdict"
+    assert report.checks[2].result is CheckResult.FAIL
+    assert report.checks[2].message == "the plan is a focused subset and is not a conformance verdict"
     assert report.result is Verdict.IN_PROGRESS
-
-
-def test_no_component_fails_check_2() -> None:
-    report = _evaluate([_outcome(_test("A"), Result.PASS)], components=())
-
-    assert report.checks[1].result is CheckResult.FAIL
-    assert report.checks[1].message == "no components registered"
-
-
-def test_an_in_progress_component_fails_check_2() -> None:
-    report = _evaluate(
-        [_outcome(_test("A"), Result.PASS)],
-        components=(
-            ComponentResult("networking", {"name": "mock"}, Verdict.IN_PROGRESS, "no component tests in the plan"),
-        ),
-    )
-
-    assert report.checks[1].result is CheckResult.FAIL
-    assert report.checks[1].message == ("1 of 1 components in progress: networking: no component tests in the plan")
 
 
 def test_focused_run_exits_zero_when_selected_blocking_tests_pass() -> None:

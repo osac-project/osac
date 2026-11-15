@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conformance.model import Classification, Layer, Plan, TestIdentity
+from tests.conformance.model import Classification, Plan, Selector, TestIdentity
 from tests.conformance.output import OutputSink, new_run_id, write_plan
 from tests.conformance.redact import Redactor
 
@@ -17,11 +17,9 @@ _FAKE_SECRET = "not-a-real-secret"
 def _test() -> TestIdentity:
     return TestIdentity(
         id="TC-1",
-        name="[networking][component] TC-1: test",
+        name="TC-1: test",
         nodeid="tests/e2e/test_tc.py::test_tc",
         labels=frozenset({"conformance_generic"}),
-        domain="networking",
-        layer=Layer.COMPONENT,
         profiles=(),
         classification=Classification.BLOCKING,
     )
@@ -53,11 +51,12 @@ def test_evidence_is_redacted_and_confined(tmp_path: Path) -> None:
 
 
 def test_write_plan_records_selectors_and_tests(tmp_path: Path) -> None:
-    plan = Plan((_test(),), ("generic",), ("generic",), True)
+    plan = Plan((_test(),), ("generic",), (Selector("generic", "marker", ("conformance_generic",)),), True)
 
     path = write_plan(plan, tmp_path)
 
     text = path.read_text()
     assert "selectors:" in text
+    assert "markers:" in text
     assert "TC-1" in text
     assert "complete: true" in text

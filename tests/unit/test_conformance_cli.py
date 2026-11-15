@@ -24,13 +24,8 @@ def test_unknown_flag_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_missing_config_exits_2_without_a_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     results = tmp_path / "results"
-    domains = tmp_path / "domains"
-    domains.mkdir()
 
-    assert (
-        main(["list", "--config", str(tmp_path / "missing.yaml"), "--results", str(results), "--domains", str(domains)])
-        == 2
-    )
+    assert main(["list", "--config", str(tmp_path / "missing.yaml"), "--results", str(results)]) == 2
 
     assert "missing.yaml" in capsys.readouterr().err
     assert not results.exists()

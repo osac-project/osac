@@ -16,15 +16,13 @@ def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:
     return {
         "osacRelease": report.osac_release,
         "suiteImageDigest": report.suite_image_digest,
-        "selectors": list(report.selectors),
-        "components": [
-            {"domain": component.domain, **dict(component.identity), "result": component.result.value}
-            for component in report.components
+        "selectors": [
+            {"id": selector.id, "type": selector.type, "markers": list(selector.markers)}
+            for selector in report.selectors
         ],
-        "enabledServices": list(report.enabled_services),
         "profiles": [
             {
-                "name": profile.name,
+                "id": profile.id,
                 "selectors": list(profile.selectors),
                 "required": profile.required,
                 "result": profile.result.value,
@@ -35,7 +33,6 @@ def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:
             {
                 "id": test.identity.id,
                 "name": redactor.text(test.identity.name),
-                "layer": test.identity.layer.value,
                 "profiles": list(test.identity.profiles),
                 "classification": test.identity.classification.value,
                 "result": test.result.value,
@@ -84,11 +81,7 @@ def write_junit(report: Report, results_dir: Path, redactor: Redactor) -> Path:
         case = ElementTree.SubElement(
             suite,
             "testcase",
-            {
-                "name": redactor.text(test.identity.name),
-                "classname": f"{test.identity.domain}.{test.identity.layer.value}",
-                "time": str(test.duration_seconds),
-            },
+            {"name": redactor.text(test.identity.name), "classname": "conformance", "time": str(test.duration_seconds)},
         )
         if test.result is Result.FAIL:
             failure = ElementTree.SubElement(case, "failure", {"message": redactor.text(test.message)})

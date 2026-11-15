@@ -274,11 +274,20 @@ var _ = Describe("handleCreateComputeInstance", func() {
 	)
 
 	It("Hides a ComputeInstance Create error description", func() {
+		createCalls := 0
+		getCalls := 0
 		instances := &mockComputeInstancesClient{
 			createFunc: func(
 				ctx context.Context, request *publicv1.ComputeInstancesCreateRequest, options ...grpc.CallOption,
 			) (*publicv1.ComputeInstancesCreateResponse, error) {
+				createCalls++
 				return nil, status.Error(codes.InvalidArgument, "private SQL host and customer data")
+			},
+			getFunc: func(
+				_ context.Context, _ *publicv1.ComputeInstancesGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesGetResponse, error) {
+				getCalls++
+				return nil, errors.New("Get should not be called for a definite failure")
 			},
 		}
 
@@ -290,7 +299,91 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		envelope := decodeToolError(err)
 		Expect(envelope.Category).To(Equal("invalid_request"))
 		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+		Expect(createCalls).To(Equal(1))
+		Expect(getCalls).To(BeZero())
 		Expect(err.Error()).ToNot(ContainSubstring("private SQL host"))
+	})
+
+	It("Recovers a lost Create response with one public Get by the trusted ID", func() {
+		var createdID string
+		var createCalls, getCalls int
+		var verificationToken string
+		instances := &mockComputeInstancesClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.ComputeInstancesCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesCreateResponse, error) {
+				createCalls++
+				createdID = request.GetObject().GetId()
+				return nil, status.Error(codes.Unavailable, "private transport details")
+			},
+			getFunc: func(
+				ctx context.Context, request *publicv1.ComputeInstancesGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesGetResponse, error) {
+				getCalls++
+				verificationToken = forwardedToken(ctx)
+				Expect(request.GetId()).To(Equal(createdID))
+				return publicv1.ComputeInstancesGetResponse_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Id:       createdID,
+						Metadata: publicv1.Metadata_builder{Version: 4}.Build(),
+						Status: publicv1.ComputeInstanceStatus_builder{
+							State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+			Name: "demo-vm", CatalogItem: "catalog-item-1",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(createdID).ToNot(BeEmpty())
+		Expect(output).To(Equal(CreateComputeInstanceOutput{
+			ID: createdID, Version: 4, State: "COMPUTE_INSTANCE_STATE_STARTING",
+		}))
+		Expect(verificationToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(createCalls).To(Equal(1))
+		Expect(getCalls).To(Equal(1))
+	})
+
+	It("Returns an unknown outcome after an uncertain Create cannot be confirmed", func() {
+		var createdID string
+		var createCalls, getCalls int
+		instances := &mockComputeInstancesClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.ComputeInstancesCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesCreateResponse, error) {
+				createCalls++
+				createdID = request.GetObject().GetId()
+				return nil, status.Error(codes.DeadlineExceeded, "private timeout details")
+			},
+			getFunc: func(
+				_ context.Context, request *publicv1.ComputeInstancesGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesGetResponse, error) {
+				getCalls++
+				Expect(request.GetId()).To(Equal(createdID))
+				return nil, status.Error(codes.Unavailable, "private lookup details")
+			},
+		}
+
+		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+			Name: "demo-vm", CatalogItem: "catalog-item-1",
+		})
+		Expect(err).To(HaveOccurred())
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(envelope.Category).To(Equal("unknown_outcome"))
+		Expect(envelope.GRPCCode).To(Equal("Unknown"))
+		Expect(envelope.Retryable).To(BeFalse())
+		Expect(envelope.Details).To(ContainElement(ContainSubstring(createdID)))
+		Expect(envelope.Message).To(ContainSubstring("before retrying"))
+		Expect(err.Error()).ToNot(ContainSubstring("private timeout details"))
+		Expect(err.Error()).ToNot(ContainSubstring("private lookup details"))
+		Expect(createCalls).To(Equal(1))
+		Expect(getCalls).To(Equal(1))
 	})
 
 	It("Returns a safe authorization error when the public API denies creation", func() {

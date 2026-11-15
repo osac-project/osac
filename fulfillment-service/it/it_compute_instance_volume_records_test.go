@@ -651,6 +651,7 @@ var _ = Describe("ComputeInstance Volume registration API contract", func() {
 				}.Build(),
 			}}.Build(),
 		}.Build()
+		registrationStarted := time.Now().Truncate(time.Second)
 		instance := createDiskRegistrationAPIContractInstance(ctx, spec)
 		var parent *privatev1.ComputeInstance
 		var ids map[string]string
@@ -677,6 +678,7 @@ var _ = Describe("ComputeInstance Volume registration API contract", func() {
 			parent, ids = current, currentIDs
 		}, time.Minute, time.Second).Should(Succeed())
 
+		registeredAt := make(map[string]time.Time, len(ids))
 		for key, size := range map[string]int64{"boot": 30, "disk-1": 12} {
 			id := ids[key]
 			DeferCleanup(func(cleanupCtx context.Context) {
@@ -699,6 +701,17 @@ var _ = Describe("ComputeInstance Volume registration API contract", func() {
 			Expect(observed.GetObject().GetSpec().GetStorageTier()).To(Equal(tierName))
 			Expect(observed.GetObject().GetSpec().GetSizeGib()).To(Equal(size))
 			Expect(observed.GetObject().GetStatus().GetProvider()).To(Equal(provider))
+			volumeStatus := observed.GetObject().GetStatus()
+			Expect(volumeStatus.GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+			Expect(volumeStatus.GetMessage()).To(BeEmpty())
+			Expect(volumeStatus.GetStateTransitionTime()).NotTo(BeNil())
+			Expect(volumeStatus.GetStateTransitionTime().GetNanos()).To(BeZero())
+			registeredAt[id] = volumeStatus.GetStateTransitionTime().AsTime()
+			Expect(registeredAt[id]).To(BeTemporally(">=", registrationStarted))
+			Expect(registeredAt[id]).To(BeTemporally("<=", time.Now()))
+			Expect(volumeStatus.GetVendorVolumeId()).To(BeEmpty())
+			Expect(volumeStatus.GetVendorContext()).To(BeEmpty())
+			Expect(volumeStatus.GetProvisionedSizeGib()).To(BeZero())
 			Expect(observed.GetObject().GetSpec().GetTopology().GetSegments()).To(Equal(
 				map[string]string{"osac.io/node": diskRegistrationPlaceholderNode}))
 		}
@@ -715,6 +728,30 @@ var _ = Describe("ComputeInstance Volume registration API contract", func() {
 			g.Expect(objects.Items).To(HaveLen(1))
 			g.Expect(objects.Items[0].Spec.DiskVolumeIDs).To(Equal(ids))
 		}, time.Minute, time.Second).Should(Succeed())
+
+		By("keeping both records registered without provisioning hub Volumes")
+		for _, id := range ids {
+			_, signalErr := volumes.Signal(ctx, privatev1.VolumesSignalRequest_builder{Id: id}.Build())
+			Expect(signalErr).NotTo(HaveOccurred())
+		}
+		Consistently(func(g Gomega) {
+			current, getErr := getDiskRegistrationComputeInstance(ctx, computeInstances, instance.GetId())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(computeStorageDiskIDs(current)).To(Equal(ids))
+			for _, id := range ids {
+				observed, volumeErr := volumes.Get(ctx, privatev1.VolumesGetRequest_builder{Id: id}.Build())
+				g.Expect(volumeErr).NotTo(HaveOccurred())
+				volumeStatus := observed.GetObject().GetStatus()
+				g.Expect(volumeStatus.GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_AVAILABLE))
+				g.Expect(volumeStatus.GetMessage()).To(BeEmpty())
+				g.Expect(volumeStatus.GetStateTransitionTime().AsTime()).To(Equal(registeredAt[id]))
+				objects := &osacv1alpha1.VolumeList{}
+				g.Expect(tool.KubeClient().List(ctx, objects,
+					crclient.MatchingLabels{labels.VolumeUuid: id},
+				)).To(Succeed())
+				g.Expect(objects.Items).To(BeEmpty())
+			}
+		}, 5*time.Second, 250*time.Millisecond).Should(Succeed())
 
 		for _, id := range ids {
 			setDiskRegistrationVolumeHoldFinalizer(ctx, volumes, id, true)

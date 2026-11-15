@@ -112,8 +112,8 @@ if ! grep -Fq 'name: VAST_VALIDATE_CERTS' <<<"${awx_tls_default_render}" \
   echo "devstack AWX hook must default VAST certificate validation to enabled" >&2
   exit 1
 fi
-if ! grep -Fq 'name: VAST_VALIDATE_CERTS' <<<"${chart_render}" \
-  || ! grep -Fq 'value: "false"' <<<"${chart_render}"; then
+if ! awk '/name: VAST_VALIDATE_CERTS/ { getline; if ($0 ~ /value: "false"/) found = 1 } END { exit !found }' \
+  <<<"${chart_render}"; then
   echo "dev-full AWX hook must honor its development VAST certificate override" >&2
   exit 1
 fi

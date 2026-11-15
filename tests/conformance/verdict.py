@@ -9,7 +9,6 @@ from tests.conformance.model import (
     Check,
     CheckResult,
     Classification,
-    ComponentResult,
     Plan,
     ProfileResult,
     Report,
@@ -17,14 +16,6 @@ from tests.conformance.model import (
     TestOutcome,
     Verdict,
 )
-
-
-def _outcome_for(plan: Plan, by_id: dict[str, TestOutcome], test_id: str) -> TestOutcome:
-    outcome = by_id.get(test_id)
-    if outcome is not None:
-        return outcome
-    identity = next(test for test in plan.tests if test.id == test_id)
-    return TestOutcome(identity, Result.SKIP, 0.0, "did not run", Path())
 
 
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
@@ -39,20 +30,26 @@ def _summary(items: Sequence[str], limit: int = 5, separator: str = ", ") -> str
     return text
 
 
+def _outcome_for(plan: Plan, by_id: dict[str, TestOutcome], test_id: str) -> TestOutcome:
+    outcome = by_id.get(test_id)
+    if outcome is not None:
+        return outcome
+    identity = next(test for test in plan.tests if test.id == test_id)
+    return TestOutcome(identity, Result.SKIP, 0.0, "did not run", Path())
+
+
 def evaluate(
     plan: Plan,
     outcomes: Sequence[TestOutcome],
     profiles: Sequence[ProfileResult],
-    components: Sequence[ComponentResult],
     leftovers: Sequence[str],
     *,
     osac_release: str,
     suite_image_digest: str,
-    enabled_services: Sequence[str],
-    domain_checks: Sequence[Check] = (),
 ) -> Report:
     by_id = {outcome.identity.id: outcome for outcome in outcomes}
     tests = tuple(_outcome_for(plan, by_id, test.id) for test in plan.tests)
+
     blocking = [outcome for outcome in tests if outcome.identity.classification is Classification.BLOCKING]
     failed_blocking = [outcome.identity.id for outcome in blocking if outcome.result is not Result.PASS]
     blocking_pass = not failed_blocking
@@ -65,19 +62,6 @@ def evaluate(
         )
     else:
         blocking_message = f"{len(blocking)} blocking {_plural(len(blocking), 'test')} passed"
-
-    in_progress_components = [component for component in components if component.result is not Verdict.CONFORMANT]
-    components_pass = bool(components) and not in_progress_components
-    if not components:
-        components_message = "no components registered"
-    elif in_progress_components:
-        details = [f"{component.domain}: {component.reason}" for component in in_progress_components]
-        components_message = (
-            f"{len(in_progress_components)} of {len(components)} components in progress: "
-            f"{_summary(details, separator='; ')}"
-        )
-    else:
-        components_message = f"{len(components)} {_plural(len(components), 'component')} conformant"
 
     if leftovers:
         leftovers_message = f"{len(leftovers)} {_plural(len(leftovers), 'leftover')}: {_summary(list(leftovers))}"
@@ -100,14 +84,6 @@ def evaluate(
             message=blocking_message,
         ),
         Check(
-            id="all-components-conformant",
-            name="every component is conformant",
-            rule="at least one component is registered and every component has result conformant",
-            remedy="see the component's failed tests",
-            result=CheckResult.PASS if components_pass else CheckResult.FAIL,
-            message=components_message,
-        ),
-        Check(
             id="no-leftovers",
             name="nothing was left behind",
             rule="leftovers is empty",
@@ -123,15 +99,12 @@ def evaluate(
             result=CheckResult.PASS if plan.complete else CheckResult.FAIL,
             message=complete_message,
         ),
-        *domain_checks,
     ]
     overall = Verdict.CONFORMANT if all(check.result is CheckResult.PASS for check in checks) else Verdict.IN_PROGRESS
     return Report(
         osac_release=osac_release,
         suite_image_digest=suite_image_digest,
         selectors=plan.selectors,
-        components=tuple(components),
-        enabled_services=tuple(enabled_services),
         profiles=tuple(profiles),
         tests=tests,
         checks=tuple(checks),

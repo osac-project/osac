@@ -1,9 +1,39 @@
 # OSAC conformance suite core
 
-The suite entry point is `osac-conformance`. It reads `conformance.yaml`,
-expands the selected profiles from `profiles.yaml` into selectors, computes a
-plan, runs it through the test tree's pytest adapter, applies the named checks,
-and writes `conformance-report.yaml` and `junit.xml` to the results directory.
+The suite entry point is `osac-conformance`. It reads the run configuration,
+expands the selected profiles from the shipped catalog into selectors, computes
+a plan, runs it through the test tree's pytest adapter, applies the named
+checks, and writes `conformance-report.yaml` and `junit.xml` to the results
+directory.
+
+The catalog ships with the image and is not operator-editable:
+
+```yaml
+# catalog.yaml
+selectors:
+  - id: netris
+    type: marker
+    markers:
+      - conformance_netris
+profiles:
+  - id: netris
+    selectors:
+      - netris
+```
+
+The operator writes the run configuration:
+
+```yaml
+# /config/conformance.yaml
+osacRelease: "0.0.1"
+profiles: [netris]
+target:
+  namespace: osac-e2e-ci
+  kubeconfig: /config/hub.kubeconfig
+  apiURL: https://fulfillment-internal-api-osac-e2e-ci.example
+  tokenFile: /config/admin-token
+  caFile: /config/api-ca.pem
+```
 
 Local commands:
 
@@ -13,26 +43,8 @@ python3 -m tests.conformance run
 python3 -m tests.conformance run --plan /results/conformance-plan.yaml
 ```
 
-The target section names the installation under test. `namespace` defaults
-to `osac` when omitted:
-
-```yaml
-target:
-  namespace: osac
-  kubeconfig: /config/hub.kubeconfig
-  apiURL: https://fulfillment-internal-api-osac.<domain>
-  tokenFile: /config/admin-token
-  caFile: /config/api-ca.pem
-```
-
 The image builds from the repository root:
 
 ```sh
 podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
 ```
-
-Profiles are a suite-level catalog in `profiles.yaml`; domains define tests and
-the selectors those tests carry. The operator selects profiles, and `generic`
-always applies. Release publication of
-`ghcr.io/osac-project/osac-conformance:<release>` is owned by OSAC-7457. Component execution, profile setup and test Tenant cleanup
-are owned by OSAC-7455; networking declarations are owned by OSAC-7456.

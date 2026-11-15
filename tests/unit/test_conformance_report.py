@@ -11,11 +11,10 @@ from tests.conformance.model import (
     Check,
     CheckResult,
     Classification,
-    ComponentResult,
-    Layer,
     ProfileResult,
     Report,
     Result,
+    Selector,
     TestIdentity,
     TestOutcome,
     Verdict,
@@ -29,20 +28,19 @@ _FAKE_SECRET = "not-a-real-secret"
 def _report(message: str = "ok") -> Report:
     identity = TestIdentity(
         id="TC-1",
-        name="[networking][component] TC-1: test",
+        name="TC-1: test",
         nodeid="tests/e2e/test_tc.py::test_tc",
         labels=frozenset({"conformance_generic"}),
-        domain="networking",
-        layer=Layer.COMPONENT,
-        profiles=(),
+        profiles=("generic",),
         classification=Classification.BLOCKING,
     )
     return Report(
         osac_release="1.4.0",
         suite_image_digest="sha256:test",
-        selectors=("generic", "vmaas"),
-        components=(ComponentResult("networking", {"name": "mock"}, Verdict.CONFORMANT),),
-        enabled_services=("vmaas",),
+        selectors=(
+            Selector("generic", "marker", ("conformance_generic",)),
+            Selector("vmaas", "marker", ("conformance_vmaas",)),
+        ),
         profiles=(ProfileResult("vm", ("vmaas",), True, Result.PASS),),
         tests=(TestOutcome(identity, Result.PASS, 1.5, message, Path()),),
         checks=(
@@ -53,14 +51,6 @@ def _report(message: str = "ok") -> Report:
                 "remedy",
                 CheckResult.PASS,
                 "1 blocking test passed",
-            ),
-            Check(
-                "all-components-conformant",
-                "every component is conformant",
-                "rule",
-                "remedy",
-                CheckResult.PASS,
-                "1 component conformant",
             ),
             Check("no-leftovers", "nothing was left behind", "rule", "remedy", CheckResult.PASS, "no leftovers"),
             Check(
@@ -86,8 +76,6 @@ def test_report_has_the_exact_top_level_keys(tmp_path: Path) -> None:
         "osacRelease",
         "suiteImageDigest",
         "selectors",
-        "components",
-        "enabledServices",
         "profiles",
         "tests",
         "checks",
@@ -98,7 +86,8 @@ def test_report_has_the_exact_top_level_keys(tmp_path: Path) -> None:
     assert data["tests"][0]["id"] == "TC-1"
     assert data["checks"][0]["message"] == "1 blocking test passed"
     assert data["tests"][0]["durationSeconds"] == 1.5
-    assert data["profiles"][0] == {"name": "vm", "selectors": ["vmaas"], "required": True, "result": "pass"}
+    assert data["profiles"][0] == {"id": "vm", "selectors": ["vmaas"], "required": True, "result": "pass"}
+    assert data["selectors"][0] == {"id": "generic", "type": "marker", "markers": ["conformance_generic"]}
 
 
 def test_report_redacts_messages(tmp_path: Path) -> None:
@@ -117,7 +106,7 @@ def test_junit_has_one_testcase_per_test_and_failure_body(tmp_path: Path) -> Non
     assert len(root.findall("testcase")) == 1
     case = root.find("testcase")
     assert case is not None
-    assert case.attrib["classname"] == "networking.component"
+    assert case.attrib["classname"] == "conformance"
 
 
 def test_junit_marks_a_failure(tmp_path: Path) -> None:

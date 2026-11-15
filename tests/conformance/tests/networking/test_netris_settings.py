@@ -27,7 +27,6 @@ def _target() -> tuple[Path, str]:
 
 @pytest.mark.conformance_netris
 @pytest.mark.conformance_informing
-@pytest.mark.sig_networking
 def test_netris_settings_are_present() -> None:
     kubeconfig, namespace = _target()
     result = subprocess.run(

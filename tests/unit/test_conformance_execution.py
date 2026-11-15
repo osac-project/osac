@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from tests.conformance.model import Classification, Layer, Result, RunContext
+from tests.conformance.model import Classification, Result, RunContext, Selector
 from tests.conformance.output import OutputSink
 from tests.conformance.redact import Redactor
 from tests.conformance.selection import compute_plan
@@ -20,13 +20,11 @@ def _tree(tmp_path: Path) -> Path:
     (tree / "test_sample.py").write_text(
         "import pytest\n"
         "@pytest.mark.conformance_generic\n"
-        "@pytest.mark.sig_networking\n"
         "@pytest.mark.conformance_blocking\n"
         "def test_passes():\n"
         "    print('pass output')\n"
         f"    print('api_key={_FAKE_API_KEY}')\n"
         "@pytest.mark.conformance_generic\n"
-        "@pytest.mark.sig_networking\n"
         "@pytest.mark.conformance_blocking\n"
         "def test_fails():\n"
         "    assert False, 'expected failure'\n"
@@ -40,14 +38,13 @@ def test_collect_reads_markers_into_identities(tmp_path: Path) -> None:
     tests = tree.collect()
 
     assert len(tests) == 2
-    assert all(test.domain == "networking" for test in tests)
     assert all(test.classification is Classification.BLOCKING for test in tests)
-    assert all(test.layer is Layer.COMPONENT for test in tests)
+    assert all(test.profiles == () for test in tests)
 
 
 def test_run_maps_pytest_outcomes_to_conformance_results(tmp_path: Path) -> None:
     tree = PytestTestTree(root=_tree(tmp_path), python=sys.executable)
-    plan = compute_plan(tree.collect(), ["generic"])
+    plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
     context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
 
     outcomes = tree.run(plan, context, keep=False)
@@ -60,7 +57,7 @@ def test_run_maps_pytest_outcomes_to_conformance_results(tmp_path: Path) -> None
 
 def test_captured_test_output_is_redacted_in_evidence(tmp_path: Path) -> None:
     tree = PytestTestTree(root=_tree(tmp_path), python=sys.executable)
-    plan = compute_plan(tree.collect(), ["generic"])
+    plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
     results = tmp_path / "results"
     redactor = Redactor()
     context = RunContext(

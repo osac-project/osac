@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,8 +34,6 @@ class Config:
     target_ca_file: Path
     target_aap: AapConfig | None
     timeouts: Mapping[str, str]
-    domains: Mapping[str, Mapping[str, Any]]
-    raw: Mapping[str, Any]
 
 
 def _mapping(value: object, name: str, checks: list[str]) -> Mapping[str, Any] | None:
@@ -70,7 +68,7 @@ def _profiles(value: object, checks: list[str]) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def load_config(path: Path, *, domain_names: Collection[str]) -> Config:
+def load_config(path: Path) -> Config:
     checks: list[str] = []
     try:
         raw = yaml.safe_load(path.read_text())
@@ -86,7 +84,7 @@ def load_config(path: Path, *, domain_names: Collection[str]) -> Config:
         raise ConfigError(checks)
 
     for key in document:
-        if key not in _COMMON_KEYS and key not in domain_names:
+        if key not in _COMMON_KEYS:
             checks.append(f"{key} is not defined by this release")
 
     release = _string(document.get("osacRelease"), "osacRelease", checks)
@@ -126,14 +124,6 @@ def load_config(path: Path, *, domain_names: Collection[str]) -> Config:
         checks.append("timeouts must map keys to duration strings")
         timeouts = {}
 
-    domains: dict[str, Mapping[str, Any]] = {}
-    for name in domain_names:
-        section = document.get(name)
-        if section is not None:
-            section_doc = _mapping(section, name, checks)
-            if section_doc is not None:
-                domains[name] = section_doc
-
     if checks:
         raise ConfigError(checks)
 
@@ -152,6 +142,4 @@ def load_config(path: Path, *, domain_names: Collection[str]) -> Config:
         target_ca_file=ca_file,
         target_aap=aap,
         timeouts=timeouts,
-        domains=domains,
-        raw=document,
     )

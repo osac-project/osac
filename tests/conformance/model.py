@@ -2,21 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tests.conformance.config import Config
     from tests.conformance.output import OutputSink
     from tests.conformance.redact import Redactor
-
-
-class Layer(str, Enum):
-    COMPONENT = "component"
-    PROFILE = "profile"
 
 
 class Result(str, Enum):
@@ -41,6 +35,13 @@ class Classification(str, Enum):
 
 
 @dataclass(frozen=True)
+class Selector:
+    id: str
+    type: str
+    markers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class RunContext:
     run_id: str
     results_dir: Path
@@ -58,8 +59,6 @@ class TestIdentity:
     name: str
     nodeid: str
     labels: frozenset[str]
-    domain: str
-    layer: Layer
     profiles: tuple[str, ...]
     classification: Classification
 
@@ -79,7 +78,7 @@ class TestOutcome:
 class Plan:
     tests: tuple[TestIdentity, ...]
     profiles: tuple[str, ...]
-    selectors: tuple[str, ...]
+    selectors: tuple[Selector, ...]
     complete: bool
 
 
@@ -95,27 +94,17 @@ class Check:
 
 @dataclass(frozen=True)
 class ProfileResult:
-    name: str
+    id: str
     selectors: tuple[str, ...]
     required: bool
     result: Result
 
 
 @dataclass(frozen=True)
-class ComponentResult:
-    domain: str
-    identity: Mapping[str, Any]
-    result: Verdict
-    reason: str = ""
-
-
-@dataclass(frozen=True)
 class Report:
     osac_release: str
     suite_image_digest: str
-    selectors: tuple[str, ...]
-    components: tuple[ComponentResult, ...]
-    enabled_services: tuple[str, ...]
+    selectors: tuple[Selector, ...]
     profiles: tuple[ProfileResult, ...]
     tests: tuple[TestOutcome, ...]
     checks: tuple[Check, ...]

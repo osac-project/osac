@@ -32,12 +32,11 @@ def _valid_data() -> dict[str, object]:
             "caFile": "/config/api-ca.pem",
         },
         "timeouts": {"delete": "30m"},
-        "networking": {"externalIPPoolCIDR": "198.51.100.0/28"},
     }
 
 
-def test_loads_common_keys_and_domain_sections(tmp_path: Path) -> None:
-    cfg = load_config(_write(tmp_path / "conformance.yaml", _valid_data()), domain_names={"networking"})
+def test_loads_common_keys(tmp_path: Path) -> None:
+    cfg = load_config(_write(tmp_path / "conformance.yaml", _valid_data()))
 
     assert cfg.osac_release == "1.4.0"
     assert cfg.profiles == ("vm", "netris")
@@ -45,14 +44,13 @@ def test_loads_common_keys_and_domain_sections(tmp_path: Path) -> None:
     assert cfg.target_api_url == "https://fulfillment.example.test"
     assert cfg.target_kubeconfig == Path("/config/target-hub.kubeconfig")
     assert cfg.timeouts == {"delete": "30m"}
-    assert cfg.domains["networking"] == {"externalIPPoolCIDR": "198.51.100.0/28"}
 
 
 def test_target_namespace_defaults_to_osac(tmp_path: Path) -> None:
     data = _valid_data()
     del data["target"]["namespace"]  # type: ignore[index]
 
-    cfg = load_config(_write(tmp_path / "conformance.yaml", data), domain_names={"networking"})
+    cfg = load_config(_write(tmp_path / "conformance.yaml", data))
 
     assert cfg.target_namespace == "osac"
 
@@ -61,7 +59,7 @@ def test_profiles_are_deduplicated(tmp_path: Path) -> None:
     data = _valid_data()
     data["profiles"] = ["generic", "vm", "generic"]
 
-    cfg = load_config(_write(tmp_path / "conformance.yaml", data), domain_names={"networking"})
+    cfg = load_config(_write(tmp_path / "conformance.yaml", data))
 
     assert cfg.profiles == ("generic", "vm")
 
@@ -70,7 +68,7 @@ def test_optional_aap_is_parsed(tmp_path: Path) -> None:
     data = _valid_data()
     data["target"]["aap"] = {"url": "https://aap.example.test", "tokenFile": "/config/aap-token"}  # type: ignore[index]
 
-    cfg = load_config(_write(tmp_path / "conformance.yaml", data), domain_names={"networking"})
+    cfg = load_config(_write(tmp_path / "conformance.yaml", data))
 
     assert cfg.target_aap is not None
     assert cfg.target_aap.url == "https://aap.example.test"
@@ -82,17 +80,17 @@ def test_unknown_top_level_key_is_a_config_error(tmp_path: Path) -> None:
     data["frobnicate"] = {}
 
     with pytest.raises(ConfigError) as exc:
-        load_config(_write(tmp_path / "conformance.yaml", data), domain_names={"networking"})
+        load_config(_write(tmp_path / "conformance.yaml", data))
 
     assert "frobnicate" in "\n".join(exc.value.checks)
 
 
-def test_unknown_domain_section_is_a_config_error(tmp_path: Path) -> None:
+def test_domain_section_is_rejected(tmp_path: Path) -> None:
     data = _valid_data()
     data["storage"] = {}
 
     with pytest.raises(ConfigError) as exc:
-        load_config(_write(tmp_path / "conformance.yaml", data), domain_names={"networking"})
+        load_config(_write(tmp_path / "conformance.yaml", data))
 
     assert "storage" in "\n".join(exc.value.checks)
 
@@ -102,7 +100,7 @@ def test_missing_required_target_key_is_a_config_error(tmp_path: Path) -> None:
     del data["target"]["apiURL"]  # type: ignore[index]
 
     with pytest.raises(ConfigError) as exc:
-        load_config(_write(tmp_path / "conformance.yaml", data), domain_names={"networking"})
+        load_config(_write(tmp_path / "conformance.yaml", data))
 
     assert "target.apiURL" in "\n".join(exc.value.checks)
 
@@ -112,14 +110,14 @@ def test_profiles_must_be_a_list_of_strings(tmp_path: Path) -> None:
     data["profiles"] = "vm"
 
     with pytest.raises(ConfigError) as exc:
-        load_config(_write(tmp_path / "conformance.yaml", data), domain_names={"networking"})
+        load_config(_write(tmp_path / "conformance.yaml", data))
 
     assert "profiles" in "\n".join(exc.value.checks)
 
 
 def test_missing_config_file_is_a_config_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as exc:
-        load_config(tmp_path / "missing.yaml", domain_names=set())
+        load_config(tmp_path / "missing.yaml")
 
     assert "missing.yaml" in "\n".join(exc.value.checks)
 
@@ -149,8 +147,6 @@ def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
         target_ca_file=ca,
         target_aap=None,
         timeouts={},
-        domains={},
-        raw={},
     )
 
     text = redactor_for_config(config).text(

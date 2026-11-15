@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conformance.domains.networking import test_netris_settings as netris
+from tests.conformance.tests.networking import test_netris_settings as netris
 
 
 def _config(tmp_path: Path) -> Path:

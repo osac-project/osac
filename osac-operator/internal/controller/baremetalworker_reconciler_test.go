@@ -527,7 +527,7 @@ var _ = Describe("BareMetalWorkerReconciler direct shared worker template", Labe
 		Expect(fc.CreateCalls()[0].GetSpec().GetCatalogItem()).To(BeNil())
 		Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetId()).To(Equal("osac.templates.bm_host_provisioning"))
 		Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetTenant()).To(Equal("shared"))
-		Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetShared()).To(BeFalse())
+		Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetShared()).To(BeTrue())
 	})
 
 	It("ignores a pre-existing system catalog item", func() {
@@ -948,7 +948,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		Expect(bmi.GetSpec().GetCatalogItem()).To(BeNil())
 		Expect(bmi.GetSpec().GetTemplate().GetId()).To(Equal("osac.templates.bm_host_provisioning"))
 		Expect(bmi.GetSpec().GetTemplate().GetTenant()).To(Equal("shared"))
-		Expect(bmi.GetSpec().GetTemplate().GetShared()).To(BeFalse())
+		Expect(bmi.GetSpec().GetTemplate().GetShared()).To(BeTrue())
 		Expect(bmi.GetSpec().GetInstanceType().GetTenant()).To(Equal("shared"))
 		Expect(bmi.GetSpec().GetInstanceType().GetShared()).To(BeTrue())
 		Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
@@ -976,7 +976,7 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 		Expect(bmi.GetStatus().GetNodeSet()).To(Equal("bm-standard"))
 		Expect(bmi.GetSpec().GetCatalogItem()).To(BeNil())
 		Expect(bmi.GetSpec().GetTemplate().GetTenant()).To(Equal("shared"))
-		Expect(bmi.GetSpec().GetTemplate().GetShared()).To(BeFalse())
+		Expect(bmi.GetSpec().GetTemplate().GetShared()).To(BeTrue())
 		Expect(bmi.GetSpec().GetInstanceType().GetTenant()).To(Equal("shared"))
 		Expect(bmi.GetSpec().GetInstanceType().GetShared()).To(BeTrue())
 		Expect(bmi.GetSpec().GetDiskImage().GetId()).To(Equal(diskImageID))

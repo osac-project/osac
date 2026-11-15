@@ -155,7 +155,7 @@ func (r *Reconciler) buildBMICreateRequest(
 
 	specBuilder := privatev1.BareMetalInstanceSpec_builder{
 		Template: privatev1.BareMetalInstanceTemplateReference_builder{
-			Id: systemBMITemplateID, Tenant: "shared",
+			Id: systemBMITemplateID, Tenant: "shared", Shared: true,
 		}.Build(),
 		DiskImage:          image,
 		UserDataSource:     privatev1.UserDataSource_builder{Inline: &ignitionRaw}.Build(),

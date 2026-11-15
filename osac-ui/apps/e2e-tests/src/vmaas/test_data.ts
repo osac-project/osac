@@ -339,9 +339,7 @@ const tenantTestName = rawTenantName ? indexedResourceName(rawTenantName) : unde
 const instanceTypeTestName = rawInstanceType.name
   ? indexedResourceName(rawInstanceType.name)
   : undefined;
-const diskImageTestName = rawDiskImage.name
-  ? indexedResourceName(rawDiskImage.name)
-  : undefined;
+const diskImageTestName = rawDiskImage.name ? indexedResourceName(rawDiskImage.name) : undefined;
 const storageTierTestName = rawStorageTier.name
   ? indexedResourceName(rawStorageTier.name)
   : undefined;

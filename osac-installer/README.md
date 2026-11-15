@@ -427,7 +427,9 @@ on active neighbors or 100 on backups. The backup outbound route-map matches
 the node's local VTEP `/32` and prepends the node ASN three times. L2VPN EVPN
 route-maps apply the same preferences without prefix matching so they cover
 every EVPN route. The L2VPN EVPN address family also activates the EVPN
-neighbors and advertises VNIs.
+neighbors and advertises VNIs. The IPv4 unicast policy extends the
+frr-k8s-managed per-neighbor route-maps with a low-sequence `call`, so the
+generated receive and transmit filters remain in effect.
 
 ```yaml
 evpn:

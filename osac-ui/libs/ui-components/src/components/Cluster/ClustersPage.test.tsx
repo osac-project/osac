@@ -1,12 +1,13 @@
 import { create } from '@bufbuild/protobuf';
 import { type Transport, createRouterTransport } from '@connectrpc/connect';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import {
   Capabilities,
   type Cluster,
   ClusterSchema,
+  ClusterState,
   ClusterVersionSchema,
   ClusterVersionState,
   ClusterVersions,
@@ -130,6 +131,27 @@ const createTransport = (
 };
 
 describe('ClustersPage', () => {
+  it('shows a cluster with DELETING status in the unfiltered cluster list', async () => {
+    const deletingCluster = create(ClusterSchema, {
+      id: 'c-deleting',
+      metadata: { name: 'c-deleting' },
+      spec: { version: { id: 'v4.17', name: 'v4.17' } },
+      status: { state: ClusterState.DELETING, observedVersion: '4.17.0' },
+    });
+    const { transport, getClusterListFilter } = createTransport([deletingCluster]);
+
+    renderClustersPage(transport);
+
+    const clusterName = await screen.findByText('c-deleting');
+    const row = clusterName.closest('tr');
+    if (!row) {
+      throw new Error('Expected the deleting cluster to remain in the list');
+    }
+
+    expect(within(row).getByText('Deleting')).toBeInTheDocument();
+    expect(getClusterListFilter()).toBeUndefined();
+  });
+
   it('sends a CEL filter when filtering clusters by status', async () => {
     const { transport, getClusterListFilter } = createTransport([makeCluster('c-active', 'v4.17')]);
     const { user } = renderClustersPage(transport);

@@ -14,16 +14,19 @@ import type { ExternalIP, ExternalIPAttachment } from '@osac/types';
 import ClusterDetailsPageContent from './ClusterDetailsPageContent';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
-const cluster = create(ClusterSchema, {
-  id: 'cluster-1',
-  metadata: { project: 'project-a' },
-  status: {
-    state: ClusterState.READY,
-    observedVersion: '4.17.0',
-    apiEndpoint: 'api.example.com',
-    ingressEndpoint: 'apps.example.com',
-  },
-});
+const makeCluster = (state: ClusterState) =>
+  create(ClusterSchema, {
+    id: 'cluster-1',
+    metadata: { project: 'project-a' },
+    status: {
+      state,
+      observedVersion: '4.17.0',
+      apiEndpoint: 'api.example.com',
+      ingressEndpoint: 'apps.example.com',
+    },
+  });
+
+const cluster = makeCluster(ClusterState.READY);
 
 const externalIp = {
   id: 'eip-1',
@@ -49,6 +52,18 @@ const attachment = {
 } as unknown as ExternalIPAttachment;
 
 describe('ClusterDetailsPageContent', () => {
+  it('shows a cluster that is still deleting in its details view', () => {
+    renderWithProviders(
+      <ClusterDetailsPageContent cluster={makeCluster(ClusterState.DELETING)} />,
+      {
+        apiFixtures: { externalIpAttachments: [] },
+      },
+    );
+
+    expect(screen.getByText('cluster-1')).toBeInTheDocument();
+    expect(screen.getByText('Deleting')).toBeInTheDocument();
+  });
+
   it('shows the observed version only on Overview with a safe unavailable reason', async () => {
     const { user } = renderWithProviders(<ClusterDetailsPageContent cluster={cluster} />, {
       apiFixtures: { externalIpAttachments: [] },

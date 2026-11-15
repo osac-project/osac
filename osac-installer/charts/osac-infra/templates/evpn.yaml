@@ -249,26 +249,26 @@ data:
             set local-preference 100
           route-map EVPN-BACKUP-OUT permit 10
             set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
-          route-map EVPN-IPV4-ACTIVE-IN permit 10
+          route-map EVPN-ACTIVE-IPV4-IN permit 10
             match ip address prefix-list EVPN-REMOTE-VTEPS
             set local-preference 200
-          route-map EVPN-IPV4-ACTIVE-IN permit 100
-          route-map EVPN-IPV4-BACKUP-IN permit 10
+          route-map EVPN-ACTIVE-IPV4-IN permit 100
+          route-map EVPN-BACKUP-IPV4-IN permit 10
             match ip address prefix-list EVPN-REMOTE-VTEPS
             set local-preference 100
-          route-map EVPN-IPV4-BACKUP-IN permit 100
-          route-map EVPN-IPV4-BACKUP-OUT permit 10
+          route-map EVPN-BACKUP-IPV4-IN permit 100
+          route-map EVPN-BACKUP-IPV4-OUT permit 10
             match ip address prefix-list EVPN-LOCAL-VTEP
             set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
-          route-map EVPN-IPV4-BACKUP-OUT permit 100
+          route-map EVPN-BACKUP-IPV4-OUT permit 100
 {{ range $uplink := $node.uplinks }}
 {{ $peerID := $uplink.peerAddress | default $uplink.interface }}
           route-map {{ $peerID }}-in permit 1
             match ip address prefix-list EVPN-REMOTE-VTEPS
-            call EVPN-IPV4-{{ if eq $uplink.role "active" }}ACTIVE{{ else }}BACKUP{{ end }}-IN
+            call EVPN-{{ if eq $uplink.role "active" }}ACTIVE{{ else }}BACKUP{{ end }}-IPV4-IN
 {{ if eq $uplink.role "backup" }}
           route-map {{ $peerID }}-out permit 1
-            call EVPN-IPV4-BACKUP-OUT
+            call EVPN-BACKUP-IPV4-OUT
 {{ end }}
 {{ end }}
 {{ end }}

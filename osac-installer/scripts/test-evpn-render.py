@@ -450,7 +450,7 @@ def test_active_active_bgp() -> None:
     assert "address-family l2vpn evpn" in raw_config
     assert "neighbor 169.254.133.1 activate" in raw_config
     assert "neighbor 169.254.134.1 activate" in raw_config
-    assert "OSAC-EVPN-ACTIVE-BACKUP" not in raw_config
+    assert "route-map EVPN-" not in raw_config
 
 
 def test_active_backup_bgp() -> None:
@@ -478,11 +478,11 @@ def test_active_backup_bgp() -> None:
     )
     raw_config = raw["spec"]["raw"]["rawConfig"]
     assert (
-        "ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS seq 1 "
+        "ip prefix-list EVPN-REMOTE-VTEPS seq 1 "
         "permit 10.200.0.0/16 ge 32 le 32" in raw_config
     )
     assert (
-        "ip prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP seq 10 "
+        "ip prefix-list EVPN-LOCAL-VTEP seq 10 "
         "permit 10.200.255.1/32" in raw_config
     )
     assert "set local-preference 200" in raw_config
@@ -490,14 +490,14 @@ def test_active_backup_bgp() -> None:
 
     # EVPN route-maps apply to every route and never match on a prefix.
     active_in = raw_config.split(
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-ACTIVE-IN permit 10\n", 1
-    )[1].split("route-map OSAC-EVPN-ACTIVE-BACKUP-BACKUP-IN permit 10", 1)[0]
+        "route-map EVPN-ACTIVE-IN permit 10\n", 1
+    )[1].split("route-map EVPN-BACKUP-IN permit 10", 1)[0]
     backup_in = raw_config.split(
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-BACKUP-IN permit 10\n", 1
-    )[1].split("route-map OSAC-EVPN-ACTIVE-BACKUP-BACKUP-OUT permit 10", 1)[0]
+        "route-map EVPN-BACKUP-IN permit 10\n", 1
+    )[1].split("route-map EVPN-BACKUP-OUT permit 10", 1)[0]
     backup_out = raw_config.split(
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-BACKUP-OUT permit 10\n", 1
-    )[1].split("route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-ACTIVE-IN permit 10", 1)[0]
+        "route-map EVPN-BACKUP-OUT permit 10\n", 1
+    )[1].split("route-map EVPN-IPV4-ACTIVE-IN permit 10", 1)[0]
     assert "set local-preference 200" in active_in
     assert "set local-preference 100" in backup_in
     assert "set local-preference" not in backup_out
@@ -508,47 +508,47 @@ def test_active_backup_bgp() -> None:
 
     # IPv4 unicast route-maps match VTEP /32 routes only.
     ipv4_active_in = raw_config.split(
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-ACTIVE-IN permit 10\n", 1
+        "route-map EVPN-IPV4-ACTIVE-IN permit 10\n", 1
     )[1].split(
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-ACTIVE-IN permit 100", 1
+        "route-map EVPN-IPV4-ACTIVE-IN permit 100", 1
     )[0]
     ipv4_backup_in = raw_config.split(
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-IN permit 10\n", 1
+        "route-map EVPN-IPV4-BACKUP-IN permit 10\n", 1
     )[1].split(
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-IN permit 100", 1
+        "route-map EVPN-IPV4-BACKUP-IN permit 100", 1
     )[0]
     ipv4_backup_out = raw_config.split(
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-OUT permit 10\n", 1
+        "route-map EVPN-IPV4-BACKUP-OUT permit 10\n", 1
     )[1].split(
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-OUT permit 100", 1
+        "route-map EVPN-IPV4-BACKUP-OUT permit 100", 1
     )[0]
     for route_map in (ipv4_active_in, ipv4_backup_in):
         assert (
             "match ip address prefix-list "
-            "OSAC-EVPN-ACTIVE-BACKUP-REMOTE-VTEPS" in route_map
+            "EVPN-REMOTE-VTEPS" in route_map
         )
     assert "set local-preference 200" in ipv4_active_in
     assert "set local-preference 100" in ipv4_backup_in
     assert (
-        "match ip address prefix-list OSAC-EVPN-ACTIVE-BACKUP-LOCAL-VTEP"
+        "match ip address prefix-list EVPN-LOCAL-VTEP"
         in ipv4_backup_out
     )
     assert "set as-path prepend 4209999999 4209999999 4209999999" in ipv4_backup_out
     assert (
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-ACTIVE-IN permit 100"
+        "route-map EVPN-IPV4-ACTIVE-IN permit 100"
         in raw_config
     )
     assert (
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-IN permit 100"
+        "route-map EVPN-IPV4-BACKUP-IN permit 100"
         in raw_config
     )
     assert (
-        "route-map OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-OUT permit 100"
+        "route-map EVPN-IPV4-BACKUP-OUT permit 100"
         in raw_config
     )
-    assert "OSAC-EVPN-ACTIVE-BACKUP-IN-0" not in raw_config
-    assert "OSAC-EVPN-ACTIVE-BACKUP-IN-1" not in raw_config
-    assert "OSAC-EVPN-ACTIVE-BACKUP-OUT-0" not in raw_config
+    assert "EVPN-IN-0" not in raw_config
+    assert "EVPN-IN-1" not in raw_config
+    assert "EVPN-OUT-0" not in raw_config
 
     ipv4_af = raw_config.split("address-family ipv4 unicast\n", 1)[1].split(
         "exit-address-family", 1
@@ -559,35 +559,35 @@ def test_active_backup_bgp() -> None:
     assert "maximum-paths 16" not in ipv4_af
     assert (
         "neighbor 169.254.133.3 route-map "
-        "OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-IN in" in ipv4_af
+        "EVPN-IPV4-BACKUP-IN in" in ipv4_af
     )
     assert (
         "neighbor 169.254.133.1 route-map "
-        "OSAC-EVPN-ACTIVE-BACKUP-IPV4-ACTIVE-IN in" in ipv4_af
+        "EVPN-IPV4-ACTIVE-IN in" in ipv4_af
     )
     assert (
         "neighbor 169.254.133.3 route-map "
-        "OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-OUT out" in ipv4_af
+        "EVPN-IPV4-BACKUP-OUT out" in ipv4_af
     )
-    assert "OSAC-EVPN-ACTIVE-BACKUP-IPV4-ACTIVE-OUT" not in ipv4_af
+    assert "EVPN-IPV4-ACTIVE-OUT" not in ipv4_af
     assert (
         "neighbor 169.254.133.1 route-map "
-        "OSAC-EVPN-ACTIVE-BACKUP-IPV4-BACKUP-OUT out" not in ipv4_af
+        "EVPN-IPV4-BACKUP-OUT out" not in ipv4_af
     )
 
     assert (
         "neighbor 169.254.133.3 route-map "
-        "OSAC-EVPN-ACTIVE-BACKUP-BACKUP-IN in" in l2vpn_af
+        "EVPN-BACKUP-IN in" in l2vpn_af
     )
     assert (
         "neighbor 169.254.133.1 route-map "
-        "OSAC-EVPN-ACTIVE-BACKUP-ACTIVE-IN in" in l2vpn_af
+        "EVPN-ACTIVE-IN in" in l2vpn_af
     )
     assert (
         "neighbor 169.254.133.3 route-map "
-        "OSAC-EVPN-ACTIVE-BACKUP-BACKUP-OUT out" in l2vpn_af
+        "EVPN-BACKUP-OUT out" in l2vpn_af
     )
-    assert "OSAC-EVPN-ACTIVE-BACKUP-IPV4-" not in l2vpn_af
+    assert "EVPN-IPV4-" not in l2vpn_af
 
 
 def test_active_backup_requires_l2vpn_enabled() -> None:

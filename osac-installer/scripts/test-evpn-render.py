@@ -496,6 +496,9 @@ def test_active_backup_bgp() -> None:
     )[1].split("route-map ", 1)[0]
     assert "set local-preference 200" in active_in
     assert "set local-preference 100" in backup_in
+    assert "description EVPN active uplink inbound" in active_in
+    assert "description EVPN backup uplink inbound" in backup_in
+    assert "description EVPN backup uplink outbound" in backup_out
     assert "set local-preference" not in backup_out
     assert "set as-path prepend 4209999999 4209999999 4209999999" in backup_out
     assert "match " not in active_in
@@ -515,9 +518,12 @@ def test_active_backup_bgp() -> None:
     )[1].split("route-map", 1)[0]
     assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in active_peer_in
     assert "set local-preference 200" in active_peer_in
+    assert "description EVPN active uplink inbound" in active_peer_in
     assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in backup_peer_in
     assert "set local-preference 100" in backup_peer_in
+    assert "description EVPN backup uplink inbound" in backup_peer_in
     assert "set as-path prepend 4209999999 4209999999 4209999999" in backup_peer_out
+    assert "description EVPN backup uplink outbound" in backup_peer_out
     assert "match " not in backup_peer_out
     assert "route-map 169.254.133.1-out permit 1" not in raw_config
     assert "address-family ipv4 unicast" not in raw_config
@@ -576,9 +582,12 @@ def test_unnumbered_active_backup_bgp() -> None:
     )[1].split("route-map", 1)[0]
     assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in active_peer_in
     assert "set local-preference 200" in active_peer_in
+    assert "description EVPN active uplink inbound" in active_peer_in
     assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in backup_peer_in
     assert "set local-preference 100" in backup_peer_in
+    assert "description EVPN backup uplink inbound" in backup_peer_in
     assert "set as-path prepend 4209999999 4209999999 4209999999" in backup_peer_out
+    assert "description EVPN backup uplink outbound" in backup_peer_out
     assert "match " not in backup_peer_out
     assert "route-map ens5f0-out permit 1" not in raw_config
     assert "neighbor ens5f0 route-map EVPN-ACTIVE-IN in" in raw_config

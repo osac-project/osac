@@ -243,18 +243,23 @@ data:
           ip prefix-list EVPN-REMOTE-VTEPS seq {{ add1 $prefixIndex }} permit {{ $prefix }} ge 32 le 32
 {{ end }}
           route-map EVPN-ACTIVE-IN permit 10
+            description EVPN active uplink inbound
             set local-preference 200
           route-map EVPN-BACKUP-IN permit 10
+            description EVPN backup uplink inbound
             set local-preference 100
           route-map EVPN-BACKUP-OUT permit 10
+            description EVPN backup uplink outbound
             set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
 {{ range $uplink := $node.uplinks }}
 {{ $peerID := $uplink.peerAddress | default $uplink.interface }}
           route-map {{ $peerID }}-in permit 1
+            description EVPN {{ $uplink.role }} uplink inbound
             match ip address prefix-list EVPN-REMOTE-VTEPS
             set local-preference {{ if eq $uplink.role "active" }}200{{ else }}100{{ end }}
 {{ if eq $uplink.role "backup" }}
           route-map {{ $peerID }}-out permit 1
+            description EVPN backup uplink outbound
             set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
 {{ end }}
 {{ end }}

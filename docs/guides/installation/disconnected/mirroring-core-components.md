@@ -92,7 +92,7 @@ such as trust management, identity, and databases.
     # --- Phase 1 (Prerequisites) ---
     - name: ghcr.io/openbao/openbao:2.6.2
     - name: quay.io/jetstack/trust-manager:v0.20.0
-    - name: quay.io/jetstack/trust-pkg-debian-bookworm:20230311-deb12u1.1
+    - name: quay.io/jetstack/trust-pkg-debian-bookworm:20250419-deb12u2.0
     - name: quay.io/keycloak/keycloak:26.6.4
     - name: quay.io/openshift/origin-cli:4.20.0
     - name: quay.io/sclorg/postgresql-18-c10s@sha256:6be2c9d855f06fb665257a6b0911676a38d740be7022cc61acee1c99a832b1b2
@@ -102,7 +102,7 @@ such as trust management, identity, and databases.
 | ----- | ------- | ------- |
 | `openbao` | 2.6.2 | Per-tenant secret storage (Vault-compatible); hard runtime dependency |
 | `trust-manager` | v0.20.0 | Distributes CA bundles across keycloak, osac, and postgres namespaces |
-| `trust-pkg-debian-bookworm` | 20230311-deb12u1.1 | Base trust-store package consumed by trust-manager |
+| `trust-pkg-debian-bookworm` | 20250419-deb12u2.0 | Base trust-store package consumed by trust-manager |
 | `keycloak` | 26.6.4 | Identity provider; issues JWTs for all OSAC services |
 | `origin-cli` | 4.20.0 | osac-aap EE image builds, osac-metering, kafka component of fulfillment-service |
 | `postgresql-18-c10s` | (digest-pinned) | Primary relational database for fulfillment-service |

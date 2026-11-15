@@ -478,7 +478,7 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 			computeInstancesClient:      mockCIs,
 			externalIPAttachmentsClient: mockAtts,
 		}
-		runner.args.timeout = 5 * time.Second
+		runner.args.attachTimeout = 5 * time.Second
 	})
 
 	AfterEach(func() { ctrl.Finish() })
@@ -631,7 +631,7 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 
 	It("should return error when CI poll times out", func() {
 		runner.args.externalIP = "my-ip"
-		runner.args.timeout = 1 * time.Millisecond
+		runner.args.attachTimeout = 1 * time.Millisecond
 		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
 		pendingCI := publicv1.ComputeInstance_builder{
 			Id:       "ci-1",
@@ -665,21 +665,37 @@ var _ = Describe("maybeAttachExistingExternalIP", func() {
 		Expect(runner.validateExternalIPFlags()).To(Succeed())
 	})
 
-	It("should fail fast when the created CI has halted run strategy", func() {
+	It("should reject a halted run strategy in the assembled spec before create", func() {
 		runner.args.externalIP = "my-ip"
-		allocatedEIP := eip("eip-1", "my-ip", publicv1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED)
+		runner.args.name = "my-vm"
 		halted := publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED
-		haltedCI := publicv1.ComputeInstance_builder{
-			Id:       "ci-1",
-			Metadata: publicv1.Metadata_builder{Name: "my-vm"}.Build(),
-			Spec: publicv1.ComputeInstanceSpec_builder{
-				RunStrategy: &halted,
-			}.Build(),
+		haltedSpec := publicv1.ComputeInstanceSpec_builder{
+			RunStrategy: &halted,
 		}.Build()
 
-		err := runner.maybeAttachExistingExternalIP(ctx, haltedCI, allocatedEIP)
+		err := runner.ensureAttachableRunStrategy(haltedSpec)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("HALTED"))
+		Expect(err.Error()).To(ContainSubstring("my-vm"))
+	})
+
+	It("should accept a non-halted run strategy in the assembled spec", func() {
+		runner.args.externalIP = "my-ip"
+		always := publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS
+		spec := publicv1.ComputeInstanceSpec_builder{
+			RunStrategy: &always,
+		}.Build()
+
+		Expect(runner.ensureAttachableRunStrategy(spec)).To(Succeed())
+	})
+
+	It("should skip the run strategy check without --externalip", func() {
+		halted := publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED
+		spec := publicv1.ComputeInstanceSpec_builder{
+			RunStrategy: &halted,
+		}.Build()
+
+		Expect(runner.ensureAttachableRunStrategy(spec)).To(Succeed())
 	})
 
 	It("should fail early when the EIP is already attached", func() {

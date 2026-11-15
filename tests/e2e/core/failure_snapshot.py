@@ -621,7 +621,7 @@ def caas_guest_source(k8s: K8sClient, namespace: str) -> SourceFn:
                         "--unit=kubelet",
                         "--unit=crio",
                         "--tail=300",
-                        f"--since={window.started_at.isoformat()}",
+                        f"--since={window.started_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S')}",
                         binary="oc",
                     )
                     write_text(directory, f"{prefix}-{_safe(node_name)}-node.log", text)

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import shlex
 import subprocess
 import sys
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -144,6 +145,76 @@ def test_logs_source_starts_at_the_module_when_it_began_first(tmp_path: Path, mo
     calls.clear()
     snap.logs_source(k8s, "osac-ns")(tmp_path, snap.Window(START, START + timedelta(minutes=1)))
     assert "--since-time=2026-01-02T03:04:05Z" in calls[0]
+
+
+@pytest.mark.parametrize("zone", [UTC, timezone(timedelta(hours=2)), timezone(timedelta(hours=-5))])
+def test_caas_guest_node_logs_use_utc_journal_dates_and_stdin_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, zone: timezone
+) -> None:
+    credential = b"guest-config-from-referenced-secret"
+    started_at = START.replace(microsecond=123456).astimezone(zone)
+    management = Mock(
+        side_effect=[
+            json.dumps(
+                {"items": [{"status": {"clusterReference": {"namespace": "clusters", "hostedClusterName": "order-a"}}}]}
+            ),
+            json.dumps({"status": {"kubeConfig": {"name": "guest-config", "key": "value"}}}),
+            json.dumps({"data": {"value": base64.b64encode(credential).decode()}}),
+        ]
+    )
+    commands: list[list[str]] = []
+
+    def guest_command(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        commands.append(argv)
+        assert argv[1] == "--kubeconfig=/dev/stdin"
+        assert kwargs == {"input": credential, "capture_output": True, "timeout": 5, "check": False}
+        if argv[0] == "oc":
+            output = f"kubelet journal\nAuthorization: Bearer {JWT}".encode()
+        elif argv[2:4] == ["get", "nodes"]:
+            output = json.dumps({"items": [{"kind": "Node", "metadata": {"name": "worker-a"}}]}).encode()
+        elif argv[2:4] == ["get", "pods"] and "openshift-ingress" in argv:
+            output = json.dumps(
+                {"items": [{"metadata": {"name": "router-a"}, "spec": {"containers": [{"name": "router"}]}}]}
+            ).encode()
+        elif argv[2] == "logs":
+            output = b"router log"
+        else:
+            output = b'{"items": []}'
+        return subprocess.CompletedProcess(argv, 0, stdout=output, stderr=b"")
+
+    monkeypatch.setattr(snap, "run", management)
+    monkeypatch.setattr(snap.subprocess, "run", guest_command)
+    k8s = Mock()
+    k8s.base_args.return_value = ["kubectl"]
+
+    snap.caas_guest_source(k8s, "ci")(tmp_path, snap.Window(started_at))
+
+    assert [call.args for call in management.call_args_list] == [
+        ("kubectl", "get", "clusterorders.osac.openshift.io", "-n", "ci", "-o", "json"),
+        ("kubectl", "get", "hostedcontrolplane", "order-a", "-n", "clusters-order-a", "-o", "json"),
+        ("kubectl", "get", "secret", "guest-config", "-n", "clusters-order-a", "-o", "json"),
+    ]
+    assert [argv for argv in commands if argv[0] == "oc"] == [
+        [
+            "oc",
+            "--kubeconfig=/dev/stdin",
+            "adm",
+            "node-logs",
+            "worker-a",
+            "--unit=kubelet",
+            "--unit=crio",
+            "--tail=300",
+            "--since=2026-01-02 03:04:05",
+        ]
+    ]
+    pod_logs = [argv for argv in commands if argv[2] == "logs"]
+    assert len(pod_logs) == 2
+    assert all(f"--since-time={started_at.isoformat().replace('+00:00', 'Z')}" in argv for argv in pod_logs)
+    assert not (tmp_path / snap.ERRORS_FILE).exists()
+    assert "kubelet journal" in (tmp_path / "guest-clusters-order-a-worker-a-node.log").read_text()
+    assert all(
+        credential not in path.read_bytes() and JWT.encode() not in path.read_bytes() for path in tmp_path.iterdir()
+    )
 
 
 def test_k8s_source_never_asks_for_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

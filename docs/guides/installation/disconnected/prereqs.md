@@ -208,6 +208,8 @@ For each affected pool, record its current state separately: unpaused, observedG
 
 Check the selected packages and channels:
 
+The mirrored cert-manager catalog entry, selected OLM bundle and its images must be available before operator installation. Require the selected CSV to declare ownership of `bundles.trust.cert-manager.io`; the [published Operator 1.19.2 bundle](https://github.com/openshift/cert-manager-operator/blob/22755dbe9e996e27c7881539b3fd24a87198ec9c/bundle/manifests/cert-manager-operator.clusterserviceversion.yaml) does so. [operators.md](operators.md#trust-manager-release-contract) verifies the installed CSV and established CRD before a separately reviewed, CRD-free trust-manager runtime and the first Bundle. Package visibility alone is not evidence that this CRD is installed.
+
 Record the source observation for each selected PackageManifest separately. Each must match both `status.catalogSource=redhat-operators` and `status.catalogSourceNamespace=openshift-marketplace`. Operator namespaces, scopes, CSV pins, and Manual approval belong to the single product table in `operators.md`, not a second table here.
 
 Consume the mirror owner's image inventory for the exact selected operator bundles/CSVs and their dependencies. Include **all applicable CSV deployment container images, sidecars and init-container images**, as well as related-image/`RELATED_IMAGE` selectors and the selected operand/helper images. In particular, include the selected CSV's `ose-kube-rbac-proxy-rhel9` sidecar reference when present; a list containing only the AAP operator images is not sufficient.

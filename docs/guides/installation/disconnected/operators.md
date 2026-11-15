@@ -192,7 +192,7 @@ oc create namespace cert-manager --dry-run=client -o yaml | oc apply -f -
 oc create namespace osac-kafka --dry-run=client -o yaml | oc apply -f -
 ```
 
-trust-manager reuses the `cert-manager` namespace prepared above. The release manifest `osac-installer/prerequisites/trust-manager.yaml` declares no Namespace; do not create a separate trust-manager namespace or add product-specific metadata for it.
+trust-manager reuses the `cert-manager` namespace prepared above. The upstream release chart rendered in the trust-manager release contract below declares no Namespace; do not create a separate trust-manager namespace or add product-specific metadata for it.
 
 ### Operator acceptance prerequisites
 
@@ -322,7 +322,26 @@ Expected: `true`. Do not create dependent Certificates while this fails.
 
 ### trust-manager release contract
 
-Use the approved `osac/v0.0.62` blob `osac-installer/prerequisites/trust-manager.yaml`, not current main or an unverified working-tree copy. A compatible existing controller may be adopted with its owner's approval.
+The selected cert-manager OLM bundle must provide `bundles.trust.cert-manager.io`. Set `CERT_MANAGER_CSV` to the intended installed CSV identified by the reviewed cert-manager Subscription. Verify its declared ownership and the established CRD before installing the runtime:
+
+```bash
+(set -o pipefail; oc --request-timeout=30s get csv "${CERT_MANAGER_CSV:?Set the intended installed cert-manager CSV}" -n cert-manager-operator -o json | jq -e '.status.phase == "Succeeded" and any(.spec.customresourcedefinitions.owned[]?; .name == "bundles.trust.cert-manager.io")') || exit 1
+oc --request-timeout=30s wait crd/bundles.trust.cert-manager.io --for=condition=Established --timeout=10m || exit 1
+```
+
+A failed observation stops this step; do not install a replacement CRD. The [published cert-manager Operator 1.19.2 bundle](https://github.com/openshift/cert-manager-operator/blob/22755dbe9e996e27c7881539b3fd24a87198ec9c/bundle/manifests/cert-manager-operator.clusterserviceversion.yaml) declares this ownership; do not assume every version on `stable-v1` has the same contract.
+
+For this procedure, OLM is the sole lifecycle owner of that CRD. Install only the separately reviewed trust-manager runtime resources: ServiceAccount, RBAC, serving Issuer/Certificate, Deployment, Service and validating webhook. Exclude all CRDs from runtime installation and upgrades; upstream v0.20.0 exposes [`crds.enabled`](https://github.com/cert-manager/trust-manager/blob/de34e5e7625a65c0f051c0571279d4e1802c50bd/deploy/charts/trust-manager/values.yaml) for this separation. Confirm the selected runtime and operator combination with their owners; matching API names alone do not prove compatibility or product support. A compatible existing controller may be adopted with its owner's approval. Do not enable an operator-managed trust-manager runtime alongside the separately installed controller.
+
+Prepare the runtime-only manifest from the official [upstream v0.20.0 chart archive](https://charts.jetstack.io/charts/trust-manager-v0.20.0.tgz), following upstream's [Helm installation model](https://cert-manager.io/docs/trust/trust-manager/). The [v0.20.0 release](https://github.com/cert-manager/trust-manager/releases/tag/v0.20.0) has no pre-rendered manifest asset. Download and verify the archive on the connected preparation host, then transfer it through the reviewed disconnected artifact process. With Helm 3, render the local archive without installing a Helm release or contacting the cluster. The trust-package override retains the exact image pin in the release table below; it is not a compatibility or support certification.
+
+```bash
+curl --fail --location --output trust-manager-v0.20.0.tgz https://charts.jetstack.io/charts/trust-manager-v0.20.0.tgz || exit 1
+printf '%s\n' 'a5043d5970eec1548d027f7f6e8779d6bea12eda8e4736cbe6c174c3139059a0  trust-manager-v0.20.0.tgz' | sha256sum --check - || exit 1
+helm template trust-manager ./trust-manager-v0.20.0.tgz --namespace cert-manager --set crds.enabled=false --set-string defaultPackageImage.tag=20230311-deb12u1.1 > trust-manager-runtime.yaml || exit 1
+```
+
+The download requires connected access; the local render can run after transfer on the disconnected host. Keep the default RBAC and cert-manager-backed webhook certificate settings. Disabling `crds.enabled` omits only the `CustomResourceDefinition` document; retain every other rendered document unchanged, including both Services, all RBAC, and the serving Issuer, Certificate and webhook. Expect 13 runtime documents and no CRD or Namespace document with these values. This local rendering is not a cluster deletion operation: never delete the live CRD or the existing `cert-manager` Namespace. Review the rendered manifest, image coverage and provenance before applying its resources in the dependency order below.
 
 | Component | Release reference |
 | --- | --- |
@@ -334,11 +353,11 @@ Use the approved `osac/v0.0.62` blob `osac-installer/prerequisites/trust-manager
 | Deployment / Service | `cert-manager/trust-manager` |
 | Admission configuration | `ValidatingWebhookConfiguration/trust-manager` |
 
-Both exact images require Doc 1 proof. The generic static-manifest installation remains the administrator's normal procedure: CRD, foundation, serving certificate, controller/endpoints, webhook with injected CA, then Bundle. Do not install a second trust-manager to repair an adopted instance.
+Both exact images require Doc 1 proof. The dependency chain is the operator-provided CRD, runtime foundation and serving certificate, controller/endpoints and webhook with injected CA, then the Bundle CR and CA distribution. Do not install a second trust-manager to repair an adopted instance.
 
 **Release-manifest gate**:
 
-Record the owner-approved Git blob identity and the separate image observations in the existing protected inputs; neither observation alone certifies complete release provenance or image coverage.
+Record the owner-approved runtime manifest identity, its CRD exclusion, the selected operator CSV and the separate image observations in the existing protected inputs; neither manifest nor image observations alone certify complete release provenance or image coverage.
 
 **Serving-certificate gate**:
 

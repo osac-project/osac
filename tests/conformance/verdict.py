@@ -95,7 +95,7 @@ def evaluate(
             id="complete-plan",
             name="the plan was complete",
             rule="complete is true",
-            remedy="run the plan a full list computes",
+            remedy="run without --plan, or use the full plan that osac-conformance list prints",
             result=CheckResult.PASS if plan.complete else CheckResult.FAIL,
             message=complete_message,
         ),

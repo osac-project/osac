@@ -98,6 +98,7 @@ def test_an_incomplete_plan_fails_complete_plan() -> None:
 
     assert report.checks[2].result is CheckResult.FAIL
     assert report.checks[2].message == "the plan is a focused subset and is not a conformance verdict"
+    assert report.checks[2].remedy == "run without --plan, or use the full plan that osac-conformance list prints"
     assert report.result is Verdict.IN_PROGRESS
 
 

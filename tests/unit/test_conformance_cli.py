@@ -34,10 +34,10 @@ def test_missing_config_exits_2_without_a_report(tmp_path: Path, capsys: pytest.
 def test_config_errors_are_redacted(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake_token = "not-a-real-credential"
+    fake_value = "redaction-marker-d"
     fake_host = "api.internal.test"
     token = tmp_path / "token"
-    token.write_text(fake_token)
+    token.write_text(fake_value)
     config = tmp_path / "conformance.yaml"
     config.write_text(
         yaml.safe_dump(
@@ -55,13 +55,13 @@ def test_config_errors_are_redacted(
     )
 
     def fail(_args: object) -> None:
-        raise ConfigError([f"target read failed: {fake_host} rejected {fake_token}"])
+        raise ConfigError([f"target read failed: {fake_host} rejected {fake_value}"])
 
     monkeypatch.setattr(cli, "_build_runtime", fail)
 
     assert main(["list", "--config", str(config)]) == 2
 
     err = capsys.readouterr().err
-    assert fake_token not in err
+    assert fake_value not in err
     assert fake_host not in err
     assert "<redacted>" in err

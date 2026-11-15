@@ -37,11 +37,9 @@ class OutputSink:
     def line(self, text: str) -> None:
         stamp = datetime.now(UTC).isoformat(timespec="seconds")
         rendered = f"{stamp} {self.redactor.text(text)}"
-        # Redacted above by Redactor.text(). CodeQL cannot model the custom boundary.
-        print(rendered, file=self.stream)  # codeql[py/clear-text-logging-sensitive-data]
+        print(rendered, file=self.stream)
         with self.log_path.open("a", encoding="utf-8") as stream:
-            # Redacted above by Redactor.text().
-            stream.write(rendered + "\n")  # codeql[py/clear-text-storage-sensitive-data]
+            stream.write(rendered + "\n")
 
     def evidence(self, test: TestIdentity, relative: Path, content: str) -> Path:
         base = (self.results_dir / "tests" / _safe_component(test.id)).resolve()
@@ -49,9 +47,8 @@ class OutputSink:
         if not candidate.is_relative_to(base):
             raise ValueError(f"evidence path escapes the test directory: {relative}")
         candidate.parent.mkdir(parents=True, exist_ok=True)
-        # Redacted by Redactor.text(). CodeQL cannot model the custom boundary.
         redacted = self.redactor.text(content)
-        candidate.write_text(redacted, encoding="utf-8")  # codeql[py/clear-text-storage-sensitive-data]
+        candidate.write_text(redacted, encoding="utf-8")
         return candidate
 
 

@@ -11,8 +11,8 @@ from tests.conformance.cli import redactor_for_config
 from tests.conformance.config import Config, load_config
 from tests.conformance.errors import ConfigError
 
-_FAKE_TOKEN = "not-a-real-credential"
-_FAKE_PASSWORD = "not-a-real-password"
+_REDACTION_MARKER_D = "redaction-marker-d"
+_REDACTION_MARKER_B = "redaction-marker-b"
 
 
 def _write(path: Path, data: dict[str, object]) -> Path:
@@ -124,14 +124,14 @@ def test_missing_config_file_is_a_config_error(tmp_path: Path) -> None:
 
 def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
     token = tmp_path / "token"
-    token.write_text(_FAKE_TOKEN)
+    token.write_text(_REDACTION_MARKER_D)
     ca = tmp_path / "ca.pem"
     ca.write_text("ca")
     hub = tmp_path / "hub.kubeconfig"
     hub.write_text(
         yaml.safe_dump(
             {
-                "users": [{"user": {"token": _FAKE_TOKEN, "password": _FAKE_PASSWORD}}],
+                "users": [{"user": {"token": _REDACTION_MARKER_D, "password": _REDACTION_MARKER_B}}],
                 "clusters": [{"cluster": {"server": "https://api.hub.example.test"}}],
             }
         )
@@ -150,10 +150,10 @@ def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
     )
 
     text = redactor_for_config(config).text(
-        f"{_FAKE_TOKEN} {_FAKE_PASSWORD} api.hub.example.test api.target.example.test"
+        f"{_REDACTION_MARKER_D} {_REDACTION_MARKER_B} api.hub.example.test api.target.example.test"
     )
 
-    assert _FAKE_TOKEN not in text
-    assert _FAKE_PASSWORD not in text
+    assert _REDACTION_MARKER_D not in text
+    assert _REDACTION_MARKER_B not in text
     assert "api.hub.example.test" not in text
     assert "api.target.example.test" not in text

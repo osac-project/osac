@@ -352,7 +352,7 @@ const resizeCpuUpMemoryDownInstanceTypeTestName = rawResizeCpuUpMemoryDownInstan
 const catalogName = indexedResourceName(rawCatalog.name);
 const catalogInstanceTypeName = indexedResourceName(rawCatalog.fields.instance_type.name);
 const catalogDiskImageName =
-  rawCatalog.fields.disk_image.name === rawDiskImage.name
+  rawCatalog.fields.disk_image.name.trim() === rawDiskImage.name
     ? (diskImageTestName ?? indexedResourceName(rawCatalog.fields.disk_image.name))
     : rawCatalog.fields.disk_image.name;
 

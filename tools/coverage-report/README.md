@@ -89,18 +89,17 @@ A behavior is a `#### TC-...: title` (or `###`) heading. Its priority and
 automation come from the `| ... | Priority | Automation |` table that follows
 it. Its tier comes from the `- **Tier:**` bullet, or the legacy
 `- **Tier / owner:**` bullet whose owner part is ignored: labels starting with
-`Unit`, `E2E`, or `Component integration` / `Contract` / `UI integration`
-(including `Contract and component integration`) map to those tiers; anything
-else is tier-unassigned. `manual` and `not automatable` cases are excluded with
-a reason.
+`Unit`, `E2E`, or `Component integration` / `Contract` / `Envtest` /
+`UI integration` / `Integration` (including `Contract and component
+integration`) map to those tiers; anything else is tier-unassigned. `manual`
+and `not automatable` cases are excluded with a reason.
 
 Metric states:
 
 - `value` - a measured percentage, for example `69.8% (405/580)`.
 - `zero` - measured zero; a real result.
 - `unavailable` - no coverprofile was supplied.
-- `blocked` - a mapped unit package is absent from the profile, or any
-  automated behavior has no tier (shows `N tier-unassigned`).
+- `blocked` - a mapped unit package is absent from the profile.
 - `na` - no test plan for that tier, or no statements in the mapped packages
   (blocks the verdict).
 - `none` - a plan exists but has no automated behaviors at that tier ("no cases
@@ -144,7 +143,8 @@ flag is consulted, so it cannot stand in for the checkout itself.
   `na`, or `zero` (a `none` tier is neutral). A `zero` tier says whether it
   reflects drafted links pending review or no reviewed test links yet. A gap
   whose priority is not one of `critical`/`high`/`medium`/`low` also lands
-  here instead of passing.
+  here instead of passing, as does any automated behavior without a
+  recognised tier (each tier is still measured on its own cases).
 - `no blocking gaps` - otherwise; coverage depth is not judged.
 
 Each area and overview row also carries `verdict_reason`, the strongest cause

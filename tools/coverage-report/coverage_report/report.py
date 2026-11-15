@@ -168,16 +168,8 @@ def _best_path(paths: Sequence[str]) -> str:
 
 def _tier_metric(tier: str, behaviors: Sequence[Behavior], statuses: Dict[str, dict], plan: bool) -> dict:
     automated = [behavior for behavior in behaviors if not behavior.excluded]
-    unassigned = [behavior for behavior in automated if behavior.tier == NONE]
     assessable = [behavior for behavior in automated if behavior.tier == tier]
     excluded = [behavior for behavior in behaviors if behavior.excluded and behavior.tier == tier]
-    if unassigned:
-        return {
-            "state": "blocked",
-            "display": "blocked",
-            "detail": "{0} tier-unassigned behavior(s)".format(len(unassigned)),
-            "excluded": len(excluded),
-        }
     if not assessable:
         if plan:
             return {"state": "none", "display": "no cases at this tier",
@@ -233,14 +225,16 @@ def build_feature_report(
         behaviors.extend(parsed)
     for item in feature.behaviors:
         behavior_id = str(item["id"]).strip()
+        tier_label = " ".join(str(item.get("tier", "")).split())
         behaviors.append(Behavior(
             tc_id=behavior_id,
             title=str(item["title"]).strip(),
             priority=normalize_priority(str(item.get("priority", ""))),
             automation="automated",
-            tier=normalize_tier(str(item.get("tier", ""))),
+            tier=normalize_tier(tier_label),
             execution="",
             id=behavior_id,
+            tier_label=tier_label,
         ))
 
     reviewed = _is_reviewed(feature.mappings_reviewed_by)
@@ -262,7 +256,7 @@ def build_feature_report(
         if behavior.tier == NONE:
             statuses[behavior.id] = {"status": "tier-unassigned"}
             gaps.append(_gap(behavior, "tier-unassigned",
-                             "Add a tier to {0} in the test plan".format(behavior.id)))
+                             _tier_unassigned_action(behavior)))
             continue
         mapping = _behavior_mapping(
             behavior,
@@ -324,6 +318,14 @@ def _gap(behavior: Behavior, kind: str, next_action: str) -> dict:
     }
 
 
+def _tier_unassigned_action(behavior: Behavior) -> str:
+    got = "got '{0}'".format(behavior.tier_label) if behavior.tier_label else "no tier"
+    return (
+        "Set a recognised tier for {0} ({1}); use Unit, Component integration, "
+        "Contract, Envtest, UI integration, Integration or E2E"
+    ).format(behavior.id, got)
+
+
 def _tier_mismatch_action(behavior: Behavior, path: str) -> str:
     if behavior.tier == E2E:
         return "Map {0} to an E2E test under tests/e2e/ (`{1}` is not one)".format(
@@ -361,6 +363,10 @@ def _verdict(
             else:
                 other_parts.append("{0} {1}: {2}".format(label, state, metric.get("detail", "")))
     parts = zero_parts + other_parts
+    unassigned = sum(1 for gap in gaps if gap.get("kind") == "tier-unassigned")
+    if unassigned:
+        parts.append("{0} automated behavior{1} without a recognised tier".format(
+            unassigned, "" if unassigned == 1 else "s"))
     unknown = sum(1 for gap in gaps if gap["priority"] == "unknown")
     if unknown:
         parts.append("{0} gap{1} without a recognised priority".format(

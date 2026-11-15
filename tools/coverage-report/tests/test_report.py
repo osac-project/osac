@@ -222,16 +222,41 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(report["behaviors"][0]["status"], "no-mapping")
         self.assertEqual(report["gaps"][0]["kind"], "no-mapping")
 
-    def test_unassigned_tier_blocks_both_tier_metrics(self):
-        plan = case("TC-FR1-01", execution="`ginkgo run -r internal`")
+    def test_tier_unassigned_does_not_block_a_scored_tier(self):
+        plan = (
+            case("TC-FR1-01", tier="Component integration / [DEV]", execution="`it/test.go`")
+            + case("TC-FR1-02", tier="Story 8.05", priority="low")
+        )
+        with Repository(plan, ["it/test.go"]) as root:
+            report = build_feature_report(feature(), root, "abc", measured())
+        self.assertEqual(report["metrics"]["integration"]["state"], "value")
+        self.assertEqual(report["metrics"]["integration"]["display"], "100.0% (1/1)")
+        self.assertEqual(report["metrics"]["e2e"]["state"], "none")
+        self.assertEqual(report["gaps"][0]["kind"], "tier-unassigned")
+        self.assertEqual(report["verdict"], "insufficient evidence")
+        self.assertEqual(report["verdict_reason"],
+                         "1 automated behavior without a recognised tier")
+
+    def test_tier_unassigned_high_priority_still_blocks(self):
+        plan = case("TC-FR1-01", tier="Story 8.05")
         with Repository(plan) as root:
             report = build_feature_report(feature(), root, "abc", measured())
-        for tier in ("integration", "e2e"):
-            self.assertEqual(report["metrics"][tier]["state"], "blocked")
-            self.assertIn("1 tier-unassigned", report["metrics"][tier]["detail"])
-        self.assertEqual(report["gaps"][0]["kind"], "tier-unassigned")
-        self.assertEqual(report["gaps"][0]["next_action"], "Add a tier to TC-FR1-01 in the test plan")
-        self.assertEqual(report["verdict_reason"], "1 high gap")
+        self.assertEqual((report["verdict"], report["verdict_reason"]),
+                         ("not ready", "1 high gap"))
+
+    def test_tier_unassigned_action_names_the_received_label(self):
+        for text, got in (
+            ("#### TC-FR1-01: case\n\n- **Tier:** Foo\n", "got 'Foo'"),
+            ("#### TC-FR1-01: case\n", "no tier"),
+        ):
+            with Repository(text) as root:
+                report = build_feature_report(feature(), root, "abc", measured())
+            self.assertEqual(
+                report["gaps"][0]["next_action"],
+                "Set a recognised tier for TC-FR1-01 ({0}); use Unit, Component "
+                "integration, Contract, Envtest, UI integration, Integration or "
+                "E2E".format(got),
+            )
 
     def test_manual_behavior_is_excluded(self):
         plan = case("TC-FR1-01", tier="E2E / [QE]", automation="manual")

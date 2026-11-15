@@ -47,6 +47,7 @@ class Behavior:
     execution: str
     id: str = ""
     excluded_reason: str = ""
+    tier_label: str = ""
 
     @property
     def excluded(self) -> bool:
@@ -327,7 +328,9 @@ _PROPOSED_BEFORE_RE = re.compile(
     r"(?<!not )proposed(?:\s+(?:path|file|test))?\s*:?\s*$", re.IGNORECASE
 )
 
-_INTEGRATION_PREFIXES = ("component integration", "contract", "envtest", "ui integration")
+_INTEGRATION_PREFIXES = (
+    "component integration", "contract", "envtest", "ui integration", "integration"
+)
 _PRIORITY_NAME_RE = re.compile(r"(critical|high|medium|low)\b")
 _PRIORITY_CODE_RE = re.compile(r"\bp([0-3])\b")
 _PRIORITY_LEVELS = {"0": "critical", "1": "high", "2": "medium", "3": "low"}
@@ -458,6 +461,9 @@ def parse_testplan(text: str, prefix: str = "") -> List[Behavior]:
     for tc_id, title, body in _split_cases(text):
         bullets = _bullet_fields(body)
         table = _table_fields(body)
+        tier_label = " ".join(
+            (bullets.get("tier") or bullets.get("tier / owner", "")).split()
+        )
         automation = " ".join(table.get("automation", "").split()).casefold()
         if "manual" in automation:
             excluded = "test case is manual"
@@ -471,12 +477,11 @@ def parse_testplan(text: str, prefix: str = "") -> List[Behavior]:
                 title=title,
                 priority=normalize_priority(table.get("priority", "")),
                 automation=automation,
-                tier=normalize_tier(
-                    bullets.get("tier") or bullets.get("tier / owner", "")
-                ),
+                tier=normalize_tier(tier_label),
                 execution=bullets.get("execution", ""),
                 id=prefix + tc_id,
                 excluded_reason=excluded,
+                tier_label=tier_label,
             )
         )
     return behaviors

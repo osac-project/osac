@@ -128,6 +128,7 @@ class TierTests(unittest.TestCase):
         self.assertEqual(normalize_tier("Contract / [DEV]"), INTEGRATION)
         self.assertEqual(normalize_tier("UI integration / [UI]"), INTEGRATION)
         self.assertEqual(normalize_tier("Contract and component integration"), INTEGRATION)
+        self.assertEqual(normalize_tier("Integration / [DEV]"), INTEGRATION)
         self.assertEqual(normalize_tier("Story 8.05"), NONE)
         self.assertEqual(normalize_tier(""), NONE)
 
@@ -202,6 +203,10 @@ class TestplanTests(unittest.TestCase):
 
     def test_envtest_tier_counts_as_integration(self):
         behaviors = self.parse("#### TC-1.1: Env\n\n- **Tier / owner:** Envtest / [DEV].\n")
+        self.assertEqual(behaviors[0].tier, INTEGRATION)
+
+    def test_integration_tier_label_counts_as_integration(self):
+        behaviors = parse_testplan("#### TC-1.1: Int\n\n- **Tier:** Integration\n")
         self.assertEqual(behaviors[0].tier, INTEGRATION)
 
     def test_tier_bullet_preferred_and_legacy_tier_owner_still_read(self):

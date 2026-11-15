@@ -58,6 +58,205 @@ _WORKER_METRIC_LABELS = {"tenant", "worker_type", "instance_type"}
 logger = logging.getLogger(__name__)
 
 
+def test_cluster_cancel_after_observed_preliminary_agent_binding(
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    private_grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    cluster_template: str,
+    caas_disk_image_version: str,
+    pull_secret_name: str,
+    ssh_key_secret: str,
+) -> None:
+    """Timing-sensitive OSAC-7754 demonstration, not a deterministic regression.
+
+    Observe OSAC's preliminary deployment reference, then cancel normally.
+    Native controllers remain active: recorded claims are only a snapshot,
+    not proof that the Agent was never claimed or cannot be claimed next.
+    Missing the window fails the precondition; successful cleanup does not
+    establish that the conditional failure is fixed. Intended for a draft,
+    DO-NOT-MERGE demonstration, requiring real native controllers and hardware.
+    """
+    private_grpc.ensure_bare_metal_instance_type(
+        name="ci-worker-bm", host_label_selector={"osac.openshift.io/host-type": "default"}
+    )
+    uuid = cli.create_cluster(
+        name=unique_name("e2e-preliminary-cancel"),
+        template=cluster_template,
+        version=caas_disk_image_version,
+        node_sets={"workers": {"size": 1, "baremetal_instance_type": {"name": "ci-worker-bm"}}},
+        pull_secret=pull_secret_name,
+        ssh_key=ssh_key_secret,
+    )
+    k8s = k8s_hub_client
+    co_name = ""
+    agent_uids: set[str] = set()
+
+    def _agents() -> list[dict[str, Any]]:
+        return k8s.list_json(resource="agents.agent-install.openshift.io", namespace=k8s.namespace)["items"]
+
+    def _log_agent(agent: dict[str, Any]) -> None:
+        metadata = agent["metadata"]
+        spec = agent.get("spec", {})
+        deployment = spec.get("clusterDeploymentName") or {}
+        status = agent.get("status", {})
+        debug_state = status.get("debugInfo", {}).get("state")
+        if debug_state not in {
+            "discovering",
+            "known",
+            "insufficient",
+            "installing",
+            "installing-in-progress",
+            "installed",
+            "added-to-existing-cluster",
+            "unbinding",
+            "unbinding-pending-user-action",
+            "known-unbound",
+            "discovering-unbound",
+            "disconnected-unbound",
+            "insufficient-unbound",
+            "disabled-unbound",
+            "error",
+        }:
+            debug_state = "omitted"
+        logger.info(
+            "Cancellation Agent namespace=%s name=%s uid=%s deployment=%s/%s "
+            "agentMachineRef=%s agentMachineRefNamespace=%s ignitionEndpointPresent=%s "
+            "debugState=%s installed=%s terminating=%s finalizers=%d",
+            metadata["namespace"],
+            metadata["name"],
+            metadata["uid"],
+            deployment.get("namespace"),
+            deployment.get("name"),
+            metadata.get("labels", {}).get("agentMachineRef"),
+            metadata.get("annotations", {}).get("agentMachineRefNamespace"),
+            bool(spec.get("ignitionEndpointTokenReference") or spec.get("ignitionEndpoint")),
+            debug_state,
+            any(
+                condition.get("type") == "Installed" and condition.get("status") == "True"
+                for condition in status.get("conditions", [])
+            ),
+            bool(metadata.get("deletionTimestamp")),
+            len(metadata.get("finalizers") or []),
+        )
+
+    def _snapshot() -> None:
+        try:
+            for line in snapshot_cluster_deletion(k8s, co_name):
+                logger.info("CaaS cancellation snapshot: %s", line)
+            orders = k8s.list_json(resource="clusterorders", namespace=k8s.namespace)["items"]
+            for order in orders:
+                if order["metadata"]["name"] == co_name:
+                    for worker in order.get("status", {}).get("workers", []):
+                        logger.info(
+                            "Cancellation worker name=%s bmi=%s phase=%s",
+                            worker.get("name"),
+                            worker.get("bareMetalInstance", {}).get("id"),
+                            worker.get("phase"),
+                        )
+            for agent in _agents():
+                if (
+                    agent["metadata"]["uid"] in agent_uids
+                    or agent["metadata"].get("labels", {}).get("osac.openshift.io/cluster-order") == co_name
+                ):
+                    _log_agent(agent)
+        except Exception:
+            logger.warning("CaaS cancellation diagnostics unavailable")
+
+    try:
+        co_name = wait_for_cluster_order_cr(k8s=k8s, uuid=uuid)
+        tenant = grpc.get_cluster(cluster_id=uuid)["object"]["metadata"]["tenant"]
+        order = k8s.get_json(resource="clusterorder", name=co_name)
+        co_uid = order["metadata"]["uid"]
+        assert co_uid and order["metadata"]["namespace"] == k8s.namespace
+        assert order["metadata"]["annotations"]["osac.openshift.io/tenant"] == tenant
+        infra_env_name = _wait_for_cluster_infra_env_name(k8s=k8s, co_name=co_name)
+
+        def _observe_preliminary_binding() -> bool:
+            current = k8s.get_json(resource="clusterorder", name=co_name)
+            assert current["metadata"]["uid"] == co_uid, "ClusterOrder identity changed"
+            bmis = _list_owned_worker_bmis(grpc=grpc, co_name=co_name, tenant=tenant)
+            workers = {
+                worker["name"]: worker
+                for worker in current.get("status", {}).get("workers", [])
+                if worker.get("bareMetalInstance", {}).get("id") in bmis
+            }
+            for agent in _agents():
+                metadata = agent["metadata"]
+                labels = metadata.get("labels", {})
+                if (
+                    labels.get("osac.openshift.io/cluster-order") != co_name
+                    or labels.get("osac.openshift.io/worker-name") not in workers
+                    or labels.get("infraenvs.agent-install.openshift.io") != infra_env_name
+                ):
+                    continue
+                assert metadata["namespace"] == k8s.namespace and metadata["uid"]
+                agent_uids.add(metadata["uid"])
+                spec = agent.get("spec", {})
+                if (
+                    spec.get("clusterDeploymentName") == {"name": co_name, "namespace": k8s.namespace}
+                    and spec.get("approved") is True
+                ):
+                    logger.info(
+                        "Observed preliminary binding for ClusterOrder %s uid=%s worker=%s",
+                        co_name,
+                        co_uid,
+                        labels["osac.openshift.io/worker-name"],
+                    )
+                    _log_agent(agent)
+                    return True
+            return False
+
+        poll_until(
+            fn=_observe_preliminary_binding,
+            until=bool,
+            retries=480,
+            delay=5,
+            description=f"{co_name} preliminary Agent binding precondition (window may be missed)",
+            resource_kind=WaitResourceKind.CLUSTER_ORDER,
+            resource_id=co_name,
+        )
+        cli.delete_cluster(uuid=uuid)
+
+        last_snapshot = time.monotonic()
+
+        def _natural_workers_removed() -> bool:
+            nonlocal last_snapshot
+            if time.monotonic() - last_snapshot >= 60:
+                _snapshot()
+                last_snapshot = time.monotonic()
+            remaining_bmis = _list_owned_worker_bmis(grpc=grpc, co_name=co_name, tenant=tenant)
+            remaining_agents = [
+                agent
+                for agent in _agents()
+                if agent["metadata"]["uid"] in agent_uids
+                or (agent["metadata"].get("labels", {}).get("osac.openshift.io/cluster-order") == co_name)
+            ]
+            return not remaining_bmis and not remaining_agents
+
+        poll_until(
+            fn=_natural_workers_removed,
+            until=bool,
+            retries=480,
+            delay=5,
+            retry_on_error=True,
+            description=f"{co_name} natural owned Agent/BMI removal after preliminary cancellation",
+            resource_kind=WaitResourceKind.CLUSTER_ORDER,
+            resource_id=co_name,
+        )
+        _wait_for_cluster_and_infraenv_deletion(
+            k8s=k8s, co_name=co_name, infra_env_name=infra_env_name, on_poll=lambda: None, on_timeout=_snapshot
+        )
+        wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
+    finally:
+        if co_name:
+            _snapshot()
+        # Retry only the owned API deletion. Never repair bindings/finalizers;
+        # stalled resources remain diagnosable and the original failure survives.
+        with contextlib.suppress(subprocess.CalledProcessError):
+            cli.delete_cluster(uuid=uuid)
+
+
 def _metric_samples(metrics: str, metric_name: str) -> list[str]:
     return [line for line in metrics.splitlines() if line.startswith(f"{metric_name}{{")]
 

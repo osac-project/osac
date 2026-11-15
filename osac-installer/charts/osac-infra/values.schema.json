@@ -141,12 +141,24 @@
         },
         "podSecurityContext": {
           "type": "object",
-          "description": "Pod-level securityContext for the OpenBao deployment. Defaults to {runAsNonRoot: true} with seccompProfile RuntimeDefault — no hardcoded UID, so OpenShift's restricted-v2 SCC can allocate from the namespace UID range. Any non-nil value here FULLY REPLACES the template default — partial overrides must include every key you want rendered.",
+          "description": "Pod-level securityContext for the OpenBao deployment. The chart default is {runAsNonRoot: true} with seccompProfile RuntimeDefault — no hardcoded UID, so OpenShift's restricted-v2 SCC can allocate from the namespace UID range. A profile override is merged with this chart default, so keys the override does not set (such as seccompProfile) keep their default values; the merged map replaces the template fallback, which applies only when podSecurityContext is empty. runAsUser 0 is rejected while runAsNonRoot is true (the default): the kubelet refuses to start a root container flagged non-root, so the combination fails only at provisioning.",
           "properties": {
             "runAsNonRoot": { "type": "boolean" },
-            "runAsUser": { "type": "integer" },
-            "runAsGroup": { "type": "integer" },
-            "fsGroup": { "type": "integer" }
+            "runAsUser": { "type": "integer", "minimum": 0 },
+            "runAsGroup": { "type": "integer", "minimum": 0 },
+            "fsGroup": { "type": "integer", "minimum": 0 }
+          },
+          "not": {
+            "allOf": [
+              {
+                "properties": { "runAsUser": { "const": 0 } },
+                "required": ["runAsUser"]
+              },
+              {
+                "properties": { "runAsNonRoot": { "const": true } },
+                "required": ["runAsNonRoot"]
+              }
+            ]
           }
         },
         "resources": {

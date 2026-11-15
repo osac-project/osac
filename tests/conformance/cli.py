@@ -265,9 +265,7 @@ def _derive_components(
         domain_profiles_pass = all(profile.result is Result.PASS for profile in relevant_profiles)
         verdict = Verdict.CONFORMANT if component_tests_pass and domain_profiles_pass else Verdict.IN_PROGRESS
         failed_tests = [
-            test.id
-            for test in tests
-            if by_id.get(test.id) is None or by_id[test.id].result is not Result.PASS
+            test.id for test in tests if by_id.get(test.id) is None or by_id[test.id].result is not Result.PASS
         ]
         failed_profiles = [profile.name for profile in relevant_profiles if profile.result is not Result.PASS]
         if not tests:

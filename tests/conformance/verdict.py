@@ -80,9 +80,7 @@ def evaluate(
         components_message = f"{len(components)} {_plural(len(components), 'component')} conformant"
 
     if leftovers:
-        leftovers_message = (
-            f"{len(leftovers)} {_plural(len(leftovers), 'leftover')}: {_summary(list(leftovers))}"
-        )
+        leftovers_message = f"{len(leftovers)} {_plural(len(leftovers), 'leftover')}: {_summary(list(leftovers))}"
     else:
         leftovers_message = "no leftovers"
 

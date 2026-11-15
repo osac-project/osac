@@ -401,7 +401,11 @@ func (r *request[O]) cloneObject(object O) O {
 }
 
 func (r *request[O]) marshalData(object O) (result []byte, err error) {
-	result, err = r.dao.jsonEncoder.Marshal(object)
+	normalized := r.cloneObject(object)
+	if err = normalizeReferenceSelectors(normalized.ProtoReflect()); err != nil {
+		return nil, fmt.Errorf("failed to normalize reference selectors: %w", err)
+	}
+	result, err = r.dao.jsonEncoder.Marshal(normalized)
 	return
 }
 

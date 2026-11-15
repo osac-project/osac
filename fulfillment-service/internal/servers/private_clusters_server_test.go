@@ -1135,6 +1135,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
 				Expect(eip.GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("cluster"))
 				Expect(eip.GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(clusterID))
+				Expect(eip.GetSpec().GetPool().GetTenant()).To(Equal(auth.SharedTenant))
 				endpoints[eip.GetMetadata().GetLabels()[autoCreatedEndpointLabel]] = true
 			}
 			Expect(endpoints).To(HaveKey("api"))

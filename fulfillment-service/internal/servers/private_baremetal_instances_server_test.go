@@ -2244,6 +2244,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
 			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("bare_metal_instance"))
+			Expect(eipList.GetItems()[0].GetSpec().GetPool().GetTenant()).To(Equal(auth.SharedTenant))
 			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
 			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()["osac.openshift.io/tenant"]).To(Equal(testTenant))
 

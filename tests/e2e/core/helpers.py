@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -20,7 +21,7 @@ from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import StuckState, poll_until, run_unchecked
-from tests.e2e.core.sanitize import sanitize_text
+from tests.e2e.core.sanitize import sanitize_obj, sanitize_text
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
@@ -810,10 +811,12 @@ def wait_for_worker_installation(*, k8s: K8sClient, co_name: str, namespace: str
     """Report install progress until every worker Agent reports itself installed."""
     logger.info("CaaS phase: starting install")
     previous = ""
+    last_agents: list[dict[str, Any]] | None = None
 
     def _check() -> int:
-        nonlocal previous
+        nonlocal previous, last_agents
         agents = cluster_order_agents(k8s=k8s, co_name=co_name, namespace=namespace)
+        last_agents = agents
         installed = sum(1 for agent in agents if _agent_installed(agent))
         pending = sorted({_agent_install_progress(agent) for agent in agents if not _agent_installed(agent)})
         current = "; ".join(pending)
@@ -823,16 +826,48 @@ def wait_for_worker_installation(*, k8s: K8sClient, co_name: str, namespace: str
             previous = current
         return installed
 
-    poll_until(
-        fn=_check,
-        until=lambda installed: installed >= expected_agents,
-        retries=_WORKER_INSTALL_RETRIES,
-        delay=_WORKER_INSTALL_DELAY,
-        description=f"{co_name} worker Agents installing",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
+    try:
+        poll_until(
+            fn=_check,
+            until=lambda installed: installed >= expected_agents,
+            retries=_WORKER_INSTALL_RETRIES,
+            delay=_WORKER_INSTALL_DELAY,
+            description=f"{co_name} worker Agents installing",
+            retry_on_error=True,
+            resource_kind=WaitResourceKind.CLUSTER_ORDER,
+            resource_id=co_name,
+        )
+    except StuckState:
+        try:
+            logger.error(
+                "CaaS Agent installation timeout: last observed Agents for %s/%s: %s",
+                sanitize_text(namespace),
+                sanitize_text(co_name),
+                len(last_agents) if last_agents is not None else "no successful observation",
+            )
+            for agent in last_agents or []:
+                status = agent.get("status", {})
+                debug_info = status.get("debugInfo", {})
+                logger.error(
+                    "CaaS Agent installation timeout (last observed): %s",
+                    json.dumps(
+                        sanitize_obj(
+                            {
+                                "cluster_order": co_name,
+                                "namespace": namespace,
+                                "name": agent.get("metadata", {}).get("name"),
+                                "conditions": status.get("conditions"),
+                                "state": debug_info.get("state"),
+                                "stateInfo": debug_info.get("stateInfo"),
+                                "progress": status.get("progress"),
+                                "validationsInfo": status.get("validationsInfo"),
+                            }
+                        )
+                    ),
+                )
+        except Exception:
+            logger.warning("CaaS Agent diagnostics unavailable")
+        raise
     logger.info("CaaS phase: install done")
     logger.info("CaaS: installation finished on %d worker Agent(s)", expected_agents)
 

@@ -360,6 +360,7 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
     monkeypatch.setattr(scenario, "snapshot_cluster_deletion", snapshot)
     with caplog.at_level(logging.INFO, logger=scenario.logger.name):
         scenario.test_cluster_create(
+            request=Mock(),
             cli=cli,
             grpc=grpc,
             private_grpc=private,

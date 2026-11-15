@@ -196,6 +196,7 @@ def test_primary_caas_scenario_reports_each_stage_without_logging_secret_values(
     monkeypatch.setattr(runner.time, "sleep", lambda _delay: None)
     with caplog.at_level(logging.INFO, logger=scenario.logger.name), pytest.raises(StopAfterWorkersJoined):
         scenario.test_cluster_create(
+            request=Mock(),
             cli=cli,
             grpc=grpc,
             private_grpc=private,

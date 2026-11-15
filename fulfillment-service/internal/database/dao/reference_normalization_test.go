@@ -138,6 +138,31 @@ var _ = Describe("Reference selector normalization", func() {
 		Expect(proto.Equal(localReference, cluster.GetSpec().GetPullSecretSecret())).To(BeTrue())
 	})
 
+	It("restores shared selectors recursively for tenant-only references", func() {
+		cluster := privatev1.Cluster_builder{
+			Spec: privatev1.ClusterSpec_builder{
+				SshKey: privatev1.SecretReference_builder{Id: "ssh-key", Tenant: auth.SharedTenant}.Build(),
+				AddOnOperators: []*privatev1.AddOnOperatorReference{
+					privatev1.AddOnOperatorReference_builder{Id: "operator", Tenant: auth.SharedTenant}.Build(),
+				},
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"workers": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+							Id: "instance-type", Tenant: auth.SharedTenant,
+						}.Build(),
+					}.Build(),
+				},
+			}.Build(),
+		}.Build()
+
+		canonicalizeSharedTenantSelectors(cluster.ProtoReflect())
+
+		Expect(cluster.GetSpec().GetSshKey().GetTenant()).To(Equal(auth.SharedTenant))
+		Expect(cluster.GetSpec().GetSshKey().GetShared()).To(BeTrue())
+		Expect(cluster.GetSpec().GetAddOnOperators()[0].GetShared()).To(BeTrue())
+		Expect(cluster.GetSpec().GetNodeSets()["workers"].GetBaremetalInstanceType().GetShared()).To(BeTrue())
+	})
+
 	It("marshals a normalized clone without mutating the supplied object", func() {
 		generic, err := NewGenericDAO[*privatev1.Cluster]().
 			SetLogger(logger).
@@ -227,6 +252,32 @@ var _ = Describe("Reference selector normalization", func() {
 
 			assertStoredReference(created.GetObject().GetId())
 			Expect(object.GetSpec().GetSshKey().GetShared()).To(BeTrue())
+			Expect(object.GetSpec().GetSshKey().GetTenant()).To(BeEmpty())
+			Expect(created.GetObject().GetSpec().GetSshKey().GetTenant()).To(Equal(auth.SharedTenant))
+			Expect(created.GetObject().GetSpec().GetSshKey().GetShared()).To(BeTrue())
+
+			loaded, err := clusters.Get().SetId(created.GetObject().GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(loaded.GetObject().GetSpec().GetSshKey(), created.GetObject().GetSpec().GetSshKey())).To(BeTrue())
+		})
+
+		It("rejects conflicting selectors before inserting an object", func() {
+			object := privatev1.Cluster_builder{
+				Id:       "conflicting-reference",
+				Metadata: privatev1.Metadata_builder{Tenant: "my-tenant"}.Build(),
+				Spec: privatev1.ClusterSpec_builder{
+					SshKey: privatev1.SecretReference_builder{
+						Id: "ssh-key", Tenant: "tenant-b", Shared: true,
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			_, err := clusters.Create().SetObject(object).Do(ctx)
+			Expect(err).To(MatchError(ContainSubstring("failed to normalize reference selectors")))
+
+			var count int
+			Expect(tx.QueryRow(ctx, "select count(*) from objects where id = $1", object.GetId()).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
 		})
 
 		It("stores tenant-only references when updating a legacy-loaded object", func() {
@@ -247,8 +298,9 @@ var _ = Describe("Reference selector normalization", func() {
 			legacyObject := loaded.GetObject()
 			Expect(legacyObject.GetSpec().GetSshKey().GetShared()).To(BeTrue())
 
-			_, err = clusters.Update().SetObject(legacyObject).Do(ctx)
+			updated, err := clusters.Update().SetObject(legacyObject).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(updated.GetObject().GetSpec().GetSshKey(), legacyObject.GetSpec().GetSshKey())).To(BeTrue())
 			assertStoredReference(id)
 			Expect(legacyObject.GetSpec().GetSshKey().GetShared()).To(BeTrue())
 		})

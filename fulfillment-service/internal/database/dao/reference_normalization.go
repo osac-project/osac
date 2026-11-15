@@ -28,21 +28,48 @@ import (
 // normalizeReferenceSelectors converts legacy shared selectors to tenant selectors and removes
 // the legacy field before an object is written to JSONB.
 func normalizeReferenceSelectors(message protoreflect.Message) error {
-	descriptor := message.Descriptor()
-	if isFullReferenceDescriptor(descriptor) {
+	return visitFullReferences(message, func(reference protoreflect.Message) error {
+		descriptor := reference.Descriptor()
 		fields := descriptor.Fields()
 		tenantField := fields.ByName("tenant")
 		sharedField := fields.ByName("shared")
-		tenant := message.Get(tenantField).String()
-		shared := message.Get(sharedField).Bool()
+		tenant := reference.Get(tenantField).String()
+		shared := reference.Get(sharedField).Bool()
 		if shared && tenant != "" && tenant != auth.SharedTenant {
 			return fmt.Errorf("%s has conflicting tenant and shared selectors", descriptor.FullName())
 		}
 		if shared && tenant == "" {
-			message.Set(tenantField, protoreflect.ValueOfString(auth.SharedTenant))
+			reference.Set(tenantField, protoreflect.ValueOfString(auth.SharedTenant))
 		}
-		message.Clear(sharedField)
+		reference.Clear(sharedField)
 		return nil
+	})
+}
+
+// canonicalizeSharedTenantSelectors keeps the compatibility representation stable
+// in memory and in API responses. Older clients still use shared=true, while new
+// clients use tenant="shared"; marshalData strips shared before persistence.
+func canonicalizeSharedTenantSelectors(message protoreflect.Message) {
+	_ = visitFullReferences(message, func(reference protoreflect.Message) error {
+		fields := reference.Descriptor().Fields()
+		tenantField := fields.ByName("tenant")
+		sharedField := fields.ByName("shared")
+		tenant := reference.Get(tenantField).String()
+		shared := reference.Get(sharedField).Bool()
+		if shared && tenant == "" {
+			reference.Set(tenantField, protoreflect.ValueOfString(auth.SharedTenant))
+		}
+		if tenant == auth.SharedTenant || (tenant == "" && shared) {
+			reference.Set(sharedField, protoreflect.ValueOfBool(true))
+		}
+		return nil
+	})
+}
+
+func visitFullReferences(message protoreflect.Message, visit func(protoreflect.Message) error) error {
+	descriptor := message.Descriptor()
+	if isFullReferenceDescriptor(descriptor) {
+		return visit(message)
 	}
 
 	fields := descriptor.Fields()
@@ -64,19 +91,19 @@ func normalizeReferenceSelectors(message protoreflect.Message) error {
 				return true
 			})
 			for _, key := range keys {
-				if err := normalizeReferenceSelectors(values.Get(key).Message()); err != nil {
+				if err := visitFullReferences(values.Get(key).Message(), visit); err != nil {
 					return err
 				}
 			}
 		case field.IsList():
 			values := message.Get(field).List()
 			for i := 0; i < values.Len(); i++ {
-				if err := normalizeReferenceSelectors(values.Get(i).Message()); err != nil {
+				if err := visitFullReferences(values.Get(i).Message(), visit); err != nil {
 					return err
 				}
 			}
 		case message.Has(field):
-			if err := normalizeReferenceSelectors(message.Get(field).Message()); err != nil {
+			if err := visitFullReferences(message.Get(field).Message(), visit); err != nil {
 				return err
 			}
 		}

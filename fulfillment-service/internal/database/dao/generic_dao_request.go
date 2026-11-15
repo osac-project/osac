@@ -410,7 +410,11 @@ func (r *request[O]) marshalData(object O) (result []byte, err error) {
 }
 
 func (r *request[O]) unmarshalData(data []byte, object O) error {
-	return r.dao.unmarshalOptions.Unmarshal(data, object)
+	if err := r.dao.unmarshalOptions.Unmarshal(data, object); err != nil {
+		return err
+	}
+	canonicalizeSharedTenantSelectors(object.ProtoReflect())
+	return nil
 }
 
 func (r *request[O]) getFinalizers(metadata metadataIface) []string {

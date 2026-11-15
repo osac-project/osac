@@ -240,6 +240,28 @@ class PathTests(unittest.TestCase):
             self.assertEqual(declared, [])
             self.assertEqual(planned, ["it/test.go"])
 
+    def test_proposed_marker_applies_only_to_the_path_after_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for relative in ("it/x.go", "it/y.go"):
+                target = os.path.join(directory, relative)
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with open(target, "w", encoding="utf-8") as handle:
+                    handle.write("")
+            for text in ("proposed `it/x.go`", "Proposed path: `it/x.go`"):
+                declared, planned = candidate_test_paths(text, "", directory)
+                self.assertEqual(declared, [], text)
+                self.assertEqual(planned, ["it/x.go"], text)
+            for text in ("`it/x.go` (not proposed)",
+                         "`it/x.go` was proposed in OSAC-123",
+                         "not proposed `it/x.go`"):
+                declared, planned = candidate_test_paths(text, "", directory)
+                self.assertEqual(declared, ["it/x.go"], text)
+                self.assertEqual(planned, [], text)
+            declared, planned = candidate_test_paths(
+                "`it/y.go` and proposed `it/x.go`", "", directory
+            )
+            self.assertEqual((declared, planned), (["it/y.go"], ["it/x.go"]))
+
     def test_paths_outside_the_repo_are_planned_not_declared(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = os.path.join(directory, "repo")

@@ -76,9 +76,9 @@ labels a working group in the report header. When a feature has several
 | Class | Source | Counted? |
 |---|---|---|
 | measured | statements in a `--coverprofile` | yes, unit only |
-| declared | a non-"proposed" path in the test plan (Execution bullet or Planning Evidence Matrix) that exists, or a reviewed `mappings:` entry | yes |
+| declared | a non-"proposed" path in the test plan (Execution bullet or Planning Evidence Matrix) that exists in the tier's tree (`tests/e2e/` for E2E, elsewhere for integration), or a reviewed `mappings:` entry; the file's content is not checked against the case | yes |
 | inferred | a `mappings:` entry without a valid `mappings_reviewed_by` | listed, never counted |
-| gap | no existing test, a proposed/missing path, no path, or no tier | drives the next action |
+| gap | no existing test, a proposed/missing path, no path, an existing file outside the tier's tree, or no tier | drives the next action |
 
 A symlinked `enhancement-proposals` checkout and `--allow-external-root` paths
 may supply test-plan files from outside the repository. Only test-plan paths

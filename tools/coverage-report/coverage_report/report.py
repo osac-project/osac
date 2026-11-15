@@ -34,6 +34,7 @@ from .inputs import (
 TIERS = (UNIT, INTEGRATION, E2E)
 PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 INSUFFICIENT_STATES = {"unavailable", "blocked", "na"}
+E2E_DIR = "tests/e2e/"
 VERDICT_INSUFFICIENT = "insufficient evidence"
 VERDICT_NOT_READY = "not ready"
 VERDICT_NO_BLOCKING = "no blocking gaps"
@@ -109,6 +110,16 @@ def unit_metric(feature: Feature, packages: Optional[Dict[str, PackageCoverage]]
             "covered": covered, "statements": statements, "rows": rows, "legacy_percent": legacy}
 
 
+def _path_matches_tier(path: str, tier: str) -> bool:
+    """Return whether ``path`` can be evidence for ``tier``.
+
+    Only the location is checked: E2E tests live under ``tests/e2e/`` and
+    integration tests elsewhere. The file's content is never inspected.
+    """
+    under_e2e = path.startswith(E2E_DIR)
+    return under_e2e if tier == E2E else not under_e2e
+
+
 def _behavior_mapping(
     behavior: Behavior,
     mappings: Sequence[dict],
@@ -134,8 +145,18 @@ def _behavior_mapping(
 
     declared = list(dict.fromkeys(declared))
     planned = list(dict.fromkeys(path for path in planned if path not in declared))
-    return {"status": "covered" if declared else ("planned" if planned else "no-mapping"),
-            "declared": declared, "planned": _best_path(planned)}
+    matching = [path for path in declared if _path_matches_tier(path, behavior.tier)]
+    mismatched = [path for path in declared if not _path_matches_tier(path, behavior.tier)]
+    if matching:
+        status = "covered"
+    elif mismatched:
+        status = "tier-mismatch"
+    elif planned:
+        status = "planned"
+    else:
+        status = "no-mapping"
+    return {"status": status, "declared": matching, "planned": _best_path(planned),
+            "mismatched": _best_path(mismatched)}
 
 
 def _best_path(paths: Sequence[str]) -> str:
@@ -167,7 +188,9 @@ def _tier_metric(tier: str, behaviors: Sequence[Behavior], statuses: Dict[str, d
     denominator = len(assessable)
     state = "zero" if covered == 0 else "value"
     if covered:
-        detail = "{0} of {1} automated behaviors have a declared existing test".format(covered, denominator)
+        detail = ("{0} of {1} automated behaviors have a declared existing test "
+                  "(file exists in the tier's tree; content not verified)").format(
+                      covered, denominator)
     else:
         detail = "no automated behavior has a declared existing test"
     return {
@@ -255,6 +278,9 @@ def build_feature_report(
         if mapping["status"] == "planned":
             gaps.append(_gap(behavior, "planned-not-implemented",
                              "Implement {0}".format(mapping["planned"])))
+        elif mapping["status"] == "tier-mismatch":
+            gaps.append(_gap(behavior, "tier-mismatch",
+                             _tier_mismatch_action(behavior, mapping["mismatched"])))
         else:
             gaps.append(_gap(behavior, "no-mapping",
                              "Map {0} to a test file".format(behavior.id)))
@@ -296,6 +322,14 @@ def _gap(behavior: Behavior, kind: str, next_action: str) -> dict:
         "kind": kind,
         "next_action": next_action,
     }
+
+
+def _tier_mismatch_action(behavior: Behavior, path: str) -> str:
+    if behavior.tier == E2E:
+        return "Map {0} to an E2E test under tests/e2e/ (`{1}` is not one)".format(
+            behavior.id, path)
+    return "Map {0} to an integration test (`{1}` is an E2E test)".format(
+        behavior.id, path)
 
 
 def _verdict(
@@ -413,7 +447,7 @@ def _feature_markdown(report: dict) -> List[str]:
             "## Legend",
             "",
             "- measured: parsed from a Go coverprofile given with `--coverprofile`.",
-            "- declared: a test plan or reviewed config names an existing test file.",
+            "- declared: a test plan or reviewed config names an existing test in the tier's tree; its content is not checked against the case.",
             "- inferred: an unreviewed mapping; listed but never counted as covered.",
             "- gap: the plan names no existing test; the next action says what to add.",
             "- unavailable/blocked/na: missing evidence, never 0%; none: no cases at this tier.",

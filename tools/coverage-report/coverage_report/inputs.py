@@ -323,6 +323,9 @@ _BULLET_RE = re.compile(r"^-\s+\*\*(?P<name>[^:*]+):\*\*\s*(?P<value>.*)$")
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 _TC_ID_RE = re.compile(r"\b" + _TC_ID + r"\b")
 _TEST_PATH_RE = re.compile(r".+\.(?:go|py|ts|tsx|js)$")
+_PROPOSED_BEFORE_RE = re.compile(
+    r"(?<!not )proposed(?:\s+(?:path|file|test))?\s*:?\s*$", re.IGNORECASE
+)
 
 _INTEGRATION_PREFIXES = ("component integration", "contract", "envtest", "ui integration")
 _PRIORITY_NAME_RE = re.compile(r"(critical|high|medium|low)\b")
@@ -505,18 +508,25 @@ def execution_matrix(text: str) -> Dict[str, str]:
     return rows
 
 
-def _path_tokens(text: str) -> List[str]:
-    """Return test-file candidates from a path cell or Execution bullet."""
-    found: List[str] = []
-    for span in _BACKTICK_RE.findall(text or ""):
-        candidate = span.strip()
+def _path_tokens(text: str) -> List[Tuple[str, bool]]:
+    """Return ``(test_path, proposed)`` for the paths in one text segment.
+
+    A path is proposed only when the text immediately before it ends with
+    ``proposed`` (optionally ``proposed path``/``file``/``test`` and a colon).
+    A later mention such as "`x` was proposed in OSAC-123" or "not proposed
+    `x`" does not mark ``x`` as proposed.
+    """
+    found: List[Tuple[str, bool]] = []
+    for match in _BACKTICK_RE.finditer(text or ""):
+        proposed = bool(_PROPOSED_BEFORE_RE.search(text[: match.start()]))
+        candidate = match.group(1).strip()
         if not candidate:
             continue
         words = candidate.split() if " " in candidate else [candidate]
         for word in words:
             word = word.strip("\"'(),;")
             if _TEST_PATH_RE.match(word):
-                found.append(word)
+                found.append((word, proposed))
     return list(dict.fromkeys(found))
 
 
@@ -534,8 +544,7 @@ def candidate_test_paths(
         if not text:
             continue
         for segment in re.split(r"[;\n]", text):
-            is_proposed = "proposed" in segment.casefold()
-            for token in _path_tokens(segment):
+            for token, is_proposed in _path_tokens(segment):
                 proposed[token] = proposed.get(token, True) and is_proposed
 
     declared: List[str] = []

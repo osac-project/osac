@@ -172,6 +172,49 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(report["gaps"][0]["priority"], "critical")
         self.assertEqual(report["verdict"], "not ready")
 
+    def test_e2e_case_citing_a_unit_test_is_a_tier_mismatch(self):
+        plan = case("TC-FR1-01", tier="E2E / [QE]", execution="`it/e2e_test.go`")
+        with Repository(plan, ["it/e2e_test.go"]) as root:
+            report = build_feature_report(feature(), root, "abc", measured())
+        self.assertEqual(report["behaviors"][0]["status"], "tier-mismatch")
+        self.assertEqual(report["gaps"][0]["kind"], "tier-mismatch")
+        self.assertEqual(
+            report["gaps"][0]["next_action"],
+            "Map TC-FR1-01 to an E2E test under tests/e2e/ (`it/e2e_test.go` is not one)")
+        self.assertEqual(report["metrics"]["e2e"]["state"], "zero")
+
+    def test_integration_case_citing_an_e2e_test_is_a_tier_mismatch(self):
+        plan = case("TC-FR1-01", tier="Component integration / [DEV]",
+                    execution="`tests/e2e/x.py`")
+        with Repository(plan, ["tests/e2e/x.py"]) as root:
+            report = build_feature_report(feature(), root, "abc", measured())
+        self.assertEqual(report["behaviors"][0]["status"], "tier-mismatch")
+        self.assertEqual(report["gaps"][0]["kind"], "tier-mismatch")
+        self.assertEqual(
+            report["gaps"][0]["next_action"],
+            "Map TC-FR1-01 to an integration test (`tests/e2e/x.py` is an E2E test)")
+
+    def test_one_tier_matching_declared_path_still_covers(self):
+        plan = case("TC-FR1-01", tier="E2E / [QE]",
+                    execution="`tests/e2e/a.py`; `it/e2e_test.go`")
+        with Repository(plan, ["tests/e2e/a.py", "it/e2e_test.go"]) as root:
+            report = build_feature_report(feature(), root, "abc", measured())
+        self.assertEqual(report["behaviors"][0]["status"], "covered")
+        self.assertEqual(report["gaps"], [])
+
+    def test_reviewed_mapping_must_match_the_tier_tree(self):
+        mapping = {"behavior": "TC-FR1-01", "test": "it/e2e_test.go", "tier": "e2e"}
+        plan = case("TC-FR1-01", tier="E2E / [QE]")
+        with Repository(plan, ["it/e2e_test.go"]) as root:
+            report = build_feature_report(
+                feature(mappings_reviewed_by="@reviewer", mappings=(mapping,)),
+                root, "abc", measured()
+            )
+        self.assertEqual(report["behaviors"][0]["status"], "tier-mismatch")
+        self.assertEqual(
+            report["gaps"][0]["next_action"],
+            "Map TC-FR1-01 to an E2E test under tests/e2e/ (`it/e2e_test.go` is not one)")
+
     def test_no_path_is_a_gap(self):
         plan = case("TC-FR1-01", tier="Component integration / [DEV]", execution="`ginkgo run -r internal`")
         with Repository(plan) as root:

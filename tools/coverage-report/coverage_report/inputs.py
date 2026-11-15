@@ -325,6 +325,9 @@ _TC_ID_RE = re.compile(r"\b" + _TC_ID + r"\b")
 _TEST_PATH_RE = re.compile(r".+\.(?:go|py|ts|tsx|js)$")
 
 _INTEGRATION_PREFIXES = ("component integration", "contract", "envtest", "ui integration")
+_PRIORITY_NAME_RE = re.compile(r"(critical|high|medium|low)\b")
+_PRIORITY_CODE_RE = re.compile(r"\bp([0-3])\b")
+_PRIORITY_LEVELS = {"0": "critical", "1": "high", "2": "medium", "3": "low"}
 
 
 def normalize_tier(value: str) -> str:
@@ -337,6 +340,23 @@ def normalize_tier(value: str) -> str:
     if label.startswith(_INTEGRATION_PREFIXES):
         return INTEGRATION
     return NONE
+
+
+def normalize_priority(value: str) -> str:
+    """Map a priority label onto ``critical``/``high``/``medium``/``low``.
+
+    Accepts names such as ``Critical (P0)`` and codes such as ``P1``. Anything
+    else becomes ``unknown`` so an unrecognised priority can never pass as a
+    non-blocking gap.
+    """
+    label = " ".join((value or "").split()).casefold()
+    match = _PRIORITY_NAME_RE.match(label)
+    if match:
+        return match.group(1)
+    match = _PRIORITY_CODE_RE.search(label)
+    if match:
+        return _PRIORITY_LEVELS[match.group(1)]
+    return "unknown"
 
 
 def _cells(row: str) -> List[str]:
@@ -446,7 +466,7 @@ def parse_testplan(text: str, prefix: str = "") -> List[Behavior]:
             Behavior(
                 tc_id=tc_id,
                 title=title,
-                priority=" ".join(table.get("priority", "").split()).casefold(),
+                priority=normalize_priority(table.get("priority", "")),
                 automation=automation,
                 tier=normalize_tier(
                     bullets.get("tier") or bullets.get("tier / owner", "")

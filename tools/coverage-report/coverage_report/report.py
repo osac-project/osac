@@ -23,6 +23,7 @@ from .inputs import (
     candidate_test_paths,
     contained_path,
     execution_matrix,
+    normalize_priority,
     normalize_tier,
     parse_testplan,
     plan_key,
@@ -212,7 +213,7 @@ def build_feature_report(
         behaviors.append(Behavior(
             tc_id=behavior_id,
             title=str(item["title"]).strip(),
-            priority=str(item.get("priority", "")).strip().casefold(),
+            priority=normalize_priority(str(item.get("priority", ""))),
             automation="automated",
             tier=normalize_tier(str(item.get("tier", ""))),
             execution="",
@@ -326,6 +327,10 @@ def _verdict(
             else:
                 other_parts.append("{0} {1}: {2}".format(label, state, metric.get("detail", "")))
     parts = zero_parts + other_parts
+    unknown = sum(1 for gap in gaps if gap["priority"] == "unknown")
+    if unknown:
+        parts.append("{0} gap{1} without a recognised priority".format(
+            unknown, "" if unknown == 1 else "s"))
     if parts:
         return VERDICT_INSUFFICIENT, "; ".join(parts)
     return VERDICT_NO_BLOCKING, "No critical or high gaps and every tier has evidence; coverage depth is not judged"

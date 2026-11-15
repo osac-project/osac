@@ -145,6 +145,33 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(report["gaps"][0]["kind"], "planned-not-implemented")
         self.assertEqual(report["gaps"][0]["next_action"], "Implement it/new_test.go")
 
+    def test_priority_code_is_normalised_before_gaps_block(self):
+        plan = case("TC-FR1-01", tier="Component integration / [DEV]", priority="P1",
+                    execution="proposed `it/new_test.go`")
+        with Repository(plan) as root:
+            report = build_feature_report(feature(), root, "abc", measured())
+        self.assertEqual(report["gaps"][0]["priority"], "high")
+        self.assertEqual((report["verdict"], report["verdict_reason"]), ("not ready", "1 high gap"))
+
+    def test_unrecognised_priority_prevents_the_pass_verdict(self):
+        for priority in ("urgent", ""):
+            plan = case("TC-FR1-01", tier="Component integration / [DEV]", priority=priority,
+                        execution="proposed `it/new_test.go`")
+            with Repository(plan) as root:
+                report = build_feature_report(feature(), root, "abc", measured())
+            self.assertEqual(report["gaps"][0]["priority"], "unknown")
+            self.assertEqual(report["verdict"], "insufficient evidence")
+            self.assertIn("1 gap without a recognised priority", report["verdict_reason"])
+
+    def test_inline_behavior_priority_code_is_normalised(self):
+        inline = ({"id": "flow-1", "title": "Flow", "tier": "e2e", "priority": "P0"},)
+        with Repository("") as root:
+            report = build_feature_report(
+                feature(testplans=(), behaviors=inline), root, "abc", measured()
+            )
+        self.assertEqual(report["gaps"][0]["priority"], "critical")
+        self.assertEqual(report["verdict"], "not ready")
+
     def test_no_path_is_a_gap(self):
         plan = case("TC-FR1-01", tier="Component integration / [DEV]", execution="`ginkgo run -r internal`")
         with Repository(plan) as root:
@@ -197,7 +224,7 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["e2e"]["state"], "zero")
         self.assertEqual(report["verdict"], "insufficient evidence")
         self.assertEqual(report["verdict_reason"],
-                         "E2E at 0.0% (0/1): 1 drafted test link pending review; Integration: no test plan")
+                         "E2E at 0.0% (0/1): 1 drafted test link pending review; Integration: no test plan; 1 gap without a recognised priority")
         self.assertEqual(report["inferred"], [{"behavior": "flow-1", "test": "tests/e2e/x.py"}])
 
     def test_no_plan_tier_without_cases_is_na(self):
@@ -208,7 +235,7 @@ class MappingTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["integration"]["detail"], "no test plan")
         self.assertEqual(report["metrics"]["e2e"]["state"], "zero")
         self.assertEqual(report["verdict_reason"],
-                         "E2E at 0.0% (0/1): no reviewed test links yet; Integration: no test plan")
+                         "E2E at 0.0% (0/1): no reviewed test links yet; Integration: no test plan; 1 gap without a recognised priority")
 
     def test_plan_without_cases_is_na_not_ready(self):
         with Repository("# Plan\n\nNo test cases here.\n") as root:

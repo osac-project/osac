@@ -15,6 +15,7 @@ from coverage_report.inputs import (  # noqa: E402
     InputError,
     execution_matrix,
     load_features,
+    normalize_priority,
     normalize_tier,
     parse_coverprofiles,
     parse_testplan,
@@ -129,6 +130,27 @@ class TierTests(unittest.TestCase):
         self.assertEqual(normalize_tier("Contract and component integration"), INTEGRATION)
         self.assertEqual(normalize_tier("Story 8.05"), NONE)
         self.assertEqual(normalize_tier(""), NONE)
+
+
+class PriorityTests(unittest.TestCase):
+    def test_normalisation(self):
+        self.assertEqual(normalize_priority("Critical (P0)"), "critical")
+        self.assertEqual(normalize_priority("P0"), "critical")
+        self.assertEqual(normalize_priority("P1"), "high")
+        self.assertEqual(normalize_priority(" p2 "), "medium")
+        self.assertEqual(normalize_priority("P3"), "low")
+        self.assertEqual(normalize_priority("High priority"), "high")
+        self.assertEqual(normalize_priority("urgent"), "unknown")
+        self.assertEqual(normalize_priority(""), "unknown")
+
+    def test_testplan_priority_uses_normalisation(self):
+        behaviors = parse_testplan(
+            "#### TC-1: Case\n\n"
+            "| IC | Priority | Automation |\n"
+            "|---|---|---|\n"
+            "| IC-1 | P1 | automated |\n"
+        )
+        self.assertEqual(behaviors[0].priority, "high")
 
 
 class TestplanTests(unittest.TestCase):

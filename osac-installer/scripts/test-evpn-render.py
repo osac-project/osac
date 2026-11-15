@@ -526,7 +526,22 @@ def test_active_backup_bgp() -> None:
     assert "description EVPN backup uplink outbound" in backup_peer_out
     assert "match " not in backup_peer_out
     assert "route-map 169.254.133.1-out permit 1" not in raw_config
-    assert "fe80::/10" not in raw_config
+    assert (
+        "ipv6 prefix-list 169.254.133.1-inpl-ipv4 seq 1 permit fe80::/10"
+        in raw_config
+    )
+    assert (
+        "ipv6 prefix-list 169.254.133.1-allowed-ipv6 seq 1 permit fe80::/10"
+        in raw_config
+    )
+    assert (
+        "ipv6 prefix-list 169.254.133.3-inpl-ipv4 seq 1 permit fe80::/10"
+        in raw_config
+    )
+    assert (
+        "ipv6 prefix-list 169.254.133.3-allowed-ipv6 seq 1 permit fe80::/10"
+        in raw_config
+    )
     assert "address-family ipv4 unicast" not in raw_config
 
     l2vpn_af = raw_config.split("address-family l2vpn evpn\n", 1)[1].split(

@@ -253,10 +253,8 @@ data:
             set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
 {{ range $uplink := $node.uplinks }}
 {{ $peerID := $uplink.peerAddress | default $uplink.interface }}
-{{ if ($uplink.unnumbered | default false) }}
           ipv6 prefix-list {{ $peerID }}-inpl-ipv4 seq 1 permit fe80::/10
           ipv6 prefix-list {{ $peerID }}-allowed-ipv6 seq 1 permit fe80::/10
-{{ end }}
           route-map {{ $peerID }}-in permit 1
             description EVPN {{ $uplink.role }} uplink inbound
             match ip address prefix-list EVPN-REMOTE-VTEPS

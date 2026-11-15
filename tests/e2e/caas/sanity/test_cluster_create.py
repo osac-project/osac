@@ -253,8 +253,10 @@ def test_cluster_cancel_after_observed_preliminary_agent_binding(
             _snapshot()
         # Retry only the owned API deletion. Never repair bindings/finalizers;
         # stalled resources remain diagnosable and the original failure survives.
-        with contextlib.suppress(subprocess.CalledProcessError):
+        try:
             cli.delete_cluster(uuid=uuid)
+        except Exception:
+            logger.warning("Owned cluster API deletion retry failed; no binding/finalizer repair attempted")
 
 
 def _metric_samples(metrics: str, metric_name: str) -> list[str]:

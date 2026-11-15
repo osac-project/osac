@@ -328,6 +328,8 @@ _PROPOSED_BEFORE_RE = re.compile(
     r"(?<!not )proposed(?:\s+(?:path|file|test))?\s*:?\s*$", re.IGNORECASE
 )
 
+_LIST_JOIN_RE = re.compile(r"\s*(?:,|,?\s*(?:and|or))?\s*", re.IGNORECASE)
+
 _INTEGRATION_PREFIXES = (
     "component integration", "contract", "envtest", "ui integration", "integration"
 )
@@ -518,12 +520,18 @@ def _path_tokens(text: str) -> List[Tuple[str, bool]]:
 
     A path is proposed only when the text immediately before it ends with
     ``proposed`` (optionally ``proposed path``/``file``/``test`` and a colon).
-    A later mention such as "`x` was proposed in OSAC-123" or "not proposed
-    `x`" does not mark ``x`` as proposed.
+    A list that follows the marker ("proposed `a`, `b` and `c`") is proposed
+    as a whole. A later mention such as "`x` was proposed in OSAC-123" or "not
+    proposed `x`" does not mark ``x`` as proposed.
     """
     found: List[Tuple[str, bool]] = []
+    previous_end, previous_proposed = None, False
     for match in _BACKTICK_RE.finditer(text or ""):
         proposed = bool(_PROPOSED_BEFORE_RE.search(text[: match.start()]))
+        if not proposed and previous_end is not None:
+            between = text[previous_end : match.start()]
+            proposed = previous_proposed and bool(_LIST_JOIN_RE.fullmatch(between))
+        previous_end, previous_proposed = match.end(), proposed
         candidate = match.group(1).strip()
         if not candidate:
             continue

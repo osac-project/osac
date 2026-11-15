@@ -455,7 +455,7 @@ def _feature_markdown(report: dict) -> List[str]:
             "- measured: parsed from a Go coverprofile given with `--coverprofile`.",
             "- declared: a test plan or reviewed config names an existing test in the tier's tree; its content is not checked against the case.",
             "- inferred: an unreviewed mapping; listed but never counted as covered.",
-            "- gap: the plan names no existing test; the next action says what to add.",
+            "- gap: no existing test in the tier's tree is named for the case; the next action says what to add.",
             "- unavailable/blocked/na: missing evidence, never 0%; none: no cases at this tier.",
         ]
     )

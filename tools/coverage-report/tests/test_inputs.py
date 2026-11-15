@@ -266,6 +266,15 @@ class PathTests(unittest.TestCase):
                 "`it/y.go` and proposed `it/x.go`", "", directory
             )
             self.assertEqual((declared, planned), (["it/y.go"], ["it/x.go"]))
+            for text in ("proposed `it/x.go`, `it/y.go`",
+                         "proposed `it/x.go` and `it/y.go`",
+                         "Proposed path: `it/x.go`, or `it/y.go`"):
+                declared, planned = candidate_test_paths(text, "", directory)
+                self.assertEqual((declared, planned), ([], ["it/x.go", "it/y.go"]), text)
+            declared, planned = candidate_test_paths(
+                "proposed `it/x.go`, replacing `it/y.go`", "", directory
+            )
+            self.assertEqual((declared, planned), (["it/y.go"], ["it/x.go"]))
 
     def test_paths_outside_the_repo_are_planned_not_declared(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -75,8 +75,8 @@ A typical test has this shape:
 ```ts
 import { expect, test } from '@playwright/test';
 
-import { openAndLogin } from '../../../libs/test-utils/src/general/open_and_login';
-import { openMainPageOption } from '../../../libs/test-utils/src/main.page';
+import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
+import { openMainPageOption } from '../../../../libs/test-utils/src/main.page';
 
 test('creates and displays a project', async ({ page }) => {
   await openAndLogin(

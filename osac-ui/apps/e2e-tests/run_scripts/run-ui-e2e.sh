@@ -88,6 +88,7 @@ Flow tags:
   create_tenant, delete_tenant, full_tenant - tenant lifecycle
   create_catalog, delete_catalog, full_catalog - catalog lifecycle
   create_vm, delete_vm, full_vm - VM lifecycle
+  create_vm_power, full_vm_power - VM Start/Stop/Restart buttons on the VM details page
 
 create_* leaves a resource for delete_*; full_* runs the configured teardown.
 
@@ -200,6 +201,8 @@ declare -A FLOW_CONFIG=(
   [create_vm]='vm-flow|create||false'
   [delete_vm]='vm-flow|delete||false'
   [full_vm]='vm-flow|full||false'
+  [create_vm_power]='vm-flow-power-actions|create||false'
+  [full_vm_power]='vm-flow-power-actions|full||false'
 )
 
 if [[ -n "$FLOW_TAG" ]]; then

@@ -204,6 +204,18 @@ The full-flow projects run in this order:
 on `vmaas_full_happy_basic` and `vmaas-full-resize`; add future full-flow
 projects to its dependencies in `playwright.config.ts`.
 
+The VM power-actions test (`lifecycle.vm.spec.ts`, project
+`vm-flow-power-actions`) is not part of the happy flow. It stops, starts, and
+restarts the VM from its details page as the tenant admin, checks the success
+alert, the status, and which power buttons are enabled after each action, and
+confirms through the CLI that the controller processed the restart. Select it
+with a `run-ui-e2e.sh` flow tag:
+
+- `create_vm_power` runs the creation flow and the power actions and keeps the
+  resources for `delete_vm` or `delete_pre-resources`.
+- `full_vm_power` also deletes the VM and every resource afterwards through the
+  `vm-flow` and resource teardowns.
+
 Run the complete creation flow, including VM creation, with:
 
 ```bash

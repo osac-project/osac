@@ -224,6 +224,17 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
+      // VM Start/Stop/Restart test, selected by the create_vm_power and
+      // full_vm_power flow tags. In full mode vm-flow's teardown deletes the
+      // VM after it. Not in vmaas-all-full-flows: vmaas_full_happy_basic
+      // would delete the same VM in parallel.
+      name: 'vm-flow-power-actions',
+      testDir: vmaasDir,
+      testMatch: /lifecycle\.vm\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['vm-flow'],
+    },
+    {
       name: 'vmaas_full_happy_basic',
       testDir: vmaasDir,
       testMatch: /delete\.vm\.spec\.ts/,

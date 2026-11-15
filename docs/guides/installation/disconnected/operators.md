@@ -338,7 +338,7 @@ Prepare the runtime-only manifest from the official [upstream v0.20.0 chart arch
 ```bash
 curl --fail --location --output trust-manager-v0.20.0.tgz https://charts.jetstack.io/charts/trust-manager-v0.20.0.tgz || exit 1
 printf '%s\n' 'a5043d5970eec1548d027f7f6e8779d6bea12eda8e4736cbe6c174c3139059a0  trust-manager-v0.20.0.tgz' | sha256sum --check - || exit 1
-helm template trust-manager ./trust-manager-v0.20.0.tgz --namespace cert-manager --set crds.enabled=false --set-string defaultPackageImage.tag=20230311-deb12u1.1 > trust-manager-runtime.yaml || exit 1
+helm template trust-manager ./trust-manager-v0.20.0.tgz --namespace cert-manager --set crds.enabled=false --set-string defaultPackageImage.tag=20250419-deb12u2.0 > trust-manager-runtime.yaml || exit 1
 ```
 
 The download requires connected access; the local render can run after transfer on the disconnected host. Keep the default RBAC and cert-manager-backed webhook certificate settings. Disabling `crds.enabled` omits only the `CustomResourceDefinition` document; retain every other rendered document unchanged, including both Services, all RBAC, and the serving Issuer, Certificate and webhook. Expect 13 runtime documents and no CRD or Namespace document with these values. This local rendering is not a cluster deletion operation: never delete the live CRD or the existing `cert-manager` Namespace. Review the rendered manifest, image coverage and provenance before applying its resources in the dependency order below.
@@ -346,7 +346,7 @@ The download requires connected access; the local render can run after transfer 
 | Component | Release reference |
 | --- | --- |
 | Controller | `quay.io/jetstack/trust-manager:v0.20.0` |
-| Trust package | `quay.io/jetstack/trust-pkg-debian-bookworm:20230311-deb12u1.1` |
+| Trust package | `quay.io/jetstack/trust-pkg-debian-bookworm:20250419-deb12u2.0` |
 | Trust namespace | `cert-manager` |
 | Serving Certificate | `cert-manager/trust-manager` |
 | Serving Secret | `cert-manager/trust-manager-tls`, `tls.crt`, `tls.key` |

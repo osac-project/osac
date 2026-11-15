@@ -81,3 +81,11 @@ def test_unknown_domain_field_is_a_config_error(tmp_path: Path) -> None:
         load_domains(tmp_path)
 
     assert "profiles" in "\n".join(exc.value.checks)
+
+
+def test_shipped_networking_domain_loads() -> None:
+    domains = load_domains(Path(__file__).resolve().parents[2] / "tests" / "conformance" / "domains")
+
+    assert "networking" in domains
+    assert domains["networking"].registration_source == "osac-network-fabric-manager-netris"
+    assert domains["networking"].selectors["netris"] == ("test_netris_settings_are_present",)

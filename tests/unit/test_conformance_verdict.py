@@ -123,16 +123,12 @@ def test_an_in_progress_component_fails_check_2() -> None:
     report = _evaluate(
         [_outcome(_test("A"), Result.PASS)],
         components=(
-            ComponentResult(
-                "networking", {"name": "mock"}, Verdict.IN_PROGRESS, "no component tests in the plan"
-            ),
+            ComponentResult("networking", {"name": "mock"}, Verdict.IN_PROGRESS, "no component tests in the plan"),
         ),
     )
 
     assert report.checks[1].result is CheckResult.FAIL
-    assert report.checks[1].message == (
-        "1 of 1 components in progress: networking: no component tests in the plan"
-    )
+    assert report.checks[1].message == ("1 of 1 components in progress: networking: no component tests in the plan")
 
 
 def test_focused_run_exits_zero_when_selected_blocking_tests_pass() -> None:

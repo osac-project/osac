@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -115,6 +116,15 @@ func (r *ExternalIPAttachmentReconciler) create(ctx context.Context, eipa *v1alp
 		return ctrl.Result{}, err
 	}
 	if out.Succeeded() {
+		if eipa.Spec.ComputeInstance != nil {
+			address, err := externalIPAddressFromTaskInput(input)
+			if err != nil {
+				return ctrl.Result{}, fmt.Errorf("ExternalIPAttachment %s: %w", eipa.Name, err)
+			}
+			if err := r.syncComputeInstanceExternalIPAddress(ctx, *eipa.Spec.ComputeInstance, "", address); err != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to set ComputeInstance external IP address: %w", err)
+			}
+		}
 		networktask.SetSucceeded(eipa)
 		return ctrl.Result{}, nil
 	}
@@ -215,12 +225,63 @@ func (r *ExternalIPAttachmentReconciler) tenantDestination(ctx context.Context, 
 
 func (r *ExternalIPAttachmentReconciler) remove(ctx context.Context, eipa *v1alpha1.ExternalIPAttachment) (bool, ctrl.Result, error) {
 	input := cleanupInput(eipa)
-	return runCleanup(ctx, r.Engine, eipa, kindExternalIPAttachment,
+	attachStarted := networktask.Started(eipa, networktask.AttachExternalIP, v1alpha1.NetworkJobManagerFabric)
+	removed, result, err := runCleanup(ctx, r.Engine, eipa, kindExternalIPAttachment,
 		cleanupTask{create: networktask.AttachExternalIP, manager: v1alpha1.NetworkJobManagerFabric,
 			request: func() networktask.Request {
 				return taskRequest(eipa, kindExternalIPAttachment, networktask.DetachExternalIP, v1alpha1.NetworkJobManagerFabric, input)
 			}},
 	)
+	if err != nil || !removed || !attachStarted || eipa.Spec.ComputeInstance == nil {
+		return removed, result, err
+	}
+	address, err := externalIPAddressFromTaskInput(input)
+	if err != nil {
+		return false, ctrl.Result{}, fmt.Errorf("ExternalIPAttachment %s: %w", eipa.Name, err)
+	}
+	if err := r.syncComputeInstanceExternalIPAddress(ctx, *eipa.Spec.ComputeInstance, address, ""); err != nil {
+		return false, ctrl.Result{}, fmt.Errorf("failed to clear ComputeInstance external IP address: %w", err)
+	}
+	return true, result, nil
+}
+
+func externalIPAddressFromTaskInput(input map[string]any) (string, error) {
+	externalIP, ok := input["external_ip"].(map[string]any)
+	if !ok {
+		return "", errors.New("task input has no external_ip object")
+	}
+	address, ok := externalIP[fieldAddress].(string)
+	if !ok || address == "" {
+		return "", errors.New("task input has no external_ip.address")
+	}
+	return address, nil
+}
+
+// syncComputeInstanceExternalIPAddress updates the target when expectedAddress
+// matches, if supplied. This keeps a completed detach from clearing a newer
+// address written by another attachment.
+func (r *ExternalIPAttachmentReconciler) syncComputeInstanceExternalIPAddress(
+	ctx context.Context,
+	computeInstanceID string,
+	expectedAddress string,
+	address string,
+) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		obj, err := findByID(ctx, r.Client, &v1alpha1.ComputeInstanceList{}, "", kindComputeInstance, computeInstanceID)
+		if err != nil || obj == nil {
+			return err
+		}
+		ci := obj.(*v1alpha1.ComputeInstance)
+		current := ci.GetExternalIPAddress()
+		if expectedAddress != "" && current != expectedAddress {
+			return nil
+		}
+		if current == address {
+			return nil
+		}
+		ci.SetExternalIPAddress(address)
+		return r.Client.Status().Update(ctx, ci)
+	})
 }
 
 // SetupWithManager registers the controller. ExternalIP events and target

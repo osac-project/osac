@@ -338,6 +338,50 @@ const matchesVirtualNetworkScopeFilter = (
   return matchesStringEqualityFilter(filter, 'this.spec.virtual_network.id', virtualNetwork);
 };
 
+const matchesNameContainsFilter = (
+  filter: string | undefined,
+  name: string | undefined,
+): boolean => {
+  const searchLiteral = filter?.match(/this\.metadata\.name\.contains\(("(?:\\.|[^"\\])*")\)/)?.[1];
+  if (!searchLiteral) {
+    return true;
+  }
+  const search = JSON.parse(searchLiteral) as string;
+  return (name ?? '').includes(search);
+};
+
+const matchesStatusStateInFilter = (
+  filter: string | undefined,
+  state: number | undefined,
+): boolean => {
+  const inMarker = 'this.status.state in ';
+  const inIndex = filter?.indexOf(inMarker) ?? -1;
+  if (inIndex < 0) {
+    return true;
+  }
+  if (!filter) {
+    return false;
+  }
+  const afterIn = filter.slice(inIndex + inMarker.length);
+  const bracketEnd = afterIn.indexOf(']');
+  if (bracketEnd < 0) {
+    return false;
+  }
+  const states = afterIn
+    .slice(1, bracketEnd)
+    .split(',')
+    .map((value) => Number(value.trim()))
+    .filter((value) => !Number.isNaN(value));
+  return states.includes(state ?? 0);
+};
+
+const matchesExternalIpPoolListFilter = (
+  filter: string | undefined,
+  pool: ExternalIPPool,
+): boolean =>
+  matchesNameContainsFilter(filter, pool.metadata?.name) &&
+  matchesStatusStateInFilter(filter, pool.status?.state);
+
 const matchesUnallocatedExternalIpFilter = (
   filter: string | undefined,
   state: number | undefined,
@@ -1004,10 +1048,16 @@ export const createMockConnectTransport = (
           if (overrides.onStorageBackendList) {
             return overrides.onStorageBackendList(req);
           }
-          const items = storageBackends.filter((item) =>
-            matchesStorageBackendReadyFilter(req.filter, item.status?.state),
+          const items = storageBackends.filter(
+            (item) =>
+              matchesStorageBackendReadyFilter(req.filter, item.status?.state) &&
+              matchesNameContainsFilter(req.filter, item.metadata?.name),
           );
-          return { items, size: items.length, total: items.length };
+          return {
+            items: req.limit === 0 ? [] : items,
+            size: req.limit === 0 ? 0 : items.length,
+            total: items.length,
+          };
         },
         get: (req) => {
           if (overrides.onStorageBackendGet) {
@@ -1065,10 +1115,13 @@ export const createMockConnectTransport = (
           if (overrides.onExternalIPPoolList) {
             return overrides.onExternalIPPoolList(req);
           }
+          const items = privateExternalIpPools.filter((pool) =>
+            matchesExternalIpPoolListFilter(req.filter, pool),
+          );
           return {
-            items: privateExternalIpPools,
-            size: privateExternalIpPools.length,
-            total: privateExternalIpPools.length,
+            items: req.limit === 0 ? [] : items,
+            size: items.length,
+            total: items.length,
           };
         },
         get: (req) => ({

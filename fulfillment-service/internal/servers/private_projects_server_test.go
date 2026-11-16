@@ -537,7 +537,7 @@ var _ = Describe("Private projects server", func() {
 		))
 	})
 
-	It("Silently ignores update of the creator of a project", func() {
+	It("Rejects update of the creator of a project", func() {
 		createResponse, err := privateServer.Create(ctx, privatev1.ProjectsCreateRequest_builder{
 			Object: privatev1.Project_builder{
 				Metadata: privatev1.Metadata_builder{
@@ -551,7 +551,6 @@ var _ = Describe("Private projects server", func() {
 		id := object.GetId()
 		originalCreator := object.GetMetadata().GetCreator()
 
-		// Attempt to update creator - should be silently ignored
 		updateResponse, err := privateServer.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
 			Object: privatev1.Project_builder{
 				Id: id,
@@ -563,8 +562,66 @@ var _ = Describe("Private projects server", func() {
 				Paths: []string{"metadata.creator"},
 			},
 		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(updateResponse).To(BeNil())
+		status, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+		Expect(status.Message()).To(Equal("field 'metadata.creator' is immutable"))
+
+		getResponse, err := privateServer.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: id}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(updateResponse).ToNot(BeNil())
-		Expect(updateResponse.Object.GetMetadata().GetCreator()).To(Equal(originalCreator))
+		Expect(getResponse.GetObject().GetMetadata().GetCreator()).To(Equal(originalCreator))
+	})
+
+	It("rejects a maskless update without metadata without changing the project", func() {
+		created, err := privateServer.Create(ctx, privatev1.ProjectsCreateRequest_builder{
+			Object: privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{Name: "maskless-project", Tenant: "my-tenant"}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		original := created.GetObject()
+
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		var updated *privatev1.ProjectsUpdateResponse
+		err = tx.Savepoint(ctx, func(savepointCtx context.Context) error {
+			var updateErr error
+			updated, updateErr = privateServer.Update(savepointCtx, privatev1.ProjectsUpdateRequest_builder{
+				Object: privatev1.Project_builder{Id: original.GetId()}.Build(),
+			}.Build())
+			return updateErr
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(updated).To(BeNil())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("field 'metadata.name' is immutable"))
+
+		got, err := privateServer.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: original.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.GetObject().GetMetadata().GetName()).To(Equal(original.GetMetadata().GetName()))
+		Expect(got.GetObject().GetMetadata().GetCreator()).To(Equal(original.GetMetadata().GetCreator()))
+	})
+
+	It("preserves the creator for a maskless update when metadata omits it", func() {
+		created, err := privateServer.Create(ctx, privatev1.ProjectsCreateRequest_builder{
+			Object: privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{Name: "maskless-project-no-creator", Tenant: "my-tenant"}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		originalCreator := created.GetObject().GetMetadata().GetCreator()
+
+		updated, err := privateServer.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
+			Object: privatev1.Project_builder{
+				Id: created.GetObject().GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Name: "maskless-project-no-creator", Tenant: "my-tenant",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updated.GetObject().GetMetadata().GetCreator()).To(Equal(originalCreator))
 	})
 })

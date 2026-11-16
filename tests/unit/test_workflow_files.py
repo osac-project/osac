@@ -91,3 +91,17 @@ def test_a_suite_that_runs_as_a_run_of_its_own_follows_the_contract_of_the_decis
         )
     listed = load(WORKFLOWS / "e2e-pr.yml")[True]["workflow_run"]["workflows"]
     assert wrapper["name"] in listed, "e2e-pr.yml must listen to the end of the suite's run"
+
+
+@pytest.mark.parametrize(("suite", "file"), sorted(DISPATCHED.items()))
+def test_a_suite_run_again_with_the_button_of_github_is_heard_by_the_rerun_workflow(suite: str, file: str) -> None:
+    """A re-run sends `in_progress` for the new attempt and no `requested`, which e2e-pr.yml does not listen to."""
+    listened = load(WORKFLOWS / "e2e-pr-rerun.yml")[True]["workflow_run"]
+    name = load(WORKFLOWS / file)["name"]
+    assert name in listened["workflows"], f"e2e-pr-rerun.yml must list the workflow of {suite}"
+    assert listened["types"] == ["in_progress"], "e2e-pr.yml hears the other types"
+
+
+def test_the_rerun_workflow_writes_the_lines_the_way_the_decision_does() -> None:
+    decide = load(WORKFLOWS / "e2e-pr.yml")["jobs"]["decide"]["with"]["lines-kind"]
+    assert load(WORKFLOWS / "e2e-pr-rerun.yml")["jobs"]["restarted"]["with"]["lines-kind"] == decide

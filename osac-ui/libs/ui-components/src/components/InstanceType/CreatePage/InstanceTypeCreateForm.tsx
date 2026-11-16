@@ -14,14 +14,14 @@ import { Formik } from 'formik';
 import { InstanceTypes } from '@osac/types/private';
 import { useCreateResource } from '@osac/ui-components/api/use-resource';
 
-import { getInstanceTypeCreateSchema } from './validation';
+import { getInstanceTypeCreateSchema, isGpuConfigured } from './validation';
 import { instanceTypeFieldIds } from '../fieldIds';
 import { InstanceTypeCreateFormValues, instanceTypeCreateValues } from './values';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
+import IntegerField from '../../Form/base/IntegerField';
 import TextAreaField from '../../Form/base/TextAreaField';
 import TextField from '../../Form/base/TextField';
-import { InputField } from '../../Form/InputField';
 import LeaveFormConfirmation from '../../Form/LeaveFormConfirmation';
 import NameField from '../../Form/NameField';
 import OsacForm from '../../Form/OsacForm';
@@ -35,7 +35,7 @@ const InstanceTypeCreateForm = () => {
 
   const onSubmit = async (values: InstanceTypeCreateFormValues) => {
     const { gpu } = values.spec;
-    const hasGpu = Boolean(gpu.pciDeviceSelector || gpu.resourceName || gpu.count);
+    const hasGpu = isGpuConfigured(gpu);
 
     try {
       const created = await create({
@@ -43,14 +43,14 @@ const InstanceTypeCreateForm = () => {
           metadata: { name: values.metadata.name },
           spec: {
             description: values.spec.description,
-            vcpus: Number(values.spec.vcpus),
-            memoryGib: Number(values.spec.memoryGib),
+            vcpus: values.spec.vcpus,
+            memoryGib: values.spec.memoryGib,
             ...(hasGpu
               ? {
                   gpu: {
                     pciDeviceSelector: gpu.pciDeviceSelector,
                     resourceName: gpu.resourceName,
-                    count: Number(gpu.count),
+                    count: gpu.count,
                   },
                 }
               : {}),
@@ -81,26 +81,23 @@ const InstanceTypeCreateForm = () => {
                   label={t('Description')}
                   fieldId={instanceTypeFieldIds.description}
                 />
-                <InputField
+                <IntegerField
                   name="spec.vcpus"
                   label={t('vCPUs')}
                   fieldId={instanceTypeFieldIds.vcpus}
-                  type="number"
                   isRequired
                 />
-                <InputField
+                <IntegerField
                   name="spec.memoryGib"
                   label={t('Memory (GiB)')}
                   fieldId={instanceTypeFieldIds.memoryGib}
-                  type="number"
                   isRequired
                 />
                 <FormSection title={t('GPU')}>
-                  <InputField
+                  <IntegerField
                     name="spec.gpu.count"
                     label={t('GPU count')}
                     fieldId={instanceTypeFieldIds.gpuCount}
-                    type="number"
                     helperText={t('Number of GPU devices of this type.')}
                   />
                   <TextField

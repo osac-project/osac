@@ -15,6 +15,11 @@ export POD_NAMESPACE="osac-system"
 export POD_NAME="test-runner"
 export POD_UID="00000000-0000-0000-0000-000000000000"
 
+# The cluster upgrade target requires an externally supplied test value.
+# Generate a random, non-functional JSON pull-secret fixture unless the caller
+# provides one. This is test-only data and is never used outside the suite.
+export OSAC_CLUSTER_UPGRADE_PULL_SECRET="${OSAC_CLUSTER_UPGRADE_PULL_SECRET:-$(printf '{"auths":{"quay.io":{"auth":"%s"}}}' "$(printf '%s:%s' "$(openssl rand -hex 8)" "$(openssl rand -hex 8)" | base64)")}"
+
 # Suppress inventory parsing warnings
 export ANSIBLE_INVENTORY_UNPARSED_WARNING=False
 export ANSIBLE_LOCALHOST_WARNING=False
@@ -63,6 +68,7 @@ ROLE_TESTS=(
   "finalizer"
   "fulfillment_trust_sync"
   "lease"
+  "guest_ingress_vip_claim"
   "bmaas_metal3"
   "agentless_net_stub"
   "agentless_net_nat_gateway"
@@ -71,6 +77,7 @@ ROLE_TESTS=(
   "agentless_net_switch"
   "compute_instance_delete_vmi_recovery"
   "metallb_l2_detach_annotation"
+  "cluster_upgrade_workflow"
   "netris_protected_launch"
   "netris_fabric"
   "cudn_evpn"
@@ -310,7 +317,8 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
   echo "=== Running Storage Provider Tests ==="
   echo ""
 
-  # Reset mock server once before parallel tests (individual tests no longer reset)
+  # Reset mock server once before tests (individual tests re-reset when they
+  # assert on the call log or seed state)
   curl -sk -X POST https://127.0.0.1:18443/_reset > /dev/null 2>&1 || true
 
   # Storage tests share a mock VMS server with a global call log and object
@@ -323,6 +331,7 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     "storage_provider_ensure_sc"
     "storage_provider_onboarding"
     "storage_provider_setup_rollback"
+    "netapp_storage_provider"
     # Playbook-level wiring tests for osac.service.csi_driver_install (stub the
     # real Helm install via csi_driver_install_override, run the real
     # storage_provider dispatch after it) -- share this gate/mock server since

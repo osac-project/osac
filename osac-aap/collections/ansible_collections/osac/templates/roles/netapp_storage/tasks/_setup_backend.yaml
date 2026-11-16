@@ -1,0 +1,78 @@
+---
+# Per-backend validation of operator-supplied ONTAP backend parameters
+# (included by setup.yaml with loop_var _netapp_backend_id).
+#
+# Supports two per-backend tenancy modes:
+# 1. Shared-TBC mode (_provider_backend_connections[_netapp_backend_id].provider_config.profiles):
+#    Validates profile definitions and per-tier profile + pool_selector bindings.
+# 2. Dedicated-SVM mode (_provider_backend_connections[_netapp_backend_id].tenant_preparation):
+#    Consumes the prepared SVM assignment for this tenant:
+#      _provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config:
+#        username:       SVM runtime username used by Trident (required)
+#        password:       SVM runtime password used by Trident (required)
+#        svm:            prepared SVM name (required)
+#        management_lif: the SVM's management LIF (required for SVM-scoped
+#                        credentials; defaults to the backend endpoint)
+#        qos_policies:   {<tier name>: <existing QoS policy group>} (required
+#                        for tiers with non-zero qos_limits.static_limits)
+#
+# Setup validates these inputs only: it makes no ONTAP HTTP calls and no
+# Kubernetes API calls.
+
+- name: Validate ONTAP backend mode and record per-backend tenant config
+  block:
+    - name: Compute assignment key for dispatched backend
+      ansible.builtin.set_fact:
+        _assignment_key: >-
+          {{ ((_netapp_backend_id ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}
+      no_log: true
+
+    - name: Validate backend tenancy mode and tier parameters
+      ansible.builtin.include_tasks: _validate_backend_mode.yaml
+
+    - name: Record the per-backend tenant config for Shared-TBC mode
+      ansible.builtin.set_fact:
+        _netapp_tenant_configs: >-
+          {{ _netapp_tenant_configs | combine({
+               _netapp_backend_id: {
+                 'assignment_key': _assignment_key,
+                 'mode': 'shared',
+                 'profiles': _netapp_shared_profile_map,
+                 'status': 'ready'
+               }
+             }) }}
+      when: _netapp_is_shared_tbc | bool
+      no_log: true
+
+    - name: Set expected SVM name from operator-supplied preparation
+      ansible.builtin.set_fact:
+        _expected_svm_name: >-
+          {{ _provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config.svm | string | trim }}
+      when: not (_netapp_is_shared_tbc | bool)
+      no_log: true
+
+    - name: Record the per-backend tenant config for Dedicated-SVM mode
+      ansible.builtin.set_fact:
+        _netapp_tenant_configs: >-
+          {{ _netapp_tenant_configs | combine({
+               _netapp_backend_id: {
+                 'assignment_key': _assignment_key,
+                 'mode': 'dedicated',
+                 'svm_name': _expected_svm_name,
+                 'status': 'ready'
+               }
+             }) }}
+      when: not (_netapp_is_shared_tbc | bool)
+      no_log: true
+
+  always:
+    - name: Clear credential-bearing facts
+      ansible.builtin.set_fact:
+        _expected_svm_name: ""
+        _assignment_key: ""
+        _netapp_shared_profile_map: {}
+        _netapp_is_shared_tbc: false
+        _netapp_qos_tier_names: []
+        _netapp_qos_policies: {}
+        _backend_tiers: []
+      no_log: true

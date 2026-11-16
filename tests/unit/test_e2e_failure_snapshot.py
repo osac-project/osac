@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import shlex
 import subprocess
 import sys
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -105,7 +107,7 @@ def test_api_source_lists_every_resource_and_one_failure_does_not_stop_the_rest(
     assert JWT not in (tmp_path / snap.ERRORS_FILE).read_text()
 
 
-def test_logs_source_asks_for_the_three_deployments_since_the_test_began(
+def test_logs_source_asks_for_the_osac_deployments_since_the_test_began(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[str, ...]] = []
@@ -123,10 +125,98 @@ def test_logs_source_asks_for_the_three_deployments_since_the_test_began(
         "deployment/fulfillment-grpc-server",
         "deployment/fulfillment-controller",
         "deployment/osac-operator",
+        "deployment/bmf-operator-controller-manager",
     ]
     assert "--since-time=2026-01-02T03:04:05Z" in calls[0]
     assert {"--all-containers", "--timestamps", "--tail=20000", "-n", "osac-ns"} <= set(calls[0])
     assert (tmp_path / "log-osac-operator.txt").read_text() == "line"
+
+
+def test_logs_source_starts_at_the_module_when_it_began_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ordered suite builds the failing state in earlier tests, so the logs start with the module."""
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(snap, "run", lambda *args, timeout: calls.append(args) or "line")
+    k8s = Mock()
+    k8s.base_args.return_value = ["kubectl"]
+    module_start = START - timedelta(minutes=20)
+    snap.logs_source(k8s, "osac-ns")(tmp_path, snap.Window(START, module_start))
+    assert "--since-time=2026-01-02T02:44:05Z" in calls[0]
+    # A later module start never narrows the window below the test's own start.
+    calls.clear()
+    snap.logs_source(k8s, "osac-ns")(tmp_path, snap.Window(START, START + timedelta(minutes=1)))
+    assert "--since-time=2026-01-02T03:04:05Z" in calls[0]
+
+
+@pytest.mark.parametrize("zone", [UTC, timezone(timedelta(hours=2)), timezone(timedelta(hours=-5))])
+@pytest.mark.parametrize("module_minutes", [0, 20])
+def test_caas_guest_node_logs_use_utc_journal_dates_and_stdin_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, zone: timezone, module_minutes: int
+) -> None:
+    credential = b"guest-config-from-referenced-secret"
+    started_at = START.replace(microsecond=123456).astimezone(zone)
+    log_start = started_at - timedelta(minutes=module_minutes)
+    management = Mock(
+        side_effect=[
+            json.dumps(
+                {"items": [{"status": {"clusterReference": {"namespace": "clusters", "hostedClusterName": "order-a"}}}]}
+            ),
+            json.dumps({"status": {"kubeConfig": {"name": "guest-config", "key": "value"}}}),
+            json.dumps({"data": {"value": base64.b64encode(credential).decode()}}),
+        ]
+    )
+    commands: list[list[str]] = []
+
+    def guest_command(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        commands.append(argv)
+        assert argv[1] == "--kubeconfig=/dev/stdin"
+        assert kwargs == {"input": credential, "capture_output": True, "timeout": 5, "check": False}
+        if argv[0] == "oc":
+            output = f"kubelet journal\nAuthorization: Bearer {JWT}".encode()
+        elif argv[2:4] == ["get", "nodes"]:
+            output = json.dumps({"items": [{"kind": "Node", "metadata": {"name": "worker-a"}}]}).encode()
+        elif argv[2:4] == ["get", "pods"] and "openshift-ingress" in argv:
+            output = json.dumps(
+                {"items": [{"metadata": {"name": "router-a"}, "spec": {"containers": [{"name": "router"}]}}]}
+            ).encode()
+        elif argv[2] == "logs":
+            output = b"router log"
+        else:
+            output = b'{"items": []}'
+        return subprocess.CompletedProcess(argv, 0, stdout=output, stderr=b"")
+
+    monkeypatch.setattr(snap, "run", management)
+    monkeypatch.setattr(snap.subprocess, "run", guest_command)
+    k8s = Mock()
+    k8s.base_args.return_value = ["kubectl"]
+
+    snap.caas_guest_source(k8s, "ci")(tmp_path, snap.Window(started_at, log_start))
+
+    assert [call.args for call in management.call_args_list] == [
+        ("kubectl", "get", "clusterorders.osac.openshift.io", "-n", "ci", "-o", "json"),
+        ("kubectl", "get", "hostedcontrolplane", "order-a", "-n", "clusters-order-a", "-o", "json"),
+        ("kubectl", "get", "secret", "guest-config", "-n", "clusters-order-a", "-o", "json"),
+    ]
+    assert [argv for argv in commands if argv[0] == "oc"] == [
+        [
+            "oc",
+            "--kubeconfig=/dev/stdin",
+            "adm",
+            "node-logs",
+            "worker-a",
+            "--unit=kubelet",
+            "--unit=crio",
+            "--tail=300",
+            f"--since={log_start.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S')}",
+        ]
+    ]
+    pod_logs = [argv for argv in commands if argv[2] == "logs"]
+    assert len(pod_logs) == 2
+    assert all(f"--since-time={log_start.isoformat().replace('+00:00', 'Z')}" in argv for argv in pod_logs)
+    assert not (tmp_path / snap.ERRORS_FILE).exists()
+    assert "kubelet journal" in (tmp_path / "guest-clusters-order-a-worker-a-node.log").read_text()
+    assert all(
+        credential not in path.read_bytes() and JWT.encode() not in path.read_bytes() for path in tmp_path.iterdir()
+    )
 
 
 def test_k8s_source_never_asks_for_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -340,3 +430,189 @@ def _fast_poll(**kwargs: object) -> object:
     from tests.e2e.core import runner
 
     return runner.poll_until(**{**kwargs, "retries": 1, "delay": 0})
+
+
+def test_reporter_passes_the_module_start_to_the_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure late in an ordered module snapshots logs from the module's first test, not only its own start."""
+    from tests.e2e.core import failure_report
+
+    monkeypatch.setenv(failure_report.OUTPUT_DIR_ENV, str(tmp_path))
+    config = SimpleNamespace(option=SimpleNamespace(dist="no"))
+    reporter = failure_report.FailureReporter(config, sources=snap.SnapshotSources())  # pyright: ignore[reportArgumentType]
+    taken: list[dict[str, object]] = []
+    reporter.snapshotter = Mock(take=lambda *args, **kwargs: taken.append({"args": args, **kwargs}) or "snap")
+    clock = iter([100.0, 400.0])
+    monkeypatch.setattr(failure_report.time, "time", lambda: next(clock))
+    reporter.pytest_runtest_logstart("suite/test_x.py::T::test_00", ("", None, ""))
+    reporter.pytest_runtest_logstart("suite/test_x.py::T::test_09", ("", None, ""))
+
+    reporter._snapshot("test_09", Kind.ASSERTION, 400.0, {"nodeid": "suite/test_x.py::T::test_09"})
+
+    assert taken[0]["logs_since"] == datetime.fromtimestamp(100.0, UTC)
+    assert taken[0]["args"][2] == datetime.fromtimestamp(400.0, UTC)
+
+
+@pytest.mark.parametrize("checkpoint", [False, True])
+def test_reporter_combines_module_log_window_and_shared_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, checkpoint: bool
+) -> None:
+    from tests.e2e.core import failure_report
+
+    monkeypatch.setenv(failure_report.OUTPUT_DIR_ENV, str(tmp_path))
+    now = [100.0]
+    monkeypatch.setattr(failure_report, "time", SimpleNamespace(time=lambda: now[0]))
+    monkeypatch.setattr(snap, "time", SimpleNamespace(monotonic=lambda: 1000.0))
+    sources = snap.SnapshotSources()
+    windows: list[snap.Window] = []
+    sources.register("window", lambda directory, window: windows.append(window))
+    config = SimpleNamespace(option=SimpleNamespace(dist="no"))
+    reporter = failure_report.FailureReporter(config, sources=sources)  # pyright: ignore[reportArgumentType]
+    reporter.pytest_runtest_logstart("suite/test_x.py::test_00", ("", None, ""))
+    now[0] = 400.0
+    nodeid = "suite/test_x.py::test_09"
+    reporter.pytest_runtest_logstart(nodeid, ("", None, ""))
+
+    if checkpoint:
+        reporter.capture_snapshot(nodeid)
+    else:
+        reporter.capture_failure(AssertionError("synthetic failure"), nodeid)
+
+    assert len(windows) == 1
+    window = windows[0]
+    assert window.started_at == datetime.fromtimestamp(400.0, UTC)
+    assert window.logs_since == datetime.fromtimestamp(100.0, UTC)
+    assert window.log_start == datetime.fromtimestamp(100.0, UTC)
+    assert window.deadline == 1000.0 + (snap.CHECKPOINT_BUDGET_S if checkpoint else snap.BUDGET_S)
+    category, filename = ("snapshots", "snapshot.json") if checkpoint else ("failures", "failure.json")
+    [metadata] = tmp_path.glob(f"{category}/main/*/{filename}")
+    assert json.loads(metadata.read_text())["kind"] == (None if checkpoint else str(Kind.ASSERTION))
+    assert metadata.parent.stat().st_mode & 0o777 == 0o700
+    if not checkpoint:
+        record = json.loads((tmp_path / "results-main.jsonl").read_text())
+        assert record["snapshot"] is not None
+        assert record["started_at"] == "1970-01-01T00:06:40+00:00"
+
+
+def test_checkpoints_and_failures_keep_independent_caps(tmp_path: Path) -> None:
+    snapshotter = snap.Snapshotter(tmp_path, "main", snap.SnapshotSources(), cap=1)
+    assert snapshotter.take("test_x", Kind.ASSERTION, START, checkpoint=True).startswith("snapshots/")
+    assert snapshotter.take("test_x", Kind.ASSERTION, START).startswith("failures/")
+    assert snapshotter.take("test_x", Kind.ASSERTION, START, checkpoint=True) == snap.CAP_REACHED
+    assert snapshotter.take("test_x", Kind.ASSERTION, START) == snap.CAP_REACHED
+
+
+def test_kubevirt_source_reads_each_vm_namespace_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The VM namespaces are deleted before the job gathers logs, so the snapshot keeps their VMs, events and logs."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(*args: str, timeout: int) -> str:
+        calls.append(args)
+        if "events" in args:
+            raise CommandFailed(1, ["kubectl", "get", "events"], "", "forbidden")
+        return "{}"
+
+    monkeypatch.setattr(stack, "run", fake_run)
+    monkeypatch.setattr(stack.ssh_helper, "vm_cluster_args", lambda: ["kubectl", "--kubeconfig", "/vm"])
+    instances = [{"vm_namespace": "ns-a"}, {"vm_namespace": "ns-a"}, {"vm_namespace": "ns-b"}, {"name": "pending"}]
+    stack.kubevirt_source(instances)(tmp_path, snap.Window(START, START - timedelta(minutes=30)))
+
+    assert sorted({c[c.index("-n") + 1] for c in calls}) == ["ns-a", "ns-b"]
+    assert len(calls) == 6
+    launcher = next(c for c in calls if "logs" in c)
+    assert {"-l", "kubevirt.io=virt-launcher", "--timestamps", "--since-time=2026-01-02T02:34:05Z"} <= set(launcher)
+    assert (tmp_path / "kubevirt-ns-a-vms.json").read_text() == "{}"
+    assert "kubevirt:ns-a:get" in (tmp_path / snap.ERRORS_FILE).read_text()
+
+
+def test_kubevirt_source_stops_at_its_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A slow VM cluster must not keep the source writing after the snapshot budget and its scrub."""
+    now = [0.0]
+    calls: list[tuple[str, ...]] = []
+
+    def slow_run(*args: str, timeout: int) -> str:
+        calls.append(args)
+        assert timeout <= snap.SOURCE_COMMAND_TIMEOUT_S
+        now[0] += 30
+        return "{}"
+
+    monkeypatch.setattr(stack, "run", slow_run)
+    monkeypatch.setattr(stack, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(stack.ssh_helper, "vm_cluster_args", lambda: ["kubectl"])
+    stack.kubevirt_source([{"vm_namespace": "ns-a"}, {"vm_namespace": "ns-b"}])(tmp_path, snap.Window(START))
+
+    assert len(calls) == 2  # 30s each against a 40s budget
+    assert "skipped: budget used up" in (tmp_path / snap.ERRORS_FILE).read_text()
+
+
+@pytest.mark.parametrize(
+    ("started", "deadline", "timeouts"),
+    [(0.0, 10.0, [10.0]), (40.0, 60.0, [20.0]), (60.0, 60.0, []), (0.0, 60.0, [30.0, 10.0])],
+)
+def test_kubevirt_source_honors_the_shared_deadline_when_queued(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, started: float, deadline: float, timeouts: list[float]
+) -> None:
+    now = [started]
+    requested: list[float] = []
+
+    def slow_run(*args: str, timeout: float) -> str:
+        requested.append(timeout)
+        now[0] += timeout
+        return "{}"
+
+    monkeypatch.setattr(stack, "run", slow_run)
+    monkeypatch.setattr(stack, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(stack.ssh_helper, "vm_cluster_args", lambda: ["kubectl"])
+    stack.kubevirt_source([{"vm_namespace": "ns-a"}])(tmp_path, snap.Window(START, deadline=deadline))
+
+    assert requested == timeouts
+    assert now[0] <= deadline
+    assert "skipped: budget used up" in (tmp_path / snap.ERRORS_FILE).read_text()
+
+
+@pytest.mark.parametrize(("deadline", "timeout"), [(50.0, 10.0), (60.0, 20.0), (100.0, 30.0), (40.0, None)])
+def test_host_source_honors_the_shared_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deadline: float, timeout: float | None
+) -> None:
+    from tests.e2e.networking.bmaas import guest_ssh as bmaas_guest_ssh
+
+    command = Mock(return_value='{"items": []}')
+    monkeypatch.setattr(bmaas_guest_ssh, "run", command)
+    monkeypatch.setattr(snap, "time", SimpleNamespace(monotonic=lambda: 40.0))
+    sources = snap.SnapshotSources()
+    monkeypatch.setattr(snap, "SOURCES", sources)
+    bmaas_guest_ssh.register_host_snapshot("guests-test", ["kubectl"], "host-inventory")
+    dict(sources.for_kind(Kind.ASSERTION))["guests-test-hosts"](tmp_path, snap.Window(START, deadline=deadline))
+
+    if timeout is None:
+        command.assert_not_called()
+        assert "snapshot budget exhausted" in (tmp_path / snap.ERRORS_FILE).read_text()
+    else:
+        command.assert_called_once_with("kubectl", "get", "bmh", "-n", "host-inventory", "-o", "json", timeout=timeout)
+        assert json.loads((tmp_path / "bmh-status.json").read_text()) == []
+
+
+def test_host_source_keeps_power_state_and_no_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.e2e.networking.bmaas import guest_ssh as bmaas_guest_ssh
+
+    host = {
+        "metadata": {"name": "h03", "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "{...}"}},
+        "spec": {"online": True, "consumerRef": {"name": "bmi-1"}, "bmc": {"credentialsName": "bmc-secret"}},
+        "status": {
+            "provisioning": {"state": "provisioned"},
+            "poweredOn": True,
+            "operationHistory": {"provision": {"start": "a", "end": "b"}},
+            "hardware": {"nics": [{"name": "ens4", "mac": "52:54:09:00:00:04", "ip": "192.168.16.5", "speed": 1}]},
+        },
+    }
+    monkeypatch.setattr(bmaas_guest_ssh, "run", lambda *_a, timeout: json.dumps({"items": [host]}))
+    sources = snap.SnapshotSources()
+    monkeypatch.setattr(snap, "SOURCES", sources)
+    bmaas_guest_ssh.register_host_snapshot("guests-test", ["kubectl"], "host-inventory")
+    dict(sources.for_kind(Kind.ASSERTION))["guests-test-hosts"](tmp_path, snap.Window(START))
+
+    summary = json.loads((tmp_path / "bmh-status.json").read_text())
+    assert summary[0]["name"] == "h03"
+    assert summary[0]["poweredOn"] is True
+    assert summary[0]["nics"] == [{"name": "ens4", "mac": "52:54:09:00:00:04", "ip": "192.168.16.5"}]
+    assert "bmc-secret" not in (tmp_path / "bmh-status.json").read_text()
+    assert "last-applied" not in (tmp_path / "bmh-status.json").read_text()

@@ -167,6 +167,87 @@ describe('StorageBackendCreatePage', () => {
       expect(passwordField).toHaveAttribute('type', 'password');
     });
 
+    it.each(['VAST Data', 'NetApp ONTAP', 'Pure FlashArray/FlashBlade'])(
+      'validates the first provider selection of %s without another field event',
+      async (label) => {
+        const { user } = renderCreatePage();
+        const provider = screen.getByLabelText(/^Provider/);
+
+        await user.click(provider);
+        await user.click(screen.getByRole('option', { name: label }));
+
+        expect(provider).toHaveTextContent(label);
+        await waitFor(() => {
+          expect(provider).not.toHaveAttribute('aria-invalid', 'true');
+          expect(screen.queryByText('Provider is required')).not.toBeInTheDocument();
+        });
+        expect(screen.getByRole('checkbox', { name: 'CSP-managed' })).toBeDisabled();
+        if (label === 'NetApp ONTAP') {
+          expect(screen.getByRole('checkbox', { name: 'CSP-managed' })).toBeChecked();
+        } else {
+          expect(screen.getByRole('checkbox', { name: 'CSP-managed' })).not.toBeChecked();
+        }
+      },
+    );
+
+    it.each(['VAST Data', 'NetApp ONTAP', 'Pure FlashArray/FlashBlade'])(
+      'clears the required provider error after selecting %s once',
+      async (label) => {
+        const onStorageBackendCreate = vi.fn();
+        const { user } = renderCreatePage({ onStorageBackendCreate });
+        await user.click(screen.getByRole('button', { name: 'Create' }));
+        expect(await screen.findByText('Provider is required')).toBeInTheDocument();
+
+        const provider = screen.getByLabelText(/^Provider/);
+        await user.click(provider);
+        await user.click(screen.getByRole('option', { name: label }));
+
+        await waitFor(() => {
+          expect(screen.queryByText('Provider is required')).not.toBeInTheDocument();
+          expect(provider).not.toHaveAttribute('aria-invalid', 'true');
+        });
+        expect(provider).toHaveTextContent(label);
+        expect(onStorageBackendCreate).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['VAST Data', 'Pure FlashArray/FlashBlade'])(
+      'revalidates conditional fields when switching between NetApp and %s',
+      async (label) => {
+        const onStorageBackendCreate = vi.fn();
+        const { user } = renderCreatePage({ onStorageBackendCreate });
+        await user.click(screen.getByRole('button', { name: 'Create' }));
+        expect(await screen.findByText('Provider is required')).toBeInTheDocument();
+        const provider = screen.getByLabelText(/^Provider/);
+
+        for (const selectedLabel of ['NetApp ONTAP', label, 'NetApp ONTAP']) {
+          await user.click(provider);
+          await user.click(screen.getByRole('option', { name: selectedLabel }));
+
+          const cspManaged = selectedLabel === 'NetApp ONTAP';
+          await waitFor(() => {
+            for (const field of ['Endpoint', 'Username', 'Password']) {
+              const error = screen.queryByText(`${field} is required`);
+              if (cspManaged) {
+                expect(error).not.toBeInTheDocument();
+                expect(screen.getByText(field).closest('label')).not.toHaveTextContent('*');
+              } else {
+                expect(error).toBeInTheDocument();
+                expect(screen.getByText(field).closest('label')).toHaveTextContent('*');
+              }
+            }
+          });
+          expect(screen.queryByText('Provider is required')).not.toBeInTheDocument();
+          if (cspManaged) {
+            expect(screen.getByRole('checkbox', { name: 'CSP-managed' })).toBeChecked();
+          } else {
+            expect(screen.getByRole('checkbox', { name: 'CSP-managed' })).not.toBeChecked();
+          }
+        }
+        expect(onStorageBackendCreate).not.toHaveBeenCalled();
+      },
+    );
+
     it('shows a DNS-label validation error for an invalid name and does not submit', async () => {
       const onStorageBackendCreate = vi.fn();
       const { user } = renderCreatePage({ onStorageBackendCreate });
@@ -294,33 +375,48 @@ describe('StorageBackendCreatePage', () => {
       expect(await screen.findByText('navigated-to-details')).toBeInTheDocument();
     }, 15000);
 
-    it('submits the expected payload and navigates to the created backend details page on success', async () => {
-      let capturedRequest: StorageBackendsCreateRequest | undefined;
-      const { user } = renderCreatePage({
-        onStorageBackendCreate: (req) => {
-          capturedRequest = req;
-          return create(StorageBackendsCreateResponseSchema, {
-            object: {
-              id: 'new-backend-1',
-              metadata: req.object?.metadata,
-              spec: req.object?.spec,
-            },
-          });
-        },
-      });
+    it.each([
+      ['VAST Data', 'vast'],
+      ['NetApp ONTAP', 'netapp'],
+      ['Pure FlashArray/FlashBlade', 'pure'],
+    ])(
+      'preserves form values and submits the expected payload for %s',
+      async (label, provider) => {
+        let capturedRequest: StorageBackendsCreateRequest | undefined;
+        const { user } = renderCreatePage({
+          onStorageBackendCreate: (req) => {
+            capturedRequest = req;
+            return create(StorageBackendsCreateResponseSchema, {
+              object: {
+                id: 'new-backend-1',
+                metadata: req.object?.metadata,
+                spec: req.object?.spec,
+              },
+            });
+          },
+        });
 
-      await fillValidForm(user);
-      await user.click(screen.getByRole('button', { name: 'Create' }));
+        await user.type(screen.getByRole('textbox', { name: 'Name' }), 'backend-1');
+        await user.type(screen.getByRole('textbox', { name: 'Endpoint' }), 'array.example.com:443');
+        await user.type(screen.getByRole('textbox', { name: 'Description' }), 'primary array');
+        await user.type(screen.getByLabelText(/^Username/), 'test-admin');
+        await user.type(screen.getByLabelText(/^Password/), testBackendPassword);
+        await user.click(screen.getByLabelText(/^Provider/));
+        await user.click(screen.getByRole('option', { name: label }));
+        await user.click(screen.getByRole('button', { name: 'Create' }));
 
-      expect(await screen.findByText('navigated-to-details')).toBeInTheDocument();
+        expect(await screen.findByText('navigated-to-details')).toBeInTheDocument();
 
-      expect(capturedRequest?.object?.metadata?.name).toBe('vast-prod-1');
-      expect(capturedRequest?.object?.spec?.provider).toBe('vast');
-      expect(capturedRequest?.object?.spec?.cspManaged).toBe(false);
-      expect(capturedRequest?.object?.spec?.endpoint).toBe('vast.example.com:443');
-      expect(capturedRequest?.object?.spec?.credentials?.username).toBe('test-admin');
-      expect(capturedRequest?.object?.spec?.credentials?.password).toBe(testBackendPassword);
-    }, 15000);
+        expect(capturedRequest?.object?.metadata?.name).toBe('backend-1');
+        expect(capturedRequest?.object?.spec?.provider).toBe(provider);
+        expect(capturedRequest?.object?.spec?.cspManaged).toBe(provider === 'netapp');
+        expect(capturedRequest?.object?.spec?.endpoint).toBe('array.example.com:443');
+        expect(capturedRequest?.object?.spec?.description).toBe('primary array');
+        expect(capturedRequest?.object?.spec?.credentials?.username).toBe('test-admin');
+        expect(capturedRequest?.object?.spec?.credentials?.password).toBe(testBackendPassword);
+      },
+      15000,
+    );
 
     it('shows a form-level error and does not navigate when the name already exists', async () => {
       const { user } = renderCreatePage({

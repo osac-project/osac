@@ -1,0 +1,53 @@
+---
+- name: Run the cluster upgrade scenario with guaranteed cleanup
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run the cluster upgrade scenario
+      ansible.builtin.command:
+        argv:
+          - uv
+          - run
+          - ansible-playbook
+          - -e
+          - "ansible_python_interpreter={{ ansible_playbook_python }}"
+          - -e
+          - "@{{ playbook_dir }}/../../../common_vars.yml"
+          - "{{ playbook_dir }}/scenario.yml"
+      environment:
+        ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../ansible.cfg"
+      register: cluster_upgrade_scenario_run
+      failed_when: false
+      changed_when: true
+
+    - name: Clean up the cluster upgrade fixtures
+      ansible.builtin.command:
+        argv:
+          - uv
+          - run
+          - ansible-playbook
+          - -e
+          - "ansible_python_interpreter={{ ansible_playbook_python }}"
+          - -e
+          - "@{{ playbook_dir }}/../../../common_vars.yml"
+          - "{{ playbook_dir }}/cleanup.yml"
+      environment:
+        ANSIBLE_CONFIG: "{{ playbook_dir }}/../../../ansible.cfg"
+      register: cluster_upgrade_cleanup_run
+      failed_when: false
+      changed_when: true
+
+    - name: Report the cluster upgrade scenario result
+      ansible.builtin.assert:
+        that:
+          - cluster_upgrade_scenario_run.rc == 0
+        fail_msg: >-
+          The cluster upgrade scenario failed; see the child playbook output above.
+
+    - name: Report the cluster upgrade cleanup result
+      ansible.builtin.assert:
+        that:
+          - cluster_upgrade_cleanup_run.rc == 0
+        fail_msg: >-
+          Cluster upgrade cleanup failed after the scenario completed.

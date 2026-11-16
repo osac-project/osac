@@ -32,21 +32,15 @@ import { ApiProvider } from '../api-context';
 import { escapeCelStringLiteral } from '../cel';
 
 describe('networking list filters', () => {
-  it('finds only ready IPv4 tenant-default subnets in the selected project', () => {
-    expect(defaultSubnetListFilter('project-a')).toBe(
-      `this.metadata.labels["osac.openshift.io/default"] == "true" && this.metadata.project == "project-a" && this.status.state == ${SubnetState.READY} && has(this.spec.ipv4_cidr)`,
-    );
-  });
-
-  it('escapes a project name in the default subnet filter', () => {
-    expect(defaultSubnetListFilter('project-"a')).toContain(
-      'this.metadata.project == "project-\\"a"',
+  it("finds only ready IPv4 tenant-default subnets in the tenant's default project", () => {
+    expect(defaultSubnetListFilter()).toBe(
+      `this.metadata.labels["osac.openshift.io/default"] == "true" && this.metadata.project == "" && this.status.state == ${SubnetState.READY} && has(this.spec.ipv4_cidr)`,
     );
   });
 
   it('finds the ready tenant-default security group in the subnet network', () => {
-    expect(defaultSecurityGroupListFilter('project-a', 'vn-a')).toBe(
-      `this.metadata.labels["osac.openshift.io/default"] == "true" && this.metadata.project == "project-a" && this.spec.virtual_network.id == "vn-a" && this.status.state == ${SecurityGroupState.READY}`,
+    expect(defaultSecurityGroupListFilter('vn-a')).toBe(
+      `this.metadata.labels["osac.openshift.io/default"] == "true" && this.metadata.project == "" && this.spec.virtual_network.id == "vn-a" && this.status.state == ${SecurityGroupState.READY}`,
     );
   });
 

@@ -11,7 +11,7 @@ const values: VolumeFormValues = {
   },
   spec: {
     storageTier: { id: 'gold-block', name: 'gold-block' },
-    sizeGib: '128',
+    sizeGib: 128n,
     accessMode: VolumeAccessMode.READ_WRITE_ONCE,
   },
 };

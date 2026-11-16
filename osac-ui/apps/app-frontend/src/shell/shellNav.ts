@@ -87,12 +87,6 @@ const getAdminNav = (t: TFunction): NavRow[] => [
       },
       {
         kind: 'link',
-        id: 'external-ip-pools',
-        label: t('External IP pools'),
-        path: '/admin/infrastructure/external-ip-pools',
-      },
-      {
-        kind: 'link',
         id: 'baremetal-instance-types',
         label: t('Bare metal instance types'),
         path: '/admin/infrastructure/baremetal-instance-types',
@@ -106,7 +100,7 @@ const getAdminNav = (t: TFunction): NavRow[] => [
       },
     ],
   },
-  getNetworkNav(t),
+  getProviderNetworkNav(t),
   getSecretsNav(t),
 ];
 
@@ -173,6 +167,20 @@ const getStorageNav = (t: TFunction): NavRow => ({
   id: 'nav-tenant-storage',
   label: t('Storage'),
   children: [{ kind: 'link', id: 'volumes', label: t('Volumes'), path: '/storage/volumes' }],
+});
+
+const getProviderNetworkNav = (t: TFunction): NavRow => ({
+  kind: 'section',
+  id: 'nav-tenant-networking',
+  label: t('Networking'),
+  children: [
+    {
+      kind: 'link',
+      id: 'external-ip-pools',
+      label: t('External IP pools'),
+      path: '/admin/infrastructure/external-ip-pools',
+    },
+  ],
 });
 
 const getNetworkNav = (t: TFunction): NavRow => ({

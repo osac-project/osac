@@ -21,12 +21,17 @@ Before tenants consume CSP-managed storage, the CSP:
   virtual machines).
 - Installs and operates the vendor CSI driver on the target cluster (for
   example, Trident).
+- Prepares the target cluster's worker nodes for the storage transport (for
+  example, DM-Multipath for NetApp block volumes).
 - Configures the CSI backend (for example, a shared TridentBackendConfig).
 - Creates one StorageClass per offered tier, labeled
   `osac.openshift.io/tenant=csp-managed` and
   `osac.openshift.io/storage-tier=<tier>`. See
   [concepts/storageclass.md](../concepts/storageclass.md) and
-  [tenancy/shared.md](../tenancy/shared.md).
+  [tenancy/shared.md](../tenancy/shared.md). Each class also carries the
+  parameters its CSI driver needs for VM disks, such as the filesystem
+  type of a block tier (for NetApp, see
+  [Filesystem type](../providers/netapp.md#filesystem-type)).
 - Configures the OSAC operator's access to the target cluster. The operator
   checks the configured target explicitly and fails closed; it never falls
   back to querying the local cluster. (Configuring a *remote* target's
@@ -56,7 +61,8 @@ OSAC does **not**:
   CSP-managed readiness.
 
 This readiness check verifies StorageClass presence only. It does not
-validate the transport, the CSI driver's health, or the backing system.
+validate the classes' parameters, the transport, the CSI driver's health,
+or the backing system.
 
 ## Supported boundaries (Dev Preview)
 

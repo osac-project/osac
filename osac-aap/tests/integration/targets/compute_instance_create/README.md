@@ -21,6 +21,12 @@ and VM API objects are real. Only the template's wait/annotate step is replaced
 with a no-op. No AAP server, operator, CDI/KubeVirt controllers, LVMS provisioner,
 Trident, NetApp, PVC binding or guest I/O is exercised.
 
+`volume_id_annotations` checks the tenant annotation on the persisted VM,
+its VMI template and each DataVolume, alongside disk Volume IDs and specs.
+`volume_id_validation` rejects missing or empty tenant annotations before
+resource creation without contacting Kubernetes. The fixture has a tenant
+annotation; these targets do not create a VMI or verify PVC propagation.
+
 ## Existing integration environment
 
 From `osac-aap/`, `make test` registers this target without requiring

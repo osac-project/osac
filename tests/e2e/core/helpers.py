@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import ipaddress
+import json
 import logging
 import os
 import re
@@ -20,7 +21,7 @@ from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import StuckState, poll_until, run_unchecked
-from tests.e2e.core.sanitize import sanitize_text
+from tests.e2e.core.sanitize import sanitize_obj, sanitize_text
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 logger = logging.getLogger(__name__)
@@ -265,8 +266,10 @@ def wait_for_new_vmi(*, k8s: K8sClient, vmi_namespace: str, compute_instance_nam
 
 def wait_for_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="computeinstance", name=name),
+        fn=lambda: k8s.is_absent(resource="computeinstances.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} deletion",
@@ -323,8 +326,10 @@ def wait_for_virtual_network_ready(*, k8s: K8sClient, name: str) -> None:
 
 def wait_for_virtual_network_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="virtualnetwork", name=name),
+        fn=lambda: k8s.is_absent(resource="virtualnetworks.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} VirtualNetwork deletion",
@@ -438,8 +443,10 @@ def wait_for_grpc_security_group_ready(*, grpc: GRPCClient, sg_id: str) -> None:
 
 def wait_for_subnet_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="subnets.osac.openshift.io", name=name),
+        fn=lambda: k8s.is_absent(resource="subnets.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} Subnet deletion",
@@ -501,8 +508,10 @@ def wait_for_external_ip_pool_grpc_ready(*, private_grpc: GRPCClient, pool_id: s
 
 def wait_for_external_ip_pool_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="externalippool", name=name),
+        fn=lambda: k8s.is_absent(resource="externalippools.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} ExternalIPPool deletion",
@@ -536,10 +545,12 @@ def wait_for_external_ip_allocated(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_external_ip_deletion(*, k8s: K8sClient, name: str) -> None:
-    """Wait for the exact ExternalIP to be absent; propagate unconfirmed read errors."""
+    """Wait for the exact ExternalIP to be absent; a failed read is retried, never taken as gone."""
     poll_until(
         fn=lambda: k8s.is_absent(resource="externalips.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} ExternalIP deletion",
@@ -574,8 +585,10 @@ def wait_for_external_ip_attachment_ready(*, k8s: K8sClient, name: str) -> None:
 
 def wait_for_external_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="externalipattachment", name=name),
+        fn=lambda: k8s.is_absent(resource="externalipattachments.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} ExternalIPAttachment deletion",
@@ -601,8 +614,10 @@ def wait_for_nat_gateway_ready(*, k8s: K8sClient, name: str) -> None:
 
 def wait_for_nat_gateway_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="natgateway", name=name),
+        fn=lambda: k8s.is_absent(resource="natgateways.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} NATGateway deletion",
@@ -796,10 +811,12 @@ def wait_for_worker_installation(*, k8s: K8sClient, co_name: str, namespace: str
     """Report install progress until every worker Agent reports itself installed."""
     logger.info("CaaS phase: starting install")
     previous = ""
+    last_agents: list[dict[str, Any]] | None = None
 
     def _check() -> int:
-        nonlocal previous
+        nonlocal previous, last_agents
         agents = cluster_order_agents(k8s=k8s, co_name=co_name, namespace=namespace)
+        last_agents = agents
         installed = sum(1 for agent in agents if _agent_installed(agent))
         pending = sorted({_agent_install_progress(agent) for agent in agents if not _agent_installed(agent)})
         current = "; ".join(pending)
@@ -809,16 +826,48 @@ def wait_for_worker_installation(*, k8s: K8sClient, co_name: str, namespace: str
             previous = current
         return installed
 
-    poll_until(
-        fn=_check,
-        until=lambda installed: installed >= expected_agents,
-        retries=_WORKER_INSTALL_RETRIES,
-        delay=_WORKER_INSTALL_DELAY,
-        description=f"{co_name} worker Agents installing",
-        retry_on_error=True,
-        resource_kind=WaitResourceKind.CLUSTER_ORDER,
-        resource_id=co_name,
-    )
+    try:
+        poll_until(
+            fn=_check,
+            until=lambda installed: installed >= expected_agents,
+            retries=_WORKER_INSTALL_RETRIES,
+            delay=_WORKER_INSTALL_DELAY,
+            description=f"{co_name} worker Agents installing",
+            retry_on_error=True,
+            resource_kind=WaitResourceKind.CLUSTER_ORDER,
+            resource_id=co_name,
+        )
+    except StuckState:
+        try:
+            logger.error(
+                "CaaS Agent installation timeout: last observed Agents for %s/%s: %s",
+                sanitize_text(namespace),
+                sanitize_text(co_name),
+                len(last_agents) if last_agents is not None else "no successful observation",
+            )
+            for agent in last_agents or []:
+                status = agent.get("status", {})
+                debug_info = status.get("debugInfo", {})
+                logger.error(
+                    "CaaS Agent installation timeout (last observed): %s",
+                    json.dumps(
+                        sanitize_obj(
+                            {
+                                "cluster_order": co_name,
+                                "namespace": namespace,
+                                "name": agent.get("metadata", {}).get("name"),
+                                "conditions": status.get("conditions"),
+                                "state": debug_info.get("state"),
+                                "stateInfo": debug_info.get("stateInfo"),
+                                "progress": status.get("progress"),
+                                "validationsInfo": status.get("validationsInfo"),
+                            }
+                        )
+                    ),
+                )
+        except Exception:
+            logger.warning("CaaS Agent diagnostics unavailable")
+        raise
     logger.info("CaaS phase: install done")
     logger.info("CaaS: installation finished on %d worker Agent(s)", expected_agents)
 
@@ -1489,8 +1538,10 @@ def wait_for_security_group_update(*, grpc: GRPCClient, sg_id: str) -> None:
 
 def wait_for_security_group_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="securitygroups.osac.openshift.io", name=name),
+        fn=lambda: k8s.is_absent(resource="securitygroups.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} SecurityGroup deletion",
@@ -1536,6 +1587,61 @@ def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str,
         resource_kind=WaitResourceKind.TENANT,
         resource_id=name,
     )
+
+
+def wait_for_tenant_default_networking_ready(*, grpc: GRPCClient, tenant_name: str) -> None:
+    """Wait for configured tenant defaults, not merely the Tenant's ready flag.
+
+    Workload creation that omits an attachment requires the actual defaults to
+    be READY. Both AllResourcesReady and ProvisioningDisabled indicate that
+    configured defaults are ready; fail immediately for known terminal states.
+    Fulfillment owns this condition, so read it from the private Tenant API
+    rather than the Kubernetes Tenant CR.
+    """
+    condition_type = "TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY"
+    expected_status = "CONDITION_STATUS_TRUE"
+    successful_reasons = {"AllResourcesReady", "ProvisioningDisabled"}
+    terminal_reasons = {"NoDefaultNetworking", "ResourceFailed", "ReservedTenant"}
+    last_condition: dict[str, Any] = {}
+
+    def _read_condition() -> dict[str, Any] | None:
+        nonlocal last_condition
+        tenant = grpc.get_tenant_by_name(name=tenant_name)
+        conditions = tenant.get("status", {}).get("conditions", []) if tenant else []
+        last_condition = next((condition for condition in conditions if condition.get("type") == condition_type), {})
+        reason = last_condition.get("reason", "")
+        if reason in terminal_reasons:
+            status = last_condition.get("status", "") or "<missing>"
+            message = last_condition.get("message", "") or "<no message>"
+            raise RuntimeError(
+                f"Tenant {tenant_name} default networking is unavailable "
+                f"(condition status={status}, reason={reason}): {message}"
+            )
+        return last_condition
+
+    try:
+        poll_until(
+            fn=_read_condition,
+            until=lambda condition: (
+                condition is not None
+                and condition.get("status") == expected_status
+                and condition.get("reason") in successful_reasons
+            ),
+            retries=120,
+            delay=5,
+            description=f"Tenant {tenant_name} {condition_type}={expected_status}/{sorted(successful_reasons)}",
+            resource_kind=WaitResourceKind.TENANT,
+            resource_id=tenant_name,
+        )
+    except TimeoutError:
+        status = last_condition.get("status", "") or "<missing>"
+        reason = last_condition.get("reason", "") or "<missing>"
+        message = last_condition.get("message", "") or "<no message>"
+        raise TimeoutError(
+            f"Tenant {tenant_name} did not reach {condition_type}={expected_status} "
+            f"with reason in {sorted(successful_reasons)} "
+            f"(last status={status}, reason={reason}, message={message})"
+        ) from None
 
 
 def wait_for_tenant_deletion(*, k8s: K8sClient, name: str) -> None:
@@ -1787,8 +1893,10 @@ def wait_for_bmi_deletion(*, k8s: K8sClient, name: str) -> None:
     # backoff wait plus job execution time, without silently swallowing an
     # actually-stuck deletion (still fails, just later).
     poll_until(
-        fn=lambda: not k8s.is_present(resource="baremetalinstance", name=name),
+        fn=lambda: k8s.is_absent(resource="baremetalinstances.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=270,
         delay=10,
         description=f"{name} BareMetalInstance deletion",

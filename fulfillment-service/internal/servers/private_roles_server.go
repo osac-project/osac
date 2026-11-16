@@ -19,10 +19,12 @@ import (
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
-
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -33,6 +35,7 @@ type PrivateRolesServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
+	permissionCatalog *catalog.Catalog
 }
 
 var _ privatev1.RolesServer = (*PrivateRolesServer)(nil)
@@ -41,8 +44,9 @@ var _ privatev1.RolesServer = (*PrivateRolesServer)(nil)
 type PrivateRolesServer struct {
 	privatev1.UnimplementedRolesServer
 
-	logger  *slog.Logger
-	generic *GenericServer[*privatev1.Role]
+	logger            *slog.Logger
+	generic           *GenericServer[*privatev1.Role]
+	permissionCatalog *catalog.Catalog
 }
 
 // NewPrivateRolesServer creates a new builder for the private roles server.
@@ -82,6 +86,13 @@ func (b *PrivateRolesServerBuilder) SetFilterDesc(value protoreflect.MessageDesc
 	return b
 }
 
+// SetPermissionCatalog sets the permission catalog used to validate the permission rules of
+// roles. This is mandatory.
+func (b *PrivateRolesServerBuilder) SetPermissionCatalog(value *catalog.Catalog) *PrivateRolesServerBuilder {
+	b.permissionCatalog = value
+	return b
+}
+
 // Build creates the private roles server from the builder configuration.
 func (b *PrivateRolesServerBuilder) Build() (result *PrivateRolesServer, err error) {
 	if b.logger == nil {
@@ -90,6 +101,10 @@ func (b *PrivateRolesServerBuilder) Build() (result *PrivateRolesServer, err err
 	}
 	if b.tenancyLogic == nil {
 		err = errors.New("tenancy logic is mandatory")
+		return
+	}
+	if b.permissionCatalog == nil {
+		err = errors.New("permission catalog is mandatory")
 		return
 	}
 
@@ -107,8 +122,9 @@ func (b *PrivateRolesServerBuilder) Build() (result *PrivateRolesServer, err err
 	}
 
 	result = &PrivateRolesServer{
-		logger:  b.logger,
-		generic: generic,
+		logger:            b.logger,
+		generic:           generic,
+		permissionCatalog: b.permissionCatalog,
 	}
 	return
 }
@@ -127,13 +143,13 @@ func (s *PrivateRolesServer) Get(ctx context.Context,
 
 func (s *PrivateRolesServer) Create(ctx context.Context,
 	request *privatev1.RolesCreateRequest) (response *privatev1.RolesCreateResponse, err error) {
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, s.validatePermissions)
 	return
 }
 
 func (s *PrivateRolesServer) Update(ctx context.Context,
 	request *privatev1.RolesUpdateRequest) (response *privatev1.RolesUpdateResponse, err error) {
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, s.validatePermissions)
 	return
 }
 
@@ -147,4 +163,20 @@ func (s *PrivateRolesServer) Signal(ctx context.Context,
 	request *privatev1.RolesSignalRequest) (response *privatev1.RolesSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
+}
+
+// validatePermissions checks the permission rules of a role candidate against the permission
+// catalog. The generic server calls it after applying the update mask, so it always validates the
+// final set of rules of the role.
+func (s *PrivateRolesServer) validatePermissions(_ context.Context, _, candidate *privatev1.Role) error {
+	for i, rule := range candidate.GetSpec().GetPermissions() {
+		if err := s.permissionCatalog.ValidateRule(rule.GetService(), rule.GetMethods()); err != nil {
+			return grpcstatus.Errorf(
+				grpccodes.InvalidArgument,
+				"invalid permissions rule %d: %s",
+				i+1, err,
+			)
+		}
+	}
+	return nil
 }

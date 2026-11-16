@@ -58,6 +58,15 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
+  - networkattachments
+  verbs:
+  - create
+  - delete
+  - get
+  - patch
+- apiGroups:
+  - osac.openshift.io
+  resources:
   - networkclasses
   - subnets
   verbs:

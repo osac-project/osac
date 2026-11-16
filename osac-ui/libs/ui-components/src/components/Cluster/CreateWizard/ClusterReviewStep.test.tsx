@@ -80,7 +80,7 @@ describe('ClusterReviewStep', () => {
         rowId: 'workers-row',
         name: 'workers',
         hostType: { id: 'bmit-worker', name: 'worker' },
-        size: '1',
+        size: 1,
       },
     ];
     renderWithProviders(

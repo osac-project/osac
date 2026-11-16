@@ -64,9 +64,9 @@
           - install_step_wait_for_agents_default is not defined
           - install_step_cluster_network_default is not defined
           - install_step_external_access_default is defined
-          - install_step_external_access_default.name == "osac.service.external_access"
-          - install_step_external_access_default.tasks_from == "caas_create.yaml"
+          - install_step_external_access_default.name == "ci.steps.external_access"
+          - install_step_external_access_default.tasks_from == "create.yaml"
         fail_msg: >-
-          ocp_ci_small must use service-owned CaaS external access tasks,
+          ocp_ci_small must use CI-owned external access orchestration,
           without the old
           install_step_cluster_network_default (OSAC-5697).

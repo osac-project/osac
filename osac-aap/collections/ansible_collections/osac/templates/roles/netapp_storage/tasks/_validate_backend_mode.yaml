@@ -1,0 +1,347 @@
+---
+# Shared per-backend mode discriminator and input validator for ONTAP backends
+# (included by _setup_backend.yaml and _ensure_storage_class_backend.yaml with
+# _netapp_backend_id in scope).
+#
+# Sets:
+#   _backend_tiers:           list of dispatched tiers for _netapp_backend_id
+#   _netapp_is_shared_tbc:     boolean (true = Shared-TBC mode, false = Dedicated-SVM mode)
+#   _netapp_shared_profile_map: mapping of profile.name -> {tbc_namespace, tbc_name} (when Shared-TBC)
+#   _netapp_qos_tier_names:   names of tiers with non-zero qos_limits.static_limits
+#   _netapp_qos_policies:     tier name -> prepared QoS policy group (Dedicated-SVM)
+
+- name: Fail if backend connection details are missing or invalid for dispatched backend
+  ansible.builtin.fail:
+    msg: >-
+      No valid mapping entry for a dispatched backend_id in
+      storage_backend_connections.
+  when: >-
+    _provider_backend_connections is not defined or
+    _netapp_backend_id not in _provider_backend_connections or
+    _provider_backend_connections[_netapp_backend_id] is not mapping
+  no_log: true
+
+- name: Select backend tiers and determine ONTAP backend tenancy mode
+  ansible.builtin.set_fact:
+    _backend_tiers: "{{ _provider_tiers | selectattr('backend_id', 'equalto', _netapp_backend_id) | list }}"
+    _netapp_is_shared_tbc: >-
+      {{ _provider_backend_connections[_netapp_backend_id].provider_config is defined and
+         _provider_backend_connections[_netapp_backend_id].provider_config is mapping and
+         _provider_backend_connections[_netapp_backend_id].provider_config.profiles is defined }}
+  no_log: true
+
+# A tier requests bandwidth QoS when either qos_limits.static_limits ceiling is
+# non-zero (the same signal osac.service.storage_provider uses to derive
+# qos_policy). ONTAP enforces QoS only through pre-created policy groups, so a
+# QoS-requesting tier must be bound to a named policy group or be rejected.
+- name: Determine which dispatched tiers request bandwidth QoS
+  ansible.builtin.set_fact:
+    _netapp_qos_tier_names: >-
+      {% set names = [] -%}
+      {% for tier in _backend_tiers -%}
+      {% set _ql = tier.qos_limits if (tier.qos_limits is defined and tier.qos_limits is mapping) else {} -%}
+      {% set _sl = _ql.static_limits if (_ql.static_limits is defined and _ql.static_limits is mapping) else {} -%}
+      {% if (_sl.max_reads_bw_mbps | default(0, true) | int) > 0
+            or (_sl.max_writes_bw_mbps | default(0, true) | int) > 0 -%}
+      {% set _ = names.append(tier.name) -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ names }}
+  no_log: true
+
+- name: Fail if backend connection defines both provider_config.profiles and tenant_preparation
+  ansible.builtin.fail:
+    msg: >-
+      storage_backend_connections entry for dispatched backend defines both
+      provider_config.profiles (Shared-TBC mode) and tenant_preparation
+      (Dedicated-SVM mode). Configure exactly one mode per backend.
+  when: >-
+    (_netapp_is_shared_tbc | bool) and
+    _provider_backend_connections[_netapp_backend_id].tenant_preparation is defined
+  no_log: true
+
+- name: Fail if Shared-TBC provider_config.profiles is not a non-empty list
+  ansible.builtin.fail:
+    msg: >-
+      Shared-TBC storage_backend_connections entry must define a non-empty list
+      in provider_config.profiles.
+  when: >-
+    (_netapp_is_shared_tbc | bool) and (
+      _provider_backend_connections[_netapp_backend_id].provider_config.profiles is not sequence or
+      _provider_backend_connections[_netapp_backend_id].provider_config.profiles is string or
+      _provider_backend_connections[_netapp_backend_id].provider_config.profiles is mapping or
+      (_provider_backend_connections[_netapp_backend_id].provider_config.profiles | length) == 0
+    )
+  no_log: true
+
+- name: Validate Shared-TBC profile entries
+  ansible.builtin.fail:
+    msg: >-
+      Invalid entry in provider_config.profiles. Every profile must be a mapping
+      with a valid DNS-label name and shared.tbc_namespace, plus a valid
+      DNS-subdomain shared.tbc_name (max 253 characters).
+  when: >-
+    (_netapp_is_shared_tbc | bool) and (
+      (
+        _provider_backend_connections[_netapp_backend_id].provider_config.profiles
+        | select('mapping')
+        | selectattr('name', 'defined')
+        | selectattr('name', 'string')
+        | selectattr('shared', 'defined')
+        | selectattr('shared', 'mapping')
+        | selectattr('shared.tbc_namespace', 'defined')
+        | selectattr('shared.tbc_namespace', 'string')
+        | selectattr('shared.tbc_name', 'defined')
+        | selectattr('shared.tbc_name', 'string')
+        | list | length
+      ) != (_provider_backend_connections[_netapp_backend_id].provider_config.profiles | length) or
+      (
+        _provider_backend_connections[_netapp_backend_id].provider_config.profiles
+        | map(attribute='name') | map('trim')
+        | reject('regex', '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+        | list | length
+      ) > 0 or
+      (
+        _provider_backend_connections[_netapp_backend_id].provider_config.profiles
+        | map(attribute='shared.tbc_namespace') | map('trim')
+        | reject('regex', '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+        | list | length
+      ) > 0 or
+      (
+        _provider_backend_connections[_netapp_backend_id].provider_config.profiles
+        | map(attribute='shared.tbc_name') | map('trim')
+        | map('length') | select('gt', 253)
+        | list | length
+      ) > 0 or
+      (
+        _provider_backend_connections[_netapp_backend_id].provider_config.profiles
+        | map(attribute='shared.tbc_name') | map('trim')
+        | reject('regex', '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$')
+        | list | length
+      ) > 0
+    )
+  no_log: true
+
+- name: Fail if Shared-TBC profile names are not unique
+  ansible.builtin.fail:
+    msg: >-
+      Duplicate profile name in provider_config.profiles. Each profile name must
+      be unique within a backend connection.
+  when: >-
+    (_netapp_is_shared_tbc | bool) and (
+      (_provider_backend_connections[_netapp_backend_id].provider_config.profiles | map(attribute='name') | map('trim') | list | length) !=
+      (_provider_backend_connections[_netapp_backend_id].provider_config.profiles | map(attribute='name') | map('trim') | unique | list | length)
+    )
+  no_log: true
+
+- name: Build Shared-TBC profile map for dispatched backend
+  ansible.builtin.set_fact:
+    _netapp_shared_profile_map: >-
+      {% set pmap = {} -%}
+      {% for profile in _provider_backend_connections[_netapp_backend_id].provider_config.profiles -%}
+      {% set _ = pmap.update({
+           (profile.name | string | trim): {
+             'tbc_namespace': profile.shared.tbc_namespace | string | trim,
+             'tbc_name': profile.shared.tbc_name | string | trim
+           }
+         }) -%}
+      {% endfor -%}
+      {{ pmap }}
+  when: _netapp_is_shared_tbc | bool
+  no_log: true
+
+- name: Fail if a Shared-TBC tier is missing valid provider_config profile or pool_selector
+  ansible.builtin.fail:
+    msg: >-
+      Every tier targeting a Shared-TBC ONTAP backend must define
+      provider_config.profile referencing a declared profile in
+      provider_config.profiles and a non-empty provider_config.pool_selector
+      mapping.
+  when: >-
+    (_netapp_is_shared_tbc | bool) and (
+      (
+        _backend_tiers
+        | selectattr('provider_config', 'defined')
+        | selectattr('provider_config', 'mapping')
+        | selectattr('provider_config.profile', 'defined')
+        | selectattr('provider_config.profile', 'string')
+        | selectattr('provider_config.pool_selector', 'defined')
+        | selectattr('provider_config.pool_selector', 'mapping')
+        | list | length
+      ) != (_backend_tiers | length) or
+      (
+        _backend_tiers
+        | map(attribute='provider_config.profile')
+        | map('trim')
+        | difference(_netapp_shared_profile_map.keys() | list)
+        | list | length
+      ) > 0 or
+      (
+        _backend_tiers
+        | map(attribute='provider_config.pool_selector')
+        | map('length')
+        | select('equalto', 0)
+        | list | length
+      ) > 0
+    )
+  no_log: true
+
+- name: Fail if any Shared-TBC tier pool_selector key or value is invalid
+  ansible.builtin.fail:
+    msg: >-
+      Invalid key or value in tier provider_config.pool_selector. Every key and
+      value must be a non-empty string matching
+      ^[A-Za-z0-9][A-Za-z0-9_./-]{0,252}$ (no semicolons, equals signs, commas,
+      or whitespace).
+  when: >-
+    (_netapp_is_shared_tbc | bool) and (
+      (
+        _backend_tiers
+        | map(attribute='provider_config.pool_selector')
+        | map('dict2items')
+        | flatten(levels=1)
+        | selectattr('key', 'string')
+        | selectattr('value', 'string')
+        | selectattr('key', 'regex', '^[A-Za-z0-9][A-Za-z0-9_./-]{0,252}$')
+        | selectattr('value', 'regex', '^[A-Za-z0-9][A-Za-z0-9_./-]{0,252}$')
+        | list | length
+      ) != (
+        _backend_tiers
+        | map(attribute='provider_config.pool_selector')
+        | map('dict2items')
+        | flatten(levels=1)
+        | list | length
+      )
+    )
+  no_log: true
+
+- name: Fail if a Shared-TBC tier requests bandwidth QoS
+  ansible.builtin.fail:
+    msg: >-
+      Shared-TBC ONTAP tiers cannot enforce qos_limits.static_limits: QoS policy
+      groups belong to the customer-managed TridentBackendConfig virtual pools
+      and a StorageClass cannot carry them. Set the tier's bandwidth limits to
+      0 and apply QoS in the customer virtual pool selected by pool_selector.
+  when: (_netapp_is_shared_tbc | bool) and (_netapp_qos_tier_names | length > 0)
+  no_log: true
+
+- name: Fail if tenant_preparation is missing for Dedicated-SVM backend
+  ansible.builtin.fail:
+    msg: >-
+      storage_backend_connections entry is missing
+      tenant_preparation.provider_config. osac-operator must resolve the tenant
+      preparation and supply provider_config (username, password, svm) in
+      storage_backend_connections.
+  when: >-
+    not (_netapp_is_shared_tbc | bool) and (
+      _provider_backend_connections[_netapp_backend_id].tenant_preparation is not defined or
+      _provider_backend_connections[_netapp_backend_id].tenant_preparation is not mapping or
+      _provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config is not defined or
+      _provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config is not mapping
+    )
+  no_log: true
+
+# managementLIF must match the credential scope (NetApp Trident ontap-san
+# docs): an SVM-scoped account (vsadmin-style) authenticates only through that
+# SVM's management LIF, while a cluster-scoped account uses the cluster
+# management LIF plus `svm`. The prepared assignment may therefore carry its
+# own management_lif; the backend connection endpoint is the fallback.
+- name: Fail if Dedicated-SVM backend has neither management_lif nor endpoint
+  ansible.builtin.fail:
+    msg: >-
+      Dedicated-SVM ONTAP backend has no management endpoint. Supply
+      tenant_preparation.provider_config.management_lif (the prepared SVM's
+      management LIF, required for SVM-scoped credentials) or a non-empty
+      backend connection endpoint (cluster management LIF for cluster-scoped
+      credentials).
+  when: >-
+    not (_netapp_is_shared_tbc | bool) and
+    ((_provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config.management_lif
+      | default('', true) | string | trim | regex_replace('^https?://', '') | regex_replace('/.*$', '') | trim | length) == 0) and
+    ((_provider_backend_connections[_netapp_backend_id].endpoint
+      | default('', true) | string | trim | regex_replace('^https?://', '') | regex_replace('/.*$', '') | trim | length) == 0)
+  no_log: true
+
+- name: Fail if Dedicated-SVM management_lif is not a host or host:port
+  ansible.builtin.fail:
+    msg: >-
+      tenant_preparation.provider_config.management_lif must be a hostname,
+      IPv4 address, or bracketed IPv6 address, optionally with a port.
+  when: >-
+    not (_netapp_is_shared_tbc | bool) and
+    ((_provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config.management_lif
+      | default('', true) | string | trim | length) > 0) and
+    (_provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config.management_lif
+      | string | trim | regex_replace('^https?://', '') | regex_replace('/.*$', '') | trim)
+    is not regex('^([A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])(:[0-9]{1,5})?$')
+  no_log: true
+
+- name: Validate operator-supplied tenant preparation fields for Dedicated-SVM backend
+  ansible.builtin.fail:
+    msg: >-
+      tenant_preparation is missing one or more required provider_config fields
+      (username, password, svm).
+  when: >-
+    not (_netapp_is_shared_tbc | bool) and (
+      (_provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config.username | default('', true) | string | trim | length) == 0 or
+      (_provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config.password | default('', true) | string | trim | length) == 0 or
+      (_provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config.svm | default('', true) | string | trim | length) == 0
+    )
+  no_log: true
+
+# QoS policy groups are created by a cluster administrator, owned by one SVM,
+# and only referenced by name from Trident virtual pools (Trident never creates
+# them and does not verify they exist until a PVC is provisioned). The prepared
+# assignment therefore names the policy group to use for each tier:
+#   tenant_preparation.provider_config.qos_policies: {<tier name>: <policy group>}
+- name: Select the prepared QoS policy group names for Dedicated-SVM backend
+  ansible.builtin.set_fact:
+    _netapp_qos_policies: >-
+      {{ (_provider_backend_connections[_netapp_backend_id].tenant_preparation.provider_config.qos_policies | default({}, true))
+         if not (_netapp_is_shared_tbc | bool) else {} }}
+  no_log: true
+
+- name: Fail if Dedicated-SVM qos_policies is not a mapping of valid policy group names
+  ansible.builtin.fail:
+    msg: >-
+      tenant_preparation.provider_config.qos_policies must map tier names to
+      ONTAP QoS policy group names (1-127 characters: letters, digits, '_',
+      '-', '.'; must not start with '-' or '.').
+  when: >-
+    not (_netapp_is_shared_tbc | bool) and (
+      _netapp_qos_policies is not mapping or
+      (
+        _netapp_qos_policies | dict2items
+        | selectattr('value', 'string')
+        | selectattr('value', 'regex', '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,126}$')
+        | list | length
+      ) != (_netapp_qos_policies | length)
+    )
+  no_log: true
+
+- name: Fail if a Dedicated-SVM tier requests bandwidth QoS without a prepared policy group
+  ansible.builtin.fail:
+    msg: >-
+      A tier requests bandwidth QoS (non-zero qos_limits.static_limits) but the
+      prepared assignment names no QoS policy group for it in
+      tenant_preparation.provider_config.qos_policies. Create a non-shared
+      policy group on the prepared SVM with the tier's throughput ceiling and
+      add it to qos_policies. ONTAP enforces one combined MB/s ceiling, not
+      separate read and write limits.
+  when: >-
+    not (_netapp_is_shared_tbc | bool) and
+    (_netapp_qos_tier_names | difference(_netapp_qos_policies.keys() | list) | length) > 0
+  no_log: true
+
+- name: Fail if a Dedicated-SVM tier specifies Shared-TBC provider_config fields
+  ansible.builtin.fail:
+    msg: >-
+      Dedicated-SVM ONTAP tiers must not set provider_config.profile or
+      provider_config.pool_selector.
+  when: >-
+    not (_netapp_is_shared_tbc | bool) and (
+      (_backend_tiers | selectattr('provider_config', 'defined') | rejectattr('provider_config', 'none') | rejectattr('provider_config', 'mapping') | list | length) > 0 or
+      (_backend_tiers | selectattr('provider_config', 'defined') | selectattr('provider_config', 'mapping') | map(attribute='provider_config') | selectattr('profile', 'defined') | list | length) > 0 or
+      (_backend_tiers | selectattr('provider_config', 'defined') | selectattr('provider_config', 'mapping') | map(attribute='provider_config') | selectattr('pool_selector', 'defined') | list | length) > 0
+    )
+  no_log: true

@@ -163,11 +163,13 @@ func (r *TenantReconciler) handleDelete(ctx context.Context, instance *v1alpha1.
 				return ctrl.Result{}, fmt.Errorf("get remote tenant namespace %q: %w", key.Name, err)
 			}
 		} else {
-			if !tenantNamespaceMatches(namespace, instance) {
-				return ctrl.Result{}, fmt.Errorf("remote namespace %q does not match Tenant %s/%s", key.Name, instance.GetNamespace(), instance.GetName())
-			}
 			if namespace.DeletionTimestamp.IsZero() {
-				if err := cluster.GetClient().Delete(ctx, namespace); err != nil && !apierrors.IsNotFound(err) {
+				uid := namespace.UID
+				resourceVersion := namespace.ResourceVersion
+				if err := cluster.GetClient().Delete(ctx, namespace, client.Preconditions{
+					UID:             &uid,
+					ResourceVersion: &resourceVersion,
+				}); err != nil && !apierrors.IsNotFound(err) {
 					return ctrl.Result{}, fmt.Errorf("delete remote tenant namespace %q: %w", key.Name, err)
 				}
 			}
@@ -217,53 +219,34 @@ func (r *TenantReconciler) ensureRemoteTenantNamespace(ctx context.Context, inst
 		return fmt.Errorf("get remote tenant namespace %q: %w", key.Name, err)
 	}
 
-	if !tenantNamespaceMatches(namespace, instance) {
-		return fmt.Errorf("remote namespace %q does not match Tenant %s/%s", key.Name, instance.GetNamespace(), instance.GetName())
-	}
 	if !namespace.DeletionTimestamp.IsZero() {
 		return fmt.Errorf("remote tenant namespace %q is being deleted", key.Name)
 	}
-	if namespace.Labels[osacTenantKey] == "" ||
-		(instance.Labels[osacTenantIDLabel] != "" && namespace.Labels[osacTenantIDLabel] == "") {
+
+	labels := tenantNamespaceLabels(instance)
+	if namespace.Labels[osacTenantRefLabel] != labels[osacTenantRefLabel] ||
+		namespace.Labels[osacProjectRefLabel] != labels[osacProjectRefLabel] {
 		base := namespace.DeepCopy()
 		if namespace.Labels == nil {
 			namespace.Labels = make(map[string]string)
 		}
-		namespace.Labels[osacTenantKey] = instance.GetName()
-		if tenantID := instance.Labels[osacTenantIDLabel]; tenantID != "" {
-			namespace.Labels[osacTenantIDLabel] = tenantID
+		for key, value := range labels {
+			namespace.Labels[key] = value
 		}
-		if err := cluster.GetClient().Patch(ctx, namespace, client.MergeFrom(base)); err != nil {
-			return fmt.Errorf("set tenant identity labels on remote namespace %q: %w", key.Name, err)
+		patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		if err := cluster.GetClient().Patch(ctx, namespace, patch); err != nil {
+			return fmt.Errorf("set tenant association labels on remote namespace %q: %w", key.Name, err)
 		}
 	}
 	return nil
 }
 
-// tenantNamespaceLabels returns the identity labels for a Tenant namespace.
+// tenantNamespaceLabels returns the association labels used by Fulfillment.
 func tenantNamespaceLabels(instance *v1alpha1.Tenant) map[string]string {
-	labels := map[string]string{
-		osacTenantKey:       instance.GetName(),
+	return map[string]string{
 		osacTenantRefLabel:  instance.GetName(),
 		osacProjectRefLabel: instance.GetNamespace(),
 	}
-	if tenantID := instance.Labels[osacTenantIDLabel]; tenantID != "" {
-		labels[osacTenantIDLabel] = tenantID
-	}
-	return labels
-}
-
-// tenantNamespaceMatches reports whether a namespace's ownership labels are
-// compatible with the Tenant.
-func tenantNamespaceMatches(namespace *corev1.Namespace, instance *v1alpha1.Tenant) bool {
-	if namespace.Labels[osacTenantRefLabel] != instance.GetName() ||
-		namespace.Labels[osacProjectRefLabel] != instance.GetNamespace() ||
-		(namespace.Labels[osacTenantKey] != "" && namespace.Labels[osacTenantKey] != instance.GetName()) {
-		return false
-	}
-	tenantID := instance.Labels[osacTenantIDLabel]
-	namespaceTenantID := namespace.Labels[osacTenantIDLabel]
-	return namespaceTenantID == "" || namespaceTenantID == tenantID
 }
 
 func (r *TenantReconciler) mapObjectToTenant(ctx context.Context, obj client.Object) []reconcile.Request {

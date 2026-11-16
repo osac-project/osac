@@ -62,14 +62,14 @@
            })
          }, recursive=True) }}
 
-- name: Add fallback root disk to BMH patch
+- name: Add fallback root device hints to BMH patch
   when:
-    - fallback_root_disk | default('') | length > 0
+    - fallback_root_device_hints | default({}) | length > 0
     - not (bmh_info.spec.rootDeviceHints | default({}))
   ansible.builtin.set_fact:
     bmh_patch: >-
       {{ bmh_patch | combine(
            {'metadata': {'resourceVersion': bmh_info.metadata.resourceVersion,
-                         'annotations': {'osac.openshift.io/fallback-root-device': fallback_root_disk}},
-            'spec': {'rootDeviceHints': {'deviceName': fallback_root_disk}}},
+                         'annotations': {'osac.openshift.io/fallback-root-device': fallback_root_device_hints | to_json}},
+            'spec': {'rootDeviceHints': fallback_root_device_hints}},
            recursive=True) }}

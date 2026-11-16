@@ -230,6 +230,16 @@ as follows:
   address. A canceled AAP job can still finish a provider request after the
   Lease is released and write stale state; revision or ETag fencing is future
   hardening, not a current conformance requirement.
+- **EVPN DHCP:** `cudn_evpn` uses OVN-Kubernetes DHCP for VMs, which allocates
+  from `overlay_ipv4_cidrs`. Its `reservedSubnets` covers only the Subnet
+  outside the overlay. The gateway and management-port addresses lie inside
+  the overlay and belong only in `infrastructureSubnets`. Netris enables DHCP
+  over `physical_ipv4_cidrs` when it creates the Subnet's V-Net and that range
+  is non-empty, and repairs it on every rerun. A physical attachment also
+  repairs it before moving a port. The range stays enabled after the attachment
+  is removed. Netris cannot filter DHCP offers by MAC, so a physical-range
+  offer can reach VMs on the same segment; whether a VM accepts one remains
+  an open lab check.
 - **DNS:** OSAC has no per-resource DNS. VMs get the cluster DNS that
   OVN-Kubernetes DHCP gives on the primary UDN. Bare metal on Netris gets an
   installation-level resolver (default `8.8.8.8`) from the Netris default DHCP

@@ -4,9 +4,10 @@
 # l2_vni of an evpn network segment, after the VPC's VNI is checked against
 # virtual_network.status.l3Vni. The gateway and DHCP follow netris_vnet_plan
 # (see netris_evpn_vnet_gateway_mode in defaults). Get-or-create by name; a
-# V-Net whose gateway or DHCP differs is updated with the full body. With a
-# network type the DHCP of an existing V-Net is left alone: a bare-metal
-# attachment switches it on (apply_network_attachment) and a rerun must keep it.
+# V-Net whose gateway or DHCP differs is updated with the full body. For EVPN,
+# Netris DHCP serves ipam.physical_ipv4_cidrs and OVN serves VM DHCP from
+# overlay_ipv4_cidrs. Enable the physical range at creation and repair it on
+# rerun; a physical attachment also enables it before moving a port.
 - name: Create the Subnet on Netris
   block:
     - name: Check the settings
@@ -186,7 +187,11 @@
 
     - name: Compare the gateway of the V-Net with the plan
       ansible.builtin.set_fact:
-        _netris_gateway: "{{ netris_vnet_detail | osac.templates.netris_vnet_gateway_update(_netris_plan, netris_network_type == 'evpn') }}"
+        _netris_gateway: >-
+          {{ netris_vnet_detail
+             | osac.templates.netris_vnet_gateway_update(
+                 _netris_plan
+               ) }}
 
     - name: Update the gateway and DHCP of an existing V-Net
       when: not _netris_gateway.matches

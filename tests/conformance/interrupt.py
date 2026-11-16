@@ -48,13 +48,17 @@ class InterruptGate:
             raise KeyboardInterrupt
         self.first = True
         child = self.child
-        if child is not None and child.poll() is None:
+        if child is None:
+            # Nothing is running, so no test outcome can be lost.
+            raise Interrupted
+        if child.poll() is None:
             # Let the running pytest process finish the current test and stop.
             # pytest stops gracefully on SIGINT and still writes the results of
             # completed tests; SIGTERM would kill it without writing anything.
             child.send_signal(signal.SIGINT)
-            return
-        raise Interrupted
+        # While the child stays attached, the runner reads the outcomes pytest
+        # wrote and raises ``Interrupted`` with them. Raising from this handler
+        # instead would escape that read-back and discard completed outcomes.
 
     def install(self) -> None:
         for signum in (signal.SIGINT, signal.SIGTERM):

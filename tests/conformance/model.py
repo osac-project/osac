@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,23 +13,23 @@ if TYPE_CHECKING:
     from tests.conformance.redact import Redactor
 
 
-class Result(str, Enum):
+class Result(StrEnum):
     PASS = "pass"
     FAIL = "fail"
     SKIP = "skip"
 
 
-class Verdict(str, Enum):
+class Verdict(StrEnum):
     CONFORMANT = "conformant"
     IN_PROGRESS = "in progress"
 
 
-class CheckResult(str, Enum):
+class CheckResult(StrEnum):
     PASS = "pass"
     FAIL = "fail"
 
 
-class Classification(str, Enum):
+class Classification(StrEnum):
     BLOCKING = "blocking"
     INFORMING = "informing"
 

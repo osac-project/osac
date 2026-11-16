@@ -1389,7 +1389,10 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 		test "$$(grep -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$vmaas_render")" -eq 1; \
 		helm template osac $(OSAC_CHART) \
 			--values $(OSAC_CHART)/ci/default-values.yaml > "$$default_operator_render"; \
-		! grep -q 'name: OSAC_VENDOR_CONTROLLERS' "$$default_operator_render"; \
+		if grep -q 'name: OSAC_VENDOR_CONTROLLERS' "$$default_operator_render"; then \
+			printf 'Default OSAC render unexpectedly sets OSAC_VENDOR_CONTROLLERS\n' >&2; \
+			exit 1; \
+		fi; \
 		test "$$(grep -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$default_operator_render")" -eq 1; \
 		assert_helm_failure 'operator[./]vendorControllers[./]lvms' \
 			helm template osac $(OSAC_CHART) \
@@ -1402,7 +1405,10 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 		helm template osac $(OSAC_CHART) \
 			--values charts/osac/ci/full-values.yaml > "$$full_render"; \
 		test "$$(grep -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$full_render")" -eq 1; \
-		! grep -Eq '# Source: osac/charts/(csiDriver|csiBackends)/' "$$full_render"; \
+		if grep -Eq '# Source: osac/charts/(csiDriver|csiBackends)/' "$$full_render"; then \
+			printf 'Full OSAC render unexpectedly includes CSI subcharts\n' >&2; \
+			exit 1; \
+		fi; \
 		helm template osac $(OSAC_CHART) \
 			--values charts/osac/ci/full-values.yaml \
 			--set operator.fulfillment.configMap.name=osac-custom-fulfillment-config > "$$custom_render"; \
@@ -1420,7 +1426,10 @@ csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider ch
 		grep -q 'secretName: osac-csi-driver-credentials' "$$node_render"; \
 		helm template osac-infra $(INFRA_CHART) \
 			--values values/caas-ci/infra.yaml > "$$infra_render"; \
-		! grep -Eq 'osac-infra-create-csi-creds|osac-csi-driver-credentials' "$$infra_render"; \
+		if grep -Eq 'osac-infra-create-csi-creds|osac-csi-driver-credentials' "$$infra_render"; then \
+			printf 'CaaS infra render unexpectedly includes CSI credential resources\n' >&2; \
+			exit 1; \
+		fi; \
 		assert_helm_failure 'namespace.*must be one of' \
 			helm template csi-driver ../osac-csi-driver/charts/csi-driver \
 			--set namespace=not-osac-csi; \
@@ -1499,20 +1508,29 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
-	@set -e; for d in values/*/; do \
-		infra="$${d}infra.yaml"; \
-		extra=""; \
-		case "$${d%/}" in \
-			values/bmaas-netbox-ci) extra="--values values/bmaas-ci/infra.yaml";; \
-		esac; \
-		if [ -f "$$infra" ]; then \
-			echo "Validating $$infra..."; \
-			helm template osac-deps $(DEPS_CHART) $$extra --values "$$infra"; \
-			helm template osac-infra $(INFRA_CHART) $$extra --values "$$infra"; \
-		fi; \
-	done
-	@echo "Validating values/dev/kind-infra.yaml..."
-	helm template osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
+	@set -euo pipefail; \
+		render="$$(mktemp)"; \
+		trap 'rm -f "$$render"' EXIT; \
+		render_chart() { \
+			if ! helm template "$$@" >"$$render" 2>&1; then \
+				cat "$$render" >&2; \
+				exit 1; \
+			fi; \
+		}; \
+		for d in values/*/; do \
+			infra="$${d}infra.yaml"; \
+			extra=""; \
+			case "$${d%/}" in \
+				values/bmaas-netbox-ci) extra="--values values/bmaas-ci/infra.yaml";; \
+			esac; \
+			if [ -f "$$infra" ]; then \
+				echo "Validating $$infra..."; \
+				render_chart osac-deps $(DEPS_CHART) $$extra --values "$$infra"; \
+				render_chart osac-infra $(INFRA_CHART) $$extra --values "$$infra"; \
+			fi; \
+		done; \
+		echo "Validating values/dev/kind-infra.yaml..."; \
+		render_chart osac-infra $(INFRA_CHART) --values values/dev/kind-infra.yaml
 	./scripts/validate-keycloak-credentials.sh
 	./scripts/validate-hub-access-rbac.sh
 	./scripts/validate-keycloak-ui-redirect-uris.py

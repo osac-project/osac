@@ -119,7 +119,7 @@
           osac.openshift.io/fulfillment-ca-sha256: "{{ _trust_hash }}"
       ansible.builtin.assert:
         that:
-          - _trust_targets.results[0].resources[0].data == {'bundle.pem': _trust_bundle}
+          - "_trust_targets.results[0].resources[0].data == {'bundle.pem': _trust_bundle}"
           - _trust_targets.results[0].resources[0].metadata.annotations == _expected_config_map_annotations
           - _trust_targets.results[1].resources[0].spec.template.metadata.annotations['osac.openshift.io/fulfillment-ca-sha256'] == _trust_hash
           - _trust_targets.results[2].resources[0].spec.template.metadata.annotations['osac.openshift.io/fulfillment-ca-sha256'] is not defined

@@ -1468,20 +1468,6 @@ var _ = Describe("Clusters server", func() {
 			Expect(err.Error()).To(ContainSubstring("status.version_transition_time is output-only"))
 		})
 
-		DescribeTable("rejects masks targeting private attempt IDs", func(path string) {
-			_, err := server.ClustersServer.Update(ctx, publicv1.ClustersUpdateRequest_builder{
-				Object: publicv1.Cluster_builder{Id: "cluster-id",
-					Spec: publicv1.ClusterSpec_builder{}.Build()}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err).To(MatchError(ContainSubstring("server-owned")))
-		},
-			Entry("control plane", "spec.control_plane_attempt_id"),
-			Entry("node-set map", "spec.node_set_attempt_ids"),
-			Entry("named node set", "spec.node_set_attempt_ids.compute"),
-		)
-
 		It("preserves server-owned fields through a public spec-masked edit", func() {
 			created, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
@@ -1496,6 +1482,7 @@ var _ = Describe("Clusters server", func() {
 			privateCluster, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			privateCluster.GetObject().GetSpec().SetSupportsAutomaticCaasEndpoints(true)
+			privateCluster.GetObject().GetStatus().SetObservedVersion("4.17.0")
 			clustersDAO, err := dao.NewGenericDAO[*privatev1.Cluster]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
@@ -1518,26 +1505,16 @@ var _ = Describe("Clusters server", func() {
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.version"}},
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			updated, err := server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
-				Object: publicv1.Cluster_builder{Id: id, Spec: publicv1.ClusterSpec_builder{
-					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"compute": publicv1.ClusterNodeSet_builder{Version: publicv1.ClusterVersionReference_builder{Name: "4-18-full-object"}.Build()}.Build(),
-					},
-				}.Build()}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets.compute.version"}},
-			}.Build())
-			Expect(err).NotTo(HaveOccurred())
 			before, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: id}.Build())
 			Expect(err).NotTo(HaveOccurred())
-			cpID := before.GetObject().GetSpec().GetControlPlaneAttemptId()
-			computeID := before.GetObject().GetSpec().GetNodeSetAttemptIds()["compute"]
-			Expect(cpID).NotTo(BeEmpty())
-			Expect(computeID).NotTo(BeEmpty())
-			Expect(before.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(2))
+			attemptID := before.GetObject().GetStatus().GetUpgradeAttemptId()
+			Expect(attemptID).NotTo(BeEmpty())
+			Expect(before.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(1))
 
+			updated, err := server.Get(ctx, publicv1.ClustersGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
 			full := proto.Clone(updated.GetObject()).(*publicv1.Cluster)
 			full.GetMetadata().SetLabels(map[string]string{"example.com/review": "updated"})
-			Expect(full.GetStatus().GetUpgradeHistory()).To(HaveLen(2))
 			for _, attempt := range full.GetStatus().GetUpgradeHistory() {
 				attempt.SetState(publicv1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED)
 			}
@@ -1550,13 +1527,10 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(after.GetObject().GetMetadata().GetLabels()["example.com/review"]).To(Equal("updated"))
 			Expect(after.GetObject().GetSpec().GetSupportsAutomaticCaasEndpoints()).To(BeTrue())
-			Expect(after.GetObject().GetSpec().GetControlPlaneAttemptId()).To(Equal(cpID))
-			Expect(after.GetObject().GetSpec().GetNodeSetAttemptIds()["compute"]).To(Equal(computeID))
-			Expect(after.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(2))
-			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal(computeID))
-			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[1].GetAttemptId()).To(Equal(cpID))
+			Expect(after.GetObject().GetStatus().GetUpgradeAttemptId()).To(Equal(attemptID))
+			Expect(after.GetObject().GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal(attemptID))
 			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
-			Expect(after.GetObject().GetStatus().GetUpgradeHistory()[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
 		})
 
 		It("updates node-set size then version in separate masked requests", func() {
@@ -1616,6 +1590,17 @@ var _ = Describe("Clusters server", func() {
 			object = getResponse.GetObject()
 			verify(object)
 
+			privateCluster, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			privateCluster.GetObject().GetStatus().SetObservedVersion("4.17.0")
+			clustersDAO, err := dao.NewGenericDAO[*privatev1.Cluster]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = clustersDAO.Update().SetObject(privateCluster.GetObject()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
 			seedClusterVersion(ctx, privatev1.ClusterVersion_builder{
 				Id:       "public-node-target",
 				Metadata: privatev1.Metadata_builder{Name: "4-18-public", Tenant: testTenant}.Build(),
@@ -1627,20 +1612,19 @@ var _ = Describe("Clusters server", func() {
 			updated, err := server.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 				Object: publicv1.Cluster_builder{
 					Id: object.GetId(),
-					Spec: publicv1.ClusterSpec_builder{NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"compute": publicv1.ClusterNodeSet_builder{
-							Version: publicv1.ClusterVersionReference_builder{Name: "4-18-public"}.Build(),
-						}.Build(),
-					}}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Version: publicv1.ClusterVersionReference_builder{Name: "4-18-public"}.Build(),
+					}.Build(),
 				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.node_sets.compute.version"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.version"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetObject().GetSpec().GetVersion().GetId()).To(Equal("public-node-target"))
 			Expect(updated.GetObject().GetSpec().GetNodeSets()["compute"].GetSize()).To(Equal(int32(4)))
-			Expect(updated.GetObject().GetSpec().GetNodeSets()["compute"].GetVersion().GetId()).To(Equal("public-node-target"))
-			Expect(updated.GetObject().GetSpec().GetNodeSets()["gpu"].GetVersion().GetId()).To(Equal(
-				object.GetSpec().GetNodeSets()["gpu"].GetVersion().GetId()))
-			Expect(updated.GetObject().GetSpec().GetVersion().GetId()).To(Equal(object.GetSpec().GetVersion().GetId()))
+			privateUpdated, err := server.private.Get(ctx, privatev1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(privateUpdated.GetObject().GetStatus().GetNodeSets()["compute"].GetVersion().GetId()).To(Equal("cv-default"))
+			Expect(privateUpdated.GetObject().GetStatus().GetNodeSets()["gpu"].GetVersion().GetId()).To(Equal("cv-default"))
 		})
 
 		It("Allows removing a node set when multiple exist", func() {

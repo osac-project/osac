@@ -46,6 +46,9 @@ type publicClusterCreationFixture struct {
 
 func (s *publicClusterCreationFixture) Create(ctx context.Context, request *publicv1.ClustersCreateRequest) (*publicv1.ClustersCreateResponse, error) {
 	request = proto.Clone(request).(*publicv1.ClustersCreateRequest)
+	if spec := request.GetObject().GetSpec(); spec != nil && spec.GetPullSecretSecret() == nil {
+		spec.SetPullSecretSecret(publicv1.SecretLocalReference_builder{Id: "fixture-pull-secret"}.Build())
+	}
 	if spec := request.GetObject().GetSpec(); spec != nil && spec.GetTemplate() != nil && spec.GetNodeSets() == nil {
 		spec = request.GetObject().GetSpec()
 		if spec.GetTemplate().GetId() == "my_bmit_template" || spec.GetTemplate().GetName() == "test-bmit-template" {
@@ -148,6 +151,7 @@ var _ = Describe("Clusters server", func() {
 
 		BeforeEach(func() {
 			var err error
+			seedClusterPullSecret(ctx)
 			seedReadyDefaultNetworkingWithNAT(testTenant)
 
 			// Create the server:
@@ -2448,6 +2452,7 @@ var _ = Describe("Clusters server", func() {
 
 		BeforeEach(func() {
 			var err error
+			seedClusterPullSecret(ctx)
 			seedReadyDefaultNetworkingWithNAT(testTenant)
 
 			publicServer, buildErr := NewClustersServer().

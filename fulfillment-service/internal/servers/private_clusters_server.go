@@ -1623,6 +1623,10 @@ func (s *PrivateClustersServer) applyClusterTemplate(
 	}
 
 	// Validate pull_secret_secret reference exists:
+	if cluster.GetSpec().GetPullSecretSecret() == nil {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+			"pull_secret_secret is required: supply a pull secret reference or configure a template default")
+	}
 	if err := s.validatePullSecretSecret(ctx, cluster, inheritsPullSecretSecret); err != nil {
 		return nil, err
 	}

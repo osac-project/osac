@@ -118,7 +118,7 @@ var _ = Describe("Cached identity deletion", func() {
 		},
 		Entry("present account", http.StatusNoContent, "", true),
 		Entry("absent exact account", http.StatusNotFound, `{"error":"User not found"}`, true),
-		Entry("missing realm", http.StatusNotFound, `{"error":"Realm not found."}`, false),
+		Entry("missing realm", http.StatusNotFound, `{"error":"Realm not found."}`, true),
 		Entry("generic route 404", http.StatusNotFound, `{"error":"HTTP 404 Not Found"}`, false),
 		Entry("empty 404", http.StatusNotFound, "", false),
 		Entry("proxy HTML 404", http.StatusNotFound, "<html>User not found</html>", false),

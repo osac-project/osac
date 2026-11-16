@@ -241,12 +241,11 @@ Touched-area requirements: [component guide](../fulfillment-service/AGENTS.md#in
 
 ### Cached User identity deletion (OSAC-7594)
 
-Both rows belong to
+This component-integration coverage belongs to
 [DEV OSAC-7594](https://redhat.atlassian.net/browse/OSAC-7594).
 
 | Tier | Boundary and cases | Command from `fulfillment-service/` |
 |---|---|---|
-| Unit | `internal/controllers/user/user_deletion_test.go` runs the reconciler and real IdP/HTTP clients against `httptest` responses. It checks cached-ID absence, realm/generic/malformed 404s, 401/403/5xx/transport failures, retries, versioned finalizer writes, and no deletion without a deletion timestamp. Persistence is a recording double. `it/it_user_deletion_unit_test.go` separately checks that wrapped HTTP request details do not reach Gomega failure output, without starting the live suite. | `go test ./internal/controllers/user ./internal/idp ./internal/apiclient -count=1 -timeout=5m` and `go test ./it -run '^TestUserDeletionKeycloakErrorOutput$' -count=1` |
 | Component integration | `it/it_user_deletion_test.go` uses the existing `it/` harness, Keycloak helpers and account/tenant fixtures. Real Fulfillment APIs, PostgreSQL, the deployed User reconciler and Keycloak exercise initially present and already-absent cached IDs, a same-username replacement, and an unaffected second tenant. The test waits for the controller finalizer to be stored before requesting normal deletion, then verifies User Get returns NotFound and the other identities survive in both APIs. No persistence or IdP doubles are used. | Against a compatible deployed Kind environment, `go run github.com/onsi/ginkgo/v2/ginkgo run --timeout=10m --label-filter=user-deletion it`; the standard installer `SUITE=fulfillment` target includes these specs. |
 
 Use the standard Kind infrastructure and Fulfillment deployment described above.
@@ -256,12 +255,12 @@ The installer currently configures Keycloak 26.6.4. Provider provisioning is
 disabled by the normal service-only integration profile; no physical
 infrastructure or workload is provisioned by these cases.
 
-Only HTTP 404 with Keycloak's JSON `error: "User not found"` confirms absence
-for the exact realm-user DELETE. Missing-realm, unknown and malformed 404
-responses remain errors; their finalizer-retention paths have unit coverage.
-Changes in Keycloak's error contract fail closed. A missing realm cannot
-distinguish intentional realm removal from an incorrect configuration, so it
-does not establish account absence in the intended realm.
+HTTP 404 with Keycloak's JSON `error: "User not found"` or
+`error: "Realm not found."` confirms absence for the exact realm-user DELETE.
+OSAC uses the single `osac` realm, so its absence also means its users are gone.
+Unknown and malformed 404 responses remain errors. Changes in Keycloak's error
+contract fail closed. The deployed cases exercise account absence while the
+shared realm remains present; they do not delete that realm.
 
 The integration cases prove persisted User removal, but do not assert
 subsequent Project/Tenant cascade completion. That deployed cascade acceptance

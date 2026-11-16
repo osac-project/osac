@@ -11,7 +11,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-package it
+package testing
 
 import (
 	"errors"
@@ -23,7 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestUserDeletionKeycloakErrorOutput(t *testing.T) {
+func TestKeycloakAdminRequestErrorOutput(t *testing.T) {
 	const testEndpoint = "https://redaction.example.invalid/users/fixture-user"
 	const fixtureDetail = "fixture-sensitive-detail"
 	fixtureError := fmt.Errorf("failed to send request: %w", &url.Error{
@@ -42,7 +42,7 @@ func TestUserDeletionKeycloakErrorOutput(t *testing.T) {
 			g := NewGomega(func(message string, _ ...int) {
 				messages = append(messages, message)
 			})
-			g.Expect(userDeletionKeycloakError(tc.err)).ToNot(HaveOccurred())
+			g.Expect(KeycloakAdminRequestError(tc.err)).ToNot(HaveOccurred())
 			if len(messages) != tc.failures {
 				t.Fatal("unexpected assertion failure count")
 			}
@@ -50,7 +50,7 @@ func TestUserDeletionKeycloakErrorOutput(t *testing.T) {
 				if strings.Contains(message, testEndpoint) || strings.Contains(message, fixtureDetail) {
 					t.Fatal("request details reached assertion output")
 				}
-				if !strings.Contains(message, "Keycloak admin request failed") {
+				if !strings.Contains(message, "keycloak admin request failed") {
 					t.Fatal("assertion output omitted the safe diagnostic")
 				}
 			}

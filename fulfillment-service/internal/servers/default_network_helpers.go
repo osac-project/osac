@@ -136,15 +136,12 @@ func resolveNetworkingReference[O referenceResource](
 	if err == nil || grpcstatus.Code(err) != notFoundCode {
 		return object, err
 	}
-	key := reference.GetId()
-	if key == "" {
-		key = reference.GetName()
-	}
-	found, findErr := findInScope(ctx, resourceDao, owner.GetTenant(), owner.GetProject(), key)
+	found, findErr := findTenantDefaultInScope(ctx, resourceDao, owner.GetTenant(),
+		reference.GetId(), reference.GetName())
 	if findErr != nil {
 		return object, findErr
 	}
-	if found.GetId() == "" || found.GetMetadata().GetLabels()[defaultLabel] != "true" {
+	if found.GetId() == "" {
 		return object, err
 	}
 	if locked {

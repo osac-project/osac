@@ -11,10 +11,10 @@ OSAC_UI_BASE_URL="${OSAC_UI_BASE_URL:-}"
 OSAC_API_BASE_URL="${OSAC_API_BASE_URL:-}"
 OSAC_ADMIN_USERNAME="${OSAC_ADMIN_USERNAME:-admin}"
 OSAC_ADMIN_PASSWORD="${OSAC_ADMIN_PASSWORD:-}"
-OSAC_ADMIN_PASSWORD_FILE="${OSAC_ADMIN_PASSWORD_FILE:-}"
 OSAC_EXTRAVARS="${OSAC_EXTRAVARS:-}"
 OSAC_CLI_PATH="${OSAC_CLI_PATH:-osac}"
 OSAC_VM_FLOW_MODE="${OSAC_VM_FLOW_MODE:-full}"
+OSAC_E2E_INSTANCE="${OSAC_E2E_INSTANCE:-1}"
 FLOW_TAG="${OSAC_FLOW_TAG:-}"
 OSAC_ALLOW_ROOT_E2E="${OSAC_ALLOW_ROOT_E2E:-false}"
 OSAC_UI_DIR="${OSAC_UI_DIR:-}"
@@ -28,6 +28,7 @@ SETUP_ONLY=true
 PW_PROJECT=""
 PW_TEST_PATH=""
 PW_GREP=""
+PW_REPORTER=""
 PW_HEADED=""
 PW_LIST=false
 NO_DEPS=false
@@ -46,23 +47,49 @@ while (($# > 0)); do
     --osac-ui-dir=*)    OSAC_UI_DIR="${arg#*=}" ;;
     --ignore-tls)       export IGNORE_HTTPS_ERRORS=true ;;
     --admin-user=*)     OSAC_ADMIN_USERNAME="${arg#*=}" ;;
-    --admin-password=*|--admin-password)
-      echo "--admin-password is not accepted; use OSAC_ADMIN_PASSWORD or --admin-password-file=PATH." >&2
-      exit 1
-      ;;
-    --admin-password-file=*) OSAC_ADMIN_PASSWORD_FILE="${arg#*=}" ;;
-    --admin-password-file)
+    --admin-user)
       if (($# == 0)); then
-        echo "--admin-password-file requires a path." >&2
+        echo "--admin-user requires a username." >&2
         exit 1
       fi
-      OSAC_ADMIN_PASSWORD_FILE="$1"
+      OSAC_ADMIN_USERNAME="$1"
+      shift
+      ;;
+    --admin-password=*)
+      OSAC_ADMIN_PASSWORD="${arg#*=}"
+      ADMIN_PASSWORD_SET=true
+      ;;
+    --admin-password)
+      if (($# == 0)); then
+        echo "--admin-password requires a value." >&2
+        exit 1
+      fi
+      OSAC_ADMIN_PASSWORD="$1"
+      ADMIN_PASSWORD_SET=true
+      shift
+      ;;
+    --instance=*)      OSAC_E2E_INSTANCE="${arg#*=}" ;;
+    --instance)
+      if (($# == 0)); then
+        echo "--instance requires an index." >&2
+        exit 1
+      fi
+      OSAC_E2E_INSTANCE="$1"
       shift
       ;;
     --run-smoke)        RUN_SMOKE=true; SETUP_ONLY=false ;;
     --test=*)           PW_TEST_PATH="${arg#*=}"; SETUP_ONLY=false ;;
     --project=*)        PW_PROJECT="${arg#*=}"; SETUP_ONLY=false ;;
     --grep=*)           PW_GREP="${arg#*=}" ;;
+    --reporter=*)       PW_REPORTER="${arg#*=}" ;;
+    --reporter)
+      if (($# == 0)); then
+        echo "--reporter requires a reporter name." >&2
+        exit 1
+      fi
+      PW_REPORTER="$1"
+      shift
+      ;;
     --headed)           PW_HEADED="--headed"; SETUP_ONLY=false ;;
     --mode=*)           OSAC_VM_FLOW_MODE="${arg#*=}"; MODE_FLAG_SET=true ;;
     --extravars=*)      OSAC_EXTRAVARS="${arg#*=}" ;;
@@ -78,8 +105,9 @@ Usage: $0 [OPTIONS]
 Run prepared OSAC UI Playwright flows. Run prepare-setup-for-ui-run.sh first.
 
 Flow tags:
-  vmaas_all  - all VMaaS flows (happy flow for now)
+  vmaas_all  - all VMaaS flows (happy basic and resize)
   vmaas_full_happy_basic - complete VMaaS happy basic flow (no features, includes creation of all requires resources, create VM, delete VM and delete all pre-created resources)
+  vmaas_resize - complete VM resize flow and cleanup
   create_pre-resources, delete_pre-resources, full_pre-resources - infrastructure resource group: create and delete resources requred for VM creation
   create_disk_image, delete_disk_image, full_disk_image - disk image lifecycle
   create_storage-tier, delete_storage-tier, full_storage-tier - storage tier lifecycle
@@ -87,6 +115,7 @@ Flow tags:
   create_tenant, delete_tenant, full_tenant - tenant lifecycle
   create_catalog, delete_catalog, full_catalog - catalog lifecycle
   create_vm, delete_vm, full_vm - VM lifecycle
+  create_vm_power, full_vm_power - VM Start/Stop/Restart buttons on the VM details page
 
 create_* leaves a resource for delete_*; full_* runs the configured teardown.
 
@@ -95,11 +124,12 @@ Options:
   --test=PATH            pass a test-path filter to Playwright
   --project=PROJECT      select a Playwright project
   --grep=PATTERN         filter test titles
+  --reporter=REPORTER    select a Playwright reporter (for example, line)
   --mode=MODE            set OSAC_VM_FLOW_MODE to create, delete, or full
   --extravars=PATH       temporarily use a VMaaS extravars.yaml
   --admin-user=USER      Keycloak admin user (default: admin)
-  --admin-password-file=PATH
-                          readable file containing the admin password
+  --admin-password=PASS  admin password (required for credentialed flows)
+  --instance=INDEX        resource-name index (default: 1)
   --headed               run with a headed browser using the prepared Xvfb
   --run-smoke            run the setup and smoke projects
   --list                 list discovered tests without executing them
@@ -125,15 +155,8 @@ ok()      { printf '  \e[32m✓\e[0m %s\n' "$1"; }
 fail()    { printf '  \e[31m✗\e[0m %s\n' "$1" >&2; exit 1; }
 info()    { printf '  → %s\n' "$1"; }
 
-if [[ -n "$OSAC_ADMIN_PASSWORD" && -n "$OSAC_ADMIN_PASSWORD_FILE" ]]; then
-  fail "Provide the admin password through the environment or a file, not both."
-fi
-if [[ -n "$OSAC_ADMIN_PASSWORD_FILE" ]]; then
-  [[ -f "$OSAC_ADMIN_PASSWORD_FILE" && -r "$OSAC_ADMIN_PASSWORD_FILE" ]] ||
-    fail "Admin password file is not readable."
-  OSAC_ADMIN_PASSWORD="$(< "$OSAC_ADMIN_PASSWORD_FILE")"
-fi
-[[ -n "$OSAC_ADMIN_PASSWORD" ]] && ADMIN_PASSWORD_SET=true
+[[ "$OSAC_E2E_INSTANCE" =~ ^[0-9]+$ ]] ||
+  fail "--instance must be a non-negative integer."
 
 cleanup() {
   if [[ -n ${xvfb_pid:-} ]]; then
@@ -157,7 +180,7 @@ trap cleanup EXIT
 
 export_test_environment() {
   export OSAC_UI_BASE_URL OSAC_ADMIN_USERNAME OSAC_ADMIN_PASSWORD
-  export OSAC_CLI_PATH OSAC_VM_FLOW_MODE
+  export OSAC_CLI_PATH OSAC_VM_FLOW_MODE OSAC_E2E_INSTANCE
 }
 
 placeholder_url() {
@@ -177,6 +200,7 @@ placeholder_username() {
 declare -A FLOW_CONFIG=(
   [vmaas_all]='vmaas-all-full-flows|full||false'
   [vmaas_full_happy_basic]='vmaas_full_happy_basic|full||false'
+  [vmaas_resize]='vmaas-full-resize|full||false'
   [create_pre-resources]='vmaas-full-flow-pre-resource|create||false'
   [delete_pre-resources]='vmaas-full-flow-pre-resource|delete||false'
   [full_pre-resources]='vmaas-full-flow-pre-resource|full||false'
@@ -198,6 +222,8 @@ declare -A FLOW_CONFIG=(
   [create_vm]='vm-flow|create||false'
   [delete_vm]='vm-flow|delete||false'
   [full_vm]='vm-flow|full||false'
+  [create_vm_power]='vm-flow-power-actions|create||false'
+  [full_vm_power]='vm-flow-power-actions|full||false'
 )
 
 if [[ -n "$FLOW_TAG" ]]; then
@@ -231,35 +257,69 @@ need_login=true
 route_host=""
 api_route_host=""
 if command -v oc >/dev/null 2>&1; then
+  oc_route_flags=(--request-timeout=10s)
+  [[ "$IGNORE_HTTPS_ERRORS" == true ]] &&
+    oc_route_flags+=(--insecure-skip-tls-verify=true)
   kubeconfig_candidates=()
   [[ -n "$KUBECONFIG_PATH" ]] && kubeconfig_candidates+=("$KUBECONFIG_PATH")
   kubeconfig_candidates+=(
     /home/kni/clusterconfigs/auth/kubeconfig
     /root/kubeconfig
     /root/dev-scripts/ocp/ostest/auth/kubeconfig
-    /root/.kube/config
   )
+  [[ -n "${HOME:-}" ]] && kubeconfig_candidates+=("${HOME}/.kube/config")
   KUBECONFIG_PATH=""
   route_host=""
+  api_route_host=""
+  fallback_route_host=""
+  fallback_api_route_host=""
+  fallback_kubeconfig_path=""
   for candidate in "${kubeconfig_candidates[@]}"; do
     [[ -f "$candidate" ]] || continue
-    route_host=$(KUBECONFIG="$candidate" oc --request-timeout=10s \
+    candidate_route_host=$(KUBECONFIG="$candidate" oc "${oc_route_flags[@]}" \
       -n osac get route osac-ui -o jsonpath='{.spec.host}' 2>/dev/null || true)
-    api_route_host=$(KUBECONFIG="$candidate" oc --request-timeout=10s \
+    candidate_api_route_host=$(KUBECONFIG="$candidate" oc "${oc_route_flags[@]}" \
       -n osac get route fulfillment-api -o jsonpath='{.spec.host}' 2>/dev/null || true)
-    if [[ -n "$route_host" && ( "$needs_vmaas" != true || -n "$api_route_host" ) ]]; then
+    if [[ -n "$candidate_route_host" ]]; then
+      route_host="$candidate_route_host"
+      api_route_host="$candidate_api_route_host"
       KUBECONFIG_PATH="$candidate"
       info "Using a reachable KUBECONFIG with an OSAC UI route."
       break
     fi
+    if [[ -z "$fallback_route_host" ]]; then
+      api_server=$(KUBECONFIG="$candidate" oc config view --minify \
+        -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || true)
+      case "$api_server" in
+        https://api.*)
+          cluster_domain="${api_server#https://api.}"
+          cluster_domain="${cluster_domain%%/*}"
+          cluster_domain="${cluster_domain%:6443}"
+          if [[ "$cluster_domain" == *.* ]]; then
+            fallback_route_host="osac-ui-osac.apps.${cluster_domain}"
+            fallback_api_route_host="$candidate_api_route_host"
+            [[ -n "$fallback_api_route_host" ]] ||
+              fallback_api_route_host="fulfillment-api-osac.apps.${cluster_domain}"
+            fallback_kubeconfig_path="$candidate"
+          fi
+          ;;
+      esac
+    fi
   done
+  if [[ -z "$route_host" && -n "$fallback_route_host" ]]; then
+    route_host="$fallback_route_host"
+    api_route_host="$fallback_api_route_host"
+    KUBECONFIG_PATH="$fallback_kubeconfig_path"
+    info "Derived OSAC routes from the kubeconfig API server."
+    info "Using a KUBECONFIG with a derived OSAC UI route."
+  fi
 fi
 
 if { [[ -z "$OSAC_UI_BASE_URL" ]] || placeholder_url "$OSAC_UI_BASE_URL"; } &&
   [[ -n "$route_host" ]]; then
   OSAC_UI_BASE_URL="https://${route_host}"
 elif { [[ -z "$OSAC_UI_BASE_URL" ]] || placeholder_url "$OSAC_UI_BASE_URL"; }; then
-  fail "Set OSAC_UI_BASE_URL, or provide a kubeconfig that can read the osac-ui route."
+  fail "Set OSAC_UI_BASE_URL, or provide a kubeconfig for a standard OSAC cluster."
 fi
 
 if [[ -z "$OSAC_API_BASE_URL" && -n "$api_route_host" ]]; then
@@ -280,11 +340,23 @@ case "$OSAC_UI_BASE_URL" in
   *) fail "OSAC_UI_BASE_URL must use an HTTP or HTTPS URL." ;;
 esac
 
+if [[ -z "$OSAC_API_BASE_URL" ]]; then
+  ui_route_host="${OSAC_UI_BASE_URL#https://}"
+  ui_route_host="${ui_route_host#http://}"
+  ui_route_host="${ui_route_host%%/*}"
+  case "$ui_route_host" in
+    osac-ui-*.*)
+      OSAC_API_BASE_URL="https://fulfillment-api-${ui_route_host#osac-ui-}"
+      info "Derived OSAC_API_BASE_URL from the osac-ui route."
+      ;;
+  esac
+fi
+
 if [[ "$need_login" == true ]]; then
   [[ -n "$OSAC_ADMIN_USERNAME" ]] && ! placeholder_username "$OSAC_ADMIN_USERNAME" ||
-    fail "Set OSAC_ADMIN_USERNAME to a real Keycloak test user before running tests."
+    fail "Pass --admin-user=USER with a real Keycloak test user."
   [[ "$ADMIN_PASSWORD_SET" == true && -n "$OSAC_ADMIN_PASSWORD" ]] ||
-    fail "Set OSAC_ADMIN_PASSWORD or pass --admin-password-file=PATH for credentialed runs."
+    fail "Admin password is required. Pass --admin-password=PASSWORD."
   if (( EUID == 0 )) && [[ "$OSAC_ALLOW_ROOT_E2E" != true ]]; then
     fail "Credentialed tests refuse to run as root. Use a non-root user or --allow-root-e2e."
   fi
@@ -412,7 +484,9 @@ HTTP_STATUS="${HTTP_STATUS: -3}"
 
 export_test_environment
 if [[ "$RUN_SMOKE" == true ]]; then
-  pnpm --filter @osac/playwright exec playwright test --project=setup --project=smoke
+  SMOKE_ARGS=(--project=setup --project=smoke)
+  [[ -n "$PW_REPORTER" ]] && SMOKE_ARGS+=(--reporter="$PW_REPORTER")
+  pnpm --filter @osac/playwright exec playwright test "${SMOKE_ARGS[@]}"
 fi
 
 if [[ "$RUN_SMOKE" == true && "$PW_LIST" == false && -z "$PW_PROJECT" &&
@@ -427,6 +501,7 @@ PW_ARGS=()
 [[ -n "$PW_TEST_PATH" ]] && PW_ARGS+=("$PW_TEST_PATH")
 [[ -n "$PW_PROJECT" ]] && PW_ARGS+=(--project="$PW_PROJECT")
 [[ -n "$PW_GREP" ]] && PW_ARGS+=(-g "$PW_GREP")
+[[ -n "$PW_REPORTER" ]] && PW_ARGS+=(--reporter="$PW_REPORTER")
 [[ -n "$PW_HEADED" ]] && PW_ARGS+=(--headed)
 
 section "Running OSAC UI E2E flow"

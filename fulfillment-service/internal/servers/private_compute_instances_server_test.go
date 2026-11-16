@@ -3118,6 +3118,62 @@ var _ = Describe("Private compute instances server", func() {
 				Expect(status.Message()).To(ContainSubstring("does not exist"))
 			})
 
+			It("stores the tenant defaults referenced by ID from another project", func() {
+				defaultNetwork := map[string]string{defaultLabel: "true"}
+				defaultVN := seedVirtualNetwork(testTenant, "10.210.0.0/16",
+					privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY, defaultNetwork)
+				defaultSubnet := seedSubnet(defaultVN, "default-ipv4", "10.210.0.0/24",
+					privatev1.SubnetState_SUBNET_STATE_READY, defaultNetwork)
+				defaultGroup := seedSecurityGroup(defaultVN, "default",
+					privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY, defaultNetwork)
+				defaults := struct{ subnetID, securityGroupID string }{defaultSubnet.GetId(), defaultGroup.GetId()}
+				seedTenantProject(testTenant, "other-project")
+				// A group of the workload's project named with the default group's ID must not shadow the default.
+				_, err := fixtureDAO[*privatev1.SecurityGroup]().Create().SetObject(privatev1.SecurityGroup_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:    defaults.securityGroupID,
+						Tenant:  testTenant,
+						Project: "other-project",
+					}.Build(),
+					Spec: defaultGroup.GetSpec(),
+					Status: privatev1.SecurityGroupStatus_builder{
+						State: privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+						Hub:   "network-hub-a",
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				response, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:    fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+							Project: "other-project",
+						}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: template.GetId()}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: defaults.subnetID}.Build(),
+									SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+										privatev1.SecurityGroupLocalReference_builder{Id: defaults.securityGroupID}.Build(),
+									},
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				stored, err := server.generic.dao.Get().SetId(response.GetObject().GetId()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				for _, object := range []*privatev1.ComputeInstance{response.GetObject(), stored.GetObject()} {
+					attachments := object.GetSpec().GetNetworkAttachments()
+					Expect(attachments).To(HaveLen(1))
+					Expect(attachments[0].GetSubnet().GetId()).To(Equal(defaults.subnetID))
+					Expect(attachments[0].GetSecurityGroups()).To(HaveLen(1))
+					Expect(attachments[0].GetSecurityGroups()[0].GetId()).To(Equal(defaults.securityGroupID))
+				}
+			})
+
 			// A reference resolves only in the tenant and project of the workload: a Subnet or SecurityGroup in another
 			// project of the same tenant fails like a missing one.
 			DescribeTable("rejects a reference to another project of the tenant like a missing one",
@@ -5069,6 +5125,10 @@ var _ = Describe("Compute instance networking reference scope", func() {
 		Expect(computeInstanceNetworkResourceInScope(owner,
 			privatev1.Metadata_builder{
 				Tenant: "tenant-a", Project: "project-b", Labels: map[string]string{defaultLabel: "true"},
+			}.Build())).To(BeFalse())
+		Expect(computeInstanceNetworkResourceInScope(owner,
+			privatev1.Metadata_builder{
+				Tenant: "tenant-a", Project: "", Labels: map[string]string{defaultLabel: "true"},
 			}.Build())).To(BeTrue())
 		Expect(computeInstanceNetworkResourceInScope(owner,
 			privatev1.Metadata_builder{

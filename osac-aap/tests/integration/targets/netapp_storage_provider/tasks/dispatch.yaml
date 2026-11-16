@@ -1,0 +1,72 @@
+---
+# Test-local stand-in for osac.service.storage_provider's per-provider dispatch
+# (_dispatch_provider.yaml). The service dispatcher currently routes the
+# `netapp` product key to osac.templates.osac_csi_storage, so these tests call
+# osac.templates.netapp_storage directly with the same inputs the dispatcher
+# hands a provider role:
+#   _provider_tiers               — the tiers whose provider is `netapp`
+#   _provider_backend_connections — only the connections those tiers reference
+# and collect the same outputs the dispatcher publishes
+# (storage_provider_tenant_configs keyed by provider, and
+# storage_provider_storage_class_names).
+#
+# Inputs (play or include vars): storage_provider_action, storage_provider_tiers,
+# storage_provider_backend_connections, tenant_name.
+
+- name: Reset provider role outputs from previous invocations
+  ansible.builtin.set_fact:
+    storage_provider_tenant_config: {}
+    storage_provider_storage_class_names: []
+  no_log: true
+
+- name: Compute the tiers and backend connections dispatched to the netapp provider
+  ansible.builtin.set_fact:
+    _test_provider_tiers: >-
+      {{ storage_provider_tiers | selectattr('provider', 'equalto', 'netapp') | list }}
+    _test_provider_backend_connections: >-
+      {{
+        storage_provider_backend_connections
+        | default({})
+        | dict2items
+        | selectattr(
+            'key',
+            'in',
+            (storage_provider_tiers
+             | selectattr('provider', 'equalto', 'netapp')
+             | selectattr('backend_id', 'defined')
+             | map(attribute='backend_id')
+             | list)
+          )
+        | items2dict
+      }}
+  no_log: true
+
+- name: Include the netapp_storage provider role
+  ansible.builtin.include_role:
+    name: osac.templates.netapp_storage
+    tasks_from: "{{ storage_provider_action }}"
+    public: true
+  vars:
+    _provider_tiers: "{{ _test_provider_tiers }}"
+    _provider_backend_connections: "{{ _test_provider_backend_connections }}"
+
+- name: Fail if setup did not produce a tenant config
+  ansible.builtin.fail:
+    msg: >-
+      netapp_storage did not set the required output fact
+      storage_provider_tenant_config after setup.
+  when:
+    - storage_provider_action == 'setup'
+    - storage_provider_tenant_config is not mapping or (storage_provider_tenant_config | length) == 0
+
+- name: Publish the dispatcher-shaped tenant config output
+  ansible.builtin.set_fact:
+    storage_provider_tenant_configs: "{{ {'netapp': storage_provider_tenant_config} }}"
+  when: storage_provider_action == 'setup'
+  no_log: true
+
+- name: Clear dispatch inputs
+  ansible.builtin.set_fact:
+    _test_provider_tiers: []
+    _test_provider_backend_connections: {}
+  no_log: true

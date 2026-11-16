@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	osactesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -926,8 +927,11 @@ func publicFinalizerCases() []publicFinalizerCase {
 		}},
 		{privatev1.Roles_ServiceDesc.ServiceName, func() publicFinalizerOps {
 			GinkgoHelper()
+			permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
+			Expect(err).ToNot(HaveOccurred())
 			server, err := NewRolesServer().
-				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).
+				SetPermissionCatalog(permissionCatalog).Build()
 			Expect(err).ToNot(HaveOccurred())
 			return newPublicFinalizerOps(
 				server.Get, server.Update, (*publicv1.RolesGetResponse).GetObject,

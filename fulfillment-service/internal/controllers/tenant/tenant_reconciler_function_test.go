@@ -827,14 +827,15 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 		Expect(err.Error()).To(ContainSubstring(`missing data["password"]`))
 	})
 
-	It("should store generated credentials as a Secret after IDP sync", func() {
+	It("should store the break-glass username as a Secret after IDP sync", func() {
 		secrets := &mockSecretsClient{
 			createFunc: func(_ context.Context, req *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
 				secret := req.GetObject()
 				Expect(secret.GetMetadata().GetName()).To(Equal("break-glass-credentials"))
 				Expect(secret.GetMetadata().GetTenant()).To(Equal("test-org"))
 				Expect(secret.GetType()).To(Equal(privatev1.SecretType_SECRET_TYPE_OPAQUE))
-				Expect(secret.GetData()).To(HaveKeyWithValue("password", []byte(testPreGeneratedPassword)))
+				Expect(secret.GetData()).To(HaveKeyWithValue("username", []byte("test-org-osac-break-glass")))
+				Expect(secret.GetData()).ToNot(HaveKey("password"))
 				secret.SetId("created-secret-id")
 				return privatev1.SecretsCreateResponse_builder{Object: secret}.Build(), nil
 			},
@@ -1189,20 +1190,12 @@ var _ = Describe("Deletion", func() {
 				Expect(req.GetId()).To(Equal("user-789"))
 				return privatev1.UsersSignalResponse_builder{}.Build(), nil
 			})
-		projectList := func() *gomock.Call {
-			return mockProjectsClient.EXPECT().
-				List(gomock.Any(), gomock.Any()).
-				Return(privatev1.ProjectsListResponse_builder{Total: 0}.Build(), nil)
-		}
-		firstProjectList := projectList()
-		remainingProjectList := projectList()
-		deleteIDPTenant := mockClient.EXPECT().DeleteTenant(gomock.Any(), "test-org").Return(nil)
-		gomock.InOrder(userList, userDelete, userSignal, firstProjectList,
-			remainingProjectList, deleteIDPTenant)
+		gomock.InOrder(userList, userDelete, userSignal)
 
 		task := &task{r: reconciler, tenant: tenant}
-		Expect(task.delete(ctx)).To(Succeed())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
+		err := task.delete(ctx)
+		Expect(err).To(MatchError(ContainSubstring("tenant users are still pending deletion")))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should delete IDP tenant by metadata name when not synced", func() {
@@ -1567,7 +1560,7 @@ var _ = Describe("Project deletion during tenant deletion", func() {
 		}
 	})
 
-	It("should request deletion of every tenant project", func() {
+	It("should keep the tenant finalizer while projects are pending deletion", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-root-proj",
 			Metadata: privatev1.Metadata_builder{
@@ -1618,19 +1611,12 @@ var _ = Describe("Project deletion during tenant deletion", func() {
 					Expect(request.GetId()).To(Equal("team-proj-id"))
 					return privatev1.ProjectsDeleteResponse_builder{}.Build(), nil
 				}),
-			mockProjectsClient.EXPECT().
-				List(gomock.Any(), gomock.Any()).
-				Return(privatev1.ProjectsListResponse_builder{Total: 0}.Build(), nil),
 		)
-
-		mockClient.EXPECT().
-			DeleteTenant(gomock.Any(), "test-org").
-			Return(nil)
 
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
+		Expect(err).To(MatchError(ContainSubstring("tenant projects are still pending deletion")))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 
 	It("should signal a project that already has a deletion timestamp", func() {
@@ -1741,7 +1727,7 @@ var _ = Describe("Project deletion during tenant deletion", func() {
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.delete(ctx)
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("failed to signal project root-proj-id for tenant deletion"))
+		Expect(err.Error()).To(ContainSubstring("failed to signal project root-proj-id"))
 		Expect(err.Error()).To(ContainSubstring("controller unavailable"))
 		Expect(err.Error()).To(ContainSubstring("failed to delete project team-proj-id"))
 		Expect(err.Error()).To(ContainSubstring("delete denied"))

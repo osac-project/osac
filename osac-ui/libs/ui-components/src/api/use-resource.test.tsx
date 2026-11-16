@@ -78,21 +78,21 @@ describe('resource queries', () => {
       () => {
         const [filter, setFilter] = useState('first');
         return {
-          query: useListResource(Tenants, { filter }, {}, (reply) => reply.items),
+          query: useListResource(Tenants, { filter }, {}),
           setFilter,
         };
       },
       { wrapper },
     );
 
-    await waitFor(() => expect(result.current.query.data?.[0]?.id).toBe('first'));
+    await waitFor(() => expect(result.current.query.data?.items[0]?.id).toBe('first'));
     act(() => result.current.setFilter('next'));
 
     await waitFor(() => expect(result.current.query.isPlaceholderData).toBe(true));
-    expect(result.current.query.data?.[0]?.id).toBe('first');
+    expect(result.current.query.data?.items[0]?.id).toBe('first');
 
     act(() => releaseNext?.());
-    await waitFor(() => expect(result.current.query.data?.[0]?.id).toBe('next'));
+    await waitFor(() => expect(result.current.query.data?.items[0]?.id).toBe('next'));
   });
 
   it('fetches every page only when requested and keeps normal list queries separate', async () => {

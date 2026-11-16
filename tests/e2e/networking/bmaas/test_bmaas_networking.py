@@ -20,10 +20,7 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_attachment_ready,
     wait_for_external_ip_cr,
     wait_for_external_ip_deletion,
-    wait_for_external_ip_pool_cr,
     wait_for_external_ip_pool_deletion,
-    wait_for_external_ip_pool_grpc_ready,
-    wait_for_external_ip_pool_ready,
     wait_for_grpc_subnet_ready,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
@@ -40,6 +37,7 @@ from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import CommandFailed, poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
+from tests.e2e.networking.vmaas.stack import resolve_external_ip_pool
 
 pytestmark = pytest.mark.regression
 
@@ -87,20 +85,23 @@ class TestBmaasNetworking:
 
     # ── Phase 0: External IP Pool ─────────────────────────────────────
 
-    def test_00_create_external_ip_pool(
+    def test_00_resolve_external_ip_pool(
         self,
         private_grpc: GRPCClient,
         k8s_hub_client: K8sClient,
         external_ip_pool_name: str,
         external_ip_pool_cidr: str,
     ) -> None:
-        pool_id = private_grpc.create_external_ip_pool(name=external_ip_pool_name, cidrs=[external_ip_pool_cidr])
-        pool_cr = wait_for_external_ip_pool_cr(k8s=k8s_hub_client, uuid=pool_id)
-        wait_for_external_ip_pool_ready(k8s=k8s_hub_client, name=pool_cr)
-        wait_for_external_ip_pool_grpc_ready(private_grpc=private_grpc, pool_id=pool_id)
-
-        self.__class__.state.update(pool_id=pool_id, pool_cr=pool_cr)
-        print("Created ExternalIPPool")
+        # The lab setup creates the routed pool before the tenants, because
+        # their default-nat needs it. Adopt it; create it only when missing.
+        pool = resolve_external_ip_pool(
+            private_grpc=private_grpc,
+            k8s_hub_client=k8s_hub_client,
+            name=external_ip_pool_name,
+            cidr=external_ip_pool_cidr,
+        )
+        self.__class__.state.update(pool_id=pool["id"], pool_cr=pool["cr"], pool_owned=pool["owned"])
+        print(f"ExternalIPPool {pool['id']} (created by this suite: {pool['owned']})")
 
     # ── Phase 1: Build the Network ──────────────────────────────────────
 
@@ -609,6 +610,12 @@ class TestBmaasNetworking:
             f"ExternalIPPool {pool_id} is still held by: "
             f"{', '.join(_describe_external_ip(item) for item in other_holders)}"
         )
+        if not self.state.get("pool_owned"):
+            assert pool_id in private_grpc.list_external_ip_pool_ids(), (
+                f"ExternalIPPool {pool_id} disappeared; this suite adopted it and did not create it"
+            )
+            _LOG.info("Leaving adopted ExternalIPPool %s in place", pool_id)
+            return
         if holders:
             assert pool_id in private_grpc.list_external_ip_pool_ids(), (
                 f"ExternalIPPool {pool_id} disappeared while tenant default ExternalIPs still use it"

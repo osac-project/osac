@@ -15,9 +15,11 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -29,9 +31,12 @@ var _ = Describe("Role binding role scopes", func() {
 	var roleID func(string) string
 	BeforeEach(func() {
 		var err error
+		permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
+		Expect(err).ToNot(HaveOccurred())
 		public, err = NewRoleBindingsServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
-		roles, err = NewPrivateRolesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+		roles, err = NewPrivateRolesServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).
+			SetPermissionCatalog(permissionCatalog).Build()
 		Expect(err).ToNot(HaveOccurred())
 		roleID = func(name string) string {
 			response, err := roles.List(ctx, privatev1.RolesListRequest_builder{Filter: new(fmt.Sprintf("this.metadata.name == %q", name))}.Build())
@@ -56,8 +61,10 @@ var _ = Describe("Role binding role scopes", func() {
 	It("hides the system CSI role from tenant users", func() {
 		systemTenancy, err := auth.NewDefaultTenancyLogic().SetLogger(logger).Build()
 		Expect(err).ToNot(HaveOccurred())
+		scopedPermissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
+		Expect(err).ToNot(HaveOccurred())
 		scopedRoles, err := NewPrivateRolesServer().SetLogger(logger).SetAttributionLogic(attribution).
-			SetTenancyLogic(systemTenancy).Build()
+			SetTenancyLogic(systemTenancy).SetPermissionCatalog(scopedPermissionCatalog).Build()
 		Expect(err).ToNot(HaveOccurred())
 		tenantCtx := auth.ContextWithSubject(ctx, &auth.Subject{
 			User: "tenant-user", Tenants: collections.NewSet(testTenant),

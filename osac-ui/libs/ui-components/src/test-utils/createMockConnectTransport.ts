@@ -1048,10 +1048,16 @@ export const createMockConnectTransport = (
           if (overrides.onStorageBackendList) {
             return overrides.onStorageBackendList(req);
           }
-          const items = storageBackends.filter((item) =>
-            matchesStorageBackendReadyFilter(req.filter, item.status?.state),
+          const items = storageBackends.filter(
+            (item) =>
+              matchesStorageBackendReadyFilter(req.filter, item.status?.state) &&
+              matchesNameContainsFilter(req.filter, item.metadata?.name),
           );
-          return { items, size: items.length, total: items.length };
+          return {
+            items: req.limit === 0 ? [] : items,
+            size: req.limit === 0 ? 0 : items.length,
+            total: items.length,
+          };
         },
         get: (req) => {
           if (overrides.onStorageBackendGet) {

@@ -148,9 +148,7 @@ describe('SecurityGroupDetailPage', () => {
         {
           object: {
             id: 'sg-1',
-            metadata: { name: 'sg-web' },
             spec: {
-              virtualNetwork: { id: 'vn-1' },
               ingress: [
                 { protocol: Protocol.TCP, portFrom: 443, portTo: 443, ipv4Cidr: '0.0.0.0/0' },
               ],
@@ -179,9 +177,7 @@ describe('SecurityGroupDetailPage', () => {
         {
           object: {
             id: 'sg-1',
-            metadata: { name: 'sg-web' },
             spec: {
-              virtualNetwork: { id: 'vn-1' },
               ingress: [
                 { protocol: Protocol.TCP, portFrom: 80, portTo: 80, ipv4Cidr: '0.0.0.0/0' },
                 { protocol: Protocol.TCP, portFrom: 443, portTo: 443, ipv4Cidr: '0.0.0.0/0' },

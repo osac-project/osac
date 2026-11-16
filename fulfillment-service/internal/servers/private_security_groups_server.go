@@ -188,7 +188,8 @@ func (s *PrivateSecurityGroupsServer) prepareCreate(ctx context.Context, group *
 	if spec.GetVirtualNetwork() == nil || key == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.virtual_network' is required")
 	}
-	virtualNetwork, err := lockParentVirtualNetwork(ctx, s.guards, s.virtualNetworks, key, group.GetMetadata())
+	virtualNetwork, err := lockParentVirtualNetwork(ctx, s.guards, s.virtualNetworks,
+		spec.GetVirtualNetwork().GetId(), spec.GetVirtualNetwork().GetName(), group.GetMetadata())
 	if err != nil {
 		return err
 	}

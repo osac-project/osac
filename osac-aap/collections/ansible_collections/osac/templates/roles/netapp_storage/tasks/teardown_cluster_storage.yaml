@@ -1,0 +1,256 @@
+---
+# ONTAP teardown_cluster_storage: remove cluster-side K8s resources only.
+# Deletes the tenant's ONTAP resources by LABEL (tenant + storage-provider +
+# managed-by): StorageClasses, TridentBackendConfigs (waits for Trident to
+# finish removing the backends), and the CSI Secrets (only after all TBCs are
+# confirmed gone so Trident never loses credentials while cleaning up a
+# backend). Label-based selection rather than re-deriving names from the
+# dispatched tiers keeps cleanup symmetric with ensure_storage_class and
+# drift-proof: a backend removed from the tenant's tiers after its resources
+# were created is still cleaned up. Nothing is removed while a PV or PVC still
+# references one of the tenant's StorageClasses.
+# Does NOT release the prepared assignment or touch any ONTAP resources —
+# those belong to teardown_backend.
+# Used when a cluster is deleted but the tenant stays.
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      tenant_name is not a valid DNS label. Must be 1-63 lowercase
+      alphanumeric characters or hyphens, cannot start or end with a hyphen.
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+  no_log: true
+
+# Dependency guard: Trident keeps a TridentBackendConfig in phase Deleting
+# while any volume on its backend still exists, and a deleted StorageClass
+# strands Pending claims. Refuse to remove anything while a PersistentVolume
+# or PersistentVolumeClaim still belongs to the tenant's NetApp storage, so a
+# retry after the workloads are gone can complete cleanly. A volume belongs to
+# the tenant when its StorageClass name is a current tenant class, carries the
+# deterministic prefix of a dispatched backend (netapp-<assignment_key>-, which
+# also covers classes of removed tiers or classes that no longer exist), or,
+# for a bound PV, when its Trident backend is one of the tenant's
+# TridentBackendConfigs.
+- name: Verify no volumes still use the tenant's NetApp storage
+  block:
+    - name: Find tenant NetApp StorageClasses for the dependency guard
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=netapp"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _netapp_guard_sc_list
+      no_log: true
+
+    # Returns no resources (rather than failing) when the CRD is not installed.
+    - name: Find tenant TridentBackendConfigs for the dependency guard
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        namespace: "{{ netapp_storage_csi_operator_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=netapp"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _netapp_guard_tbc_list
+      no_log: true
+
+    - name: Find PersistentVolumes for the dependency guard
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: PersistentVolume
+      register: _netapp_guard_pv_list
+      no_log: true
+
+    - name: Find PersistentVolumeClaims for the dependency guard
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: PersistentVolumeClaim
+      register: _netapp_guard_pvc_list
+      no_log: true
+
+    - name: Count volumes that still use the tenant's NetApp storage
+      ansible.builtin.set_fact:
+        _netapp_guard_dependents: >-
+          {% set _names = _netapp_guard_sc_list.resources | default([]) | map(attribute='metadata.name') | list -%}
+          {# Every prefix is 'netapp-' + 16 hex + '-' (24 characters). -#}
+          {% set _prefixes = [] -%}
+          {# Hash the raw backend_id exactly as provisioning does. -#}
+          {% for _bid in (_provider_tiers | default([]) | selectattr('backend_id', 'defined')
+                          | map(attribute='backend_id') | select('string') | unique(case_sensitive=true) | list) -%}
+          {% if (_bid | trim) != '' -%}
+          {% set _ = _prefixes.append('netapp-' ~ (((_bid ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower) ~ '-') -%}
+          {% endif -%}
+          {% endfor -%}
+          {% set _uuids = _netapp_guard_tbc_list.resources | default([])
+                          | map(attribute='status.backendInfo.backendUUID', default='')
+                          | reject('equalto', '') | list -%}
+          {% set _counts = namespace(pv=0, pvc=0) -%}
+          {% for _pv in (_netapp_guard_pv_list.resources | default([])) -%}
+          {% set _sc = (_pv.spec | default({}, true)).storageClassName | default('', true) | string -%}
+          {% set _uuid = (((_pv.spec | default({}, true)).csi | default({}, true)).volumeAttributes | default({}, true)).backendUUID
+                         | default('', true) | string -%}
+          {% if (_sc in _names)
+                or (_sc[:24] in _prefixes)
+                or (_uuid | length > 0 and _uuid in _uuids) -%}
+          {% set _counts.pv = _counts.pv + 1 -%}
+          {% endif -%}
+          {% endfor -%}
+          {% for _pvc in (_netapp_guard_pvc_list.resources | default([])) -%}
+          {% set _sc = (_pvc.spec | default({}, true)).storageClassName | default('', true) | string -%}
+          {% if (_sc in _names)
+                or (_sc[:24] in _prefixes) -%}
+          {% set _counts.pvc = _counts.pvc + 1 -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ {'pv': _counts.pv, 'pvc': _counts.pvc} }}
+
+    - name: Fail while volumes still use the tenant's NetApp storage
+      ansible.builtin.fail:
+        msg: >-
+          Refusing to remove NetApp cluster storage for the tenant:
+          {{ _netapp_guard_dependents.pv }} PersistentVolume(s) and
+          {{ _netapp_guard_dependents.pvc }} PersistentVolumeClaim(s) still use
+          its StorageClasses or Trident backends. Delete the workloads and their
+          volumes first, then retry; nothing was removed.
+      when: (_netapp_guard_dependents.pv | int) > 0 or (_netapp_guard_dependents.pvc | int) > 0
+
+  always:
+    - name: Clear dependency guard facts
+      ansible.builtin.set_fact:
+        _netapp_guard_sc_list: {}
+        _netapp_guard_tbc_list: {}
+        _netapp_guard_pv_list: {}
+        _netapp_guard_pvc_list: {}
+
+- name: Clean up cluster-side K8s resources
+  block:
+    - name: Find all tenant ONTAP StorageClasses by label
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=netapp"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _netapp_cleanup_sc_list
+      no_log: true
+
+    - name: Delete tenant ONTAP StorageClasses
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item.metadata.name }}"
+      loop: "{{ _netapp_cleanup_sc_list.resources | default([]) }}"
+      loop_control:
+        label: "storage-class"
+      no_log: true
+
+    - name: Check if TridentBackendConfig CRD is installed on the target cluster
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: tridentbackendconfigs.trident.netapp.io
+      register: _netapp_cleanup_trident_crd
+      no_log: true
+
+    - name: Find all tenant ONTAP TridentBackendConfigs by label
+      when: (_netapp_cleanup_trident_crd.resources | default([]) | length) > 0
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        namespace: "{{ netapp_storage_csi_operator_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=netapp"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _netapp_cleanup_tbc_list
+      no_log: true
+
+    - name: Delete tenant ONTAP TridentBackendConfigs
+      when: (_netapp_cleanup_trident_crd.resources | default([]) | length) > 0
+      kubernetes.core.k8s:
+        state: absent
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ netapp_storage_csi_operator_namespace }}"
+      loop: "{{ _netapp_cleanup_tbc_list.resources | default([]) }}"
+      loop_control:
+        label: "trident-backend-config"
+      no_log: true
+
+    - name: Wait for the TridentBackendConfigs to be removed
+      when: (_netapp_cleanup_tbc_list.resources | default([]) | length) > 0
+      kubernetes.core.k8s_info:
+        api_version: trident.netapp.io/v1
+        kind: TridentBackendConfig
+        namespace: "{{ netapp_storage_csi_operator_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=netapp"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _tbc_check
+      until: _tbc_check.resources | length == 0
+      retries: 12
+      delay: 5
+      no_log: true
+
+    - name: Find all tenant ONTAP CSI Secrets by label
+      when: >-
+        ((_netapp_cleanup_tbc_list.resources | default([]) | length) == 0) or
+        (_tbc_check is succeeded and (_tbc_check.resources | default([]) | length) == 0)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ netapp_storage_csi_operator_namespace }}"
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "osac.openshift.io/storage-provider=netapp"
+          - "app.kubernetes.io/managed-by=osac-aap"
+      register: _netapp_cleanup_csi_list
+      no_log: true
+
+    - name: Delete tenant ONTAP CSI Secrets after TBCs are confirmed gone
+      when: >-
+        ((_netapp_cleanup_tbc_list.resources | default([]) | length) == 0) or
+        (_tbc_check is succeeded and (_tbc_check.resources | default([]) | length) == 0)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ netapp_storage_csi_operator_namespace }}"
+      loop: "{{ _netapp_cleanup_csi_list.resources | default([]) }}"
+      loop_control:
+        label: "csi-secret"
+      no_log: true
+
+    - name: Report teardown_cluster_storage summary
+      ansible.builtin.debug:
+        msg: >-
+          Teardown of ONTAP cluster-side resources complete. Prepared
+          assignments and ONTAP resources untouched.
+
+  rescue:
+    - name: Warn about teardown_cluster_storage failure
+      ansible.builtin.debug:
+        msg: "Teardown of ONTAP cluster-side resources failed."
+
+    - name: Re-raise teardown_cluster_storage failure
+      ansible.builtin.fail:
+        msg: "teardown_cluster_storage failed to remove all ONTAP cluster-side resources."
+      no_log: true
+
+  always:
+    - name: Clear credential-bearing facts
+      ansible.builtin.set_fact:
+        _netapp_cleanup_sc_list: {}
+        _netapp_cleanup_trident_crd: {}
+        _netapp_cleanup_tbc_list: {}
+        _netapp_cleanup_csi_list: {}
+        _tbc_check: {}
+      no_log: true

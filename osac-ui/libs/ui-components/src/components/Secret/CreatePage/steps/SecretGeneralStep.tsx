@@ -3,6 +3,7 @@ import { Stack, StackItem, Title } from '@patternfly/react-core';
 import NameField from '@osac/ui-components/components/Form/NameField';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
 import ProjectField from '@osac/ui-components/components/Form/ProjectField';
+import { useSession } from '@osac/ui-components/hooks/use-session';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 
@@ -12,6 +13,7 @@ interface SecretGeneralStepProps {
 
 const SecretGeneralStep = ({ isEdit }: SecretGeneralStepProps) => {
   const { t } = useTranslation();
+  const { role } = useSession();
 
   return (
     <Stack hasGutter>
@@ -22,7 +24,7 @@ const SecretGeneralStep = ({ isEdit }: SecretGeneralStepProps) => {
       </StackItem>
       <StackItem>
         <OsacForm>
-          <ProjectField isDisabled={isEdit} />
+          {role !== 'admin' && <ProjectField isDisabled={isEdit} />}
           <NameField isDisabled={isEdit} />
         </OsacForm>
       </StackItem>

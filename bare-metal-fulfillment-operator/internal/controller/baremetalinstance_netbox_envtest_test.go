@@ -42,6 +42,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmh"
 	netboxcredentials "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/netbox"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/directclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
@@ -359,8 +360,12 @@ func newNetBoxCredentialsReader(deviceID int) credentials.Reader {
 // newNetBoxReconciler wires the real NetBox adapter and BMH manager to the
 // shared envtest API server, mirroring newBCMReconciler.
 func newNetBoxReconciler(m *mockNetBox, reader credentials.Reader) *BareMetalInstanceReconciler {
-	bmhManager := baremetalhost.NewManager(k8sClient, k8sClient, netboxTestNS)
-	secretWriter := bmh.NewSecretWriter(k8sClient, netboxTestNS)
+	direct, err := directclient.WrapForTest(k8sClient)
+	Expect(err).NotTo(HaveOccurred())
+	bmhManager, err := baremetalhost.NewManager(k8sClient, direct, netboxTestNS)
+	Expect(err).NotTo(HaveOccurred())
+	secretWriter, err := bmh.NewSecretWriter(direct, netboxTestNS)
+	Expect(err).NotTo(HaveOccurred())
 	api := netboxclient.NewClientForTest(m.server.Client(), m.server.URL, testNetBoxToken)
 	inventoryClient := inventory.NewNetBoxClient(api, bmhManager, secretWriter, metal3HostClass, reader)
 	return newTestReconciler(inventoryClient, netboxTestNS)

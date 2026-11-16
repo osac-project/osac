@@ -7897,10 +7897,13 @@ var _ = Describe("Private clusters server", func() {
 					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
 				)
 
-				object, err := createCluster(privatev1.SecretReference_builder{Name: secret.GetMetadata().GetName()}.Build())
+				object, err := createCluster(privatev1.SecretReference_builder{
+					Name: secret.GetMetadata().GetName(), Tenant: testTenant,
+				}.Build())
 				Expect(err).ToNot(HaveOccurred())
 				Expect(object.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()))
 				Expect(object.GetSpec().GetSshKey().GetName()).To(Equal(secret.GetMetadata().GetName()))
+				Expect(object.GetSpec().GetSshKey().GetTenant()).To(BeEmpty())
 				Expect(object.GetSpec().GetSshKey().GetShared()).To(BeFalse())
 
 				encoded, err := protojson.Marshal(object)
@@ -8002,6 +8005,43 @@ var _ = Describe("Private clusters server", func() {
 				_, err = createCluster(privatev1.SecretReference_builder{Id: secret.GetId()}.Build())
 				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found or is not visible"))
+			})
+
+			It("rejects an SSH key reference with an explicit non-owner tenant", func() {
+				tenantsDao, err := dao.NewGenericDAO[*privatev1.Tenant]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = tenantsDao.Create().SetObject(privatev1.Tenant_builder{
+					Id:       "ssh-key-selected-tenant",
+					Metadata: privatev1.Metadata_builder{Name: "ssh-key-selected-tenant", Tenant: "ssh-key-selected-tenant"}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				keyName := fmt.Sprintf("cluster-selected-tenant-key-%s", uuid.New()[24:32])
+				ownerSecret := seedSSHKeySecret(
+					keyName,
+					testTenant,
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+				selectedSecret := seedSSHKeySecret(
+					keyName,
+					"ssh-key-selected-tenant",
+					privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+					map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+				)
+				Expect(ownerSecret.GetId()).NotTo(Equal(selectedSecret.GetId()))
+
+				for _, reference := range []*privatev1.SecretReference{
+					privatev1.SecretReference_builder{Id: ownerSecret.GetId(), Tenant: "ssh-key-selected-tenant"}.Build(),
+					privatev1.SecretReference_builder{Name: keyName, Tenant: "ssh-key-selected-tenant"}.Build(),
+				} {
+					_, err = createCluster(reference)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+					Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found or is not visible"))
+				}
 			})
 
 			It("rejects a missing SSH key Secret reference", func() {

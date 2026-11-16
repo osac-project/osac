@@ -12,7 +12,7 @@ scripts:
   options work unchanged.
 
 The image is based on UBI 9 with Node.js
-(`registry.access.redhat.com/ubi9/nodejs-22`) and adds pnpm, Chromium and its
+(`registry.access.redhat.com/ubi9/nodejs-22-minimal`) and adds pnpm, Chromium and its
 system libraries, `oc`, and the `osac` CLI. UBI 9 repositories have no Xvfb,
 so the image runs headless only; `--headed` stops with `Xvfb is missing`. The
 host needs only podman,
@@ -35,6 +35,9 @@ FULFILLMENT_SERVICE_IMAGE=$(oc get pods \
   -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="grpc-server")].imageID}')
 ```
 
+The value must include the image repository and `@sha256:` digest. If the
+runtime returns only a digest, prepend the deployed image's repository name.
+
 Then build the image:
 
 ```bash
@@ -47,7 +50,7 @@ podman build \
 
 | Build argument              | Default                                           | Purpose                                                                   |
 | --------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------- |
-| `FULFILLMENT_SERVICE_IMAGE` | `ghcr.io/osac-project/fulfillment-service:latest` | Image the `osac` CLI is copied from                                       |
+| `FULFILLMENT_SERVICE_IMAGE` | Required                                          | Digest-qualified image the `osac` CLI is copied from                     |
 | `OC_VERSION`                | `4.22.22`                                         | `oc` client version                                                       |
 | `PNPM_RELEASE`              | `10.34.5`                                         | pnpm version; keep it equal to `packageManager` in `osac-ui/package.json` |
 
@@ -66,7 +69,7 @@ repository. Do not pass it on the command line.
 umask 077
 read -rs -p 'OSAC admin password: ' p && printf %s "$p" > ./admin-password; echo
 mkdir -p test-output
-cp "${KUBECONFIG}" ./kubeconfig
+cp "${KUBECONFIG:-$HOME/.kube/config}" ./kubeconfig
 
 podman run --rm \
   --network=host \
@@ -89,6 +92,8 @@ podman run --rm \
   to the checkout in the image. `run-ui-e2e.sh` refuses credentialed runs as
   root.
 - The kubeconfig is copied so that `:Z` relabels the copy, not the original.
+  If `KUBECONFIG` lists multiple files, use `oc config view --raw --flatten`
+  to create a single kubeconfig instead.
 - `run-ui-e2e.sh` reads the `osac-ui` and `fulfillment-api` routes with the
   kubeconfig. To run without one, see
   [Without a kubeconfig](#without-a-kubeconfig).
@@ -98,7 +103,9 @@ podman run --rm \
   configuration needs to be mounted.
 - The Playwright HTML report and the test results are copied to
   `test-output/playwright-report/` and `test-output/test-results/` when the
-  run ends. They are owned by your user; with rootless podman their group
+  run ends. These two directories are cleared before each run, so use a
+  separate output directory to keep earlier reports. They are owned by your
+  user; with rootless podman their group
   shows as a subordinate group ID (for example `165536`), which is the
   container's group 0. You can still read and delete them.
 
@@ -229,7 +236,8 @@ the first attempt left behind.
 
 - **Exit code:** `0` when every test of the flow passed, non-zero otherwise
   (a test failure, or a setup error such as an unreachable route or a failed
-  CLI login). The first failure stops the run.
+  CLI login). An artifact export failure also returns non-zero; an existing
+  test failure code takes precedence. The first test failure stops the run.
 - **Artifacts:** `playwright-report/` (open `index.html`) and
   `test-results/` in the results directory, copied there even when the run
   fails. There is no JUnit output. Tracing and video are off because the

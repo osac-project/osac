@@ -127,6 +127,9 @@ data:
             enabled: true
             dhcp: false
             autoconf: false
+{{ if $.Values.evpn.bgp.activeActive }}
+            auto-route-metric: 100
+{{ end }}
       {{- else if $uplink.address }}
       {{- $uplinkAddress := split "/" $uplink.address }}
         - name: {{ $uplink.interface | quote }}
@@ -135,11 +138,20 @@ data:
           ipv4:
             enabled: true
             dhcp: false
+{{ if $.Values.evpn.bgp.activeActive }}
+            auto-route-metric: 100
+{{ end }}
             address:
               - ip: {{ $uplinkAddress._0 | quote }}
                 prefix-length: {{ int $uplinkAddress._1 }}
           ipv6:
             enabled: false
+      {{- else if $.Values.evpn.bgp.activeActive }}
+        - name: {{ $uplink.interface | quote }}
+          type: ethernet
+          state: up
+          ipv4:
+            auto-route-metric: 100
       {{- end }}
     {{- end }}
         - name: evpn-vtep0

@@ -140,7 +140,8 @@ evpn:
     # [REQUIRED when enabled] Fabric loopback ranges (remote VTEPs). Only /32
     # routes inside these ranges are accepted from the fabric.
     acceptPrefixes: []
-    # Allow up to 16 eligible IPv4 BGP paths for active-active forwarding.
+    # Allow up to 16 eligible IPv4 BGP paths for active-active forwarding and
+    # set equal local route metrics on all uplinks.
     activeActive: false
     # Use uplink roles to set local preference and prepend on backups in the
     # IPv4 unicast and L2VPN EVPN address families.

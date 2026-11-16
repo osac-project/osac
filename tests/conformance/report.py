@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
@@ -12,13 +11,16 @@ import yaml
 from tests.conformance.model import CheckResult, Report, Result
 from tests.conformance.redact import Redactor
 
-# XML 1.0 forbids most C0 control characters, including the ANSI escapes that
-# captured test output and failure messages routinely contain.
-_XML_ILLEGAL = re.compile("[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
+# XML 1.0 forbids most C0 controls, lone surrogates and the two non-characters at
+# the end of the BMP. Captured test output routinely carries ANSI escapes (0x1B),
+# which would otherwise make the JUnit report invalid XML.
+_XML_ILLEGAL = {
+    code: None for code in (*range(0x00, 0x09), 0x0B, 0x0C, *range(0x0E, 0x20), *range(0xD800, 0xE000), 0xFFFE, 0xFFFF)
+}
 
 
 def _xml_text(value: str) -> str:
-    return _XML_ILLEGAL.sub("", value)
+    return value.translate(_XML_ILLEGAL)
 
 
 def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:

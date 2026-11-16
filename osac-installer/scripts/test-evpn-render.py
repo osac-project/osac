@@ -106,6 +106,19 @@ def parse_documents(value: str) -> list[dict[str, Any]]:
     return [item for item in yaml.safe_load_all(value) if isinstance(item, dict)]
 
 
+def assert_ipv6_prefix_lists_removed(raw_config: str) -> None:
+    """frr-k8s generates IPv6 deny lists for every neighbor; we remove them."""
+    prefix_lines = [
+        line.strip()
+        for line in raw_config.splitlines()
+        if "ipv6 prefix-list" in line
+    ]
+    assert prefix_lines, "expected removal commands for generated IPv6 prefix-lists"
+    assert all(
+        line.startswith("no ipv6 prefix-list ") for line in prefix_lines
+    ), prefix_lines
+
+
 def write_values(directory: pathlib.Path, name: str, values: dict[str, Any]) -> pathlib.Path:
     path = directory / name
     path.write_text(yaml.safe_dump(values, sort_keys=False), encoding="utf-8")
@@ -457,10 +470,13 @@ def test_active_active_bgp() -> None:
     assert "neighbor 169.254.133.1 activate" in raw_config
     assert "neighbor 169.254.134.1 activate" in raw_config
     assert "route-map EVPN-" not in raw_config
+    assert_ipv6_prefix_lists_removed(raw_config)
+    assert "no ipv6 prefix-list 169.254.133.1-inpl-ipv4" in raw_config
+    assert "no ipv6 prefix-list 169.254.134.1-inpl-ipv4" in raw_config
 
 
 def test_unnumbered_active_active_bgp() -> None:
-    """Keep RFC 5549 IPv4 routes out of the generated IPv6 deny lists."""
+    """Use chart-owned IPv4 unicast route-maps for dual-stack neighbors."""
     values = base_values(
         [node("worker-0", "10.200.255.1", [uplink("ens6", None, unnumbered=True)])]
     )
@@ -481,7 +497,10 @@ def test_unnumbered_active_active_bgp() -> None:
     assert "maximum-paths 16" in ipv4_af
     assert "neighbor ens6 route-map EVPN-IPV4-IN in" in ipv4_af
     assert "neighbor ens6 route-map EVPN-IPV4-OUT out" in ipv4_af
-    assert "ipv6 prefix-list" not in raw_config
+    assert_ipv6_prefix_lists_removed(raw_config)
+    assert "no ipv6 prefix-list ens6-allowed-ipv6" in raw_config
+    assert "no ipv6 prefix-list ens6-inpl-dual" in raw_config
+    assert "no ipv6 prefix-list ens6-inpl-ipv4" not in raw_config
 
 
 def test_active_backup_bgp() -> None:
@@ -540,8 +559,8 @@ def test_active_backup_bgp() -> None:
     assert "match " not in backup_in
     assert "match " not in backup_out
 
-    # The chart owns the IPv4 unicast route-maps so RFC 5549 next hops are not
-    # evaluated against the frr-k8s-generated IPv6 deny lists.
+    # The chart owns the IPv4 unicast route-maps so IPv4 policy does not depend
+    # on frr-k8s route-map entries that reference the removed IPv6 lists.
     ipv4_active_in = raw_config.split(
         "route-map EVPN-IPV4-ACTIVE-IN permit 10\n", 1
     )[1].split("route-map ", 1)[0]
@@ -562,6 +581,11 @@ def test_active_backup_bgp() -> None:
     assert "route-map 169.254.133.1-in permit 1" not in raw_config
     assert "route-map 169.254.133.3-out permit 1" not in raw_config
     assert "fe80::/10" not in raw_config
+    assert_ipv6_prefix_lists_removed(raw_config)
+    assert "no ipv6 prefix-list 169.254.133.1-allowed-ipv6" in raw_config
+    assert "no ipv6 prefix-list 169.254.133.1-inpl-ipv4" in raw_config
+    assert "no ipv6 prefix-list 169.254.133.3-allowed-ipv6" in raw_config
+    assert "no ipv6 prefix-list 169.254.133.3-inpl-ipv4" in raw_config
 
     ipv4_af = raw_config.split("address-family ipv4 unicast\n", 1)[1].split(
         "exit-address-family", 1
@@ -622,7 +646,7 @@ def test_unnumbered_active_backup_bgp() -> None:
         "osac-evpn-raw-worker-0",
     )
     raw_config = raw["spec"]["raw"]["rawConfig"]
-    assert "ipv6 prefix-list" not in raw_config
+    assert_ipv6_prefix_lists_removed(raw_config)
     assert "fe80::/10" not in raw_config
     assert "route-map ens5f0-in permit 1" not in raw_config
     assert "route-map ens5f1-out permit 1" not in raw_config
@@ -633,6 +657,10 @@ def test_unnumbered_active_backup_bgp() -> None:
     assert "neighbor ens5f0 route-map EVPN-IPV4-ACTIVE-OUT out" in ipv4_af
     assert "neighbor ens5f1 route-map EVPN-IPV4-BACKUP-IN in" in ipv4_af
     assert "neighbor ens5f1 route-map EVPN-IPV4-BACKUP-OUT out" in ipv4_af
+    assert "no ipv6 prefix-list ens5f0-allowed-ipv6" in raw_config
+    assert "no ipv6 prefix-list ens5f0-inpl-dual" in raw_config
+    assert "no ipv6 prefix-list ens5f1-allowed-ipv6" in raw_config
+    assert "no ipv6 prefix-list ens5f1-inpl-dual" in raw_config
     assert "neighbor ens5f0 route-map EVPN-ACTIVE-IN in" in raw_config
     assert "neighbor ens5f1 route-map EVPN-BACKUP-IN in" in raw_config
     assert "neighbor ens5f1 route-map EVPN-BACKUP-OUT out" in raw_config
@@ -760,7 +788,9 @@ def test_unnumbered_uplink() -> None:
     raw = named(parse_documents(data["frr.yaml"]), "FRRConfiguration", "osac-evpn-raw-worker-0")
     raw_config = raw["spec"]["raw"]["rawConfig"]
     assert "neighbor ens6 activate" in raw_config
-    assert "ipv6 prefix-list" not in raw_config
+    assert_ipv6_prefix_lists_removed(raw_config)
+    assert "no ipv6 prefix-list ens6-allowed-ipv6" in raw_config
+    assert "no ipv6 prefix-list ens6-inpl-dual" in raw_config
     assert "neighbor ens6 route-map EVPN-IPV4-IN in" in raw_config
     assert "neighbor ens6 route-map EVPN-IPV4-OUT out" in raw_config
 

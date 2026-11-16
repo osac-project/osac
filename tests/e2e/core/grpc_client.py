@@ -949,7 +949,7 @@ class GRPCClient:
     # NATGateway operations (public API)
 
     def create_nat_gateway(
-        self, *, name: str, virtual_network_name: str, external_ip_name: str, tenant: str | None = None
+        self, *, name: str, virtual_network_id: str, external_ip_id: str, tenant: str | None = None
     ) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.NATGateways/Create",
@@ -957,8 +957,8 @@ class GRPCClient:
                 "object": {
                     "metadata": _metadata(name=name, tenant=tenant),
                     "spec": {
-                        "virtual_network": {"name": virtual_network_name},
-                        "external_ip": {"name": external_ip_name},
+                        "virtual_network": {"id": virtual_network_id},
+                        "external_ip": {"id": external_ip_id},
                     },
                 }
             },

@@ -22,8 +22,9 @@ in `osac-aap/Makefile`.
 
 - `compute_instance_create` (see its
   [README](../../osac-aap/tests/integration/targets/compute_instance_create/README.md)):
-  real Kind StorageClasses, Secrets, DataVolume task execution. VM
-  readiness/creation may be overridden; synthetic Volume IDs prove no Volume
+  real Kind StorageClasses, Secrets, VM and DataVolume task execution. The VM
+  tenant annotation and VMI template metadata are checked, but VMI creation
+  is not exercised. VM readiness may be overridden; synthetic Volume IDs prove no Volume
   API recovery, CDI/KubeVirt, PVC binding or guest I/O; minimal CRDs prove no
   provider admission.
 - Storage target-routing scenarios: separate management/workload Kind APIs;

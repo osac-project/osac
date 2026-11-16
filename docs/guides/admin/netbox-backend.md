@@ -82,13 +82,13 @@ bmf:
     tokenSecretKey: "token"
     tokenValue: ""
     caCert: "" # Optional NetBox CA PEM
-    allowInsecureHTTP: false
+    clientAllowInsecureHTTP: false
   secrets:
     netboxToken: "osac-netbox-token"
     netboxCA: "osac-netbox-ca"
 ```
 
-`bmf.netbox.url` must be an HTTP(S) origin only: do not append `/api`, a path, credentials, query, or fragment. HTTPS is the default and recommended transport. HTTP requires the explicit `allowInsecureHTTP: true` setting and should be limited to isolated development environments. If `caCert` is set, the chart mounts it through the `bmf.secrets.netboxCA` Secret (default `osac-netbox-ca`, key `ca.crt`); the client adds it to the system trust roots.
+`bmf.netbox.url` must be an HTTP(S) origin only: do not append `/api`, a path, credentials, query, or fragment. HTTPS is the default and recommended transport. HTTP requires the explicit `clientAllowInsecureHTTP: true` setting and should be limited to isolated development environments. If `caCert` is set, the chart mounts it through the `bmf.secrets.netboxCA` Secret (default `osac-netbox-ca`, key `ca.crt`); the client adds it to the system trust roots.
 
 Also configure `bmf.secretAPI.url` and `bmf.secretAPI.issuerUrl`. The Secret API URL must use HTTPS, and its issuer must match the rendered `service.auth.issuerUrl`. `bmf.secretAPI.caBundle` trusts the Secret API and is separate from the NetBox `caCert`. The NetBox API identity needs permission to list/read devices and interfaces and update device status and custom fields.
 

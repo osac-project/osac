@@ -48,8 +48,8 @@ var (
 var _ = Describe("NetBox client", func() {
 	Describe("endpoint normalization", func() {
 		DescribeTable("normalizes or rejects endpoints",
-			func(endpoint string, allowInsecureHTTP bool, want string, wantErr bool) {
-				got, err := normalizeEndpoint(endpoint, allowInsecureHTTP)
+			func(endpoint string, clientAllowInsecureHTTP bool, want string, wantErr bool) {
+				got, err := normalizeEndpoint(endpoint, clientAllowInsecureHTTP)
 				if wantErr {
 					Expect(err).To(HaveOccurred())
 					return
@@ -125,8 +125,8 @@ var _ = Describe("NetBox client", func() {
 
 	Describe("client configuration", func() {
 		DescribeTable("validates HTTP and token-file requirements",
-			func(endpoint string, allowInsecureHTTP, withToken bool, want error) {
-				config := Config{Endpoint: endpoint, AllowInsecureHTTP: allowInsecureHTTP}
+			func(endpoint string, clientAllowInsecureHTTP, withToken bool, want error) {
+				config := Config{Endpoint: endpoint, ClientAllowInsecureHTTP: clientAllowInsecureHTTP}
 				if withToken {
 					config.TokenFile = writeTestToken()
 				}

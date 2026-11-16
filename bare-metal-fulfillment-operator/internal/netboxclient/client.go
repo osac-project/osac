@@ -91,7 +91,7 @@ type Client struct {
 // New validates configuration and creates a client without making a network
 // request. Connectivity and schema checks remain the responsibility of callers.
 func New(config Config) (*Client, error) {
-	endpoint, err := normalizeEndpoint(config.Endpoint, config.AllowInsecureHTTP)
+	endpoint, err := normalizeEndpoint(config.Endpoint, config.ClientAllowInsecureHTTP)
 	if err != nil {
 		return nil, err
 	}

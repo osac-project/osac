@@ -94,3 +94,15 @@ def test_container_environment_credential_pairs_are_redacted() -> None:
             {"name": "NETRIS_CONTROLLER_URL", "value": "https://netris.example.test"},
         ]
     }
+
+
+@pytest.mark.parametrize("name", ["DOCKER_AUTH_CONFIG", "REGISTRY_AUTH_CONFIG"])
+def test_registry_auth_config_entries_are_redacted(name: str) -> None:
+    redactor = Redactor()
+    # base64 of "test:test", deliberately low-entropy so secret scanners do not
+    # flag a fixture that only needs to look like a registry auth config.
+    payload = '{"auths":{"registry.example.test":{"auth":"dGVzdDp0ZXN0"}}}'
+
+    cleaned = redactor.obj({"env": [{"name": name, "value": payload}]})
+
+    assert cleaned == {"env": [{"name": name, "value": "<redacted>"}]}

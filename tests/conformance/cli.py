@@ -146,7 +146,9 @@ def redactor_for_config_path(path: Path) -> Redactor:
 
 def _build_runtime(args: argparse.Namespace) -> Runtime:
     catalog = load_catalog(Path(args.catalog))
-    config = load_config(Path(args.config))
+    # Resolve against the invocation directory: the pytest child runs from the
+    # tree root and reads this path from OSAC_CONFORMANCE_CONFIG.
+    config = load_config(Path(args.config).resolve())
     expand_profiles(config.profiles, catalog)
     results = Path(args.results)
     _check_results(results)

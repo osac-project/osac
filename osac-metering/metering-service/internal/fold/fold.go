@@ -216,7 +216,7 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 			// to that account. A fatal extraction error returns above so this
 			// transaction rolls back instead of advancing past it.
 			if billingChanged && !errors.Is(err, ErrForeignTenant) {
-				if err := database.InsertFacts(ctx, tx, tenant, []database.Fact{billing}, message.Offset+1); err != nil {
+				if err := database.InsertFacts(ctx, tx, tenant, []database.Fact{billing}, message.Offset+1, f.eventTopic(tenant)); err != nil {
 					return err
 				}
 				latestBillingID, hasBillingID = billing.Value, true
@@ -233,12 +233,12 @@ func (f *Fold) apply(ctx context.Context, tenant string, messages []*sarama.Cons
 			latestBillingID, hasBillingID = billing.Value, true
 		}
 		if len(facts) == 0 {
-			if err := database.AdvanceEventOffset(ctx, tx, tenant, message.Offset+1); err != nil {
+			if err := database.AdvanceEventOffset(ctx, tx, tenant, message.Offset+1, f.eventTopic(tenant)); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := database.InsertFacts(ctx, tx, tenant, facts, message.Offset+1); err != nil {
+		if err := database.InsertFacts(ctx, tx, tenant, facts, message.Offset+1, f.eventTopic(tenant)); err != nil {
 			return err
 		}
 	}
@@ -306,7 +306,7 @@ func (f *Fold) skipEvent(
 	f.logger.Error(err, "Skipping event",
 		"tenant", tenant, "topic", message.Topic, "offset", message.Offset, "reason", reason)
 	metrics.EventsSkipped(tenant, reason, 1)
-	return database.AdvanceEventOffset(ctx, tx, tenant, message.Offset+1)
+	return database.AdvanceEventOffset(ctx, tx, tenant, message.Offset+1, f.eventTopic(tenant))
 }
 
 // startOffset maps a stored next offset to the offset a partition consumer starts at. A tenant

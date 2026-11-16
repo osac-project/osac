@@ -16,8 +16,11 @@ global:
   # osac.metering.). Those Kafka permissions include metering's own topics.
   # Changing this value stops metering from reading events under the old prefix.
   # Events on the old topics that were not folded before the change are not read
-  # after it. Facts already folded stay in the metering database. The fold then
-  # reads each tenant's new topic from the beginning.
+  # after it, and the fold reads each tenant's new topic from the beginning.
+  # A metering pod that still uses the previous prefix deletes a tenant's folded
+  # history and progress after that tenant is absent from its topic listing. An
+  # ACL change that hides the previous topics from that pod makes the tenant
+  # absent. Coordinate that ACL change with removing the pod so those facts stay.
   eventTopicPrefix: "osac.events."
   # [REQUIRED on OpenShift, via --set global.clusterDomain=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')]
   # Backs the tpl-templated defaults below (service.auth.issuerUrl,

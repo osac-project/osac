@@ -491,14 +491,45 @@ func (s *Service) pruneDrained() {
 
 // stopGone stops the loops of a tenant whose event topic is gone and deletes its rows.
 // Only several missing passes in a row count, because one listing can be incomplete:
-// a pass that sees the tenant again resets its count.
+// a pass that sees the tenant again resets its count. A prefix change also drops the
+// old topic from the listing. That tenant's stored topic differs from the one the
+// current prefix names, which is a rename, not a deletion, so its rows stay.
 func (s *Service) stopGone(live map[string]bool) {
 	s.lock.Lock()
-	for tenant, loops := range s.tenants {
+	var absent []string
+	for tenant := range s.tenants {
 		if s.stopping {
 			continue
 		}
 		if live[tenant] {
+			delete(s.missing, tenant)
+			continue
+		}
+		absent = append(absent, tenant)
+	}
+	s.lock.Unlock()
+
+	// The progress read stays outside the service lock. A slow database must not
+	// stall the loops that take the same lock.
+	renamed := make(map[string]bool, len(absent))
+	for _, tenant := range absent {
+		renamed[tenant] = s.topicRenamed(tenant)
+	}
+
+	s.lock.Lock()
+	for _, tenant := range absent {
+		if s.stopping {
+			continue
+		}
+		loops, running := s.tenants[tenant]
+		if !running {
+			continue
+		}
+		if live[tenant] {
+			delete(s.missing, tenant)
+			continue
+		}
+		if renamed[tenant] {
 			delete(s.missing, tenant)
 			continue
 		}
@@ -519,6 +550,19 @@ func (s *Service) stopGone(live map[string]bool) {
 		}
 	}
 	s.lock.Unlock()
+}
+
+// topicRenamed reports whether the tenant's stored event topic is a different topic
+// from the one the current prefix names. Discovery lists only the current prefix, so
+// after a prefix change the tenant is missing from the list while its rows still
+// belong to the previous topic. An empty stored topic was written before topics were
+// recorded, so it is not a rename.
+func (s *Service) topicRenamed(tenant string) bool {
+	progress, err := s.cfg.Store.GetTenantProgress(context.Background(), tenant)
+	if err != nil || progress.EventTopic == "" {
+		return false
+	}
+	return progress.EventTopic != topics.EventTopic(s.cfg.EventTopicPrefix, tenant)
 }
 
 // deleteRows waits for a gone tenant's loops to end, then deletes the tenant's rows.

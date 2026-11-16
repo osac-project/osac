@@ -33,6 +33,7 @@ import (
 	"github.com/osac-project/osac-metering/internal/kafka"
 	"github.com/osac-project/osac-metering/internal/rules"
 	"github.com/osac-project/osac-metering/internal/testenv"
+	"github.com/osac-project/osac-metering/internal/topics"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -202,7 +203,7 @@ func TestNewStartsAfterRestoreBeforeFutureRevisionWasLoaded(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 	if err := database.SetLastRound(
-		ctx, tx, tenant, time.Now().UTC().Add(-48*time.Hour), 0,
+		ctx, tx, tenant, time.Now().UTC().Add(-48*time.Hour), 0, "",
 	); err != nil {
 		t.Fatalf("setting the last round: %v", err)
 	}
@@ -637,7 +638,7 @@ func TestRestartKeepsStoppingLoopsInShutdownJoin(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("enqueueing the heartbeat: %v", err)
 	}
-	if err := database.SetLastRound(ctx, tx, tenant, now, 2); err != nil {
+	if err := database.SetLastRound(ctx, tx, tenant, now, 2, topics.Events(tenant)); err != nil {
 		t.Fatalf("setting the last round: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -802,7 +803,7 @@ func setBillingPosition(t *testing.T, store *database.Store, tenant string, at t
 		t.Fatalf("begin: %v", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := database.SetLastRound(ctx, tx, tenant, at, 0); err != nil {
+	if err := database.SetLastRound(ctx, tx, tenant, at, 0, ""); err != nil {
 		t.Fatalf("setting the last round: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1015,6 +1016,94 @@ func TestCheckRulesRetriesListingFailures(t *testing.T) {
 	}
 	if got := len(svc.ruleset.Revisions()); got != 1 {
 		t.Fatalf("the calculator serves %d revisions after a failed listing, want 1", got)
+	}
+}
+
+// TestPrefixChangeKeepsFoldedRows checks the whole prefix-change journey: a tenant
+// already has folded facts and a progress row, the service's prefix changes, and
+// discovery no longer lists the old topic. The rows stay. Deleting them would throw
+// away the ledger of what was already billed.
+func TestPrefixChangeKeepsFoldedRows(t *testing.T) {
+	tenant := strings.ToLower(t.Name())
+	s := newTestService(t)
+	ctx := context.Background()
+	createEventTopic(t, tenant)
+	s.syncTenants(ctx, []string{tenant})
+	waitUntil(t, func() bool {
+		progress, err := s.cfg.Store.GetTenantProgress(ctx, tenant)
+		return err == nil && progress.EventTopic == topics.Events(tenant)
+	}, "the fold must record the event topic before the prefix changes")
+
+	since := time.Now().UTC().Truncate(time.Second)
+	tx, err := s.cfg.Store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	err = database.InsertFacts(ctx, tx, tenant, []database.Fact{{
+		ResourceType: "ComputeInstance",
+		ResourceID:   "vm-7",
+		Field:        "kept-across-rename",
+		Since:        since,
+		Value:        "yes",
+	}}, 1, topics.Events(tenant))
+	if err != nil {
+		t.Fatalf("insert folded fact: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit folded fact: %v", err)
+	}
+
+	s.cfg.EventTopicPrefix = "custom.events."
+	for range DeletionPasses {
+		s.syncTenants(ctx, nil)
+	}
+
+	s.lock.Lock()
+	_, running := s.tenants[tenant]
+	s.lock.Unlock()
+	if !running {
+		t.Fatal("a prefix change must not stop the tenant")
+	}
+	if !tenantRowsExist(t, s, tenant) {
+		t.Fatal("a prefix change must not delete the progress row")
+	}
+	var value string
+	err = s.cfg.Store.Pool().QueryRow(
+		ctx,
+		`SELECT value FROM history
+		 WHERE tenant = $1 AND resource_id = $2 AND field = $3`,
+		tenant, "vm-7", "kept-across-rename",
+	).Scan(&value)
+	if err != nil {
+		t.Fatalf("reading the folded fact: %v", err)
+	}
+	if value != "yes" {
+		t.Fatalf("folded fact = %q, want yes", value)
+	}
+}
+
+// TestRunDiscoversACustomPrefix checks that Run itself passes the configured prefix
+// to discovery. A test that calls syncTenants directly would miss a regression there.
+func TestRunDiscoversACustomPrefix(t *testing.T) {
+	// The prefix is unique to this test. Discovery lists every topic under the
+	// prefix, and the broker is shared with the other tests.
+	tenant := strings.ToLower(t.Name())
+	prefix := tenant + ".events."
+	producePrefixedEvent(t, prefix+tenant, tenant)
+	s := newTestService(t)
+	s.cfg.EventTopicPrefix = prefix
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	waitUntil(t, func() bool {
+		progress, err := s.cfg.Store.GetTenantProgress(context.Background(), tenant)
+		return err == nil && progress.EventOffset >= 1
+	}, "Run must discover and fold "+prefix+tenant)
+
+	cancel()
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("Run must return the context error, got %v", err)
 	}
 }
 

@@ -247,7 +247,7 @@ func (r *Round) Once(ctx context.Context, tenant string, roundTime time.Time) er
 	if err := r.compare(ctx, tx, tenant, progress, roundTime, billingID); err != nil {
 		return err
 	}
-	if err := database.SetLastRound(ctx, tx, tenant, roundTime, progress.EventOffset); err != nil {
+	if err := database.SetLastRound(ctx, tx, tenant, roundTime, progress.EventOffset, r.eventPrefix+tenant); err != nil {
 		return err
 	}
 	// The round's own commit supersedes the replay's id memory: every heartbeat on
@@ -490,9 +490,10 @@ func (r *Round) scanResources(
 	}
 
 	// Resources with facts the previous round has not used: written after its event
-	// offset, or dated after its time, because a writer's clock can run ahead.
+	// offset on the current topic, or dated after its time, because a writer's clock
+	// can run ahead. Offsets from an earlier topic do not count.
 	newFacts, err := database.ResourcesWithNewFacts(
-		ctx, tx, tenant, progress.LastRoundEventOffset, *progress.LastRoundTime,
+		ctx, tx, tenant, progress.TopicGeneration, progress.LastRoundEventOffset, *progress.LastRoundTime,
 	)
 	if err != nil {
 		return nil, nil, err

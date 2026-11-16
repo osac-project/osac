@@ -956,10 +956,7 @@ class GRPCClient:
             data={
                 "object": {
                     "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {
-                        "virtual_network": {"id": virtual_network_id},
-                        "external_ip": {"id": external_ip_id},
-                    },
+                    "spec": {"virtual_network": {"id": virtual_network_id}, "external_ip": {"id": external_ip_id}},
                 }
             },
         )

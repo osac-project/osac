@@ -204,3 +204,11 @@ def test_duplicate_mapping_keys_are_a_config_error(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="duplicate key"):
         load_config(path)
+
+
+def test_unhashable_mapping_keys_are_a_config_error(tmp_path: Path) -> None:
+    path = tmp_path / "conformance.yaml"
+    path.write_text("? {a: b}\n: c\n")
+
+    with pytest.raises(ConfigError, match="unhashable key"):
+        load_config(path)

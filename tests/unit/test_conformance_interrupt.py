@@ -82,3 +82,15 @@ def test_a_finished_child_leaves_the_interrupt_to_the_run_loop() -> None:
     assert gate.first is True
     assert child.signals == []
     assert child.killed is False
+
+
+def test_a_signal_during_registration_is_forwarded_after_attachment() -> None:
+    gate = InterruptGate()
+    child = _Child()
+
+    with gate.hold():
+        gate.child = child
+        gate.trigger()
+
+    assert gate.first is True
+    assert child.signals == [signal.SIGINT]

@@ -2,9 +2,52 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 from tests.e2e.core.sanitize import REDACTED, sanitize_obj, sanitize_text
+
+# A decoded YAML document separates a credential's name from its value, so the
+# textual ``name=value`` rules no longer see the pair. Match the name here too.
+_CREDENTIAL_NAMES = frozenset(
+    {
+        "password",
+        "passwd",
+        "passphrase",
+        "token",
+        "apikey",
+        "accesskey",
+        "secretkey",
+        "clientsecret",
+        "secret",
+        "sessionid",
+        "authorization",
+        "credential",
+        "credentials",
+        "privatekey",
+        "bearertoken",
+    }
+)
+_CREDENTIAL_SUFFIXES = (
+    "password",
+    "passwd",
+    "passphrase",
+    "token",
+    "apikey",
+    "accesskey",
+    "secretkey",
+    "clientsecret",
+    "privatekey",
+    "credentials",
+    "sessionid",
+)
+
+
+def _is_credential_name(value: object) -> bool:
+    if isinstance(value, bytes):
+        value = value.decode(errors="replace")
+    normalized = re.sub(r"[^a-z0-9]", "", str(value).lower())
+    return normalized in _CREDENTIAL_NAMES or normalized.endswith(_CREDENTIAL_SUFFIXES)
 
 
 class Redactor:
@@ -26,11 +69,23 @@ class Redactor:
         return sanitize_text(value)
 
     def obj(self, value: object) -> object:
-        cleaned = sanitize_obj(value)
-        if isinstance(cleaned, str):
-            return self.text(cleaned)
-        if isinstance(cleaned, dict):
-            return {self.text(str(key)): self.obj(item) for key, item in cleaned.items()}
-        if isinstance(cleaned, list):
-            return [self.obj(item) for item in cleaned]
-        return cleaned
+        return self._structure(sanitize_obj(value))
+
+    def _structure(self, value: object) -> object:
+        if isinstance(value, dict):
+            # A container environment entry keeps the credential name and the
+            # value in separate fields: {"name": "API_KEY", "value": "..."}.
+            secret_entry = "value" in value and _is_credential_name(value.get("name", ""))
+            cleaned: dict[object, object] = {}
+            for key, item in value.items():
+                name = self.text(str(key))
+                if _is_credential_name(key) or (secret_entry and str(key) == "value"):
+                    cleaned[name] = REDACTED
+                else:
+                    cleaned[name] = self._structure(item)
+            return cleaned
+        if isinstance(value, list):
+            return [self._structure(item) for item in value]
+        if isinstance(value, str):
+            return self.text(value)
+        return value

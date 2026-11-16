@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import sys
 from pathlib import Path
 
@@ -27,6 +28,7 @@ class _FakeProcess:
         self.entries = entries or []
         self.stderr = stderr
         self.command: list[str] = []
+        self.signals: list[int] = []
         self._results = Path("/dev/null")
 
     def __call__(self, command: list[str], **kwargs: object) -> _FakeProcess:
@@ -40,8 +42,8 @@ class _FakeProcess:
         self._results.write_text("".join(json.dumps(entry) + "\n" for entry in self.entries))
         return "", self.stderr
 
-    def send_signal(self, _signum: int) -> None:
-        return None
+    def send_signal(self, signum: int) -> None:
+        self.signals.append(signum)
 
     def kill(self) -> None:
         return None
@@ -104,9 +106,9 @@ def test_captured_test_output_is_redacted_in_evidence(tmp_path: Path) -> None:
         output=OutputSink(results, redactor),
     )
 
-    tree.run(plan, context, keep=False)
+    outcomes = tree.run(plan, context, keep=False)
 
-    evidence = next((results / "tests").glob("test_sample.py_test_passes-*"))
+    evidence = next(outcome.evidence_dir for outcome in outcomes if outcome.identity.id.endswith("::test_passes"))
     log = (evidence / "test.log").read_text()
     assert _REDACTION_MARKER_C not in log
     assert "<redacted>" in log
@@ -150,6 +152,37 @@ def test_teardown_failure_is_reported(tmp_path: Path) -> None:
     assert "teardown boom" in outcomes[0].message
 
 
+def test_teardown_skip_is_reported(tmp_path: Path) -> None:
+    tree_dir = tmp_path / "tree"
+    tree_dir.mkdir()
+    (tree_dir / "test_teardown.py").write_text(
+        "import pytest\n"
+        "@pytest.fixture\n"
+        "def skipping():\n"
+        "    yield\n"
+        "    pytest.skip('teardown skipped')\n"
+        "@pytest.mark.conformance_generic\n"
+        "def test_body_passes(skipping):\n"
+        "    assert True\n"
+    )
+    tree = PytestTestTree(root=tree_dir, python=sys.executable)
+    plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+
+    outcomes = tree.run(plan, context, keep=False)
+
+    assert outcomes[0].result is Result.SKIP
+    assert "teardown skipped" in outcomes[0].message
+
+
+def test_relative_root_resolves_against_the_runner_cwd(tmp_path: Path) -> None:
+    (tmp_path / "tests").mkdir()
+
+    tree = PytestTestTree(root=Path("tests"), cwd=tmp_path)
+
+    assert tree.root == (tmp_path / "tests").resolve()
+
+
 def test_collection_failure_is_a_config_error(tmp_path: Path) -> None:
     tree_dir = tmp_path / "tree"
     tree_dir.mkdir()
@@ -182,6 +215,44 @@ def test_pytest_interrupt_return_code_keeps_completed_outcomes(tmp_path: Path) -
     with pytest.raises(Interrupted) as raised:
         tree.run(plan, context, keep=False)
 
+    assert [outcome.result for outcome in raised.value.outcomes] == [Result.PASS]
+
+
+class _SignalingFakeProcess(_FakeProcess):
+    """Delivers a signal in the window between Popen returning and registration."""
+
+    def __init__(self, gate: InterruptGate, returncode: int, **kwargs: object) -> None:
+        super().__init__(returncode, **kwargs)
+        self._gate = gate
+        self._finished = False
+
+    def __call__(self, command: list[str], **kwargs: object) -> _SignalingFakeProcess:
+        super().__call__(command, **kwargs)
+        self._gate.trigger()
+        return self
+
+    def poll(self) -> int | None:
+        return None if not self._finished else self.returncode
+
+    def communicate(self) -> tuple[str, str]:
+        output = super().communicate()
+        self._finished = True
+        return output
+
+
+def test_signal_during_child_registration_reaches_the_child(tmp_path: Path) -> None:
+    tree = _one_test_tree(tmp_path)
+    plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    gate = InterruptGate()
+    entry = {"nodeid": "test_ok.py::test_ok", "outcome": "passed", "duration": 0.1, "stdout": "", "stderr": ""}
+    process = _SignalingFakeProcess(gate, 0, entries=[entry])
+    tree.popen = process  # type: ignore[assignment]
+
+    with pytest.raises(Interrupted) as raised:
+        tree.run(plan, context, keep=False, interrupt=gate)
+
+    assert process.signals == [signal.SIGINT]
     assert [outcome.result for outcome in raised.value.outcomes] == [Result.PASS]
 
 

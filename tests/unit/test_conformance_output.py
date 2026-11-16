@@ -53,13 +53,39 @@ def test_evidence_is_redacted_and_confined(tmp_path: Path) -> None:
 def test_write_plan_records_selectors_and_tests(tmp_path: Path) -> None:
     plan = Plan((_test(),), ("generic",), (Selector("generic", "marker", ("conformance_generic",)),), True)
 
-    path = write_plan(plan, tmp_path)
+    path = write_plan(plan, tmp_path, Redactor())
 
     text = path.read_text()
     assert "selectors:" in text
     assert "markers:" in text
     assert "TC-1" in text
     assert "complete: true" in text
+    assert "key:" in text
+
+
+def test_write_plan_redacts_test_ids_and_names(tmp_path: Path) -> None:
+    plan = Plan(
+        (_test(f"TC-1[{_REDACTION_MARKER}]"),),
+        ("generic",),
+        (Selector("generic", "marker", ("conformance_generic",)),),
+        True,
+    )
+
+    path = write_plan(plan, tmp_path, Redactor(secrets=(_REDACTION_MARKER,)))
+
+    text = path.read_text()
+    assert _REDACTION_MARKER not in text
+    assert "<redacted>" in text
+    assert "key:" in text
+
+
+def test_evidence_directory_does_not_repeat_the_test_id(tmp_path: Path) -> None:
+    sink = OutputSink(tmp_path, Redactor(secrets=(_REDACTION_MARKER,)))
+
+    path = sink.evidence(_test(f"TC-1[{_REDACTION_MARKER}]"), Path("test.log"), "x")
+
+    assert _REDACTION_MARKER not in str(path)
+    assert path.parent.name.isalnum()
 
 
 def test_echo_does_not_create_the_run_log(tmp_path: Path) -> None:

@@ -44,6 +44,8 @@ class TestSanitizeText:
             "GITHUB_TOKEN=s3cr3t-value",
             "MY_API_KEY=abc123",
             "run --token s3cr3t-value now",
+            'password: "correct horse battery staple"',
+            "password: 'correct horse battery staple'",
             '{"password": "hunter2"}',
             '{"token": "abc"}',
             '{"access_token": "abc"}',
@@ -52,7 +54,15 @@ class TestSanitizeText:
     def test_secret_shapes_are_redacted(self, text: str) -> None:
         cleaned = sanitize_text(text)
         assert "<redacted>" in cleaned
-        for secret in (JWT, "dXNlcjpwYXNz", "hunter2", "abc123", "s3cr3t-value", '"abc"'):
+        for secret in (
+            JWT,
+            "dXNlcjpwYXNz",
+            "hunter2",
+            "abc123",
+            "s3cr3t-value",
+            '"abc"',
+            "correct horse battery staple",
+        ):
             assert secret not in cleaned
 
     def test_plain_text_is_unchanged(self) -> None:

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import signal
+from collections.abc import Iterator
 from types import FrameType
 from typing import TYPE_CHECKING, Protocol
 
@@ -38,8 +40,16 @@ class InterruptGate:
         self.second = False
         self.child: _Signalable | None = None
         self._old: dict[int, signal.Handlers] = {}
+        self._deferring = False
+        self._deferred: int | None = None
 
     def trigger(self, signum: int = signal.SIGINT) -> None:
+        if self._deferring:
+            self._deferred = signum
+            return
+        self._activate(signum)
+
+    def _activate(self, signum: int) -> None:
         if self.first:
             self.second = True
             child = self.child
@@ -59,6 +69,24 @@ class InterruptGate:
         # While the child stays attached, the runner reads the outcomes pytest
         # wrote and raises ``Interrupted`` with them. Raising from this handler
         # instead would escape that read-back and discard completed outcomes.
+
+    @contextlib.contextmanager
+    def hold(self) -> Iterator[None]:
+        """Defer signal handling until a child process has been attached.
+
+        A signal can arrive between ``Popen`` returning and the runner storing
+        the handle. While this context is active the handler records the signal
+        instead of escaping, so after registration the pending signal reaches
+        the child rather than abandoning a live process.
+        """
+        self._deferring = True
+        try:
+            yield
+        finally:
+            self._deferring = False
+            pending, self._deferred = self._deferred, None
+            if pending is not None:
+                self._activate(pending)
 
     def install(self) -> None:
         for signum in (signal.SIGINT, signal.SIGTERM):

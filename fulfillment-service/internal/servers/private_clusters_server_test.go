@@ -104,6 +104,27 @@ type clusterCreator interface {
 	Create(context.Context, *privatev1.ClustersCreateRequest) (*privatev1.ClustersCreateResponse, error)
 }
 
+func seedClusterPullSecret(ctx context.Context, projects ...string) {
+	GinkgoHelper()
+	project := ""
+	if len(projects) > 0 {
+		project = projects[0]
+	}
+	secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancy).
+		Build()
+	Expect(err).ToNot(HaveOccurred())
+	_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
+		Id: "fixture-pull-secret" + project,
+		Metadata: privatev1.Metadata_builder{
+			Name: "fixture-pull-secret", Tenant: testTenant, Project: project,
+		}.Build(),
+		Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+	}.Build()).Do(ctx)
+	Expect(err).ToNot(HaveOccurred())
+}
+
 func createClusterWithAddOnOperators(ctx context.Context, server clusterCreator,
 	operators []*privatev1.AddOnOperatorReference) (*privatev1.Cluster, error) {
 	response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
@@ -183,10 +204,16 @@ func newCaaSNodeSetCreateRequest(
 // clusterCreationFixture supplies explicit Cluster NodeSets for tests of unrelated
 // fields that previously depended on template-supplied hardware. It also runs the
 // reference interceptor for NodeSets, as a gRPC request would before reaching the handler.
-type clusterCreationFixture struct{ *PrivateClustersServer }
+type clusterCreationFixture struct {
+	*PrivateClustersServer
+	testPullSecretReferences bool
+}
 
 func (s *clusterCreationFixture) Create(ctx context.Context, request *privatev1.ClustersCreateRequest) (*privatev1.ClustersCreateResponse, error) {
 	request = proto.Clone(request).(*privatev1.ClustersCreateRequest)
+	if spec := request.GetObject().GetSpec(); spec != nil && spec.GetPullSecretSecret() == nil && !s.testPullSecretReferences {
+		spec.SetPullSecretSecret(privatev1.SecretLocalReference_builder{Id: "fixture-pull-secret" + request.GetObject().GetMetadata().GetProject()}.Build())
+	}
 	if spec := request.GetObject().GetSpec(); spec != nil && spec.GetTemplate() != nil &&
 		spec.GetNodeSets() == nil && spec.GetTemplate().GetId() != "no-bmit-template-id" {
 		spec = request.GetObject().GetSpec()
@@ -375,6 +402,7 @@ var _ = Describe("Private clusters server", func() {
 
 		BeforeEach(func() {
 			var err error
+			seedClusterPullSecret(ctx)
 
 			// Create the server:
 			privateServer, buildErr := NewPrivateClustersServer().
@@ -754,6 +782,7 @@ var _ = Describe("Private clusters server", func() {
 					}, nil)
 				request.GetObject().GetMetadata().SetTenant(tenant)
 				spec := request.GetObject().GetSpec()
+				spec.SetPullSecretSecret(privatev1.SecretLocalReference_builder{Id: "fixture-pull-secret"}.Build())
 				spec.SetVersion(privatev1.ClusterVersionReference_builder{Id: "shared-version-id", Shared: true}.Build())
 				if catalog {
 					spec.ClearTemplate()
@@ -1622,6 +1651,7 @@ var _ = Describe("Private clusters server", func() {
 				Metadata: privatev1.Metadata_builder{Name: "workloads", Tenant: testTenant}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+			seedClusterPullSecret(ctx, "workloads")
 			response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 				Object: privatev1.Cluster_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -6543,6 +6573,28 @@ var _ = Describe("Private clusters server", func() {
 		Describe("Pull secret secret reference", func() {
 			var secretsDao *dao.GenericDAO[*privatev1.Secret]
 
+			It("Rejects create without an explicit or inherited pull secret", func() {
+				response, err := server.PrivateClustersServer.Create(ctx, privatev1.ClustersCreateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Metadata: privatev1.Metadata_builder{Name: "missing-pull-secret"}.Build(),
+						Spec: privatev1.ClusterSpec_builder{
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
+							NodeSets: map[string]*privatev1.ClusterNodeSet{
+								"compute": privatev1.ClusterNodeSet_builder{
+									Size: proto.Int32(3),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
+										Id: "acme-bmit-id", Shared: true,
+									}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("pull_secret_secret is required"))
+				Expect(response).To(BeNil())
+			})
+
 			BeforeEach(func() {
 				var err error
 				secretsDao, err = dao.NewGenericDAO[*privatev1.Secret]().
@@ -6550,6 +6602,7 @@ var _ = Describe("Private clusters server", func() {
 					SetTenancyLogic(tenancy).
 					Build()
 				Expect(err).ToNot(HaveOccurred())
+				server.testPullSecretReferences = true
 
 				_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
 					Id:   "my-secret-id",
@@ -6677,6 +6730,7 @@ var _ = Describe("Private clusters server", func() {
 			})
 
 			It("Updates a cluster with pull_secret_secret reference", func() {
+				server.testPullSecretReferences = false
 				createResponse, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -6711,6 +6765,27 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(updateResponse.GetObject().GetSpec().GetPullSecretSecret().GetId()).To(Equal("my-secret-id"))
 				Expect(updateResponse.GetObject().GetSpec().GetPullSecretSecret().GetName()).To(Equal("my-secret-name"))
+			})
+
+			It("Updates metadata on a legacy cluster without a pull secret", func() {
+				clustersDao, err := dao.NewGenericDAO[*privatev1.Cluster]().
+					SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				created, err := clustersDao.Create().SetObject(privatev1.Cluster_builder{
+					Metadata: privatev1.Metadata_builder{Name: "legacy-cluster", Tenant: testTenant}.Build(),
+					Spec:     privatev1.ClusterSpec_builder{}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				response, err := server.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+					Object: privatev1.Cluster_builder{
+						Id:       created.GetObject().GetId(),
+						Metadata: privatev1.Metadata_builder{Labels: map[string]string{"purpose": "legacy-update"}}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("purpose", "legacy-update"))
+				Expect(response.GetObject().GetSpec().GetPullSecretSecret()).To(BeNil())
 			})
 
 			It("Applies pull_secret_secret from template defaults", func() {
@@ -7149,6 +7224,7 @@ var _ = Describe("Private clusters server", func() {
 				}.Build()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
+				seedClusterPullSecret(ctx, project)
 				_, err = server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{Name: "na-inconsistent-default-network", Project: project}.Build(),
@@ -7244,6 +7320,7 @@ var _ = Describe("Private clusters server", func() {
 				}.Build()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
+				seedClusterPullSecret(ctx, project)
 				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{Name: "na-tenant-default-sg-in-project", Project: project}.Build(),

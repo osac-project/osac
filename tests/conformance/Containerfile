@@ -1,18 +1,34 @@
 # Build context: the osac repository root.
 #   podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
-FROM registry.k8s.io/kubectl:v1.32.1 AS kubectl
 
-FROM registry.access.redhat.com/ubi9/python-312:latest
+FROM registry.k8s.io/kubectl:v1.32.1@sha256:6ae337221866ae69380cfa08e2b38fa113fd5044cfb5b7a7662f5b0028be23b6 AS kubectl
 
-# The suite runs as UID 0 by design: it runs with --userns=host so it can open
-# the runner's podman socket. See "Running the suite" in the conformance design.
-USER 0
+# The builder carries the compilers needed to build source distributions on
+# architectures without a manylinux wheel.
+FROM registry.access.redhat.com/ubi9/python-312@sha256:5b184c2acfe9e2eb9df1a243da8e4a82fedd96e5e7f6648ec5512656177fa326 AS builder
 
 WORKDIR /opt/osac
 
-COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml ./
 COPY tests ./tests
-RUN python3 -m pip install --no-cache-dir .
+RUN python3 -m pip install --no-cache-dir --prefix=/runtime .
+
+# The runtime is the minimal UBI 9 Python base, not a builder image.
+FROM registry.access.redhat.com/ubi9/python-312-minimal@sha256:612eb994cd4255fbafd0de6967efba8d72b62c812058e68e28974458529d0523
+
+# The suite reaches the runner's podman socket, which is owned by the invoking
+# user. Map that user onto the image UID at run time, and mount a results
+# directory that UID can write, for example:
+#   podman run --rm --userns=keep-id:uid=1001,gid=1001 \
+#     -v "$XDG_RUNTIME_DIR/podman/podman.sock:/run/podman/podman.sock" \
+#     -v "$PWD/results:/results" osac-conformance:dev
+# Run as root only to install; the entrypoint runs as UID 1001.
+USER 0
+
+COPY --from=builder --chown=1001:0 /runtime/ /opt/app-root/
+COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
+RUN mkdir -p /results && chown 1001:0 /results
+
+USER 1001
 
 ENTRYPOINT ["osac-conformance"]

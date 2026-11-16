@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from tests.conformance import yamlio
 from tests.conformance.errors import ConfigError
 
 _COMMON_KEYS = frozenset({"osacRelease", "profiles", "target", "timeouts"})
@@ -52,7 +52,12 @@ def _string(value: object, name: str, checks: list[str]) -> str | None:
 
 def _path(value: object, name: str, checks: list[str]) -> Path | None:
     text = _string(value, name, checks)
-    return Path(text) if text is not None else None
+    if text is None:
+        return None
+    if ".." in Path(text).parts:
+        checks.append(f"{name} must not contain parent-directory traversal")
+        return None
+    return Path(os.path.normpath(text))
 
 
 def _profiles(value: object, checks: list[str]) -> tuple[str, ...]:
@@ -71,13 +76,12 @@ def _profiles(value: object, checks: list[str]) -> tuple[str, ...]:
 def load_config(path: Path) -> Config:
     checks: list[str] = []
     try:
-        raw = yaml.safe_load(path.read_text())
+        text = path.read_text()
     except FileNotFoundError:
         raise ConfigError([f"{path} does not exist"]) from None
     except OSError as exc:
         raise ConfigError([f"{path} cannot be read: {exc}"]) from None
-    except yaml.YAMLError as exc:
-        raise ConfigError([f"{path} is not valid YAML: {exc}"]) from None
+    raw = yamlio.loads(text, str(path))
 
     document = _mapping(raw, str(path), checks)
     if document is None:

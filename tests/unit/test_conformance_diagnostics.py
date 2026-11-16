@@ -50,3 +50,22 @@ def test_diagnostics_writes_redacted_control_plane_state(tmp_path: Path) -> None
     assert _REDACTION_MARKER_C not in logs
     assert _REDACTION_MARKER_F not in logs
     assert all("helm" not in " ".join(call).lower() for call in calls)
+
+
+def test_a_failed_diagnostics_command_is_redacted(tmp_path: Path) -> None:
+    def fake_run(*_args: str, timeout: int = 300) -> str:
+        raise RuntimeError(f"token={_REDACTION_MARKER}")
+
+    context = RunContext(
+        run_id="abcdefgh",
+        results_dir=tmp_path,
+        config=None,  # type: ignore[arg-type]
+        redactor=Redactor(secrets=(_REDACTION_MARKER,)),
+    )
+
+    path = DiagnosticsCollector(run_command=fake_run).collect(context, None)
+
+    for name in ("osac-state.yaml", "pod-logs.txt"):
+        content = (path / name).read_text()
+        assert _REDACTION_MARKER not in content
+        assert "diagnostics command failed" in content

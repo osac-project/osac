@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -54,4 +55,35 @@ def test_unreadable_configmap_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(netris.subprocess, "run", lambda *_args, **_kwargs: _Run(returncode=1, stderr="not found"))
 
     with pytest.raises(AssertionError, match="cannot read"):
+        netris.test_netris_settings_are_present()
+
+
+def test_explicit_null_namespace_falls_back_to_osac(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    kubeconfig = tmp_path / "hub.kubeconfig"
+    kubeconfig.write_text("hub")
+    config = tmp_path / "conformance.yaml"
+    config.write_text(f"target:\n  kubeconfig: {kubeconfig}\n  namespace: null\n")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(netris, "_CONFIG_PATH", config)
+
+    def fake_run(*args: str, **_kwargs: object) -> _Run:
+        calls.append(args[0])
+        return _Run(data={netris._SETTING: "https://netris.example.test"})
+
+    monkeypatch.setattr(netris.subprocess, "run", fake_run)
+
+    netris.test_netris_settings_are_present()
+
+    assert calls[0][calls[0].index("-n") + 1] == "osac"
+
+
+def test_kubectl_timeout_fails_the_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(netris, "_CONFIG_PATH", _config(tmp_path))
+
+    def fake_run(*args: str, **kwargs: object) -> _Run:
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])  # type: ignore[arg-type]
+
+    monkeypatch.setattr(netris.subprocess, "run", fake_run)
+
+    with pytest.raises(pytest.fail.Exception, match="timed out"):
         netris.test_netris_settings_are_present()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess
+import json
 import sys
 from pathlib import Path
 
@@ -17,6 +17,37 @@ from tests.conformance.selection import compute_plan
 from tests.conformance.testtree import PytestTestTree
 
 _REDACTION_MARKER_C = "redaction-marker-c"
+
+
+class _FakeProcess:
+    """Stand-in for ``subprocess.Popen`` that records what pytest would write."""
+
+    def __init__(self, returncode: int, *, entries: list[dict[str, object]] | None = None, stderr: str = "") -> None:
+        self.returncode = returncode
+        self.entries = entries or []
+        self.stderr = stderr
+        self.command: list[str] = []
+        self._results = Path("/dev/null")
+
+    def __call__(self, command: list[str], **kwargs: object) -> _FakeProcess:
+        self.command = command
+        env = kwargs["env"]
+        assert isinstance(env, dict)
+        self._results = Path(env["OSAC_CONFORMANCE_RESULTS"])
+        return self
+
+    def communicate(self) -> tuple[str, str]:
+        self._results.write_text("".join(json.dumps(entry) + "\n" for entry in self.entries))
+        return "", self.stderr
+
+    def send_signal(self, _signum: int) -> None:
+        return None
+
+    def kill(self) -> None:
+        return None
+
+    def poll(self) -> int:
+        return self.returncode
 
 
 def _tree(tmp_path: Path) -> Path:
@@ -75,7 +106,8 @@ def test_captured_test_output_is_redacted_in_evidence(tmp_path: Path) -> None:
 
     tree.run(plan, context, keep=False)
 
-    log = (results / "tests" / "test_sample.py_test_passes" / "test.log").read_text()
+    evidence = next((results / "tests").glob("test_sample.py_test_passes-*"))
+    log = (evidence / "test.log").read_text()
     assert _REDACTION_MARKER_C not in log
     assert "<redacted>" in log
 
@@ -128,42 +160,37 @@ def test_collection_failure_is_a_config_error(tmp_path: Path) -> None:
         tree.collect()
 
 
-def test_pytest_interrupt_return_code_raises_interrupted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _one_test_tree(tmp_path: Path) -> PytestTestTree:
     tree_dir = tmp_path / "tree"
     tree_dir.mkdir()
     (tree_dir / "test_ok.py").write_text(
         "import pytest\n@pytest.mark.conformance_generic\ndef test_ok():\n    assert True\n"
     )
-    tree = PytestTestTree(root=tree_dir, python=sys.executable)
+    return PytestTestTree(root=tree_dir, python=sys.executable)
+
+
+def test_pytest_interrupt_return_code_keeps_completed_outcomes(tmp_path: Path) -> None:
+    tree = _one_test_tree(tmp_path)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
     context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    tree.popen = _FakeProcess(  # type: ignore[assignment]
+        2,
+        entries=[{"nodeid": "test_ok.py::test_ok", "outcome": "passed", "duration": 0.1, "stdout": "", "stderr": ""}],
+        stderr="interrupted",
+    )
 
-    def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(args=[], returncode=2, stdout="", stderr="interrupted")
-
-    monkeypatch.setattr("tests.conformance.testtree.subprocess.run", fake_run)
-
-    with pytest.raises(Interrupted):
+    with pytest.raises(Interrupted) as raised:
         tree.run(plan, context, keep=False)
+
+    assert [outcome.result for outcome in raised.value.outcomes] == [Result.PASS]
 
 
 @pytest.mark.parametrize("returncode", [3, 4, 5])
-def test_pytest_process_errors_are_config_errors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int
-) -> None:
-    tree_dir = tmp_path / "tree"
-    tree_dir.mkdir()
-    (tree_dir / "test_ok.py").write_text(
-        "import pytest\n@pytest.mark.conformance_generic\ndef test_ok():\n    assert True\n"
-    )
-    tree = PytestTestTree(root=tree_dir, python=sys.executable)
+def test_pytest_process_errors_are_config_errors(tmp_path: Path, returncode: int) -> None:
+    tree = _one_test_tree(tmp_path)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
     context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
-
-    def fake_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(args=[], returncode=returncode, stdout="", stderr="boom")
-
-    monkeypatch.setattr("tests.conformance.testtree.subprocess.run", fake_run)
+    tree.popen = _FakeProcess(returncode, stderr="boom")  # type: ignore[assignment]
 
     with pytest.raises(ConfigError, match=f"pytest exited {returncode}"):
         tree.run(plan, context, keep=False)

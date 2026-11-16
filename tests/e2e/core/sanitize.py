@@ -45,9 +45,12 @@ def register_endpoint(address: str) -> None:
 _JWT = re.compile(r"eyJ[\w-]+\.eyJ[\w-]+\.[\w-]*")
 # "Basic" is matched capitalised only, so prose such as "basic connectivity" survives.
 _AUTH_SCHEME = re.compile(r"\b((?i:bearer)|Basic)(\s+)[A-Za-z0-9._~+/=-]{8,}")
+# The label may follow an underscore (DB_PASSWORD, AWS_SECRET_ACCESS_KEY) but not a
+# letter or digit, so identifiers such as "mytokenizer" stay intact.
 _KEY_VALUE = re.compile(
-    r"(?i)\b(password|passwd|client[_-]?secret|secret[_-]?key|api[_-]?key|access[_-]?key|token|session[_-]?id)"
-    r"(\s*[=:]\s*)\S+"
+    r"(?i)(?<![A-Za-z0-9])"
+    r"(password|passwd|client[_-]?secret|secret[_-]?key|api[_-]?key|access[_-]?key|token|session[_-]?id)"
+    r"([ \t]*[=:][ \t]*)\S+"
 )
 _TOKEN_FLAG = re.compile(r"(--token(?:-script)?)([ =])\S+")
 _JSON_SECRET = re.compile(r'(?i)("[\w-]*(?:password|token|secret)[\w-]*"\s*:\s*)"(?:[^"\\]|\\.)*"')

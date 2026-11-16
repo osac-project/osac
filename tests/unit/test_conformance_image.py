@@ -27,7 +27,6 @@ def test_containerfile_builds_and_starts(tmp_path: Path) -> None:
         capture_output=True,
         check=False,
     )
-    if build.returncode != 0:
-        pytest.skip(f"image build unavailable: {build.stderr[-500:]}")
+    assert build.returncode == 0, f"image build failed: {build.stderr[-2000:]}"
     run = subprocess.run(["podman", "run", "--rm", tag, "--help"], text=True, capture_output=True, check=False)
     assert run.returncode == 0, run.stderr

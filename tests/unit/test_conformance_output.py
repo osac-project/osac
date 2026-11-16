@@ -14,10 +14,10 @@ from tests.conformance.redact import Redactor
 _REDACTION_MARKER = "redaction-marker"
 
 
-def _test() -> TestIdentity:
+def _test(test_id: str = "TC-1") -> TestIdentity:
     return TestIdentity(
-        id="TC-1",
-        name="TC-1: test",
+        id=test_id,
+        name=f"{test_id}: test",
         nodeid="tests/e2e/test_tc.py::test_tc",
         labels=frozenset({"conformance_generic"}),
         profiles=(),
@@ -60,3 +60,22 @@ def test_write_plan_records_selectors_and_tests(tmp_path: Path) -> None:
     assert "markers:" in text
     assert "TC-1" in text
     assert "complete: true" in text
+
+
+def test_echo_does_not_create_the_run_log(tmp_path: Path) -> None:
+    sink = OutputSink(tmp_path, Redactor())
+
+    sink.echo("plan contents")
+
+    assert not (tmp_path / "conformance.log").exists()
+
+
+def test_evidence_directories_are_unique_per_test_id(tmp_path: Path) -> None:
+    sink = OutputSink(tmp_path, Redactor())
+
+    first = sink.evidence(_test("test_case[a/b]"), Path("test.log"), "first")
+    second = sink.evidence(_test("test_case[a:b]"), Path("test.log"), "second")
+
+    assert first.parent != second.parent
+    assert first.read_text() == "first"
+    assert second.read_text() == "second"

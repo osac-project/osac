@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
@@ -10,6 +11,14 @@ import yaml
 
 from tests.conformance.model import CheckResult, Report, Result
 from tests.conformance.redact import Redactor
+
+# XML 1.0 forbids most C0 control characters, including the ANSI escapes that
+# captured test output and failure messages routinely contain.
+_XML_ILLEGAL = re.compile("[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
+
+
+def _xml_text(value: str) -> str:
+    return _XML_ILLEGAL.sub("", value)
 
 
 def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:
@@ -82,15 +91,19 @@ def write_junit(report: Report, results_dir: Path, redactor: Redactor) -> Path:
         case = ElementTree.SubElement(
             suite,
             "testcase",
-            {"name": redactor.text(test.identity.name), "classname": "conformance", "time": str(test.duration_seconds)},
+            {
+                "name": _xml_text(redactor.text(test.identity.name)),
+                "classname": "conformance",
+                "time": str(test.duration_seconds),
+            },
         )
         if test.result is Result.FAIL:
             log_path = test.evidence_dir / "test.log"
             body = log_path.read_text(encoding="utf-8") if log_path.is_file() else test.message
-            failure = ElementTree.SubElement(case, "failure", {"message": redactor.text(test.message)})
-            failure.text = redactor.text(body)
+            failure = ElementTree.SubElement(case, "failure", {"message": _xml_text(redactor.text(test.message))})
+            failure.text = _xml_text(redactor.text(body))
         elif test.result is Result.SKIP:
-            ElementTree.SubElement(case, "skipped", {"message": redactor.text(test.message)})
+            ElementTree.SubElement(case, "skipped", {"message": _xml_text(redactor.text(test.message))})
     tree = ElementTree.ElementTree(suite)
     path = results_dir / "junit.xml"
     results_dir.mkdir(parents=True, exist_ok=True)

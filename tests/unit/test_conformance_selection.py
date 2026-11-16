@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from tests.conformance.catalog import Catalog, ProfileDefinition, expand_profiles
+from tests.conformance.catalog import Catalog, ProfileDefinition, expand_profiles, load_catalog
 from tests.conformance.errors import ConfigError
 from tests.conformance.model import Classification, Selector, TestIdentity
 from tests.conformance.selection import assign_profiles, compute_plan, plan_from_names
@@ -130,3 +132,22 @@ def test_a_test_can_count_toward_multiple_profiles() -> None:
     enriched = assign_profiles(raw, catalog, ("generic", "vm", "full"))
 
     assert enriched[0].profiles == ("vm", "full")
+
+
+def test_catalog_rejects_duplicate_mapping_keys(tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.yaml"
+    catalog.write_text(
+        "selectors:\n"
+        "  - id: generic\n"
+        "    type: marker\n"
+        "    markers: [conformance_generic]\n"
+        "profiles:\n"
+        "  - id: generic\n"
+        "    selectors: [generic]\n"
+        "profiles:\n"
+        "  - id: generic\n"
+        "    selectors: [generic]\n"
+    )
+
+    with pytest.raises(ConfigError, match="duplicate key"):
+        load_catalog(catalog)

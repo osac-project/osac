@@ -6,8 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
+from tests.conformance import yamlio
 from tests.conformance.errors import ConfigError
 from tests.conformance.model import Selector
 
@@ -46,11 +45,10 @@ def _string_list(value: object, name: str) -> tuple[str, ...]:
 
 def load_catalog(path: Path) -> Catalog:
     try:
-        data = yaml.safe_load(path.read_text())
+        text = path.read_text()
     except OSError as exc:
         raise ConfigError([f"{path} cannot be read: {exc}"]) from None
-    except yaml.YAMLError as exc:
-        raise ConfigError([f"{path} is not valid YAML: {exc}"]) from None
+    data = yamlio.loads(text, str(path))
 
     document = _mapping(data, str(path))
     raw_selectors = document.get("selectors")

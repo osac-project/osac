@@ -740,10 +740,12 @@ evpn:
       vtepIP: 192.168.51.1
       uplinks:
         - interface: ens5f0
+          address: 169.254.133.0/31
           peerAddress: 169.254.133.1
           peerASN: 4200300002
           role: active
         - interface: ens5f1
+          address: 169.254.133.2/31
           peerAddress: 169.254.133.3
           peerASN: 4200300003
           role: backup
@@ -809,6 +811,145 @@ Configure Netris coordinates and credentials in
 The old expert NetworkClass block and `k8s_only` selection do not apply to
 `0.4.0`. Networking selection and the provider-provisioning switch are fixed
 at the first installation; a successful Helm render does not verify the fabric.
+
+### Resulting FRR configuration for active/backup
+
+frr-k8s writes its own per-neighbor `<peer>-in`/`<peer>-out` route-maps into
+`address-family ipv4 unicast` and applies them after the chart's raw block, so
+the chart merges its active/backup entries into those generated maps instead of
+attaching maps of its own. For the values above the node ends up with this
+configuration (the OVN-managed `router bgp ... vrf` instance is omitted):
+
+```frr
+ip prefix-list 169.254.133.1-allowed-ipv4 seq 1 permit 192.168.51.1/32
+ip prefix-list 169.254.133.1-inpl-ipv4 seq 1 permit 192.168.52.0/24 ge 32 le 32
+ip prefix-list 169.254.133.3-allowed-ipv4 seq 1 permit 192.168.51.1/32
+ip prefix-list 169.254.133.3-inpl-ipv4 seq 1 permit 192.168.52.0/24 ge 32 le 32
+ip prefix-list EVPN-REMOTE-VTEPS seq 1 permit 192.168.52.0/24 ge 32 le 32
+!
+ipv6 prefix-list 169.254.133.1-allowed-ipv6 seq 1 deny any
+ipv6 prefix-list 169.254.133.1-inpl-ipv4 seq 3 deny any
+ipv6 prefix-list 169.254.133.3-allowed-ipv6 seq 1 deny any
+ipv6 prefix-list 169.254.133.3-inpl-ipv4 seq 3 deny any
+!
+route-map 169.254.133.1-out permit 1
+ match ip address prefix-list 169.254.133.1-allowed-ipv4
+exit
+!
+route-map 169.254.133.1-out permit 2
+ match ipv6 address prefix-list 169.254.133.1-allowed-ipv6
+exit
+!
+route-map 169.254.133.1-in permit 1
+ description EVPN active uplink IPv4 unicast inbound
+ match ip address prefix-list EVPN-REMOTE-VTEPS
+ set local-preference 200
+exit
+!
+route-map 169.254.133.1-in permit 3
+ match ip address prefix-list 169.254.133.1-inpl-ipv4
+exit
+!
+route-map 169.254.133.1-in permit 4
+ match ipv6 address prefix-list 169.254.133.1-inpl-ipv4
+exit
+!
+route-map 169.254.133.3-out permit 1
+ description EVPN backup uplink IPv4 unicast outbound
+ match ip address prefix-list 169.254.133.3-allowed-ipv4
+ set as-path prepend 4209999999 4209999999 4209999999
+exit
+!
+route-map 169.254.133.3-out permit 2
+ match ipv6 address prefix-list 169.254.133.3-allowed-ipv6
+exit
+!
+route-map 169.254.133.3-in permit 1
+ description EVPN backup uplink IPv4 unicast inbound
+ match ip address prefix-list EVPN-REMOTE-VTEPS
+ set local-preference 100
+exit
+!
+route-map 169.254.133.3-in permit 3
+ match ip address prefix-list 169.254.133.3-inpl-ipv4
+exit
+!
+route-map 169.254.133.3-in permit 4
+ match ipv6 address prefix-list 169.254.133.3-inpl-ipv4
+exit
+!
+route-map EVPN-ACTIVE-IN permit 10
+ description EVPN active uplink inbound
+ set local-preference 200
+exit
+!
+route-map EVPN-BACKUP-IN permit 10
+ description EVPN backup uplink inbound
+ set local-preference 100
+exit
+!
+route-map EVPN-BACKUP-OUT permit 10
+ description EVPN backup uplink outbound
+ set as-path prepend 4209999999 4209999999 4209999999
+exit
+!
+route-map EVPN-ACTIVE-OUT permit 10
+ description EVPN active uplink outbound
+exit
+!
+router bgp 4209999999
+ no bgp ebgp-requires-policy
+ no bgp default ipv4-unicast
+ bgp graceful-restart preserve-fw-state
+ no bgp network import-check
+ neighbor 169.254.133.1 remote-as 4200300002
+ neighbor 169.254.133.1 ebgp-multihop
+ neighbor 169.254.133.1 update-source 169.254.133.0
+ neighbor 169.254.133.3 remote-as 4200300003
+ neighbor 169.254.133.3 ebgp-multihop
+ neighbor 169.254.133.3 update-source 169.254.133.2
+ !
+ address-family ipv4 unicast
+  network 192.168.51.1/32
+  neighbor 169.254.133.1 activate
+  neighbor 169.254.133.1 allowas-in origin
+  neighbor 169.254.133.1 route-map 169.254.133.1-in in
+  neighbor 169.254.133.1 route-map 169.254.133.1-out out
+  neighbor 169.254.133.3 activate
+  neighbor 169.254.133.3 allowas-in origin
+  neighbor 169.254.133.3 route-map 169.254.133.3-in in
+  neighbor 169.254.133.3 route-map 169.254.133.3-out out
+ exit-address-family
+ !
+ address-family l2vpn evpn
+  neighbor 169.254.133.1 activate
+  neighbor 169.254.133.1 allowas-in origin
+  neighbor 169.254.133.1 route-map EVPN-ACTIVE-IN in
+  neighbor 169.254.133.1 route-map EVPN-ACTIVE-OUT out
+  neighbor 169.254.133.3 activate
+  neighbor 169.254.133.3 allowas-in origin
+  neighbor 169.254.133.3 route-map EVPN-BACKUP-IN in
+  neighbor 169.254.133.3 route-map EVPN-BACKUP-OUT out
+  advertise-all-vni
+ exit-address-family
+exit
+```
+
+On the inbound side, `permit 1` matches the remote VTEP `/32` routes from
+`acceptPrefixes` and sets local preference 200 or 100; every other prefix falls
+through to `permit 3`, which keeps the frr-k8s `acceptPrefixes` filter, and then
+to the implicit deny. Each additional `acceptPrefixes` entry adds another
+`inpl-ipv4` sequence, and the fabric or OVN-Kubernetes may add further accepted
+ranges such as the VTEP network. On the outbound side only `permit 1` matches,
+so the node advertises its own VTEP `/32` and the backup prepends its ASN three
+times.
+`EVPN-ACTIVE-IN`/`EVPN-BACKUP-IN` set the same preferences for every L2VPN EVPN
+route without matching a prefix. The `permit 2`/`permit 4` entries match the
+frr-k8s IPv6 deny-any lists, so they never pass an IPv6 route; the IPv6
+prefix-lists only filter IPv6 unicast and do not affect IPv4 routes or their
+RFC 5549 link-local next hops. Unnumbered peers use the same layout with the
+interface name in place of the peer address (`ens5f0-in`, `ens5f1-out`, and so
+on).
 
 ### Adding CA roots to the shared bundle at runtime
 

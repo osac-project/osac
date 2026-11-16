@@ -534,7 +534,7 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			SetClient(r.client).
 			SetFunction(workloadClusterReconcilerFunction).
 			SetSyncInterval(5 * time.Minute).
-			SetEventFilter("has(event.workload_cluster) && event.type != EVENT_TYPE_OBJECT_UPDATED").
+			SetEventFilter("(has(event.workload_cluster) && event.type != EVENT_TYPE_OBJECT_UPDATED) || has(event.hub)").
 			SetHealthReporter(healthAggregator).
 			Build()
 		if err != nil {

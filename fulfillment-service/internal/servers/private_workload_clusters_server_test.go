@@ -60,7 +60,7 @@ func workloadClustersFromHubs(hubIDs ...string) []*privatev1.WorkloadCluster {
 	clusters := make([]*privatev1.WorkloadCluster, 0, len(hubIDs))
 	for _, hubID := range hubIDs {
 		clusters = append(clusters, privatev1.WorkloadCluster_builder{
-			Spec: privatev1.WorkloadClusterSpec_builder{SourceHubId: hubID}.Build(),
+			Spec: privatev1.WorkloadClusterSpec_builder{Maas: privatev1.MaasConfig_builder{SourceHubId: hubID}.Build()}.Build(),
 		}.Build())
 	}
 	return clusters
@@ -85,6 +85,36 @@ func TestValidateSupportedWorkloads(t *testing.T) {
 				Spec: privatev1.WorkloadClusterSpec_builder{SupportedWorkloads: test.values}.Build(),
 			}.Build()
 			err := validateSupportedWorkloads(object)
+			if got := status.Code(err); got != test.code {
+				t.Fatalf("expected %s, got %s", test.code, got)
+			}
+			if test.messageHas != "" && !strings.Contains(status.Convert(err).Message(), test.messageHas) {
+				t.Fatalf("expected error to contain %q, got %q", test.messageHas, status.Convert(err).Message())
+			}
+		})
+	}
+}
+
+func TestValidateMaaSConfig(t *testing.T) {
+	tests := []struct {
+		name       string
+		maas       *privatev1.MaasConfig
+		workloads  []string
+		code       codes.Code
+		messageHas string
+	}{
+		{name: "requires config when MaaS is selected", workloads: []string{"maas"}, code: codes.InvalidArgument, messageHas: "maas config is required"},
+		{name: "requires source Hub ID", maas: &privatev1.MaasConfig{ManagedClusterName: "worker-1"}, workloads: []string{"maas"}, code: codes.InvalidArgument, messageHas: "spec.maas.source_hub_id"},
+		{name: "requires managed cluster name", maas: &privatev1.MaasConfig{SourceHubId: "hub-1"}, workloads: []string{"maas"}, code: codes.InvalidArgument, messageHas: "spec.maas.managed_cluster_name"},
+		{name: "accepts valid nested config", maas: &privatev1.MaasConfig{SourceHubId: "hub-1", ManagedClusterName: "worker-1"}, workloads: []string{"maas"}, code: codes.OK},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			object := privatev1.WorkloadCluster_builder{
+				Spec: privatev1.WorkloadClusterSpec_builder{SupportedWorkloads: test.workloads, Maas: test.maas}.Build(),
+			}.Build()
+			err := validateMaaSConfig(object)
 			if got := status.Code(err); got != test.code {
 				t.Fatalf("expected %s, got %s", test.code, got)
 			}

@@ -81,8 +81,8 @@ begin
   insert into workload_cluster_hub_refs (workload_cluster_id, source_hub_id, managed_cluster_name)
   values (
     new.id,
-    new.data->'spec'->>'source_hub_id',
-    new.data->'spec'->>'managed_cluster_name'
+    new.data->'spec'->'maas'->>'source_hub_id',
+    new.data->'spec'->'maas'->>'managed_cluster_name'
   )
   on conflict (workload_cluster_id) do update set
     source_hub_id = excluded.source_hub_id,
@@ -102,6 +102,83 @@ select id from workload_clusters where deletion_timestamp = 'epoch';
 create trigger materialize_active_objects
   after insert or update of deletion_timestamp on workload_clusters
   for each row execute function materialize_active_objects();
+
+alter table changes
+  add column reason text,
+  add column severity text;
+
+create or replace function enqueue_change() returns trigger as $$
+declare
+  rec record;
+  change_op text;
+  change_id uuid;
+  event_reason text := nullif(current_setting('osac.event_reason', true), '');
+  event_severity text := nullif(current_setting('osac.event_severity', true), '');
+  old_available jsonb;
+  new_available jsonb;
+begin
+  if TG_OP = 'DELETE' then
+    rec := old;
+  else
+    rec := new;
+  end if;
+
+  if TG_OP = 'UPDATE' and current_setting('osac.signal', true) = 'on' then
+    change_op := 'SIGNAL';
+  else
+    change_op := TG_OP;
+  end if;
+
+  -- WorkloadCluster availability events must be based on the old and new
+  -- condition values. Timestamps alone cannot distinguish a transition from
+  -- an unrelated metadata update that preserves the condition.
+  if TG_TABLE_NAME = 'workload_clusters' and TG_OP = 'UPDATE' and event_reason is null then
+    select condition into old_available
+    from jsonb_array_elements(coalesce(old.data->'status'->'conditions', '[]'::jsonb)) condition
+    where condition->>'type' = 'Available';
+    select condition into new_available
+    from jsonb_array_elements(coalesce(new.data->'status'->'conditions', '[]'::jsonb)) condition
+    where condition->>'type' = 'Available';
+
+    if old_available->>'status' is distinct from new_available->>'status'
+       or old_available->>'reason' is distinct from new_available->>'reason' then
+      if new_available->>'reason' = 'ClusterIdentityMismatch' then
+        event_reason := 'IdentityMismatch';
+        event_severity := 'Warning';
+      elsif new_available->>'status' = 'True' then
+        event_reason := 'Available';
+        event_severity := 'Normal';
+      elsif new_available->>'status' = 'False' then
+        event_reason := 'Unavailable';
+        event_severity := 'Warning';
+      end if;
+    end if;
+  end if;
+
+  insert into changes (
+    "table",
+    op,
+    data,
+    reason,
+    severity
+  )
+  values (
+    TG_TABLE_NAME,
+    change_op,
+    to_jsonb(rec),
+    event_reason,
+    event_severity
+  )
+  returning id into change_id;
+
+  perform pg_notify('changes', change_id::text);
+
+  if TG_OP = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
 
 create trigger enqueue_change
   after insert or update or delete on workload_clusters

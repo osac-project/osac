@@ -53,3 +53,16 @@ func LockAddOnOperatorDependencyGraph(ctx context.Context, tx Tx) error {
 	}
 	return nil
 }
+
+// LockWorkloadClusterHubRegistration serializes workload-cluster
+// registrations for the lifetime of the supplied transaction. This protects
+// the single-active-Hub invariant even when the first registrations race while
+// there are no Hub rows to lock yet.
+func LockWorkloadClusterHubRegistration(ctx context.Context, tx Tx) error {
+	if _, err := tx.Exec(ctx, `
+		select pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		"osac.workload_cluster_hub_registration"); err != nil {
+		return fmt.Errorf("lock workload cluster Hub registration: %w", err)
+	}
+	return nil
+}

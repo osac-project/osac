@@ -31,8 +31,7 @@ var _ = Describe("WorkloadCluster API contract", func() {
 		valid := publicv1.WorkloadCluster_builder{
 			Metadata: publicv1.Metadata_builder{Name: "cluster-a"}.Build(),
 			Spec: publicv1.WorkloadClusterSpec_builder{
-				SourceHubId:        "hub-a",
-				ManagedClusterName: "cluster-a",
+				Maas:               publicv1.MaasConfig_builder{SourceHubId: "hub-a", ManagedClusterName: "cluster-a"}.Build(),
 				SupportedWorkloads: []string{"maas"},
 			}.Build(),
 		}.Build()
@@ -41,8 +40,17 @@ var _ = Describe("WorkloadCluster API contract", func() {
 		invalid := publicv1.WorkloadCluster_builder{
 			Metadata: publicv1.Metadata_builder{Name: "cluster-a"}.Build(),
 			Spec: publicv1.WorkloadClusterSpec_builder{
-				SourceHubId:        "hub-a",
-				ManagedClusterName: "Cluster-A",
+				Maas: publicv1.MaasConfig_builder{SourceHubId: "hub-a", ManagedClusterName: "Cluster-A"}.Build(),
+			}.Build(),
+		}.Build()
+		Expect(protovalidate.Validate(invalid)).To(HaveOccurred())
+	})
+
+	It("rejects MaaS registrations without a MaaS configuration", func() {
+		invalid := publicv1.WorkloadCluster_builder{
+			Metadata: publicv1.Metadata_builder{Name: "cluster-a"}.Build(),
+			Spec: publicv1.WorkloadClusterSpec_builder{
+				SupportedWorkloads: []string{"maas"},
 			}.Build(),
 		}.Build()
 		Expect(protovalidate.Validate(invalid)).To(HaveOccurred())

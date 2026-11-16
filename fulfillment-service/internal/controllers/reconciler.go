@@ -777,7 +777,8 @@ func (c *Reconciler[O]) watchEvents(ctx context.Context) error {
 
 func (c *Reconciler[O]) syncObjects(ctx context.Context) error {
 	const pageSize int32 = 100
-	for offset := int32(0); ; offset += pageSize {
+	var offset int32
+	for {
 		requestMsg := proto.Clone(c.listRequest)
 		fields := requestMsg.ProtoReflect().Descriptor().Fields()
 		if offsetField := fields.ByName("offset"); offsetField != nil {
@@ -805,6 +806,7 @@ func (c *Reconciler[O]) syncObjects(ctx context.Context) error {
 		if items.Len() == 0 || int64(offset)+int64(items.Len()) >= total {
 			return nil
 		}
+		offset += int32(items.Len())
 	}
 }
 

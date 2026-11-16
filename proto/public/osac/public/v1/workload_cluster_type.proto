@@ -30,6 +30,25 @@ message WorkloadCluster {
 
 // Desired registration details for a WorkloadCluster.
 message WorkloadClusterSpec {
+  option (buf.validate.message).cel = {
+    id: "workload_cluster_spec.maas_config"
+    message: "maas config is required when 'maas' is in supported_workloads"
+    expression: "!this.supported_workloads.exists(workload, workload == 'maas') || has(this.maas)"
+  };
+
+  // Workload capabilities offered by the registered cluster.
+  repeated string supported_workloads = 1 [(buf.validate.field).repeated = {
+    min_items: 1
+    unique: true
+    items: {string: {in: ["maas"]}}
+  }];
+
+  // MaaS registration details. Required when "maas" is listed in supported_workloads.
+  optional MaasConfig maas = 2;
+}
+
+// MaaS-specific registration details for a WorkloadCluster.
+message MaasConfig {
   // Identifier of the OSAC Hub hosting the ManagedCluster resource.
   string source_hub_id = 1 [(buf.validate.field).string.min_len = 1];
 
@@ -38,13 +57,6 @@ message WorkloadClusterSpec {
     min_len: 1
     max_len: 63
     pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
-  }];
-
-  // Workload capabilities offered by the registered cluster.
-  repeated string supported_workloads = 3 [(buf.validate.field).repeated = {
-    min_items: 1
-    unique: true
-    items: {string: {in: ["maas"]}}
   }];
 }
 

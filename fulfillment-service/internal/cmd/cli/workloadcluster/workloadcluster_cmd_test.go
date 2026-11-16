@@ -87,8 +87,7 @@ var _ = Describe("WorkloadCluster rendering", func() {
 			Id:       "wc-1",
 			Metadata: privatev1.Metadata_builder{Name: "worker-1"}.Build(),
 			Spec: privatev1.WorkloadClusterSpec_builder{
-				SourceHubId:        "hub-1",
-				ManagedClusterName: "worker-1",
+				Maas:               privatev1.MaasConfig_builder{SourceHubId: "hub-1", ManagedClusterName: "worker-1"}.Build(),
 				SupportedWorkloads: []string{"maas"},
 			}.Build(),
 			Status: privatev1.WorkloadClusterStatus_builder{
@@ -111,10 +110,7 @@ var _ = Describe("WorkloadCluster rendering", func() {
 		object := privatev1.WorkloadCluster_builder{
 			Id:       "wc-1",
 			Metadata: privatev1.Metadata_builder{Name: "worker-1"}.Build(),
-			Spec: privatev1.WorkloadClusterSpec_builder{
-				SourceHubId:        "hub-1",
-				ManagedClusterName: "worker-1",
-			}.Build(),
+			Spec:     privatev1.WorkloadClusterSpec_builder{Maas: privatev1.MaasConfig_builder{SourceHubId: "hub-1", ManagedClusterName: "worker-1"}.Build()}.Build(),
 			Status: privatev1.WorkloadClusterStatus_builder{
 				Conditions: []*privatev1.WorkloadClusterCondition{
 					privatev1.WorkloadClusterCondition_builder{Type: "Available", Status: "True"}.Build(),
@@ -131,7 +127,7 @@ var _ = Describe("WorkloadCluster rendering", func() {
 		object := privatev1.WorkloadCluster_builder{
 			Id:       "wc-1",
 			Metadata: privatev1.Metadata_builder{Name: "worker-1"}.Build(),
-			Spec:     privatev1.WorkloadClusterSpec_builder{SourceHubId: "hub-1"}.Build(),
+			Spec:     privatev1.WorkloadClusterSpec_builder{Maas: privatev1.MaasConfig_builder{SourceHubId: "hub-1"}.Build()}.Build(),
 		}.Build()
 		output := &bytes.Buffer{}
 		renderWorkloadClusterList(output, []*privatev1.WorkloadCluster{object}, nil)

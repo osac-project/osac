@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -136,18 +137,18 @@ func (b *FunctionBuilder) Build() (controllers.ReconcilerFunction[*privatev1.Wor
 func (r *function) run(ctx context.Context, object *privatev1.WorkloadCluster) error {
 	if object.GetMetadata().HasDeletionTimestamp() {
 		r.updateAvailabilityMetrics(object.GetId(), "")
-		return nil
+		return r.releaseWatcherIfUnused(ctx, object.GetSpec().GetMaas().GetSourceHubId())
 	}
 	old := proto.Clone(object).(*privatev1.WorkloadCluster)
 	status := object.GetStatus()
 	if status == nil {
 		status = &privatev1.WorkloadClusterStatus{}
 	}
-	entry, err := r.hubCache.Get(ctx, object.GetSpec().GetSourceHubId())
+	entry, err := r.hubCache.Get(ctx, object.GetSpec().GetMaas().GetSourceHubId())
 	if err == nil {
-		r.ensureWatcher(ctx, object.GetSpec().GetSourceHubId(), entry.CredentialFingerprint)
+		r.ensureWatcher(ctx, object.GetSpec().GetMaas().GetSourceHubId(), entry.CredentialFingerprint)
 	}
-	if err != nil || !r.isHubReady(object.GetSpec().GetSourceHubId()) {
+	if err != nil || !r.isHubReady(object.GetSpec().GetMaas().GetSourceHubId()) {
 		setUnavailable(status, reasonHubUnreachable, "Cannot reach hub to validate cluster registration", false)
 		if err != nil {
 			// Do not return the underlying Hub/Kubernetes error: the generic
@@ -174,6 +175,39 @@ func (r *function) run(ctx context.Context, object *privatev1.WorkloadCluster) e
 	r.recordConditionTransitions(old.GetStatus(), object.GetStatus())
 	r.updateAvailabilityMetrics(object.GetId(), availableStatus(object.GetStatus()))
 	return err
+}
+
+// releaseWatcherIfUnused stops a Hub informer once its last active registration
+// has been deleted. The list is intentionally performed through the public
+// client so soft-deleted records do not keep a Hub watcher alive.
+func (r *function) releaseWatcherIfUnused(ctx context.Context, hubID string) error {
+	if hubID == "" {
+		return nil
+	}
+	filter := "this.spec.maas.source_hub_id == " + strconv.Quote(hubID)
+	response, err := r.workloadClusters.List(ctx, privatev1.WorkloadClustersListRequest_builder{
+		Filter: &filter,
+		Limit:  proto.Int32(1),
+	}.Build())
+	if err != nil {
+		r.logger.Warn("Failed to check workload cluster registrations before releasing Hub watcher", slog.String("component", "workload-cluster-controller"), slog.String("operation", "cleanup"), slog.String("reason", "ListFailed"))
+		return errors.New("failed to check workload cluster registrations before releasing Hub watcher")
+	}
+	if len(response.GetItems()) != 0 {
+		return nil
+	}
+
+	r.watchersLock.Lock()
+	defer r.watchersLock.Unlock()
+	if cancel, ok := r.watchers[hubID]; ok {
+		cancel()
+		delete(r.watchers, hubID)
+		delete(r.watcherCredentials, hubID)
+		delete(r.readyHubs, hubID)
+		delete(r.managedCaches, hubID)
+		delete(r.watchEstablished, hubID)
+	}
+	return nil
 }
 
 func (r *function) recordConditionTransitions(old, current *privatev1.WorkloadClusterStatus) {
@@ -235,19 +269,19 @@ func (r *function) observe(ctx context.Context, hubClient clnt.Client, object *p
 	managed := &unstructured.Unstructured{}
 	managed.SetGroupVersionKind(managedClusterGVK)
 	var err error
-	if informer := r.managedClusterInformer(object.GetSpec().GetSourceHubId()); informer != nil {
-		cached, exists, cacheErr := informer.GetStore().GetByKey(object.GetSpec().GetManagedClusterName())
+	if informer := r.managedClusterInformer(object.GetSpec().GetMaas().GetSourceHubId()); informer != nil {
+		cached, exists, cacheErr := informer.GetStore().GetByKey(object.GetSpec().GetMaas().GetManagedClusterName())
 		if cacheErr != nil {
 			err = cacheErr
 		} else if !exists {
-			err = apierrors.NewNotFound(schema.GroupResource{Group: managedClusterGroup, Resource: managedClusterResource}, object.GetSpec().GetManagedClusterName())
+			err = apierrors.NewNotFound(schema.GroupResource{Group: managedClusterGroup, Resource: managedClusterResource}, object.GetSpec().GetMaas().GetManagedClusterName())
 		} else if cachedObject, ok := cached.(*unstructured.Unstructured); ok {
 			managed = cachedObject.DeepCopy()
 		} else {
 			err = errors.New("hub informer returned an unexpected ManagedCluster object")
 		}
 	} else {
-		err = hubClient.Get(ctx, clnt.ObjectKey{Name: object.GetSpec().GetManagedClusterName()}, managed)
+		err = hubClient.Get(ctx, clnt.ObjectKey{Name: object.GetSpec().GetMaas().GetManagedClusterName()}, managed)
 	}
 	if apierrors.IsNotFound(err) {
 		setUnavailable(status, reasonManagedClusterNotFound, "Referenced managed cluster not found on the hub", true)

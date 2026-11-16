@@ -31,9 +31,6 @@ func TestDecorateWorkloadClusterEvents(t *testing.T) {
 		severity  string
 	}{
 		{name: "registration", operation: eventPublisherOpInsert, want: "Registered", severity: "Normal"},
-		{name: "available", operation: eventPublisherOpUpdate, status: "True", want: "Available", severity: "Normal"},
-		{name: "unavailable", operation: eventPublisherOpUpdate, status: "False", want: "Unavailable", severity: "Warning"},
-		{name: "identity mismatch", operation: eventPublisherOpUpdate, status: "False", reason: "ClusterIdentityMismatch", want: "IdentityMismatch", severity: "Warning"},
 		{name: "ordinary signal", operation: eventPublisherOpSignal},
 	}
 

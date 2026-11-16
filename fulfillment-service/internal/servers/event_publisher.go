@@ -1172,31 +1172,8 @@ func (p *EventPublisher) decorateWorkloadClusterEvent(event *privatev1.Event, op
 	switch operation {
 	case eventPublisherOpInsert:
 		event.SetReason("Registered")
-		event.SetSeverity("Normal")
-	case eventPublisherOpUpdate:
-		for _, condition := range event.GetWorkloadCluster().GetStatus().GetConditions() {
-			if condition.GetType() != "Available" {
-				continue
-			}
-			// A condition whose transition and observation timestamps differ was
-			// carried through an unrelated update (for example a finalizer or
-			// last_observed_time update), not produced by an availability change.
-			if condition.GetLastTransitionTime() == nil || condition.GetLastObservedTime() == nil ||
-				!condition.GetLastTransitionTime().AsTime().Equal(condition.GetLastObservedTime().AsTime()) {
-				continue
-			}
-			reason := condition.GetReason()
-			if reason == "ClusterIdentityMismatch" {
-				event.SetReason("IdentityMismatch")
-				event.SetSeverity("Warning")
-			} else if condition.GetStatus() == "True" {
-				event.SetReason("Available")
-				event.SetSeverity("Normal")
-			} else if condition.GetStatus() == "False" {
-				event.SetReason("Unavailable")
-				event.SetSeverity("Warning")
-			}
-			break
+		if event.GetSeverity() == "" {
+			event.SetSeverity("Normal")
 		}
 	}
 }

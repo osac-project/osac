@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -861,6 +862,93 @@ var _ = Describe("Private secrets server", func() {
 					privatev1.SecretBackend_SECRET_BACKEND_VAULT))
 				Expect(obj.GetData()).To(BeEmpty())
 			})
+
+			It("stores and retrieves exact-limit Windows user-data bytes", func() {
+				prefix := append([]byte{0xef, 0xbb, 0xbf}, []byte("<root>")...)
+				data := append(prefix, bytes.Repeat([]byte("a"), 65_536-len(prefix)-len("</root>"))...)
+				data = append(data, "</root>"...)
+				Expect(data).To(HaveLen(65_536))
+				mockStore.EXPECT().
+					Store(gomock.Any(), testTenant, "", "windows-user-data",
+						map[string][]byte{"userdata": data}).
+					Return(nil)
+
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{Name: "windows-user-data"}.Build(),
+						Type:     privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+						Data:     map[string][]byte{"userdata": bytes.Clone(data)},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(created.GetObject().GetType()).To(Equal(
+					privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA))
+				Expect(created.GetObject().GetData()).To(BeEmpty())
+
+				mockStore.EXPECT().
+					Fetch(gomock.Any(), testTenant, "", "windows-user-data").
+					Return(map[string][]byte{"userdata": bytes.Clone(data)}, nil)
+				response, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetData()).To(HaveKeyWithValue("userdata", data))
+			})
+
+			It("rejects malformed Windows user-data before persistence", func() {
+				const name = "windows-user-data-invalid"
+				const sentinel = "OSAC-7712-SECRET-SENTINEL"
+				mockStore.EXPECT().
+					Store(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+					Times(0)
+
+				_, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Type:     privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+						Data:     map[string][]byte{"userdata": []byte(`<root>` + sentinel)},
+					}.Build(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("not well-formed XML"))
+				Expect(err.Error()).NotTo(ContainSubstring(sentinel))
+
+				filter := "this.metadata.name == '" + name + "'"
+				stored, listErr := server.List(ctx, privatev1.SecretsListRequest_builder{
+					Filter: &filter,
+				}.Build())
+				Expect(listErr).ToNot(HaveOccurred())
+				Expect(stored.GetItems()).To(BeEmpty())
+			})
+
+			DescribeTable("rejects non-UTF-8 Windows user-data before persistence",
+				func(name string, value []byte) {
+					mockStore.EXPECT().
+						Store(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+						Times(0)
+
+					_, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+						Object: privatev1.Secret_builder{
+							Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+							Type:     privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+							Data:     map[string][]byte{"userdata": value},
+						}.Build(),
+					}.Build())
+					Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+					Expect(err.Error()).To(ContainSubstring("unsupported encoding"))
+
+					filter := "this.metadata.name == '" + name + "'"
+					stored, listErr := server.List(ctx, privatev1.SecretsListRequest_builder{
+						Filter: &filter,
+					}.Build())
+					Expect(listErr).ToNot(HaveOccurred())
+					Expect(stored.GetItems()).To(BeEmpty())
+				},
+				Entry("with raw invalid UTF-8", "windows-user-data-invalid-utf8",
+					[]byte{0xff, 0xfe, '<', 'r', 'o', 'o', 't', '/', '>'}),
+				Entry("with UTF-16 bytes", "windows-user-data-utf16",
+					[]byte{0xff, 0xfe, 0x3c, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x6f, 0x00, 0x74, 0x00, 0x2f, 0x00, 0x3e, 0x00}),
+			)
 
 			It("allows a tenant-scoped SSH public-key Secret", func() {
 				const name = "tenant-ssh-key"

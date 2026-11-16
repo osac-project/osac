@@ -22,6 +22,7 @@ import (
 	"go.uber.org/mock/gomock"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -412,6 +413,55 @@ var _ = Describe("Secrets Server", func() {
 	})
 
 	Describe("Update", func() {
+		It("delegates Windows user-data data updates to the private server", func() {
+			var capturedRequest *privatev1.SecretsUpdateRequest
+
+			mock := &mockPrivateSecretsServer{
+				getFunc: func(_ context.Context,
+					_ *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
+					resp := &privatev1.SecretsGetResponse{}
+					resp.SetObject(privatev1.Secret_builder{
+						Id: "windows-secret",
+						Metadata: privatev1.Metadata_builder{
+							Name: "windows-secret",
+						}.Build(),
+						Type:    privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
+					}.Build())
+					return resp, nil
+				},
+				updateFunc: func(_ context.Context,
+					req *privatev1.SecretsUpdateRequest) (*privatev1.SecretsUpdateResponse, error) {
+					capturedRequest = req
+					return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+						"field 'data' is immutable for secrets of type SECRET_TYPE_WINDOWS_USER_DATA")
+				},
+			}
+
+			server := newTestSecretsServer(mock)
+			_, err := server.Update(ctx, publicv1.SecretsUpdateRequest_builder{
+				Object: publicv1.Secret_builder{
+					Id:   "windows-secret",
+					Type: publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+					Data: map[string][]byte{"userdata": []byte("<root>changed</root>")},
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
+			}.Build())
+
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("data"))
+			Expect(err.Error()).To(ContainSubstring("immutable"))
+			Expect(capturedRequest).ToNot(BeNil())
+			Expect(capturedRequest.GetObject().GetId()).To(Equal("windows-secret"))
+			Expect(capturedRequest.GetUpdateMask().GetPaths()).To(Equal([]string{"data"}))
+			Expect(capturedRequest.GetObject().GetType()).To(Equal(
+				privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA))
+			Expect(capturedRequest.GetObject().GetBackend()).To(Equal(
+				privatev1.SecretBackend_SECRET_BACKEND_VAULT))
+			Expect(capturedRequest.GetObject().GetData()).To(HaveKeyWithValue(
+				"userdata", []byte("<root>changed</root>")))
+		})
+
 		It("returns FAILED_PRECONDITION for hub-backed secret with non-empty data", func() {
 			mock := &mockPrivateSecretsServer{
 				getFunc: func(_ context.Context,

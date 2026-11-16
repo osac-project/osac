@@ -29,6 +29,8 @@ class _FakeProcess:
         self.stderr = stderr
         self.command: list[str] = []
         self.signals: list[int] = []
+        self.killed = False
+        self.waited = False
         self._results = Path("/dev/null")
 
     def __call__(self, command: list[str], **kwargs: object) -> _FakeProcess:
@@ -46,7 +48,11 @@ class _FakeProcess:
         self.signals.append(signum)
 
     def kill(self) -> None:
-        return None
+        self.killed = True
+
+    def wait(self) -> int:
+        self.waited = True
+        return self.returncode
 
     def poll(self) -> int:
         return self.returncode
@@ -219,16 +225,18 @@ def test_pytest_interrupt_return_code_keeps_completed_outcomes(tmp_path: Path) -
 
 
 class _SignalingFakeProcess(_FakeProcess):
-    """Delivers a signal in the window between Popen returning and registration."""
+    """Delivers signals in the window between Popen returning and registration."""
 
-    def __init__(self, gate: InterruptGate, returncode: int, **kwargs: object) -> None:
+    def __init__(self, gate: InterruptGate, returncode: int, *, signal_count: int = 1, **kwargs: object) -> None:
         super().__init__(returncode, **kwargs)
         self._gate = gate
+        self._signal_count = signal_count
         self._finished = False
 
     def __call__(self, command: list[str], **kwargs: object) -> _SignalingFakeProcess:
         super().__call__(command, **kwargs)
-        self._gate.trigger()
+        for _ in range(self._signal_count):
+            self._gate.trigger()
         return self
 
     def poll(self) -> int | None:
@@ -254,6 +262,24 @@ def test_signal_during_child_registration_reaches_the_child(tmp_path: Path) -> N
 
     assert process.signals == [signal.SIGINT]
     assert [outcome.result for outcome in raised.value.outcomes] == [Result.PASS]
+
+
+def test_two_signals_during_child_registration_kill_and_reap_the_child(tmp_path: Path) -> None:
+    tree = _one_test_tree(tmp_path)
+    plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    gate = InterruptGate()
+    process = _SignalingFakeProcess(gate, 0, signal_count=2)
+    tree.popen = process  # type: ignore[assignment]
+
+    with pytest.raises(KeyboardInterrupt):
+        tree.run(plan, context, keep=False, interrupt=gate)
+
+    assert gate.first is True
+    assert gate.second is True
+    assert process.killed is True
+    assert process.waited is True
+    assert gate.child is None
 
 
 def test_signal_after_pytest_exits_keeps_completed_outcomes(tmp_path: Path) -> None:

@@ -71,3 +71,41 @@ def test_default_collection_root_covers_the_shipped_tests() -> None:
     args = _parser().parse_args(["list"])
 
     assert args.tree == "tests"
+
+
+def test_relative_config_is_resolved_before_the_child_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("token", "ca.pem", "hub"):
+        (tmp_path / name).write_text(name)
+    config = tmp_path / "conformance.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "osacRelease": "1.4.0",
+                "target": {
+                    "kubeconfig": str(tmp_path / "hub"),
+                    "apiURL": "http://target.example.test",
+                    "tokenFile": str(tmp_path / "token"),
+                    "caFile": str(tmp_path / "ca.pem"),
+                },
+            },
+            sort_keys=False,
+        )
+    )
+    catalog = tmp_path / "catalog.yaml"
+    catalog.write_text(
+        yaml.safe_dump(
+            {
+                "selectors": [{"id": "generic", "type": "marker", "markers": ["conformance_generic"]}],
+                "profiles": [{"id": "generic", "selectors": ["generic"]}],
+            },
+            sort_keys=False,
+        )
+    )
+    monkeypatch.chdir(tmp_path)
+    args = _parser().parse_args(
+        ["list", "--config", "conformance.yaml", "--results", str(tmp_path / "results"), "--catalog", str(catalog)]
+    )
+
+    runtime = cli._build_runtime(args)
+
+    assert runtime.config.path == config.resolve()

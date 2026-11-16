@@ -28,6 +28,18 @@ class TestTree(Protocol):
     ) -> tuple[TestOutcome, ...]: ...
 
 
+def _stop(process: subprocess.Popen[str] | None) -> None:
+    """Kill and reap a child the runner could not wait for normally.
+
+    Reached only when something escaped before ``communicate`` returned, so a
+    child that is still running here is one no one else will stop.
+    """
+    if process is None or process.poll() is not None:
+        return
+    process.kill()
+    process.wait()
+
+
 class PytestTestTree:
     def __init__(
         self,
@@ -143,32 +155,38 @@ class PytestTestTree:
         nodeids = [test.nodeid for test in plan.tests]
         with tempfile.TemporaryDirectory() as tmp:
             results_path = Path(tmp) / "pytest-results.jsonl"
-            with interrupt.hold() if interrupt is not None else contextlib.nullcontext():
-                process = self.popen(
-                    [
-                        self.python,
-                        "-m",
-                        "pytest",
-                        "-n",
-                        "0",
-                        "-p",
-                        "tests.conformance.pytest_plugin",
-                        "-q",
-                        "--tb=short",
-                        "--rootdir",
-                        str(self.root),
-                        *nodeids,
-                    ],
-                    cwd=self.cwd,
-                    env=self._run_env(context, results_path),
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    start_new_session=True,
-                )
-                if interrupt is not None:
-                    interrupt.child = process
+            process: subprocess.Popen[str] | None = None
+            # Cleanup is in place before the child is registered: ``hold``
+            # replays a signal that arrived during ``Popen`` from its own
+            # ``finally``, so it can raise for a second pending signal before
+            # the body below starts. Without this ``try`` that path would drop
+            # a live pytest process.
             try:
+                with interrupt.hold() if interrupt is not None else contextlib.nullcontext():
+                    process = self.popen(
+                        [
+                            self.python,
+                            "-m",
+                            "pytest",
+                            "-n",
+                            "0",
+                            "-p",
+                            "tests.conformance.pytest_plugin",
+                            "-q",
+                            "--tb=short",
+                            "--rootdir",
+                            str(self.root),
+                            *nodeids,
+                        ],
+                        cwd=self.cwd,
+                        env=self._run_env(context, results_path),
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        start_new_session=True,
+                    )
+                    if interrupt is not None:
+                        interrupt.child = process
                 stdout, stderr = process.communicate()
                 if process.returncode not in (0, 1, 2):
                     detail = (stderr or "").strip() or (stdout or "").strip() or "no output"
@@ -185,6 +203,7 @@ class PytestTestTree:
                 # block must not raise ahead of the recorded results.
                 if interrupt is not None:
                     interrupt.child = None
+                _stop(process)
 
     def _recorded_outcomes(self, plan: Plan, context: RunContext, results_path: Path) -> tuple[TestOutcome, ...]:
         """Read what pytest managed to record, including after an interrupt."""

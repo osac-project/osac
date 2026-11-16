@@ -94,3 +94,18 @@ def test_a_signal_during_registration_is_forwarded_after_attachment() -> None:
 
     assert gate.first is True
     assert child.signals == [signal.SIGINT]
+
+
+def test_two_signals_during_registration_escalate_after_attachment() -> None:
+    gate = InterruptGate()
+    child = _Child()
+
+    with pytest.raises(KeyboardInterrupt), gate.hold():
+        gate.child = child
+        gate.trigger()
+        gate.trigger()
+
+    assert gate.first is True
+    assert gate.second is True
+    assert child.signals == [signal.SIGINT]
+    assert child.killed is True

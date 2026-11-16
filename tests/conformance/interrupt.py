@@ -41,11 +41,13 @@ class InterruptGate:
         self.child: _Signalable | None = None
         self._old: dict[int, signal.Handlers] = {}
         self._deferring = False
-        self._deferred: int | None = None
+        self._pending: list[int] = []
 
     def trigger(self, signum: int = signal.SIGINT) -> None:
         if self._deferring:
-            self._deferred = signum
+            # Queue every signal: two of them are the escalation path, so
+            # keeping only the last one would swallow the second.
+            self._pending.append(signum)
             return
         self._activate(signum)
 
@@ -78,15 +80,21 @@ class InterruptGate:
         the handle. While this context is active the handler records the signal
         instead of escaping, so after registration the pending signal reaches
         the child rather than abandoning a live process.
+
+        Signals are replayed in the order they arrived, from this context's
+        ``finally``. A first signal only forwards ``SIGINT`` to the child; a
+        second one raises ``KeyboardInterrupt``. The caller must therefore
+        already have its cleanup in place around the ``with`` block, so the
+        child is stopped and reaped on that path too.
         """
         self._deferring = True
         try:
             yield
         finally:
             self._deferring = False
-            pending, self._deferred = self._deferred, None
-            if pending is not None:
-                self._activate(pending)
+            pending, self._pending = self._pending, []
+            for signum in pending:
+                self._activate(signum)
 
     def install(self) -> None:
         for signum in (signal.SIGINT, signal.SIGTERM):

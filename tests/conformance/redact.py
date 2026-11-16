@@ -40,6 +40,8 @@ _CREDENTIAL_SUFFIXES = (
     "privatekey",
     "credentials",
     "sessionid",
+    # DOCKER_AUTH_CONFIG and friends carry registry credentials as base64.
+    "authconfig",
 )
 
 

@@ -77,6 +77,15 @@ class TestSanitizeText:
     def test_a_credential_suffix_inside_a_word_is_not_redacted(self) -> None:
         assert sanitize_text("mytokenizer=abc") == "mytokenizer=abc"
 
+    def test_adjacent_quoted_parts_are_redacted_as_one_shell_word(self) -> None:
+        assert sanitize_text("DB_PASSWORD=\"first half\"'second half' command") == "DB_PASSWORD=<redacted> command"
+
+    def test_an_unterminated_quote_still_redacts_the_rest_of_the_word(self) -> None:
+        assert sanitize_text('token=abc"def next') == "token=<redacted> next"
+
+    def test_a_plain_value_stops_at_whitespace(self) -> None:
+        assert sanitize_text("password: plain end") == "password: <redacted> end"
+
 
 class TestSanitizeArgs:
     def test_grpcurl_argv_drops_token_and_payload(self) -> None:

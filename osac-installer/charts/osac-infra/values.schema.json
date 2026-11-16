@@ -305,7 +305,7 @@
             },
             "activeActive": {
               "type": "boolean",
-              "description": "Allow up to 16 eligible IPv4 BGP paths for active-active forwarding and set equal local route metrics on all uplinks.",
+              "description": "Allow up to 16 eligible IPv4 BGP paths for active-active forwarding; numbered peer next hops receive equal-metric host routes.",
               "default": false
             },
             "activeBackup": {

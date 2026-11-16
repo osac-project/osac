@@ -105,6 +105,14 @@ data:
     {{- if $nodeIndex }}
     ---
     {{- end }}
+    {{- $metricRoutes := list }}
+    {{- if $.Values.evpn.bgp.activeActive }}
+      {{- range $uplink := $node.uplinks }}
+        {{- if $uplink.peerAddress }}
+          {{- $metricRoutes = append $metricRoutes (dict "destination" (printf "%s/32" $uplink.peerAddress) "interface" $uplink.interface) }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
     apiVersion: nmstate.io/v1
     kind: NodeNetworkConfigurationPolicy
     metadata:
@@ -127,9 +135,6 @@ data:
             enabled: true
             dhcp: false
             autoconf: false
-{{ if $.Values.evpn.bgp.activeActive }}
-            auto-route-metric: 100
-{{ end }}
       {{- else if $uplink.address }}
       {{- $uplinkAddress := split "/" $uplink.address }}
         - name: {{ $uplink.interface | quote }}
@@ -138,9 +143,6 @@ data:
           ipv4:
             enabled: true
             dhcp: false
-{{ if $.Values.evpn.bgp.activeActive }}
-            auto-route-metric: 100
-{{ end }}
             address:
               - ip: {{ $uplinkAddress._0 | quote }}
                 prefix-length: {{ int $uplinkAddress._1 }}
@@ -150,8 +152,6 @@ data:
         - name: {{ $uplink.interface | quote }}
           type: ethernet
           state: up
-          ipv4:
-            auto-route-metric: 100
       {{- end }}
     {{- end }}
         - name: evpn-vtep0
@@ -165,6 +165,16 @@ data:
                 prefix-length: 32
           ipv6:
             enabled: false
+    {{- if $metricRoutes }}
+        routes:
+          config:
+      {{- range $route := $metricRoutes }}
+          - destination: {{ $route.destination | quote }}
+            metric: 100
+            next-hop-interface: {{ $route.interface | quote }}
+            table-id: 254
+      {{- end }}
+    {{- end }}
     {{- end }}
   vtep.yaml: |
     apiVersion: k8s.ovn.org/v1

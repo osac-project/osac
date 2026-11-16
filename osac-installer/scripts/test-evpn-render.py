@@ -617,6 +617,27 @@ def test_active_active_bgp() -> None:
         values_file = write_values(pathlib.Path(temp), "active-active.yaml", values)
         infra = render("osac-infra", INFRA_CHART, "--values", str(values_file))
 
+    data = config_data(infra)
+    nncp = named(
+        parse_documents(data["nncp.yaml"]),
+        "NodeNetworkConfigurationPolicy",
+        "osac-evpn-worker-0",
+    )
+    assert nncp["spec"]["desiredState"]["routes"]["config"] == [
+        {
+            "destination": "169.254.133.1/32",
+            "metric": 100,
+            "next-hop-interface": "ens6",
+            "table-id": 254,
+        },
+        {
+            "destination": "169.254.134.1/32",
+            "metric": 100,
+            "next-hop-interface": "ens7",
+            "table-id": 254,
+        },
+    ]
+
     raw = named(
         parse_documents(config_data(infra)["frr.yaml"]),
         "FRRConfiguration",
@@ -643,6 +664,13 @@ def test_unnumbered_active_active_bgp() -> None:
     with tempfile.TemporaryDirectory(prefix="evpn-unnumbered-active-active-") as temp:
         values_file = write_values(pathlib.Path(temp), "unnumbered.yaml", values)
         infra = render("osac-infra", INFRA_CHART, "--values", str(values_file))
+
+    nncp = named(
+        parse_documents(config_data(infra)["nncp.yaml"]),
+        "NodeNetworkConfigurationPolicy",
+        "osac-evpn-worker-0",
+    )
+    assert "routes" not in nncp["spec"]["desiredState"]
 
     raw = named(
         parse_documents(config_data(infra)["frr.yaml"]),

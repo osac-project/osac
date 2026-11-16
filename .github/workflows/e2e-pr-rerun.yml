@@ -27,7 +27,7 @@ permissions: {}
 
 jobs:
   restarted:
-    uses: osac-project/osac-ci/.github/workflows/e2e-pr-rerun.yml@68dd6acbc0695357b92b5e1008a718ecd68f2b92  # v1.3.9
+    uses: osac-project/osac-ci/.github/workflows/e2e-pr-rerun.yml@728d1b064cdbfa429c68ce5bc5a35b47b6c127d7  # v1.3.10
     with:
       lines-kind: statuses  # the same as decide, track and finish in e2e-pr.yml
     permissions:

@@ -257,6 +257,12 @@ func (s *PrivateTenantsServer) Update(ctx context.Context,
 
 func (s *PrivateTenantsServer) Delete(ctx context.Context,
 	request *privatev1.TenantsDeleteRequest) (response *privatev1.TenantsDeleteResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.ReportError(&err)
+
 	// Lock the Tenant, so the guard and the creates in the tenant, which lock it too, run one after the other.
 	if err = s.rejectDeleteWhileResourcesExist(ctx, request.GetId()); err != nil {
 		return
@@ -273,6 +279,16 @@ func (s *PrivateTenantsServer) Delete(ctx context.Context,
 		}
 	}
 	err = s.generic.Delete(ctx, request, &response)
+	if err != nil {
+		return
+	}
+	// Close at deletion acceptance, not at finalizer removal. The tenant lock acquired above also
+	// fences assignment finalization; the interval close and deletion timestamp commit together.
+	if closeErr := database.CloseTenantBillingAssignmentOnDeletion(ctx, tx, request.GetId()); closeErr != nil {
+		s.logger.ErrorContext(ctx, "Failed to close tenant billing assignment on deletion", slog.Any("error", closeErr))
+		err = grpcstatus.Error(grpccodes.Internal, "failed to close tenant billing assignment on deletion")
+		response = nil
+	}
 	return
 }
 

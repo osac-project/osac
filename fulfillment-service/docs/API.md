@@ -498,6 +498,65 @@ appear in the public API.
 |----------|------------------------------------------------------------------|
 | `Signal` | Notifies the controller that the object may need reconciliation. |
 
+`TenantBillingAssignments.Signal` is a private, synchronous exception: it revalidates the current assignment
+through the same path as re-submitting `Update`, without creating another history interval. Closed intervals
+are rejected. Its flat table has no generic change trigger or billing controller, so it emits no outbox
+signal and starts no background reconciliation. Only global administrators/controllers may call it.
+
+#### Billing account and assignment contracts
+
+Billing methods use the existing `is_admin` authorization allow-list. Assignment reads and
+writes are additionally constrained by the authenticated subject's trusted tenant scope;
+current platform administrators have universal tenant scope. A `cloud-provider-admin` realm
+claim alone grants no access. There is no tenant self-service assignment read, and
+`spec.tenant_id` is data, not an authorization credential. The private metering read and
+identity are owned by
+[OSAC-6888](https://redhat.atlassian.net/browse/OSAC-6888), not this administrative API.
+
+Billing list filters use normalized stored values: `this.state == "ACTIVE"` for accounts and
+`this.status.connection_state == "CONNECTED"` for assignments. The type-prefixed enum names
+in JSON responses are not filter literals.
+
+Discovery refreshes a supplied, nonempty `base_currency` from a non-older provider observation;
+empty or stale observations do not erase it. Three-letter currency codes are normalized to
+uppercase, and no currency is invented or defaulted. Rate-card-derived currency resolution
+is owned by [OSAC-6890](https://redhat.atlassian.net/browse/OSAC-6890); account discovery alone
+does not implement that pricing boundary.
+
+A successful correlation-write response is not enough to establish `CONNECTED`. The adapter
+must read back the exact value, and the selected account must be its sole provider-side
+carrier. An acknowledged write with a differing read-back fails with
+`FAILED_PRECONDITION/BILLING_CORRELATION_READBACK_MISMATCH`. Adapters without correlation-write
+support retain the `PENDING` remediation path. Under the merged design's M360 contract, the
+OSAC adapter reports correlation-write unsupported: an external administrator sets the
+provider value to the stored correlation, then re-submits Update to validate the unique match.
+Current vendor API capabilities do not silently change this application contract.
+
+Assignment creation, replacement, and same-account revalidation read the selected
+account's normalized state from the provider before resolving correlation. The stored
+state is the last observation and cannot alone decide eligibility at preflight: an
+inactive or unknown account is rejected even if discovery previously stored `ACTIVE`,
+a stale stored `INACTIVE` or `UNKNOWN` does not block an account the provider reports
+active now, and provider-read failure is not permission to fall back to that cache.
+State observations retain their observation time and cannot overwrite a newer stored
+observation; a newer observation already stored, or a stored state change committed
+after the assignment read, still decides the request and can reject it. Provider calls
+run outside database transactions. This is assignment-time validation, not continuous
+provider monitoring.
+
+Tenant deletion closes its active assignment in the deletion transaction and records a
+read-only tombstone message, releasing the account for another tenant. Billing history retains
+the referenced, deletion-marked tenant identity until provider retention permits cleanup.
+The foreign key currently prevents reusing that retained name. Public `Tenants.List` hides
+deleted tenants; private lists and `Tenants.Get` retain their existing behavior. This does not
+define permanent retention, a purge schedule, or a platform-wide name-reservation policy.
+Retaining billing history does not bypass other restrictive tenant dependencies.
+Domain reservations remain while deletion cleanup has finalizers, and are released
+after successful cleanup completes, matching the physical-deletion baseline.
+Historical domain text on a retained tenant is not live ownership; later tombstone
+updates must not reserve those domains again. This domain-release timing is an
+approved lifecycle compatibility choice, not a new billing-retention requirement.
+
 In general, services should not have any additional ad-hoc methods beyond those listed above. There
 are some existing exceptions, and the project will work to remove them over time.
 

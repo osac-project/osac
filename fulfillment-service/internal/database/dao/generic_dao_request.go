@@ -106,63 +106,172 @@ func (r *request[O]) objectFromRow(row storedObject) (O, error) {
 	return object, nil
 }
 
-// archive moves a deleted object to the archived table and removes it from the main table.
+// archiveDeferredConstraint names a foreign key whose violation during archival is not an error: the referencing
+// table outlives its archived parent row. tenant_billing_assignments keeps assignment history as a read-only
+// tombstone after its tenant is deleted, so leaving the parent row live-but-deleted is the correct final state,
+// not a retry condition.
+const archiveDeferredConstraint = "tenant_billing_assignments_tenant_id_fkey"
+
+// archive moves a deleted object to the archived table and removes it from the main table, inside a savepoint so
+// archiveDeferredConstraint can be rolled back without poisoning the caller's transaction.
+//
+// When that constraint is the violation, the rollback leaves the row live-but-deleted; checkDeferredArchiveBlockers
+// then decides whether that tombstone is the intended final state. Any other error is translated as usual.
 func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
-	sql := fmt.Sprintf(
-		`
-		insert into archived_%s (
-			id,
-			name,
-			creation_timestamp,
-			deletion_timestamp,
-			creator,
-			tenant,
-			project,
-			labels,
-			annotations,
-			version,
-			data
-		) values (
-		 	$1,
-			$2,
-			$3,
-			$4,
-			$5,
-			$6,
-			$7,
-			$8,
-			$9,
-			$10,
-			$11
-		)
-		`,
-		r.dao.table,
-	)
-	_, err := r.exec(
-		ctx,
-		archiveOpType,
-		sql,
-		args.id,
-		args.name,
-		args.creationTs,
-		args.deletionTs,
-		args.creator,
-		args.tenant,
-		args.project,
-		args.labelsData,
-		args.annotationsData,
-		args.version,
-		args.data,
-	)
-	if err != nil {
-		return r.translateArchiveError(ctx, args.tenant, err)
+	if r.dao.table == "tenants" {
+		// Take the key lock outside the savepoint: rolling back the failed DELETE must not release it.
+		// FK checks on concurrent dependent inserts take KEY SHARE, so wait for earlier inserts before
+		// taking the fresh READ COMMITTED snapshot used by the recovery probe.
+		var id string
+		if err := r.queryRow(ctx, getOpType, `select id from tenants where id = $1 for update`, args.id).
+			Scan(&id); err != nil {
+			return r.translateArchiveError(ctx, args.tenant, err)
+		}
 	}
-	sql = fmt.Sprintf(`delete from %s where id = $1`, r.dao.table)
-	_, err = r.exec(ctx, deleteOpType, sql, args.id)
+	deferred := false
+	outerTx := r.tx
+	err := outerTx.Savepoint(ctx, func(spCtx context.Context) error {
+		spTx, err := database.TxFromContext(spCtx)
+		if err != nil {
+			return err
+		}
+		// Run the archive statements against the savepoint through r.exec, keeping the usual logging and metrics.
+		r.tx = spTx
+		defer func() { r.tx = outerTx }()
+
+		insertSQL := fmt.Sprintf(
+			`
+			insert into archived_%s (
+				id,
+				name,
+				creation_timestamp,
+				deletion_timestamp,
+				creator,
+				tenant,
+				project,
+				labels,
+				annotations,
+				version,
+				data
+			) values (
+			 	$1,
+				$2,
+				$3,
+				$4,
+				$5,
+				$6,
+				$7,
+				$8,
+				$9,
+				$10,
+				$11
+			)
+			`,
+			r.dao.table,
+		)
+		if _, err := r.exec(
+			spCtx,
+			archiveOpType,
+			insertSQL,
+			args.id,
+			args.name,
+			args.creationTs,
+			args.deletionTs,
+			args.creator,
+			args.tenant,
+			args.project,
+			args.labelsData,
+			args.annotationsData,
+			args.version,
+			args.data,
+		); err != nil {
+			deferred = isArchiveDeferred(err)
+			return err
+		}
+		deleteSQL := fmt.Sprintf(`delete from %s where id = $1`, r.dao.table)
+		if _, err := r.exec(spCtx, deleteOpType, deleteSQL, args.id); err != nil {
+			deferred = isArchiveDeferred(err)
+			return err
+		}
+		return nil
+	})
+	if err == nil {
+		return nil
+	}
+	if deferred {
+		return r.checkDeferredArchiveBlockers(ctx, args)
+	}
+	return r.translateArchiveError(ctx, args.tenant, err)
+}
+
+// checkDeferredArchiveBlockers runs after the archive savepoint rolled back. The retained billing identity must not
+// mask any other restrictive FK, including soft-deleted dependents still awaiting cleanup. Derive the probes from
+// the actual schema rather than maintaining another partial list of tenant-scoped tables. Cascades are not blockers;
+// the tenant's own self-reference disappears with a physical delete and is excluded from its probe.
+func (r *request[O]) checkDeferredArchiveBlockers(ctx context.Context, args archiveArgs) error {
+	if r.dao.table != "tenants" {
+		return fmt.Errorf(
+			"deferred archive constraint '%s' is only expected while archiving a tenant, but the table is '%s'",
+			archiveDeferredConstraint,
+			r.dao.table,
+		)
+	}
+	var probes string
+	err := r.queryRow(
+		ctx,
+		existsOpType,
+		`select coalesce(string_agg(format(
+			'select %L::text as blocker where exists (select 1 from %s as child join tenants as parent on %s
+			 where parent.id = $1 %s)',
+			fk.conname, fk.conrelid::regclass, keys.predicate,
+			case when fk.conrelid = fk.confrelid then 'and child.id <> parent.id' else '' end
+		), ' union all ' order by (fk.conname = 'projects_tenant_fk') desc, fk.conname), '')
+		from pg_catalog.pg_constraint as fk
+		cross join lateral (
+			select string_agg(format('child.%I = parent.%I', child.attname, parent.attname), ' and ') as predicate
+			from unnest(fk.conkey, fk.confkey) as key(child, parent)
+			join pg_catalog.pg_attribute as child on child.attrelid = fk.conrelid and child.attnum = key.child
+			join pg_catalog.pg_attribute as parent on parent.attrelid = fk.confrelid and parent.attnum = key.parent
+		) as keys
+		where fk.contype = 'f' and fk.confrelid = 'tenants'::regclass
+		and fk.confdeltype in ('a', 'r') and fk.conname <> $1`,
+		archiveDeferredConstraint,
+	).Scan(&probes)
+	if err == nil && probes == "" {
+		err = errors.New("no restrictive tenant foreign keys found")
+	}
+	var blocker string
+	if err == nil {
+		err = r.queryRow(ctx, existsOpType,
+			`select coalesce((select blocker from (`+probes+`) as blockers limit 1), '')`, args.id,
+		).Scan(&blocker)
+	}
 	if err != nil {
-		return r.translateArchiveError(ctx, args.tenant, err)
+		return fmt.Errorf(
+			"failed to check dependencies for tenant '%s' after deferred archive: %w",
+			args.name,
+			err,
+		)
+	}
+	if blocker == "projects_tenant_fk" {
+		return &ErrInUse{
+			Reason: fmt.Sprintf("tenant '%s' cannot be deleted because it still has projects", args.name),
+		}
+	}
+	if blocker != "" {
+		r.dao.logger.WarnContext(ctx, "Tenant archive blocked by a restrictive dependency",
+			slog.String("constraint", blocker))
+		return &ErrInUse{Reason: "object cannot be deleted because it is still referenced by other objects"}
 	}
 	return nil
+}
+
+// isArchiveDeferred reports whether err is a "not yet" deferred-constraint violation that archive can treat as
+// success.
+func isArchiveDeferred(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.ForeignKeyViolation &&
+		pgErr.ConstraintName == archiveDeferredConstraint
 }
 
 // translateArchiveError translates a raw PostgreSQL error from either statement of archive() into

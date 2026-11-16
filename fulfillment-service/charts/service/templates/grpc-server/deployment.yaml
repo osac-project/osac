@@ -259,7 +259,7 @@ spec:
         - --vault-keycloak-client-id={{ $vaultClientID }}
         - --vault-keycloak-client-secret-file=/etc/fulfillment-grpc-server/vault/client-secret
         {{- if $billingProvider }}
-        # OSAC_BILLING_* contract: see docs/INTEGRATION-TESTING.md.
+        # OSAC_BILLING_* tuning environment variables.
         env:
         - name: OSAC_BILLING_PROVIDER
           value: {{ $billingProvider.key | quote }}

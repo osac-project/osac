@@ -500,6 +500,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	var tenancyLogic auth.TenancyLogic
 	tenancyLogic, err = auth.NewDefaultTenancyLogic().
 		SetLogger(c.logger).
+		SetTenantResolver(database.ResolveLiveTenantNames).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create default tenancy logic: %w", err)
@@ -509,6 +510,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	evaluator, err := auth.NewEvaluator().
 		AddEmergencyServiceAccounts(c.args.emergencyServiceAccounts).
 		SetManagedServiceAccountResolver(serviceaccounts.ResolveAuthorization).
+		SetTenantResolver(database.ResolveLiveTenantNames).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create authorization evaluator: %w", err)
@@ -608,6 +610,15 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	txInterceptor, err := database.NewTxInterceptor().
 		SetLogger(c.logger).
 		SetManager(txManager).
+		AddManagerOnlyMethods(
+			"/osac.public.v1.BillingAccounts/List",
+			"/osac.private.v1.BillingAccounts/List",
+			"/osac.public.v1.TenantBillingAssignments/Create",
+			"/osac.private.v1.TenantBillingAssignments/Create",
+			"/osac.public.v1.TenantBillingAssignments/Update",
+			"/osac.private.v1.TenantBillingAssignments/Update",
+			"/osac.private.v1.TenantBillingAssignments/Signal",
+		).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create transactions interceptor: %w", err)
@@ -656,6 +667,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			metricsInterceptor.StreamServer,
 			loggingInterceptor.StreamServer,
 			validationInterceptor.StreamServer,
+			txInterceptor.StreamServer,
 			authnInterceptor.StreamServer,
 			authzInterceptor.StreamServer,
 			jitProvisioningInterceptor.StreamServer,
@@ -722,6 +734,55 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	publicv1.RegisterBillingProviderStatusesServer(grpcServer, billingProviderStatusesServer)
 	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
 	privatev1.RegisterBillingProviderStatusesServer(grpcServer, privateBillingProviderStatusesServer)
+
+	// Create the billing accounts servers. BillingAccounts.List supports filter/order, but billing_accounts is a
+	// flat, provider-global table, not the generic Metadata/Spec/Status jsonb shape, so it uses its own
+	// allowlist-based translator (internal/database/billing_account.go).
+	c.logger.InfoContext(ctx, "Creating billing accounts servers")
+	privateBillingAccountsServer, err := servers.NewPrivateBillingAccountsServer().
+		SetLogger(c.logger).
+		SetProvider(billingProvider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private billing accounts server: %w", err)
+	}
+	billingAccountsServer, err := servers.NewBillingAccountsServer().
+		SetLogger(c.logger).
+		SetDelegate(privateBillingAccountsServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public billing accounts server: %w", err)
+	}
+	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
+	// billing_account.go), not dao.FilterTranslator/GenericDAO.
+	publicv1.RegisterBillingAccountsServer(grpcServer, billingAccountsServer)
+	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
+	// billing_account.go), not dao.FilterTranslator/GenericDAO.
+	privatev1.RegisterBillingAccountsServer(grpcServer, privateBillingAccountsServer)
+
+	// Create the tenant billing assignments servers. Like billing accounts, tenant_billing_assignments is a flat,
+	// history-shaped table, so it uses its own filter/order translator.
+	c.logger.InfoContext(ctx, "Creating tenant billing assignments servers")
+	privateTenantBillingAssignmentsServer, err := servers.NewPrivateTenantBillingAssignmentsServer().
+		SetLogger(c.logger).
+		SetProvider(billingProvider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private tenant billing assignments server: %w", err)
+	}
+	tenantBillingAssignmentsServer, err := servers.NewTenantBillingAssignmentsServer().
+		SetLogger(c.logger).
+		SetDelegate(privateTenantBillingAssignmentsServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public tenant billing assignments server: %w", err)
+	}
+	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
+	// tenant_billing_assignment.go), not dao.FilterTranslator/GenericDAO.
+	publicv1.RegisterTenantBillingAssignmentsServer(grpcServer, tenantBillingAssignmentsServer)
+	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
+	// tenant_billing_assignment.go), not dao.FilterTranslator/GenericDAO.
+	privatev1.RegisterTenantBillingAssignmentsServer(grpcServer, privateTenantBillingAssignmentsServer)
 
 	// Create the capabilities servers:
 	c.logger.InfoContext(ctx, "Creating capabilities servers")

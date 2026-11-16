@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
@@ -27,14 +28,16 @@ import (
 // TxInterceptorBuilder contains the data and logic needed to build an interceptor that begins and ends transactions
 // automatically. Don't create instances of this type directly, use the NewTxInterceptor function instead.
 type TxInterceptorBuilder struct {
-	logger  *slog.Logger
-	manager TxManager
+	logger             *slog.Logger
+	manager            TxManager
+	managerOnlyMethods []string
 }
 
 // TxInterceptor contains the data needed by the interceptor.
 type TxInterceptor struct {
-	logger  *slog.Logger
-	manager TxManager
+	logger             *slog.Logger
+	manager            TxManager
+	managerOnlyMethods []string
 }
 
 // NewTxInterceptor creates a builder that can then be used to configure and create a transactions interceptor.
@@ -54,6 +57,13 @@ func (b *TxInterceptorBuilder) SetManager(value TxManager) *TxInterceptorBuilder
 	return b
 }
 
+// AddManagerOnlyMethods selects RPCs that own short transaction scopes themselves.
+// No ambient transaction is begun, including for authorization and JIT provisioning.
+func (b *TxInterceptorBuilder) AddManagerOnlyMethods(methods ...string) *TxInterceptorBuilder {
+	b.managerOnlyMethods = append(b.managerOnlyMethods, methods...)
+	return b
+}
+
 // Build uses the data stored in the builder to create and configure a new interceptor.
 func (b *TxInterceptorBuilder) Build() (result *TxInterceptor, err error) {
 	// Check parameters:
@@ -68,8 +78,9 @@ func (b *TxInterceptorBuilder) Build() (result *TxInterceptor, err error) {
 
 	// Create and populate the object:
 	result = &TxInterceptor{
-		logger:  b.logger,
-		manager: b.manager,
+		logger:             b.logger,
+		manager:            b.manager,
+		managerOnlyMethods: slices.Clone(b.managerOnlyMethods),
 	}
 	return
 }
@@ -77,6 +88,13 @@ func (b *TxInterceptorBuilder) Build() (result *TxInterceptor, err error) {
 // UnaryServer is the unary server interceptor function.
 func (i *TxInterceptor) UnaryServer(ctx context.Context, request any, info *grpc.UnaryServerInfo,
 	handler grpc.UnaryHandler) (response any, err error) {
+	if slices.Contains(i.managerOnlyMethods, info.FullMethod) {
+		ctx = TxManagerIntoContext(ctx, i.manager)
+		// Shadow any inherited transaction; these methods must not pin a connection
+		// while calling their provider. Never end someone else's wrapper here.
+		ctx = context.WithValue(ctx, contextTxKey, struct{}{})
+		return handler(ctx, request)
+	}
 	// Begin the transaction:
 	tx, err := i.manager.Begin(ctx)
 	if err != nil {
@@ -136,3 +154,19 @@ func (i *TxInterceptor) UnaryServer(ctx context.Context, request any, info *grpc
 	response, err = handler(handlerCtx, request)
 	return
 }
+
+// StreamServer supplies only a manager: authorization, JIT and event delivery
+// may open short transactions without pinning a connection for the Watch.
+func (i *TxInterceptor) StreamServer(server any, stream grpc.ServerStream,
+	info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	ctx := TxManagerIntoContext(stream.Context(), i.manager)
+	ctx = context.WithValue(ctx, contextTxKey, struct{}{})
+	return handler(server, &txManagerStream{ServerStream: stream, ctx: ctx})
+}
+
+type txManagerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *txManagerStream) Context() context.Context { return s.ctx }

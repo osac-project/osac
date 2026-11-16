@@ -86,12 +86,10 @@ func (i *GrpcJitProvisioningInterceptor) UnaryServer(ctx context.Context, req an
 
 // StreamServer is the stream server interceptor function.
 //
-// JIT provisioning is intentionally skipped for streaming RPCs. The database
-// transaction interceptor (TxInterceptor) only covers unary calls, so streaming
-// contexts never carry a transaction. Calling provisionIfNeeded here would
-// always fail with "failed to get transaction from context". Users that reach
-// a streaming endpoint are already authenticated and authorised; provisioning
-// happens on their first unary call instead.
+// JIT provisioning is intentionally skipped for streaming RPCs. Streams carry
+// only a transaction manager for short authorization reads, not a transaction
+// held for the stream lifetime. Keep provisioning on the user's first unary
+// call rather than adding provisioning writes when a Watch is opened.
 func (i *GrpcJitProvisioningInterceptor) StreamServer(srv any, stream grpc.ServerStream,
 	info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	return handler(srv, stream)

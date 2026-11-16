@@ -11,10 +11,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
 language governing permissions and limitations under the License.
 */
 
-// Package billingstub is a deterministic HTTP stand-in for the M360 read API, driven by the same
+// Package billingstub is a deterministic HTTP stand-in for the M360 API, driven by the same
 // billingfake.Scenario as the in-process fake. Pointing a real M360 configuration at it exercises the real adapter
-// without credentials or a live tenant. It serves GET only: any other method is answered 405 and recorded, so a test
-// can prove no write was attempted. Every Stub owns its scenario and request log (no globals).
+// without credentials or a live tenant. It serves reads and the scalar externalId account PUT; all other writes
+// are rejected and recorded. Every Stub owns its account state and request log (no globals).
 package billingstub
 
 import (
@@ -26,6 +26,9 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"io"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -51,12 +54,15 @@ type Request struct {
 	Authorization string
 	Op            string
 	Failed        bool
+	ExternalID    string
 }
 
 // Stub is a scripted M360 server that records its requests.
 type Stub struct {
 	mu       sync.Mutex
 	scenario billingfake.Scenario
+	accounts []billingfake.AccountSpec
+	denied   map[string]bool
 	failed   map[string]int
 	requests []Request
 	server   *httptest.Server
@@ -64,7 +70,9 @@ type Stub struct {
 
 // New builds a Stub from a scenario. Call Start to serve it.
 func New(s billingfake.Scenario) *Stub {
-	return &Stub{scenario: s, failed: map[string]int{}}
+	stub := &Stub{}
+	stub.SetScenario(s)
+	return stub
 }
 
 // Start serves the stub over plain HTTP on addr, such as 127.0.0.1:0 for a free local port.
@@ -150,11 +158,22 @@ func (s *Stub) Close() {
 	}
 }
 
-// SetScenario swaps the scenario of a running stub and restarts failure counting. The request log is kept.
+// SetScenario replaces account state and restarts failure counting and write denials. The request log is kept.
 func (s *Stub) SetScenario(scenario billingfake.Scenario) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.scenario, s.failed = scenario, map[string]int{}
+	s.scenario.Failures = maps.Clone(scenario.Failures)
+	s.accounts = slices.Clone(scenario.Accounts)
+	s.denied = map[string]bool{}
+}
+
+// SetCorrelationWriteDenied injects an account-specific unsupported PUT (405), without affecting reads or other
+// accounts. This is a capability failure fixture, not a claim that M360 authorization failures mean unsupported.
+func (s *Stub) SetCorrelationWriteDenied(id string, denied bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.denied[id] = denied
 }
 
 // Requests returns a copy of the recorded requests in order.
@@ -195,16 +214,13 @@ var (
 	attrsPath     = regexp.MustCompile(`^/services/([^/]+)/priceable-attributes$`)
 )
 
-// ServeHTTP answers only GETs, records the request and applies scripted failures.
+// ServeHTTP records the request and applies scripted failures. Account reads and writes share the same lock.
 func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	request := Request{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery,
 		Authorization: r.Header.Get("Authorization")}
-	status, body := http.StatusMethodNotAllowed, any(nil)
-	if r.Method == http.MethodGet {
-		status, body = s.route(&request, r)
-	}
+	status, body := s.route(&request, r)
 	request.Failed = status >= 300
 	s.requests = append(s.requests, request)
 	if status >= 300 {
@@ -216,34 +232,42 @@ func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-// route answers a GET, applying the scripted failure of the op it maps to.
+// route applies the scripted failure of the op before serving it.
 func (s *Stub) route(request *Request, r *http.Request) (int, any) {
 	path := versionPrefix.ReplaceAllString(r.URL.Path, "")
 	query := r.URL.Query()
 	var serve func() (int, any)
-	switch {
-	case path == "/accounts":
-		request.Op = "ListAccounts"
-		// The health check and the status probe are a one-item, unfiltered first page; both count as HealthCheck.
-		if query.Get("size") == "1" && query.Get("q") == "" && query.Get("page") == "" {
-			request.Op = "HealthCheck"
+	if r.Method == http.MethodPut && strings.HasPrefix(path, "/accounts/") &&
+		!strings.Contains(strings.TrimPrefix(path, "/accounts/"), "/") {
+		request.Op = "SetCorrelationValue"
+		serve = func() (int, any) { return s.updateAccount(request, r, strings.TrimPrefix(path, "/accounts/")) }
+	} else if r.Method != http.MethodGet {
+		return http.StatusMethodNotAllowed, nil
+	} else {
+		switch {
+		case path == "/accounts":
+			request.Op = "ListAccounts"
+			// The health check and the status probe are a one-item, unfiltered first page; both count as HealthCheck.
+			if query.Get("size") == "1" && query.Get("q") == "" && query.Get("page") == "" {
+				request.Op = "HealthCheck"
+			}
+			serve = func() (int, any) { return s.listAccounts(query) }
+		case strings.HasPrefix(path, "/accounts/"):
+			request.Op = "GetAccount"
+			serve = func() (int, any) { return s.account(strings.TrimPrefix(path, "/accounts/")) }
+		case path == "/services":
+			request.Op = "FindServiceByName"
+			serve = func() (int, any) { return s.listServices(query) }
+		case attrsPath.MatchString(path):
+			request.Op = "ListPriceableAttributes"
+			serve = func() (int, any) { return s.attributes(attrsPath.FindStringSubmatch(path)[1], query) }
+		case rateCardPath.MatchString(path):
+			request.Op = "GetServiceRateCard"
+			m := rateCardPath.FindStringSubmatch(path)
+			serve = func() (int, any) { return s.rateCard(m[1], m[2]) }
+		default:
+			return http.StatusNotFound, nil
 		}
-		serve = func() (int, any) { return s.listAccounts(query) }
-	case strings.HasPrefix(path, "/accounts/"):
-		request.Op = "GetAccount"
-		serve = func() (int, any) { return s.account(strings.TrimPrefix(path, "/accounts/")) }
-	case path == "/services":
-		request.Op = "FindServiceByName"
-		serve = func() (int, any) { return s.listServices(query) }
-	case attrsPath.MatchString(path):
-		request.Op = "ListPriceableAttributes"
-		serve = func() (int, any) { return s.attributes(attrsPath.FindStringSubmatch(path)[1], query) }
-	case rateCardPath.MatchString(path):
-		request.Op = "GetServiceRateCard"
-		m := rateCardPath.FindStringSubmatch(path)
-		serve = func() (int, any) { return s.rateCard(m[1], m[2]) }
-	default:
-		return http.StatusNotFound, nil
 	}
 	// A one-item unfiltered page is also what ListAccounts(Size 1) sends, so a ListAccounts failure applies too.
 	for _, op := range []string{request.Op, "ListAccounts"} {
@@ -270,6 +294,8 @@ func failureStatus(f billingfake.Failure) int {
 		return http.StatusNotFound
 	case billing.ReasonConflict:
 		return http.StatusConflict
+	case billing.ReasonUnsupported:
+		return http.StatusMethodNotAllowed
 	case billing.ReasonTimeout:
 		return http.StatusRequestTimeout
 	case billing.ReasonUnavailable:
@@ -327,7 +353,7 @@ func paged[T any](items []T, query url.Values) (int, any) {
 // listAccounts answers the filtered, paged /accounts collection.
 func (s *Stub) listAccounts(query url.Values) (int, any) {
 	items := []map[string]any{}
-	for _, a := range s.scenario.Accounts {
+	for _, a := range s.accounts {
 		if matches(query.Get("q"), a.Name, a.ExternalID) {
 			items = append(items, wireAccount(a))
 		}
@@ -337,10 +363,39 @@ func (s *Stub) listAccounts(query url.Values) (int, any) {
 
 // account answers a single account by id, 404 when unknown.
 func (s *Stub) account(id string) (int, any) {
-	for _, a := range s.scenario.Accounts {
+	for _, a := range s.accounts {
 		if a.ID == id {
 			return envelope(wireAccount(a))
 		}
+	}
+	return http.StatusNotFound, nil
+}
+
+// updateAccount implements only the documented scalar externalId PUT. Writes return the camelCase DTO, not
+// the PascalCase GET row or list envelope. Subsequent GETs and lists read the retained value.
+func (s *Stub) updateAccount(request *Request, r *http.Request, id string) (int, any) {
+	var fields map[string]json.RawMessage
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 4096))
+	if decoder.Decode(&fields) != nil || len(fields) != 1 {
+		return http.StatusBadRequest, nil
+	}
+	value, ok := fields["externalId"]
+	if !ok || string(value) == "null" || json.Unmarshal(value, &request.ExternalID) != nil {
+		return http.StatusBadRequest, nil
+	}
+	if !errors.Is(decoder.Decode(new(any)), io.EOF) {
+		return http.StatusBadRequest, nil
+	}
+	for i := range s.accounts {
+		a := &s.accounts[i]
+		if a.ID != id {
+			continue
+		}
+		if s.denied[id] {
+			return http.StatusMethodNotAllowed, nil
+		}
+		a.ExternalID = request.ExternalID
+		return http.StatusOK, map[string]any{"id": a.ID, "name": a.Name, "externalId": a.ExternalID}
 	}
 	return http.StatusNotFound, nil
 }

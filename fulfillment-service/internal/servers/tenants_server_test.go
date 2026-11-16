@@ -80,6 +80,68 @@ var _ = Describe("Public tenants server", func() {
 		})
 	})
 
+	Describe("Deleted tenant visibility", func() {
+		BeforeEach(func() {
+			for _, name := range []string{"deleted-tenant", "visible-tenant", "other-tenant"} {
+				_, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+					Object: privatev1.Tenant_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: name, Finalizers: []string{"test-cleanup"},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			}
+			_, err := privateServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: "deleted-tenant"}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("hides deletion-marked tenants only from the public List, including its total", func() {
+			privateList, err := privateServer.List(ctx, &privatev1.TenantsListRequest{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(privateList.GetItems()).To(ContainElement(HaveField("Id", "deleted-tenant")))
+			publicList, err := publicServer.List(ctx, &publicv1.TenantsListRequest{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(publicList.GetTotal()).To(Equal(privateList.GetTotal() - 1))
+			Expect(publicList.GetSize()).To(Equal(privateList.GetSize() - 1))
+			Expect(publicList.GetItems()).NotTo(ContainElement(HaveField("Id", "deleted-tenant")))
+
+			// Get deliberately remains unchanged on both surfaces.
+			privateGet, err := privateServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: "deleted-tenant"}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(privateGet.GetObject().GetMetadata().GetDeletionTimestamp()).NotTo(BeNil())
+			publicGet, err := publicServer.Get(ctx, publicv1.TenantsGetRequest_builder{Id: "deleted-tenant"}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(publicGet.GetObject().GetMetadata().GetDeletionTimestamp()).NotTo(BeNil())
+		})
+
+		DescribeTable("composes the liveness predicate with the caller filter",
+			func(filter string, names []string) {
+				request := publicv1.TenantsListRequest_builder{Filter: &filter}.Build()
+				listed, err := publicServer.List(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(listed.GetTotal()).To(Equal(int32(len(names))))
+				Expect(listed.GetSize()).To(Equal(int32(len(names))))
+				got := make([]string, 0, len(listed.GetItems()))
+				for _, tenant := range listed.GetItems() {
+					got = append(got, tenant.GetId())
+				}
+				Expect(got).To(ConsistOf(names))
+				Expect(request.GetFilter()).To(Equal(filter), "do not mutate the caller request")
+				request.SetLimit(0)
+				counted, err := publicServer.List(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(counted.GetTotal()).To(Equal(int32(len(names))))
+				Expect(counted.GetItems()).To(BeEmpty())
+			},
+			Entry("matching live tenant", `this.metadata.name == "visible-tenant"`, []string{"visible-tenant"}),
+			Entry("OR cannot bypass the deletion check",
+				`this.metadata.name == "deleted-tenant" || this.metadata.name == "visible-tenant"`, []string{"visible-tenant"}),
+			Entry("a deleted-only filter cannot expose tombstones", `this.metadata.deletion_timestamp != null`, []string{}),
+			Entry("caller filter still restricts live tenants", `this.metadata.name == "missing-tenant"`, []string{}),
+		)
+	})
+
 	Describe("Behaviour", func() {
 		It("Lists tenants", func() {
 			// Create the tenant using the private server, as that isn't implemented for the public server:

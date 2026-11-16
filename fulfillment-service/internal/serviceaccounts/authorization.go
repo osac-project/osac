@@ -78,12 +78,15 @@ func ResolveAuthorization(ctx context.Context, clientID, tenantClaim string) (*A
 		select sa.id, sa.tenant, sa.annotations, sa.data
 		from service_accounts sa
 		join active_service_accounts active on active.id = sa.id
+		join tenants tenant on tenant.name = sa.tenant
+		join active_tenants active_tenant on active_tenant.id = tenant.id
 		join secrets credential
 		  on credential.id = sa.data #>> '{status,client_secret,id}'
 		join active_secrets active_credential on active_credential.id = credential.id
 		where sa.id = $1
 		  and sa.tenant = $2
 		  and sa.deletion_timestamp = 'epoch'
+		  and tenant.deletion_timestamp = 'epoch'
 		  and credential.deletion_timestamp = 'epoch'
 		  and credential.tenant = sa.tenant
 		  and credential.annotations ->> 'osac.openshift.io/tenant' = sa.tenant

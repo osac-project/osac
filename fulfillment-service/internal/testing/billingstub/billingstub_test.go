@@ -19,7 +19,10 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,6 +79,20 @@ func load(data string) billingfake.Scenario {
 	return s
 }
 
+// requestJSON exercises the wire contract independently of the adapter's decoder.
+func requestJSON(stub *billingstub.Stub, method, path, body string) (int, map[string]any) {
+	GinkgoHelper()
+	request, err := http.NewRequest(method, stub.URL()+"/api/v2/external"+path, strings.NewReader(body))
+	Expect(err).ToNot(HaveOccurred())
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	Expect(err).ToNot(HaveOccurred())
+	defer func() { _ = response.Body.Close() }()
+	var data map[string]any
+	Expect(json.NewDecoder(response.Body).Decode(&data)).To(Succeed())
+	return response.StatusCode, data
+}
+
 var _ = Describe("Billing stub", func() {
 	It("serves the shared fixture to the real M360 adapter", func() {
 		stub, adapter := start(load(fixture))
@@ -91,8 +108,8 @@ var _ = Describe("Billing stub", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(next.Accounts).To(HaveLen(1))
 		Expect(next.Next).To(BeEmpty())
-		// The normalized state stays UNKNOWN until the status mapping rule is decided; the raw value is exposed.
-		Expect(next.Accounts[0].State).To(Equal(billing.AccountUnknown))
+		// A lone INACTIVE status (no ApprovalStatus) wins over the missing signal; the raw value is still exposed.
+		Expect(next.Accounts[0].State).To(Equal(billing.AccountInactive))
 		Expect(next.Accounts[0].RawStatus).To(Equal("Inactive"))
 
 		account, err := adapter.GetAccount(ctx, billing.NewAccountRef("a1"))
@@ -224,10 +241,149 @@ var _ = Describe("Billing stub", func() {
 		Expect(body.Message).ToNot(BeEmpty())
 	})
 
-	It("rejects and records every write with 405", func() {
+	It("retains a camelCase externalId PUT and returns PascalCase GET and list rows", func() {
+		scenario := load(fixture)
+		stub, _ := start(scenario)
+		code, body := requestJSON(stub, http.MethodPut, "/accounts/a1", `{"externalId":"new-correlation"}`)
+		Expect(code).To(Equal(http.StatusOK))
+		Expect(body).To(Equal(map[string]any{"id": "a1", "name": "one", "externalId": "new-correlation"}))
+		code, body = requestJSON(stub, http.MethodGet, "/accounts/a1", "")
+		Expect(code).To(Equal(http.StatusOK))
+		Expect(body["data"]).To(HaveKeyWithValue("ExternalId", "new-correlation"))
+		Expect(body["data"]).To(HaveKeyWithValue("Status__r", HaveKeyWithValue("Name", "Active")))
+		_, body = requestJSON(stub, http.MethodGet, "/accounts?q=new-correlation", "")
+		Expect(body["data"]).To(HaveKeyWithValue("content", ConsistOf(HaveKeyWithValue("Id", "a1"))))
+		// The stub owns a copy, not the caller's fixture slice.
+		Expect(scenario.Accounts[0].ExternalID).To(Equal("ext"))
+	})
+
+	It("reports the adapter's correlation write as unsupported and sends no request", func() {
+		stub, adapter := start(load(fixture))
+		Expect(adapter.SupportsCorrelationWrite()).To(BeFalse())
+		err := adapter.SetCorrelationValue(ctx, billing.NewAccountRef("a1"), "new-correlation")
+		Expect(reasonOf(err)).To(Equal(billing.ReasonUnsupported))
+		Expect(stub.Writes()).To(BeEmpty(), "an unsupported write must not reach the provider")
+		value, present, err := adapter.CorrelationValue(ctx, billing.NewAccountRef("a1"))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(present).To(BeTrue())
+		Expect(value).To(Equal("ext"), "the account keeps the fixture value")
+	})
+
+	It("classifies an account-specific write denial as unsupported without changing its value", func() {
+		stub, _ := start(load(fixture))
+		stub.SetCorrelationWriteDenied("a1", true)
+		// The adapter advertises no write, so the stub's PUT contract is exercised directly over raw HTTP.
+		code, _ := requestJSON(stub, http.MethodPut, "/accounts/a1", `{"externalId":"denied-value"}`)
+		Expect(code).To(Equal(http.StatusMethodNotAllowed))
+		Expect(stub.Count("SetCorrelationValue")).To(Equal(1), "the stub records the denied write once")
+		code, body := requestJSON(stub, http.MethodGet, "/accounts/a1", "")
+		Expect(code).To(Equal(http.StatusOK))
+		Expect(body["data"]).To(HaveKeyWithValue("ExternalId", "ext"))
+		code, _ = requestJSON(stub, http.MethodPut, "/accounts/a2", `{"externalId":"allowed-value"}`)
+		Expect(code).To(Equal(http.StatusOK))
+		stub.SetCorrelationWriteDenied("a1", false)
+		code, _ = requestJSON(stub, http.MethodPut, "/accounts/a1", `{"externalId":"allowed-now"}`)
+		Expect(code).To(Equal(http.StatusOK))
+	})
+
+	DescribeTable("rejects malformed account writes without mutation", func(body string) {
+		stub, _ := start(load(fixture))
+		code, _ := requestJSON(stub, http.MethodPut, "/accounts/a1", body)
+		Expect(code).To(Equal(http.StatusBadRequest))
+		_, read := requestJSON(stub, http.MethodGet, "/accounts/a1", "")
+		Expect(read["data"]).To(HaveKeyWithValue("ExternalId", "ext"))
+	},
+		Entry("GET field casing is not the write contract", `{"ExternalId":"bad"}`),
+		Entry("no scalar", `{}`),
+		Entry("not a string", `{"externalId":123}`),
+		Entry("null", `{"externalId":null}`),
+		Entry("unmodelled writes", `{"externalId":"bad","addresses":[]}`),
+		Entry("trailing JSON", `{"externalId":"bad"} {}`),
+		Entry("malformed JSON", `{"externalId":`),
+	)
+
+	It("returns 404 for a PUT to a missing account", func() {
+		stub, _ := start(load(fixture))
+		code, body := requestJSON(stub, http.MethodPut, "/accounts/missing", `{"externalId":"value"}`)
+		Expect(code).To(Equal(http.StatusNotFound))
+		Expect(body).To(HaveKeyWithValue("status", float64(http.StatusNotFound)))
+	})
+
+	It("leaves account state unchanged when a scripted PUT fails", func() {
+		scenario := load(fixture)
+		scenario.Failures = map[string]billingfake.Failure{"SetCorrelationValue": {Status: http.StatusServiceUnavailable}}
+		stub, _ := start(scenario)
+		code, _ := requestJSON(stub, http.MethodPut, "/accounts/a1", `{"externalId":"not-persisted"}`)
+		Expect(code).To(Equal(http.StatusServiceUnavailable))
+		_, read := requestJSON(stub, http.MethodGet, "/accounts/a1", "")
+		Expect(read["data"]).To(HaveKeyWithValue("ExternalId", "ext"))
+		Expect(stub.Writes()).To(ConsistOf(HaveField("Failed", true)))
+	})
+
+	It("resets retained values and write denials when replacing the scenario", func() {
+		stub, _ := start(load(fixture))
+		code, _ := requestJSON(stub, http.MethodPut, "/accounts/a1", `{"externalId":"new-value"}`)
+		Expect(code).To(Equal(http.StatusOK))
+		stub.SetCorrelationWriteDenied("a1", true)
+		stub.SetScenario(load(fixture))
+		_, read := requestJSON(stub, http.MethodGet, "/accounts/a1", "")
+		Expect(read["data"]).To(HaveKeyWithValue("ExternalId", "ext"))
+		code, _ = requestJSON(stub, http.MethodPut, "/accounts/a1", `{"externalId":"allowed-again"}`)
+		Expect(code).To(Equal(http.StatusOK))
+	})
+
+	It("keeps concurrent account writes and readbacks isolated within one stub", func() {
+		accounts := make([]billingfake.AccountSpec, 8)
+		for i := range accounts {
+			accounts[i].ID = fmt.Sprintf("account-%d", i)
+		}
+		stub, _ := start(billingfake.Scenario{Accounts: accounts})
+		var wg sync.WaitGroup
+		for _, account := range accounts {
+			wg.Go(func() {
+				defer GinkgoRecover()
+				value := "correlation-" + account.ID
+				code, _ := requestJSON(stub, http.MethodPut, "/accounts/"+account.ID,
+					`{"externalId":"`+value+`"}`)
+				Expect(code).To(Equal(http.StatusOK))
+				_, body := requestJSON(stub, http.MethodGet, "/accounts/"+account.ID, "")
+				Expect(body["data"]).To(HaveKeyWithValue("ExternalId", value))
+				_ = stub.Requests() // snapshots can race with other writes, but do not expose mutable state.
+			})
+		}
+		wg.Wait()
+		Expect(stub.Succeeded("SetCorrelationValue")).To(Equal(len(accounts)))
+	})
+
+	It("keeps q as substring search and leaves exact matching and page walking to the adapter", func() {
+		accounts := make([]billingfake.AccountSpec, 21)
+		for i := range accounts {
+			accounts[i] = billingfake.AccountSpec{ID: fmt.Sprintf("a%d", i), Name: "EXT candidate", ExternalID: "ext-other"}
+		}
+		accounts[20].ExternalID = "ext"
+		stub, adapter := start(billingfake.Scenario{Accounts: accounts})
+		_, body := requestJSON(stub, http.MethodGet, "/accounts?q=EXT&size=100", "")
+		Expect(body["data"]).To(HaveKeyWithValue("size", float64(20)))
+		Expect(body["data"]).To(HaveKeyWithValue("last", false))
+		Expect(body["data"].(map[string]any)["content"]).To(HaveLen(20))
+		first, err := adapter.ListAccounts(ctx, billing.AccountFilter{ExternalID: "ext"}, billing.Page{Size: 100})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(first.Accounts).To(BeEmpty(), "substring hits must not become exact correlation matches")
+		Expect(first.Next).To(Equal("1"))
+		second, err := adapter.ListAccounts(ctx, billing.AccountFilter{ExternalID: "ext"}, billing.Page{Token: first.Next})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(second.Accounts).To(HaveLen(1))
+		Expect(second.Accounts[0].Ref.ID()).To(Equal("a20"))
+		Expect(second.Next).To(BeEmpty())
+		query, err := url.ParseQuery(stub.Requests()[1].Query)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(query.Get("size")).To(Equal("20"))
+	})
+
+	It("rejects and records unimplemented writes with 405", func() {
 		stub, _ := start(load(fixture))
 
-		for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodPost, http.MethodDelete} {
+		for _, method := range []string{http.MethodPatch, http.MethodPost, http.MethodDelete} {
 			request, err := http.NewRequest(method, stub.URL()+"/api/v2/external/accounts/a1", nil)
 			Expect(err).ToNot(HaveOccurred())
 			response, err := http.DefaultClient.Do(request)
@@ -235,7 +391,7 @@ var _ = Describe("Billing stub", func() {
 			_ = response.Body.Close()
 			Expect(response.StatusCode).To(Equal(http.StatusMethodNotAllowed))
 		}
-		Expect(stub.Writes()).To(HaveLen(4))
+		Expect(stub.Writes()).To(HaveLen(3))
 	})
 
 	It("records the Authorization header of each request", func() {

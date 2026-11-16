@@ -13,12 +13,75 @@ language governing permissions and limitations under the License.
 
 package billing
 
-import "context"
+import (
+	"context"
+	"strings"
+	"unicode"
+)
+
+// MaxListPages bounds how many pages of one provider list OSAC reads. A caller that still sees a following page
+// at the bound decides how to fail, but never reads past it, so a provider that never reports a last page cannot
+// loop a caller forever.
+const MaxListPages = 50
+
+// ForEachAccount walks the provider accounts matching filter from page, calling fn for each in order. It stops
+// on fn's error, the last page, or MaxListPages pages that all report a following page, which is a MALFORMED
+// *Error. A page larger than the requested positive size is also MALFORMED and rejected before any visitor runs,
+// so one oversized provider page cannot widen a caller's buffer. Without a requested size the adapter enforces
+// its own bound.
+func ForEachAccount(
+	ctx context.Context, adapter Adapter, filter AccountFilter, page Page, fn func(Account) error) error {
+	for range MaxListPages {
+		result, err := adapter.ListAccounts(ctx, filter, page)
+		if err != nil {
+			return err
+		}
+		if page.Size > 0 && len(result.Accounts) > page.Size {
+			return NewError(ReasonMalformed, "ListAccounts", false, 0)
+		}
+		for _, account := range result.Accounts {
+			if err := fn(account); err != nil {
+				return err
+			}
+		}
+		if result.Next == "" {
+			return nil
+		}
+		page.Token = result.Next
+	}
+	return NewError(ReasonMalformed, "ListAccounts", false, 0)
+}
+
+// CountAccountsWithExternalID counts provider accounts whose correlation value is exactly value. It walks every
+// page so a provider that never ends the match list is MALFORMED rather than merely ambiguous.
+func CountAccountsWithExternalID(ctx context.Context, adapter Adapter, value string) (int, error) {
+	count := 0
+	err := ForEachAccount(ctx, adapter, AccountFilter{ExternalID: value}, Page{}, func(Account) error {
+		count++
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// SanitizeProviderText strips control characters from provider-supplied text so a compromised provider cannot
+// plant terminal escape sequences in an administrator's terminal. Printable runes, including non-ASCII, are kept.
+func SanitizeProviderText(text string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, text)
+}
 
 // Adapter is the only boundary through which OSAC talks to a billing provider. It exposes normalized values only.
 type Adapter interface {
 	// ListAccounts pages through accounts that exactly match filter. A page may hold fewer accounts than its size,
-	// or none, while Next is still set, so callers must keep paging until Next is empty.
+	// or none, while Next is still set, so callers must keep paging until it is empty. It never holds more accounts
+	// than the requested positive size; ForEachAccount rejects such a page as MALFORMED.
 	ListAccounts(ctx context.Context, filter AccountFilter, page Page) (AccountPage, error)
 	// GetAccount and CorrelationValue fail with a NOT_FOUND *Error when the account does not exist.
 	GetAccount(ctx context.Context, ref AccountRef) (Account, error)
@@ -39,6 +102,7 @@ type Adapter interface {
 	// SupportsCorrelationWrite reports whether SetCorrelationValue is implemented by the provider.
 	SupportsCorrelationWrite() bool
 
-	// SetCorrelationValue fails with an UNSUPPORTED *Error when SupportsCorrelationWrite is false.
+	// SetCorrelationValue fails with an UNSUPPORTED *Error when SupportsCorrelationWrite is false, or when
+	// writing is unsupported for the selected account. Resolution retains the PENDING remediation path in either case.
 	SetCorrelationValue(ctx context.Context, ref AccountRef, value string) error
 }

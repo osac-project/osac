@@ -1,0 +1,191 @@
+/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
+language governing permissions and limitations under the License.
+*/
+
+package billingaccount
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/output"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
+)
+
+// Cmd creates the command that lists discovered billing accounts.
+func Cmd() *cobra.Command {
+	runner := &runnerContext{}
+	result := &cobra.Command{
+		Use:     "billingaccount [FLAG...]",
+		Aliases: []string{"billingaccounts", "billing-accounts"},
+		Short:   shortHelp,
+		Long:    longHelp,
+		Example: example,
+		Args:    cobra.NoArgs,
+		RunE:    runner.run,
+	}
+	result.Flags().StringVarP(&runner.format, "output", "o", output.Table, output.FlagHelp)
+	result.Flags().Int32Var(&runner.limit, "limit", 0, limitFlagHelp)
+	result.Flags().Int32Var(&runner.offset, "offset", 0, offsetFlagHelp)
+	return result
+}
+
+type runnerContext struct {
+	format string
+	limit  int32
+	offset int32
+}
+
+// run validates the output format and the page bounds, connects using the configured login, and renders the listed
+// billing accounts.
+func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
+	ctx := cmd.Context()
+	if err := output.Validate(c.format); err != nil {
+		return err
+	}
+	if c.limit < 0 {
+		return fmt.Errorf("--limit must be >= 0, got %d", c.limit)
+	}
+	if c.offset < 0 {
+		return fmt.Errorf("--offset must be >= 0, got %d", c.offset)
+	}
+	cfg := config.SettingsFromContext(ctx)
+	if !cfg.Armed() {
+		return fmt.Errorf("there is no configuration, run the 'login' command")
+	}
+	conn, err := cfg.Connect(ctx, cmd.Flags())
+	if err != nil {
+		return fmt.Errorf("failed to create gRPC connection: %w", err)
+	}
+	defer conn.Close()
+	response, err := listBillingAccounts(ctx, publicv1.NewBillingAccountsClient(conn), c.limit, c.offset)
+	if err != nil {
+		return err
+	}
+	return render(ctx, terminal.ConsoleFromContext(ctx), c.format, c.offset, response)
+}
+
+// listBillingAccounts requests one page of billing accounts, sending limit and offset as explicit fields so the
+// server sees the bounds even when they are zero.
+func listBillingAccounts(ctx context.Context, client publicv1.BillingAccountsClient,
+	limit, offset int32) (*publicv1.BillingAccountsListResponse, error) {
+	response, err := client.List(ctx, publicv1.BillingAccountsListRequest_builder{
+		Limit:  proto.Int32(limit),
+		Offset: proto.Int32(offset),
+	}.Build())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list billing accounts: %w", err)
+	}
+	return response, nil
+}
+
+// render writes response as a table, JSON, or YAML depending on format. In table mode the paging continuation hint
+// goes to the console's error stream; JSON and YAML keep the response envelope, which carries size and total.
+func render(ctx context.Context, console *terminal.Console, format string, offset int32,
+	response *publicv1.BillingAccountsListResponse) error {
+	if format == output.Table {
+		return renderTable(console, offset, response)
+	}
+	return output.Render(ctx, console, format, "billing accounts", response)
+}
+
+// renderTable writes a compact table of discovered billing accounts. Empty currency and unknown state are rendered
+// explicitly as "-" and "UNKNOWN" so a viewer can tell "not supplied" from a rendering bug. Display-name and
+// correlation-id cells are sanitized on output: correlation values are stored raw for exact matching. When the page
+// does not reach the total, a continuation hint follows the table on the error stream.
+func renderTable(console *terminal.Console, offset int32,
+	response *publicv1.BillingAccountsListResponse) error {
+	items := response.GetItems()
+	total := response.GetTotal()
+	if len(items) == 0 {
+		if total == 0 {
+			return output.Infof(console, "No billing accounts found.\n")
+		}
+		return output.WritePageNotice(console.Stderr(), "billing accounts", offset, 0, total)
+	}
+	writer := tabwriter.NewWriter(console, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(writer, "ID\tPROVIDER\tDISPLAY-NAME\tCURRENCY\tSTATE\tCORRELATION-ID\tSTATUS-OBSERVED"); err != nil {
+		return fmt.Errorf("failed to render billing accounts table header: %w", err)
+	}
+	for _, item := range items {
+		observed := "-"
+		if item.HasStatusObservedAt() {
+			observed = item.GetStatusObservedAt().AsTime().Format(time.RFC3339)
+		}
+		state := strings.TrimPrefix(item.GetState().String(), "BILLING_ACCOUNT_STATE_")
+		if state == "" || state == "UNSPECIFIED" {
+			state = "UNKNOWN"
+		}
+		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			item.GetId(), output.OrDash(item.GetProviderKey()),
+			output.OrDash(billing.SanitizeProviderText(item.GetDisplayName())),
+			output.OrDash(item.GetBaseCurrency()), state,
+			output.OrDash(billing.SanitizeProviderText(item.GetCorrelationId())), observed); err != nil {
+			return fmt.Errorf("failed to render billing accounts table row: %w", err)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("failed to flush billing accounts table: %w", err)
+	}
+	return output.WritePageNotice(console.Stderr(), "billing accounts", offset, len(items), total)
+}
+
+const shortHelp = `List discovered billing accounts`
+
+const longHelp = `
+List the accounts discovered from the configured billing provider. An empty list means no accounts have been
+discovered yet; it does not mean billing is disabled. {{ bt }}CURRENCY{{ bt }} shows {{ bt }}-{{ bt }} when the
+provider does not supply one. {{ bt }}STATE{{ bt }} is {{ bt }}ACTIVE{{ bt }}, {{ bt }}INACTIVE{{ bt }} or
+{{ bt }}UNKNOWN{{ bt }}; a value OSAC could not classify is always shown as {{ bt }}UNKNOWN{{ bt }}, never guessed
+as {{ bt }}ACTIVE{{ bt }}.
+
+Results are paged. {{ bt }}--limit 0{{ bt }} asks for the server default page of 100 accounts, values above 1000
+are clamped to 1000 by the server rather than rejected, and {{ bt }}--offset{{ bt }} skips ahead. In table mode,
+when more accounts remain, a continuation hint such as {{ bt }}Showing 1-100 of 240 billing accounts. Next page:
+--offset 100{{ bt }} is written to standard error so it never mixes with the table on standard output; JSON and
+YAML output include the {{ bt }}size{{ bt }} and {{ bt }}total{{ bt }} fields of the response instead. Paging is
+not a snapshot: rows created or deleted between requests can shift an offset, so do not treat separately fetched
+pages as a consistent export. Only Cloud Provider Admins may run this command.
+`
+
+const example = `  # List discovered billing accounts
+  osac get billingaccount
+
+  # List as JSON
+  osac get billingaccount -o json
+
+  # List one page of up to 50 accounts
+  osac get billingaccount --limit 50
+
+  # List the next page
+  osac get billingaccount --limit 50 --offset 50`
+
+const limitFlagHelp = `
+_N_ - Maximum number of billing accounts to return. {{ bt }}0{{ bt }} (the default) asks for the server default
+page of 100, and values above 1000 are clamped to 1000 by the server, not rejected. In table mode a continuation
+hint for the next page is written to standard error; JSON and YAML output includes the {{ bt }}size{{ bt }} and
+{{ bt }}total{{ bt }} fields instead. Must be >= 0.
+`
+
+const offsetFlagHelp = `
+_N_ - Index of the first billing account to return, {{ bt }}0{{ bt }} (the default) first. Must be >= 0. Use the
+offset from the table-mode standard error continuation hint to fetch the next page.
+`

@@ -125,6 +125,7 @@ var _ = BeforeEach(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	// Start a transaction and add it to the context:
+	ctx = database.TxManagerIntoContext(ctx, tm)
 	suiteTx, err = tm.Begin(ctx)
 	Expect(err).ToNot(HaveOccurred())
 	DeferCleanup(func() {

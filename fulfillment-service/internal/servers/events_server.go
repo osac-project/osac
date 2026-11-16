@@ -76,7 +76,6 @@ type eventsServerSubscription struct {
 	messages      chan *sarama.ConsumerMessage
 	topics        []string
 	allowedTopics map[string]struct{}
-	visibility    *auth.Visibility
 	filterSrc     string
 	filterPrg     cel.Program
 	stream        grpc.ServerStreamingServer[publicv1.EventsWatchResponse]
@@ -270,7 +269,7 @@ func (s *EventsServer) newSubscription(
 		err = grpcstatus.Error(grpccodes.Internal, "failed to determine tenant")
 		return
 	}
-	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
+	_, err = s.tenancyLogic.DetermineVisibility(ctx)
 	if err != nil {
 		cancel()
 		logger.ErrorContext(ctx, "Failed to determine visibility", slog.Any("error", err))
@@ -322,7 +321,6 @@ func (s *EventsServer) newSubscription(
 		messages:      make(chan *sarama.ConsumerMessage),
 		topics:        topics,
 		allowedTopics: allowedTopics,
-		visibility:    visibility,
 		filterSrc:     filterSrc,
 		filterPrg:     filterPrg,
 		stream:        stream,
@@ -491,7 +489,18 @@ func (s *eventsServerSubscription) processMessage(message *sarama.ConsumerMessag
 		return nil
 	}
 	metadata := s.server.extractMetadata(s.ctx, private)
-	if metadata == nil || !s.visibility.IsProjectVisible(metadata.GetTenant(), metadata.GetProject()) {
+	if metadata == nil {
+		return nil
+	}
+	// Never authorize delivery using the visibility frozen when Watch opened.
+	// In production this reads tenant liveness from PostgreSQL in a fresh short
+	// transaction, including for events already queued before tenant deletion.
+	visibility, err := s.server.tenancyLogic.DetermineVisibility(s.ctx)
+	if err != nil {
+		s.logger.ErrorContext(s.ctx, "Failed to recheck event visibility", slog.Any("error", err))
+		return grpcstatus.Error(grpccodes.Internal, "failed to determine visibility")
+	}
+	if !visibility.IsProjectVisible(metadata.GetTenant(), metadata.GetProject()) {
 		return nil
 	}
 	public := &publicv1.Event{}

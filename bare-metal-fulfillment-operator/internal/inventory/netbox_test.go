@@ -56,8 +56,6 @@ func credentialResolutionFailure(err error) error {
 	return fmt.Errorf("%w: %w", credentials.ErrResolutionFailed, err)
 }
 
-func ptrTo[T any](v T) *T { return &v }
-
 type noOpCredentialsWriter struct{}
 
 func (noOpCredentialsWriter) Create(context.Context, credentials.Reference, credentials.BMC) error {
@@ -99,7 +97,7 @@ var _ = Describe("NetBox inventory client", func() {
 				TokenFile:                        "/var/run/secrets/netbox/token",
 				CAFile:                           "/var/run/secrets/netbox/ca.crt",
 				AllowInsecureHTTP:                true,
-				EnableBMCCertificateVerification: ptrTo(false),
+				EnableBMCCertificateVerification: new(false),
 			}))
 		})
 
@@ -117,12 +115,11 @@ var _ = Describe("NetBox inventory client", func() {
 		})
 
 		It("reports the stored default when the setting is present", func() {
-			enabled := false
+			disabled := &NetBoxClientConfig{EnableBMCCertificateVerification: new(false)}
+			Expect(disabled.BMCVerificationEnabled()).To(BeFalse())
 
-			Expect((&NetBoxClientConfig{EnableBMCCertificateVerification: &enabled}).BMCVerificationEnabled()).To(BeFalse())
-
-			enabled = true
-			Expect((&NetBoxClientConfig{EnableBMCCertificateVerification: &enabled}).BMCVerificationEnabled()).To(BeTrue())
+			enabled := &NetBoxClientConfig{EnableBMCCertificateVerification: new(true)}
+			Expect(enabled.BMCVerificationEnabled()).To(BeTrue())
 		})
 
 		It("rejects values that cannot be marshaled", func() {

@@ -299,6 +299,33 @@ func (s *Store) GetTenantProgress(ctx context.Context, tenant string) (Progress,
 	return GetProgress(ctx, s.pool, tenant)
 }
 
+// collapseFacts keeps the last fact for each history key. One INSERT cannot update the same
+// conflict row twice, and a repeated key in one event is the later value of that field at that
+// time. since is compared as an instant, so equal timestamps from different locations collapse.
+func collapseFacts(facts []Fact) []Fact {
+	if len(facts) < 2 {
+		return facts
+	}
+	type key struct {
+		resourceType string
+		resourceID   string
+		field        string
+		since        int64
+	}
+	index := make(map[key]int, len(facts))
+	collapsed := make([]Fact, 0, len(facts))
+	for _, fact := range facts {
+		k := key{fact.ResourceType, fact.ResourceID, fact.Field, fact.Since.UTC().UnixNano()}
+		if at, ok := index[k]; ok {
+			collapsed[at] = fact
+			continue
+		}
+		index[k] = len(collapsed)
+		collapsed = append(collapsed, fact)
+	}
+	return collapsed
+}
+
 // InsertFacts writes facts that the tenant's event carries, and moves the tenant's event offset
 // to the given next offset, in the same statement. The offset only moves forward. topic is the
 // topic the writer read. A stored topic that is already set and differs rejects the write, so
@@ -306,14 +333,15 @@ func (s *Store) GetTenantProgress(ctx context.Context, tenant string) (Progress,
 // row has not recorded a topic yet. Each fact records the progress row's topic generation, so a
 // write after a prefix change sorts ahead of the previous topic. Facts are consumed in log order,
 // so a fact that exists already is updated to the arriving value: two changes of one field within
-// the same second collapse to the value the log carries last, and replaying an event writes the
-// value it already wrote.
+// the same second collapse to the value the log carries last, including when both are in this
+// call, and replaying an event writes the value it already wrote.
 func InsertFacts(
 	ctx context.Context, q Querier, tenant string, facts []Fact, nextOffset int64, topic string,
 ) error {
 	if len(facts) == 0 {
 		return AdvanceEventOffset(ctx, q, tenant, nextOffset, topic)
 	}
+	facts = collapseFacts(facts)
 	resourceTypes := make([]string, len(facts))
 	resourceIDs := make([]string, len(facts))
 	fields := make([]string, len(facts))

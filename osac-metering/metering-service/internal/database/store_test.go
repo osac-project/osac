@@ -139,6 +139,64 @@ func TestInsertFactsLastValueWithinOneSecondWins(t *testing.T) {
 	}
 }
 
+// TestInsertFactsRepeatedKeyInOneCallKeepsLastValue checks that one event listing the same
+// history key twice still writes. The single insert keeps the last value, and the offset moves.
+func TestInsertFactsRepeatedKeyInOneCallKeepsLastValue(t *testing.T) {
+	ctx := context.Background()
+	_, pool := startDatabase(t)
+	store := database.NewStore(pool)
+	if err := store.EnsureProgress(ctx, "acme"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	facts := []database.Fact{
+		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "spec.template",
+			Since: base, Value: "first"},
+		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "status.state",
+			Since: base, Value: "PROGRESSING"},
+		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "spec.template",
+			Since: base.In(time.FixedZone("UTC+2", 2*60*60)), Value: "kept"},
+	}
+	tx, err := store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := database.InsertFacts(ctx, tx, "acme", facts, 4, ""); err != nil {
+		t.Fatalf("insert facts: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	got, err := database.ResourceFacts(ctx, pool, "acme", "ComputeInstance", "vm-7")
+	if err != nil {
+		t.Fatalf("read facts: %v", err)
+	}
+	want := []database.Fact{
+		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "spec.template",
+			Since: base, Value: "kept"},
+		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "status.state",
+			Since: base, Value: "PROGRESSING"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d facts, got %+v", len(want), got)
+	}
+	for i := range want {
+		if got[i].Field != want[i].Field || got[i].Value != want[i].Value ||
+			!got[i].Since.Equal(want[i].Since) {
+			t.Fatalf("fact %d: expected %+v, got %+v", i, want[i], got[i])
+		}
+	}
+	progress, err := database.GetProgress(ctx, pool, "acme")
+	if err != nil {
+		t.Fatalf("read progress: %v", err)
+	}
+	if progress.EventOffset != 4 {
+		t.Fatalf("event offset = %d, want 4", progress.EventOffset)
+	}
+}
+
 // TestLatestFactValuePrefersLaterEventOffset pins current billing identity to Kafka
 // order. An older event published later has a smaller since and a larger offset; the
 // query must return that later offset, not the later timestamp.

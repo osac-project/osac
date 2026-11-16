@@ -55,6 +55,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/controller"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmh"
 	netboxcredentials "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/netbox"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/directclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/helpers"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
@@ -689,14 +690,22 @@ func createMetal3Managers(
 		return nil, nil, fmt.Errorf("kubernetes manager is required to create Metal3 dependencies")
 	}
 
-	// Keep BMC credential Secret access off the cluster-wide informer.
-	uncachedClient, err := client.New(
-		mgr.GetConfig(),
-		client.Options{Scheme: mgr.GetScheme(), Mapper: mgr.GetRESTMapper()},
-	)
+	// Keep BMC credential Secret access off the cluster-wide informer. The
+	// direct client avoids Secret list/watch permissions and limits access to
+	// the operations performed by the BMH manager and the credentials writer.
+	direct, err := directclient.New(mgr.GetConfig(), mgr.GetScheme(), mgr.GetRESTMapper())
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create uncached Kubernetes client: %w", err)
+		return nil, nil, fmt.Errorf("failed to create direct Kubernetes client: %w", err)
 	}
 
-	return baremetalhost.NewManager(mgr.GetClient(), uncachedClient, ns), bmh.NewSecretWriter(uncachedClient, ns), nil
+	bmhManager, err := baremetalhost.NewManager(mgr.GetClient(), direct, ns)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create BMH manager: %w", err)
+	}
+	secretWriter, err := bmh.NewSecretWriter(direct, ns)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create BMC Secret writer: %w", err)
+	}
+
+	return bmhManager, secretWriter, nil
 }

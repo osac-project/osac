@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	osacv1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
@@ -59,7 +60,7 @@ type startupTestManager struct {
 }
 
 func (m *startupTestManager) GetClient() client.Client {
-	return nil
+	return fake.NewClientBuilder().WithScheme(m.scheme).Build()
 }
 
 func (m *startupTestManager) GetConfig() *rest.Config {

@@ -375,6 +375,75 @@ def test_bgp_wait_requires_bfd_and_redacts_identifiers() -> None:
                 assert "Established Down" in output
 
 
+def test_nncp_failure_redacts_node_name() -> None:
+    """An NNCP readiness failure names the entry, not the node."""
+    node_hostname = "worker-0.internal.example.com"
+    with tempfile.TemporaryDirectory(prefix="evpn-nncp-wait-") as temp:
+        directory = pathlib.Path(temp)
+        config_dir = directory / "config"
+        bin_dir = directory / "bin"
+        config_dir.mkdir()
+        bin_dir.mkdir()
+
+        (config_dir / "settings.env").write_text(
+            "CONFIGURE_CLUSTER_NETWORK=false\n"
+            "WAIT_FOR_ESTABLISHED=false\n"
+            "BGP_TIMEOUT_SECONDS=0\n",
+            encoding="utf-8",
+        )
+        (config_dir / "nodes.txt").write_text(
+            node_hostname + "\n", encoding="utf-8"
+        )
+        (config_dir / "peers.txt").write_text("", encoding="utf-8")
+        for filename in (
+            "cluster-network-patch.json",
+            "nmstate.yaml",
+            "nncp.yaml",
+            "vtep.yaml",
+            "frr.yaml",
+            "routeadvertisements.yaml",
+        ):
+            (config_dir / filename).write_text("", encoding="utf-8")
+
+        mock_oc = bin_dir / "oc"
+        mock_oc.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "case \"${1:-} ${2:-}\" in\n"
+            "  'get network.operator.openshift.io') echo OVNKubernetes ;;\n"
+            "  'get pods') echo True ;;\n"
+            "  'get csv') echo Succeeded ;;\n"
+            "  'get vtep.k8s.ovn.org')\n"
+            "    if [[ \"${5:-}\" == *reason* ]]; then echo Allocated; "
+            "else echo True; fi\n"
+            "    ;;\n"
+            "  'wait nncp/osac-evpn-'*)\n"
+            f"    echo 'timed out waiting for {node_hostname}' >&2; exit 1 ;;\n"
+            "  'get nncp/osac-evpn-'*) echo 'Available=False/Error' ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        mock_oc.chmod(0o755)
+
+        env = os.environ.copy()
+        env["CONFIG_DIR"] = str(config_dir)
+        env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+        result = subprocess.run(
+            ["bash", str(HOOK_SCRIPT)],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+            timeout=30,
+        )
+
+        output = result.stdout + result.stderr
+        assert result.returncode != 0, "the hook must fail when NNCP is not ready"
+        assert "nodes.txt entry 1" in result.stderr
+        assert node_hostname not in output, "the hook logged the node hostname"
+        assert "Available=False" in output
+
+
 def test_single_node() -> None:
     """A single numbered peer renders the full EVPN setup."""
     values = base_values(
@@ -1169,6 +1238,7 @@ def main() -> None:
     test_job_deadline_covers_bgp_wait()
     test_prune_listing_failure_is_fatal()
     test_bgp_wait_requires_bfd_and_redacts_identifiers()
+    test_nncp_failure_redacts_node_name()
     test_single_node()
     test_multiple_nodes()
     test_active_active_bgp()

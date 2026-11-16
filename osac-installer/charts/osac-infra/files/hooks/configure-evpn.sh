@@ -212,7 +212,7 @@ while IFS= read -r node_name || [[ -n "${node_name:-}" ]]; do
         echo "nodes.txt entry ${node_index}: NNCP readiness failed; conditions:" >&2
         oc get "nncp/osac-evpn-${node_name}" \
             -o jsonpath='{range .status.conditions[*]}{.type}={.status}/{.reason}{"\n"}{end}' \
-            || true
+            2>/dev/null || true
         exit 1
     fi
 done < "${CONFIG_DIR}/nodes.txt"

@@ -39,6 +39,10 @@ class TestSanitizeText:
             f"token {JWT} leaked",
             "password=hunter2 next",
             "client_secret=abc123",
+            "DB_PASSWORD=hunter2",
+            "AWS_SECRET_ACCESS_KEY=abc123",
+            "GITHUB_TOKEN=s3cr3t-value",
+            "MY_API_KEY=abc123",
             "run --token s3cr3t-value now",
             '{"password": "hunter2"}',
             '{"token": "abc"}',
@@ -55,6 +59,13 @@ class TestSanitizeText:
         assert sanitize_text("Code: FailedPrecondition\nMessage: pool is full") == (
             "Code: FailedPrecondition\nMessage: pool is full"
         )
+
+    def test_an_empty_value_does_not_consume_the_next_line(self) -> None:
+        text = "token:\nname: demo\npassword: "
+        assert sanitize_text(text) == text
+
+    def test_a_credential_suffix_inside_a_word_is_not_redacted(self) -> None:
+        assert sanitize_text("mytokenizer=abc") == "mytokenizer=abc"
 
 
 class TestSanitizeArgs:

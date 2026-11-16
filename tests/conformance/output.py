@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import secrets
 import string
@@ -22,8 +23,14 @@ def new_run_id() -> str:
     return "".join(secrets.choice(_RUN_ID_ALPHABET) for _ in range(8))
 
 
-def _safe_component(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "test"
+def safe_component(value: str) -> str:
+    """A readable, unique path component for a test ID.
+
+    The digest keeps parametrized IDs such as ``test_case[a/b]`` and
+    ``test_case[a:b]``, which sanitize to the same text, in separate directories.
+    """
+    readable = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "test"
+    return f"{readable}-{hashlib.sha256(value.encode('utf-8')).hexdigest()[:12]}"
 
 
 class OutputSink:
@@ -34,15 +41,26 @@ class OutputSink:
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = self.results_dir / "conformance.log"
 
-    def line(self, text: str) -> None:
+    def _render(self, text: str) -> str:
         stamp = datetime.now(UTC).isoformat(timespec="seconds")
-        rendered = f"{stamp} {self.redactor.text(text)}"
+        return f"{stamp} {self.redactor.text(text)}"
+
+    def line(self, text: str) -> None:
+        rendered = self._render(text)
         print(rendered, file=self.stream)
         with self.log_path.open("a", encoding="utf-8") as stream:
             stream.write(rendered + "\n")
 
+    def echo(self, text: str) -> None:
+        """Print redacted text without creating the run log.
+
+        ``list`` must not leave a ``conformance.log`` behind, because the same
+        results directory has to accept the later ``run --plan``.
+        """
+        print(self._render(text), file=self.stream)
+
     def evidence(self, test: TestIdentity, relative: Path, content: str) -> Path:
-        base = (self.results_dir / "tests" / _safe_component(test.id)).resolve()
+        base = (self.results_dir / "tests" / safe_component(test.id)).resolve()
         candidate = (base / relative).resolve()
         if not candidate.is_relative_to(base):
             raise ValueError(f"evidence path escapes the test directory: {relative}")

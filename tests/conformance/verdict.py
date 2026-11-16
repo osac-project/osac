@@ -52,7 +52,7 @@ def evaluate(
 
     blocking = [outcome for outcome in tests if outcome.identity.classification is Classification.BLOCKING]
     failed_blocking = [outcome.identity.id for outcome in blocking if outcome.result is not Result.PASS]
-    blocking_pass = not failed_blocking
+    blocking_pass = bool(blocking) and not failed_blocking
     if not blocking:
         blocking_message = "no blocking tests in the plan"
     elif failed_blocking:
@@ -119,6 +119,6 @@ def exit_code(report: Report, *, focused: bool = False) -> int:
         return 0
     if focused and not report.leftovers:
         selected_blocking = [test for test in report.tests if test.identity.classification is Classification.BLOCKING]
-        if all(test.result is Result.PASS for test in selected_blocking):
+        if selected_blocking and all(test.result is Result.PASS for test in selected_blocking):
             return 0
     return 1

@@ -10,7 +10,8 @@ import yaml
 from tests.conformance.catalog import Catalog, ProfileDefinition
 from tests.conformance.cli import Runtime, main
 from tests.conformance.config import load_config
-from tests.conformance.model import Selector
+from tests.conformance.interrupt import Interrupted, InterruptGate
+from tests.conformance.model import Plan, Result, RunContext, Selector, TestIdentity, TestOutcome
 from tests.conformance.output import OutputSink
 from tests.conformance.redact import Redactor
 from tests.conformance.testtree import PytestTestTree
@@ -185,3 +186,64 @@ def test_unknown_profile_is_a_config_error(tmp_path: Path, capsys: pytest.Captur
         == 2
     )
     assert "frobnicate" in capsys.readouterr().err
+
+
+def test_list_leaves_no_artifact_that_blocks_a_plan_run(tmp_path: Path) -> None:
+    tree_dir = _tree(tmp_path / "tree")
+    token = tmp_path / "token"
+    token.write_text("admin")
+    ca = tmp_path / "ca.pem"
+    ca.write_text("ca")
+    hub = tmp_path / "hub"
+    hub.write_text("hub")
+    config = _config(tmp_path / "conformance.yaml", token, ca, hub)
+    catalog = tmp_path / "catalog.yaml"
+    catalog.write_text(
+        yaml.safe_dump(
+            {
+                "selectors": [
+                    {"id": "generic", "type": "marker", "markers": ["conformance_generic"]},
+                    {"id": "vmaas", "type": "marker", "markers": ["conformance_vmaas"]},
+                ],
+                "profiles": [{"id": "generic", "selectors": ["generic"]}, {"id": "vm", "selectors": ["vmaas"]}],
+            },
+            sort_keys=False,
+        )
+    )
+    results = tmp_path / "results"
+    args = ["--config", str(config), "--results", str(results), "--catalog", str(catalog), "--tree", str(tree_dir)]
+
+    assert main(["list", *args]) == 0
+    assert not (results / "conformance.log").exists()
+
+    assert main(["run", "--plan", str(results / "conformance-plan.yaml"), *args]) == 0
+    assert (results / "conformance-report.yaml").exists()
+
+
+class _InterruptingTree:
+    """A tree whose only run stops after the first test finished."""
+
+    def __init__(self, tests: tuple[TestIdentity, ...]) -> None:
+        self.tests = tests
+
+    def collect(self) -> tuple[TestIdentity, ...]:
+        return self.tests
+
+    def run(
+        self, plan: Plan, context: RunContext, *, keep: bool, interrupt: InterruptGate | None = None
+    ) -> tuple[TestOutcome, ...]:
+        raise Interrupted((TestOutcome(plan.tests[0], Result.PASS, 1.0, "", context.results_dir),))
+
+
+def test_an_interrupt_reports_the_tests_that_already_finished(tmp_path: Path) -> None:
+    tree_dir = _tree(tmp_path / "tree")
+    results = tmp_path / "results"
+    results.mkdir()
+    runtime = _runtime(tmp_path, results, tree_dir)
+    runtime.tree = _InterruptingTree(runtime.tree.collect())
+
+    assert main(["run"], runtime=runtime) == 130
+
+    report = yaml.safe_load((results / "conformance-report.yaml").read_text())
+    assert [test["result"] for test in report["tests"]] == ["pass", "skip"]
+    assert report["result"] == "in progress"

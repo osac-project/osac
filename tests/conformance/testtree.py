@@ -4,34 +4,42 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
 from tests.conformance.errors import ConfigError
-from tests.conformance.interrupt import Interrupted
+from tests.conformance.interrupt import Interrupted, InterruptGate
 from tests.conformance.model import Classification, Plan, Result, RunContext, TestIdentity, TestOutcome
+from tests.conformance.output import safe_component
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestTree(Protocol):
     def collect(self) -> tuple[TestIdentity, ...]: ...
-    def run(self, plan: Plan, context: RunContext, *, keep: bool) -> tuple[TestOutcome, ...]: ...
 
-
-def _safe_component(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "test"
+    def run(
+        self, plan: Plan, context: RunContext, *, keep: bool, interrupt: InterruptGate | None = None
+    ) -> tuple[TestOutcome, ...]: ...
 
 
 class PytestTestTree:
-    def __init__(self, *, root: Path, python: str | None = None, cwd: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        root: Path,
+        python: str | None = None,
+        cwd: Path | None = None,
+        popen: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
+    ) -> None:
         self.root = root
         self.python = python or sys.executable
         self.cwd = cwd or _REPO_ROOT
+        self.popen = popen
 
     def _env(self, name: str, path: Path) -> dict[str, str]:
         env = os.environ.copy()
@@ -124,13 +132,15 @@ class PytestTestTree:
             classification=classification,
         )
 
-    def run(self, plan: Plan, context: RunContext, *, keep: bool) -> tuple[TestOutcome, ...]:
+    def run(
+        self, plan: Plan, context: RunContext, *, keep: bool, interrupt: InterruptGate | None = None
+    ) -> tuple[TestOutcome, ...]:
         import tempfile
 
         nodeids = [test.nodeid for test in plan.tests]
         with tempfile.TemporaryDirectory() as tmp:
             results_path = Path(tmp) / "pytest-results.jsonl"
-            proc = subprocess.run(
+            process = self.popen(
                 [
                     self.python,
                     "-m",
@@ -148,26 +158,44 @@ class PytestTestTree:
                 cwd=self.cwd,
                 env=self._run_env(context, results_path),
                 text=True,
-                capture_output=True,
-                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
             )
-            if proc.returncode == 2:
-                raise Interrupted
-            if proc.returncode not in (0, 1):
-                detail = proc.stderr.strip() or proc.stdout.strip() or "no output"
-                raise ConfigError([f"pytest exited {proc.returncode}: {detail}"])
+            if interrupt is not None:
+                interrupt.child = process
+            try:
+                stdout, stderr = process.communicate()
+            finally:
+                if interrupt is not None:
+                    interrupt.child = None
+            if process.returncode not in (0, 1, 2):
+                detail = (stderr or "").strip() or (stdout or "").strip() or "no output"
+                raise ConfigError([f"pytest exited {process.returncode}: {detail}"])
             if context.output is not None:
-                for line in (proc.stdout + proc.stderr).splitlines():
+                for line in (stdout + stderr).splitlines():
                     context.output.line(line)
-            entries: dict[str, list[dict[str, object]]] = {}
-            if results_path.exists():
-                for line in results_path.read_text().splitlines():
+            outcomes = self._recorded_outcomes(plan, context, results_path)
+            if process.returncode == 2 or (interrupt is not None and interrupt.first):
+                raise Interrupted(outcomes)
+            return outcomes
+
+    def _recorded_outcomes(self, plan: Plan, context: RunContext, results_path: Path) -> tuple[TestOutcome, ...]:
+        """Read what pytest managed to record, including after an interrupt."""
+        entries: dict[str, list[dict[str, object]]] = {}
+        if results_path.exists():
+            for line in results_path.read_text().splitlines():
+                try:
                     entry = json.loads(line)
-                    entries.setdefault(self._canonical_id(str(entry["nodeid"])), []).append(entry)
+                except json.JSONDecodeError:
+                    continue
+                nodeid = entry.get("nodeid")
+                if isinstance(nodeid, str):
+                    entries.setdefault(self._canonical_id(nodeid), []).append(entry)
         outcomes: list[TestOutcome] = []
         for test in plan.tests:
             group = entries.get(test.id, [])
-            evidence = context.results_dir / "tests" / _safe_component(test.id)
+            evidence = context.results_dir / "tests" / safe_component(test.id)
             evidence.mkdir(parents=True, exist_ok=True)
             if not group:
                 outcome = Result.SKIP

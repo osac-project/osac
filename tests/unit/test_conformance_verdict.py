@@ -77,12 +77,21 @@ def test_a_blocking_skip_is_not_a_pass() -> None:
     assert report.result is Verdict.IN_PROGRESS
 
 
-def test_an_informing_failure_does_not_fail_a_check() -> None:
+def test_a_plan_without_blocking_tests_fails_the_blocking_check() -> None:
     report = _evaluate([_outcome(_test("A", Classification.INFORMING), Result.FAIL)])
 
-    assert report.checks[0].result is CheckResult.PASS
+    assert report.checks[0].result is CheckResult.FAIL
     assert report.checks[0].message == "no blocking tests in the plan"
-    assert report.result is Verdict.CONFORMANT
+    assert report.result is Verdict.IN_PROGRESS
+    assert exit_code(report) == 1
+
+
+def test_informing_tests_alone_are_not_a_conformance_verdict() -> None:
+    report = _evaluate([_outcome(_test("A", Classification.INFORMING), Result.PASS)])
+
+    assert report.checks[0].result is CheckResult.FAIL
+    assert report.result is Verdict.IN_PROGRESS
+    assert exit_code(report, focused=True) == 1
 
 
 def test_a_leftover_fails_no_leftovers() -> None:

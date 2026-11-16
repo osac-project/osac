@@ -110,7 +110,10 @@ def _redactor_from_document(document: Mapping[str, object]) -> Redactor:
         clusters = hub.get("clusters", [])
         if isinstance(clusters, list):
             for cluster in clusters:
-                server = cluster.get("cluster", {}).get("server") if isinstance(cluster, Mapping) else None
+                settings = cluster.get("cluster") if isinstance(cluster, Mapping) else None
+                if not isinstance(settings, Mapping):
+                    continue
+                server = settings.get("server")
                 if isinstance(server, str) and urlparse(server).hostname:
                     redactor.add_host(urlparse(server).hostname or "")
     api_url = target.get("apiURL")
@@ -206,7 +209,7 @@ def _run_list(runtime: Runtime) -> int:
     tests: tuple[TestIdentity, ...] = assign_profiles(raw, runtime.catalog, selected_profiles)
     plan = compute_plan(tests, selectors, selected_profiles)
     path = write_plan(plan, runtime.results)
-    runtime.output.line(path.read_text().rstrip())
+    runtime.output.echo(path.read_text().rstrip())
     return 0
 
 
@@ -235,13 +238,15 @@ def _run_plan(runtime: Runtime, *, plan_path: Path | None, keep: bool) -> int:
     interrupted = False
     outcomes: tuple[TestOutcome, ...] = ()
     try:
-        outcomes = runtime.tree.run(plan, context, keep=keep)
-    except Interrupted:
+        outcomes = runtime.tree.run(plan, context, keep=keep, interrupt=gate)
+    except Interrupted as exc:
+        outcomes = exc.outcomes
         interrupted = True
     except KeyboardInterrupt:
         return 130
     finally:
         gate.restore()
+    interrupted = interrupted or gate.first
 
     profiles = _derive_profiles(plan, outcomes, runtime.catalog)
     report = evaluate(

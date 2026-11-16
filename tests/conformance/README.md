@@ -48,3 +48,14 @@ The image builds from the repository root:
 ```sh
 podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
 ```
+
+The image runs as UID 1001. The suite reads the runner's podman socket, so map
+the invoking user onto that UID and mount a results directory it can write:
+
+```sh
+mkdir -p results
+podman run --rm --userns=keep-id:uid=1001,gid=1001 \
+  -v "$XDG_RUNTIME_DIR/podman/podman.sock:/run/podman/podman.sock" \
+  -v "$PWD/config:/config:ro" -v "$PWD/results:/results" \
+  osac-conformance:dev run
+```

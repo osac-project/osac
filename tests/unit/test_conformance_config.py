@@ -157,3 +157,50 @@ def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
     assert _REDACTION_MARKER_B not in text
     assert "api.hub.example.test" not in text
     assert "api.target.example.test" not in text
+
+
+def test_configured_paths_are_canonicalized(tmp_path: Path) -> None:
+    data = _valid_data()
+    data["target"]["caFile"] = "/config/./api-ca.pem"  # type: ignore[index]
+
+    cfg = load_config(_write(tmp_path / "conformance.yaml", data))
+
+    assert cfg.target_ca_file == Path("/config/api-ca.pem")
+
+
+@pytest.mark.parametrize("key", ["kubeconfig", "tokenFile", "caFile"])
+def test_parent_directory_traversal_is_a_config_error(tmp_path: Path, key: str) -> None:
+    data = _valid_data()
+    data["target"][key] = "/config/../outside/credential"  # type: ignore[index]
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(_write(tmp_path / "conformance.yaml", data))
+
+    assert f"target.{key}" in "\n".join(exc.value.checks)
+
+
+def test_aap_token_file_traversal_is_a_config_error(tmp_path: Path) -> None:
+    data = _valid_data()
+    data["target"]["aap"] = {"url": "https://aap.example.test", "tokenFile": "/config/../aap-token"}  # type: ignore[index]
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(_write(tmp_path / "conformance.yaml", data))
+
+    assert "target.aap.tokenFile" in "\n".join(exc.value.checks)
+
+
+def test_duplicate_mapping_keys_are_a_config_error(tmp_path: Path) -> None:
+    path = tmp_path / "conformance.yaml"
+    path.write_text(
+        'osacRelease: "1.4.0"\n'
+        "profiles: [vm]\n"
+        "profiles: [netris]\n"
+        "target:\n"
+        "  kubeconfig: /config/hub\n"
+        "  apiURL: https://fulfillment.example.test\n"
+        "  tokenFile: /config/token\n"
+        "  caFile: /config/ca.pem\n"
+    )
+
+    with pytest.raises(ConfigError, match="duplicate key"):
+        load_config(path)

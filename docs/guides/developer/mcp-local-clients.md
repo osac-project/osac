@@ -2,12 +2,14 @@
 
 This guide covers the opt-in MCP endpoint in a local OSAC development
 deployment. It offers `check_connection`, `list_resources`, `get_resource`,
-`create_compute_instance`, `update_compute_instance`, and
-`delete_compute_instance`, plus `create_project` and `update_project`. Call
-the read-only `check_connection` diagnostic before provisioning to verify the
-signed-in identity and permission summary. The write tools are experimental;
-use a development deployment and an account authorized for the intended
-tenant. The endpoint is disabled by default.
+`create_network_resource`, `delete_network_resource`,
+`create_compute_instance`, `update_compute_instance`,
+`delete_compute_instance`, `create_project`, and `update_project`, plus the
+catalog-offering Create, Update, Publish, and Delete tools. Call the read-only
+`check_connection` diagnostic before provisioning to verify the signed-in
+identity and permission summary. The write tools are experimental; use a
+development deployment and an account authorized for the intended tenant. The
+endpoint is disabled by default.
 
 The examples use development settings and a shared Keycloak client fixture.
 For another deployment, obtain its connection values and public OAuth client
@@ -29,7 +31,7 @@ make -C osac-installer install \
 This profile also installs the local VM stack, seeds a sample catalog, and
 onboards `tenant1`; sign in as `tenant1_user` or `tenant1_admin` to see its
 resources. The smaller `PROFILE=dev` profile installs the control plane but
-does not seed a tenant or any of the eleven MCP resource types, so empty lists
+does not seed a tenant or any of the MCP resource types, so empty lists
 are expected on a fresh installation.
 
 The Kind infrastructure step registers a dedicated confidential MCP resource
@@ -254,7 +256,7 @@ Set `default_tools_approval_mode = "writes"` in the existing
 `[mcp_servers.osac]` table if you used `codex mcp add`; it is included in the
 Kind example above. This makes Codex ask before invoking tools that are not
 marked read-only.
-Restart Codex, use `/mcp` to confirm the connection and eight available tools,
+Restart Codex, use `/mcp` to confirm the connection and 14 available tools,
 call `check_connection` before provisioning, and try a read request first.
 For a VM create, update, or delete, inspect the target and check that Codex
 presents a separate approval prompt for the write call. A conversation request
@@ -291,7 +293,7 @@ MCP_STORAGE_DIR="$INSPECTOR_DIR/storage" \
 In the Inspector web UI, connect to `osac`, leave **OAuth Client Metadata
 Document** empty, and complete Keycloak login. Its browser callback is
 `http://localhost:6274/oauth/callback`, which the development client allows.
-The Tools tab should list the eight available tools after login.
+The Tools tab should list the 14 available tools after login.
 The browser must trust the Kind CA separately; `NODE_EXTRA_CA_CERTS` applies
 to the Node process. `PROFILE=dev-full` uses `keycloak.osac.localhost` as its
 issuer, while `PROFILE=dev` uses `keycloak.keycloak.svc.cluster.local`.

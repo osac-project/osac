@@ -27,17 +27,21 @@ import (
 type ResourceType string
 
 const (
-	ResourceTypeComputeInstanceCatalogItem ResourceType = "compute_instance_catalog_item"
-	ResourceTypeComputeInstanceTemplate    ResourceType = "compute_instance_template"
-	ResourceTypeInstanceType               ResourceType = "instance_type"
-	ResourceTypeDiskImage                  ResourceType = "disk_image"
-	ResourceTypeStorageTier                ResourceType = "storage_tier"
-	ResourceTypeProject                    ResourceType = "project"
-	ResourceTypeVirtualNetwork             ResourceType = "virtual_network"
-	ResourceTypeSubnet                     ResourceType = "subnet"
-	ResourceTypeSecurityGroup              ResourceType = "security_group"
-	ResourceTypeComputeInstance            ResourceType = "compute_instance"
-	ResourceTypeSecretReference            ResourceType = "secret_reference"
+	ResourceTypeComputeInstanceCatalogItem   ResourceType = "compute_instance_catalog_item"
+	ResourceTypeClusterCatalogItem           ResourceType = "cluster_catalog_item"
+	ResourceTypeBareMetalInstanceCatalogItem ResourceType = "bare_metal_instance_catalog_item"
+	ResourceTypeComputeInstanceTemplate      ResourceType = "compute_instance_template"
+	ResourceTypeClusterTemplate              ResourceType = "cluster_template"
+	ResourceTypeBareMetalInstanceTemplate    ResourceType = "bare_metal_instance_template"
+	ResourceTypeInstanceType                 ResourceType = "instance_type"
+	ResourceTypeDiskImage                    ResourceType = "disk_image"
+	ResourceTypeStorageTier                  ResourceType = "storage_tier"
+	ResourceTypeProject                      ResourceType = "project"
+	ResourceTypeVirtualNetwork               ResourceType = "virtual_network"
+	ResourceTypeSubnet                       ResourceType = "subnet"
+	ResourceTypeSecurityGroup                ResourceType = "security_group"
+	ResourceTypeComputeInstance              ResourceType = "compute_instance"
+	ResourceTypeSecretReference              ResourceType = "secret_reference"
 )
 
 type ListResourcesInput struct {

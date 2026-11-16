@@ -686,10 +686,14 @@ Agree on the BGP mode as well. In the Helm example,
 Alternatively, `evpn.bgp.activeBackup: true` applies VTEP-route and L2VPN EVPN
 route preferences using exactly one uplink with `role: active` and at least one
 with `role: backup` per node. Both settings default to `false` and cannot be
-enabled together. They configure the OpenShift FRR side; the fabric
-administrator configures the corresponding leaf behavior. The
+enabled together. Unnumbered uplinks are supported in either mode. Set
+`evpn.bgp.bfdProfile` to add single-hop BFD to every peer; the install then
+waits for BFD to come up as well as for BGP to establish. These settings
+configure the OpenShift FRR side; the fabric administrator configures the
+corresponding leaf behavior and BFD mode. The
 [Helm Deployment Guide](helm-deployment-guide.md#evpn-host-networking-vmaas)
-contains the values and active-backup example.
+contains the values plus active-active, active-backup, unnumbered, and BFD
+examples.
 
 Platform administrators own the host-network values, BGP readiness checks,
 node additions and removals, and cleanup. Follow the administrator procedure

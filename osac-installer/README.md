@@ -471,6 +471,55 @@ evpn:
           role: backup
 ```
 
+Active-backup policy covers both address families: the merged IPv4 unicast
+`<peer>-in` entry prefers the active neighbor for remote VTEP `/32` routes, and
+`EVPN-ACTIVE-IN`/`EVPN-BACKUP-IN` do the same for L2VPN EVPN routes. The backup
+prepends the node ASN on both outbound paths.
+
+Unnumbered peers accept the same policy. The ACLs are `EVPN-REMOTE-VTEPS`
+(chart-owned, built from `acceptPrefixes`) and the frr-k8s generated
+`<interface>-inpl-ipv4` and `<interface>-allowed-ipv4` lists:
+
+```yaml
+evpn:
+  enabled: true
+  bgp:
+    asn: 4209999999
+    acceptPrefixes: [10.200.0.0/16]
+    activeBackup: true
+    bfdProfile: evpn-underlay
+  nodes:
+    - name: worker-0
+      vtepIP: 10.200.255.1
+      uplinks:
+        - interface: ens5f0
+          role: active
+          unnumbered: true
+          peerASN: 4200300002
+        - interface: ens5f1
+          role: backup
+          unnumbered: true
+          peerASN: 4200300003
+```
+
+BFD is opt-in. Set `evpn.bgp.bfdProfile` (and optionally the timer values) to
+attach a profile to every uplink peer:
+
+```yaml
+evpn:
+  bgp:
+    bfdProfile: evpn-underlay
+    bfdReceiveInterval: 300
+    bfdTransmitInterval: 300
+    bfdDetectMultiplier: 3
+```
+
+The chart does not set `ebgp-multihop` on numbered underlay peers, so FRR uses
+single-hop BFD (UDP 3784) on those directly connected links and on unnumbered
+IPv6 link-local links. Configure the fabric side for single-hop BFD as well.
+When a BFD profile is set, the configure-EVPN hook waits for `bfdStatus: Up` in
+addition to `bgpStatus: Established`.
+
 The Netris fabric side stays external: the fabric admin configures the links,
 VTEP range, and switch-side node ASN. VMs use the cluster DNS that
 OVN-Kubernetes DHCP gives on the primary network, and OSAC configures no

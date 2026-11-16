@@ -9,6 +9,7 @@ import pytest
 from tests.conformance.catalog import Catalog, ProfileDefinition, expand_profiles, load_catalog
 from tests.conformance.errors import ConfigError
 from tests.conformance.model import Classification, Selector, TestIdentity
+from tests.conformance.output import plan_key
 from tests.conformance.selection import assign_profiles, compute_plan, plan_from_names
 
 
@@ -90,6 +91,17 @@ def test_plan_from_names_marks_a_subset_incomplete() -> None:
     subset = plan_from_names(tests, ["A"], selectors, ("generic", "vm"))
 
     assert tuple(t.id for t in full.tests) == ("A", "B")
+    assert tuple(t.id for t in subset.tests) == ("A",)
+    assert subset.complete is False
+
+
+def test_plan_from_names_accepts_the_opaque_plan_key() -> None:
+    catalog = _catalog()
+    tests = [_test("A", "conformance_generic"), _test("B", "conformance_vmaas")]
+    selectors = _selector_ids(catalog, ("generic", "vmaas"))
+
+    subset = plan_from_names(tests, [plan_key("A")], selectors, ("generic", "vm"))
+
     assert tuple(t.id for t in subset.tests) == ("A",)
     assert subset.complete is False
 

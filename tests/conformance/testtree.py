@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -36,9 +37,11 @@ class PytestTestTree:
         cwd: Path | None = None,
         popen: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
     ) -> None:
-        self.root = root
         self.python = python or sys.executable
-        self.cwd = cwd or _REPO_ROOT
+        self.cwd = Path(cwd) if cwd is not None else _REPO_ROOT
+        # Resolve once, against the install root the child runs in, so
+        # collection and execution agree on every node ID.
+        self.root = (self.cwd / Path(root)).resolve()
         self.popen = popen
 
     def _env(self, name: str, path: Path) -> dict[str, str]:
@@ -140,30 +143,31 @@ class PytestTestTree:
         nodeids = [test.nodeid for test in plan.tests]
         with tempfile.TemporaryDirectory() as tmp:
             results_path = Path(tmp) / "pytest-results.jsonl"
-            process = self.popen(
-                [
-                    self.python,
-                    "-m",
-                    "pytest",
-                    "-n",
-                    "0",
-                    "-p",
-                    "tests.conformance.pytest_plugin",
-                    "-q",
-                    "--tb=short",
-                    "--rootdir",
-                    str(self.root),
-                    *nodeids,
-                ],
-                cwd=self.cwd,
-                env=self._run_env(context, results_path),
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
-            )
-            if interrupt is not None:
-                interrupt.child = process
+            with interrupt.hold() if interrupt is not None else contextlib.nullcontext():
+                process = self.popen(
+                    [
+                        self.python,
+                        "-m",
+                        "pytest",
+                        "-n",
+                        "0",
+                        "-p",
+                        "tests.conformance.pytest_plugin",
+                        "-q",
+                        "--tb=short",
+                        "--rootdir",
+                        str(self.root),
+                        *nodeids,
+                    ],
+                    cwd=self.cwd,
+                    env=self._run_env(context, results_path),
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    start_new_session=True,
+                )
+                if interrupt is not None:
+                    interrupt.child = process
             try:
                 stdout, stderr = process.communicate()
                 if process.returncode not in (0, 1, 2):

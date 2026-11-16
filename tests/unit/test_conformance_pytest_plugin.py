@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+_REDACTION_MARKER_LOG = "redaction-marker-log"
 
 
 def _run_plugin(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -77,3 +78,42 @@ def test_run_writes_pass_fail_and_skip_outcomes(tmp_path: Path) -> None:
     assert outcomes == {"test_passes": "passed", "test_fails": "failed", "test_skips": "skipped"}
     failed = next(line for line in lines if line["name"] == "test_fails")
     assert "assert False" in failed["message"]
+
+
+def test_teardown_skip_is_recorded(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "test_teardown.py").write_text(
+        "import pytest\n"
+        "@pytest.fixture\n"
+        "def skipping():\n"
+        "    yield\n"
+        "    pytest.skip('teardown skipped')\n"
+        "@pytest.mark.conformance_blocking\n"
+        "def test_body_passes(skipping):\n"
+        "    assert True\n"
+    )
+
+    result = _run_plugin(tmp_path, "-q", str(tree))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = [json.loads(line) for line in (tmp_path / "results.jsonl").read_text().splitlines()]
+    assert {(line["when"], line["outcome"]) for line in lines} == {("call", "passed"), ("teardown", "skipped")}
+
+
+def test_the_unfiltered_pytest_log_file_is_disabled(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "test_logs.py").write_text(
+        "import logging\n"
+        "import pytest\n"
+        "@pytest.mark.conformance_generic\n"
+        "def test_logs():\n"
+        f"    logging.getLogger('conformance').warning('api_key={_REDACTION_MARKER_LOG}')\n"
+    )
+    log_file = tmp_path / "unfiltered.log"
+
+    result = _run_plugin(tmp_path, "-q", "-o", f"log_file={log_file}", str(tree))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not log_file.exists()

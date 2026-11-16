@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import secrets
 import string
 import sys
@@ -23,14 +22,24 @@ def new_run_id() -> str:
     return "".join(secrets.choice(_RUN_ID_ALPHABET) for _ in range(8))
 
 
-def safe_component(value: str) -> str:
-    """A readable, unique path component for a test ID.
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
-    The digest keeps parametrized IDs such as ``test_case[a/b]`` and
-    ``test_case[a:b]``, which sanitize to the same text, in separate directories.
+
+def safe_component(value: str) -> str:
+    """An opaque, bounded path component for a test ID.
+
+    A parametrized ID can embed a value copied from the target environment, so
+    the directory name must not repeat it. The digest also keeps IDs such as
+    ``test_case[a/b]`` and ``test_case[a:b]`` in separate directories and stays
+    well inside the filesystem's name limit no matter how long the ID is.
     """
-    readable = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "test"
-    return f"{readable}-{hashlib.sha256(value.encode('utf-8')).hexdigest()[:12]}"
+    return _digest(value)[:16]
+
+
+def plan_key(test_id: str) -> str:
+    """A stable, non-reversible handle that lets a written plan be replayed."""
+    return _digest(test_id)
 
 
 class OutputSink:
@@ -82,22 +91,28 @@ def _test_markers(test: TestIdentity) -> list[str]:
     return markers
 
 
-def plan_document(plan: Plan) -> dict[str, object]:
+def plan_document(plan: Plan, redactor: Redactor) -> dict[str, object]:
     return {
         "profiles": list(plan.profiles),
         "selectors": [
             {"id": selector.id, "type": selector.type, "markers": list(selector.markers)} for selector in plan.selectors
         ],
         "tests": [
-            {"id": test.id, "name": test.name, "profiles": list(test.profiles), "markers": _test_markers(test)}
+            {
+                "id": redactor.text(test.id),
+                "key": plan_key(test.id),
+                "name": redactor.text(test.name),
+                "profiles": list(test.profiles),
+                "markers": _test_markers(test),
+            }
             for test in plan.tests
         ],
         "complete": plan.complete,
     }
 
 
-def write_plan(plan: Plan, results_dir: Path) -> Path:
+def write_plan(plan: Plan, results_dir: Path, redactor: Redactor) -> Path:
     results_dir.mkdir(parents=True, exist_ok=True)
     path = results_dir / "conformance-plan.yaml"
-    path.write_text(yaml.safe_dump(plan_document(plan), sort_keys=False), encoding="utf-8")
+    path.write_text(yaml.safe_dump(plan_document(plan, redactor), sort_keys=False), encoding="utf-8")
     return path

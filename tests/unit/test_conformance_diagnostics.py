@@ -12,6 +12,8 @@ _REDACTION_MARKER = "redaction-marker"
 _REDACTION_MARKER_B = "redaction-marker-b"
 _REDACTION_MARKER_C = "redaction-marker-c"
 _REDACTION_MARKER_F = "redaction-marker-f"
+_REDACTION_MARKER_API = "redaction-marker-api"
+_REDACTION_MARKER_ENV = "redaction-marker-env"
 
 
 def test_diagnostics_writes_redacted_control_plane_state(tmp_path: Path) -> None:
@@ -29,6 +31,15 @@ def test_diagnostics_writes_redacted_control_plane_state(tmp_path: Path) -> None
             "  annotations:\n"
             f"    secret-value: {_REDACTION_MARKER}\n"
             f"    password: {_REDACTION_MARKER_B}\n"
+            f"    api_key: {_REDACTION_MARKER_API}\n"
+            "spec:\n"
+            "  containers:\n"
+            "    - name: fulfillment\n"
+            "      env:\n"
+            "        - name: API_KEY\n"
+            f"          value: {_REDACTION_MARKER_ENV}\n"
+            "        - name: LOG_LEVEL\n"
+            "          value: debug\n"
         )
 
     context = RunContext(
@@ -45,6 +56,9 @@ def test_diagnostics_writes_redacted_control_plane_state(tmp_path: Path) -> None
     assert _REDACTION_MARKER not in content
     assert "<redacted>" in content
     assert "password:" not in content
+    assert _REDACTION_MARKER_API not in content
+    assert _REDACTION_MARKER_ENV not in content
+    assert "LOG_LEVEL" in content
     assert (path / "tenant-resources.yaml").exists()
     logs = (path / "pod-logs.txt").read_text()
     assert _REDACTION_MARKER_C not in logs

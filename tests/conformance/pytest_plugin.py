@@ -8,6 +8,24 @@ from pathlib import Path
 from typing import Any
 
 
+def _conformance_mode() -> bool:
+    return bool(os.environ.get("OSAC_CONFORMANCE_RESULTS") or os.environ.get("OSAC_CONFORMANCE_MANIFEST"))
+
+
+def pytest_configure(config: Any) -> None:  # noqa: ANN401
+    """Stop pytest writing its own unfiltered log during conformance runs.
+
+    The repository's pytest configuration sets ``log_file``. A conformance
+    child would write that file before the runner can redact captured output,
+    so the parent's single redaction boundary would be bypassed. The conformance
+    log and per-test evidence already carry the same records.
+    """
+    if _conformance_mode():
+        # pytest falls back to the ini value when the option is None, so point
+        # the file handler at the null device instead.
+        config.option.log_file = os.devnull
+
+
 def _append(path: str, entry: dict[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -32,9 +50,9 @@ def pytest_runtest_logreport(report: Any) -> None:  # noqa: ANN401
     path = os.environ.get("OSAC_CONFORMANCE_RESULTS")
     if not path or report.when not in ("call", "setup", "teardown"):
         return
-    if report.when == "setup" and not (report.failed or report.skipped):
-        return
-    if report.when == "teardown" and not report.failed:
+    # A setup or teardown report matters only when it failed or skipped: an
+    # ordinary passing phase would otherwise duplicate the call report.
+    if report.when in ("setup", "teardown") and not (report.failed or report.skipped):
         return
     message = ""
     if report.failed or report.skipped:

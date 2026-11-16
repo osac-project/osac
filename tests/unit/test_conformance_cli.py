@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from tests.conformance import cli
-from tests.conformance.cli import main
+from tests.conformance.cli import _parser, main
 from tests.conformance.errors import ConfigError
 
 
@@ -65,3 +65,9 @@ def test_config_errors_are_redacted(
     assert fake_value not in err
     assert fake_host not in err
     assert "<redacted>" in err
+
+
+def test_default_collection_root_covers_the_shipped_tests() -> None:
+    args = _parser().parse_args(["list"])
+
+    assert args.tree == "tests"

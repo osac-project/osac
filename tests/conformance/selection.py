@@ -8,6 +8,7 @@ from dataclasses import replace
 from tests.conformance.catalog import Catalog
 from tests.conformance.errors import ConfigError
 from tests.conformance.model import Plan, Selector, TestIdentity
+from tests.conformance.output import plan_key
 
 
 def matches(selector: Selector, test: TestIdentity) -> bool:
@@ -52,6 +53,9 @@ def plan_from_names(
     profiles: Sequence[str] = ("generic",),
 ) -> Plan:
     by_id = {test.id: test for test in tests}
+    # A saved plan carries the opaque ``key`` so a redacted ``id`` can still be
+    # replayed; a hand-written plan may use the raw canonical id instead.
+    by_id.update({plan_key(test.id): test for test in tests})
     checks: list[str] = []
     selected: dict[str, TestIdentity] = {}
     for name in names:

@@ -51,7 +51,7 @@ def _parser() -> argparse.ArgumentParser:
     parent.add_argument("--config", default="/config/conformance.yaml")
     parent.add_argument("--results", default="/results")
     parent.add_argument("--catalog", default=str(_DEFAULT_CATALOG))
-    parent.add_argument("--tree", default="tests/e2e")
+    parent.add_argument("--tree", default="tests")
     parent.add_argument("--podman-socket", default="/run/podman/podman.sock")
 
     parser = _Parser(prog="osac-conformance", add_help=True)
@@ -154,7 +154,8 @@ def _build_runtime(args: argparse.Namespace) -> Runtime:
     return Runtime(
         config=config,
         catalog=catalog,
-        tree=PytestTestTree(root=Path(args.tree)),
+        # Resolve once: pytest runs in a different working directory.
+        tree=PytestTestTree(root=Path(args.tree).resolve()),
         results=results,
         redactor=redactor,
         output=OutputSink(results, redactor),
@@ -175,8 +176,13 @@ def _plan_names(plan_path: Path) -> list[str]:
     for item in data["tests"]:
         if isinstance(item, str):
             names.append(item)
-        elif isinstance(item, dict) and isinstance(item.get("id"), str):
-            names.append(item["id"])
+        elif isinstance(item, dict):
+            # ``key`` is the opaque replay handle written next to the redacted
+            # ``id``; plans written before that field existed still replay by id.
+            identifier = item.get("key") or item.get("id")
+            if not isinstance(identifier, str):
+                raise ConfigError([f"{plan_path} has a test entry without an id"])
+            names.append(identifier)
         else:
             raise ConfigError([f"{plan_path} has a test entry without an id"])
     return names
@@ -208,7 +214,7 @@ def _run_list(runtime: Runtime) -> int:
     raw = runtime.tree.collect()
     tests: tuple[TestIdentity, ...] = assign_profiles(raw, runtime.catalog, selected_profiles)
     plan = compute_plan(tests, selectors, selected_profiles)
-    path = write_plan(plan, runtime.results)
+    path = write_plan(plan, runtime.results, runtime.redactor)
     runtime.output.echo(path.read_text().rstrip())
     return 0
 

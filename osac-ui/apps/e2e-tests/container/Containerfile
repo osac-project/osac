@@ -26,7 +26,7 @@ ARG OC_VERSION=4.22.22
 # Same pnpm as the workspace's packageManager field. Not named PNPM_VERSION:
 # build arguments are visible to RUN, and the prepare script reads that name
 # as a major version.
-ARG PNPM_RELEASE=9.15.9
+ARG PNPM_RELEASE=10.34.5
 
 # The build runs as root: the prepare script installs packages with dnf.
 USER 0

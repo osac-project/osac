@@ -33,7 +33,7 @@ for arg in "$@"; do
     --osac-cli-version=*) FULFILLMENT_SERVICE_VERSION="${arg#*=}" ;;
     --browser=*)        PW_BROWSER="${arg#*=}" ;;
     --kubeconfig=*)     KUBECONFIG_PATH="${arg#*=}" ;;
-    --ignore-tls|--run-smoke|--admin-user=*|--admin-password=*|--test=*|--project=*|--grep=*|--headed|--mode=*|--tag=*|--allow-root-e2e|--list|--no-deps|--all)
+    --ignore-tls|--run-smoke|--admin-user=*|--admin-password=*|--admin-password-file=*|--test=*|--project=*|--grep=*|--headed|--mode=*|--tag=*|--allow-root-e2e|--list|--no-deps|--all)
       option_name="${arg%%=*}"
       echo "${option_name} is a run option. Use run-ui-e2e.sh for test parameters." >&2
       exit 1

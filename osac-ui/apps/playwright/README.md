@@ -63,7 +63,7 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
     --tag=vmaas_all \
     --instance=1 \
     --admin-user=admin \
-    --admin-password='YOUR_ADMIN_PASSWORD' \
+    --admin-password-file=/path/to/admin-password \
     --allow-root-e2e \
     --ignore-tls \
     --reporter=line 2>&1 | tee vmaas-flow-1.log
@@ -72,8 +72,8 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
 )
 ```
 
-Replace `YOUR_ADMIN_PASSWORD` before running; the command does not prompt for
-input. The live output is saved to `vmaas-flow-1.log`.
+Provide a readable file containing the admin password; the command does not
+prompt for input. The live output is saved to `vmaas-flow-1.log`.
 
 The default HTML reporter does not show the full live test log in the terminal.
 Add `--reporter=line` to the runner command for live progress and test output.
@@ -86,10 +86,11 @@ VMaaS capacity preflight. A capacity failure means the cluster needs more
 allocatable memory/CPU or the configured instance type must be reduced; the
 script never changes cluster sizing automatically. The runner accepts the flow
 tags listed below, validates the deployment and VMaaS prerequisites, and keeps
-run-time credentials outside the setup step. Pass the admin credentials with
-`--admin-user=USER` and `--admin-password=PASSWORD`; the username defaults to
-`admin`. The runner requires the password command-line option even when
-`OSAC_ADMIN_PASSWORD` is set in the environment, and never prompts for input.
+run-time credentials outside the setup step. Pass the admin user with
+`--admin-user=USER` and the password with `--admin-password-file=PATH`; the
+username defaults to `admin`. The runner also accepts `--admin-password=PASSWORD`,
+but its value is visible in process arguments. A password file cannot be used
+with that option or a non-empty `OSAC_ADMIN_PASSWORD` environment variable.
 A missing password stops the run with a fix instruction. For VMaaS flows, the
 runner also authenticates the OSAC CLI for the duration of the run using the
 same credentials; temporary CLI files are removed on exit.

@@ -432,21 +432,22 @@ multipath eligibility checks.
 For active/backup forwarding, set `evpn.bgp.activeBackup: true` instead; it is
 mutually exclusive with `activeActive`. Set `role: active` or `role: backup`
 on every node uplink; each node needs exactly one active neighbor and at least
-one backup. The chart installs dedicated IPv4 unicast route-maps on every
-neighbor: the inbound route-maps match remote fabric VTEP `/32` routes from
-`acceptPrefixes` and set local preference to 200 on active neighbors or 100 on
-backups. The active outbound route-map matches the node's local VTEP `/32`, and
-the backup outbound route-map adds the same match and prepends the node ASN
+one backup. frr-k8s attaches its own per-neighbor `<peer>-in` and `<peer>-out`
+route-maps in `address-family ipv4 unicast` and applies them after the chart's
+raw block, so the chart adds a `permit 1` entry to those generated maps instead
+of attaching route-maps of its own: the inbound entry matches remote fabric VTEP
+`/32` routes from `acceptPrefixes` and sets local preference to 200 on active
+neighbors or 100 on backups, and the backup outbound entry prepends the node ASN
 three times. L2VPN EVPN route-maps apply the same preferences without prefix
-matching so they cover every EVPN route. The L2VPN EVPN address family also
-activates the EVPN neighbors and advertises VNIs.
+matching so they cover every EVPN route, and the active peer gets an explicit
+outbound map as well. The L2VPN EVPN address family also activates the EVPN
+neighbors and advertises VNIs.
 
-frr-k8s treats interface-based unnumbered neighbors as dual-stack and would
-otherwise evaluate RFC 5549 IPv4 routes with IPv6 link-local next hops against
-its generated IPv6 deny lists. For unnumbered neighbors the chart applies
-matching IPv4 unicast route-maps directly to the neighbor, in every BGP mode,
-so those routes are never filtered by IPv6 policy. The chart does not add or
-modify any IPv6 prefix-list.
+frr-k8s treats interface-based unnumbered neighbors as dual-stack and generates
+IPv6 deny prefix-lists for them. Those lists filter IPv6 unicast routes only:
+RFC 5549 IPv4 routes are accepted through the IPv4 unicast `<peer>-in` map, and
+IPv6 link-local next hops are resolved independently of the route-map policy.
+The chart does not add or modify any IPv6 prefix-list.
 
 ```yaml
 evpn:

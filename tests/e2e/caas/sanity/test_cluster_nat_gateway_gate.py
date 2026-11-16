@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
+from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
     wait_for_grpc_subnet_ready,
@@ -42,9 +42,9 @@ def test_cluster_create_requires_ready_nat_gateway(
     caas_disk_image_version: str,
     pull_secret_name: str,
     ssh_key_secret: str,
+    networking_provisioning_enabled: bool,
 ) -> None:
-    settings = private_grpc.call(service=f"{PRIVATE_API}.InstallationSettings/Get")
-    if not settings.get("networkingProvisioningEnabled", False):
+    if not networking_provisioning_enabled:
         pytest.skip("Cluster NATGateway readiness is not required when provider networking is disabled")
 
     private_grpc.ensure_bare_metal_instance_type(

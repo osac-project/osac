@@ -34,6 +34,8 @@ PW_LIST=false
 NO_DEPS=false
 MODE_FLAG_SET=false
 ADMIN_PASSWORD_SET=false
+ADMIN_PASSWORD_FILE_SET=false
+ADMIN_PASSWORD_FILE=""
 
 if [[ "$OSAC_CLI_PATH" == osac ]] && ! command -v osac >/dev/null 2>&1 &&
   [[ -x "${HOME}/.local/bin/osac" ]]; then
@@ -66,6 +68,19 @@ while (($# > 0)); do
       fi
       OSAC_ADMIN_PASSWORD="$1"
       ADMIN_PASSWORD_SET=true
+      shift
+      ;;
+    --admin-password-file=*)
+      ADMIN_PASSWORD_FILE="${arg#*=}"
+      ADMIN_PASSWORD_FILE_SET=true
+      ;;
+    --admin-password-file)
+      if (($# == 0)) || [[ "$1" == --* ]]; then
+        echo "--admin-password-file requires a path." >&2
+        exit 1
+      fi
+      ADMIN_PASSWORD_FILE="$1"
+      ADMIN_PASSWORD_FILE_SET=true
       shift
       ;;
     --instance=*)      OSAC_E2E_INSTANCE="${arg#*=}" ;;
@@ -128,7 +143,8 @@ Options:
   --mode=MODE            set OSAC_VM_FLOW_MODE to create, delete, or full
   --extravars=PATH       temporarily use a VMaaS extravars.yaml
   --admin-user=USER      Keycloak admin user (default: admin)
-  --admin-password=PASS  admin password (required for credentialed flows)
+  --admin-password=PASS  admin password (visible in process arguments)
+  --admin-password-file=PATH  read the admin password from a file
   --instance=INDEX        resource-name index (default: 1)
   --headed               run with a headed browser using the prepared Xvfb
   --run-smoke            run the setup and smoke projects
@@ -154,6 +170,16 @@ section() { printf '\n\e[1m== %s\e[0m\n' "$1"; }
 ok()      { printf '  \e[32m✓\e[0m %s\n' "$1"; }
 fail()    { printf '  \e[31m✗\e[0m %s\n' "$1" >&2; exit 1; }
 info()    { printf '  → %s\n' "$1"; }
+
+if [[ "$ADMIN_PASSWORD_FILE_SET" == true ]]; then
+  [[ "$ADMIN_PASSWORD_SET" == false && -z "$OSAC_ADMIN_PASSWORD" ]] ||
+    fail "Use only one admin password source."
+  [[ -n "$ADMIN_PASSWORD_FILE" && -f "$ADMIN_PASSWORD_FILE" && -r "$ADMIN_PASSWORD_FILE" ]] ||
+    fail "Admin password file is not readable."
+  OSAC_ADMIN_PASSWORD="$(< "$ADMIN_PASSWORD_FILE")"
+  [[ -n "$OSAC_ADMIN_PASSWORD" ]] || fail "Admin password file is empty."
+  ADMIN_PASSWORD_SET=true
+fi
 
 [[ "$OSAC_E2E_INSTANCE" =~ ^[0-9]+$ ]] ||
   fail "--instance must be a non-negative integer."
@@ -356,7 +382,7 @@ if [[ "$need_login" == true ]]; then
   [[ -n "$OSAC_ADMIN_USERNAME" ]] && ! placeholder_username "$OSAC_ADMIN_USERNAME" ||
     fail "Pass --admin-user=USER with a real Keycloak test user."
   [[ "$ADMIN_PASSWORD_SET" == true && -n "$OSAC_ADMIN_PASSWORD" ]] ||
-    fail "Admin password is required. Pass --admin-password=PASSWORD."
+    fail "Admin password is required. Pass --admin-password-file=PATH or --admin-password=PASSWORD."
   if (( EUID == 0 )) && [[ "$OSAC_ALLOW_ROOT_E2E" != true ]]; then
     fail "Credentialed tests refuse to run as root. Use a non-root user or --allow-root-e2e."
   fi

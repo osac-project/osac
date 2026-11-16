@@ -49,7 +49,7 @@ podman build \
 | --------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------- |
 | `FULFILLMENT_SERVICE_IMAGE` | `ghcr.io/osac-project/fulfillment-service:latest` | Image the `osac` CLI is copied from                                       |
 | `OC_VERSION`                | `4.22.22`                                         | `oc` client version                                                       |
-| `PNPM_RELEASE`              | `9.15.9`                                          | pnpm version; keep it equal to `packageManager` in `osac-ui/package.json` |
+| `PNPM_RELEASE`              | `10.34.5`                                         | pnpm version; keep it equal to `packageManager` in `osac-ui/package.json` |
 
 The build installs RPMs from the UBI 9 repositories, npm packages, the
 Playwright Chromium build, and the `oc` client, so it needs internet access. It

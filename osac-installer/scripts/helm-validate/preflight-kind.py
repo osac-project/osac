@@ -716,7 +716,10 @@ def main(context: str = "", only: tuple[str, ...] = ()) -> None:
     finally:
         cleanup(c)
     print(f"{len(selected) - failures}/{len(selected)} cases passed")
-    assert failures == 0, f"{failures} of {len(selected)} preflight cases failed"
+    if failures:
+        # An explicit exit status, not an assert: `python -O` strips asserts
+        # and would turn a failed run into a successful `sys.exit(None)`.
+        raise SystemExit(f"{failures} of {len(selected)} preflight cases failed")
 
 
 # CI runs this harness (uv run --script) against a live, disposable Kind

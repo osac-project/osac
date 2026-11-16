@@ -356,7 +356,7 @@ unit-tests-e2e-policy:
 # Offline preflight and metering reader rendering, the preflight harness, and stubbed Kind runner checks.
 # Preflight rendering also covers the osac-aap and osac-csi-driver hook Jobs.
 unit-tests-osac-installer:
-  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/helm-validate/tests/**,osac-installer/scripts/dev-full/**,osac-installer/scripts/lib.sh,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
+  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/helm-validate/tests/**,osac-installer/scripts/helm-validate/preflight-kind.py,osac-installer/scripts/dev-full/**,osac-installer/scripts/lib.sh,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-caas-integration:
   - '{tests/integration/caas/**,fulfillment-service/**,osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 

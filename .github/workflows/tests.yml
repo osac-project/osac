@@ -601,10 +601,6 @@ jobs:
           helm lint charts/osac-infra/ --values values/dev/infra.yaml
           helm lint charts/osac/ --values values/dev/kind-instance.yaml
 
-      - name: Set up Python
-        if: inputs.kind == 'it-osac-installer'
-        uses: ./.github/actions/setup-python
-
       - name: Validate Helm networking values
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer

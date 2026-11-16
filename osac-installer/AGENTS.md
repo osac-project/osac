@@ -66,6 +66,7 @@ Focused contracts, selected by the changed wiring:
 | MCE defaults and lifecycle gate | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_mce-render.py` |
 | Optional LVMS worker/device allowlist | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_lvms-optional-path-render.py` |
 | Fulfillment trust and CA mounts | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_fulfillment-trust-render.py` |
+| CSI/storage-provider render contract (`OSAC_VENDOR_CONTROLLERS`, fulfillment-endpoint cardinality, csi-driver node DaemonSet arguments and credentials) | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_csi-render.py` |
 | Service-account IDP credentials and realm roles | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_service-account-idp-render.py` |
 | Fulfillment hook token exchange and dev-full wiring | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_fulfillment-auth.py` and `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_dev-full-render.py` |
 | Billing provider mounts and tuning bounds | `make helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_billing-render.py` |

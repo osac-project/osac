@@ -250,11 +250,6 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 	log := logf.FromContext(ctx)
 	log.Info("Reconciling inventory")
 
-	allocated := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionAllocated)
-	if allocated != nil && allocated.Reason == v1alpha1.HostConditionReasonSelectedPortMACUnavailable {
-		return ctrl.Result{}, nil
-	}
-
 	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseAllocating
 	bareMetalInstance.SetStatusCondition(
 		v1alpha1.HostConditionAllocated,

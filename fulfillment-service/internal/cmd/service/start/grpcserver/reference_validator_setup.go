@@ -36,8 +36,9 @@ import (
 // NATGateway Create ExternalIPs are resolved by the handler, by ID or by name within
 // the NATGateway's tenant and project, after checking that only the system may create
 // a NATGateway for a tenant-default VirtualNetwork.
-// RoleBinding handlers validate service-account references in the request's
-// tenant scope.
+// RoleBinding handlers resolve Role and service-account references after the
+// binding tenant is assigned. An unqualified Role name must not be resolved
+// globally by the interceptor before that tenant is known.
 // Workload ssh_key references are resolved by their private handlers after
 // tenant assignment and catalog/template defaults. Those handlers enforce the
 // tenant-only SSH-key contract, validate key material, and store canonical
@@ -55,7 +56,7 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(serviceAccountControllerSecretReferenceMethods(),
 			"object.status.client_secret", "object.status.registration_secret").
 		SetExcludedReferencePaths(natGatewayCreationMethods(), "object.spec.external_ip").
-		SetExcludedReferencePaths(roleBindingServiceAccountMethods(), "object.spec.service_accounts").
+		SetExcludedReferencePaths(roleBindingReferenceMethods(), "object.spec.role", "object.spec.service_accounts").
 		SetExcludedReferencePaths(bareMetalInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterSshKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterTemplateSshKeyMethods(), "object.spec_defaults.ssh_key").
@@ -87,7 +88,7 @@ func natGatewayCreationMethods() []string {
 	}
 }
 
-func roleBindingServiceAccountMethods() []string {
+func roleBindingReferenceMethods() []string {
 	return []string{
 		publicv1.RoleBindings_Create_FullMethodName,
 		privatev1.RoleBindings_Create_FullMethodName,

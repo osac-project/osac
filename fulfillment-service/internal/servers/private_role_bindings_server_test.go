@@ -16,6 +16,9 @@ package servers
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -29,11 +32,23 @@ func refIDs[T interface{ GetId() string }](refs []T) []string {
 	return ids
 }
 
+func seedRoleBindingTestRoles() {
+	roles, err := dao.NewGenericDAO[*privatev1.Role]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+	Expect(err).ToNot(HaveOccurred())
+	for _, id := range []string{"admin-role-id", "role-a", "role-b", "role-1", "role-2", "my-role-id"} {
+		_, err := roles.Create().SetObject(privatev1.Role_builder{
+			Id: id, Metadata: privatev1.Metadata_builder{Name: id, Tenant: testTenant}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+	}
+}
+
 var _ = Describe("Private role bindings server", func() {
 	var roleBindingsServer *PrivateRoleBindingsServer
 
 	BeforeEach(func() {
 		var err error
+		seedRoleBindingTestRoles()
 
 		roleBindingsServer, err = NewPrivateRoleBindingsServer().
 			SetLogger(logger).
@@ -96,6 +111,165 @@ var _ = Describe("Private role bindings server", func() {
 			Expect(response.GetObject().GetMetadata().GetName()).To(Equal("admin-binding"))
 			Expect(response.GetObject().GetSpec().GetRole().GetId()).To(Equal("admin-role-id"))
 			Expect(refIDs(response.GetObject().GetSpec().GetUsers())).To(ConsistOf("admin-user-1", "admin-user-2"))
+		})
+
+		DescribeTable("rejects bindings without a Role", func(name string, role *privatev1.RoleReference,
+			users []*privatev1.UserReference, serviceAccounts []*privatev1.ServiceAccountReference) {
+			_, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role:            role,
+						Users:           users,
+						ServiceAccounts: serviceAccounts,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("a role reference must specify an ID or name"))
+		},
+			Entry("nil Role with a user", "roleless-user-nil", nil,
+				[]*privatev1.UserReference{privatev1.UserReference_builder{Id: "human-user"}.Build()}, nil),
+			Entry("empty Role with a user", "roleless-user-empty", privatev1.RoleReference_builder{}.Build(),
+				[]*privatev1.UserReference{privatev1.UserReference_builder{Id: "human-user"}.Build()}, nil),
+			Entry("nil Role with a service account", "roleless-service-account", nil, nil,
+				[]*privatev1.ServiceAccountReference{privatev1.ServiceAccountReference_builder{Id: "service-account"}.Build()}),
+			Entry("nil Role without subjects", "roleless-no-subjects", nil, nil, nil),
+			Entry("qualified Role without an ID or name", "roleless-qualified",
+				privatev1.RoleReference_builder{Tenant: testTenant}.Build(), nil, nil),
+		)
+
+		It("rejects clearing the Role from a human binding", func() {
+			created, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: "clear-human-role"}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role:  privatev1.RoleReference_builder{Id: "role-a"}.Build(),
+						Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "human-user"}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = roleBindingsServer.Update(ctx, privatev1.RoleBindingsUpdateRequest_builder{
+				Object:     privatev1.RoleBinding_builder{Id: created.GetObject().GetId()}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.role"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+			stored, err := roleBindingsServer.Get(ctx, privatev1.RoleBindingsGetRequest_builder{
+				Id: created.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetSpec().GetRole().GetId()).To(Equal("role-a"))
+		})
+
+		It("keeps updating a binding whose unchanged Role reference no longer resolves", func() {
+			created, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: "deleted-role-update"}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role: privatev1.RoleReference_builder{Id: "role-1"}.Build(),
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "human-user"}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			roles, err := dao.NewGenericDAO[*privatev1.Role]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = roles.Delete().SetId("role-1").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			stored, err := roleBindingsServer.Get(ctx, privatev1.RoleBindingsGetRequest_builder{
+				Id: created.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			stored.GetObject().GetMetadata().SetLabels(map[string]string{"updated": "true"})
+			updated, err := roleBindingsServer.Update(ctx, privatev1.RoleBindingsUpdateRequest_builder{
+				Object: stored.GetObject(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetObject().GetSpec().GetRole().GetId()).To(Equal("role-1"))
+			Expect(updated.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("updated", "true"))
+
+			_, err = roleBindingsServer.Update(ctx, privatev1.RoleBindingsUpdateRequest_builder{
+				Object: privatev1.RoleBinding_builder{Id: created.GetObject().GetId(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "another-user"}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.users"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("role 'role-1' not found"))
+
+			_, err = roleBindingsServer.Update(ctx, privatev1.RoleBindingsUpdateRequest_builder{
+				Object: privatev1.RoleBinding_builder{Id: created.GetObject().GetId(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role: privatev1.RoleReference_builder{Id: "missing-role"}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.role"}},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("role 'missing-role' not found"))
+		})
+
+		It("rechecks the Role when service account subjects are added", func() {
+			created, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: "user-only-binding"}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role: privatev1.RoleReference_builder{Id: "role-a"}.Build(),
+						Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Id: "human-user"}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = roleBindingsServer.Update(ctx, privatev1.RoleBindingsUpdateRequest_builder{
+				Object: privatev1.RoleBinding_builder{Id: created.GetObject().GetId(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						ServiceAccounts: []*privatev1.ServiceAccountReference{
+							privatev1.ServiceAccountReference_builder{Id: "account-id"}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.service_accounts"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("service accounts may only receive predefined OSAC roles"))
+		})
+
+		It("checks account readiness after accepting an assignable shared Role", func() {
+			roles, err := dao.NewGenericDAO[*privatev1.Role]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			sharedRole, err := roles.List().SetFilter("this.metadata.name == 'tenant-automation'").SetLimit(1).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sharedRole.GetItems()).To(HaveLen(1))
+
+			_, err = roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: "inactive-account-binding"}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role: privatev1.RoleReference_builder{Id: sharedRole.GetItems()[0].GetId()}.Build(),
+						ServiceAccounts: []*privatev1.ServiceAccountReference{
+							privatev1.ServiceAccountReference_builder{
+								Id: "00000000-0000-4000-8000-000000000001",
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("service account must be active and provisioned"))
 		})
 
 		It("Lists role bindings", func() {

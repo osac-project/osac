@@ -461,7 +461,7 @@ var _ = Describe("Role binding reconciler", func() {
 })
 
 var _ = Describe("RoleBinding references", func() {
-	It("resolves a global role by name for a tenant RoleBinding", func() {
+	It("falls back to a shared role by name for a tenant RoleBinding", func() {
 		ctx := context.Background()
 		conn := tool.InternalView().AdminConn()
 		tenantClient := privatev1.NewTenantsClient(conn)
@@ -507,6 +507,7 @@ var _ = Describe("RoleBinding references", func() {
 
 		bindingID = response.GetObject().GetId()
 		Expect(response.GetObject().GetSpec().GetRole().GetId()).ToNot(BeEmpty())
+		Expect(response.GetObject().GetSpec().GetRole().GetTenant()).To(Equal("shared"))
 	})
 })
 

@@ -5320,51 +5320,56 @@ var _ = Describe("Catalog materialized defaults", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("rejects invalid XML user_data_source.inline on update for a Windows instance", func() {
-			// Create a Windows instance with valid XML user_data_source.inline.
-			validXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings/></unattend>`
-			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
-				Object: privatev1.ComputeInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("win-test-%s", uuid.NewString()[:8]),
+		DescribeTable("rejects invalid XML user_data_source.inline on update for a Windows instance",
+			func(invalidXML, expectedMessage string) {
+				// Create a Windows instance with valid XML user_data_source.inline.
+				validXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings/></unattend>`
+				createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("win-test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template:       privatev1.ComputeInstanceTemplateReference_builder{Id: "win-template"}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Inline: &validXML}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								}.Build(),
+							},
+						}.Build(),
 					}.Build(),
-					Spec: privatev1.ComputeInstanceSpec_builder{
-						Template:       privatev1.ComputeInstanceTemplateReference_builder{Id: "win-template"}.Build(),
-						UserDataSource: privatev1.UserDataSource_builder{Inline: &validXML}.Build(),
-						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
-							privatev1.ComputeNetworkAttachment_builder{
-								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
-							}.Build(),
-						},
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			id := createResponse.GetObject().GetId()
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := createResponse.GetObject().GetId()
 
-			// Update with invalid XML user_data_source.inline — should be rejected.
-			invalidXML := "not xml at all"
-			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
-				Object: privatev1.ComputeInstance_builder{
-					Id: id,
-					Spec: privatev1.ComputeInstanceSpec_builder{
-						UserDataSource: privatev1.UserDataSource_builder{Inline: &invalidXML}.Build(),
+				// Update with invalid XML user_data_source.inline — should be rejected.
+				_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							UserDataSource: privatev1.UserDataSource_builder{Inline: &invalidXML}.Build(),
+						}.Build(),
 					}.Build(),
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.user_data_source"},
-				},
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			st, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(st.Message()).To(ContainSubstring("not well-formed XML"))
-		})
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.user_data_source"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring(expectedMessage))
+				Expect(st.Message()).NotTo(ContainSubstring("xml-content-sentinel"))
+			},
+			Entry("plain text", "not xml at all", "not well-formed XML"),
+			Entry("forbidden literal character", "<!--xml-content-sentinel\x00--><root/>", "not well-formed XML"),
+			Entry("UTF-16 declaration", `<?xml version="1.0" encoding="UTF-16"?><root>xml-content-sentinel</root>`, "unsupported_encoding"),
+		)
 
 		It("accepts valid XML user_data_source.inline on update for a Windows instance", func() {
 			// Create a Windows instance with valid XML user_data_source.inline.
-			validXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings/></unattend>`
+			validXML := "\xef\xbb\xbf<?xml version=\"1.0\" encoding=\"utf-8\" ?><unattend><settings/></unattend>"
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
 				Object: privatev1.ComputeInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -5382,10 +5387,11 @@ var _ = Describe("Catalog materialized defaults", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(createResponse.GetObject().GetSpec().GetUserDataSource().GetInline()).To(Equal(validXML))
 			id := createResponse.GetObject().GetId()
 
 			// Update with valid XML user_data_source.inline — should succeed.
-			updatedXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings pass="oobeSystem"/></unattend>`
+			updatedXML := `<?xml version="1.0" ?><unattend><a:b:c pass="oobeSystem"/></unattend>`
 			updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 				Object: privatev1.ComputeInstance_builder{
 					Id: id,

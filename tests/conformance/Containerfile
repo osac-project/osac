@@ -5,7 +5,7 @@ FROM registry.k8s.io/kubectl:v1.32.1@sha256:6ae337221866ae69380cfa08e2b38fa113fd
 
 # The builder carries the compilers needed to build source distributions on
 # architectures without a manylinux wheel.
-FROM registry.access.redhat.com/ubi9/python-312@sha256:5b184c2acfe9e2eb9df1a243da8e4a82fedd96e5e7f6648ec5512656177fa326 AS builder
+FROM registry.access.redhat.com/ubi9/python-312:latest AS builder
 
 # The base image runs as UID 1001, which cannot write the work directory that
 # the build creates as root. Build as root here only; the runtime stage drops
@@ -19,7 +19,7 @@ COPY tests ./tests
 RUN python3 -m pip install --no-cache-dir --prefix=/runtime .
 
 # The runtime is the minimal UBI 9 Python base, not a builder image.
-FROM registry.access.redhat.com/ubi9/python-312-minimal@sha256:612eb994cd4255fbafd0de6967efba8d72b62c812058e68e28974458529d0523
+FROM registry.access.redhat.com/ubi9/python-312-minimal:latest
 
 # The suite reaches the runner's podman socket, which is owned by the invoking
 # user. Map that user onto the image UID at run time, and mount a results

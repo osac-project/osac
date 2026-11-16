@@ -88,6 +88,15 @@ def test_evidence_directory_does_not_repeat_the_test_id(tmp_path: Path) -> None:
     assert path.parent.name.isalnum()
 
 
+def test_evidence_directory_name_is_bounded_for_long_test_ids(tmp_path: Path) -> None:
+    sink = OutputSink(tmp_path, Redactor())
+    long_id = "tests/test_sample.py::test_case[" + "x" * 400 + "]"
+
+    path = sink.evidence(_test(long_id), Path("test.log"), "x")
+
+    assert len(path.parent.name.encode("utf-8")) <= 255
+
+
 def test_echo_does_not_create_the_run_log(tmp_path: Path) -> None:
     sink = OutputSink(tmp_path, Redactor())
 

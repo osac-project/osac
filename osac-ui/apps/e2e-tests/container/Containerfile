@@ -4,7 +4,8 @@
 # and network access to the cluster routes.
 #
 # Build context: mono-repo root.
-#   podman build -f osac-ui/apps/e2e-tests/container/Containerfile -t osac-ui-e2e .
+#   podman build -f osac-ui/apps/e2e-tests/container/Containerfile \
+#     --build-arg FULFILLMENT_SERVICE_IMAGE=<image@sha256:digest> -t osac-ui-e2e .
 #
 # Use the osac CLI of the build under test: the flows create and delete
 # resources with it, so it must match the deployed fulfillment service. Pass
@@ -13,14 +14,14 @@
 #
 # See osac-ui/apps/e2e-tests/container/README.md for running it.
 
-ARG FULFILLMENT_SERVICE_IMAGE=ghcr.io/osac-project/fulfillment-service:latest
+ARG FULFILLMENT_SERVICE_IMAGE
 
 FROM ${FULFILLMENT_SERVICE_IMAGE} AS osac-cli
 
-# UBI 9 with Node.js. The full image, not -minimal: the prepare script
-# installs the browser's system libraries with dnf through its RHEL 9 path.
-FROM registry.access.redhat.com/ubi9/nodejs-22:9.9-1793849239
+# UBI 9 with Node.js; add dnf and git for the shared preparation script.
+FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:latest
 
+ARG FULFILLMENT_SERVICE_IMAGE
 ARG TARGETARCH=amd64
 ARG OC_VERSION=4.22.22
 # Same pnpm as the workspace's packageManager field. Not named PNPM_VERSION:
@@ -31,11 +32,17 @@ ARG PNPM_RELEASE=10.34.5
 # The build runs as root: the prepare script installs packages with dnf.
 USER 0
 
+RUN printf '%s' "${FULFILLMENT_SERVICE_IMAGE}" | grep -Eq '@sha256:[[:xdigit:]]{64}$' \
+    || { echo 'FULFILLMENT_SERVICE_IMAGE must be digest-qualified' >&2; exit 1; }
+
+RUN microdnf install -y dnf git && microdnf clean all
+
 COPY --from=osac-cli /usr/local/bin/osac /usr/local/bin/osac
 
 # Installed system-wide so any run-time user finds it; the prepare script
 # then accepts it instead of installing pnpm under root's home.
-RUN npm install --global --prefix /usr/local "pnpm@${PNPM_RELEASE}"
+RUN npm install --global --prefix /usr/local "pnpm@${PNPM_RELEASE}" \
+    && npm cache clean --force
 
 # Browsers outside root's home, so the run-time user can launch them.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright

@@ -150,8 +150,8 @@ evpn:
     timeoutSeconds: 900
     # Optional FRR-K8s BFD profile name; empty disables BFD. The profile is
     # attached to every EVPN uplink peer. Underlay peers are directly connected,
-    # so BFD runs single-hop; setting a profile also makes the install hook wait
-    # for BFD Up. Intervals are in milliseconds.
+    # so BFD runs single-hop. With waitForEstablished, the install hook also
+    # waits for BFD Up. Intervals are in milliseconds.
     bfdProfile: ""
     bfdReceiveInterval: 300
     bfdTransmitInterval: 300

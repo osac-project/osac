@@ -974,9 +974,9 @@ The chart therefore does not set `ebgp-multihop`, and FRR runs single-hop BFD
 use the same BFD mode. Unnumbered peers also use single-hop BFD over the IPv6
 link-local address.
 
-When a BFD profile is set, the configure-EVPN hook requires `bfdStatus: Up` on
-every peer before the install succeeds, in addition to
-`bgpStatus: Established`. If BFD never comes up, the hook exits with the peer
+When a BFD profile is set and `evpn.bgp.waitForEstablished` is true (the
+default), the configure-EVPN hook requires `bfdStatus: Up` on every peer before
+the install succeeds, in addition to `bgpStatus: Established`. If BFD never comes up, the hook exits with the peer
 entry number and the non-sensitive status values, so check the fabric side and
 the `evpn` values.
 

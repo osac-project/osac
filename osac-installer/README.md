@@ -517,8 +517,9 @@ evpn:
 The chart does not set `ebgp-multihop` on numbered underlay peers, so FRR uses
 single-hop BFD (UDP 3784) on those directly connected links and on unnumbered
 IPv6 link-local links. Configure the fabric side for single-hop BFD as well.
-When a BFD profile is set, the configure-EVPN hook waits for `bfdStatus: Up` in
-addition to `bgpStatus: Established`.
+When a BFD profile is set and `evpn.bgp.waitForEstablished` is true (the
+default), the configure-EVPN hook waits for `bfdStatus: Up` in addition to
+`bgpStatus: Established`.
 
 The Netris fabric side stays external: the fabric admin configures the links,
 VTEP range, and switch-side node ASN. VMs use the cluster DNS that

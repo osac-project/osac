@@ -687,8 +687,9 @@ Alternatively, `evpn.bgp.activeBackup: true` applies VTEP-route and L2VPN EVPN
 route preferences using exactly one uplink with `role: active` and at least one
 with `role: backup` per node. Both settings default to `false` and cannot be
 enabled together. Unnumbered uplinks are supported in either mode. Set
-`evpn.bgp.bfdProfile` to add single-hop BFD to every peer; the install then
-waits for BFD to come up as well as for BGP to establish. These settings
+`evpn.bgp.bfdProfile` to add single-hop BFD to every peer; with the default
+`waitForEstablished`, the install then waits for BFD to come up as well as for
+BGP to establish. These settings
 configure the OpenShift FRR side; the fabric administrator configures the
 corresponding leaf behavior and BFD mode. The
 [Helm Deployment Guide](helm-deployment-guide.md#evpn-host-networking-vmaas)

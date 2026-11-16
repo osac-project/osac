@@ -50,7 +50,7 @@ class HelperPodError(RuntimeError):
 
 
 class HelperExecError(HelperPodError):
-    """`kubectl exec` into the helper Pod returned no SSH status (API or kubelet blip, Pod gone). Transient."""
+    """`kubectl exec` into the helper Pod returned no SSH status (API or kubelet blip, Pod gone, timeout). Transient."""
 
 
 _READY: set[str] = set()
@@ -86,6 +86,11 @@ def _kubeconfig() -> str:
 
 def _base() -> list[str]:
     return K8sClient(namespace="default", kubeconfig=_kubeconfig()).base_args()
+
+
+def vm_cluster_args() -> list[str]:
+    """kubectl and the flags that reach the VM cluster, where the VM namespaces live."""
+    return _base()
 
 
 def _scrub(text: str, secrets: tuple[str, ...] = ()) -> str:
@@ -330,8 +335,8 @@ def ssh_args(*, address: str, command: str, timeout: int) -> list[str]:
 def exec_ssh(*, namespace: str, vm_name: str, identity_file: str, command: str, timeout: int) -> tuple[str, int]:
     """Run `command` on the guest. Returns (output, ssh status): 255 is an SSH transport failure.
 
-    Raises HelperPodError (Pod not usable), HelperExecError (exec lost) or RuntimeError (timeout, no VM
-    address), which is different from any guest or ssh exit status.
+    Raises HelperPodError (Pod not usable), HelperExecError (exec lost or timed out) or RuntimeError (no VM
+    address, kubectl not started), which is different from any guest or ssh exit status.
     """
     ensure_helper(namespace, identity_file)
     address = vm_ip(namespace, vm_name)
@@ -350,7 +355,10 @@ def exec_ssh(*, namespace: str, vm_name: str, identity_file: str, command: str, 
     try:
         result = subprocess.run([*_base(), *args], capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"SSH to {namespace}/{vm_name} through the helper Pod timed out after {timeout}s") from exc
+        # A timed-out exec, like a lost one, says nothing about the guest: callers retry it as a transport failure.
+        raise HelperExecError(
+            f"SSH to {namespace}/{vm_name} through the helper Pod timed out after {timeout}s"
+        ) from exc
     except OSError as exc:
         raise RuntimeError(f"failed to start kubectl exec for {namespace}/{vm_name}: {type(exc).__name__}") from exc
 

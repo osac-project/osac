@@ -67,6 +67,11 @@ def _guarded(
     return wrapper
 
 
+def _module_of(nodeid: str) -> str:
+    """The test file of a node ID; a fixture failure's name has no "::" and is its own key."""
+    return nodeid.split("::", 1)[0]
+
+
 class FailureReporter:
     def __init__(self, config: pytest.Config, *, sources: SnapshotSources = SOURCES) -> None:
         self.worker: str = os.environ.get("PYTEST_XDIST_WORKER") or "main"
@@ -78,6 +83,8 @@ class FailureReporter:
         self.snapshotter: Snapshotter = Snapshotter(self.output_dir, self.worker, sources)
         self._path: Path = self.output_dir / f"results-{self.worker}.jsonl"
         self._started: dict[str, float] = {}
+        # First test start per module: the snapshot logs begin there, where an ordered suite built its state.
+        self._module_started: dict[str, float] = {}
         self._exceptions: dict[int, tuple[BaseException, str]] = {}
         self._counts: dict[str, int] = {}
 
@@ -122,7 +129,9 @@ class FailureReporter:
 
     @_guarded
     def pytest_runtest_logstart(self, nodeid: str, location: tuple[str, int | None, str]) -> None:
-        self._started[nodeid] = time.time()
+        now = time.time()
+        self._started[nodeid] = now
+        self._module_started.setdefault(_module_of(nodeid), now)
 
     # Per test
 
@@ -232,7 +241,9 @@ class FailureReporter:
 
     def _snapshot(self, test: str, kind: Kind, started: float, entry: dict[str, Any]) -> str | None:
         try:
-            return self.snapshotter.take(test, kind, datetime.fromtimestamp(started, UTC), entry)
+            module_started = self._module_started.get(_module_of(str(entry.get("nodeid", ""))))
+            logs_since = datetime.fromtimestamp(module_started, UTC) if module_started is not None else None
+            return self.snapshotter.take(test, kind, datetime.fromtimestamp(started, UTC), entry, logs_since=logs_since)
         except Exception:
             _log_internal_error("E2E failure snapshot hit an internal error")
             return None

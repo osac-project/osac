@@ -4,15 +4,21 @@ import json
 import logging
 import shlex
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
+from tests.e2e.core.failures import E2EFailure, Kind
+from tests.e2e.core.runner import poll_until
 from tests.e2e.core.ssh_probe import probe_connectivity
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 log = logging.getLogger(__name__)
 
 _SSH_OPTS = [
     "-o",
     "ConnectTimeout=10",
+    # Key only: a rejected key fails at once instead of waiting on a password prompt.
+    "-o",
+    "BatchMode=yes",
     "-o",
     "StrictHostKeyChecking=no",
     "-o",
@@ -110,6 +116,83 @@ def _probe_connectivity(ssh_host: str, command: str, timeout: int = 30) -> bool:
         transport="SSH",
         timeout=timeout,
     )
+
+
+# A host that is still booting: sshd is not listening yet or the network is not up.
+_NOT_READY_MARKERS = (
+    "connection refused",
+    "connection timed out",
+    "ssh timed out",
+    "no route to host",
+    "network is unreachable",
+    "connection reset",
+    "connection closed",
+    "kex_exchange_identification",
+    "banner exchange",
+)
+# A rejected login. On a booting image cloud-init may still be writing the key, so a few in a row are allowed.
+_AUTH_MARKERS = ("permission denied", "too many authentication failures")
+_AUTH_FAILURES_ALLOWED = 3
+
+
+def wait_for_ssh_ready(bmis: Sequence[Mapping[str, str]], *, retries: int = 60, delay: int = 10) -> None:
+    """Wait until every BMI accepts SSH on its management address.
+
+    RUNNING does not mean the OS is up: after provisioning the operator power-cycles the host onto the tenant
+    network and reports RUNNING once the host is powered on, a minute or more before sshd listens. Every test that
+    probes from a BMI needs this wait first. A refused or timed-out connection is retried; a login rejected
+    several times in a row fails at once, since waiting does not fix a wrong key or user.
+    """
+    last_output: dict[str, str] = {}
+    auth_failures: dict[str, int] = {}
+
+    def not_ready() -> list[str]:
+        waiting = []
+        for bmi in bmis:
+            host = bmi["ssh_host"]
+            if last_output.get(host) == "ready":
+                continue
+            output, rc = ssh_bmi_unchecked(host, "true", timeout=15)
+            if rc == 0:
+                last_output[host] = "ready"
+                continue
+            lowered = output.lower()
+            last_output[host] = output.strip()[-300:] or f"ssh exited {rc} with no output"
+            if any(marker in lowered for marker in _AUTH_MARKERS):
+                auth_failures[host] = auth_failures.get(host, 0) + 1
+                if auth_failures[host] >= _AUTH_FAILURES_ALLOWED:
+                    raise E2EFailure(
+                        Kind.TEST_SSH_FAILED,
+                        f"SSH to BMI {bmi.get('name', host)} ({host}) was rejected {auth_failures[host]} times in a "
+                        f"row: {last_output[host]}. Check the BMI SSH key Secret, user and identity file.",
+                        ids={"bmi_id": bmi.get("id", ""), "ssh_host": host},
+                    )
+            else:
+                auth_failures[host] = 0
+                if not any(marker in lowered for marker in _NOT_READY_MARKERS):
+                    log.warning("SSH to %s failed with an unrecognized error, retrying: %s", host, last_output[host])
+            waiting.append(host)
+        return waiting
+
+    hosts = ", ".join(f"{bmi.get('name', bmi['ssh_host'])} ({bmi['ssh_host']})" for bmi in bmis)
+    try:
+        poll_until(
+            fn=not_ready,
+            until=lambda waiting: not waiting,
+            retries=retries,
+            delay=delay,
+            description=f"SSH on BMIs {hosts}",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmis[0].get("id") or bmis[0]["ssh_host"],
+        )
+    except TimeoutError as exc:
+        pending = {host: out for host, out in last_output.items() if out != "ready"}
+        detail = "; ".join(f"{host}: {out}" for host, out in pending.items())
+        raise E2EFailure(
+            Kind.STUCK_STATE,
+            f"BMIs were RUNNING but SSH never came up on {', '.join(pending)} (last errors: {detail}).\n{exc}",
+            ids={"ssh_hosts": ",".join(pending)},
+        ) from exc
 
 
 def arping(ssh_host: str, target_ip: str, count: int = 3) -> bool:

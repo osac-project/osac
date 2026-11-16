@@ -1,0 +1,23 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: nodepools.hypershift.openshift.io
+spec:
+  group: hypershift.openshift.io
+  scope: Namespaced
+  names:
+    plural: nodepools
+    singular: nodepool
+    kind: NodePool
+    shortNames:
+      - np
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}

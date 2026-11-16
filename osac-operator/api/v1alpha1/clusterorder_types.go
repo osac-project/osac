@@ -24,17 +24,10 @@ import (
 )
 
 const (
-	// UpgradeAttemptIDAnnotation identifies the attempt stamped on a HyperShift resource.
+	// UpgradeAttemptIDAnnotation identifies the current cluster upgrade attempt on
+	// a ClusterOrder and the attempt stamped on a HyperShift resource.
 	UpgradeAttemptIDAnnotation = "osac.openshift.io/upgrade-attempt-id"
-	// UpgradeAttemptIDsAnnotation carries current component IDs as JSON on the order.
-	UpgradeAttemptIDsAnnotation = "osac.openshift.io/upgrade-attempt-ids"
 )
-
-// ClusterOrderUpgradeAttemptIDs is the value of UpgradeAttemptIDsAnnotation.
-type ClusterOrderUpgradeAttemptIDs struct {
-	ControlPlane string            `json:"controlPlane,omitempty"`
-	NodeSets     map[string]string `json:"nodeSets,omitempty"`
-}
 
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
@@ -180,17 +173,16 @@ type NodeRequestStatus struct {
 	// selected NodePool, independently of an OSAC upgrade attempt.
 	// +kubebuilder:validation:Optional
 	ObservedVersion string `json:"observedVersion,omitempty"`
-	// UpgradeObservation reports the observed version and state of this node set's
-	// current upgrade attempt.
+	// UpgradeObservation reports this node set's observed version and state in
+	// the current whole-cluster upgrade attempt.
 	// +kubebuilder:validation:Optional
 	UpgradeObservation *UpgradeObservation `json:"upgradeObservation,omitempty"`
 }
 
-// UpgradeObservation carries the observed version and state of one control-plane
-// or node-pool upgrade attempt from HyperShift to Fulfillment feedback.
+// UpgradeObservation carries one component's observed version and state from
+// HyperShift to Fulfillment feedback during a whole-cluster upgrade attempt.
 type UpgradeObservation struct {
-	// AttemptID links this observation to the selected control-plane or node-pool
-	// attempt.
+	// AttemptID links this observation to the current whole-cluster attempt.
 	// +kubebuilder:validation:Required
 	AttemptID string `json:"attemptID"`
 	// Version is the OpenShift version observed on the selected control plane or
@@ -204,11 +196,11 @@ type UpgradeObservation struct {
 	// component.
 	// +kubebuilder:validation:Enum=Progressing;Succeeded;Failed
 	State UpgradeObservationState `json:"state,omitempty"`
-	// Message explains a failed component attempt without including provider
+	// Message explains a failed component's result without including provider
 	// output.
 	Message string `json:"message,omitempty"`
 	// BaselineTransitionTime is the NodePool UpdatingVersion transition before AAP
-	// stamped this attempt. It is compared only with another NodePool time and is
+	// stamped the attempt. It is compared only with another NodePool time and is
 	// unused for control-plane observations.
 	BaselineTransitionTime *metav1.Time `json:"baselineTransitionTime,omitempty"`
 }
@@ -319,8 +311,8 @@ type ClusterOrderStatus struct {
 	// selected HostedCluster. It is independent of an OSAC upgrade attempt.
 	// +kubebuilder:validation:Optional
 	ObservedVersion string `json:"observedVersion,omitempty"`
-	// UpgradeObservation reports the observed version and state of the control
-	// plane's current upgrade attempt.
+	// UpgradeObservation reports the control-plane component's observed version
+	// and state in the current whole-cluster upgrade attempt.
 	// +kubebuilder:validation:Optional
 	UpgradeObservation *UpgradeObservation `json:"upgradeObservation,omitempty"`
 	// Phase provides a single-value overview of the state of the ClusterOrder

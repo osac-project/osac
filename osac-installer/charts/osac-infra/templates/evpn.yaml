@@ -24,49 +24,49 @@
   {{- $_ := set $seenVTEPs $node.vtepIP true }}
   {{- if $.Values.evpn.bgp.activeBackup }}
     {{- if lt (len $node.uplinks) 2 }}
-      {{- fail (printf "evpn.nodes: activeBackup requires at least two uplinks on node %s" $node.name) }}
+      {{- fail (printf "evpn.nodes: activeBackup requires at least two uplinks on node index %d" $index) }}
     {{- end }}
     {{- $activeCount := 0 }}
     {{- $backupCount := 0 }}
-    {{- range $uplink := $node.uplinks }}
+    {{- range $uplinkIndex, $uplink := $node.uplinks }}
       {{- if not (hasKey $uplink "role") }}
-        {{- fail (printf "evpn.nodes: node %s uplink %s must set role to active or backup when activeBackup is enabled" $node.name $uplink.interface) }}
+        {{- fail (printf "evpn.nodes: node index %d uplink index %d must set role to active or backup when activeBackup is enabled" $index $uplinkIndex) }}
       {{- else if eq $uplink.role "active" }}
         {{- $activeCount = add $activeCount 1 }}
       {{- else if eq $uplink.role "backup" }}
         {{- $backupCount = add $backupCount 1 }}
       {{- else }}
-        {{- fail (printf "evpn.nodes: node %s uplink %s role must be active or backup" $node.name $uplink.interface) }}
+        {{- fail (printf "evpn.nodes: node index %d uplink index %d role must be active or backup" $index $uplinkIndex) }}
       {{- end }}
     {{- end }}
     {{- if ne $activeCount 1 }}
-      {{- fail (printf "evpn.nodes: activeBackup requires exactly one active uplink on node %s" $node.name) }}
+      {{- fail (printf "evpn.nodes: activeBackup requires exactly one active uplink on node index %d" $index) }}
     {{- end }}
     {{- if lt $backupCount 1 }}
-      {{- fail (printf "evpn.nodes: activeBackup requires at least one backup uplink on node %s" $node.name) }}
+      {{- fail (printf "evpn.nodes: activeBackup requires at least one backup uplink on node index %d" $index) }}
     {{- end }}
   {{- end }}
   {{- $seenPeers := dict }}
   {{- $seenInterfaces := dict }}
-  {{- range $uplink := $node.uplinks }}
+  {{- range $uplinkIndex, $uplink := $node.uplinks }}
     {{- if not $uplink.interface }}
-      {{- fail (printf "evpn.nodes: uplink without interface on node index %d" $index) }}
+      {{- fail (printf "evpn.nodes: uplink index %d of node index %d is missing interface" $uplinkIndex $index) }}
     {{- end }}
     {{- if hasKey $seenInterfaces $uplink.interface }}
-      {{- fail (printf "evpn.nodes: duplicate interface %s in uplinks of node index %d" $uplink.interface $index) }}
+      {{- fail (printf "evpn.nodes: duplicate interface in uplink index %d of node index %d" $uplinkIndex $index) }}
     {{- end }}
     {{- $_ := set $seenInterfaces $uplink.interface true }}
     {{- $unnumbered := $uplink.unnumbered | default false }}
     {{- if $unnumbered }}
       {{- if hasKey $uplink "peerAddress" }}
-        {{- fail (printf "evpn.nodes: node %s unnumbered uplink %s must omit peerAddress" $node.name $uplink.interface) }}
+        {{- fail (printf "evpn.nodes: node index %d unnumbered uplink index %d must omit peerAddress" $index $uplinkIndex) }}
       {{- end }}
       {{- if hasKey $uplink "address" }}
-        {{- fail (printf "evpn.nodes: node %s unnumbered uplink %s must omit address" $node.name $uplink.interface) }}
+        {{- fail (printf "evpn.nodes: node index %d unnumbered uplink index %d must omit address" $index $uplinkIndex) }}
       {{- end }}
     {{- else }}
       {{- if not $uplink.peerAddress }}
-        {{- fail (printf "evpn.nodes: node %s numbered uplink %s requires peerAddress" $node.name $uplink.interface) }}
+        {{- fail (printf "evpn.nodes: node index %d numbered uplink index %d requires peerAddress" $index $uplinkIndex) }}
       {{- end }}
       {{- if hasKey $seenPeers $uplink.peerAddress }}
         {{- fail (printf "evpn.nodes: duplicate peerAddress in uplinks of node index %d" $index) }}
@@ -87,6 +87,7 @@ data:
   settings.env: |
     CONFIGURE_CLUSTER_NETWORK={{ .Values.evpn.configureClusterNetwork }}
     WAIT_FOR_ESTABLISHED={{ .Values.evpn.bgp.waitForEstablished }}
+    WAIT_FOR_BFD={{ if $bfdProfile }}true{{ else }}false{{ end }}
     BGP_TIMEOUT_SECONDS={{ int .Values.evpn.bgp.timeoutSeconds }}
   nodes.txt: {{ $nodeNames := list }}{{- range .Values.evpn.nodes }}{{- $nodeNames = append $nodeNames .name }}{{- end }}{{ join "\n" $nodeNames | quote }}
   peers.txt: {{ $peerLines := list }}{{- range $node := .Values.evpn.nodes }}{{- range $uplink := $node.uplinks }}{{- $peerID := $uplink.peerAddress | default $uplink.interface }}{{- $peerLines = append $peerLines (printf "%s %s" $node.name $peerID) }}{{- end }}{{- end }}{{ join "\n" $peerLines | quote }}
@@ -200,7 +201,6 @@ data:
               - {{ if ($uplink.unnumbered | default false) }}interface: {{ $uplink.interface | quote }}{{ else }}address: {{ $uplink.peerAddress | quote }}{{ end }}
                 asn: {{ int64 $uplink.peerASN }}
 {{- if not ($uplink.unnumbered | default false) }}
-                ebgpMultiHop: true
                 port: 179
 {{- end }}
 {{- if $bfdProfile }}

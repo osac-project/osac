@@ -280,7 +280,7 @@
             },
             "bfdProfile": {
               "type": "string",
-              "description": "Optional FRR-K8s BFD profile name; empty disables BFD.",
+              "description": "Optional FRR-K8s BFD profile name; empty disables BFD. Applied to every EVPN uplink peer and requires single-hop BFD to come up.",
               "default": ""
             },
             "bfdReceiveInterval": {

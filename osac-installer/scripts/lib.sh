@@ -563,18 +563,18 @@ offline_render_error() {
             echo 'instanceGroups.networkFulfillment.config.NETRIS_VALIDATE_CERTS must be "true" or "false"' >&2 ;;
         *"NETRIS_CA_CONFIGMAP must be a ConfigMap name"*)
             echo "instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP must be a ConfigMap name" >&2 ;;
-        # The EVPN duplicate checks name the rejected entry by its index
-        # and never by its node name or addresses, so their fail text is
-        # chart-authored and value-free. Echo only the matched phrase, so
-        # caller text on the same error line cannot reach the output. The
-        # phrase set is the chart's three fixed messages: a wildcard span
-        # between "duplicate" and "index" would echo any words a caller
-        # placed there, such as a --set-file path fragment.
-        *"evpn.nodes: duplicate"*)
+        # The EVPN checks name the rejected entry by node and uplink
+        # index and never by its node name, interface name, or addresses,
+        # so their fail text is chart-authored and value-free. Echo only
+        # the matched phrase, so caller text on the same error line cannot
+        # reach the output. The phrase set below is the chart's fixed
+        # message list; a wildcard span between fixed words would echo any
+        # words a caller placed there, such as a --set-file path fragment.
+        *"evpn.nodes: "*)
             printf '%s\n' "$1" | LC_ALL=C awk '
                 !seen && /^Error: / {
                     seen = 1
-                    if (match($0, /evpn\.nodes: duplicate (node name at|vtepIP at|peerAddress in uplinks of node) index [0-9]+/))
+                    if (match($0, /evpn\.nodes: (duplicate (node name at|vtepIP at|peerAddress in uplinks of node) index [0-9]+|duplicate interface in uplink index [0-9]+ of node index [0-9]+|activeBackup requires (at least two uplinks|exactly one active uplink|at least one backup uplink) on node index [0-9]+|node index [0-9]+ uplink index [0-9]+ (must set role to active or backup when activeBackup is enabled|role must be active or backup)|uplink index [0-9]+ of node index [0-9]+ is missing interface|node index [0-9]+ unnumbered uplink index [0-9]+ must omit (peerAddress|address)|node index [0-9]+ numbered uplink index [0-9]+ requires peerAddress)/))
                         print substr($0, RSTART, RLENGTH)
                     next
                 }' >&2 ;;

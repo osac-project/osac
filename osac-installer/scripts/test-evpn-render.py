@@ -19,6 +19,7 @@ HOOK_SCRIPT = INFRA_CHART / "files/hooks/configure-evpn.sh"
 
 
 def render(release: str, chart: pathlib.Path, *args: str) -> list[dict[str, Any]]:
+    """Render a chart with helm template and return its objects."""
     result = subprocess.run(
         [
             os.environ.get("HELM_BIN", "helm"),
@@ -43,6 +44,7 @@ def render(release: str, chart: pathlib.Path, *args: str) -> list[dict[str, Any]
 
 
 def expect_render_failure(chart: pathlib.Path, values_file: pathlib.Path) -> None:
+    """Assert that the chart rejects the supplied values."""
     result = render_failure_result(chart, values_file)
     assert result.returncode != 0, "invalid EVPN values unexpectedly rendered"
 
@@ -50,6 +52,7 @@ def expect_render_failure(chart: pathlib.Path, values_file: pathlib.Path) -> Non
 def render_failure_result(
     chart: pathlib.Path, values_file: pathlib.Path
 ) -> subprocess.CompletedProcess[str]:
+    """Run helm template and return the failed result."""
     return subprocess.run(
         [
             os.environ.get("HELM_BIN", "helm"),
@@ -70,6 +73,7 @@ def render_failure_result(
 def named(
     resources: list[dict[str, Any]], kind: str, name: str
 ) -> dict[str, Any]:
+    """Return the single rendered resource with the given kind and name."""
     matches = [
         item
         for item in resources
@@ -80,6 +84,7 @@ def named(
 
 
 def absent(resources: list[dict[str, Any]], kind: str, name: str) -> None:
+    """Assert that the given resource was not rendered."""
     assert not any(
         item.get("kind") == kind and item.get("metadata", {}).get("name") == name
         for item in resources
@@ -87,12 +92,14 @@ def absent(resources: list[dict[str, Any]], kind: str, name: str) -> None:
 
 
 def config_data(resources: list[dict[str, Any]]) -> dict[str, str]:
+    """Return the EVPN configuration ConfigMap data."""
     return named(resources, "ConfigMap", "osac-infra-evpn-config")["data"]
 
 
 def granted_verbs(
     rules: list[dict[str, Any]], api_group: str, resource: str
 ) -> set[str]:
+    """Return the verbs granted for an API group and resource."""
     return {
         verb
         for rule in rules
@@ -103,10 +110,12 @@ def granted_verbs(
 
 
 def parse_documents(value: str) -> list[dict[str, Any]]:
+    """Parse a multi-document YAML string into objects."""
     return [item for item in yaml.safe_load_all(value) if isinstance(item, dict)]
 
 
 def write_values(directory: pathlib.Path, name: str, values: dict[str, Any]) -> pathlib.Path:
+    """Write values to a YAML file and return its path."""
     path = directory / name
     path.write_text(yaml.safe_dump(values, sort_keys=False), encoding="utf-8")
     return path
@@ -118,6 +127,7 @@ def node(
     uplinks: list[dict[str, Any]],
     asn: int | None = None,
 ) -> dict[str, Any]:
+    """Build one evpn.nodes entry."""
     value: dict[str, Any] = {"name": name, "vtepIP": vtep_ip, "uplinks": uplinks}
     if asn is not None:
         value["asn"] = asn
@@ -132,6 +142,7 @@ def uplink(
     unnumbered: bool = False,
     role: str | None = None,
 ) -> dict[str, Any]:
+    """Build one evpn.nodes[].uplinks entry."""
     value: dict[str, Any] = {
         "interface": interface,
         "peerASN": peer_asn,
@@ -148,6 +159,7 @@ def uplink(
 
 
 def base_values(nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a minimal valid EVPN values document."""
     return {
         "evpn": {
             "enabled": True,
@@ -166,6 +178,7 @@ def base_values(nodes: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def test_defaults() -> None:
+    """EVPN disabled renders no EVPN resources."""
     deps = render("osac-deps", DEPS_CHART)
     infra = render("osac-infra", INFRA_CHART)
     assert not any(
@@ -177,6 +190,7 @@ def test_defaults() -> None:
 
 
 def test_granted_verbs_aggregates_rules_and_wildcards() -> None:
+    """Wildcard rules contribute grants for every resource."""
     rules = [
         {"apiGroups": ["nmstate.io"], "resources": ["nmstates"], "verbs": ["get"]},
         {"apiGroups": ["*"], "resources": ["*"], "verbs": ["watch"]},
@@ -185,6 +199,7 @@ def test_granted_verbs_aggregates_rules_and_wildcards() -> None:
 
 
 def test_readiness_uses_operator_labels() -> None:
+    """Readiness checks use the operator's own label selectors."""
     script = HOOK_SCRIPT.read_text(encoding="utf-8")
     assert '-l "app=frr-k8s,component=frr-k8s"' in script
     assert (
@@ -194,6 +209,7 @@ def test_readiness_uses_operator_labels() -> None:
 
 
 def test_job_deadline_covers_bgp_wait() -> None:
+    """The hook deadline covers every per-peer BGP wait."""
     values = base_values(
         [node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.3")])]
     )
@@ -207,6 +223,7 @@ def test_job_deadline_covers_bgp_wait() -> None:
 
 
 def test_prune_listing_failure_is_fatal() -> None:
+    """A failed prune listing aborts the hook before any deletion."""
     with tempfile.TemporaryDirectory(prefix="evpn-prune-") as temp:
         directory = pathlib.Path(temp)
         config_dir = directory / "config"
@@ -278,7 +295,88 @@ def test_prune_listing_failure_is_fatal() -> None:
         assert not any(call.startswith("delete ") for call in calls)
 
 
+def test_bgp_wait_requires_bfd_and_redacts_identifiers() -> None:
+    """The BGP readiness wait requires BFD Up and logs no identifiers."""
+    node_hostname = "worker-0.internal.example.com"
+    peer_ip = "169.254.133.1"
+    for bfd_status, expected_success in (("Up", True), ("Down", False)):
+        with tempfile.TemporaryDirectory(prefix="evpn-bfd-wait-") as temp:
+            directory = pathlib.Path(temp)
+            config_dir = directory / "config"
+            bin_dir = directory / "bin"
+            config_dir.mkdir()
+            bin_dir.mkdir()
+
+            (config_dir / "settings.env").write_text(
+                "CONFIGURE_CLUSTER_NETWORK=false\n"
+                "WAIT_FOR_ESTABLISHED=true\n"
+                "WAIT_FOR_BFD=true\n"
+                "BGP_TIMEOUT_SECONDS=0\n",
+                encoding="utf-8",
+            )
+            (config_dir / "nodes.txt").write_text(
+                node_hostname + "\n", encoding="utf-8"
+            )
+            (config_dir / "peers.txt").write_text(
+                f"{node_hostname} {peer_ip}\n", encoding="utf-8"
+            )
+            for filename in (
+                "cluster-network-patch.json",
+                "nmstate.yaml",
+                "nncp.yaml",
+                "vtep.yaml",
+                "frr.yaml",
+                "routeadvertisements.yaml",
+            ):
+                (config_dir / filename).write_text("", encoding="utf-8")
+
+            mock_oc = bin_dir / "oc"
+            mock_oc.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "case \"${1:-} ${2:-}\" in\n"
+                "  'get network.operator.openshift.io') echo OVNKubernetes ;;\n"
+                "  'get pods') echo True ;;\n"
+                "  'get csv') echo Succeeded ;;\n"
+                "  'get vtep.k8s.ovn.org')\n"
+                "    if [[ \"${5:-}\" == *reason* ]]; then echo Allocated; "
+                "else echo True; fi\n"
+                "    ;;\n"
+                "  'get bgpsessionstates.frrk8s.metallb.io')\n"
+                f"    echo 'Established {bfd_status}' ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            mock_oc.chmod(0o755)
+
+            env = os.environ.copy()
+            env["CONFIG_DIR"] = str(config_dir)
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+            result = subprocess.run(
+                ["bash", str(HOOK_SCRIPT)],
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+                timeout=30,
+            )
+
+            output = result.stdout + result.stderr
+            assert (result.returncode == 0) is expected_success, result.stderr
+            assert node_hostname not in output, (
+                "the hook logged the node hostname"
+            )
+            assert peer_ip not in output, "the hook logged the peer address"
+            if not expected_success:
+                assert (
+                    "Timed out waiting for BGP session for peers.txt entry 1"
+                    in result.stderr
+                )
+                assert "Established Down" in output
+
+
 def test_single_node() -> None:
+    """A single numbered peer renders the full EVPN setup."""
     values = base_values(
         [
             node(
@@ -385,11 +483,19 @@ def test_single_node() -> None:
     router = underlay["spec"]["bgp"]["routers"][0]
     assert router["asn"] == 4209999999 and isinstance(router["asn"], int)
     assert "sourceaddress" in router["neighbors"][0]
+    assert "ebgpMultiHop" not in router["neighbors"][0], (
+        "numbered underlay peers are directly connected; multihop would force "
+        "BFD into multihop mode"
+    )
+    assert "bfdProfiles" not in underlay["spec"]["bgp"]
+    assert "bfdProfile" not in router["neighbors"][0]
+    assert "WAIT_FOR_BFD=false" in data["settings.env"]
     assert "e+09" not in str(infra), "large ASNs must not render as float notation"
     assert data["peers.txt"].splitlines() == ["worker-0 169.254.133.3"]
 
 
 def test_multiple_nodes() -> None:
+    """Multiple nodes render one NNCP and underlay FRRConfiguration each."""
     values = base_values(
         [
             node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")]),
@@ -484,6 +590,7 @@ def test_unnumbered_active_active_bgp() -> None:
 
 
 def test_active_backup_bgp() -> None:
+    """Active-backup renders role-based IPv4 unicast and EVPN policy."""
     values = base_values(
         [
             node(
@@ -597,6 +704,7 @@ def test_active_backup_bgp() -> None:
 
 
 def test_unnumbered_active_backup_bgp() -> None:
+    """Unnumbered active-backup uses interface-named route-maps."""
     values = base_values(
         [
             node(
@@ -647,6 +755,7 @@ def test_unnumbered_active_backup_bgp() -> None:
 
 
 def test_active_backup_requires_l2vpn_enabled() -> None:
+    """Active-backup requires EVPN to be enabled."""
     values = base_values(
         [node("worker-0", "10.200.255.1", [uplink("ens5f0", "169.254.133.1")])]
     )
@@ -661,6 +770,7 @@ def test_active_backup_requires_l2vpn_enabled() -> None:
 
 
 def test_active_backup_requires_two_uplinks() -> None:
+    """Active-backup needs at least two uplinks per node."""
     values = base_values(
         [node("worker-0", "10.200.255.1", [uplink("ens5f0", "169.254.133.1")])]
     )
@@ -671,6 +781,7 @@ def test_active_backup_requires_two_uplinks() -> None:
 
 
 def test_active_backup_requires_explicit_uplink_roles() -> None:
+    """Every uplink needs an explicit role in active-backup mode."""
     values = base_values(
         [
             node(
@@ -690,6 +801,7 @@ def test_active_backup_requires_explicit_uplink_roles() -> None:
 
 
 def test_active_backup_requires_one_active_and_one_backup() -> None:
+    """Active-backup needs exactly one active and one backup uplink."""
     for roles in (["backup", "backup"], ["active", "active"]):
         values = base_values(
             [
@@ -731,6 +843,7 @@ def test_active_backup_is_mutually_exclusive_with_active_active() -> None:
 
 
 def test_uplink_without_address() -> None:
+    """An uplink without a CIDR leaves the interface unconfigured."""
     values = base_values([node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")])])
     with tempfile.TemporaryDirectory(prefix="evpn-values-") as temp:
         values_file = write_values(pathlib.Path(temp), "no-address.yaml", values)
@@ -745,6 +858,7 @@ def test_uplink_without_address() -> None:
 
 
 def test_unnumbered_uplink() -> None:
+    """An unnumbered uplink renders an interface-based neighbor."""
     values = base_values(
         [node("worker-0", "10.200.255.1", [uplink("ens6", None, unnumbered=True)])]
     )
@@ -772,7 +886,57 @@ def test_unnumbered_uplink() -> None:
     assert "route-map" not in raw_config
 
 
+def test_bfd_profile_is_single_hop() -> None:
+    """BFD attaches to directly connected peers without multihop."""
+    values = base_values(
+        [
+            node(
+                "worker-0",
+                "10.200.255.1",
+                [
+                    uplink("ens6", "169.254.133.1", address="169.254.133.2/31"),
+                    uplink("ens7", None, peer_asn=4200300003, unnumbered=True),
+                ],
+            )
+        ]
+    )
+    values["evpn"]["bgp"].update(
+        {
+            "bfdProfile": "evpn-underlay",
+            "bfdReceiveInterval": 150,
+            "bfdTransmitInterval": 200,
+            "bfdDetectMultiplier": 4,
+        }
+    )
+    with tempfile.TemporaryDirectory(prefix="evpn-bfd-") as temp:
+        values_file = write_values(pathlib.Path(temp), "bfd.yaml", values)
+        infra = render("osac-infra", INFRA_CHART, "--values", str(values_file))
+
+    data = config_data(infra)
+    assert "WAIT_FOR_BFD=true" in data["settings.env"]
+    underlay = named(
+        parse_documents(data["frr.yaml"]), "FRRConfiguration", "osac-evpn-worker-0"
+    )
+    bgp = underlay["spec"]["bgp"]
+    assert bgp["bfdProfiles"] == [
+        {
+            "name": "evpn-underlay",
+            "receiveInterval": 150,
+            "transmitInterval": 200,
+            "detectMultiplier": 4,
+        }
+    ]
+    numbered, unnumbered = bgp["routers"][0]["neighbors"]
+    assert numbered["address"] == "169.254.133.1"
+    assert numbered["bfdProfile"] == "evpn-underlay"
+    assert "ebgpMultiHop" not in numbered
+    assert unnumbered["interface"] == "ens7"
+    assert unnumbered["bfdProfile"] == "evpn-underlay"
+    assert "ebgpMultiHop" not in unnumbered
+
+
 def test_uplinks_reject_duplicate_interface() -> None:
+    """A physical interface may not serve two uplinks."""
     # Interface identity is independent of peer identity. A numbered and an
     # unnumbered uplink, or two numbered uplinks, must not share a physical
     # interface: NMState keeps the last entry for a name, so the earlier
@@ -832,12 +996,13 @@ def test_uplinks_reject_duplicate_interface() -> None:
             assert result.returncode != 0, (
                 f"{name}: duplicate interface unexpectedly rendered"
             )
-            assert "duplicate interface ens6" in result.stderr, (
-                f"{name}: the failure did not identify the duplicate interface"
+            assert "duplicate interface in uplink index" in result.stderr, (
+                f"{name}: the failure did not identify the duplicate uplink"
             )
 
 
 def test_nmstate_install_disabled() -> None:
+    """A preinstalled NMState operator skips the subscription."""
     values = base_values([node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")])])
     values["evpn"]["nmstate"]["install"] = False
     with tempfile.TemporaryDirectory(prefix="evpn-values-") as temp:
@@ -850,6 +1015,7 @@ def test_nmstate_install_disabled() -> None:
 
 
 def test_invalid_values() -> None:
+    """Schema and template validation reject invalid values."""
     valid_node = node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")])
     invalid: list[dict[str, Any]] = []
 
@@ -896,6 +1062,11 @@ def test_invalid_values() -> None:
     )
     invalid.append(missing_peer_asn)
 
+    invalid_bfd = base_values([valid_node])
+    invalid_bfd["evpn"]["bgp"]["bfdProfile"] = "evpn-underlay"
+    invalid_bfd["evpn"]["bgp"]["bfdReceiveInterval"] = 5
+    invalid.append(invalid_bfd)
+
     with tempfile.TemporaryDirectory(prefix="evpn-invalid-") as temp:
         directory = pathlib.Path(temp)
         for index, values in enumerate(invalid):
@@ -904,11 +1075,11 @@ def test_invalid_values() -> None:
 
 
 def test_validation_errors_do_not_log_node_names() -> None:
+    """Validation errors identify entries by index, never by node name."""
     # Validation errors must not echo node names or peer addresses: they can
     # be internal hostnames or router IPs, and a failed render's error text
-    # ends up in installer logs. The messages identify the offending node by
-    # index. peerAddress must be IPv4 to pass the chart schema, so the render
-    # reaches the template's own duplicate checks.
+    # ends up in installer logs. peerAddress must be IPv4 to pass the chart
+    # schema, so the render reaches the template's own duplicate checks.
     node_hostname = "worker-0.internal.example.com"
     second_hostname = "worker-1.internal.example.com"
     peer_ip = "10.11.12.1"
@@ -935,46 +1106,69 @@ def test_validation_errors_do_not_log_node_names() -> None:
             node(second_hostname, vtep_ip, [uplink("ens7", second_peer_ip)]),
         ]
     )
+    missing_role = base_values(
+        [
+            node(
+                node_hostname,
+                "10.200.255.1",
+                [
+                    uplink("ens5f0", peer_ip),
+                    uplink("ens5f1", second_peer_ip, role="backup"),
+                ],
+            )
+        ]
+    )
+    missing_role["evpn"]["bgp"]["activeBackup"] = True
+    two_active = base_values(
+        [
+            node(
+                node_hostname,
+                "10.200.255.1",
+                [
+                    uplink("ens5f0", peer_ip, role="active"),
+                    uplink("ens5f1", second_peer_ip, role="active"),
+                ],
+            )
+        ]
+    )
+    two_active["evpn"]["bgp"]["activeBackup"] = True
     with tempfile.TemporaryDirectory(prefix="evpn-nolog-") as temp:
         directory = pathlib.Path(temp)
-        for name, values in (
-            ("duplicate-name.yaml", duplicate_name),
-            ("duplicate-peer.yaml", duplicate_peer),
-            ("duplicate-vtep.yaml", duplicate_vtep),
+        for name, values, expected in (
+            ("duplicate-name.yaml", duplicate_name, "duplicate node name"),
+            ("duplicate-peer.yaml", duplicate_peer, "duplicate peerAddress"),
+            ("duplicate-vtep.yaml", duplicate_vtep, "duplicate vtepIP"),
+            ("missing-role.yaml", missing_role, "must set role"),
+            ("two-active.yaml", two_active, "exactly one active uplink"),
         ):
             values_file = write_values(directory, name, values)
             result = render_failure_result(INFRA_CHART, values_file)
             assert result.returncode != 0, (
                 f"{name}: invalid EVPN values unexpectedly rendered"
             )
-            assert node_hostname not in result.stderr, (
-                f"{name}: the failure logged the node name"
-            )
-            assert second_hostname not in result.stderr, (
-                f"{name}: the failure logged the second node's name"
-            )
-            assert peer_ip not in result.stderr, (
-                f"{name}: the failure logged the peer address"
-            )
-            assert second_peer_ip not in result.stderr, (
-                f"{name}: the failure logged the second node's peer address"
-            )
-            assert vtep_ip not in result.stderr, (
-                f"{name}: the failure logged the VTEP address"
-            )
-            assert "duplicate" in result.stderr, f"{name}: no failure message"
-            if name == "duplicate-vtep.yaml":
-                assert "duplicate vtepIP" in result.stderr, (
-                    f"{name}: the failure did not identify the duplicate VTEP"
+            for identifier in (
+                node_hostname,
+                second_hostname,
+                peer_ip,
+                second_peer_ip,
+                vtep_ip,
+                "ens5f0",
+                "ens5f1",
+            ):
+                assert identifier not in result.stderr, (
+                    f"{name}: the failure logged {identifier}"
                 )
+            assert expected in result.stderr, f"{name}: no {expected} message"
 
 
 def main() -> None:
+    """Run every EVPN render contract test."""
     test_defaults()
     test_granted_verbs_aggregates_rules_and_wildcards()
     test_readiness_uses_operator_labels()
     test_job_deadline_covers_bgp_wait()
     test_prune_listing_failure_is_fatal()
+    test_bgp_wait_requires_bfd_and_redacts_identifiers()
     test_single_node()
     test_multiple_nodes()
     test_active_active_bgp()
@@ -988,6 +1182,7 @@ def main() -> None:
     test_active_backup_is_mutually_exclusive_with_active_active()
     test_uplink_without_address()
     test_unnumbered_uplink()
+    test_bfd_profile_is_single_hop()
     test_uplinks_reject_duplicate_interface()
     test_nmstate_install_disabled()
     test_invalid_values()

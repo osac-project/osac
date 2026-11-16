@@ -15,11 +15,13 @@ ROLE = COMPONENT / "collections/ansible_collections/osac/service/roles/fulfillme
 
 
 def content_assertion():
+    """Load the production ConfigMap assertion, including its task variables."""
     tasks = yaml.safe_load((ROLE / "tasks/main.yaml").read_text())
     return next(task for task in tasks if task["name"] == "Assert the fulfillment CA ConfigMap has only approved content")
 
 
 def test_assertion_conditions_are_strings():
+    """Check YAML preserves condition strings and the role suppresses output."""
     for path in (
         ROLE / "tasks/main.yaml",
         COMPONENT / "tests/integration/targets/fulfillment_trust_sync/tasks/baseline.yml",
@@ -37,6 +39,7 @@ def test_assertion_conditions_are_strings():
     ["matching", "missing", "duplicate", "wrong_bundle", "extra_data", "tenant", "owner", "hash", "extra_annotation"],
 )
 def test_content_assertion(tmp_path, case):
+    """Run the real assertion locally, accepting only the exact approved content."""
     values = yaml.safe_load((ROLE / "defaults/main.yaml").read_text())
     annotations = {
         "osac.openshift.io/tenant": "fixture-tenant",

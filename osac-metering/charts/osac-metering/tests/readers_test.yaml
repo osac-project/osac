@@ -129,7 +129,7 @@ tests:
         - name: billing-reader
     asserts:
       - failedTemplate:
-          errorPattern: 'duplicate metering reader "billing-reader": each reader name must be unique'
+          errorPattern: 'duplicate metering reader at index 1: each reader name must be unique'
 
   - it: rejects a reader name that is not a lowercase DNS name
     set:
@@ -137,7 +137,7 @@ tests:
         - name: Billing_Reader
     asserts:
       - failedTemplate:
-          errorPattern: 'metering reader "Billing_Reader" must be a lowercase DNS name'
+          errorPattern: 'metering reader at index 0 must be a lowercase DNS name'
 
   - it: rejects a reader name that collides with an OSAC KafkaUser
     set:
@@ -145,7 +145,7 @@ tests:
         - name: osac-metering
     asserts:
       - failedTemplate:
-          errorPattern: 'metering reader "osac-metering" is a KafkaUser OSAC owns'
+          errorPattern: 'metering reader at index 0 is a KafkaUser OSAC owns'
 
   - it: rejects the echo adapter KafkaUser name
     set:
@@ -153,7 +153,7 @@ tests:
         - name: osac-metering-echo-adapter
     asserts:
       - failedTemplate:
-          errorPattern: 'metering reader "osac-metering-echo-adapter" is a KafkaUser OSAC owns'
+          errorPattern: 'metering reader at index 0 is a KafkaUser OSAC owns'
 
   - it: rejects the m360 adapter KafkaUser name
     set:
@@ -161,7 +161,7 @@ tests:
         - name: osac-metering-m360-adapter
     asserts:
       - failedTemplate:
-          errorPattern: 'metering reader "osac-metering-m360-adapter" is a KafkaUser OSAC owns'
+          errorPattern: 'metering reader at index 0 is a KafkaUser OSAC owns'
 
   - it: rejects any reader name in the reserved osac- prefix
     set:
@@ -169,7 +169,7 @@ tests:
         - name: osac-billing-reader
     asserts:
       - failedTemplate:
-          errorPattern: 'metering reader "osac-billing-reader" uses the reserved osac- or osac. name prefix'
+          errorPattern: 'metering reader at index 0 uses the reserved osac- or osac. name prefix'
 
   - it: rejects any reader name in the reserved osac. prefix
     set:
@@ -177,7 +177,7 @@ tests:
         - name: osac.billing-reader
     asserts:
       - failedTemplate:
-          errorPattern: 'metering reader "osac.billing-reader" uses the reserved osac- or osac. name prefix'
+          errorPattern: 'metering reader at index 0 uses the reserved osac- or osac. name prefix'
 
   - it: rejects a reader name longer than a KafkaUser name
     set:
@@ -185,4 +185,4 @@ tests:
         - name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     asserts:
       - failedTemplate:
-          errorPattern: 'metering reader "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" must be at most 253 characters'
+          errorPattern: 'metering reader at index 0 must be at most 253 characters'

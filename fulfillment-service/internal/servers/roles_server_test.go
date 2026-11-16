@@ -18,8 +18,10 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -29,40 +31,63 @@ var _ = Describe("Public roles server", func() {
 	BeforeEach(func() {
 		var err error
 
+		permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
+		Expect(err).ToNot(HaveOccurred())
+
 		rolesServer, err = NewRolesServer().
 			SetLogger(logger).
 			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
+			SetPermissionCatalog(permissionCatalog).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 	})
 
 	Describe("Creation", func() {
 		It("Can be built if all required parameters are set", func() {
+			permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
+			Expect(err).ToNot(HaveOccurred())
 			server, err := NewRolesServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
+				SetPermissionCatalog(permissionCatalog).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(server).ToNot(BeNil())
 		})
 
 		It("Fails if logger is not set", func() {
+			permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
+			Expect(err).ToNot(HaveOccurred())
 			server, err := NewRolesServer().
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
+				SetPermissionCatalog(permissionCatalog).
 				Build()
 			Expect(err).To(MatchError("logger is mandatory"))
 			Expect(server).To(BeNil())
 		})
 
 		It("Fails if tenancy logic is not set", func() {
+			permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
+			Expect(err).ToNot(HaveOccurred())
 			server, err := NewRolesServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
+				SetPermissionCatalog(permissionCatalog).
 				Build()
 			Expect(err).To(MatchError("tenancy logic is mandatory"))
+			Expect(server).To(BeNil())
+		})
+
+		It("Fails if permission catalog is not set", func() {
+			server, err := NewRolesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).To(MatchError("permission catalog is mandatory"))
 			Expect(server).To(BeNil())
 		})
 	})
@@ -273,6 +298,111 @@ var _ = Describe("Public roles server", func() {
 				Id: "non-existent-id",
 			}.Build())
 			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("Permission rule validation", func() {
+		It("Creates a role with valid permission rules and stores them verbatim", func() {
+			response, err := rolesServer.Create(ctx, publicv1.RolesCreateRequest_builder{
+				Object: publicv1.Role_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "cluster-viewer",
+					}.Build(),
+					Spec: publicv1.RoleSpec_builder{
+						Permissions: []*publicv1.PermissionRule{
+							publicv1.PermissionRule_builder{
+								Service: "osac.public.clusters",
+								Methods: []string{"get", "list"},
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			permissions := response.GetObject().GetSpec().GetPermissions()
+			Expect(permissions).To(HaveLen(1))
+			Expect(permissions[0].GetService()).To(Equal("osac.public.clusters"))
+			Expect(permissions[0].GetMethods()).To(Equal([]string{"get", "list"}))
+		})
+
+		It("Rejects the creation of roles with an unknown service", func() {
+			_, err := rolesServer.Create(ctx, publicv1.RolesCreateRequest_builder{
+				Object: publicv1.Role_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "invalid-role",
+					}.Build(),
+					Spec: publicv1.RoleSpec_builder{
+						Permissions: []*publicv1.PermissionRule{
+							publicv1.PermissionRule_builder{
+								Service: "osac.public.nope",
+								Methods: []string{"create"},
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring(`unknown service`))
+			Expect(err.Error()).ToNot(ContainSubstring(`osac.public.nope`), "the error must not echo the rule values")
+
+			listResponse, err := rolesServer.List(ctx, publicv1.RolesListRequest_builder{
+				Filter: new("this.metadata.name == 'invalid-role'"),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listResponse.GetSize()).To(Equal(int32(0)), "no role row should be created")
+		})
+
+		It("Rejects the creation of roles with an unknown method", func() {
+			_, err := rolesServer.Create(ctx, publicv1.RolesCreateRequest_builder{
+				Object: publicv1.Role_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "invalid-role",
+					}.Build(),
+					Spec: publicv1.RoleSpec_builder{
+						Permissions: []*publicv1.PermissionRule{
+							publicv1.PermissionRule_builder{
+								Service: "osac.public.clusters",
+								Methods: []string{"fake"},
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring(`unknown method`))
+		})
+
+		It("Rejects updating the permission rules with a malformed wildcard", func() {
+			createResponse, err := rolesServer.Create(ctx, publicv1.RolesCreateRequest_builder{
+				Object: publicv1.Role_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "cluster-viewer",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = rolesServer.Update(ctx, publicv1.RolesUpdateRequest_builder{
+				Object: publicv1.Role_builder{
+					Id: createResponse.GetObject().GetId(),
+					Spec: publicv1.RoleSpec_builder{
+						Permissions: []*publicv1.PermissionRule{
+							publicv1.PermissionRule_builder{
+								Service: "osac.public.clus*",
+								Methods: []string{"get"},
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.permissions"},
+				},
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 	})
 })

@@ -18,7 +18,7 @@ tests:
         - name: fulfillment-service
     asserts:
       - failedTemplate:
-          errorPattern: 'metering reader "fulfillment-service" is a KafkaUser OSAC owns'
+          errorPattern: 'metering reader at index 0 is a KafkaUser OSAC owns'
 
   - it: rejects the reserved osac prefix
     set:
@@ -26,4 +26,4 @@ tests:
         - name: osac-billing-reader
     asserts:
       - failedTemplate:
-          errorPattern: 'metering reader "osac-billing-reader" uses the reserved osac- or osac. name prefix'
+          errorPattern: 'metering reader at index 0 uses the reserved osac- or osac. name prefix'

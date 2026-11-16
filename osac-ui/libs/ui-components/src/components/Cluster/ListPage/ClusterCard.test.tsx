@@ -2,7 +2,12 @@ import { create } from '@bufbuild/protobuf';
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { ClusterSchema, ClusterState, ClusterVersionSchema } from '@osac/types';
+import {
+  ClusterSchema,
+  ClusterState,
+  ClusterVersionSchema,
+  ClusterVersionState,
+} from '@osac/types';
 
 import ClusterCard from './ClusterCard';
 import { formatClusterCreatedAt } from './clusterDisplay';
@@ -25,6 +30,7 @@ const cluster = create(ClusterSchema, {
   status: {
     state: ClusterState.READY,
     consoleUrl: 'https://console.example.com',
+    observedVersion: '4.19.0',
     nodeSets: {
       worker: { size: 3 },
     },
@@ -34,7 +40,7 @@ const cluster = create(ClusterSchema, {
 const clusterVersion = create(ClusterVersionSchema, {
   id: 'v4.19',
   metadata: { name: 'v4.19' },
-  spec: { version: '4.19.0' },
+  spec: { version: '4.19.0', state: ClusterVersionState.ACTIVE },
 });
 
 describe('ClusterCard', () => {
@@ -47,7 +53,9 @@ describe('ClusterCard', () => {
     );
     expect(screen.getByText('cluster-node-sets-object')).toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
+    expect(screen.getByText('Cluster version')).toBeInTheDocument();
     expect(screen.getByText('OpenShift 4.19.0')).toBeInTheDocument();
+    expect(screen.getByText('Active')).toBeInTheDocument();
     expect(screen.getByText('Node sets')).toBeInTheDocument();
     expect(screen.getByText('1 pool · 3 of 3 nodes ready')).toBeInTheDocument();
     expect(screen.getByText('Root')).toBeInTheDocument();
@@ -56,6 +64,17 @@ describe('ClusterCard', () => {
     const consoleLink = screen.getByRole('link', { name: 'Console' });
     expect(consoleLink).toHaveAttribute('href', 'https://console.example.com');
     expect(consoleLink).toHaveAttribute('target', '_blank');
+  });
+
+  it('shows no inferred version or lifecycle without an observation', () => {
+    renderWithProviders(
+      <ClusterCard cluster={create(ClusterSchema, { id: 'missing', spec: cluster.spec })} />,
+    );
+
+    expect(screen.getByText('Cluster version').closest('dt')?.nextElementSibling).toHaveTextContent(
+      '—',
+    );
+    expect(screen.queryByText('Active')).not.toBeInTheDocument();
   });
 
   it('disables console when cluster is not ready', () => {

@@ -3,15 +3,12 @@ import {
   CardBody,
   CardTitle,
   Divider,
-  ProgressStep,
   type ProgressStepProps,
   ProgressStepVariant,
   ProgressStepper,
   Stack,
   StackItem,
 } from '@patternfly/react-core';
-import { RhUiInProgressIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-in-progress-icon';
-import { TFunction } from 'i18next';
 
 import {
   type BareMetalInstance,
@@ -21,6 +18,7 @@ import {
 } from '@osac/types';
 
 import { useTranslation } from '../../hooks/useTranslation';
+import ResourceProgressStep from '../Resource/ResourceProgressStep';
 
 type StepKey = 'host' | 'network' | 'provision' | 'finalizing';
 
@@ -114,59 +112,6 @@ const getSteps = (conditions: BareMetalInstanceCondition[] = []): StepStatusMap 
   };
 };
 
-const getStatusLabel = (step: StepStatus, t: TFunction): string | undefined => {
-  if (step.variant === ProgressStepVariant.success) {
-    return t('Complete');
-  }
-
-  if (step.variant === ProgressStepVariant.danger) {
-    return t('Failed');
-  }
-
-  if (step.isCurrent) {
-    return t('In progress');
-  }
-
-  return undefined;
-};
-
-const BMProgressStep = ({
-  stepId,
-  title,
-  stepStatus,
-}: {
-  stepId: StepKey;
-  title: string;
-  stepStatus: StepStatus | undefined;
-}) => {
-  const { t } = useTranslation();
-
-  const stepProps = stepStatus ?? { variant: ProgressStepVariant.default };
-
-  const statusLabel = getStatusLabel(stepProps, t);
-  const description = stepProps.description || statusLabel;
-  const ariaLabel = [
-    title,
-    statusLabel,
-    typeof stepProps.description === 'string' ? stepProps.description : undefined,
-  ]
-    .filter(Boolean)
-    .join(', ');
-
-  return (
-    <ProgressStep
-      {...stepProps}
-      id={stepId}
-      titleId={`${stepId}-title`}
-      aria-label={ariaLabel}
-      description={description}
-      icon={stepProps.variant === 'pending' ? <RhUiInProgressIcon /> : undefined}
-    >
-      {title}
-    </ProgressStep>
-  );
-};
-
 interface Props {
   instance: BareMetalInstance;
 }
@@ -188,22 +133,22 @@ const BareMetalProvisioningProgress = ({ instance }: Props) => {
           </StackItem>
           <StackItem>
             <ProgressStepper isCenterAligned aria-label={t('Provisioning progress steps')}>
-              <BMProgressStep
+              <ResourceProgressStep
                 stepId="host"
                 stepStatus={step['host']}
                 title={t('Host allocation')}
               />
-              <BMProgressStep
+              <ResourceProgressStep
                 stepId="provision"
                 stepStatus={step['provision']}
                 title={t('Provisioning')}
               />
-              <BMProgressStep
+              <ResourceProgressStep
                 stepId="network"
                 stepStatus={step['network']}
                 title={t('Network setup')}
               />
-              <BMProgressStep
+              <ResourceProgressStep
                 stepId="finalizing"
                 stepStatus={step['finalizing']}
                 title={t('Finalizing')}

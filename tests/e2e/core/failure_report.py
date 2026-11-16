@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import time
+import traceback
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,6 +47,11 @@ def _utc(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat(timespec="seconds")
 
 
+def _log_internal_error(message: str) -> None:
+    """Retain reporting-error tracebacks without handing raw exception data to log handlers."""
+    logger.warning("%s\n%s", message, sanitize_text(traceback.format_exc()))
+
+
 def _guarded(
     method: Callable[Concatenate[FailureReporter, P], None],
 ) -> Callable[Concatenate[FailureReporter, P], None]:
@@ -56,7 +62,7 @@ def _guarded(
         try:
             method(self, *args, **kwargs)
         except Exception:
-            logger.warning("E2E failure reporting hit an internal error", exc_info=True)
+            _log_internal_error("E2E failure reporting hit an internal error")
 
     return wrapper
 
@@ -166,14 +172,14 @@ class FailureReporter:
             classified = classify(exc)
         except Exception:
             # A bug in classification must not lose the failure: report it as unclassified.
-            logger.warning("E2E failure classification hit an internal error", exc_info=True)
+            _log_internal_error("E2E failure classification hit an internal error")
             classified = Classified(Kind.UNCLASSIFIED, type(exc).__name__, {})
         entry.update(kind=str(classified.kind), summary=classified.summary, ids=classified.ids)
 
         first = self._remembered(exc)
         if first is not None:
             entry["repeat_of"] = first
-            logger.error("E2E FAILURE %s [%s] repeats the failure of %s", test, classified.kind, first)
+            logger.error("%s", sanitize_text(f"E2E FAILURE {test} [{classified.kind}] repeats the failure of {first}"))
             return
         self._exceptions[id(exc)] = (exc, test)
 
@@ -181,8 +187,8 @@ class FailureReporter:
             f"E2E FAILURE {test} [{classified.kind}] phase={entry['phase']} ids={classified.ids} "
             f"{sanitize_text(classified.summary)[:_LOG_SUMMARY_LIMIT]}"
         )
-        logger.error("%s", line)
-        entry["snapshot"] = self._snapshot(test, classified.kind, started, entry)
+        logger.error("%s", sanitize_text(line))
+        entry["snapshot"] = self._snapshot(sanitize_text(test), classified.kind, started, entry)
 
     def _remembered(self, exc: BaseException) -> str | None:
         """The test that already reported `exc`, or an exception in its chain (a cleanup error replaces it)."""
@@ -228,7 +234,7 @@ class FailureReporter:
         try:
             return self.snapshotter.take(test, kind, datetime.fromtimestamp(started, UTC), entry)
         except Exception:
-            logger.warning("E2E failure snapshot hit an internal error", exc_info=True)
+            _log_internal_error("E2E failure snapshot hit an internal error")
             return None
 
 
@@ -249,4 +255,4 @@ def capture_fixture_failure(config: pytest.Config, exc: BaseException, name: str
         if reporter is not None:
             reporter.capture_fixture_failure(exc, name, started)
     except Exception:
-        logger.warning("E2E fixture failure capture hit an internal error", exc_info=True)
+        _log_internal_error("E2E fixture failure capture hit an internal error")

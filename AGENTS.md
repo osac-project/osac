@@ -126,7 +126,12 @@ forks writable repositories using authenticated `gh`; use
 
 Use the affected component's touched-area map and the relevant section of
 [Integration testing](docs/INTEGRATION-TESTING.md) for tiers, commands, and
-coverage boundaries. Keep both current when suites change, and link missing
+coverage boundaries. Follow the linked component suite guide and inspect its
+actual test source before extending coverage. Update the suite guide only when
+commands, prerequisites, dependency boundaries, coverage scope or known gaps
+change; update the touched-area map when required validation changes. Routine
+test additions do not require a documentation inventory update. Keep individual
+assertions in test source and execution results in the PR or task. Link missing
 coverage to its owning follow-up ticket using the Jira URL.
 
 Assign Unit, Envtest, component-integration, and Contract coverage for changed

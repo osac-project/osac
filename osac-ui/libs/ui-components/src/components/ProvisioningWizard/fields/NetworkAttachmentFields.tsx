@@ -60,7 +60,7 @@ const NetworkAttachmentFields = ({ name, isDisabled = false }: NetworkAttachment
       />
       <div className="network-attachment-fields__details">
         {useDefaultNetwork ? (
-          <DefaultNetworkSummary project={values.metadata.project} />
+          <DefaultNetworkSummary />
         ) : (
           <>
             {createdNetworkName && (

@@ -467,10 +467,13 @@ func (i *Interceptor) dumpMessage(ctx context.Context, key string, value any) (f
 const (
 	publicSecretMessage  = protoreflect.FullName("osac.public.v1.Secret")
 	privateSecretMessage = protoreflect.FullName("osac.private.v1.Secret")
+
+	publicPermissionRuleMessage  = protoreflect.FullName("osac.public.v1.PermissionRule")
+	privatePermissionRuleMessage = protoreflect.FullName("osac.private.v1.PermissionRule")
 )
 
-// redactProtoMessage returns a copy of the message with Secret data replaced by the standard log redaction marker.
-// The copy ensures that logging never changes the message sent through gRPC.
+// redactProtoMessage returns a copy of the message with Secret data and permission rule values replaced by the
+// standard log redaction marker. The copy ensures that logging never changes the message sent through gRPC.
 func redactProtoMessage(message proto.Message) proto.Message {
 	result := proto.Clone(message)
 	redactProtoMessageFields(result.ProtoReflect())
@@ -504,6 +507,19 @@ func redactProtoMessageFields(message protoreflect.Message) {
 				for index := 0; index < list.Len(); index++ {
 					redactProtoMessageFields(list.Get(index).Message())
 				}
+				continue
+			}
+			if field.Kind() == protoreflect.StringKind && isPermissionRule(field.ContainingMessage()) {
+				list := message.Mutable(field).List()
+				for index := 0; index < list.Len(); index++ {
+					list.Set(index, protoreflect.ValueOfString(redactMark))
+				}
+			}
+			continue
+		}
+		if field.Kind() == protoreflect.StringKind && isPermissionRule(field.ContainingMessage()) {
+			if message.Has(field) {
+				message.Set(field, protoreflect.ValueOfString(redactMark))
 			}
 			continue
 		}
@@ -516,6 +532,11 @@ func redactProtoMessageFields(message protoreflect.Message) {
 func isSecret(message protoreflect.MessageDescriptor) bool {
 	name := message.FullName()
 	return name == publicSecretMessage || name == privateSecretMessage
+}
+
+func isPermissionRule(message protoreflect.MessageDescriptor) bool {
+	name := message.FullName()
+	return name == publicPermissionRuleMessage || name == privatePermissionRuleMessage
 }
 
 type interceptorServerStream struct {

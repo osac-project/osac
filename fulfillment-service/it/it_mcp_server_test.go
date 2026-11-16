@@ -923,6 +923,148 @@ var _ = Describe("MCP server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(instances.GetItems()).To(BeEmpty())
 	})
+
+	It("recovers a committed Create when the response is lost", func() {
+		var faultClient *mcpComputeInstancesFaultClient
+		mcpHTTPServer = startInProcessMCPServerWithDeps(ctx, "fulfillment-mcp-write-lost-response", func(
+			deps mcpserver.ServerDeps,
+		) mcpserver.ServerDeps {
+			faultClient = &mcpComputeInstancesFaultClient{
+				ComputeInstancesClient: deps.ComputeInstancesClient,
+				dropCreateResponse:     true,
+			}
+			deps.ComputeInstancesClient = faultClient
+			return deps
+		})
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-lost-create-response", userUsername)
+		instanceName := fmt.Sprintf("mcp-lost-create-%s", uuid.New()[24:32])
+		bootDiskSize := int32(20)
+		created, err := callMCPTool[mcpserver.CreateComputeInstanceOutput](
+			ctx, session, "create_compute_instance", mcpserver.CreateComputeInstanceInput{
+				Name: instanceName, CatalogItem: catalogItemID, DiskImageID: diskImageID,
+				ProjectID: projectID, InstanceTypeID: instanceTypeID,
+				BootDisk: &mcpserver.ComputeInstanceBootDiskInput{
+					SizeGiB: &bootDiskSize, StorageTierID: storageTierID,
+				},
+				NetworkAttachments: []mcpserver.ComputeInstanceNetworkAttachmentInput{{
+					SubnetID: subnetID, SecurityGroupIDs: []string{securityGroupID},
+				}},
+			},
+		)
+		if faultClient.lastCreateID != "" {
+			deferMCPComputeInstanceCleanup(ctx, faultClient.lastCreateID)
+		}
+		Expect(err).ToNot(HaveOccurred())
+		Expect(created.ID).To(Equal(faultClient.lastCreateID))
+		Expect(faultClient.createCalls).To(Equal(1))
+		Expect(faultClient.getCalls).To(Equal(1))
+
+		confirmed, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+			Id: created.ID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(confirmed.GetObject().GetMetadata().GetName()).To(Equal(instanceName))
+	})
+
+	It("reports unknown outcome when a committed Create cannot be looked up", func() {
+		var faultClient *mcpComputeInstancesFaultClient
+		mcpHTTPServer = startInProcessMCPServerWithDeps(ctx, "fulfillment-mcp-unknown-write-outcome", func(
+			deps mcpserver.ServerDeps,
+		) mcpserver.ServerDeps {
+			faultClient = &mcpComputeInstancesFaultClient{
+				ComputeInstancesClient: deps.ComputeInstancesClient,
+				dropCreateResponse:     true,
+				failGet:                true,
+			}
+			deps.ComputeInstancesClient = faultClient
+			return deps
+		})
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-unknown-write-outcome", userUsername)
+		instanceName := fmt.Sprintf("mcp-unknown-outcome-%s", uuid.New()[24:32])
+		bootDiskSize := int32(20)
+		_, err := callMCPTool[mcpserver.CreateComputeInstanceOutput](
+			ctx, session, "create_compute_instance", mcpserver.CreateComputeInstanceInput{
+				Name: instanceName, CatalogItem: catalogItemID, DiskImageID: diskImageID,
+				ProjectID: projectID, InstanceTypeID: instanceTypeID,
+				BootDisk: &mcpserver.ComputeInstanceBootDiskInput{
+					SizeGiB: &bootDiskSize, StorageTierID: storageTierID,
+				},
+				NetworkAttachments: []mcpserver.ComputeInstanceNetworkAttachmentInput{{
+					SubnetID: subnetID, SecurityGroupIDs: []string{securityGroupID},
+				}},
+			},
+		)
+		if faultClient.lastCreateID != "" {
+			deferMCPComputeInstanceCleanup(ctx, faultClient.lastCreateID)
+		}
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`"category":"unknown_outcome"`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"Unknown"`))
+		Expect(err.Error()).To(ContainSubstring(`"retryable":false`))
+		Expect(err.Error()).To(ContainSubstring(faultClient.lastCreateID))
+		Expect(faultClient.createCalls).To(Equal(1))
+		Expect(faultClient.getCalls).To(Equal(1))
+
+		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+		committed, err := adminInstances.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{
+			Id: faultClient.lastCreateID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(committed.GetObject().GetMetadata().GetName()).To(Equal(instanceName))
+	})
+
+	It("keeps prior success and stops after a definite second-write failure", func() {
+		var faultClient *mcpComputeInstancesFaultClient
+		mcpHTTPServer = startInProcessMCPServerWithDeps(ctx, "fulfillment-mcp-definite-write-failure", func(
+			deps mcpserver.ServerDeps,
+		) mcpserver.ServerDeps {
+			faultClient = &mcpComputeInstancesFaultClient{ComputeInstancesClient: deps.ComputeInstancesClient}
+			deps.ComputeInstancesClient = faultClient
+			return deps
+		})
+		session := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-definite-write-failure", userUsername)
+		instanceName := fmt.Sprintf("mcp-definite-failure-%s", uuid.New()[24:32])
+		thirdName := fmt.Sprintf("mcp-uninvoked-third-write-%s", uuid.New()[24:32])
+		bootDiskSize := int32(20)
+		createInput := mcpserver.CreateComputeInstanceInput{
+			Name: instanceName, CatalogItem: catalogItemID, DiskImageID: diskImageID,
+			ProjectID: projectID, InstanceTypeID: instanceTypeID,
+			BootDisk: &mcpserver.ComputeInstanceBootDiskInput{
+				SizeGiB: &bootDiskSize, StorageTierID: storageTierID,
+			},
+			NetworkAttachments: []mcpserver.ComputeInstanceNetworkAttachmentInput{{
+				SubnetID: subnetID, SecurityGroupIDs: []string{securityGroupID},
+			}},
+		}
+		first, err := callMCPTool[mcpserver.CreateComputeInstanceOutput](
+			ctx, session, "create_compute_instance", createInput,
+		)
+		Expect(err).ToNot(HaveOccurred())
+		deferMCPComputeInstanceCleanup(ctx, first.ID)
+
+		_, err = callMCPTool[mcpserver.CreateComputeInstanceOutput](
+			ctx, session, "create_compute_instance", createInput,
+		)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`"category":"conflict"`))
+		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"AlreadyExists"`))
+		Expect(faultClient.createCalls).To(Equal(2))
+		Expect(faultClient.getCalls).To(BeZero())
+
+		prior, err := computeInstancesClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+			Id: first.ID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(prior.GetObject().GetMetadata().GetName()).To(Equal(instanceName))
+		Expect(prior.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+
+		adminInstances := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+		third, err := adminInstances.List(ctx, privatev1.ComputeInstancesListRequest_builder{
+			Filter: proto.String(fmt.Sprintf("this.metadata.name == %q", thirdName)),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(third.GetItems()).To(BeEmpty())
+	})
 })
 
 func waitForMCPComputeInstanceDeletion(ctx context.Context, id string) {

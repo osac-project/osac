@@ -30,6 +30,8 @@ import (
 )
 
 var _ = Describe("Tenancy logic", func() {
+	var pullSecretDefaults *privatev1.ClusterTemplateSpecDefaults
+
 	BeforeEach(func() {
 		var err error
 
@@ -54,6 +56,19 @@ var _ = Describe("Tenancy logic", func() {
 		}
 		createTenant("my-tenant")
 		createTenant("your-tenant")
+		secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+			SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		for _, tenant := range []string{"my-tenant", auth.SharedTenant} {
+			_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Metadata: privatev1.Metadata_builder{Name: "tenancy-pull-secret", Tenant: tenant}.Build(),
+				Type:     privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		}
+		pullSecretDefaults = privatev1.ClusterTemplateSpecDefaults_builder{
+			PullSecretSecret: privatev1.SecretLocalReference_builder{Name: "tenancy-pull-secret"}.Build(),
+		}.Build()
 		seedReadyDefaultNetworkingWithNAT("my-tenant")
 		seedReadyDefaultNetworkingWithNAT("your-tenant")
 		seedReadyDefaultNetworkingWithNAT(auth.SharedTenant)
@@ -117,9 +132,10 @@ var _ = Describe("Tenancy logic", func() {
 		_, err = templatesDao.Create().
 			SetObject(
 				privatev1.ClusterTemplate_builder{
-					Id:          "my-template",
-					Title:       "My template",
-					Description: "My template",
+					SpecDefaults: pullSecretDefaults,
+					Id:           "my-template",
+					Title:        "My template",
+					Description:  "My template",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-template",
 						Tenant: "my-tenant",
@@ -175,9 +191,10 @@ var _ = Describe("Tenancy logic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = templatesDao.Create().
 			SetObject(privatev1.ClusterTemplate_builder{
-				Id:          "my-template",
-				Title:       "My template",
-				Description: "My template",
+				SpecDefaults: pullSecretDefaults,
+				Id:           "my-template",
+				Title:        "My template",
+				Description:  "My template",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-template",
 					Tenant: "my-tenant",
@@ -257,9 +274,10 @@ var _ = Describe("Tenancy logic", func() {
 		_, err = templatesDao.Create().
 			SetObject(
 				privatev1.ClusterTemplate_builder{
-					Id:          "my-template",
-					Title:       "My template",
-					Description: "My template",
+					SpecDefaults: pullSecretDefaults,
+					Id:           "my-template",
+					Title:        "My template",
+					Description:  "My template",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-template",
 						Tenant: "my-tenant",
@@ -325,9 +343,10 @@ var _ = Describe("Tenancy logic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = templatesDao.Create().
 			SetObject(privatev1.ClusterTemplate_builder{
-				Id:          "my-template",
-				Title:       "My template",
-				Description: "My template",
+				SpecDefaults: pullSecretDefaults,
+				Id:           "my-template",
+				Title:        "My template",
+				Description:  "My template",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-template",
 					Tenant: "my-tenant",
@@ -390,9 +409,10 @@ var _ = Describe("Tenancy logic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = templatesDao.Create().
 			SetObject(privatev1.ClusterTemplate_builder{
-				Id:          "my-template",
-				Title:       "My template",
-				Description: "My template",
+				SpecDefaults: pullSecretDefaults,
+				Id:           "my-template",
+				Title:        "My template",
+				Description:  "My template",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-template",
 					Tenant: "my-tenant",
@@ -464,9 +484,10 @@ var _ = Describe("Tenancy logic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = templatesDao.Create().
 			SetObject(privatev1.ClusterTemplate_builder{
-				Id:          "my-template",
-				Title:       "My template",
-				Description: "My template",
+				SpecDefaults: pullSecretDefaults,
+				Id:           "my-template",
+				Title:        "My template",
+				Description:  "My template",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-template",
 					Tenant: "my-tenant",
@@ -541,7 +562,8 @@ var _ = Describe("Tenancy logic", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = templatesDao.Create().
 			SetObject(privatev1.ClusterTemplate_builder{
-				Id: "our-template",
+				SpecDefaults: pullSecretDefaults,
+				Id:           "our-template",
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-template",
 					Tenant: "my-tenant",
@@ -608,9 +630,10 @@ var _ = Describe("Tenancy logic", func() {
 		_, err = templatesDao.Create().
 			SetObject(
 				privatev1.ClusterTemplate_builder{
-					Id:          "my-template",
-					Title:       "My template",
-					Description: "My template",
+					SpecDefaults: pullSecretDefaults,
+					Id:           "my-template",
+					Title:        "My template",
+					Description:  "My template",
 					Metadata: privatev1.Metadata_builder{
 						Name:   "test-template",
 						Tenant: auth.SharedTenant,

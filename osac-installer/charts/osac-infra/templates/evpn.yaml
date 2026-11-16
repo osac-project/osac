@@ -283,15 +283,6 @@ data:
             match ip address prefix-list EVPN-LOCAL-VTEP
 {{ end }}
 {{ end }}
-{{ range $uplink := $node.uplinks }}
-{{ $peerID := $uplink.peerAddress | default $uplink.interface }}
-{{ $inplFamily := "ipv4" }}
-{{ if ($uplink.unnumbered | default false) }}
-{{ $inplFamily = "dual" }}
-{{ end }}
-          no ipv6 prefix-list {{ $peerID }}-allowed-ipv6
-          no ipv6 prefix-list {{ $peerID }}-inpl-{{ $inplFamily }}
-{{ end }}
           router bgp {{ int64 $nodeASN }}
 {{ if $.Values.evpn.bgp.activeActive }}
             bgp bestpath as-path multipath-relax

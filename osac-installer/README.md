@@ -441,14 +441,12 @@ three times. L2VPN EVPN route-maps apply the same preferences without prefix
 matching so they cover every EVPN route. The L2VPN EVPN address family also
 activates the EVPN neighbors and advertises VNIs.
 
-frr-k8s generates an IPv6 deny-any prefix-list for every BGP neighbor, and for
-unnumbered neighbors it also generates one as the IPv6 half of the inbound
-IPv4 filter. The chart emits `no ipv6 prefix-list` commands in the raw FRR
-configuration so the running configuration carries no IPv6 prefix-lists. The
-chart does not define any IPv6 prefix-list. For unnumbered neighbors it also
-applies IPv4 unicast route-maps directly to the neighbor, in every BGP mode,
-so IPv4 policy does not depend on frr-k8s route-map entries that reference the
-removed lists.
+frr-k8s treats interface-based unnumbered neighbors as dual-stack and would
+otherwise evaluate RFC 5549 IPv4 routes with IPv6 link-local next hops against
+its generated IPv6 deny lists. For unnumbered neighbors the chart applies
+matching IPv4 unicast route-maps directly to the neighbor, in every BGP mode,
+so those routes are never filtered by IPv6 policy. The chart does not add or
+modify any IPv6 prefix-list.
 
 ```yaml
 evpn:

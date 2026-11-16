@@ -491,9 +491,12 @@ func (s *PrivateSecretsServer) validateSecretCreate(secret *privatev1.Secret) er
 	if secret.GetType() == privatev1.SecretType_SECRET_TYPE_UNSPECIFIED {
 		secret.SetType(privatev1.SecretType_SECRET_TYPE_OPAQUE)
 	}
-
 	switch secret.GetBackend() {
 	case privatev1.SecretBackend_SECRET_BACKEND_HUB:
+		if secret.GetType() == privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"secret type %s does not support the HUB backend", secret.GetType())
+		}
 		if err := s.validateHubSecretCreate(secret); err != nil {
 			return err
 		}
@@ -543,7 +546,8 @@ func (s *PrivateSecretsServer) validateSecretUpdate(_ context.Context,
 	if !dataUpdated {
 		return nil
 	}
-	if existingSecret.GetType() == privatev1.SecretType_SECRET_TYPE_USER_DATA {
+	if existingSecret.GetType() == privatev1.SecretType_SECRET_TYPE_USER_DATA ||
+		existingSecret.GetType() == privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'data' is immutable for secrets of type %s", existingSecret.GetType())
 	}

@@ -324,6 +324,33 @@ var _ = Describe("Private secrets server", func() {
 				HaveKeyWithValue("new-key", []byte("new-value")))
 		})
 
+		It("updates Windows Secret metadata while preserving its XML", func() {
+			userData := []byte("\xef\xbb\xbf<?xml version='1.0' ?><unattend><settings/></unattend>")
+			created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{Name: "windows-metadata"}.Build(),
+					Type:     privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+					Data:     map[string][]byte{"userdata": bytes.Clone(userData)},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Id:       created.GetObject().GetId(),
+					Metadata: privatev1.Metadata_builder{Labels: map[string]string{"purpose": "desktop"}}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			fetched, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(fetched.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("purpose", "desktop"))
+			Expect(fetched.GetObject().GetType()).To(Equal(privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA))
+			Expect(fetched.GetObject().GetData()).To(Equal(map[string][]byte{"userdata": userData}))
+		})
+
 		It("Delete removes the object", func() {
 			created := createVaultSecret()
 
@@ -558,14 +585,14 @@ var _ = Describe("Private secrets server", func() {
 		})
 
 		Describe("Immutability", func() {
-			DescribeTable("Update of user data Secret data fails",
-				func(updateMask *fieldmaskpb.FieldMask) {
+			DescribeTable("Update of user-data Secret data fails",
+				func(secretType privatev1.SecretType, updateMask *fieldmaskpb.FieldMask) {
 					existing := privatev1.Secret_builder{
-						Type: privatev1.SecretType_SECRET_TYPE_USER_DATA,
+						Type: secretType,
 						Data: map[string][]byte{"userdata": []byte("original")},
 					}.Build()
 					updated := privatev1.Secret_builder{
-						Type: privatev1.SecretType_SECRET_TYPE_USER_DATA,
+						Type: secretType,
 						Data: map[string][]byte{"userdata": []byte("changed")},
 					}.Build()
 
@@ -574,9 +601,14 @@ var _ = Describe("Private secrets server", func() {
 					Expect(err.Error()).To(ContainSubstring("data"))
 					Expect(err.Error()).To(ContainSubstring("immutable"))
 				},
-				Entry("with an explicit data mask", &fieldmaskpb.FieldMask{Paths: []string{"data"}}),
-				Entry("with an empty mask", &fieldmaskpb.FieldMask{}),
-				Entry("with no mask", nil),
+				Entry("generic user data with an explicit data mask",
+					privatev1.SecretType_SECRET_TYPE_USER_DATA,
+					&fieldmaskpb.FieldMask{Paths: []string{"data"}}),
+				Entry("generic user data with an empty mask",
+					privatev1.SecretType_SECRET_TYPE_USER_DATA,
+					&fieldmaskpb.FieldMask{}),
+				Entry("generic user data with no mask",
+					privatev1.SecretType_SECRET_TYPE_USER_DATA, nil),
 			)
 
 			It("allows metadata-only updates to user data Secrets", func() {
@@ -855,6 +887,80 @@ var _ = Describe("Private secrets server", func() {
 				Entry("with UTF-16 bytes", "windows-user-data-utf16",
 					[]byte{0xff, 0xfe, 0x3c, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x6f, 0x00, 0x74, 0x00, 0x2f, 0x00, 0x3e, 0x00}),
 			)
+
+			DescribeTable("rejects Windows user-data Hub Secrets before Hub validation",
+				func(name string, coordinates map[string]string) {
+					mockStore.EXPECT().
+						Store(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+						Times(0)
+					mockHubSecretFetcher.EXPECT().
+						Fetch(gomock.Any(), gomock.Any()).
+						Times(0)
+
+					_, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+						Object: privatev1.Secret_builder{
+							Metadata:    privatev1.Metadata_builder{Name: name}.Build(),
+							Type:        privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+							Backend:     privatev1.SecretBackend_SECRET_BACKEND_HUB,
+							Coordinates: coordinates,
+						}.Build(),
+					}.Build())
+					Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+					st, ok := status.FromError(err)
+					Expect(ok).To(BeTrue())
+					Expect(st.Message()).To(ContainSubstring(
+						"SECRET_TYPE_WINDOWS_USER_DATA does not support the HUB backend"))
+
+					filter := "this.metadata.name == '" + name + "'"
+					stored, listErr := server.List(ctx, privatev1.SecretsListRequest_builder{
+						Filter: &filter,
+					}.Build())
+					Expect(listErr).ToNot(HaveOccurred())
+					Expect(stored.GetItems()).To(BeEmpty())
+				},
+				Entry("with complete coordinates", "windows-user-data-hub-complete",
+					map[string]string{
+						"hub_id":      "hub-1",
+						"namespace":   "default",
+						"secret_name": "windows-secret",
+					}),
+				Entry("without coordinates", "windows-user-data-hub-missing", nil),
+				Entry("with incomplete coordinates", "windows-user-data-hub-incomplete",
+					map[string]string{
+						"hub_id":    "hub-1",
+						"namespace": "default",
+					}),
+			)
+
+			It("allows a generic user-data Hub Secret", func() {
+				mockStore.EXPECT().
+					Store(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+					Times(0)
+				mockHubSecretFetcher.EXPECT().
+					Fetch(gomock.Any(), gomock.Any()).
+					Times(0)
+
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "user-data-hub-secret",
+						}.Build(),
+						Type:    privatev1.SecretType_SECRET_TYPE_USER_DATA,
+						Backend: privatev1.SecretBackend_SECRET_BACKEND_HUB,
+						Coordinates: map[string]string{
+							"hub_id":      "hub-1",
+							"namespace":   "default",
+							"secret_name": "user-data-secret",
+						},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(created.GetObject().GetId()).ToNot(BeEmpty())
+				Expect(created.GetObject().GetType()).To(Equal(
+					privatev1.SecretType_SECRET_TYPE_USER_DATA))
+				Expect(created.GetObject().GetBackend()).To(Equal(
+					privatev1.SecretBackend_SECRET_BACKEND_HUB))
+			})
 
 			It("allows a tenant-scoped SSH public-key Secret", func() {
 				const name = "tenant-ssh-key"
@@ -1415,6 +1521,72 @@ var _ = Describe("Private secrets server", func() {
 		})
 
 		Describe("Update", func() {
+			DescribeTable("rejects Windows user-data updates before persistence",
+				func(name string, updatedType privatev1.SecretType,
+					updateMask *fieldmaskpb.FieldMask, expectedImmutableField string) {
+					userData := []byte("<root>original</root>")
+					store := newMemorySecretStore()
+					mockStore.EXPECT().
+						Store(gomock.Any(), testTenant, "", name,
+							map[string][]byte{"userdata": userData}).
+						DoAndReturn(store.Store)
+
+					created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+						Object: privatev1.Secret_builder{
+							Metadata: privatev1.Metadata_builder{
+								Name:   name,
+								Labels: map[string]string{"preserve": "yes"},
+							}.Build(),
+							Type: privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+							Data: map[string][]byte{"userdata": bytes.Clone(userData)},
+						}.Build(),
+					}.Build())
+					Expect(err).ToNot(HaveOccurred())
+					originalVersion := created.GetObject().GetMetadata().GetVersion()
+
+					_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+						Object: privatev1.Secret_builder{
+							Id:   created.GetObject().GetId(),
+							Type: updatedType,
+							Data: map[string][]byte{"userdata": []byte("<root>changed</root>")},
+						}.Build(),
+						UpdateMask: updateMask,
+					}.Build())
+					Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+					Expect(err.Error()).To(ContainSubstring(expectedImmutableField))
+					Expect(err.Error()).To(ContainSubstring("immutable"))
+
+					mockStore.EXPECT().
+						Fetch(gomock.Any(), testTenant, "", name).
+						DoAndReturn(store.Fetch)
+					fetched, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+						Id: created.GetObject().GetId(),
+					}.Build())
+					Expect(err).ToNot(HaveOccurred())
+					Expect(fetched.GetObject().GetType()).To(Equal(
+						privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA))
+					Expect(fetched.GetObject().GetData()).To(HaveKeyWithValue("userdata", userData))
+					Expect(fetched.GetObject().GetMetadata().GetVersion()).To(Equal(originalVersion))
+					Expect(fetched.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("preserve", "yes"))
+				},
+				Entry("data update with an explicit data mask", "windows-user-data-data-mask",
+					privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+					&fieldmaskpb.FieldMask{Paths: []string{"data"}}, "data"),
+				Entry("data update with an empty mask", "windows-user-data-empty-mask",
+					privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+					&fieldmaskpb.FieldMask{}, "data"),
+				Entry("data update with no mask", "windows-user-data-no-mask",
+					privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, nil, "data"),
+				Entry("type retag with an explicit type mask", "windows-user-data-type-mask",
+					privatev1.SecretType_SECRET_TYPE_USER_DATA,
+					&fieldmaskpb.FieldMask{Paths: []string{"type"}}, "type"),
+				Entry("type retag with an empty mask", "windows-user-data-retag-empty-mask",
+					privatev1.SecretType_SECRET_TYPE_USER_DATA,
+					&fieldmaskpb.FieldMask{}, "type"),
+				Entry("type retag with no mask", "windows-user-data-retag-no-mask",
+					privatev1.SecretType_SECRET_TYPE_USER_DATA, nil, "type"),
+			)
+
 			It("Stores new data in vault when data provided", func() {
 				mockStore.EXPECT().
 					Store(gomock.Any(), gomock.Any(), gomock.Any(), "update-secret",

@@ -69,7 +69,10 @@ repository. Do not pass it on the command line.
 umask 077
 read -rs -p 'OSAC admin password: ' p && printf %s "$p" > ./admin-password; echo
 mkdir -p test-output
-cp "${KUBECONFIG:-$HOME/.kube/config}" ./kubeconfig
+touch ./kubeconfig
+chmod 600 ./kubeconfig
+KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}" \
+  oc config view --raw --flatten > ./kubeconfig
 
 podman run --rm \
   --network=host \
@@ -91,9 +94,12 @@ podman run --rm \
   so a kubeconfig readable only by you can be read. Group 0 gives write access
   to the checkout in the image. `run-ui-e2e.sh` refuses credentialed runs as
   root.
-- The kubeconfig is copied so that `:Z` relabels the copy, not the original.
-  If `KUBECONFIG` lists multiple files, use `oc config view --raw --flatten`
-  to create a single kubeconfig instead.
+- The kubeconfig is flattened using `oc` on the host into a separate file so
+  that `:Z` relabels it, not the original. This merges multiple `KUBECONFIG`
+  files and embeds referenced certificates and keys. The output contains
+  credentials; keep it private and remove it when no longer needed. External
+  authentication helpers or token files, if used, must still be available inside
+  the container.
 - `run-ui-e2e.sh` reads the `osac-ui` and `fulfillment-api` routes with the
   kubeconfig. To run without one, see
   [Without a kubeconfig](#without-a-kubeconfig).

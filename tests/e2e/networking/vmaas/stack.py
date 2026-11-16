@@ -241,7 +241,7 @@ def unregister_guest_snapshot(name: str) -> None:
     failure_snapshot.SOURCES.unregister(f"{name}-kubevirt")
 
 
-# Under the snapshotter's budget (failure_snapshot.BUDGET_S), so this source never outlives the snapshot.
+# Local cap; queued sources also honor the snapshot's remaining budget.
 KUBEVIRT_SOURCE_BUDGET_S = 40
 
 
@@ -257,6 +257,8 @@ def kubevirt_source(instances: list[dict[str, str]]) -> failure_snapshot.SourceF
         namespaces = sorted({vm["vm_namespace"] for vm in list(instances) if vm.get("vm_namespace")})
         # Finish inside the snapshot budget: a source still running after it would write past the scrub.
         deadline = time.monotonic() + KUBEVIRT_SOURCE_BUDGET_S
+        if window.deadline is not None:
+            deadline = min(deadline, window.deadline)
         for namespace in namespaces:
             reads = {
                 f"kubevirt-{namespace}-vms.json": ("get", "vm,vmi", "-n", namespace, "-o", "json"),

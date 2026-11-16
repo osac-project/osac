@@ -150,6 +150,8 @@ type Creates struct {
 }
 
 // CreatedFor says how a resource that OSAC creates for a parent points back to it.
+// A field link resolves by the reference's id subfield, such as a host's
+// status.cluster.id.
 type CreatedFor struct {
 	// Parent is the parent's kind, such as "ComputeInstance". Empty for label links,
 	// whose kind label carries the parent's kind.
@@ -462,9 +464,17 @@ func newField(
 			"%s must set exactly one of dimension, through, creates and created_for", where,
 		)
 	}
+	if options.GetLargerOf() != "" && options.GetThrough() == "" {
+		return nil, fmt.Errorf(
+			"%s sets larger_of but not through, the only shape larger_of applies to", where,
+		)
+	}
 
 	switch {
 	case options.GetDimension() != "":
+		if annotated.descriptor.IsList() || annotated.descriptor.IsMap() {
+			return nil, fmt.Errorf("%s counts a dimension but is a repeated field", where)
+		}
 		if !integerKind(annotated.descriptor.Kind()) {
 			return nil, fmt.Errorf("%s counts a dimension but isn't an integer field", where)
 		}
@@ -478,12 +488,16 @@ func newField(
 			annotated.descriptor.IsList() || annotated.descriptor.IsMap() {
 			return nil, fmt.Errorf("%s resolves through a type but isn't a reference", where)
 		}
-		name := annotated.descriptor.Message().Fields().ByName("name")
-		if name == nil || name.Kind() != protoreflect.StringKind {
-			return nil, fmt.Errorf(
-				"%s resolves through '%s', whose reference has no name field",
-				where, options.GetThrough(),
-			)
+		// A through reference resolves by id or name, with id winning, the way RefKeyStr
+		// reads references everywhere else in the service: both fields must exist.
+		for _, name := range []string{"id", "name"} {
+			referenceField := annotated.descriptor.Message().Fields().ByName(protoreflect.Name(name))
+			if referenceField == nil || referenceField.Kind() != protoreflect.StringKind {
+				return nil, fmt.Errorf(
+					"%s resolves through '%s', whose reference has no %s field",
+					where, options.GetThrough(), name,
+				)
+			}
 		}
 		if _, ok := universe[options.GetThrough()]; !ok {
 			return nil, fmt.Errorf(
@@ -518,6 +532,18 @@ func newField(
 		createdFor, err := newCreatedFor(options.GetCreatedFor(), true, where)
 		if err != nil {
 			return nil, err
+		}
+		if createdFor.NamePrefix == "" && createdFor.IDLabel == "" {
+			// A field link resolves by the reference's id: the usage counter and the
+			// child-create check read the id subfield, such as a host's
+			// status.cluster.id, so the reference must carry one.
+			id := annotated.descriptor.Message().Fields().ByName("id")
+			if id == nil || id.Kind() != protoreflect.StringKind {
+				return nil, fmt.Errorf(
+					"%s holds a link through '%s', which has no id field",
+					where, annotated.descriptor.Message().FullName(),
+				)
+			}
 		}
 		field.CreatedFor = createdFor
 	}
@@ -613,6 +639,11 @@ func newCreates(
 		countField, err := resolveField(item, creates.CountField)
 		if err != nil {
 			return nil, fmt.Errorf("%s has an invalid count_field path: %w", where, err)
+		}
+		if countField.IsList() || countField.IsMap() {
+			return nil, fmt.Errorf(
+				"%s counts through '%s', which is a repeated field", where, creates.CountField,
+			)
 		}
 		if !integerKind(countField.Kind()) {
 			return nil, fmt.Errorf("%s counts through '%s', which isn't an integer field", where, creates.CountField)
@@ -782,13 +813,13 @@ func resolveField(message protoreflect.MessageDescriptor, path string) (protoref
 	return nil, fmt.Errorf("empty field path")
 }
 
-// integerKind reports whether a field of this proto kind can hold an amount.
+// integerKind reports whether a field of this proto kind can hold an amount. Unsigned
+// kinds are refused: the price reads amounts as signed integers, so an unsigned
+// annotation would pass validation and panic on the request path.
 func integerKind(kind protoreflect.Kind) bool {
 	switch kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 		return true
 	}
 	return false

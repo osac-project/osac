@@ -27,7 +27,9 @@ type Link struct {
 	Parent string
 
 	// Field is the path of the parent reference, relative to the resource, such as a
-	// host's "status.cluster". Empty for name and label links.
+	// host's "status.cluster". The link resolves by the reference's id subfield, such
+	// as "status.cluster.id": the writers set the id and leave the name empty. Empty
+	// for name and label links.
 	Field string
 
 	// NamePrefix names the parent's created resources: "{parent}" is the parent's ID,

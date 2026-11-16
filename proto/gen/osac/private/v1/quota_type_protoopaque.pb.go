@@ -68,7 +68,8 @@ const (
 // The kinds of link, with examples:
 //
 //   - by field: the resource holds a reference to its parent, such as a host's
-//     `status.cluster`.
+//     `status.cluster`. The link resolves by the reference's `id` subfield, such as
+//     `status.cluster.id`, because the writers set the id and leave the name empty.
 //   - by name: the resource's name starts with a prefix of the parent's ID, such as a VM's
 //     disk volume named `ci-` + the VM's ID + `-boot`.
 //   - by labels: two labels hold the parent's ID and kind, such as an automatic external IP

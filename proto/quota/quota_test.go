@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -337,11 +338,13 @@ func TestPriceCluster(t *testing.T) {
 		"bare_metal.instances.metal-1tb": 3,
 		"network.external_ips":           2,
 	})
-	if len(plannedOf(quote, "BareMetalInstance")) != 3 {
-		t.Fatalf("expected 3 planned hosts, got %d", len(plannedOf(quote, "BareMetalInstance")))
+	hosts := plannedOf(quote, "BareMetalInstance")
+	if len(hosts) != 1 || hosts[0].Count != 3 {
+		t.Fatalf("expected 1 planned host entry standing for 3 hosts, got %#v", hosts)
 	}
-	if len(plannedOf(quote, "ExternalIP")) != 2 {
-		t.Fatalf("expected 2 planned external IPs, got %d", len(plannedOf(quote, "ExternalIP")))
+	addresses := plannedOf(quote, "ExternalIP")
+	if len(addresses) != 1 || addresses[0].Count != 2 {
+		t.Fatalf("expected 1 planned address entry standing for 2 addresses, got %#v", addresses)
 	}
 }
 
@@ -536,6 +539,118 @@ func TestPriceUnknownType(t *testing.T) {
 	}
 }
 
+// TestPriceReferencesById checks that a type reference given by id only prices: references
+// are id-or-name with id winning everywhere else in the service, and a create the servers
+// accept must not fail pricing because it names no type.
+func TestPriceReferencesById(t *testing.T) {
+	types := fakeTypes{
+		"InstanceType/it-id": instanceType("gpu-2", 8, 32, nil).ProtoReflect(),
+		"BareMetalInstanceType/host-id": (&privatev1.BareMetalInstanceType{
+			Metadata: &privatev1.Metadata{Name: "metal-1tb"},
+		}).ProtoReflect(),
+		"StorageTier/tier-id": (&privatev1.StorageTier{
+			Metadata: &privatev1.Metadata{Name: "fast"},
+		}).ProtoReflect(),
+	}
+
+	t.Run("an instance type given by id prices the VM", func(t *testing.T) {
+		instance := &privatev1.ComputeInstance{
+			Spec: &privatev1.ComputeInstanceSpec{
+				InstanceType: &privatev1.InstanceTypeReference{Id: "it-id"},
+			},
+		}
+		quote, err := Price(instance.ProtoReflect(), types)
+		if err != nil {
+			t.Fatalf("failed to price the compute instance: %v", err)
+		}
+		assertDimensions(t, quote, map[string]int64{
+			"compute.vcpus":      8,
+			"compute.memory_gib": 32,
+		})
+	})
+
+	t.Run("a host type given by id prices the node set's hosts", func(t *testing.T) {
+		cluster := &privatev1.Cluster{
+			Spec: &privatev1.ClusterSpec{
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"compute": {
+						Size:                  proto.Int32(2),
+						BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Id: "host-id"},
+					},
+				},
+			},
+		}
+		quote, err := Price(cluster.ProtoReflect(), types)
+		if err != nil {
+			t.Fatalf("failed to price the cluster: %v", err)
+		}
+		assertDimensions(t, quote, map[string]int64{
+			"caas.control_planes":            1,
+			"bare_metal.instances.metal-1tb": 2,
+		})
+	})
+
+	t.Run("a storage tier given by id prices the boot disk's storage", func(t *testing.T) {
+		instance := &privatev1.ComputeInstance{
+			Spec: &privatev1.ComputeInstanceSpec{
+				BootDisk: &privatev1.ComputeInstanceDisk{
+					SizeGib:     proto.Int32(100),
+					StorageTier: &privatev1.StorageTierReference{Id: "tier-id"},
+				},
+				InstanceType: &privatev1.InstanceTypeReference{Id: "it-id"},
+			},
+		}
+		quote, err := Price(instance.ProtoReflect(), types)
+		if err != nil {
+			t.Fatalf("failed to price the compute instance: %v", err)
+		}
+		assertDimensions(t, quote, map[string]int64{
+			"compute.vcpus":      8,
+			"compute.memory_gib": 32,
+			"storage.volumes":    1,
+			"storage.fast.gib":   100,
+		})
+		volumes := plannedOf(quote, "Volume")
+		if len(volumes) != 1 || volumes[0].Fields["spec.storage_tier"].String() != "fast" {
+			t.Fatalf("the planned volume carries the tier's name, got %#v", volumes)
+		}
+	})
+}
+
+// TestPriceLargeNodeSet checks that a huge count prices one planned message times the
+// count: a node set's size has no upper bound, so materializing a message per host would
+// spend the request's memory before any limit applies.
+func TestPriceLargeNodeSet(t *testing.T) {
+	types := fakeTypes{
+		"BareMetalInstanceType/metal-1tb": (&privatev1.BareMetalInstanceType{
+			Metadata: &privatev1.Metadata{Name: "metal-1tb"},
+		}).ProtoReflect(),
+	}
+	cluster := &privatev1.Cluster{
+		Spec: &privatev1.ClusterSpec{
+			NodeSets: map[string]*privatev1.ClusterNodeSet{
+				"compute": {
+					Size:                  proto.Int32(1000000),
+					BaremetalInstanceType: &privatev1.BareMetalInstanceTypeReference{Name: "metal-1tb"},
+				},
+			},
+		},
+	}
+
+	quote, err := Price(cluster.ProtoReflect(), types)
+	if err != nil {
+		t.Fatalf("failed to price the cluster: %v", err)
+	}
+	assertDimensions(t, quote, map[string]int64{
+		"caas.control_planes":            1,
+		"bare_metal.instances.metal-1tb": 1000000,
+	})
+	hosts := plannedOf(quote, "BareMetalInstance")
+	if len(hosts) != 1 || hosts[0].Count != 1000000 {
+		t.Fatalf("expected 1 planned host entry standing for 1000000 hosts, got %#v", hosts)
+	}
+}
+
 // TestLinks pins the created_for link descriptors the usage query counts by. The query
 // trusts a link only when the linked resource's creator is `system`; that gate is the
 // query's rule, and the descriptors here are what it consumes.
@@ -568,16 +683,108 @@ func TestLinks(t *testing.T) {
 	}
 }
 
+// TestItemsOfNestedEach checks that an each path resolves nested paths the way validation
+// resolves them: "wrapper.items" must reach the list inside the wrapper message, not look
+// for one field literally named "wrapper.items".
+func TestItemsOfNestedEach(t *testing.T) {
+	other := ratedResource("OtherResource")
+	otherOptions := &descriptorpb.MessageOptions{}
+	proto.SetExtension(otherOptions, privatev1.E_QuotaMessage,
+		&privatev1.QuotaMessageOptions{Dimension: "test.other"})
+	other[0].Options = otherOptions
+
+	messages := append(append(ratedResource("RatedResource",
+		fieldDesc("list", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+			".osac.private.v1.RatedResourceList",
+			quotaField(&privatev1.QuotaFieldOptions{
+				Creates: &privatev1.QuotaCreatesOptions{
+					Kind: "OtherResource",
+					Each: "wrapper.items",
+				},
+			}))),
+		other...),
+		&descriptorpb.DescriptorProto{
+			Name: proto.String("RatedResourceList"),
+			Field: []*descriptorpb.FieldDescriptorProto{
+				fieldDesc("wrapper", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedResourceWrapper", nil),
+			},
+		},
+		&descriptorpb.DescriptorProto{
+			Name: proto.String("RatedResourceWrapper"),
+			Field: []*descriptorpb.FieldDescriptorProto{
+				repeatedFieldDesc("items", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedResourceItem", nil),
+			},
+		},
+		&descriptorpb.DescriptorProto{
+			Name: proto.String("RatedResourceItem"),
+			Field: []*descriptorpb.FieldDescriptorProto{
+				fieldDesc("name", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+			},
+		},
+	)
+	file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
+		Name:        proto.String("osac/private/v1/nested_each_test.proto"),
+		Package:     proto.String("osac.private.v1"),
+		Syntax:      proto.String("proto3"),
+		MessageType: messages,
+	}, nil)
+	if err != nil {
+		t.Fatalf("building the synthetic proto: %v", err)
+	}
+	files := &protoregistry.Files{}
+	if err := files.RegisterFile(file); err != nil {
+		t.Fatalf("registering the synthetic proto: %v", err)
+	}
+
+	// Validation resolves the nested path, so the annotations must pass.
+	kinds, _, err := kindsOf(files)
+	if err != nil {
+		t.Fatalf("a nested each path must pass validation: %v", err)
+	}
+	if len(kinds) != 2 {
+		t.Fatalf("expected the two synthetic kinds, got %#v", kinds)
+	}
+
+	// The price walk resolves the same path: the wrapper's items are the creates items.
+	resource := file.Messages().Get(0)
+	spec := resource.Fields().ByName("spec").Message()
+	listField := spec.Fields().ByName("list")
+	list := dynamicpb.NewMessage(listField.Message())
+	wrapperField := listField.Message().Fields().ByName("wrapper")
+	wrapper := list.Mutable(wrapperField).Message()
+	itemsField := wrapperField.Message().Fields().ByName("items")
+	items := wrapper.Mutable(itemsField).List()
+	for _, name := range []string{"first", "second"} {
+		item := dynamicpb.NewMessage(itemsField.Message())
+		item.Set(itemsField.Message().Fields().ByName("name"), protoreflect.ValueOfString(name))
+		items.Append(protoreflect.ValueOfMessage(item))
+	}
+
+	found, err := itemsOf(protoreflect.ValueOfMessage(list), listField, "wrapper.items")
+	if err != nil {
+		t.Fatalf("failed to read the items of the nested each path: %v", err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("expected 2 items from the nested each path, got %d", len(found))
+	}
+}
+
+// quotaField builds the field options that carry one quota annotation.
+func quotaField(options *privatev1.QuotaFieldOptions) *descriptorpb.FieldOptions {
+	fieldOptions := &descriptorpb.FieldOptions{}
+	proto.SetExtension(fieldOptions, privatev1.E_Quota, options)
+	return fieldOptions
+}
+
 // TestKindsRejectsInvalidAnnotations checks the validation's loud-failure branches on
 // synthetic protos: a bad brace path, a through or creates kind that doesn't exist, a
-// created_for with both or neither link shape, a bool creates that sets fields, a creates
-// that counts fields of items that aren't messages, and creates that cycle.
+// created_for with both or neither link shape, a larger_of outside a through reference,
+// an unsigned or repeated dimension field, a field link to a message without an id, a
+// bool creates that sets fields, a creates that counts fields of items that aren't
+// messages, and creates that cycle.
 func TestKindsRejectsInvalidAnnotations(t *testing.T) {
-	quotaField := func(options *privatev1.QuotaFieldOptions) *descriptorpb.FieldOptions {
-		fieldOptions := &descriptorpb.FieldOptions{}
-		proto.SetExtension(fieldOptions, privatev1.E_Quota, options)
-		return fieldOptions
-	}
 	withMessageOptions := func(
 		messages []*descriptorpb.DescriptorProto, options *privatev1.QuotaMessageOptions,
 	) []*descriptorpb.DescriptorProto {
@@ -608,7 +815,8 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 				&descriptorpb.DescriptorProto{
 					Name: proto.String("RatedResourceType"),
 					Field: []*descriptorpb.FieldDescriptorProto{
-						fieldDesc("name", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+						fieldDesc("id", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+						fieldDesc("name", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
 					},
 				}),
 			contains: "NoSuchKind",
@@ -680,6 +888,46 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 					},
 				}),
 			contains: "aren't messages",
+		},
+		{
+			name: "a larger_of set next to a dimension",
+			messages: ratedResource("RatedResource",
+				fieldDesc("count", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32, "",
+					quotaField(&privatev1.QuotaFieldOptions{
+						Dimension: "test.count",
+						LargerOf:  "spec.other",
+					}))),
+			contains: "larger_of",
+		},
+		{
+			name: "an unsigned dimension field",
+			messages: ratedResource("RatedResource",
+				fieldDesc("count", 1, descriptorpb.FieldDescriptorProto_TYPE_UINT32, "",
+					quotaField(&privatev1.QuotaFieldOptions{Dimension: "test.count"}))),
+			contains: "isn't an integer field",
+		},
+		{
+			name: "a repeated dimension field",
+			messages: ratedResource("RatedResource",
+				repeatedFieldDesc("counts", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32, "",
+					quotaField(&privatev1.QuotaFieldOptions{Dimension: "test.count"}))),
+			contains: "repeated field",
+		},
+		{
+			name: "a field link to a message without an id",
+			messages: append(ratedResource("RatedResource",
+				fieldDesc("parent", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedResourceParent",
+					quotaField(&privatev1.QuotaFieldOptions{
+						CreatedFor: &privatev1.QuotaCreatedForOptions{Parent: "RatedResource"},
+					}))),
+				&descriptorpb.DescriptorProto{
+					Name: proto.String("RatedResourceParent"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						fieldDesc("name", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+					},
+				}),
+			contains: "no id field",
 		},
 		{
 			name: "creates that cycle",

@@ -141,22 +141,28 @@ func newOversizedCreateResponseClient(
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
 	publicv1.RegisterComputeInstancesServer(grpcServer, server)
+	serveErr := make(chan error, 1)
 	go func() {
-		_ = grpcServer.Serve(listener)
+		serveErr <- grpcServer.Serve(listener)
 	}()
 
 	connection, err := grpc.NewClient(
 		"passthrough:///mcp-write-safety",
-		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
-			return listener.Dial()
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return listener.DialContext(ctx)
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	Expect(err).ToNot(HaveOccurred())
 	return publicv1.NewComputeInstancesClient(connection), func() {
-		_ = connection.Close()
+		connectionErr := connection.Close()
 		grpcServer.Stop()
-		_ = listener.Close()
+		listenerErr := listener.Close()
+		serverErr := <-serveErr
+		if errors.Is(serverErr, grpc.ErrServerStopped) {
+			serverErr = nil
+		}
+		Expect(errors.Join(connectionErr, listenerErr, serverErr)).To(Succeed())
 	}
 }
 

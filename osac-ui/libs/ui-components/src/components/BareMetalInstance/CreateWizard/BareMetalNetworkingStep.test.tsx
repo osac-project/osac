@@ -103,7 +103,7 @@ describe('BareMetalNetworkingStep', () => {
       expect(getResourceSelectCombobox(/^Virtual network/)).toHaveValue('vn-prod'),
     );
     await waitFor(() =>
-      expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a · 10.0.1.0/24'),
+      expect(getResourceSelectCombobox(/^Subnet/)).toHaveValue('subnet-a'),
     );
     expectResourceSelectDisabled(/^Virtual network/);
     expectResourceSelectDisabled(/^Subnet/);

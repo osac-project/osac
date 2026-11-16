@@ -101,7 +101,7 @@ describe('formatInstanceTypeOptionLabel', () => {
     });
 
     expect(formatInstanceTypeOptionLabel(instanceType)).toBe(
-      'u1-gpu-small — 2 vCPUs · 4 GiB · 1 GPU · nvidia.com/A100',
+      'u1-gpu-small — 2 vCPUs · 4 GiB · 1 GPU (nvidia.com/A100)',
     );
   });
 
@@ -118,7 +118,7 @@ describe('formatInstanceTypeOptionLabel', () => {
     });
 
     expect(formatInstanceTypeOptionLabel(instanceType)).toBe(
-      'gpu-no-selector — 4 vCPUs · 16 GiB · 1 GPU · nvidia.com/gpu',
+      'gpu-no-selector — 4 vCPUs · 16 GiB · 1 GPU (nvidia.com/gpu)',
     );
   });
 });

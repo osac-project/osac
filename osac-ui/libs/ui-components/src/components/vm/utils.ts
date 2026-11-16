@@ -45,7 +45,7 @@ const formatGpuSizing = (gpu: GpuSpecFields): string => {
   if (!gpu.resourceName) {
     return gpuLabel;
   }
-  return `${gpuLabel} · ${gpu.resourceName}`;
+  return `${gpuLabel} (${gpu.resourceName})`;
 };
 
 export const formatInstanceTypeSizing = (instanceType: InstanceType): string => {

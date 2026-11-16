@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.conformance.errors import ConfigError
-from tests.conformance.interrupt import Interrupted
+from tests.conformance.interrupt import Interrupted, InterruptGate
 from tests.conformance.model import Classification, Result, RunContext, Selector
 from tests.conformance.output import OutputSink
 from tests.conformance.redact import Redactor
@@ -181,6 +181,29 @@ def test_pytest_interrupt_return_code_keeps_completed_outcomes(tmp_path: Path) -
 
     with pytest.raises(Interrupted) as raised:
         tree.run(plan, context, keep=False)
+
+    assert [outcome.result for outcome in raised.value.outcomes] == [Result.PASS]
+
+
+def test_signal_after_pytest_exits_keeps_completed_outcomes(tmp_path: Path) -> None:
+    tree = _one_test_tree(tmp_path)
+    plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    gate = InterruptGate()
+    entry = {"nodeid": "test_ok.py::test_ok", "outcome": "passed", "duration": 0.1, "stdout": "", "stderr": ""}
+    process = _FakeProcess(0, entries=[entry])
+    communicate = process.communicate
+
+    def communicate_then_signal() -> tuple[str, str]:
+        output = communicate()
+        gate.trigger()
+        return output
+
+    process.communicate = communicate_then_signal  # type: ignore[method-assign]
+    tree.popen = process  # type: ignore[assignment]
+
+    with pytest.raises(Interrupted) as raised:
+        tree.run(plan, context, keep=False, interrupt=gate)
 
     assert [outcome.result for outcome in raised.value.outcomes] == [Result.PASS]
 

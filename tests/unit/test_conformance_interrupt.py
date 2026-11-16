@@ -72,11 +72,13 @@ def test_second_signal_kills_the_child() -> None:
     assert child.killed is True
 
 
-def test_a_finished_child_does_not_swallow_the_first_signal() -> None:
+def test_a_finished_child_leaves_the_interrupt_to_the_run_loop() -> None:
     gate = InterruptGate()
-    gate.child = _Child(running=False)
+    child = _Child(running=False)
+    gate.child = child
 
-    with pytest.raises(Interrupted):
-        gate.trigger()
+    gate.trigger()
 
     assert gate.first is True
+    assert child.signals == []
+    assert child.killed is False

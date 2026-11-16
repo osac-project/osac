@@ -166,19 +166,21 @@ class PytestTestTree:
                 interrupt.child = process
             try:
                 stdout, stderr = process.communicate()
+                if process.returncode not in (0, 1, 2):
+                    detail = (stderr or "").strip() or (stdout or "").strip() or "no output"
+                    raise ConfigError([f"pytest exited {process.returncode}: {detail}"])
+                if context.output is not None:
+                    for line in (stdout + stderr).splitlines():
+                        context.output.line(line)
+                outcomes = self._recorded_outcomes(plan, context, results_path)
+                if process.returncode == 2 or (interrupt is not None and interrupt.first):
+                    raise Interrupted(outcomes)
+                return outcomes
             finally:
+                # Kept attached until the outcomes are read: a signal inside this
+                # block must not raise ahead of the recorded results.
                 if interrupt is not None:
                     interrupt.child = None
-            if process.returncode not in (0, 1, 2):
-                detail = (stderr or "").strip() or (stdout or "").strip() or "no output"
-                raise ConfigError([f"pytest exited {process.returncode}: {detail}"])
-            if context.output is not None:
-                for line in (stdout + stderr).splitlines():
-                    context.output.line(line)
-            outcomes = self._recorded_outcomes(plan, context, results_path)
-            if process.returncode == 2 or (interrupt is not None and interrupt.first):
-                raise Interrupted(outcomes)
-            return outcomes
 
     def _recorded_outcomes(self, plan: Plan, context: RunContext, results_path: Path) -> tuple[TestOutcome, ...]:
         """Read what pytest managed to record, including after an interrupt."""

@@ -167,9 +167,10 @@ var _ = Describe("Node set removal", func() {
 
 		_, err = clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
 			Object: publicv1.Cluster_builder{
-				Id:       clusterId,
-				Metadata: getResponse.Object.Metadata,
-				Spec:     updatedSpec,
+				Id: clusterId,
+				Spec: publicv1.ClusterSpec_builder{
+					NodeSets: updatedSpec.GetNodeSets(),
+				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{
 				Paths: []string{"spec.node_sets"},

@@ -113,6 +113,10 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+			_, err := templateClient.Delete(ctx, privatev1.ClusterTemplatesDeleteRequest_builder{Id: templateID}.Build())
+			return err
+		}, nil)
 	})
 
 	It("preserves ordinary metadata and rejects reserved metadata before review evaluation", func() {

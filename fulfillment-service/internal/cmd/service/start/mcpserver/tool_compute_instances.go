@@ -177,6 +177,8 @@ func handleCreateComputeInstance(
 }
 
 func isDefiniteComputeInstanceCreateError(err error) bool {
+	// ResourceExhausted can follow a committed Create when its response exceeds
+	// the client receive limit, so Create must verify that outcome by ID.
 	switch status.Code(err) {
 	case codes.InvalidArgument,
 		codes.Unauthenticated,
@@ -185,7 +187,6 @@ func isDefiniteComputeInstanceCreateError(err error) bool {
 		codes.AlreadyExists,
 		codes.Aborted,
 		codes.FailedPrecondition,
-		codes.ResourceExhausted,
 		codes.Unimplemented:
 		return true
 	default:

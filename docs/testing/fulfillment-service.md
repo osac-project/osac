@@ -59,9 +59,12 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   fixtures before extending those cases.
 - MCP write safety ([OSAC-5851](https://redhat.atlassian.net/browse/OSAC-5851))
   uses typed client failure injection, a pass-through token exchanger, deployed
-  Fulfillment, and PostgreSQL; real transport faults and host-driven stop
-  behavior remain with [OSAC-5852](https://redhat.atlassian.net/browse/OSAC-5852).
-  Provider provisioning is out of scope.
+  Fulfillment, and PostgreSQL. Its unit suite also uses the generated public
+  gRPC client and an in-process server to cover a successful Create whose
+  response exceeds the client receive limit. Broader transport faults and
+  host-driven stop behavior remain with
+  [OSAC-5852](https://redhat.atlassian.net/browse/OSAC-5852). Provider
+  provisioning is out of scope.
 - FabricDomain setup and focused execution are documented in
   [the suite README](../../fulfillment-service/it/README.fabric-domain.md).
 - Deployed service-account journeys, secret rotation included, are the

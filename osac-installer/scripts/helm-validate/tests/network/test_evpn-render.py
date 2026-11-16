@@ -561,4 +561,3 @@ def test_validation_errors_do_not_log_node_names() -> None:
                 assert "duplicate vtepIP" in result.stderr, (
                     f"{name}: the failure did not identify the duplicate VTEP"
                 )
-

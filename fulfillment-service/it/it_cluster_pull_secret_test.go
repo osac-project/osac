@@ -188,6 +188,47 @@ var _ = Describe("Cluster pull_secret_secret", Label("secrets", "cluster"), func
 		Expect(err).ToNot(HaveOccurred())
 	})
 
+	DescribeTable("Rejects cluster creation without an explicit or inherited pull secret", func(catalog bool) {
+		templateID := createTemplate(ctx, nil)
+		spec := publicv1.ClusterSpec_builder{
+			Template:          publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+			NodeSets:          testClusterNodeSets(bmitName, 2),
+			NetworkAttachment: network.clusterAttachment(),
+			TemplateParameters: map[string]*anypb.Any{
+				"my": makeAny(wrapperspb.String("my_value")),
+			},
+		}.Build()
+		if catalog {
+			catalogClient := privatev1.NewClusterCatalogItemsClient(tool.InternalView().AdminConn())
+			created, err := catalogClient.Create(ctx, privatev1.ClusterCatalogItemsCreateRequest_builder{
+				Object: privatev1.ClusterCatalogItem_builder{
+					Metadata:  privatev1.Metadata_builder{Name: fmt.Sprintf("missing-secret-%s", uuid.New()[24:32])}.Build(),
+					Published: true,
+					Template:  privatev1.ClusterTemplateReference_builder{Id: templateID, Shared: true}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func(ctx context.Context) {
+				_, err := catalogClient.Delete(ctx, privatev1.ClusterCatalogItemsDeleteRequest_builder{Id: created.GetObject().GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			})
+			spec.ClearTemplate()
+			spec.SetCatalogItem(publicv1.ClusterCatalogItemReference_builder{Id: created.GetObject().GetId(), Shared: true}.Build())
+		}
+		response, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("missing-secret-%s", uuid.New()[24:32])}.Build(),
+				Spec:     spec,
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("pull_secret_secret is required"))
+		Expect(response).To(BeNil())
+	},
+		Entry("direct template", false),
+		Entry("catalog item", true),
+	)
+
 	It("Resolves pull_secret_secret by id into the ClusterOrder pull secret", func() {
 		secretId, _ := createSecret(ctx, map[string][]byte{".dockerconfigjson": []byte(dockerConfigJSON)})
 		templateId := createTemplate(ctx, nil)

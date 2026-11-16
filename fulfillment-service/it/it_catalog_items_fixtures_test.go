@@ -716,6 +716,16 @@ func createCatalogItemClusterTemplateFixture(ctx context.Context, defaults *priv
 	if len(tenants) > 0 {
 		tenant = tenants[0]
 	}
+	if defaults.GetPullSecretSecret() == nil {
+		if defaults == nil {
+			defaults = &privatev1.ClusterTemplateSpecDefaults{}
+		} else {
+			defaults = proto.Clone(defaults).(*privatev1.ClusterTemplateSpecDefaults)
+		}
+		defaults.SetPullSecretSecret(privatev1.SecretLocalReference_builder{
+			Id: createCatalogItemPullSecretFixture(ctx, tenant),
+		}.Build())
+	}
 	client := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 	response, err := client.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 		Object: privatev1.ClusterTemplate_builder{

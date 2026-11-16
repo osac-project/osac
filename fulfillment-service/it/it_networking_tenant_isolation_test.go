@@ -268,8 +268,9 @@ var _ = Describe("Networking tenant isolation", func() {
 		templateID := newTemplateID("tmpl")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id:    templateID,
-				Title: "Networking tenant isolation template",
+				SpecDefaults: testClusterSpecDefaults(ctx),
+				Id:           templateID,
+				Title:        "Networking tenant isolation template",
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("tmpl-%s", uuid.New()[24:32]),
 				}.Build(),

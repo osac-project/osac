@@ -170,7 +170,8 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				templatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 				_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 					Object: privatev1.ClusterTemplate_builder{
-						Id: templateId,
+						SpecDefaults: testClusterSpecDefaults(ctx),
+						Id:           templateId,
 						Metadata: privatev1.Metadata_builder{
 							Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
 						}.Build(),
@@ -454,7 +455,8 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				templatesClient := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 				_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 					Object: privatev1.ClusterTemplate_builder{
-						Id: templateId,
+						SpecDefaults: testClusterSpecDefaults(ctx),
+						Id:           templateId,
 						Metadata: privatev1.Metadata_builder{
 							Name: fmt.Sprintf("test-template-%s", uuid.New()[24:32]),
 						}.Build(),

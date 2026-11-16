@@ -721,7 +721,7 @@ fabric loopback ranges; the installer accepts only /32 routes within them.
 | `evpn.nodes[].uplinks[].interface` | Node interface name for a cable to a fabric leaf, supplied by the fabric admin. |
 | `evpn.nodes[].uplinks[].address` | Optional IPv4 CIDR for the uplink. Omit it when the address is already configured. The fabric admin supplies it. |
 | `evpn.nodes[].uplinks[].peerAddress` | IPv4 address of the connected fabric BGP peer, supplied by the fabric admin. |
-| `evpn.nodes[].uplinks[].unnumbered` | Set `true` to use an interface-based unnumbered BGP neighbor; omit `address` and `peerAddress`. IPv4 routes use RFC 5549 IPv6 link-local next hops, so the chart permits `fe80::/10` in the frr-k8s-generated IPv6 prefix-lists; numbered peers keep the deny-any IPv6 lists. |
+| `evpn.nodes[].uplinks[].unnumbered` | Set `true` to use an interface-based unnumbered BGP neighbor; omit `address` and `peerAddress`. The chart applies IPv4 unicast route-maps directly to the neighbor so RFC 5549 IPv4 routes with IPv6 link-local next hops are not filtered by the frr-k8s-generated IPv6 deny lists. The chart does not add IPv6 prefix-lists. |
 | `evpn.nodes[].uplinks[].peerASN` | ASN of the connected fabric peer, supplied by the fabric admin. |
 | `evpn.nodes[].uplinks[].role` | `active` or `backup`; required for every uplink when `evpn.bgp.activeBackup` is enabled. |
 

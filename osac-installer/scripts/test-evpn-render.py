@@ -459,6 +459,31 @@ def test_active_active_bgp() -> None:
     assert "route-map EVPN-" not in raw_config
 
 
+def test_unnumbered_active_active_bgp() -> None:
+    """Keep RFC 5549 IPv4 routes out of the generated IPv6 deny lists."""
+    values = base_values(
+        [node("worker-0", "10.200.255.1", [uplink("ens6", None, unnumbered=True)])]
+    )
+    values["evpn"]["bgp"]["activeActive"] = True
+    with tempfile.TemporaryDirectory(prefix="evpn-unnumbered-active-active-") as temp:
+        values_file = write_values(pathlib.Path(temp), "unnumbered.yaml", values)
+        infra = render("osac-infra", INFRA_CHART, "--values", str(values_file))
+
+    raw = named(
+        parse_documents(config_data(infra)["frr.yaml"]),
+        "FRRConfiguration",
+        "osac-evpn-raw-worker-0",
+    )
+    raw_config = raw["spec"]["raw"]["rawConfig"]
+    ipv4_af = raw_config.split("address-family ipv4 unicast\n", 1)[1].split(
+        "exit-address-family", 1
+    )[0]
+    assert "maximum-paths 16" in ipv4_af
+    assert "neighbor ens6 route-map EVPN-IPV4-IN in" in ipv4_af
+    assert "neighbor ens6 route-map EVPN-IPV4-OUT out" in ipv4_af
+    assert "ipv6 prefix-list" not in raw_config
+
+
 def test_active_backup_bgp() -> None:
     values = base_values(
         [
@@ -487,6 +512,10 @@ def test_active_backup_bgp() -> None:
         "ip prefix-list EVPN-REMOTE-VTEPS seq 1 "
         "permit 10.200.0.0/16 ge 32 le 32" in raw_config
     )
+    assert (
+        "ip prefix-list EVPN-LOCAL-VTEP seq 10 permit 10.200.255.1/32"
+        in raw_config
+    )
     assert "set local-preference 200" in raw_config
     assert "set local-preference 100" in raw_config
 
@@ -511,29 +540,44 @@ def test_active_backup_bgp() -> None:
     assert "match " not in backup_in
     assert "match " not in backup_out
 
-    # frr-k8s owns the per-neighbor route-maps, so the IPv4 policy extends
-    # them with a low sequence that runs before the generated filter.
-    active_peer_in = raw_config.split(
-        "route-map 169.254.133.1-in permit 1\n", 1
-    )[1].split("route-map", 1)[0]
-    backup_peer_in = raw_config.split(
-        "route-map 169.254.133.3-in permit 1\n", 1
-    )[1].split("route-map", 1)[0]
-    backup_peer_out = raw_config.split(
-        "route-map 169.254.133.3-out permit 1\n", 1
-    )[1].split("route-map", 1)[0]
-    assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in active_peer_in
-    assert "set local-preference 200" in active_peer_in
-    assert "description EVPN active uplink inbound" in active_peer_in
-    assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in backup_peer_in
-    assert "set local-preference 100" in backup_peer_in
-    assert "description EVPN backup uplink inbound" in backup_peer_in
-    assert "set as-path prepend 4209999999 4209999999 4209999999" in backup_peer_out
-    assert "description EVPN backup uplink outbound" in backup_peer_out
-    assert "match " not in backup_peer_out
-    assert "route-map 169.254.133.1-out permit 1" not in raw_config
+    # The chart owns the IPv4 unicast route-maps so RFC 5549 next hops are not
+    # evaluated against the frr-k8s-generated IPv6 deny lists.
+    ipv4_active_in = raw_config.split(
+        "route-map EVPN-IPV4-ACTIVE-IN permit 10\n", 1
+    )[1].split("route-map ", 1)[0]
+    ipv4_backup_in = raw_config.split(
+        "route-map EVPN-IPV4-BACKUP-IN permit 10\n", 1
+    )[1].split("route-map ", 1)[0]
+    ipv4_backup_out = raw_config.split(
+        "route-map EVPN-IPV4-BACKUP-OUT permit 10\n", 1
+    )[1].split("route-map ", 1)[0]
+    assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in ipv4_active_in
+    assert "set local-preference 200" in ipv4_active_in
+    assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in ipv4_backup_in
+    assert "set local-preference 100" in ipv4_backup_in
+    assert "match ip address prefix-list EVPN-LOCAL-VTEP" in ipv4_backup_out
+    assert (
+        "set as-path prepend 4209999999 4209999999 4209999999" in ipv4_backup_out
+    )
+    assert "route-map 169.254.133.1-in permit 1" not in raw_config
+    assert "route-map 169.254.133.3-out permit 1" not in raw_config
     assert "fe80::/10" not in raw_config
-    assert "address-family ipv4 unicast" not in raw_config
+
+    ipv4_af = raw_config.split("address-family ipv4 unicast\n", 1)[1].split(
+        "exit-address-family", 1
+    )[0]
+    assert (
+        "neighbor 169.254.133.1 route-map EVPN-IPV4-ACTIVE-IN in" in ipv4_af
+    )
+    assert (
+        "neighbor 169.254.133.1 route-map EVPN-IPV4-ACTIVE-OUT out" in ipv4_af
+    )
+    assert (
+        "neighbor 169.254.133.3 route-map EVPN-IPV4-BACKUP-IN in" in ipv4_af
+    )
+    assert (
+        "neighbor 169.254.133.3 route-map EVPN-IPV4-BACKUP-OUT out" in ipv4_af
+    )
 
     l2vpn_af = raw_config.split("address-family l2vpn evpn\n", 1)[1].split(
         "exit-address-family", 1
@@ -578,41 +622,20 @@ def test_unnumbered_active_backup_bgp() -> None:
         "osac-evpn-raw-worker-0",
     )
     raw_config = raw["spec"]["raw"]["rawConfig"]
-    assert (
-        "ipv6 prefix-list ens5f0-inpl-ipv4 seq 1 permit fe80::/10" in raw_config
-    )
-    assert (
-        "ipv6 prefix-list ens5f0-allowed-ipv6 seq 1 permit fe80::/10" in raw_config
-    )
-    assert (
-        "ipv6 prefix-list ens5f1-inpl-ipv4 seq 1 permit fe80::/10" in raw_config
-    )
-    assert (
-        "ipv6 prefix-list ens5f1-allowed-ipv6 seq 1 permit fe80::/10" in raw_config
-    )
-    active_peer_in = raw_config.split(
-        "route-map ens5f0-in permit 1\n", 1
-    )[1].split("route-map", 1)[0]
-    backup_peer_in = raw_config.split(
-        "route-map ens5f1-in permit 1\n", 1
-    )[1].split("route-map", 1)[0]
-    backup_peer_out = raw_config.split(
-        "route-map ens5f1-out permit 1\n", 1
-    )[1].split("route-map", 1)[0]
-    assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in active_peer_in
-    assert "set local-preference 200" in active_peer_in
-    assert "description EVPN active uplink inbound" in active_peer_in
-    assert "match ip address prefix-list EVPN-REMOTE-VTEPS" in backup_peer_in
-    assert "set local-preference 100" in backup_peer_in
-    assert "description EVPN backup uplink inbound" in backup_peer_in
-    assert "set as-path prepend 4209999999 4209999999 4209999999" in backup_peer_out
-    assert "description EVPN backup uplink outbound" in backup_peer_out
-    assert "match " not in backup_peer_out
-    assert "route-map ens5f0-out permit 1" not in raw_config
+    assert "ipv6 prefix-list" not in raw_config
+    assert "fe80::/10" not in raw_config
+    assert "route-map ens5f0-in permit 1" not in raw_config
+    assert "route-map ens5f1-out permit 1" not in raw_config
+    ipv4_af = raw_config.split("address-family ipv4 unicast\n", 1)[1].split(
+        "exit-address-family", 1
+    )[0]
+    assert "neighbor ens5f0 route-map EVPN-IPV4-ACTIVE-IN in" in ipv4_af
+    assert "neighbor ens5f0 route-map EVPN-IPV4-ACTIVE-OUT out" in ipv4_af
+    assert "neighbor ens5f1 route-map EVPN-IPV4-BACKUP-IN in" in ipv4_af
+    assert "neighbor ens5f1 route-map EVPN-IPV4-BACKUP-OUT out" in ipv4_af
     assert "neighbor ens5f0 route-map EVPN-ACTIVE-IN in" in raw_config
     assert "neighbor ens5f1 route-map EVPN-BACKUP-IN in" in raw_config
     assert "neighbor ens5f1 route-map EVPN-BACKUP-OUT out" in raw_config
-    assert "address-family ipv4 unicast" not in raw_config
 
 
 def test_active_backup_requires_l2vpn_enabled() -> None:
@@ -735,7 +758,11 @@ def test_unnumbered_uplink() -> None:
     assert "ebgpMultiHop" not in neighbor
     assert "sourceaddress" not in neighbor
     raw = named(parse_documents(data["frr.yaml"]), "FRRConfiguration", "osac-evpn-raw-worker-0")
-    assert "neighbor ens6 activate" in raw["spec"]["raw"]["rawConfig"]
+    raw_config = raw["spec"]["raw"]["rawConfig"]
+    assert "neighbor ens6 activate" in raw_config
+    assert "ipv6 prefix-list" not in raw_config
+    assert "neighbor ens6 route-map EVPN-IPV4-IN in" in raw_config
+    assert "neighbor ens6 route-map EVPN-IPV4-OUT out" in raw_config
 
 
 def test_uplinks_reject_duplicate_interface() -> None:
@@ -944,6 +971,7 @@ def main() -> None:
     test_single_node()
     test_multiple_nodes()
     test_active_active_bgp()
+    test_unnumbered_active_active_bgp()
     test_active_backup_bgp()
     test_unnumbered_active_backup_bgp()
     test_active_backup_requires_l2vpn_enabled()

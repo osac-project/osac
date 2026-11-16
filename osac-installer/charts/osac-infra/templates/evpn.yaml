@@ -13,6 +13,7 @@
 {{- end }}
 {{- $seenNames := dict }}
 {{- $seenVTEPs := dict }}
+{{- $hasUnnumbered := false }}
 {{- range $index, $node := .Values.evpn.nodes }}
   {{- if hasKey $seenNames $node.name }}
     {{- fail (printf "evpn.nodes: duplicate node name at index %d" $index) }}
@@ -58,6 +59,7 @@
     {{- $_ := set $seenInterfaces $uplink.interface true }}
     {{- $unnumbered := $uplink.unnumbered | default false }}
     {{- if $unnumbered }}
+      {{- $hasUnnumbered = true }}
       {{- if hasKey $uplink "peerAddress" }}
         {{- fail (printf "evpn.nodes: node %s unnumbered uplink %s must omit peerAddress" $node.name $uplink.interface) }}
       {{- end }}
@@ -238,10 +240,12 @@ data:
       raw:
         priority: 5
         rawConfig: |
-{{ if $.Values.evpn.bgp.activeBackup }}
+{{ if or $.Values.evpn.bgp.activeBackup $hasUnnumbered }}
 {{ range $prefixIndex, $prefix := $.Values.evpn.bgp.acceptPrefixes }}
           ip prefix-list EVPN-REMOTE-VTEPS seq {{ add1 $prefixIndex }} permit {{ $prefix }} ge 32 le 32
 {{ end }}
+{{ end }}
+{{ if $.Values.evpn.bgp.activeBackup }}
           route-map EVPN-ACTIVE-IN permit 10
             description EVPN active uplink inbound
             set local-preference 200
@@ -251,30 +255,55 @@ data:
           route-map EVPN-BACKUP-OUT permit 10
             description EVPN backup uplink outbound
             set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
-{{ range $uplink := $node.uplinks }}
-{{ $peerID := $uplink.peerAddress | default $uplink.interface }}
-{{ if ($uplink.unnumbered | default false) }}
-          ipv6 prefix-list {{ $peerID }}-inpl-ipv4 seq 1 permit fe80::/10
-          ipv6 prefix-list {{ $peerID }}-allowed-ipv6 seq 1 permit fe80::/10
 {{ end }}
-          route-map {{ $peerID }}-in permit 1
-            description EVPN {{ $uplink.role }} uplink inbound
+{{ if or $.Values.evpn.bgp.activeBackup $hasUnnumbered }}
+          ip prefix-list EVPN-LOCAL-VTEP seq 10 permit {{ printf "%s/32" $node.vtepIP }}
+{{ if $.Values.evpn.bgp.activeBackup }}
+          route-map EVPN-IPV4-ACTIVE-IN permit 10
+            description EVPN active uplink IPv4 unicast inbound
             match ip address prefix-list EVPN-REMOTE-VTEPS
-            set local-preference {{ if eq $uplink.role "active" }}200{{ else }}100{{ end }}
-{{ if eq $uplink.role "backup" }}
-          route-map {{ $peerID }}-out permit 1
-            description EVPN backup uplink outbound
+            set local-preference 200
+          route-map EVPN-IPV4-BACKUP-IN permit 10
+            description EVPN backup uplink IPv4 unicast inbound
+            match ip address prefix-list EVPN-REMOTE-VTEPS
+            set local-preference 100
+          route-map EVPN-IPV4-ACTIVE-OUT permit 10
+            description EVPN active uplink IPv4 unicast outbound
+            match ip address prefix-list EVPN-LOCAL-VTEP
+          route-map EVPN-IPV4-BACKUP-OUT permit 10
+            description EVPN backup uplink IPv4 unicast outbound
+            match ip address prefix-list EVPN-LOCAL-VTEP
             set as-path prepend {{ int64 $nodeASN }} {{ int64 $nodeASN }} {{ int64 $nodeASN }}
-{{ end }}
+{{ else }}
+          route-map EVPN-IPV4-IN permit 10
+            description EVPN IPv4 unicast inbound
+            match ip address prefix-list EVPN-REMOTE-VTEPS
+          route-map EVPN-IPV4-OUT permit 10
+            description EVPN IPv4 unicast outbound
+            match ip address prefix-list EVPN-LOCAL-VTEP
 {{ end }}
 {{ end }}
           router bgp {{ int64 $nodeASN }}
 {{ if $.Values.evpn.bgp.activeActive }}
             bgp bestpath as-path multipath-relax
 {{ end }}
-{{ if $.Values.evpn.bgp.activeActive }}
+{{ if or $.Values.evpn.bgp.activeActive $.Values.evpn.bgp.activeBackup $hasUnnumbered }}
             address-family ipv4 unicast
+{{ if $.Values.evpn.bgp.activeActive }}
               maximum-paths 16
+{{ end }}
+{{ range $uplink := $node.uplinks }}
+{{ $peerID := $uplink.peerAddress | default $uplink.interface }}
+{{ if or $.Values.evpn.bgp.activeBackup ($uplink.unnumbered | default false) }}
+{{ if $.Values.evpn.bgp.activeBackup }}
+              neighbor {{ $peerID }} route-map EVPN-IPV4-{{ if eq $uplink.role "active" }}ACTIVE{{ else }}BACKUP{{ end }}-IN in
+              neighbor {{ $peerID }} route-map EVPN-IPV4-{{ if eq $uplink.role "active" }}ACTIVE{{ else }}BACKUP{{ end }}-OUT out
+{{ else }}
+              neighbor {{ $peerID }} route-map EVPN-IPV4-IN in
+              neighbor {{ $peerID }} route-map EVPN-IPV4-OUT out
+{{ end }}
+{{ end }}
+{{ end }}
             exit-address-family
 {{ end }}
             address-family l2vpn evpn

@@ -36,7 +36,7 @@ func (s *watcherWorkloadClustersServer) List(context.Context, *privatev1.Workloa
 	return privatev1.WorkloadClustersListResponse_builder{
 		Items: []*privatev1.WorkloadCluster{privatev1.WorkloadCluster_builder{
 			Id:   "wc-1",
-			Spec: privatev1.WorkloadClusterSpec_builder{SourceHubId: "hub-1", ManagedClusterName: "worker-1"}.Build(),
+			Spec: privatev1.WorkloadClusterSpec_builder{Maas: privatev1.MaasConfig_builder{SourceHubId: "hub-1", ManagedClusterName: "worker-1"}.Build()}.Build(),
 		}.Build()},
 	}.Build(), nil
 }

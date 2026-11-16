@@ -273,8 +273,9 @@ func finalizerCases() []finalizerCase {
 						Tenant: auth.SharedTenant,
 					}.Build(),
 					Spec: privatev1.WorkloadClusterSpec_builder{
-						SourceHubId:        finalizerWorkloadClusterSourceHubID(),
-						ManagedClusterName: "managed-cluster",
+						Maas: privatev1.MaasConfig_builder{
+							SourceHubId: finalizerWorkloadClusterSourceHubID(), ManagedClusterName: "managed-cluster",
+						}.Build(),
 						SupportedWorkloads: []string{"maas"},
 					}.Build(),
 				}.Build()

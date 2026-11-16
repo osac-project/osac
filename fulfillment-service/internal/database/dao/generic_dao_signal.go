@@ -110,6 +110,10 @@ func (r *SignalRequest[O]) do(ctx context.Context) (response *SignalResponse, er
 		r.sql.filter.String(),
 	)
 	tag, updateErr := r.exec(ctx, signalOpType, buffer.String(), r.sql.params...)
+	// The event metadata settings are transaction-local, but they remain set
+	// for subsequent writes in this transaction unless explicitly cleared.
+	_, clearReasonErr := r.exec(ctx, signalOpType, "select set_config('osac.event_reason', '', true)")
+	_, clearSeverityErr := r.exec(ctx, signalOpType, "select set_config('osac.event_severity', '', true)")
 	_, clearErr := r.exec(ctx, signalOpType, "set local osac.signal = 'off'")
 	if updateErr == nil && tag.RowsAffected() == 0 {
 		err = &ErrNotFound{
@@ -119,7 +123,7 @@ func (r *SignalRequest[O]) do(ctx context.Context) (response *SignalResponse, er
 	}
 	err = updateErr
 	if err == nil {
-		err = clearErr
+		err = errors.Join(clearReasonErr, clearSeverityErr, clearErr)
 	}
 	if err != nil {
 		var pgErr *pgconn.PgError

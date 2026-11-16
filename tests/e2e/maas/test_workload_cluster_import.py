@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -10,10 +11,16 @@ import pytest
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import env, poll_until, run
+from tests.e2e.core.runner import poll_until, run
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
-pytestmark = pytest.mark.regression
+pytestmark = [
+    pytest.mark.regression,
+    pytest.mark.skipif(
+        not os.environ.get("OSAC_SOURCE_HUB_KUBECONFIG") or not os.environ.get("OSAC_SOURCE_HUB_ID"),
+        reason="OSAC_SOURCE_HUB_KUBECONFIG and OSAC_SOURCE_HUB_ID are required for Hub import e2e coverage",
+    ),
+]
 
 
 def _condition(object_: dict[str, Any], condition_type: str) -> dict[str, Any]:
@@ -23,16 +30,22 @@ def _condition(object_: dict[str, Any], condition_type: str) -> dict[str, Any]:
     return {}
 
 
+def _managed_cluster_condition(condition_type: str, status: str) -> dict[str, str]:
+    observed_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return {
+        "type": condition_type,
+        "status": status,
+        "reason": "ManagedClusterImportE2E",
+        "message": "ManagedCluster import e2e fixture",
+        "lastTransitionTime": observed_at,
+    }
+
+
 def test_import_available_managed_cluster(
-    private_cli: OsacCLI,
-    private_grpc: GRPCClient,
-    request: pytest.FixtureRequest,
+    private_cli: OsacCLI, private_grpc: GRPCClient, request: pytest.FixtureRequest
 ) -> None:
     source_kubeconfig = os.environ.get("OSAC_SOURCE_HUB_KUBECONFIG")
     source_hub_id = os.environ.get("OSAC_SOURCE_HUB_ID")
-    if not source_kubeconfig or not source_hub_id:
-        pytest.skip("OSAC_SOURCE_HUB_KUBECONFIG and OSAC_SOURCE_HUB_ID are required for Hub import e2e coverage")
-
     source_hub = K8sClient(
         namespace="default",
         kubeconfig=source_kubeconfig,
@@ -45,20 +58,14 @@ def test_import_available_managed_cluster(
 
     def cleanup_source_hub() -> None:
         for resource, name in (("managedcluster", managed_cluster_name), ("namespace", managed_cluster_name)):
-            run(env("OSAC_OC_PATH", "oc"), "--kubeconfig", source_kubeconfig, "delete", resource, name, "--ignore-not-found=true", "--wait=true")
+            run(*source_hub.base_args(), "delete", resource, name, "--ignore-not-found=true", "--wait=true")
 
     request.addfinalizer(cleanup_source_hub)
 
     # These are the ACM objects the real Hub would provide. The controller only
     # needs the registration conditions and the stable identity claim.
     source_hub.apply(
-        manifest=json.dumps(
-            {
-                "apiVersion": "v1",
-                "kind": "Namespace",
-                "metadata": {"name": managed_cluster_name},
-            }
-        )
+        manifest=json.dumps({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": managed_cluster_name}})
     )
     source_hub.apply(
         manifest=json.dumps(
@@ -70,22 +77,21 @@ def test_import_available_managed_cluster(
                         "apiVersion": "cluster.open-cluster-management.io/v1",
                         "kind": "ManagedCluster",
                         "metadata": {"name": managed_cluster_name},
+                        "spec": {"hubAcceptsClient": True},
                         "status": {
                             "conditions": [
-                                {"type": "HubAcceptedManagedCluster", "status": "True"},
-                                {"type": "ManagedClusterConditionAvailable", "status": "True"},
+                                _managed_cluster_condition("HubAcceptedManagedCluster", "True"),
+                                _managed_cluster_condition("ManagedClusterConditionAvailable", "True"),
                             ],
                             "clusterClaims": [{"name": "id.k8s.io", "value": cluster_uid}],
                         },
-                    },
+                    }
                 ],
             }
         )
     )
     run(
-        env("OSAC_OC_PATH", "oc"),
-        "--kubeconfig",
-        source_kubeconfig,
+        *source_hub.base_args(),
         "patch",
         "managedcluster",
         managed_cluster_name,
@@ -96,8 +102,8 @@ def test_import_available_managed_cluster(
             {
                 "status": {
                     "conditions": [
-                        {"type": "HubAcceptedManagedCluster", "status": "True"},
-                        {"type": "ManagedClusterConditionAvailable", "status": "True"},
+                        _managed_cluster_condition("HubAcceptedManagedCluster", "True"),
+                        _managed_cluster_condition("ManagedClusterConditionAvailable", "True"),
                     ],
                     "clusterClaims": [{"name": "id.k8s.io", "value": cluster_uid}],
                 }
@@ -114,9 +120,9 @@ def test_import_available_managed_cluster(
         )
 
         def get_workload_cluster() -> dict[str, Any]:
-            return private_grpc.call(
-                service=f"{PRIVATE_API}.WorkloadClusters/Get", data={"id": workload_cluster_id}
-            )["object"]
+            return private_grpc.call(service=f"{PRIVATE_API}.WorkloadClusters/Get", data={"id": workload_cluster_id})[
+                "object"
+            ]
 
         registered = poll_until(
             fn=get_workload_cluster,
@@ -129,8 +135,7 @@ def test_import_available_managed_cluster(
         )
         assert registered["metadata"]["name"] == workload_cluster_name
         assert registered["spec"] == {
-            "sourceHubId": source_hub_id,
-            "managedClusterName": managed_cluster_name,
+            "maas": {"sourceHubId": source_hub_id, "managedClusterName": managed_cluster_name},
             "supportedWorkloads": ["maas"],
         }
         assert registered["status"]["managedClusterUid"] == cluster_uid
@@ -143,16 +148,7 @@ def test_import_available_managed_cluster(
         assert managed_cluster_name in cli_description
 
         managed_cluster_json = json.loads(
-            run(
-                env("OSAC_OC_PATH", "oc"),
-                "--kubeconfig",
-                source_kubeconfig,
-                "get",
-                "managedcluster",
-                managed_cluster_name,
-                "-o",
-                "json",
-            )
+            run(*source_hub.base_args(), "get", "managedcluster", managed_cluster_name, "-o", "json")
         )
         assert managed_cluster_json["metadata"]["name"] == managed_cluster_name
         assert managed_cluster_json["status"]["clusterClaims"][0]["value"] == cluster_uid

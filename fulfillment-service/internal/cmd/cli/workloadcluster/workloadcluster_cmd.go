@@ -73,7 +73,7 @@ func createCmd() *cobra.Command {
 	return result
 }
 
-func runCreate(cmd *cobra.Command, args *createArgs) error {
+func runCreate(cmd *cobra.Command, args *createArgs) (err error) {
 	if args.name == "" {
 		return errors.New("name is required")
 	}
@@ -114,9 +114,11 @@ func runCreate(cmd *cobra.Command, args *createArgs) error {
 			Project: config.ProjectFromContext(ctx),
 		}.Build(),
 		Spec: privatev1.WorkloadClusterSpec_builder{
-			SourceHubId:        hub.GetId(),
-			ManagedClusterName: args.managedCluster,
 			SupportedWorkloads: workloads,
+			Maas: privatev1.MaasConfig_builder{
+				SourceHubId:        hub.GetId(),
+				ManagedClusterName: args.managedCluster,
+			}.Build(),
 		}.Build(),
 	}.Build()
 	response, err := privatev1.NewWorkloadClustersClient(conn).Create(ctx, privatev1.WorkloadClustersCreateRequest_builder{
@@ -173,7 +175,8 @@ func listCmd() *cobra.Command {
 			}
 			hubs, err := hublistAll(ctx, privatev1.NewHubsClient(conn))
 			if err != nil {
-				return fmt.Errorf("failed to list hubs: %w", err)
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: Hub names are unavailable; displaying Hub IDs")
+				hubs = nil
 			}
 			hubNames := make(map[string]string, len(hubs))
 			for _, hub := range hubs {
@@ -241,7 +244,7 @@ func updateCmd() *cobra.Command {
 	return result
 }
 
-func runUpdate(cmd *cobra.Command, ref string, args *updateArgs) error {
+func runUpdate(cmd *cobra.Command, ref string, args *updateArgs) (err error) {
 	paths := []string{}
 	if cmd.Flags().Changed("supported-workloads") {
 		paths = append(paths, "spec.supported_workloads")
@@ -387,14 +390,14 @@ func renderWorkloadClusterList(w io.Writer, objects []*privatev1.WorkloadCluster
 		return err
 	}
 	for _, object := range objects {
-		hubID := object.GetSpec().GetSourceHubId()
+		hubID := object.GetSpec().GetMaas().GetSourceHubId()
 		hubName := hubNames[hubID]
 		if hubName == "" {
 			hubName = hubID
 		}
 		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			object.GetId(), object.GetMetadata().GetName(), hubName,
-			object.GetSpec().GetManagedClusterName(), conditionValue(object, "Available"), conditionValue(object, "HubReachable")); err != nil {
+			object.GetSpec().GetMaas().GetManagedClusterName(), conditionValue(object, "Available"), conditionValue(object, "HubReachable")); err != nil {
 			return err
 		}
 	}
@@ -404,8 +407,8 @@ func renderWorkloadClusterList(w io.Writer, objects []*privatev1.WorkloadCluster
 func renderWorkloadCluster(w io.Writer, object *privatev1.WorkloadCluster) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintf(writer, "ID:\t%s\nName:\t%s\nSource Hub ID:\t%s\nManagedCluster:\t%s\nSupported workloads:\t%s\nManagedCluster UID:\t%s\n",
-		object.GetId(), object.GetMetadata().GetName(), object.GetSpec().GetSourceHubId(),
-		object.GetSpec().GetManagedClusterName(), strings.Join(object.GetSpec().GetSupportedWorkloads(), ", "),
+		object.GetId(), object.GetMetadata().GetName(), object.GetSpec().GetMaas().GetSourceHubId(),
+		object.GetSpec().GetMaas().GetManagedClusterName(), strings.Join(object.GetSpec().GetSupportedWorkloads(), ", "),
 		object.GetStatus().GetManagedClusterUid()); err != nil {
 		return err
 	}

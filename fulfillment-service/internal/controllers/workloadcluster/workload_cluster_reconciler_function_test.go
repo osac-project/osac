@@ -20,7 +20,7 @@ func TestObserveAvailableManagedClusterRecordsIdentity(t *testing.T) {
 	hub := fake.NewClientBuilder().WithObjects(
 		managedCluster("worker-1", "uid-1", true, true),
 	).Build()
-	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{ManagedClusterName: "worker-1"}}
+	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{Maas: &privatev1.MaasConfig{ManagedClusterName: "worker-1"}}}
 	status := &privatev1.WorkloadClusterStatus{}
 
 	err := (&function{}).observe(context.Background(), hub, object, status)
@@ -40,10 +40,9 @@ func TestObserveUsesHubInformerCache(t *testing.T) {
 	managed := managedCluster("worker-1", "uid-1", true, true)
 	require.NoError(t, informer.GetStore().Add(managed))
 
-	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{
-		SourceHubId:        "hub-1",
-		ManagedClusterName: "worker-1",
-	}}
+	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{Maas: &privatev1.MaasConfig{
+		SourceHubId: "hub-1", ManagedClusterName: "worker-1",
+	}}}
 	status := &privatev1.WorkloadClusterStatus{}
 	reconciler := &function{managedCaches: map[string]cache.SharedIndexInformer{"hub-1": informer}}
 
@@ -58,7 +57,7 @@ func TestObserveRetainsIdentityAndReportsMismatch(t *testing.T) {
 	hub := fake.NewClientBuilder().WithObjects(
 		managedCluster("worker-1", "uid-2", true, true),
 	).Build()
-	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{ManagedClusterName: "worker-1"}}
+	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{Maas: &privatev1.MaasConfig{ManagedClusterName: "worker-1"}}}
 	status := &privatev1.WorkloadClusterStatus{ManagedClusterUid: "uid-1"}
 
 	err := (&function{}).observe(context.Background(), hub, object, status)
@@ -72,7 +71,7 @@ func TestObserveMissingIdentityDoesNotRecordUID(t *testing.T) {
 	hub := fake.NewClientBuilder().WithObjects(
 		managedCluster("worker-1", "", true, true),
 	).Build()
-	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{ManagedClusterName: "worker-1"}}
+	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{Maas: &privatev1.MaasConfig{ManagedClusterName: "worker-1"}}}
 	status := &privatev1.WorkloadClusterStatus{}
 
 	err := (&function{}).observe(context.Background(), hub, object, status)
@@ -84,7 +83,7 @@ func TestObserveMissingIdentityDoesNotRecordUID(t *testing.T) {
 
 func TestObserveMissingManagedCluster(t *testing.T) {
 	hub := fake.NewClientBuilder().Build()
-	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{ManagedClusterName: "worker-1"}}
+	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{Maas: &privatev1.MaasConfig{ManagedClusterName: "worker-1"}}}
 	status := &privatev1.WorkloadClusterStatus{}
 
 	err := (&function{}).observe(context.Background(), hub, object, status)

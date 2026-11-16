@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	osacmetrics "github.com/osac-project/osac/fulfillment-service/internal/metrics"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -142,10 +143,13 @@ func (s *PrivateWorkloadClustersServer) Create(ctx context.Context,
 	}()
 	setRegistrationResult := func(err error) error {
 		if err != nil {
-			if grpcstatus.Code(err) == grpccodes.AlreadyExists {
+			switch grpcstatus.Code(err) {
+			case grpccodes.AlreadyExists:
 				registrationResult = "already_exists"
-			} else {
+			case grpccodes.InvalidArgument, grpccodes.FailedPrecondition:
 				registrationResult = "invalid"
+			default:
+				registrationResult = "error"
 			}
 		}
 		return err
@@ -157,7 +161,10 @@ func (s *PrivateWorkloadClustersServer) Create(ctx context.Context,
 	if err := validateSupportedWorkloads(object); err != nil {
 		return nil, setRegistrationResult(err)
 	}
-	if err := s.validateSourceHub(ctx, object.GetSpec().GetSourceHubId()); err != nil {
+	if err := validateMaaSConfig(object); err != nil {
+		return nil, setRegistrationResult(err)
+	}
+	if err := s.validateSourceHub(ctx, object.GetSpec().GetMaas().GetSourceHubId()); err != nil {
 		return nil, setRegistrationResult(err)
 	}
 	if err := s.rejectDuplicate(ctx, object); err != nil {
@@ -184,13 +191,16 @@ func (s *PrivateWorkloadClustersServer) Update(ctx context.Context,
 	err := s.generic.UpdateWithValidation(ctx, request, &response, func(
 		_ context.Context, candidate, current *privatev1.WorkloadCluster,
 	) error {
-		if candidate.GetSpec().GetSourceHubId() != current.GetSpec().GetSourceHubId() {
-			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.source_hub_id' is immutable")
+		if candidate.GetSpec().GetMaas().GetSourceHubId() != current.GetSpec().GetMaas().GetSourceHubId() {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.source_hub_id' is immutable")
 		}
-		if candidate.GetSpec().GetManagedClusterName() != current.GetSpec().GetManagedClusterName() {
-			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.managed_cluster_name' is immutable")
+		if candidate.GetSpec().GetMaas().GetManagedClusterName() != current.GetSpec().GetMaas().GetManagedClusterName() {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.managed_cluster_name' is immutable")
 		}
 		if err := validateSupportedWorkloads(candidate); err != nil {
+			return err
+		}
+		if err := validateMaaSConfig(candidate); err != nil {
 			return err
 		}
 		if current.GetStatus().GetManagedClusterUid() != "" && candidate.GetStatus().GetManagedClusterUid() != current.GetStatus().GetManagedClusterUid() {
@@ -238,6 +248,34 @@ func validateSupportedWorkloads(object *privatev1.WorkloadCluster) error {
 	return nil
 }
 
+func validateMaaSConfig(object *privatev1.WorkloadCluster) error {
+	if object == nil || object.GetSpec() == nil {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "spec is required")
+	}
+	if !containsWorkload(object.GetSpec().GetSupportedWorkloads(), supportedWorkloadMaaS) {
+		return nil
+	}
+	if !object.GetSpec().HasMaas() {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "maas config is required when 'maas' is in supported_workloads")
+	}
+	if object.GetSpec().GetMaas().GetSourceHubId() == "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.source_hub_id' is required")
+	}
+	if object.GetSpec().GetMaas().GetManagedClusterName() == "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.managed_cluster_name' is required")
+	}
+	return nil
+}
+
+func containsWorkload(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func initialWorkloadClusterStatus() *privatev1.WorkloadClusterStatus {
 	return privatev1.WorkloadClusterStatus_builder{
 		Conditions: []*privatev1.WorkloadClusterCondition{
@@ -249,10 +287,17 @@ func initialWorkloadClusterStatus() *privatev1.WorkloadClusterStatus {
 
 func (s *PrivateWorkloadClustersServer) validateSourceHub(ctx context.Context, id string) error {
 	if id == "" {
-		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.source_hub_id' is required")
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.source_hub_id' is required")
 	}
 	var err error
 	if hubs, ok := s.hubsServer.(*PrivateHubsServer); ok {
+		tx, txErr := database.TxFromContext(ctx)
+		if txErr != nil {
+			return grpcstatus.Error(grpccodes.Internal, "workload cluster registration requires a database transaction")
+		}
+		if lockErr := database.LockWorkloadClusterHubRegistration(ctx, tx); lockErr != nil {
+			return ConvertDAOErrorToGRPC(lockErr, "lock", "workload cluster Hub registration")
+		}
 		activeHubFilter := "this.metadata.deletion_timestamp == null"
 		configured, listErr := listActiveHubs(ctx, hubs, activeHubFilter)
 		if listErr != nil {
@@ -289,7 +334,7 @@ func (s *PrivateWorkloadClustersServer) validateSourceHub(ctx context.Context, i
 	}
 	if err != nil {
 		if grpcstatus.Code(err) == grpccodes.NotFound {
-			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.source_hub_id' must reference an existing Hub")
+			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.source_hub_id' must reference an existing Hub")
 		}
 		return err
 	}
@@ -328,19 +373,19 @@ func listWorkloadClusters(ctx context.Context, workloadClusters *dao.GenericDAO[
 
 func validateExistingWorkloadClusterHub(hubs []*privatev1.Hub, id string) error {
 	if len(hubs) == 0 {
-		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.source_hub_id' must reference an existing active Hub")
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.source_hub_id' must reference an existing active Hub")
 	}
 	for _, hub := range hubs {
 		if hub.GetId() == id {
 			return nil
 		}
 	}
-	return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.source_hub_id' must reference an existing active Hub")
+	return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.source_hub_id' must reference an existing active Hub")
 }
 
 func validateActiveWorkloadClusterHub(workloadClusters []*privatev1.WorkloadCluster, activeHubIDs map[string]struct{}, requestedHubID string) error {
 	for _, workloadCluster := range workloadClusters {
-		sourceHubID := workloadCluster.GetSpec().GetSourceHubId()
+		sourceHubID := workloadCluster.GetSpec().GetMaas().GetSourceHubId()
 		if sourceHubID == requestedHubID {
 			continue
 		}
@@ -355,8 +400,8 @@ func (s *PrivateWorkloadClustersServer) rejectDuplicate(ctx context.Context, obj
 	if object == nil || object.GetSpec() == nil {
 		return nil
 	}
-	filter := "this.spec.source_hub_id == " + strconv.Quote(object.GetSpec().GetSourceHubId()) +
-		" && this.spec.managed_cluster_name == " + strconv.Quote(object.GetSpec().GetManagedClusterName()) +
+	filter := "this.spec.maas.source_hub_id == " + strconv.Quote(object.GetSpec().GetMaas().GetSourceHubId()) +
+		" && this.spec.maas.managed_cluster_name == " + strconv.Quote(object.GetSpec().GetMaas().GetManagedClusterName()) +
 		" && this.metadata.deletion_timestamp == null"
 	response, err := s.List(ctx, privatev1.WorkloadClustersListRequest_builder{Filter: &filter}.Build())
 	if err != nil {

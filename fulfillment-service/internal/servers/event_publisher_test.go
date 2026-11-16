@@ -427,7 +427,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 				"id": %q,
 				"name": %q,
 				"tenant": %q,
-				"data": {"spec":{"source_hub_id":"hub-1","managed_cluster_name":"worker-1"},"status":{"conditions":[{"type":"Available","status":"False","reason":"ClusterIdentityMismatch"}]}}
+				"data": {"spec":{"maas":{"source_hub_id":"hub-1","managed_cluster_name":"worker-1"}},"status":{"conditions":[{"type":"Available","status":"False","reason":"ClusterIdentityMismatch"}]}}
 			}`, objectID, objectID, tenant)
 			err := pool.QueryRow(encodeCtx, `
 				insert into changes ("table", op, data, reason, severity)

@@ -213,16 +213,14 @@ describe('EditInstanceTypeModal wrapper', () => {
     });
 
     await user.click(await screen.findByRole('combobox'));
-    expect(
-      await screen.findByRole('option', {
-        name: /GPU small — 4 vCPUs · 16 GiB · 1 GPU · nvidia\.com\/A100/,
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('option', {
-        name: /GPU medium — 8 vCPUs · 32 GiB · 1 GPU · nvidia\.com\/A100/,
-      }),
-    ).toBeInTheDocument();
+    const smallOption = await screen.findByRole('option', { name: /GPU small/ });
+    const mediumOption = screen.getByRole('option', { name: /GPU medium/ });
+    expect(smallOption.querySelector('.pf-v6-c-menu__item-description')).toHaveTextContent(
+      '4 vCPUs · 16 GiB · 1 GPU · nvidia.com/A100',
+    );
+    expect(mediumOption.querySelector('.pf-v6-c-menu__item-description')).toHaveTextContent(
+      '8 vCPUs · 32 GiB · 1 GPU · nvidia.com/A100',
+    );
     expect(screen.queryByRole('option', { name: /GPU negative/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /CPU small/ })).not.toBeInTheDocument();
   });

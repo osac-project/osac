@@ -32,7 +32,11 @@ import {
   emptyResourceSelectValue,
 } from '../../Form/ResourceSelectField';
 import { useUpdateVmInstanceType } from '../useUpdateVmInstanceType';
-import { formatInstanceTypeOptionLabel, isGpuCompatibleInstanceType } from '../utils';
+import {
+  formatInstanceTypeDisplayName,
+  formatInstanceTypeSizing,
+  isGpuCompatibleInstanceType,
+} from '../utils';
 
 interface EditInstanceTypeModalProps {
   vm: ComputeInstance;
@@ -171,7 +175,13 @@ const EditInstanceTypeModal = ({ vm, onClose }: EditInstanceTypeModalProps) => {
                     }
                     return isGpuCompatibleInstanceType(currentType, item as InstanceType);
                   }}
-                  formatOptionLabel={(item) => formatInstanceTypeOptionLabel(item as InstanceType)}
+                  formatOptionLabel={(item) =>
+                    formatInstanceTypeDisplayName(item as InstanceType, ` (${t('deprecated')})`)
+                  }
+                  getOptionDescription={(item) => {
+                    const sizing = formatInstanceTypeSizing(item as InstanceType);
+                    return sizing === '—' ? undefined : sizing;
+                  }}
                   placeholder={t('Select an instance type')}
                   loadErrorTitle={t('Error loading instance types')}
                   emptyTitle={t('No instance types available')}

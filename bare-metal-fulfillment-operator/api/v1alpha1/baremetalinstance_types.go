@@ -242,6 +242,10 @@ const (
 	HostConditionReasonNetworkHandoffFailed = "NetworkHandoffFailed"
 	HostConditionReasonLeasePending         = "LeasePending"
 	HostConditionReasonIPDiscoveryFailed    = "IPDiscoveryFailed"
+	HostConditionReasonOffboarding          = "Offboarding"
+	HostConditionReasonNetworkDetaching     = "NetworkDetaching"
+	HostConditionReasonPowerOffFailed       = "PowerOffFailed"
+	HostConditionReasonProvisioningDisabled = "ProvisioningDisabled"
 )
 
 // HostSelectorSpec defines host selection constraints.

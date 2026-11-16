@@ -127,7 +127,7 @@ func (r *Resolver) Resolve(ctx context.Context, tenant string, subject Subject) 
 	if tenant == "" || !subject.Tenants.Contains(tenant) {
 		return nil, errors.New("requested tenant must belong to the authenticated subject")
 	}
-	if (subject.Username == "") && (subject.ServiceAccountID == "") {
+	if (subject.Username == "") == (subject.ServiceAccountID == "") {
 		return nil, errors.New("exactly one subject identifier is required")
 	}
 	res := newResolution(r, tenant, subject)

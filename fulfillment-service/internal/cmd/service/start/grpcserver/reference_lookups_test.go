@@ -480,9 +480,9 @@ var _ = Describe("RegisterReferenceLookups", func() {
 			unqualified.GetObject().GetSpec().GetRole().GetId()))
 		Expect(response.GetObject().GetSpec().GetRole().GetTenant()).To(Equal(auth.SharedTenant))
 
-		roleless, err := create("grpc-roleless-binding", nil)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(roleless.GetObject().GetSpec().GetRole()).To(BeNil())
+		_, err = create("grpc-roleless-binding", nil)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("a role reference must specify an ID or name"))
 	})
 })
 

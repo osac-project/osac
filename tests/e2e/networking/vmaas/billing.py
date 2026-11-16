@@ -16,6 +16,7 @@ by name in heartbeats, so this journey pins reference-based attribution.
 from __future__ import annotations
 
 import contextlib
+import logging
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -25,7 +26,6 @@ from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import (
     wait_for_external_ip_allocated,
     wait_for_external_ip_attachment_cr,
-    wait_for_external_ip_attachment_deletion,
     wait_for_external_ip_attachment_ready,
     wait_for_external_ip_cr,
     wait_for_external_ip_deletion,
@@ -45,6 +45,10 @@ from tests.e2e.core.metering import (
 )
 from tests.e2e.core.runner import poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
+from tests.e2e.networking.teardown import teardown_external_ip, teardown_external_ip_attachment
+from tests.e2e.networking.vmaas import stack
+
+_LOG = logging.getLogger(__name__)
 
 HEARTBEAT_TIMEOUT: int = 300
 
@@ -215,8 +219,8 @@ def external_ip_attach_detach_reattach(
     assert attached_event is not None, "no heartbeat with the attached dimensions arrived"
 
     # --- Detach (delete attachment) ---
-    grpc.delete_external_ip_attachment(attachment_id=att_id)
-    wait_for_external_ip_attachment_deletion(k8s=k8s_hub_client, name=att_cr_name)
+    # Waits for the API record too: it outlives the CR, and the server refuses a new attachment while it exists.
+    teardown_external_ip_attachment(grpc, k8s_hub_client, att_id, "billing")
 
     poll_until(
         fn=lambda: grpc.get_external_ip(external_ip_id=ip_id)["object"]["status"].get("attached"),
@@ -275,8 +279,8 @@ def external_ip_attach_detach_reattach(
     assert_dimension_sets_disjoint(metering.get_all_events(HEARTBEAT_TYPE, ip_id), label=f"ExternalIP {ip_id}")
 
     # --- Cleanup: delete the attachment and the ExternalIP ---
-    grpc.delete_external_ip_attachment(attachment_id=att2_id)
-    wait_for_external_ip_attachment_deletion(k8s=k8s_hub_client, name=att2_cr_name)
+    # The server refuses to delete an ExternalIP while an attachment record exists.
+    teardown_external_ip_attachment(grpc, k8s_hub_client, att2_id, "billing")
 
     grpc.delete_external_ip(external_ip_id=ip_id)
     wait_for_external_ip_deletion(k8s=k8s_hub_client, name=ip_cr_name)
@@ -297,6 +301,7 @@ def nat_gateway_bills_allocation(
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     virtual_network: str,
+    virtual_network_id: str,
     pool: dict[str, Any],
 ) -> None:
     """A READY gateway bills per interval with its references as dimensions;
@@ -316,9 +321,11 @@ def nat_gateway_bills_allocation(
     nat_cr_name: str | None = None
     try:
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr_name)
+        # The server accepts the NATGateway only once the API, not only the CR, says ALLOCATED.
+        stack.wait_for_grpc_external_ip_allocated(grpc, eip_id)
 
         nat_name = f"billing-nat-{tag}"
-        nat_id = grpc.create_nat_gateway(name=nat_name, virtual_network_name=virtual_network, external_ip_name=eip_name)
+        nat_id = grpc.create_nat_gateway(name=nat_name, virtual_network_id=virtual_network_id, external_ip_id=eip_id)
         poll_until(
             fn=lambda: (
                 grpc.call(service=f"{PUBLIC_API}.NATGateways/Get", data={"id": nat_id})
@@ -382,9 +389,12 @@ def nat_gateway_bills_allocation(
             if nat_id is not None
             else None
         )
-        with contextlib.suppress(Exception):
-            grpc.delete_external_ip(external_ip_id=eip_id)
-            wait_for_external_ip_deletion(k8s=k8s_hub_client, name=eip_cr_name)
+        try:
+            teardown_external_ip(grpc, k8s_hub_client, eip_id, "billing NAT")
+        except Exception as exc:
+            # Raising here would hide the failure of the test body; the pool accounting of the teardown test
+            # still fails on a leaked address.
+            _LOG.warning("billing NAT ExternalIP %s cleanup failed: %s", eip_id, exc)
 
     if nat_id is not None:
         assert deletion_recorded is not None, (

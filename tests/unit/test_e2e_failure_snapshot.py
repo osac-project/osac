@@ -8,8 +8,9 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -105,7 +106,7 @@ def test_api_source_lists_every_resource_and_one_failure_does_not_stop_the_rest(
     assert JWT not in (tmp_path / snap.ERRORS_FILE).read_text()
 
 
-def test_logs_source_asks_for_the_three_deployments_since_the_test_began(
+def test_logs_source_asks_for_the_osac_deployments_since_the_test_began(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[str, ...]] = []
@@ -123,10 +124,26 @@ def test_logs_source_asks_for_the_three_deployments_since_the_test_began(
         "deployment/fulfillment-grpc-server",
         "deployment/fulfillment-controller",
         "deployment/osac-operator",
+        "deployment/bmf-operator-controller-manager",
     ]
     assert "--since-time=2026-01-02T03:04:05Z" in calls[0]
     assert {"--all-containers", "--timestamps", "--tail=20000", "-n", "osac-ns"} <= set(calls[0])
     assert (tmp_path / "log-osac-operator.txt").read_text() == "line"
+
+
+def test_logs_source_starts_at_the_module_when_it_began_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ordered suite builds the failing state in earlier tests, so the logs start with the module."""
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(snap, "run", lambda *args, timeout: calls.append(args) or "line")
+    k8s = Mock()
+    k8s.base_args.return_value = ["kubectl"]
+    module_start = START - timedelta(minutes=20)
+    snap.logs_source(k8s, "osac-ns")(tmp_path, snap.Window(START, module_start))
+    assert "--since-time=2026-01-02T02:44:05Z" in calls[0]
+    # A later module start never narrows the window below the test's own start.
+    calls.clear()
+    snap.logs_source(k8s, "osac-ns")(tmp_path, snap.Window(START, START + timedelta(minutes=1)))
+    assert "--since-time=2026-01-02T03:04:05Z" in calls[0]
 
 
 def test_k8s_source_never_asks_for_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -340,3 +357,93 @@ def _fast_poll(**kwargs: object) -> object:
     from tests.e2e.core import runner
 
     return runner.poll_until(**{**kwargs, "retries": 1, "delay": 0})
+
+
+def test_reporter_passes_the_module_start_to_the_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure late in an ordered module snapshots logs from the module's first test, not only its own start."""
+    from tests.e2e.core import failure_report
+
+    monkeypatch.setenv(failure_report.OUTPUT_DIR_ENV, str(tmp_path))
+    config = SimpleNamespace(option=SimpleNamespace(dist="no"))
+    reporter = failure_report.FailureReporter(config, sources=snap.SnapshotSources())  # pyright: ignore[reportArgumentType]
+    taken: list[dict[str, object]] = []
+    reporter.snapshotter = Mock(take=lambda *args, **kwargs: taken.append({"args": args, **kwargs}) or "snap")
+    clock = iter([100.0, 400.0])
+    monkeypatch.setattr(failure_report.time, "time", lambda: next(clock))
+    reporter.pytest_runtest_logstart("suite/test_x.py::T::test_00", ("", None, ""))
+    reporter.pytest_runtest_logstart("suite/test_x.py::T::test_09", ("", None, ""))
+
+    reporter._snapshot("test_09", Kind.ASSERTION, 400.0, {"nodeid": "suite/test_x.py::T::test_09"})
+
+    assert taken[0]["logs_since"] == datetime.fromtimestamp(100.0, UTC)
+    assert taken[0]["args"][2] == datetime.fromtimestamp(400.0, UTC)
+
+
+def test_kubevirt_source_reads_each_vm_namespace_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The VM namespaces are deleted before the job gathers logs, so the snapshot keeps their VMs, events and logs."""
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(*args: str, timeout: int) -> str:
+        calls.append(args)
+        if "events" in args:
+            raise CommandFailed(1, ["kubectl", "get", "events"], "", "forbidden")
+        return "{}"
+
+    monkeypatch.setattr(stack, "run", fake_run)
+    monkeypatch.setattr(stack.ssh_helper, "vm_cluster_args", lambda: ["kubectl", "--kubeconfig", "/vm"])
+    instances = [{"vm_namespace": "ns-a"}, {"vm_namespace": "ns-a"}, {"vm_namespace": "ns-b"}, {"name": "pending"}]
+    stack.kubevirt_source(instances)(tmp_path, snap.Window(START, START - timedelta(minutes=30)))
+
+    assert sorted({c[c.index("-n") + 1] for c in calls}) == ["ns-a", "ns-b"]
+    assert len(calls) == 6
+    launcher = next(c for c in calls if "logs" in c)
+    assert {"-l", "kubevirt.io=virt-launcher", "--timestamps", "--since-time=2026-01-02T02:34:05Z"} <= set(launcher)
+    assert (tmp_path / "kubevirt-ns-a-vms.json").read_text() == "{}"
+    assert "kubevirt:ns-a:get" in (tmp_path / snap.ERRORS_FILE).read_text()
+
+
+def test_kubevirt_source_stops_at_its_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A slow VM cluster must not keep the source writing after the snapshot budget and its scrub."""
+    now = [0.0]
+    calls: list[tuple[str, ...]] = []
+
+    def slow_run(*args: str, timeout: int) -> str:
+        calls.append(args)
+        assert timeout <= snap.SOURCE_COMMAND_TIMEOUT_S
+        now[0] += 30
+        return "{}"
+
+    monkeypatch.setattr(stack, "run", slow_run)
+    monkeypatch.setattr(stack, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    monkeypatch.setattr(stack.ssh_helper, "vm_cluster_args", lambda: ["kubectl"])
+    stack.kubevirt_source([{"vm_namespace": "ns-a"}, {"vm_namespace": "ns-b"}])(tmp_path, snap.Window(START))
+
+    assert len(calls) == 2  # 30s each against a 40s budget
+    assert "skipped: budget used up" in (tmp_path / snap.ERRORS_FILE).read_text()
+
+
+def test_host_source_keeps_power_state_and_no_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.e2e.networking.bmaas import guest_ssh as bmaas_guest_ssh
+
+    host = {
+        "metadata": {"name": "h03", "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "{...}"}},
+        "spec": {"online": True, "consumerRef": {"name": "bmi-1"}, "bmc": {"credentialsName": "bmc-secret"}},
+        "status": {
+            "provisioning": {"state": "provisioned"},
+            "poweredOn": True,
+            "operationHistory": {"provision": {"start": "a", "end": "b"}},
+            "hardware": {"nics": [{"name": "ens4", "mac": "52:54:09:00:00:04", "ip": "192.168.16.5", "speed": 1}]},
+        },
+    }
+    monkeypatch.setattr(bmaas_guest_ssh, "run", lambda *_a, timeout: json.dumps({"items": [host]}))
+    sources = snap.SnapshotSources()
+    monkeypatch.setattr(snap, "SOURCES", sources)
+    bmaas_guest_ssh.register_host_snapshot("guests-test", ["kubectl"], "host-inventory")
+    dict(sources.for_kind(Kind.ASSERTION))["guests-test-hosts"](tmp_path, snap.Window(START))
+
+    summary = json.loads((tmp_path / "bmh-status.json").read_text())
+    assert summary[0]["name"] == "h03"
+    assert summary[0]["poweredOn"] is True
+    assert summary[0]["nics"] == [{"name": "ens4", "mac": "52:54:09:00:00:04", "ip": "192.168.16.5"}]
+    assert "bmc-secret" not in (tmp_path / "bmh-status.json").read_text()
+    assert "last-applied" not in (tmp_path / "bmh-status.json").read_text()

@@ -404,8 +404,8 @@ class TestCrossTenantBmaasNetworking:
             wait_for_external_ip_allocated(k8s=k8s_hub_client, name=net["nat_eip_cr"])
             net["nat_id"] = private_grpc.create_nat_gateway(
                 name=f"{key}-nat-{net_test_run_id}",
-                virtual_network_name=vnet_name,
-                external_ip_name=nat_eip_name,
+                virtual_network_id=net["vnet_id"],
+                external_ip_id=net["nat_eip_id"],
                 tenant=tenant,
             )
             poll_until(

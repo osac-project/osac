@@ -265,8 +265,10 @@ def wait_for_new_vmi(*, k8s: K8sClient, vmi_namespace: str, compute_instance_nam
 
 def wait_for_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="computeinstance", name=name),
+        fn=lambda: k8s.is_absent(resource="computeinstances.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} deletion",
@@ -323,8 +325,10 @@ def wait_for_virtual_network_ready(*, k8s: K8sClient, name: str) -> None:
 
 def wait_for_virtual_network_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="virtualnetwork", name=name),
+        fn=lambda: k8s.is_absent(resource="virtualnetworks.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} VirtualNetwork deletion",
@@ -438,8 +442,10 @@ def wait_for_grpc_security_group_ready(*, grpc: GRPCClient, sg_id: str) -> None:
 
 def wait_for_subnet_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="subnets.osac.openshift.io", name=name),
+        fn=lambda: k8s.is_absent(resource="subnets.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} Subnet deletion",
@@ -501,8 +507,10 @@ def wait_for_external_ip_pool_grpc_ready(*, private_grpc: GRPCClient, pool_id: s
 
 def wait_for_external_ip_pool_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="externalippool", name=name),
+        fn=lambda: k8s.is_absent(resource="externalippools.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} ExternalIPPool deletion",
@@ -536,10 +544,12 @@ def wait_for_external_ip_allocated(*, k8s: K8sClient, name: str) -> None:
 
 
 def wait_for_external_ip_deletion(*, k8s: K8sClient, name: str) -> None:
-    """Wait for the exact ExternalIP to be absent; propagate unconfirmed read errors."""
+    """Wait for the exact ExternalIP to be absent; a failed read is retried, never taken as gone."""
     poll_until(
         fn=lambda: k8s.is_absent(resource="externalips.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} ExternalIP deletion",
@@ -574,8 +584,10 @@ def wait_for_external_ip_attachment_ready(*, k8s: K8sClient, name: str) -> None:
 
 def wait_for_external_ip_attachment_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="externalipattachment", name=name),
+        fn=lambda: k8s.is_absent(resource="externalipattachments.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} ExternalIPAttachment deletion",
@@ -601,8 +613,10 @@ def wait_for_nat_gateway_ready(*, k8s: K8sClient, name: str) -> None:
 
 def wait_for_nat_gateway_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="natgateway", name=name),
+        fn=lambda: k8s.is_absent(resource="natgateways.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} NATGateway deletion",
@@ -1489,8 +1503,10 @@ def wait_for_security_group_update(*, grpc: GRPCClient, sg_id: str) -> None:
 
 def wait_for_security_group_deletion(*, k8s: K8sClient, name: str) -> None:
     poll_until(
-        fn=lambda: not k8s.is_present(resource="securitygroups.osac.openshift.io", name=name),
+        fn=lambda: k8s.is_absent(resource="securitygroups.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=120,
         delay=5,
         description=f"{name} SecurityGroup deletion",
@@ -1842,8 +1858,10 @@ def wait_for_bmi_deletion(*, k8s: K8sClient, name: str) -> None:
     # backoff wait plus job execution time, without silently swallowing an
     # actually-stuck deletion (still fails, just later).
     poll_until(
-        fn=lambda: not k8s.is_present(resource="baremetalinstance", name=name),
+        fn=lambda: k8s.is_absent(resource="baremetalinstances.osac.openshift.io", name=name),
         until=lambda v: v is True,
+        # Gone only on an exact NotFound; a failed read is retried, never taken as gone.
+        retry_on_error=True,
         retries=270,
         delay=10,
         description=f"{name} BareMetalInstance deletion",

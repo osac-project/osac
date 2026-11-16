@@ -327,13 +327,20 @@ restore it to make allocation-dependent tests run in a disabled profile.
   allocators; a read failure fails
   the case rather than supplying a default snapshot.
 - **Enabled [QE] E2E:** the complete ordered
-  `tests/e2e/networking/vmaas/test_vmaas_networking.py` module tests eight
-  pool/VirtualNetwork/ExternalIP ID/name NAT combinations and eight
-  pool/ExternalIP/ComputeInstance ID/name attachment combinations. Every row
+  `tests/e2e/networking/vmaas/test_vmaas_networking.py` module creates one
+  NATGateway and one ExternalIPAttachment, with every reference by ID. Each
   requires real API and CR allocation, canonical stored IDs, consumer readiness
-  and actual egress or SSH ingress with the intended guest's host key. Natural
-  release separates rows; the final row stays for subsequent lifecycle tests.
-  Netris, `cudn_evpn`, AAP, a routed pool and real KubeVirt guests are required.
+  and actual egress or SSH ingress with the intended guest's host key, and
+  stays for the lifecycle tests that follow. The API resolves a name to its ID
+  before anything is stored, so the provider path is the same for either form;
+  the E2E does not exercise name references. Netris, `cudn_evpn`, AAP, a routed
+  pool and real KubeVirt guests are required.
+- **Name references (gap):** names for the pool, VirtualNetwork and ExternalIP
+  last passed on a lab in osac-project/osac#2454 run 43740274491, with all
+  eight combinations. No integration test covers the name form now; it belongs
+  in fulfillment-service integration tests. A ComputeInstance attachment
+  target is refused by name: the API's `compute_instance.id != ''` validation
+  runs before name resolution. No ticket or owner is assigned.
 - **[DEV] helper units and Helm contracts:** exact-error parsing, request
   selection and cleanup sequencing use fakes; default rendering and manager
   registration checks do not prove provider allocation, routing or traffic.

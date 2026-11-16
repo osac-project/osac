@@ -38,7 +38,8 @@ BUDGET_S = 60.0
 MAX_WORKERS = 6
 SOURCE_COMMAND_TIMEOUT_S = 30
 GUEST_KINDS = (Kind.TRAFFIC_BLOCKED, Kind.TEST_SSH_FAILED, Kind.UNCLASSIFIED, Kind.ASSERTION)
-GUEST_COMMAND = "ip -br addr; ip route; ip neigh; ss -tln; cat /etc/resolv.conf"
+# The capture time and the boot time first, so the dump lines up with the logs and a reboot shows.
+GUEST_COMMAND = "date -u +%FT%TZ; uptime -s; ip -br addr; ip route; ip neigh; ss -tln; cat /etc/resolv.conf"
 GUEST_PER_VM_TIMEOUT_S = 10
 GUEST_TOTAL_BUDGET_S = 45
 FABRIC_COMMAND_ENV = "OSAC_E2E_FABRIC_SNAPSHOT_CMD"
@@ -55,15 +56,31 @@ _RESOURCES = (
     ("ExternalIPPools", "externalippools.osac.openshift.io"),
     ("BareMetalInstances", "baremetalinstances.osac.openshift.io"),
 )
-# Deployment names in the OSAC namespace (fulfillment-service and osac-operator charts).
-_LOG_DEPLOYMENTS = ("fulfillment-grpc-server", "fulfillment-controller", "osac-operator")
+# Deployment names in the OSAC namespace (fulfillment-service, osac-operator and bare-metal-fulfillment-operator
+# charts). A deployment the install does not have is recorded in the errors file and skipped.
+_LOG_DEPLOYMENTS = (
+    "fulfillment-grpc-server",
+    "fulfillment-controller",
+    "osac-operator",
+    "bmf-operator-controller-manager",
+)
 
 
 @dataclass(frozen=True)
 class Window:
-    """The period to look at: from the start of the failed test."""
+    """The period to look at.
+
+    `started_at` is the start of the failed test. `logs_since` is where the logs begin: the start of the failed
+    test's module, because ordered suites build the failing resources in earlier tests, and logs from the failed
+    test alone (often under a second) miss how they were built.
+    """
 
     started_at: datetime
+    logs_since: datetime | None = None
+
+    @property
+    def log_start(self) -> datetime:
+        return min(self.logs_since, self.started_at) if self.logs_since is not None else self.started_at
 
 
 SourceFn = Callable[[Path, Window], None]
@@ -129,7 +146,14 @@ class Snapshotter:
         self.cap = cap
         self._taken = 0
 
-    def take(self, test: str, kind: Kind, started_at: datetime, record: dict[str, Any] | None = None) -> str:
+    def take(
+        self,
+        test: str,
+        kind: Kind,
+        started_at: datetime,
+        record: dict[str, Any] | None = None,
+        logs_since: datetime | None = None,
+    ) -> str:
         """Snapshot into `<output>/failures/<worker>/<nn>-<test>/`; return its path relative to the output."""
         if self._taken >= self.cap:
             return CAP_REACHED
@@ -138,7 +162,7 @@ class Snapshotter:
         directory = self.output_dir / relative
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         write_json(directory, "failure.json", {**(record or {}), "test": test, "kind": str(kind), "snapshot": relative})
-        self._run_sources(directory, Window(started_at), self.sources.for_kind(kind))
+        self._run_sources(directory, Window(started_at, logs_since), self.sources.for_kind(kind))
         self._scrub(directory)
         return relative
 
@@ -212,10 +236,10 @@ def k8s_source(k8s: K8sClient, namespace: str) -> SourceFn:
 
 
 def logs_source(k8s: K8sClient, namespace: str) -> SourceFn:
-    """Logs of the fulfillment API server, the fulfillment controller and the operator since the test began."""
+    """Logs of the fulfillment API server and controller and the operators since the failed test's module began."""
 
     def source(directory: Path, window: Window) -> None:
-        since = window.started_at.isoformat().replace("+00:00", "Z")
+        since = window.log_start.isoformat().replace("+00:00", "Z")
         for deployment in _LOG_DEPLOYMENTS:
             try:
                 output = run(

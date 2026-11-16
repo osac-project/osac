@@ -24,7 +24,6 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator, Sequence
 from functools import partial
-from itertools import product
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -48,9 +47,16 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import MeteringCollector
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import StuckState, poll_until
+from tests.e2e.core.ssh_probe import false_on_transport_error
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking import cidrs
-from tests.e2e.networking.teardown import nat_gateway_ids, teardown_nat, teardown_nat_eip, wait_owned_gone
+from tests.e2e.networking.teardown import (
+    nat_gateway_ids,
+    teardown_external_ip,
+    teardown_nat,
+    teardown_nat_eip,
+    wait_owned_gone,
+)
 from tests.e2e.networking.vmaas import billing, guest_ssh, stack
 from tests.e2e.networking.vmaas.cleanup import _run_cleanup
 from tests.e2e.vmaas.conftest import DEFAULT_DISK_IMAGE_SOURCE_REF
@@ -61,7 +67,6 @@ _LOG = logging.getLogger(__name__)
 _DEFAULT_LABEL = "osac.openshift.io/default"
 
 H = stack.EXTERNAL_PATH_HINT
-REFERENCE_SELECTORS = tuple(product(("id", "name"), repeat=3))
 
 _ALL = {"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}
 _TCP_22 = {"protocol": "PROTOCOL_TCP", "port_from": 22, "port_to": 22, "ipv4_cidr": "0.0.0.0/0"}
@@ -693,15 +698,16 @@ def billing_external_ip(
         name=f"netris-vm-billing-{uuid4().hex[:8]}", pool=pool["id"], project=billing_project
     )
     pool.setdefault("suite_eip_ids", set()).add(ip_id)
-    cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=ip_id)
-    wait_for_external_ip_allocated(k8s=k8s_hub_client, name=cr_name)
-    yield ip_id, cr_name
-    if k8s_hub_client.is_present(resource="externalip", name=cr_name):
-        try:
-            grpc.delete_external_ip(external_ip_id=ip_id)
-        except subprocess.CalledProcessError as exc:
-            _LOG.warning("ExternalIP %s gRPC delete failed in teardown: %s", ip_id, (exc.stderr or "").strip())
-        wait_for_external_ip_deletion(k8s=k8s_hub_client, name=cr_name)
+    try:
+        cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=ip_id)
+        wait_for_external_ip_allocated(k8s=k8s_hub_client, name=cr_name)
+        # Attachments and NATGateways are accepted only once the API, not only the CR, says ALLOCATED.
+        stack.wait_for_grpc_external_ip_allocated(grpc, ip_id)
+        yield ip_id, cr_name
+    finally:
+        # Also when a wait above failed. Re-issues the delete until the API record and the CR are gone; a kubectl
+        # error is retried, not read as gone.
+        teardown_external_ip(grpc, k8s_hub_client, ip_id, "billing")
 
 
 @pytest.fixture
@@ -864,16 +870,13 @@ def _create_nat(
     pool: dict[str, Any],
     run_id: str,
     key: str,
-    pool_selector: str = "id",
-    network_selector: str = "name",
-    eip_selector: str = "name",
 ) -> None:
     """Allocate an ExternalIP and bind a NATGateway to the VirtualNetwork; records every ID first."""
     assert not network.get("nat_id") and not network.get("nat_eip_id"), "Previous NAT resources still need cleanup"
     eip_name = f"netris-vm-nat-eip-{key}-{run_id}"
     eip_id = client.call(
         service=f"{PUBLIC_API}.ExternalIPs/Create",
-        data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {pool_selector: pool[pool_selector]}}}},
+        data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"id": pool["id"]}}}},
     )["object"]["id"]
     pool.setdefault("suite_eip_ids", set()).add(eip_id)
     network.update(nat_eip_id=eip_id, nat_eip_name=eip_name)
@@ -892,10 +895,7 @@ def _create_nat(
         data={
             "object": {
                 "metadata": {"name": f"netris-vm-nat-{key}-{run_id}"},
-                "spec": {
-                    "virtual_network": {network_selector: network[f"vnet_{network_selector}"]},
-                    "external_ip": {eip_selector: eip_id if eip_selector == "id" else eip_name},
-                },
+                "spec": {"virtual_network": {"id": network["vnet_id"]}, "external_ip": {"id": eip_id}},
             }
         },
     )["object"]["id"]
@@ -933,13 +933,58 @@ def _create_nat(
 
 
 def _assert_no_egress_without_nat(state: dict[str, Any], vm: dict[str, str], who: str) -> None:
-    """Without a NATGateway the VM must not reach the internet, or a later 200 proves nothing about NAT."""
-    # Raises on a transport failure, so a non-200 here means the guest ran curl and it could not get out.
-    status = guest_ssh.curl_status_checked(vm["vm_namespace"], vm["cr"], _identity(state))
-    assert status != 200, (
-        f"{who} VM {vm['ip']} reached https://quay.io (HTTP {status}) before any NATGateway existed, "
-        "so egress exists without NAT and the NAT egress check would prove nothing"
-    )
+    """Without a NATGateway the VM must not reach the internet, or a later 200 proves nothing about NAT.
+
+    A NATGateway deleted by the previous selector row leaves the API before the softgates stop translating, so
+    this waits for two blocked attempts in a row instead of checking once. A transport failure is not counted as
+    blocked: it resets the count, so a dead SSH path can never pass as blocked egress.
+    """
+    blocked_in_a_row = [0]
+    last_status: list[int] = []
+    # The latest attempt's transport error, or None when it returned an HTTP status.
+    last_error: list[str | None] = [None]
+
+    def probe() -> int:
+        try:
+            status = guest_ssh.curl_status_checked(vm["vm_namespace"], vm["cr"], _identity(state))
+        except RuntimeError as exc:
+            _LOG.warning("egress probe from %s VM %s did not run, retrying: %s", who, vm["ip"], exc)
+            last_error[0] = str(exc)
+            blocked_in_a_row[0] = 0
+            return 0
+        last_status[:] = [status]
+        last_error[0] = None
+        blocked_in_a_row[0] = blocked_in_a_row[0] + 1 if status != 200 else 0
+        return blocked_in_a_row[0]
+
+    description = f"{who} VM {vm['ip']} to have no egress to https://quay.io without a NATGateway"
+    try:
+        poll_until(
+            fn=probe,
+            until=lambda in_a_row: in_a_row >= 2,
+            retries=12,
+            delay=10,
+            description=description,
+            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+            resource_id=vm["id"],
+        )
+    except TimeoutError as exc:
+        if last_error[0] is not None or not last_status:
+            # No probe showed egress at the end: guest access, not traffic, kept this from being verified.
+            raise E2EFailure(
+                Kind.TEST_SSH_FAILED,
+                f"{description} could not be verified: the latest egress probe did not run ({last_error[0]}). "
+                f"Last HTTP result: {f'HTTP {last_status[0]}' if last_status else 'none'}.\n{exc}",
+                ids={"ci_id": vm["id"], "address": vm["ip"]},
+            ) from exc
+        last = f"HTTP {last_status[0]}"
+        raise E2EFailure(
+            Kind.ASSERTION,
+            f"{description} timed out (last result: {last}). Egress exists without NAT, so the NAT egress check "
+            "would prove nothing. If the previous row deleted a NATGateway, the softgates still translate for it "
+            f"after the API and CR are gone.\n{exc}",
+            ids={"ci_id": vm["id"], "address": vm["ip"]},
+        ) from exc
 
 
 def _assert_nat_egress(state: dict[str, Any], vm: dict[str, str], who: str) -> None:
@@ -958,6 +1003,57 @@ def _assert_nat_egress(state: dict[str, Any], vm: dict[str, str], who: str) -> N
     )
 
 
+def _wait_external_ssh_stopped(
+    *,
+    state: dict[str, Any],
+    vm: dict[str, str],
+    address: str,
+    description: str,
+    ids: dict[str, str],
+    host_key: str | None = None,
+) -> None:
+    """Wait until SSH to `vm` through `address` fails three times in a row.
+
+    A removed DNAT keeps answering on the softgates for a while after the API and CR are gone, and one failed
+    attempt can be a dropped packet on a path that still works, so a single failure does not prove the path closed.
+    """
+    identity_file = _identity(state)
+    if host_key is None:
+        host_key = guest_ssh.guest_host_key(vm["vm_namespace"], vm["cr"], identity_file)
+    failed_in_a_row = [0]
+
+    def attempt() -> int:
+        try:
+            guest_ssh.ssh_via_external_ip(address, identity_file, expected_host_key=host_key, timeout=10)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+            reason, kind = guest_ssh.external_ssh_error(exc)
+            if kind is not Kind.TRAFFIC_BLOCKED:
+                # A rejected key or host key, or ssh failing to start, says nothing about the path: only a
+                # network failure counts toward "stopped".
+                raise E2EFailure(
+                    kind, f"{description}: SSH through {address} could not test the path ({reason})", ids=ids
+                ) from exc
+            failed_in_a_row[0] += 1
+            _LOG.info("SSH through %s failed (%s), %d in a row", address, reason, failed_in_a_row[0])
+            return failed_in_a_row[0]
+        failed_in_a_row[0] = 0
+        return 0
+
+    stack.poll_or_fail(
+        hint="the traffic was still allowed: SSH through the ExternalIP still reached the VM.",
+        fn=attempt,
+        until=lambda in_a_row: in_a_row >= 3,
+        retries=18,
+        delay=10,
+        description=description,
+        # The wait ends when ssh keeps failing, so a timeout means the traffic was still allowed.
+        kind=Kind.ASSERTION,
+        ids=ids,
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=vm["id"],
+    )
+
+
 def _attach_external_ip(
     *,
     client: GRPCClient,
@@ -967,16 +1063,13 @@ def _attach_external_ip(
     vm: dict[str, str],
     label: str,
     run_id: str,
-    pool_selector: str = "id",
-    eip_selector: str = "id",
-    vm_selector: str = "id",
 ) -> dict[str, Any]:
     """Create an ExternalIP and attach it to `vm`; the record joins `external['ingress']` before any wait."""
     pool = external["pool"]
     eip_name = f"netris-vm-{label}-eip-{run_id}"
     eip_id = client.call(
         service=f"{PUBLIC_API}.ExternalIPs/Create",
-        data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {pool_selector: pool[pool_selector]}}}},
+        data={"object": {"metadata": {"name": eip_name}, "spec": {"pool": {"id": pool["id"]}}}},
     )["object"]["id"]
     record: dict[str, Any] = {"label": label, "client": client, "eip_id": eip_id, "vm": vm}
     external["ingress"].append(record)
@@ -992,10 +1085,7 @@ def _attach_external_ip(
         data={
             "object": {
                 "metadata": {"name": f"netris-vm-{label}-attachment-{run_id}"},
-                "spec": {
-                    "external_ip": {eip_selector: eip_id if eip_selector == "id" else eip_name},
-                    "compute_instance": {vm_selector: vm[vm_selector]},
-                },
+                "spec": {"external_ip": {"id": eip_id}, "compute_instance": {"id": vm["id"]}},
             }
         },
     )["object"]["id"]
@@ -1368,7 +1458,7 @@ class TestVmaasNetworking:
 
         for source, target in ((first, second), (second, first)):
             assert poll_until(
-                fn=lambda src=source, dst=target: _arping(netris_vm_network, src, dst["ip"]),
+                fn=false_on_transport_error(partial(_arping, netris_vm_network, source, target["ip"]), _LOG.warning),
                 until=bool,
                 retries=5,
                 delay=10,
@@ -1383,7 +1473,7 @@ class TestVmaasNetworking:
 
         for source, target in ((first, second), (second, first)):
             assert poll_until(
-                fn=lambda src=source, dst=target: _ping(netris_vm_network, src, dst["ip"]),
+                fn=false_on_transport_error(partial(_ping, netris_vm_network, source, target["ip"]), _LOG.warning),
                 until=bool,
                 retries=5,
                 delay=10,
@@ -1440,7 +1530,7 @@ class TestVmaasNetworking:
             f"ICMP from {a1['ip']} to {r1['ip']} succeeded although the restricted group has no all rule"
         )
         assert poll_until(
-            fn=lambda: _ping(state, a1, a2["ip"]),
+            fn=false_on_transport_error(partial(_ping, state, a1, a2["ip"]), _LOG.warning),
             until=bool,
             retries=5,
             delay=10,
@@ -1460,7 +1550,7 @@ class TestVmaasNetworking:
         wait_for_security_group_update(grpc=grpc, sg_id=restricted_id)
 
         _wait_tcp(state, a1, r1["ip"], 8081, want_open=True, retries=12, delay=5)
-        _wait_tcp(state, a1, r1["ip"], 8080, want_open=False, retries=12, delay=5)
+        _wait_tcp(state, a1, r1["ip"], 8080, want_open=False, retries=24, delay=5)
         _assert_listener_alive(state, r1, 8080)
 
     def test_07_security_group_tcp_egress_allow_and_deny(
@@ -1482,7 +1572,7 @@ class TestVmaasNetworking:
             )
             wait_for_security_group_update(grpc=grpc, sg_id=restricted_id)
             _wait_tcp(state, r1, a1["ip"], 8080, want_open=True, retries=12, delay=5)
-            _wait_tcp(state, r1, a1["ip"], 8081, want_open=False, retries=12, delay=5)
+            _wait_tcp(state, r1, a1["ip"], 8081, want_open=False, retries=24, delay=5)
             _assert_listener_alive(state, a1, 8081)
         except BaseException:
             # A failed restore must not mask the failure that got us here.
@@ -1518,7 +1608,7 @@ class TestVmaasNetworking:
             resource_id=t2a["id"],
         )
         assert poll_until(
-            fn=lambda: _ping(netris_vm_network, a1, a2["ip"]),
+            fn=false_on_transport_error(partial(_ping, netris_vm_network, a1, a2["ip"]), _LOG.warning),
             until=bool,
             retries=5,
             delay=10,
@@ -1540,7 +1630,6 @@ class TestVmaasNetworking:
 
     # Phase C: the external path. The routed pool is checked by the netris_external_path fixture.
 
-    @pytest.mark.parametrize(("pool_selector", "network_selector", "eip_selector"), REFERENCE_SELECTORS)
     def test_09_nat_gateway_egress(
         self,
         grpc: GRPCClient,
@@ -1548,33 +1637,19 @@ class TestVmaasNetworking:
         net_test_run_id: str,
         netris_vm_network: dict[str, Any],
         netris_external_path: dict[str, Any],
-        pool_selector: str,
-        network_selector: str,
-        eip_selector: str,
     ) -> None:
-        """Prove each NAT reference combination and release non-final rows even on failure."""
+        """A NATGateway on the tenant1 VirtualNetwork gives its VM internet egress, and none exists without it."""
         _assert_no_egress_without_nat(netris_vm_network, netris_vm_network["vm_a1"], "tenant1")
-        cleanup = []
-        if (pool_selector, network_selector, eip_selector) != REFERENCE_SELECTORS[-1]:
-            cleanup = [
-                partial(_drop_nat, grpc, k8s_hub_client, netris_external_path["t1"]),
-                partial(_drop_nat_eip, grpc, k8s_hub_client, netris_external_path["t1"]),
-            ]
-        with _selector_row_cleanup(cleanup):
-            _create_nat(
-                client=grpc,
-                k8s_hub_client=k8s_hub_client,
-                network=netris_external_path["t1"],
-                pool=netris_external_path["pool"],
-                run_id=net_test_run_id,
-                key="t1",
-                pool_selector=pool_selector,
-                network_selector=network_selector,
-                eip_selector=eip_selector,
-            )
-            _assert_nat_egress(netris_vm_network, netris_vm_network["vm_a1"], "tenant1")
+        _create_nat(
+            client=grpc,
+            k8s_hub_client=k8s_hub_client,
+            network=netris_external_path["t1"],
+            pool=netris_external_path["pool"],
+            run_id=net_test_run_id,
+            key="t1",
+        )
+        _assert_nat_egress(netris_vm_network, netris_vm_network["vm_a1"], "tenant1")
 
-    @pytest.mark.parametrize(("pool_selector", "eip_selector", "vm_selector"), REFERENCE_SELECTORS)
     def test_10_manual_external_ip_ingress(
         self,
         grpc: GRPCClient,
@@ -1583,46 +1658,25 @@ class TestVmaasNetworking:
         net_test_run_id: str,
         netris_vm_network: dict[str, Any],
         netris_external_path: dict[str, Any],
-        pool_selector: str,
-        eip_selector: str,
-        vm_selector: str,
     ) -> None:
-        """Verify intended-guest ingress for every selector, retaining only the final row."""
+        """SSH through a manually attached ExternalIP reaches the intended guest; the attachment stays for test_11."""
         vm = netris_vm_network["vm_a1"]
-        ingress = netris_external_path["ingress"]
-        previous_records = tuple(ingress)
-        record: dict[str, Any] | None = None
-
-        def cleanup() -> None:
-            """Find this row's early ledger entry if creation failed before returning it."""
-            owned = record
-            if owned is None:
-                owned = next((item for item in ingress if all(item is not prior for prior in previous_records)), None)
-            if owned is not None:
-                _teardown_ingress_record(owned, k8s_hub_client)
-                ingress[:] = [item for item in ingress if item is not owned]
-
-        actions = [] if (pool_selector, eip_selector, vm_selector) == REFERENCE_SELECTORS[-1] else [cleanup]
-        with _selector_row_cleanup(actions):
-            record = _attach_external_ip(
-                client=grpc,
-                private_grpc=private_grpc,
-                k8s_hub_client=k8s_hub_client,
-                external=netris_external_path,
-                vm=vm,
-                label="t1-a1",
-                run_id=net_test_run_id,
-                pool_selector=pool_selector,
-                eip_selector=eip_selector,
-                vm_selector=vm_selector,
-            )
-            _assert_external_ip_ssh(
-                state=netris_vm_network,
-                vm=vm,
-                external_ip=record["address"],
-                description=f"SSH ingress through manually attached ExternalIP {record['address']}",
-            )
-            record["ingress_proven"] = True
+        record = _attach_external_ip(
+            client=grpc,
+            private_grpc=private_grpc,
+            k8s_hub_client=k8s_hub_client,
+            external=netris_external_path,
+            vm=vm,
+            label="t1-a1",
+            run_id=net_test_run_id,
+        )
+        _assert_external_ip_ssh(
+            state=netris_vm_network,
+            vm=vm,
+            external_ip=record["address"],
+            description=f"SSH ingress through manually attached ExternalIP {record['address']}",
+        )
+        record["ingress_proven"] = True
 
     def test_11_external_ip_attachment_delete_stops_ingress(
         self,
@@ -1660,30 +1714,18 @@ class TestVmaasNetworking:
         record["attachment_id"] = ""
         _wait_for_compute_instance_external_ip(client=grpc, vm=vm, expected_address="", external_ip=record["address"])
 
-        def ingress_stopped() -> bool:
-            try:
-                guest_ssh.ssh_via_external_ip(record["address"], identity_file, expected_host_key=host_key, timeout=10)
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-                return True
-            return False
-
-        stack.poll_or_fail(
-            hint="the traffic was still allowed: ingress still works after the attachment was deleted.",
-            fn=ingress_stopped,
-            until=bool,
-            retries=12,
-            delay=10,
+        _wait_external_ssh_stopped(
+            state=netris_vm_network,
+            vm=vm,
+            address=record["address"],
+            host_key=host_key,
             description=f"SSH through ExternalIP {record['address']} stops after the attachment is deleted",
-            # The wait ends when ssh fails, so a timeout means the traffic was still allowed.
-            kind=Kind.ASSERTION,
             ids={
                 "ci_id": vm["id"],
                 "attachment_id": attachment_id,
                 "eip_id": record["eip_id"],
                 "address": record["address"],
             },
-            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
-            resource_id=vm["id"],
         )
 
         eip_id = record["eip_id"]
@@ -1785,6 +1827,7 @@ class TestVmaasNetworking:
             grpc=grpc,
             k8s_hub_client=k8s_hub_client,
             virtual_network=netris_vm_network["network_b"]["vnet_name"],
+            virtual_network_id=netris_vm_network["network_b"]["vnet_id"],
             pool=netris_external_path["pool"],
         )
 

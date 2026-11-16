@@ -6573,8 +6573,8 @@ var _ = Describe("Private clusters server", func() {
 		Describe("Pull secret secret reference", func() {
 			var secretsDao *dao.GenericDAO[*privatev1.Secret]
 
-			It("Rejects create without an explicit or inherited pull secret", func() {
-				response, err := server.PrivateClustersServer.Create(ctx, privatev1.ClustersCreateRequest_builder{
+			DescribeTable("Rejects create without an explicit or inherited pull secret", func(catalog bool) {
+				request := privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{Name: "missing-pull-secret"}.Build(),
 						Spec: privatev1.ClusterSpec_builder{
@@ -6589,11 +6589,25 @@ var _ = Describe("Private clusters server", func() {
 							},
 						}.Build(),
 					}.Build(),
-				}.Build())
+				}.Build()
+				if catalog {
+					_, err := server.catalogItemsDao.Create().SetObject(privatev1.ClusterCatalogItem_builder{
+						Metadata:  privatev1.Metadata_builder{Name: "missing-secret-offering", Tenant: testTenant}.Build(),
+						Published: true,
+						Template:  request.GetObject().GetSpec().GetTemplate(),
+					}.Build()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					request.GetObject().GetSpec().ClearTemplate()
+					request.GetObject().GetSpec().SetCatalogItem(privatev1.ClusterCatalogItemReference_builder{Name: "missing-secret-offering"}.Build())
+				}
+				response, err := server.PrivateClustersServer.Create(ctx, request)
 				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("pull_secret_secret is required"))
 				Expect(response).To(BeNil())
-			})
+			},
+				Entry("direct template", false),
+				Entry("catalog item", true),
+			)
 
 			BeforeEach(func() {
 				var err error
@@ -6833,7 +6847,7 @@ var _ = Describe("Private clusters server", func() {
 				Expect(response.GetObject().GetSpec().GetPullSecretSecret().GetId()).To(Equal("my-secret-id"))
 			})
 
-			It("inherits a canonical shared pull Secret when a tenant Secret has the same name", func() {
+			DescribeTable("inherits a canonical shared pull Secret when a tenant Secret has the same name", func(catalog bool) {
 				_, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
 					Id:   "shared-pull-secret-id",
 					Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
@@ -6866,7 +6880,7 @@ var _ = Describe("Private clusters server", func() {
 				}.Build()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 
-				response, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{
+				request := privatev1.ClustersCreateRequest_builder{
 					Object: privatev1.Cluster_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name: fmt.Sprintf("test-%s", uuid.New()[24:32]),
@@ -6881,7 +6895,18 @@ var _ = Describe("Private clusters server", func() {
 						}.Build(),
 						Status: privatev1.ClusterStatus_builder{Hub: "my-hub-id"}.Build(),
 					}.Build(),
-				}.Build())
+				}.Build()
+				if catalog {
+					_, err = server.catalogItemsDao.Create().SetObject(privatev1.ClusterCatalogItem_builder{
+						Metadata:  privatev1.Metadata_builder{Name: "shared-secret-offering", Tenant: auth.SharedTenant}.Build(),
+						Published: true,
+						Template:  privatev1.ClusterTemplateReference_builder{Id: "shared-template-with-secret-ref", Shared: true}.Build(),
+					}.Build()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					request.GetObject().GetSpec().ClearTemplate()
+					request.GetObject().GetSpec().SetCatalogItem(privatev1.ClusterCatalogItemReference_builder{Name: "shared-secret-offering", Shared: true}.Build())
+				}
+				response, err := server.Create(ctx, request)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetObject().GetSpec().GetPullSecretSecret().GetId()).
 					To(Equal("shared-pull-secret-id"))
@@ -6901,7 +6926,10 @@ var _ = Describe("Private clusters server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(updateResponse.GetObject().GetSpec().GetPullSecretSecret().GetId()).
 					To(Equal("shared-pull-secret-id"))
-			})
+			},
+				Entry("direct shared template", false),
+				Entry("shared catalog item", true),
+			)
 
 			It("User-provided pull_secret_secret overrides the template default", func() {
 				templatesDao, err := dao.NewGenericDAO[*privatev1.ClusterTemplate]().

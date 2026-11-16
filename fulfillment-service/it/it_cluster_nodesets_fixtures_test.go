@@ -14,10 +14,20 @@ language governing permissions and limitations under the License.
 package it
 
 import (
+	"context"
 	"testing"
 
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+func testClusterSpecDefaults(ctx context.Context) *privatev1.ClusterTemplateSpecDefaults {
+	return privatev1.ClusterTemplateSpecDefaults_builder{
+		PullSecretSecret: privatev1.SecretLocalReference_builder{
+			Id: createCatalogItemPullSecretFixture(ctx, "shared"),
+		}.Build(),
+	}.Build()
+}
 
 // testClusterNodeSets is an explicit request fixture for tests unrelated to hardware selection.
 // The caller must create the referenced BareMetalInstanceType in the shared tenant.

@@ -457,7 +457,7 @@ def _collect_state(directory: Path, name: str, command: Callable[..., str], *arg
 def _pod_logs(
     directory: Path, prefix: str, namespace: str, pods: dict[str, Any], command: Callable[..., str], window: Window
 ) -> None:
-    since = window.started_at.isoformat().replace("+00:00", "Z")
+    since = window.log_start.isoformat().replace("+00:00", "Z")
     for pod in pods.get("items", []):
         name = pod["metadata"]["name"]
         pod_name = _safe(name)
@@ -621,7 +621,7 @@ def caas_guest_source(k8s: K8sClient, namespace: str) -> SourceFn:
                         "--unit=kubelet",
                         "--unit=crio",
                         "--tail=300",
-                        f"--since={window.started_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S')}",
+                        f"--since={window.log_start.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S')}",
                         binary="oc",
                     )
                     write_text(directory, f"{prefix}-{_safe(node_name)}-node.log", text)

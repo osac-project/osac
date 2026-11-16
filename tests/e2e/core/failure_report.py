@@ -245,7 +245,11 @@ class FailureReporter:
         """Take a bounded pre-delete checkpoint while leaving the test's outcome and failure cap untouched."""
         if self.enabled:
             started = datetime.fromtimestamp(self._started.get(name, time.time()), UTC)
-            path = self.snapshotter.take(name, Kind.UNCLASSIFIED, started, {"reason": "before-delete"}, checkpoint=True)
+            module_started = self._module_started.get(_module_of(name))
+            logs_since = datetime.fromtimestamp(module_started, UTC) if module_started is not None else None
+            path = self.snapshotter.take(
+                name, Kind.UNCLASSIFIED, started, {"reason": "before-delete"}, logs_since=logs_since, checkpoint=True
+            )
             logger.info("E2E snapshot before delete: %s", sanitize_text(path))
 
     def _snapshot(self, test: str, kind: Kind, started: float, entry: dict[str, Any]) -> str | None:

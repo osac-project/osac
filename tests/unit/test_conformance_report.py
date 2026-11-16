@@ -155,7 +155,7 @@ def test_report_redacts_check_messages_and_leftovers(tmp_path: Path) -> None:
 
 def test_junit_strips_xml_illegal_characters(tmp_path: Path) -> None:
     report = _report("boom")
-    message = "boom \x1b[31mred\x1b[0m \x00 \x07"
+    message = "boom \x1b[31mred\x1b[0m \x00 \x07 \ud800 \ufffe \uffff"
     failed = Report(
         **{**report.__dict__, "tests": (TestOutcome(report.tests[0].identity, Result.FAIL, 1.0, message, Path()),)}
     )
@@ -165,6 +165,9 @@ def test_junit_strips_xml_illegal_characters(tmp_path: Path) -> None:
     raw = path.read_bytes()
     assert b"\x1b" not in raw
     assert b"\x00" not in raw
+    written = path.read_text(encoding="utf-8")
+    assert "\ufffe" not in written
+    assert "\uffff" not in written
     root = ElementTree.parse(path).getroot()
     failure = root.find("testcase/failure")
     assert failure is not None

@@ -483,6 +483,7 @@ Unnumbered peers accept the same policy. The ACLs are `EVPN-REMOTE-VTEPS`
 ```yaml
 evpn:
   enabled: true
+  vtepCIDR: 10.200.255.0/24
   bgp:
     asn: 4209999999
     acceptPrefixes: [10.200.0.0/16]

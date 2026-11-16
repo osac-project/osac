@@ -369,6 +369,7 @@ export const deleteVmIfPresent = async (page: Page, name: string): Promise<boole
     await openVmsPage(page);
     const names = await listVmNames(page);
     if (!names.includes(name)) {
+      await waitForVmToBeDeleted(page, name);
       return false;
     }
     await openVmDetailsPage(page, name);
@@ -389,7 +390,18 @@ export const waitForVmToBeDeleted = async (
     .poll(
       async () => {
         // Explicitly clear the persisted project filter as well as URL filters.
-        await page.goto('/vms?project=', { waitUntil: 'domcontentloaded' });
+        try {
+          await page.goto('/vms?project=', { waitUntil: 'domcontentloaded' });
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            (error.message.includes('net::ERR_ABORTED') ||
+              /Navigation to .* is interrupted by another navigation/.test(error.message))
+          ) {
+            return 'VM list navigation interrupted';
+          }
+          throw error;
+        }
         try {
           await page
             .getByRole(...VmsMainPage.pageTitle)
@@ -422,14 +434,34 @@ export const waitForVmToBeDeleted = async (
           return 'VM list not selected';
         }
 
-        if (await page.getByText(...VmsMainPage.noMatchingState).isVisible()) {
+        const table = page.getByRole(...VmsMainPage.vmsTable);
+        const emptyState = page.getByText(...VmsMainPage.emptyState);
+        const filteredState = page.getByText(...VmsMainPage.noMatchingState);
+        const errorState = page.getByRole(...VmsMainPage.errorState);
+        try {
+          await table
+            .or(emptyState)
+            .or(filteredState)
+            .or(errorState)
+            .filter({ visible: true })
+            .first()
+            .waitFor({ state: 'visible', timeout: Math.min(timeout, 15_000) });
+        } catch (error) {
+          if (!(error instanceof errors.TimeoutError)) {
+            throw error;
+          }
+          return 'VM list still loading';
+        }
+        if (await errorState.isVisible()) {
+          throw new Error('The tenant VM list reported an API error while loading.');
+        }
+        if (await filteredState.isVisible()) {
           throw new Error('The tenant VM list is filtered; deletion cannot be verified.');
         }
-        const table = page.getByRole(...VmsMainPage.vmsTable);
         if (await table.isVisible()) {
           return (await getVmRow(page, name).count()) === 0 ? 'absent' : 'VM still present';
         }
-        if (await page.getByText(...VmsMainPage.emptyState).isVisible()) {
+        if (await emptyState.isVisible()) {
           return 'absent';
         }
         return 'VM list still loading';

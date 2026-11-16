@@ -328,6 +328,22 @@ func kindsOf(files *protoregistry.Files) (result []Kind, universe map[string]pro
 		}
 	}
 
+	// A resource-like message, one with both a metadata and a spec field, that isn't
+	// object shape can carry no annotations, so the loop above never reaches it. It
+	// must be on the list of kinds that use nothing, or its price is silently
+	// undecided: NetworkClass is covered only because the list names it.
+	for _, r := range roots {
+		if isObjectShape(r.message) || !isResourceLike(r.message) {
+			continue
+		}
+		if !onList[shortName(r.message.FullName())] {
+			return nil, nil, fmt.Errorf(
+				"message '%s' has metadata and spec fields but isn't object shape or listed as using nothing",
+				r.message.FullName(),
+			)
+		}
+	}
+
 	if err := checkCreatesCycles(result); err != nil {
 		return nil, nil, err
 	}
@@ -533,17 +549,22 @@ func newField(
 		if err != nil {
 			return nil, err
 		}
-		if createdFor.NamePrefix == "" && createdFor.IDLabel == "" {
-			// A field link resolves by the reference's id: the usage counter and the
-			// child-create check read the id subfield, such as a host's
-			// status.cluster.id, so the reference must carry one.
-			id := annotated.descriptor.Message().Fields().ByName("id")
-			if id == nil || id.Kind() != protoreflect.StringKind {
-				return nil, fmt.Errorf(
-					"%s holds a link through '%s', which has no id field",
-					where, annotated.descriptor.Message().FullName(),
-				)
-			}
+		// A field link is only a parent reference: Links() emits nothing else for a
+		// field link, so a name prefix or labels here would be silently dropped.
+		if createdFor.NamePrefix != "" || createdFor.IDLabel != "" || createdFor.KindLabel != "" {
+			return nil, fmt.Errorf(
+				"%s holds a field link, so it can carry no name prefix or labels", where,
+			)
+		}
+		// A field link resolves by the reference's id: the usage counter and the
+		// child-create check read the id subfield, such as a host's
+		// status.cluster.id, so the reference must carry one.
+		id := annotated.descriptor.Message().Fields().ByName("id")
+		if id == nil || id.Kind() != protoreflect.StringKind {
+			return nil, fmt.Errorf(
+				"%s holds a link through '%s', which has no id field",
+				where, annotated.descriptor.Message().FullName(),
+			)
 		}
 		field.CreatedFor = createdFor
 	}
@@ -581,6 +602,9 @@ func newCreates(
 		Count:      options.GetCount(),
 		CountField: options.GetCountField(),
 		Set:        options.GetSet(),
+	}
+	if creates.Count < 0 {
+		return nil, fmt.Errorf("%s sets a negative count", where)
 	}
 	if creates.Count > 0 && creates.CountField != "" {
 		return nil, fmt.Errorf("%s sets both count and count_field", where)
@@ -654,9 +678,17 @@ func newCreates(
 		if err != nil {
 			return nil, fmt.Errorf("%s has an invalid set path: %w", where, err)
 		}
+		if source.IsList() || source.IsMap() {
+			return nil, fmt.Errorf(
+				"%s sets '%s' from '%s', which is a repeated field", where, set, creates.Set[set],
+			)
+		}
 		targetField, err := resolveField(target, set)
 		if err != nil {
 			return nil, fmt.Errorf("%s sets '%s': %w", where, set, err)
+		}
+		if targetField.IsList() || targetField.IsMap() {
+			return nil, fmt.Errorf("%s sets '%s', which is a repeated field", where, set)
 		}
 		if !assignable(targetField, source) {
 			return nil, fmt.Errorf(
@@ -761,6 +793,11 @@ func validateDimension(kind protoreflect.MessageDescriptor, dimension, where str
 		if err != nil {
 			return fmt.Errorf("%s: dimension '%s' reads '%s': %w", where, dimension, path, err)
 		}
+		if field.IsList() || field.IsMap() {
+			return fmt.Errorf(
+				"%s: dimension '%s' reads '%s', which is a repeated field", where, dimension, path,
+			)
+		}
 		if field.Kind() != protoreflect.StringKind {
 			return fmt.Errorf("%s: dimension '%s' reads '%s', which isn't a string", where, dimension, path)
 		}
@@ -850,6 +887,14 @@ func sortedKeys[V any](values map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// isResourceLike reports whether the message is shaped like a stored resource: it has
+// both a 'metadata' and a 'spec' field. Some stored kinds carry more fields than the
+// object shape, such as NetworkClass's title and description, so the rule that every
+// kind must have a price also checks resource-like messages.
+func isResourceLike(message protoreflect.MessageDescriptor) bool {
+	return message.Fields().ByName("metadata") != nil && message.Fields().ByName("spec") != nil
 }
 
 // isObjectShape reports whether the message is a base resource type: exactly the 'id',

@@ -781,9 +781,10 @@ func quotaField(options *privatev1.QuotaFieldOptions) *descriptorpb.FieldOptions
 // TestKindsRejectsInvalidAnnotations checks the validation's loud-failure branches on
 // synthetic protos: a bad brace path, a through or creates kind that doesn't exist, a
 // created_for with both or neither link shape, a larger_of outside a through reference,
-// an unsigned or repeated dimension field, a field link to a message without an id, a
-// bool creates that sets fields, a creates that counts fields of items that aren't
-// messages, and creates that cycle.
+// an unsigned or repeated dimension field, a brace path or set path over a repeated
+// field, a negative creates count, a field link to a message without an id, a field
+// link that carries a name prefix or labels, a bool creates that sets fields, a creates
+// that counts fields of items that aren't messages, and creates that cycle.
 func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 	withMessageOptions := func(
 		messages []*descriptorpb.DescriptorProto, options *privatev1.QuotaMessageOptions,
@@ -890,6 +891,55 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 			contains: "aren't messages",
 		},
 		{
+			name: "a set path to a repeated field",
+			messages: append(ratedResource("RatedResource",
+				fieldDesc("item", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedResourceItem",
+					quotaField(&privatev1.QuotaFieldOptions{
+						Creates: &privatev1.QuotaCreatesOptions{
+							Kind: "RatedResource",
+							Set:  map[string]string{"spec.counts": "count"},
+						},
+					})),
+				repeatedFieldDesc("counts", 2, descriptorpb.FieldDescriptorProto_TYPE_INT32, "", nil)),
+				&descriptorpb.DescriptorProto{
+					Name: proto.String("RatedResourceItem"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						fieldDesc("count", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32, "", nil),
+					},
+				}),
+			contains: "sets 'spec.counts', which is a repeated field",
+		},
+		{
+			name: "a set path from a repeated field",
+			messages: append(ratedResource("RatedResource",
+				fieldDesc("item", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedResourceItem",
+					quotaField(&privatev1.QuotaFieldOptions{
+						Creates: &privatev1.QuotaCreatesOptions{
+							Kind: "RatedResource",
+							Set:  map[string]string{"spec.count": "counts"},
+						},
+					})),
+				fieldDesc("count", 2, descriptorpb.FieldDescriptorProto_TYPE_INT32, "", nil)),
+				&descriptorpb.DescriptorProto{
+					Name: proto.String("RatedResourceItem"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						repeatedFieldDesc("counts", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32, "", nil),
+					},
+				}),
+			contains: "sets 'spec.count' from 'counts', which is a repeated field",
+		},
+		{
+			name: "a negative creates count",
+			messages: ratedResource("RatedResource",
+				fieldDesc("flag", 1, descriptorpb.FieldDescriptorProto_TYPE_BOOL, "",
+					quotaField(&privatev1.QuotaFieldOptions{
+						Creates: &privatev1.QuotaCreatesOptions{Kind: "RatedResource", Count: -2},
+					}))),
+			contains: "negative count",
+		},
+		{
 			name: "a larger_of set next to a dimension",
 			messages: ratedResource("RatedResource",
 				fieldDesc("count", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32, "",
@@ -914,6 +964,14 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 			contains: "repeated field",
 		},
 		{
+			name: "a dimension brace path over a repeated string field",
+			messages: ratedResource("RatedResource",
+				fieldDesc("count", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32, "",
+					quotaField(&privatev1.QuotaFieldOptions{Dimension: "test.{spec.names}"})),
+				repeatedFieldDesc("names", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil)),
+			contains: "reads 'spec.names', which is a repeated field",
+		},
+		{
 			name: "a field link to a message without an id",
 			messages: append(ratedResource("RatedResource",
 				fieldDesc("parent", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
@@ -928,6 +986,46 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 					},
 				}),
 			contains: "no id field",
+		},
+		{
+			name: "a field link that carries a name prefix",
+			messages: append(ratedResource("RatedResource",
+				fieldDesc("parent", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedResourceParent",
+					quotaField(&privatev1.QuotaFieldOptions{
+						CreatedFor: &privatev1.QuotaCreatedForOptions{
+							Parent:     "RatedResource",
+							NamePrefix: "rr-{parent}-",
+						},
+					}))),
+				&descriptorpb.DescriptorProto{
+					Name: proto.String("RatedResourceParent"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						fieldDesc("id", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+						fieldDesc("name", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+					},
+				}),
+			contains: "no name prefix or labels",
+		},
+		{
+			name: "a field link that carries labels",
+			messages: append(ratedResource("RatedResource",
+				fieldDesc("parent", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedResourceParent",
+					quotaField(&privatev1.QuotaFieldOptions{
+						CreatedFor: &privatev1.QuotaCreatedForOptions{
+							IdLabel:   "osac.test/parent-id",
+							KindLabel: "osac.test/parent-kind",
+						},
+					}))),
+				&descriptorpb.DescriptorProto{
+					Name: proto.String("RatedResourceParent"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						fieldDesc("id", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+						fieldDesc("name", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+					},
+				}),
+			contains: "no name prefix or labels",
 		},
 		{
 			name: "creates that cycle",
@@ -955,6 +1053,35 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 				t.Fatalf("the error must say '%s', got: %v", testCase.contains, err)
 			}
 		})
+	}
+}
+
+// TestKindsRejectsUnlistedResourceLikeMessage checks that a message with metadata and
+// spec fields can't escape the rule that every kind is annotated or listed as using
+// nothing by carrying extra top-level fields beyond the object shape: NetworkClass is
+// covered only because the list names it, and a new message shaped like it must fail
+// validation naming it, not pass silently.
+func TestKindsRejectsUnlistedResourceLikeMessage(t *testing.T) {
+	// The message carries the object shape plus a title, so it is resource-like but
+	// not object shape, and carries no annotations.
+	unlisted := ratedResource("RatedResource")
+	unlisted[0].Field = append(unlisted[0].Field,
+		fieldDesc("title", 5, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil))
+
+	_, _, err := kindsOf(syntheticRegistry(t, unlisted))
+	if err == nil {
+		t.Fatal("a resource-like message that no list covers must fail validation")
+	}
+	if !strings.Contains(err.Error(), "RatedResource") {
+		t.Fatalf("the error must name the message, got: %v", err)
+	}
+
+	// A listed kind such as NetworkClass passes: the list is what covers it.
+	listed := ratedResource("NetworkClass")
+	listed[0].Field = append(listed[0].Field,
+		fieldDesc("title", 5, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil))
+	if _, _, err := kindsOf(syntheticRegistry(t, listed)); err != nil {
+		t.Fatalf("a listed resource-like message must pass validation: %v", err)
 	}
 }
 

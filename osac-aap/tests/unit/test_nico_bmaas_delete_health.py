@@ -80,3 +80,23 @@ def test_delete_fails_closed_when_ready_machine_aggregate_health_is_unusable(hea
 
     with pytest.raises(nico.NicoError, match="aggregate health|classifications"):
         nico.ensure_absent(client)
+
+
+def test_delete_without_machine_releases_once_the_instance_is_gone():
+    # A failed create can leave an Instance that NICo never assigned to a Machine.
+    client = FakeClient(machine=None)
+    client.params["machine_id"] = ""
+
+    result = nico.ensure_absent(client)
+
+    assert result == {"changed": False, "instance_id": "instance-id", "machine_id": "", "status": "Released"}
+    assert ("provider", "GET", "machine/") not in client.calls
+    assert all(scope == "tenant" for scope, _, _ in client.calls)
+
+
+def test_delete_requires_the_instance_id():
+    client = FakeClient(machine=None)
+    client.params["instance_id"] = ""
+
+    with pytest.raises(nico.NicoError, match="saved Instance ID is required"):
+        nico.ensure_absent(client)

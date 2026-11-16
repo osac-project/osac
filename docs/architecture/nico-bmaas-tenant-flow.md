@@ -117,7 +117,11 @@ health reports; the public BMI list was empty.
 
 This proves the simulator control-plane lifecycle and cleanup gate. The pilot
 iPXE script exits without installing a guest OS, and the selected OSAC
-SecurityGroup is not translated to a NICo policy. Guest boot and network
+SecurityGroup is not translated to a NICo policy. The current BMI path replaces
+the inline iPXE script with a catalog NICo Operating System and phone-home
+readiness, and the binding file is now `version: 2` with an
+`operatingSystems` catalog; see the
+[approved standalone boot path](nico-bmaas-launchpad-pilot.md#approved-standalone-boot-path). Guest boot and network
 traffic isolation remain untested. The lab's NICo provider credential is
 shared and broad; a production binding needs a scoped provider identity and
 credential rotation procedure.

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,6 +17,93 @@ import (
 )
 
 const nicoBMaaSTemplateID = "osac.templates.nico_bm_host_provisioning"
+
+// Create outcomes published by a failed NICo create job.
+const (
+	nicoCreateOutcomeNotCreated = "NotCreated"
+	nicoCreateOutcomeUncertain  = "Uncertain"
+	nicoCreateOutcomeCreated    = "Created"
+)
+
+// recordNicoCreateFailure saves what a failed create job reported, so delete
+// knows whether a NICo Instance may exist. A job without a known outcome, for
+// example a canceled one, is uncertain and keeps the conservative behavior.
+func recordNicoCreateFailure(bmi *v1alpha1.BareMetalInstance, artifacts map[string]any) error {
+	outcome, _ := artifacts["nicoCreateOutcome"].(string)
+	instanceID, _ := artifacts["nicoInstanceID"].(string)
+	machineID, _ := artifacts["nicoMachineID"].(string)
+	if outcome == nicoCreateOutcomeNotCreated && instanceID == "" && machineID == "" {
+		bmi.Status.NicoCreateOutcome = outcome
+		return nil
+	}
+	// Any reported ID identifies a NICo resource to release, whatever the
+	// reported outcome; never discard it.
+	if instanceID != "" && bmi.Status.NicoInstanceID != "" && bmi.Status.NicoInstanceID != instanceID ||
+		machineID != "" && bmi.Status.NicoMachineID != "" && bmi.Status.NicoMachineID != machineID {
+		return fmt.Errorf("NICo AAP artifacts differ from saved provider IDs")
+	}
+	if instanceID != "" {
+		bmi.Status.NicoInstanceID = instanceID
+	}
+	if machineID != "" {
+		bmi.Status.NicoMachineID = machineID
+	}
+	if outcome == nicoCreateOutcomeCreated {
+		bmi.Status.NicoCreateOutcome = outcome
+	} else {
+		bmi.Status.NicoCreateOutcome = nicoCreateOutcomeUncertain
+	}
+	return nil
+}
+
+// resolveNicoOperatingSystem resolves the approved NICo Operating System
+// before any create intent is recorded. It returns resolved=false when the
+// BMI must not be created now; the BMI status then explains why. An unsupported
+// DiskImage fails without contacting NICo, never booting a different image
+// while OSAC reports the requested one, and stays terminal.
+func (r *BareMetalInstanceReconciler) resolveNicoOperatingSystem(
+	bmi *v1alpha1.BareMetalInstance, bindings *nicoBindingsFile,
+) (string, bool, error) {
+	// The tenant already sees FAILED, so a later catalog change must not
+	// provision this BMI on its own.
+	if condition := bmi.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete); condition != nil &&
+		condition.Reason == v1alpha1.HostConditionReasonUnsupportedDiskImage {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return "", false, nil
+	}
+	operatingSystemID, err := nicoOperatingSystemFor(bindings, bmi)
+	if errors.Is(err, errNicoDiskImageUnsupported) {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		bmi.SetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete, metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonUnsupportedDiskImage, err.Error())
+		return "", false, nil
+	}
+	if err != nil {
+		// A configuration error, such as bindings without the catalog. No create
+		// intent was recorded, so a later reconcile retries after the
+		// administrator fixes the ConfigMap.
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		bmi.SetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete, metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonTemplateFailed, "NICo Operating System catalog is unavailable")
+		return "", false, err
+	}
+	return operatingSystemID, true, nil
+}
+
+// failNicoCreate records a failed create job and its reported reason.
+func failNicoCreate(bmi *v1alpha1.BareMetalInstance, artifacts map[string]any) error {
+	if err := recordNicoCreateFailure(bmi, artifacts); err != nil {
+		return err
+	}
+	message := "NICo create job failed; verify the Site before retrying"
+	if reason, _ := artifacts["nicoFailureReason"].(string); reason != "" {
+		message += ": " + reason
+	}
+	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+	bmi.SetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete, metav1.ConditionFalse,
+		v1alpha1.HostConditionReasonTemplateFailed, message)
+	return nil
+}
 
 func isNicoBMaaS(bmi *v1alpha1.BareMetalInstance) bool {
 	return bmi.Spec.TemplateID == nicoBMaaSTemplateID
@@ -42,7 +130,7 @@ func (r *BareMetalInstanceReconciler) reconcileNicoBMaaS(ctx context.Context, bm
 		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return ctrl.Result{}, nil
 	}
-	boundCtx, err := r.withNicoCredentials(ctx, bmi)
+	boundCtx, bindings, err := r.withNicoCredentials(ctx, bmi)
 	if err != nil {
 		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 		bmi.SetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete, metav1.ConditionFalse,
@@ -54,15 +142,23 @@ func (r *BareMetalInstanceReconciler) reconcileNicoBMaaS(ctx context.Context, bm
 	if !ok {
 		return ctrl.Result{}, fmt.Errorf("NICo BMI requires AAP provision output artifacts")
 	}
-	return r.reconcileNicoBMaaSProvisioning(boundCtx, bmi, outputs)
+	return r.reconcileNicoBMaaSProvisioning(boundCtx, bmi, outputs, bindings)
 }
 
 func (r *BareMetalInstanceReconciler) reconcileNicoBMaaSProvisioning(
 	ctx context.Context, bmi *v1alpha1.BareMetalInstance, outputs provisioning.ProvisioningProviderWithProvisionOutputs,
+	bindings *nicoBindingsFile,
 ) (ctrl.Result, error) {
 	latest := provisioning.FindLatestJobByType(bmi.Status.ProvisioningJobs, opv1alpha1.JobTypeProvision)
 	newAttempt := false
+	operatingSystemID := ""
 	if !bmi.Status.NicoCreateAttempted {
+		var resolved bool
+		var err error
+		operatingSystemID, resolved, err = r.resolveNicoOperatingSystem(bmi, bindings)
+		if !resolved {
+			return ctrl.Result{}, err
+		}
 		// Persist the one-create-attempt marker BEFORE the AAP launch. A crash or
 		// lost launch response must leave the BMI requiring Site verification,
 		// never silently issue another NICo POST.
@@ -85,7 +181,10 @@ func (r *BareMetalInstanceReconciler) reconcileNicoBMaaSProvisioning(
 		if !ok {
 			return ctrl.Result{}, fmt.Errorf("NICo BMI requires AAP extra vars for the one-time create authorization")
 		}
-		result, err := trigger.TriggerProvisionWithExtraVars(ctx, bmi, map[string]any{"nico_bmaas_create_allowed": true})
+		result, err := trigger.TriggerProvisionWithExtraVars(ctx, bmi, map[string]any{
+			"nico_bmaas_create_allowed":      true,
+			"nico_bmaas_operating_system_id": operatingSystemID,
+		})
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("NICo AAP launch outcome requires inspection before retry: %w", err)
 		}
@@ -114,11 +213,7 @@ func (r *BareMetalInstanceReconciler) reconcileNicoBMaaSProvisioning(
 	updated.Message = status.MessageWithDetails()
 	provisioning.UpdateJob(bmi.Status.ProvisioningJobs, updated)
 	if status.State == opv1alpha1.JobStateFailed || status.State == opv1alpha1.JobStateCanceled {
-		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-		bmi.SetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete, metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonTemplateFailed,
-			"NICo create job failed; verify the Site before retrying")
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, failNicoCreate(bmi, status.ExtraVars)
 	}
 	if status.State != opv1alpha1.JobStateSucceeded {
 		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
@@ -171,6 +266,48 @@ func (r *BareMetalInstanceReconciler) reconcileNicoBMaaSProvisioning(
 	return ctrl.Result{}, nil
 }
 
+// resolveNicoIDsForDelete handles a delete that has no saved provider IDs yet.
+// An in-flight create may finish after Kubernetes accepts deletion, so it waits
+// for the create job's artifacts and never removes the finalizer on an
+// uncertain result. A create job that reports NotCreated releases the BMI.
+func (r *BareMetalInstanceReconciler) resolveNicoIDsForDelete(ctx context.Context, bmi *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
+	latest := provisioning.FindLatestJobByType(bmi.Status.ProvisioningJobs, opv1alpha1.JobTypeProvision)
+	if latest == nil {
+		return ctrl.Result{}, fmt.Errorf("NICo create attempt has no saved job or provider IDs; inspect Site allocation")
+	}
+	outputs, ok := r.ProvisioningProvider.(provisioning.ProvisioningProviderWithProvisionOutputs)
+	if !ok {
+		return ctrl.Result{}, fmt.Errorf("NICo BMI deletion requires AAP provision artifacts")
+	}
+	status, err := outputs.GetProvisionStatusWithExtraVars(ctx, bmi, latest.JobID)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, err
+	}
+	if !status.State.IsTerminal() {
+		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	}
+	if status.State == opv1alpha1.JobStateSucceeded {
+		instanceID, _ := status.ExtraVars["nicoInstanceID"].(string)
+		machineID, _ := status.ExtraVars["nicoMachineID"].(string)
+		if instanceID != "" && machineID != "" {
+			bmi.Status.NicoInstanceID, bmi.Status.NicoMachineID = instanceID, machineID
+		}
+	} else {
+		// The create job failed after deletion was requested.
+		if err := recordNicoCreateFailure(bmi, status.ExtraVars); err != nil {
+			return ctrl.Result{}, err
+		}
+		if bmi.Status.NicoCreateOutcome == nicoCreateOutcomeNotCreated {
+			controllerutil.RemoveFinalizer(bmi, BareMetalInstanceManagementFinalizer)
+			return ctrl.Result{}, r.Update(ctx, bmi)
+		}
+	}
+	if bmi.Status.NicoInstanceID == "" {
+		return ctrl.Result{}, fmt.Errorf("NICo create ended without a provider Instance ID; verify Site allocation before deletion")
+	}
+	return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+}
+
 // deleteNicoBMaaS leaves the BMI finalizer in place until the AAP backend has
 // observed Instance absence and the original Machine unassigned Ready.
 func (r *BareMetalInstanceReconciler) deleteNicoBMaaS(ctx context.Context, bmi *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
@@ -181,42 +318,22 @@ func (r *BareMetalInstanceReconciler) deleteNicoBMaaS(ctx context.Context, bmi *
 		}
 		return ctrl.Result{}, nil
 	}
-	if !bmi.Status.NicoCreateAttempted && bmi.Status.NicoInstanceID == "" && bmi.Status.NicoMachineID == "" {
-		// A BMI can be deleted after the finalizer is installed but before
-		// any NICo create attempt. There is no provider resource to release.
+	if bmi.Status.NicoInstanceID == "" && bmi.Status.NicoMachineID == "" &&
+		(!bmi.Status.NicoCreateAttempted || bmi.Status.NicoCreateOutcome == nicoCreateOutcomeNotCreated) {
+		// The BMI was deleted before any NICo create attempt, or its create job
+		// failed before the create request. There is no provider resource to release.
 		controllerutil.RemoveFinalizer(bmi, BareMetalInstanceManagementFinalizer)
 		return ctrl.Result{}, r.Update(ctx, bmi)
 	}
 	if r.ProvisioningProvider == nil {
 		return ctrl.Result{}, fmt.Errorf("NICo BMI deletion requires a provisioning provider")
 	}
-	if bmi.Status.NicoInstanceID == "" || bmi.Status.NicoMachineID == "" {
-		// An in-flight create may finish after Kubernetes accepts deletion. Wait
-		// for its artifact IDs; never remove the finalizer on an uncertain result.
-		latest := provisioning.FindLatestJobByType(bmi.Status.ProvisioningJobs, opv1alpha1.JobTypeProvision)
-		if latest == nil {
-			return ctrl.Result{}, fmt.Errorf("NICo create attempt has no saved job or provider IDs; inspect Site allocation")
-		}
-		outputs, ok := r.ProvisioningProvider.(provisioning.ProvisioningProviderWithProvisionOutputs)
-		if !ok {
-			return ctrl.Result{}, fmt.Errorf("NICo BMI deletion requires AAP provision artifacts")
-		}
-		status, err := outputs.GetProvisionStatusWithExtraVars(ctx, bmi, latest.JobID)
-		if err != nil {
-			return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, err
-		}
-		if !status.State.IsTerminal() {
-			return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
-		}
-		instanceID, instanceOK := status.ExtraVars["nicoInstanceID"].(string)
-		machineID, machineOK := status.ExtraVars["nicoMachineID"].(string)
-		if !instanceOK || !machineOK || instanceID == "" || machineID == "" {
-			return ctrl.Result{}, fmt.Errorf("NICo create ended without both provider IDs; verify Site allocation before deletion")
-		}
-		bmi.Status.NicoInstanceID, bmi.Status.NicoMachineID = instanceID, machineID
-		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+	// A failed create can leave an Instance with no Machine assigned; the
+	// Instance ID alone is enough to release it.
+	if bmi.Status.NicoInstanceID == "" {
+		return r.resolveNicoIDsForDelete(ctx, bmi)
 	}
-	boundCtx, err := r.withNicoCredentials(ctx, bmi)
+	boundCtx, _, err := r.withNicoCredentials(ctx, bmi)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

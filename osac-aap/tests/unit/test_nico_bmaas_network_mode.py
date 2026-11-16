@@ -27,8 +27,10 @@ def params(mode="FLAT", **overrides):
         "flat_ipv4_cidr": "172.16.200.0/24" if mode == "FLAT" else "",
         "subnet_id": "subnet-id" if mode == "ETHERNET_VIRTUALIZER" else "",
         "vpc_prefix_id": "prefix-id" if mode == "FNN" else "",
-        "operating_system_id": "",
-        "ipxe_script": "#!ipxe\nexit",
+        "operating_system_id": "os-id",
+        "user_data": "",
+        "ssh_public_key": "",
+        "phone_home_enabled": True,
         "instance_id": "",
         "machine_id": "",
         "create_allowed": True,
@@ -39,12 +41,35 @@ def params(mode="FLAT", **overrides):
     return result
 
 
+def ready_operating_system(**overrides):
+    definition = {
+        "id": "os-id",
+        "status": "Ready",
+        "type": "TemplatedIpxe",
+        "phoneHomeEnabled": True,
+        "ipxeTemplateId": "qcow-template-id",
+        "ipxeTemplateParameters": [
+            {"name": "image_url", "value": "http://artifacts/centos.qcow2"},
+            {"name": "ds", "value": "nocloud-net;s=${tenant-cloudinit-url}"},
+        ],
+        "siteAssociations": [{"site": {"id": "site-id"}, "status": "Synced"}],
+    }
+    definition.update(overrides)
+    return definition
+
+
+NO_DATASOURCE_PARAMETERS = [{"name": "image_url", "value": "http://artifacts/centos.qcow2"}]
+
+
 class FakeClient:
-    def __init__(self, parameters, interfaces=None, target_machine=None, ready_machine_id="machine-id"):
+    def __init__(self, parameters, interfaces=None, target_machine=None, ready_machine_id="machine-id",
+                 operating_system=None, template_body="chain qcow-imager.efi image_url={{image_url}} {{extra}}"):
         self.params = parameters
         self.interfaces = interfaces
         self.target_machine = target_machine
         self.ready_machine_id = ready_machine_id
+        self.operating_system = ready_operating_system() if operating_system is None else operating_system
+        self.template_body = template_body
         self.posts = []
 
     def request(self, scope, method, resource, body=None):
@@ -61,6 +86,12 @@ class FakeClient:
             }
         if (method, resource) == ("GET", "instance?name=osac-bmi-uid"):
             return 200, []
+        if (method, resource) == ("GET", "operating-system/os-id"):
+            if self.operating_system is False:
+                raise nico.NicoHTTPError(404, "not found")
+            return 200, self.operating_system
+        if (method, resource) == ("GET", "ipxe-template/qcow-template-id"):
+            return 200, {"id": "qcow-template-id", "template": self.template_body}
         if (method, resource) == ("POST", "instance"):
             self.posts.append(body)
             return 201, {"id": "instance-id"}
@@ -228,6 +259,82 @@ def test_create_requires_one_placement_selector(instance_type_id, target_machine
         nico.ensure_present(client)
 
     assert client.posts == []
+
+
+def test_create_boots_only_the_approved_operating_system():
+    client = FakeClient(params("FNN"),
+                        interfaces=[{"vpcPrefixId": "prefix-id", "ipAddresses": ["198.51.100.20"]}])
+
+    nico.ensure_present(client)
+
+    assert client.posts[0]["operatingSystemId"] == "os-id"
+    assert "ipxeScript" not in client.posts[0]
+
+
+def test_create_requires_an_operating_system():
+    client = FakeClient(params("FNN", operating_system_id=""))
+
+    with pytest.raises(nico.NicoError, match="operating_system_id is required"):
+        nico.ensure_present(client)
+
+    assert client.posts == []
+
+
+@pytest.mark.parametrize(
+    ("operating_system", "message"),
+    [
+        (False, "not found"),
+        (ready_operating_system(status="Syncing"), "is not Ready"),
+        (ready_operating_system(type="Ipxe"), "not a templated iPXE definition"),
+        (ready_operating_system(ipxeTemplateParameters=NO_DATASOURCE_PARAMETERS), "does not deliver user data"),
+        (ready_operating_system(ipxeTemplateParameters=NO_DATASOURCE_PARAMETERS, ipxeTemplateId=None),
+         "does not deliver user data"),
+        (ready_operating_system(siteAssociations=[]), "not synced to the VPC's Site"),
+        (ready_operating_system(siteAssociations=[{"site": {"id": "site-id"}, "status": "Syncing"}]),
+         "not synced to the VPC's Site"),
+        (ready_operating_system(siteAssociations=[{"site": {"id": "another-site"}, "status": "Synced"}]),
+         "not synced to the VPC's Site"),
+    ],
+)
+def test_create_refuses_an_unusable_operating_system_before_post(operating_system, message):
+    client = FakeClient(params("FNN"), operating_system=operating_system)
+
+    with pytest.raises(nico.NicoError, match=message):
+        nico.ensure_present(client)
+
+    assert client.posts == []
+
+
+def test_create_accepts_a_template_that_embeds_the_cloud_init_datasource():
+    # For example ubuntu-autoinstall carries ds=nocloud-net in its template body.
+    client = FakeClient(params("FNN"),
+                        operating_system=ready_operating_system(ipxeTemplateParameters=NO_DATASOURCE_PARAMETERS),
+                        template_body="kernel {{kernel}} autoinstall ds=nocloud-net;s=${tenant-cloudinit-url}",
+                        interfaces=[{"vpcPrefixId": "prefix-id", "ipAddresses": ["198.51.100.20"]}])
+
+    nico.ensure_present(client)
+
+    assert len(client.posts) == 1
+
+
+def test_create_accepts_an_operating_system_without_phone_home():
+    # The Instance phoneHomeEnabled overrides the OS value in NICo.
+    client = FakeClient(params("FNN"), operating_system=ready_operating_system(phoneHomeEnabled=False),
+                        interfaces=[{"vpcPrefixId": "prefix-id", "ipAddresses": ["198.51.100.20"]}])
+
+    nico.ensure_present(client)
+
+    assert client.posts[0]["phoneHomeEnabled"] is True
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_create_sends_the_configured_phone_home_setting(enabled):
+    client = FakeClient(params("FNN", phone_home_enabled=enabled),
+                        interfaces=[{"vpcPrefixId": "prefix-id", "ipAddresses": ["198.51.100.20"]}])
+
+    nico.ensure_present(client)
+
+    assert client.posts[0]["phoneHomeEnabled"] is enabled
 
 
 def test_targeted_create_rejects_a_different_machine_in_ready_response():

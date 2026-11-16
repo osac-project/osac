@@ -1,42 +1,121 @@
 ---
-- name: Validate NICo BMI backend configuration
-  ansible.builtin.include_tasks: validate.yaml
-
+# Every failure publishes nicoCreateOutcome so the BMI controller knows whether
+# a NICo Instance may exist and must be released on delete:
+# - NotCreated: the job failed before the create POST; nothing exists in NICo.
+# - Uncertain: the create POST outcome is unknown; Site verification is needed.
+# - Created: the Instance exists; its IDs are published when known.
 - name: Create or adopt one NICo Instance for this BMI
-  nico.steps.bare_metal_instance:
-    state: present
-    api_url: "{{ nico_bmaas_api_url }}"
-    token_url: "{{ nico_bmaas_token_url }}"
-    token_host: "{{ nico_bmaas_token_host }}"
-    allow_http: "{{ nico_bmaas_allow_http }}"
-    tenant_org: "{{ nico_bmaas_tenant_org }}"
-    provider_org: "{{ nico_bmaas_provider_org }}"
-    tenant_auth: "{{ nico_bmaas_tenant_auth }}"
-    provider_auth: "{{ nico_bmaas_provider_auth }}"
-    tenant_id: "{{ nico_bmaas_tenant_id }}"
-    bmi_uid: "{{ bare_metal_instance.metadata.uid }}"
-    instance_id: "{{ (bare_metal_instance.status | default({})).get('nicoInstanceID', '') }}"
-    machine_id: "{{ (bare_metal_instance.status | default({})).get('nicoMachineID', '') }}"
-    create_allowed: "{{ nico_bmaas_create_allowed }}"
-    name: "osac-{{ bare_metal_instance.metadata.uid }}"
-    vpc_id: "{{ nico_bmaas_vpc_id }}"
-    instance_type_id: "{{ nico_bmaas_instance_type_id }}"
-    target_machine_id: "{{ nico_bmaas_target_machine_id }}"
-    subnet_id: "{{ nico_bmaas_subnet_id }}"
-    vpc_prefix_id: "{{ nico_bmaas_vpc_prefix_id }}"
-    network_virtualization_type: "{{ nico_bmaas_network_virtualization_type }}"
-    flat_ipv4_cidr: "{{ nico_bmaas_flat_ipv4_cidr }}"
-    operating_system_id: "{{ nico_bmaas_operating_system_id }}"
-    ipxe_script: "{{ nico_bmaas_ipxe_script }}"
-    timeout: "{{ nico_bmaas_timeout }}"
-    poll_interval: "{{ nico_bmaas_poll_interval }}"
-  register: nico_bmaas_result
-  no_log: true
+  block:
+    - name: Validate NICo BMI backend configuration
+      ansible.builtin.include_tasks: validate.yaml
 
-- name: Publish durable NICo Instance and Machine identifiers for the BMI controller
-  ansible.builtin.set_stats:
-    data:
-      nicoInstanceID: "{{ nico_bmaas_result.instance_id }}"
-      nicoMachineID: "{{ nico_bmaas_result.machine_id }}"
-      nicoIPAddress: "{{ nico_bmaas_result.ip_address }}"
-  no_log: false
+    - name: Validate the approved NICo Operating System from the bare-metal operator
+      ansible.builtin.assert:
+        that:
+          - nico_bmaas_operating_system_id | default('') | length > 0
+        fail_msg: No approved NICo Operating System was passed by the bare-metal operator
+
+    - name: Read the tenant SSH key and user data reference from the BMI template parameters
+      ansible.builtin.set_fact:
+        nico_bmaas_template_params: "{{ bare_metal_instance.spec.templateParameters | default('{}', true) | from_json }}"
+
+    # The fulfillment service creates the Secret right after the BMI, so the
+    # job can start first. Wait for it instead of failing the only create.
+    - name: Read the tenant user data Secret created by the fulfillment service
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "{{ bare_metal_instance.metadata.namespace }}"
+        name: "{{ nico_bmaas_template_params.userDataSecret }}"
+      register: nico_bmaas_user_data_secret
+      until: nico_bmaas_user_data_secret.resources | default([]) | length == 1
+      retries: "{{ nico_bmaas_user_data_secret_retries }}"
+      delay: 5
+      when: nico_bmaas_template_params.userDataSecret | default('') | length > 0
+      no_log: true
+
+    - name: Validate the tenant user data Secret
+      ansible.builtin.assert:
+        that:
+          - nico_bmaas_user_data_secret.resources | length == 1
+          - (nico_bmaas_user_data_secret.resources[0].data | default({})).userdata is defined
+        fail_msg: >-
+          Tenant user data Secret '{{ nico_bmaas_template_params.userDataSecret }}' with key 'userdata'
+          was not found in namespace '{{ bare_metal_instance.metadata.namespace }}'
+      when: nico_bmaas_template_params.userDataSecret | default('') | length > 0
+      no_log: true
+
+    - name: Decode the tenant user data
+      ansible.builtin.set_fact:
+        nico_bmaas_user_data: >-
+          {{ (nico_bmaas_user_data_secret.resources[0].data.userdata | b64decode)
+             if nico_bmaas_template_params.userDataSecret | default('') | length > 0 else '' }}
+      no_log: true
+
+    - name: Create or adopt the NICo Instance and wait for the OS to phone home
+      nico.steps.bare_metal_instance:
+        state: present
+        api_url: "{{ nico_bmaas_api_url }}"
+        token_url: "{{ nico_bmaas_token_url }}"
+        token_host: "{{ nico_bmaas_token_host }}"
+        allow_http: "{{ nico_bmaas_allow_http }}"
+        tenant_org: "{{ nico_bmaas_tenant_org }}"
+        provider_org: "{{ nico_bmaas_provider_org }}"
+        tenant_auth: "{{ nico_bmaas_tenant_auth }}"
+        provider_auth: "{{ nico_bmaas_provider_auth }}"
+        tenant_id: "{{ nico_bmaas_tenant_id }}"
+        bmi_uid: "{{ bare_metal_instance.metadata.uid }}"
+        instance_id: "{{ (bare_metal_instance.status | default({})).get('nicoInstanceID', '') }}"
+        machine_id: "{{ (bare_metal_instance.status | default({})).get('nicoMachineID', '') }}"
+        create_allowed: "{{ nico_bmaas_create_allowed }}"
+        name: "osac-{{ bare_metal_instance.metadata.uid }}"
+        vpc_id: "{{ nico_bmaas_vpc_id }}"
+        instance_type_id: "{{ nico_bmaas_instance_type_id }}"
+        target_machine_id: "{{ nico_bmaas_target_machine_id }}"
+        subnet_id: "{{ nico_bmaas_subnet_id }}"
+        vpc_prefix_id: "{{ nico_bmaas_vpc_prefix_id }}"
+        network_virtualization_type: "{{ nico_bmaas_network_virtualization_type }}"
+        flat_ipv4_cidr: "{{ nico_bmaas_flat_ipv4_cidr }}"
+        operating_system_id: "{{ nico_bmaas_operating_system_id }}"
+        user_data: "{{ nico_bmaas_user_data }}"
+        ssh_public_key: "{{ nico_bmaas_template_params.sshPublicKey | default('') }}"
+        # Always on: OSAC reports RUNNING only after the booted OS phones home.
+        phone_home_enabled: true
+        timeout: "{{ nico_bmaas_create_timeout }}"
+        poll_interval: "{{ nico_bmaas_poll_interval }}"
+      register: nico_bmaas_result
+      no_log: true
+
+    - name: Publish durable NICo Instance and Machine identifiers for the BMI controller
+      ansible.builtin.set_stats:
+        data:
+          nicoInstanceID: "{{ nico_bmaas_result.instance_id }}"
+          nicoMachineID: "{{ nico_bmaas_result.machine_id }}"
+          nicoIPAddress: "{{ nico_bmaas_result.ip_address }}"
+      no_log: false
+
+  rescue:
+    - name: Publish the NICo create outcome and failure reason for the BMI controller
+      ansible.builtin.set_stats:
+        data:
+          # A failed module reports its outcome. A module that succeeded
+          # created the Instance even if a later task failed. A failure before
+          # the module ran made no NICo call; an unexpected module failure is
+          # uncertain.
+          nicoCreateOutcome: >-
+            {{ nico_bmaas_result.nico_create_outcome
+               if nico_bmaas_result.nico_create_outcome is defined
+               else ('NotCreated' if nico_bmaas_result is not defined
+                     else ('Uncertain' if nico_bmaas_result.failed | default(false)
+                           else 'Created')) }}
+          nicoInstanceID: "{{ nico_bmaas_result.instance_id | default('') }}"
+          nicoMachineID: "{{ nico_bmaas_result.machine_id | default('') }}"
+          nicoFailureReason: >-
+            {{ (nico_bmaas_result.msg | default(ansible_failed_result.msg | default('NICo create failed')))
+               | truncate(300) }}
+      no_log: false
+
+    - name: Fail the NICo create job
+      ansible.builtin.fail:
+        msg: >-
+          {{ nico_bmaas_result.msg | default(ansible_failed_result.msg | default('NICo create failed')) }}

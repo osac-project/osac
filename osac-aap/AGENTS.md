@@ -44,6 +44,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Filters, variable transforms, and isolated plugin logic | Unit | `uv run pytest tests/unit` |
+| NICo BMI module: create body, Operating System pre-check, tenant user data and SSH key composition, create outcome, and release checks | Unit | `tests/unit/test_nico_bmaas_*.py`; run `uv run pytest tests/unit`. The `nico_bmaas` role and its `block`/`rescue` artifacts have no Kind target; see the [coverage gap](../docs/INTEGRATION-TESTING.md#osac-aap) |
 | Keycloak token lookup, cache refresh, and error handling | Unit | `uv run pytest tests/unit/plugins/lookup/test_fulfillment_token.py` |
 | AAP publish-templates credential and Kubernetes token wiring | Unit | `uv run pytest tests/unit/test_publish_templates_auth_config.py` |
 | Template publishing certificate validation | Local protocol integration | Run the `test_cert_validation` play in `collections/ansible_collections/osac/service/roles/publish_templates/tests/test.yml` with `uv run ansible-playbook`; the mock HTTPS server tests the client transport only |

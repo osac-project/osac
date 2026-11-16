@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+import yaml
 from ansible.module_utils.basic import AnsibleModule
 
 
@@ -95,11 +96,28 @@ options:
       - The assigned NICo HostInband address must fall within this range.
   operating_system_id:
     type: str
-  ipxe_script:
+    description:
+      - Approved NICo Operating System for the BMI DiskImage. Required for create.
+      - Before a create, the module verifies it is a Ready templated iPXE definition synced to the
+        VPC's Site that delivers the Instance user data through the tenant cloud-init datasource.
+  user_data:
     type: str
+    description:
+      - Tenant user data. Must be a single-document C(#cloud-config) mapping, which NICo requires
+        when phone-home is enabled. Scripts, Jinja templates, archives and other formats are rejected.
+  ssh_public_key:
+    type: str
+    description:
+      - Tenant SSH public key. It is added to the cloud-config C(ssh_authorized_keys) of the default user.
+  phone_home_enabled:
+    type: bool
+    default: true
+    description:
+      - When true, NICo reports the Instance Ready only after the booted OS phones home.
+      - When false, Ready proves allocation only, not an installed and booted OS.
   timeout:
     type: int
-    default: 1200
+    default: 2700
   poll_interval:
     type: int
     default: 10
@@ -238,12 +256,15 @@ def assert_owned(instance, params, machine_id=None):
         raise NicoError("Instance Machine ID differs from the saved BMI Machine ID")
 
 
-def wait_for_instance(client, instance_id, timeout, interval):
+def wait_for_instance(client, instance_id, timeout, interval, progress=None):
     deadline = time.monotonic() + timeout
     while True:
         instance = get_or_none(client, "tenant", instance_path(instance_id))
         if instance is None:
             raise NicoError("Instance vanished while waiting for Ready")
+        if progress is not None and instance.get("machineId"):
+            # Keep the allocated Machine so a later failure can still be released.
+            progress["machine_id"] = instance["machineId"]
         status = instance.get("status")
         if status in ("Ready", "BootCompleted"):
             return instance
@@ -252,6 +273,49 @@ def wait_for_instance(client, instance_id, timeout, interval):
         if time.monotonic() >= deadline:
             raise NicoError(f"Instance {instance_id} did not reach Ready before timeout")
         time.sleep(interval)
+
+
+# iPXE variable that NICo sets on every boot. The PXE service behind it returns
+# the user data of the Instance assigned to the requesting Machine.
+TENANT_CLOUD_INIT_URL = "${tenant-cloudinit-url}"
+
+
+def delivers_user_data(client, os_definition):
+    """Whether the OS boot passes the Instance user data to the installed OS.
+
+    The cloud-init datasource can be a template parameter (for example ds for
+    qcow-image) or part of the template itself (for example ubuntu-autoinstall).
+    """
+    for parameter in os_definition.get("ipxeTemplateParameters") or []:
+        if TENANT_CLOUD_INIT_URL in str(parameter.get("value") or ""):
+            return True
+    template_id = os_definition.get("ipxeTemplateId")
+    if not template_id:
+        return False
+    template = get_or_none(client, "tenant", "ipxe-template/" + quote(template_id, safe=""))
+    return template is not None and TENANT_CLOUD_INIT_URL in str(template.get("template") or "")
+
+
+def check_operating_system(client, operating_system_id, site_id):
+    """Fail before any create unless the approved OS can boot and report at this Site."""
+    os_definition = get_or_none(client, "tenant", "operating-system/" + quote(operating_system_id, safe=""))
+    if os_definition is None:
+        raise NicoError(f"NICo Operating System {operating_system_id} not found")
+    if os_definition.get("status") != "Ready":
+        raise NicoError(f"NICo Operating System {operating_system_id} is not Ready")
+    if os_definition.get("type") != "TemplatedIpxe":
+        raise NicoError(f"NICo Operating System {operating_system_id} is not a templated iPXE definition")
+    # The OS phone-home flag is not checked: the Instance create sends its own
+    # phoneHomeEnabled, which takes precedence and makes NICo inject phone-home.
+    # The OS must, however, carry the user data (SSH key and phone-home block)
+    # to the installed OS, or the Instance can never become Ready.
+    if not delivers_user_data(client, os_definition):
+        raise NicoError(f"NICo Operating System {operating_system_id} does not deliver user data to the "
+                        f"installed OS (no {TENANT_CLOUD_INIT_URL} cloud-init datasource)")
+    synced = any((association.get("site") or {}).get("id") == site_id and association.get("status") == "Synced"
+                 for association in os_definition.get("siteAssociations") or [])
+    if not site_id or not synced:
+        raise NicoError(f"NICo Operating System {operating_system_id} is not synced to the VPC's Site")
 
 
 def validate_network_configuration(params):
@@ -306,8 +370,65 @@ def assigned_ip(instance, params):
     return matching[0]["ipAddresses"][0]
 
 
-def ensure_present(client):
+CLOUD_CONFIG_HEADER = "#cloud-config"
+
+
+def compose_user_data(user_data, ssh_public_key):
+    """Build the NICo Instance user data from the tenant user data and SSH key.
+
+    Returns None when there is nothing to send; NICo then generates a minimal
+    cloud-config with only its phone-home block. NICo injects phone-home into
+    the returned document, so it must stay a single #cloud-config mapping.
+    """
+    if not user_data and not ssh_public_key:
+        return None
+    document = {}
+    if user_data:
+        first_line = user_data.lstrip().split("\n", 1)[0].strip()
+        if first_line != CLOUD_CONFIG_HEADER:
+            raise NicoError("tenant user data must start with #cloud-config; scripts, Jinja templates, "
+                            "archives and other cloud-init formats are not supported for NICo BMIs")
+        try:
+            documents = list(yaml.safe_load_all(user_data))
+        except yaml.YAMLError as exc:
+            raise NicoError("tenant user data is not valid cloud-config YAML") from exc
+        # A header-only document parses to no document at all.
+        documents = documents or [None]
+        if len(documents) != 1 or not isinstance(documents[0], (dict, type(None))):
+            raise NicoError("tenant user data must be a single cloud-config YAML mapping")
+        document = documents[0] or {}
+    if ssh_public_key:
+        keys = document.setdefault("ssh_authorized_keys", [])
+        if not isinstance(keys, list):
+            raise NicoError("tenant user data ssh_authorized_keys must be a list")
+        if ssh_public_key not in keys:
+            keys.append(ssh_public_key)
+        # Top-level keys apply to the default user. Tenant-defined users replace
+        # it unless the list keeps "default", so keep it for the OSAC key.
+        users = document.get("users")
+        if users is not None:
+            if not isinstance(users, list):
+                raise NicoError("tenant user data users must be a list")
+            if "default" not in users:
+                users.insert(0, "default")
+    return CLOUD_CONFIG_HEADER + "\n" + yaml.safe_dump(document, sort_keys=False, default_flow_style=False)
+
+
+# Create outcomes reported on failure, so the BMI controller knows whether a
+# NICo Instance may exist and must be released on delete.
+OUTCOME_NOT_CREATED = "NotCreated"  # Failed before the create POST.
+OUTCOME_UNCERTAIN = "Uncertain"  # The create POST outcome is unknown.
+OUTCOME_CREATED = "Created"  # The Instance exists; its IDs are reported when known.
+
+# Create POST responses where NICo validated and refused the request, so no
+# Instance exists. A conflict (409) or server error keeps the outcome uncertain.
+CREATE_REJECTED_STATUSES = (400, 403, 422)
+
+
+def ensure_present(client, progress=None):
     params = client.params
+    progress = {} if progress is None else progress
+    progress.update(outcome=OUTCOME_NOT_CREATED, instance_id="", machine_id="")
     for key in ("name", "vpc_id"):
         if not params[key]:
             raise NicoError(f"{key} is required for Instance create")
@@ -315,8 +436,10 @@ def ensure_present(client):
     if bool(params["instance_type_id"]) == bool(target_machine_id):
         raise NicoError("configure exactly one of instance_type_id or target_machine_id")
     validate_network_configuration(params)
-    if not params["operating_system_id"] and not params["ipxe_script"]:
-        raise NicoError("operating_system_id or ipxe_script is required")
+    if not params["operating_system_id"]:
+        raise NicoError("operating_system_id is required")
+    # Validate tenant input before any NICo call.
+    user_data = compose_user_data(params["user_data"], params["ssh_public_key"])
     vpc = get_or_none(client, "tenant", "vpc/" + quote(params["vpc_id"], safe=""))
     if vpc is None or vpc.get("tenantId") != params["tenant_id"]:
         raise NicoError("configured NICo VPC is absent or belongs to another tenant")
@@ -324,6 +447,7 @@ def ensure_present(client):
         raise NicoError("configured NICo VPC network type differs from BMI backend mode")
 
     if params["instance_id"]:
+        progress.update(outcome=OUTCOME_CREATED, instance_id=params["instance_id"], machine_id=params["machine_id"])
         instance = get_or_none(client, "tenant", instance_path(params["instance_id"]))
         if instance is None:
             raise NicoError("saved Instance ID is absent; refusing a second create")
@@ -339,6 +463,8 @@ def ensure_present(client):
         if matches:
             instance = matches[0]
             assert_owned(instance, params)
+            progress.update(outcome=OUTCOME_CREATED, instance_id=instance.get("id") or "",
+                            machine_id=instance.get("machineId") or "")
             changed = False
         else:
             if not params["create_allowed"]:
@@ -351,10 +477,11 @@ def ensure_present(client):
                     raise NicoError("target Machine and configured VPC are not at the same Site")
                 if machine.get("status") != "Ready" or machine.get("instanceId") is not None:
                     raise NicoError("target Machine is not unassigned Ready")
+            check_operating_system(client, params["operating_system_id"], vpc.get("siteId"))
             body = {"name": params["name"], "tenantId": params["tenant_id"],
                     "vpcId": params["vpc_id"],
                     "labels": {"osacBmiUid": params["bmi_uid"]},
-                    "phoneHomeEnabled": False}
+                    "phoneHomeEnabled": params["phone_home_enabled"]}
             body["machineId" if target_machine_id else "instanceTypeId"] = target_machine_id or params["instance_type_id"]
             if params["network_virtualization_type"] == "FLAT":
                 body["autoNetwork"] = True
@@ -362,19 +489,28 @@ def ensure_present(client):
                 interface = {"isPhysical": True}
                 interface["subnetId" if params["subnet_id"] else "vpcPrefixId"] = params["subnet_id"] or params["vpc_prefix_id"]
                 body["interfaces"] = [interface]
-            if params["operating_system_id"]:
-                body["operatingSystemId"] = params["operating_system_id"]
-            if params["ipxe_script"]:
-                body["ipxeScript"] = params["ipxe_script"]
+            body["operatingSystemId"] = params["operating_system_id"]
+            if user_data is not None:
+                body["userData"] = user_data
+            progress["outcome"] = OUTCOME_UNCERTAIN
             try:
                 _, instance = client.request("tenant", "POST", "instance", body)
+            except NicoHTTPError as exc:
+                if exc.status in CREATE_REJECTED_STATUSES:
+                    # NICo validated and refused the request: nothing was created.
+                    progress["outcome"] = OUTCOME_NOT_CREATED
+                    raise NicoError("NICo rejected the Instance create: " + str(exc)) from exc
+                raise NicoError("Instance create outcome requires Site verification before another POST: " + str(exc)) from exc
             except NicoError as exc:
                 raise NicoError("Instance create outcome requires Site verification before another POST: " + str(exc)) from exc
             changed = True
     instance_id = instance.get("id")
     if not instance_id:
         raise NicoError("NICo Instance response has no ID; verify Site allocation before retrying")
-    instance = wait_for_instance(client, instance_id, params["timeout"], params["poll_interval"])
+    progress.update(outcome=OUTCOME_CREATED, instance_id=instance_id)
+    if instance.get("machineId"):
+        progress["machine_id"] = instance["machineId"]
+    instance = wait_for_instance(client, instance_id, params["timeout"], params["poll_interval"], progress)
     assert_owned(instance, params, params["machine_id"])
     if instance.get("vpcId") != params["vpc_id"]:
         raise NicoError("Ready Instance VPC differs from the configured BMI backend")
@@ -395,8 +531,8 @@ def ensure_present(client):
 def ensure_absent(client):
     params = client.params
     instance_id, machine_id = params["instance_id"], params["machine_id"]
-    if not instance_id or not machine_id:
-        raise NicoError("saved Instance and Machine IDs are both required for safe delete")
+    if not instance_id:
+        raise NicoError("saved Instance ID is required for safe delete")
     instance = get_or_none(client, "tenant", instance_path(instance_id))
     if instance is not None:
         assert_owned(instance, params, machine_id)
@@ -406,6 +542,10 @@ def ensure_absent(client):
     deadline = time.monotonic() + params["timeout"]
     while True:
         instance = get_or_none(client, "tenant", instance_path(instance_id))
+        if instance is None and not machine_id:
+            # The create failed before NICo assigned a Machine, so the Instance
+            # never held a tray and its absence completes the cleanup.
+            return {"changed": changed, "instance_id": instance_id, "machine_id": "", "status": "Released"}
         if instance is None:
             machine = get_or_none(client, "provider", machine_path(machine_id))
             if machine is None:
@@ -438,17 +578,27 @@ def main():
         network_virtualization_type=dict(type="str", default="ETHERNET_VIRTUALIZER",
                                          choices=["ETHERNET_VIRTUALIZER", "FNN", "FLAT"]),
         flat_ipv4_cidr=dict(type="str", default=""),
-        operating_system_id=dict(type="str", default=""), ipxe_script=dict(type="str", default=""),
-        timeout=dict(type="int", default=1200), poll_interval=dict(type="int", default=10),
+        operating_system_id=dict(type="str", default=""),
+        user_data=dict(type="str", default="", no_log=True), ssh_public_key=dict(type="str", default=""),
+        phone_home_enabled=dict(type="bool", default=True),
+        timeout=dict(type="int", default=2700), poll_interval=dict(type="int", default=10),
     ), supports_check_mode=False)
+    progress = {"outcome": OUTCOME_NOT_CREATED, "instance_id": "", "machine_id": ""}
     try:
         if module.params["timeout"] <= 0 or module.params["poll_interval"] <= 0:
             raise NicoError("timeout and poll_interval must be positive")
         client = NicoClient(module)
-        result = ensure_present(client) if module.params["state"] == "present" else ensure_absent(client)
+        if module.params["state"] == "present":
+            result = ensure_present(client, progress)
+        else:
+            result = ensure_absent(client)
         module.exit_json(**result)
     except NicoError as exc:
-        module.fail_json(msg=str(exc))
+        failure = {"msg": str(exc)}
+        if module.params["state"] == "present":
+            failure.update(nico_create_outcome=progress["outcome"], instance_id=progress["instance_id"],
+                           machine_id=progress["machine_id"])
+        module.fail_json(**failure)
 
 
 if __name__ == "__main__":

@@ -22,8 +22,11 @@ nico_bmaas_vpc_prefix_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_VPC_PREF
 # match the bound OSAC Subnet and the site's HostInband address range.
 nico_bmaas_network_virtualization_type: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_NETWORK_VIRTUALIZATION_TYPE') | default('ETHERNET_VIRTUALIZER', true) }}"
 nico_bmaas_flat_ipv4_cidr: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_FLAT_IPV4_CIDR') }}"
-nico_bmaas_operating_system_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_OPERATING_SYSTEM_ID') }}"
-nico_bmaas_ipxe_script: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_IPXE_SCRIPT') }}"
+# The bare-metal operator resolves the BMI DiskImage through the administrator
+# catalog and passes the approved NICo Operating System as an extra var. It is
+# never taken from the AWX credential, so a BMI cannot boot an image other than
+# the one it reports.
+nico_bmaas_operating_system_id: ""
 nico_bmaas_tenant_auth:
   grant_type: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_TENANT_GRANT_TYPE') | default('client_credentials', true) }}"
   client_id: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_TENANT_CLIENT_ID') }}"
@@ -36,6 +39,12 @@ nico_bmaas_provider_auth:
   client_secret: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_PROVIDER_CLIENT_SECRET') }}"
   username: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_PROVIDER_USERNAME') }}"
   password: "{{ lookup('ansible.builtin.env', 'NICO_BMAAS_PROVIDER_PASSWORD') }}"
-nico_bmaas_timeout: 1800
+# Create waits for the installed OS to phone home, which includes firmware
+# boot, image download and write, and a second boot.
+nico_bmaas_create_timeout: 2700
+# Delete waits for the Instance to disappear and the Machine to return Ready.
+nico_bmaas_delete_timeout: 1800
 nico_bmaas_poll_interval: 10
+# Attempts, 5 seconds apart, to find the tenant user data Secret (2 minutes).
+nico_bmaas_user_data_secret_retries: 24
 nico_bmaas_create_allowed: false

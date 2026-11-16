@@ -65,10 +65,11 @@ leave `NICO_BMAAS_INSTANCE_TYPE_ID` empty. Verify that the tenant account is
 `Ready` with effective `targetedInstanceCreation` for the VPC's Site, and
 that the selected host Machine is unassigned `Ready` with its expected DPU.
 The module checks the Machine and VPC Site before POST and verifies the
-returned Machine ID. This check does not reserve the Machine. Obtain a
-standalone ARM64 OS/boot artifact for BMaaS; the InfraEnv iPXE script in the
-onboarding notes installs hosted-cluster workers. Keep the site/DPU onboarding
-and switch configuration under the NICo site owner's control.
+returned Machine ID. This check does not reserve the Machine. Use the
+standalone ARM64 boot path in [Approved standalone boot path](#approved-standalone-boot-path);
+the InfraEnv iPXE script in the onboarding notes installs hosted-cluster
+workers. Keep the site/DPU onboarding and switch configuration under the NICo
+site owner's control.
 
 The Flat-network guidance below records an alternative zero-DPU path; it is
 not the current Launchpad pilot target.
@@ -93,8 +94,9 @@ and label its networking limitation before enabling create. The seeded
 `tenant1` OSAC Subnet is `10.200.0.0/20`; do not assume it represents the
 recorded site network.
 
-Confirm the boot method: a NICo Operating System ID or a real iPXE script with
-reachable artifacts. An iPXE script that exits proves only NICo allocation.
+The boot method is a catalog NICo Operating System; see
+[Approved standalone boot path](#approved-standalone-boot-path). An iPXE
+script that exits proves only NICo allocation.
 
 **Flat-network pilot mode:** `nico.steps.bare_metal_instance` now accepts
 `NICO_BMAAS_NETWORK_VIRTUALIZATION_TYPE=FLAT` with no NICo Subnet or VPC
@@ -130,9 +132,55 @@ to work around unfinished NICo cleanup. NVIDIA documents the asynchronous
 The recording's mTLS/gRPC access to NICo Core does not supply OSAC with NICo
 REST authorization. The BMI role calls REST with JWT bearer tokens; confirm
 the REST issuer, tenant and provider roles, and a secure credential handoff.
-The InfraEnv iPXE script shown for HostedCluster workers is a CaaS boot path.
-For a standalone BMaaS pilot, agree on the OS or iPXE artifact and on what
-installed-OS signal will count as success.
+The InfraEnv iPXE script shown for HostedCluster workers is a CaaS boot path,
+not the standalone BMaaS boot path.
+
+## Approved standalone boot path
+
+The GB300 Site has no image-based Operating System capability
+(`imageBasedOperatingSystem: false`), so the approved path is a templated iPXE
+NICo Operating System based on the built-in `qcow-image` template. Its
+`qcow-imager` downloads a qcow2 image, verifies its digest, writes it to the
+selected disk, writes the cloud-init NoCloud seed, and reboots into the
+installed OS. A pinned CentOS Stream 10 GenericCloud aarch64 image (XFS root,
+`LABEL=root`) was validated on two trays: it boots, applies the tenant user
+data and SSH key, and phones home. Fedora Cloud is excluded because the imager
+does not handle its btrfs subvolume root.
+
+Register one NICo Operating System per approved OSAC DiskImage and add the
+pair to the `operatingSystems` catalog of the
+[binding file](../../bare-metal-fulfillment-operator/README.md#nico-bmaas-tenant-bindings-pilot).
+The Operating System template parameters are:
+
+| Parameter | Value |
+| --- | --- |
+| `image_url` | HTTP URL of the pinned qcow2 image, reachable from the tenant network |
+| `image_sha` | SHA-256 of that image |
+| `rootfs_label` | Root filesystem label of the image, for example `root` |
+| `efifs_uuid` | UUID of the image EFI System Partition |
+| `image_disk` | Boot disk selector (see the limitation below) |
+| `ds` | `nocloud-net;s=${tenant-cloudinit-url}`; required to deliver the Instance user data |
+
+The Instance requests phone-home, so OSAC reports `RUNNING` only after the
+installed OS posts to the Site phone-home URL. These Site prerequisites are
+owned by the NICo operator:
+
+- `site.phoneHomeUrl` in the NICo REST configuration must be reachable from
+  tenant hosts. The embedded DPU agent listens on port 7777; the default URL
+  uses port 80.
+- The artifact server in `image_url` must be reachable from the tenant network.
+
+Known limitations, to be resolved by the Site operator or NICo:
+
+- `image_disk=smallest` selects the 0-byte BMC USB virtual disks while USB
+  virtual media is enabled, and the `by-path` of the M.2 boot disk differs
+  between trays. Until USB virtual media is disabled or NICo ignores those
+  disks, a pinned `by-id` selector limits one Operating System to one tray.
+- The deployed imager does not create an EFI boot entry for GRUB2/BLS images;
+  the boot relies on the removable-media fallback `\EFI\BOOT\BOOTAA64.EFI`. It
+  also reboots after a failed image write, which appears as a PXE loop until
+  the OSAC create timeout.
+- No NTP server is reachable from the tenant network.
 
 ## Replay the OSAC control plane
 

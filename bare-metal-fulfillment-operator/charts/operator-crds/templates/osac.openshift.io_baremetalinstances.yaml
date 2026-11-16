@@ -450,6 +450,17 @@ spec:
                   attempt was authorized before AAP was launched. A lost launch response or
                   failed job must not cause another POST without Site-side verification.
                 type: boolean
+              nicoCreateOutcome:
+                description: |-
+                  NicoCreateOutcome is the outcome reported by a failed NICo create job.
+                  NotCreated means the job failed before the create request, so delete has
+                  nothing to release in NICo. Uncertain requires Site verification. Created
+                  means the Instance exists and must be released through NICo.
+                enum:
+                - NotCreated
+                - Uncertain
+                - Created
+                type: string
               nicoInstanceID:
                 description: NicoInstanceID is the tenant-owned NICo Instance returned
                   by create.

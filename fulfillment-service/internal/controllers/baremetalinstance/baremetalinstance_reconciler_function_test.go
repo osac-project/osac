@@ -44,6 +44,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/annotations"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/gvks"
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
@@ -508,6 +509,49 @@ var _ = Describe("mutateBMI", func() {
 		var params map[string]string
 		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
 		Expect(params["imageURL"]).To(Equal("quay.io/org/rhel9:latest"))
+		Expect(obj.Annotations).To(HaveKeyWithValue(annotations.DiskImage, "disk-image-1"))
+	})
+
+	It("should keep the DiskImage ID out of templateParameters", func() {
+		// templateParameters is part of the provisioning configuration hash;
+		// adding a key there would relaunch provisioning for existing instances.
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		diskImagesClient := NewMockDiskImagesClient(ctrl)
+		diskImagesClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(privatev1.DiskImagesGetResponse_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: "disk-image-1",
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceRef: "quay.io/org/rhel9:latest",
+					}.Build(),
+				}.Build(),
+			}.Build(), nil)
+
+		t := &task{
+			r: &function{
+				logger:                       logger,
+				bareMetalInstanceTypesClient: defaultFakeBareMetalInstanceTypesClient(),
+				diskImagesClient:             diskImagesClient,
+			},
+			bareMetalInstance: privatev1.BareMetalInstance_builder{
+				Id: "bmi-test",
+				Spec: privatev1.BareMetalInstanceSpec_builder{
+					CatalogItem:  privatev1.BareMetalInstanceCatalogItemReference_builder{Id: "catalog-1"}.Build(),
+					Template:     privatev1.BareMetalInstanceTemplateReference_builder{Id: "osac.templates.default"}.Build(),
+					InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type", Shared: true}.Build(),
+					DiskImage:    privatev1.DiskImageReference_builder{Id: "disk-image-1"}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		var obj bmfov1alpha1.BareMetalInstance
+		Expect(t.mutateBMI(ctx, &obj)).To(Succeed())
+
+		var params map[string]any
+		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
+		Expect(params).To(Equal(map[string]any{"imageURL": "quay.io/org/rhel9:latest"}))
 	})
 
 	It("should return a wrapped error when disk_image resolution fails", func() {
@@ -606,6 +650,7 @@ var _ = Describe("mutateBMI", func() {
 		var params map[string]string
 		Expect(json.Unmarshal([]byte(obj.Spec.TemplateParameters), &params)).To(Succeed())
 		Expect(params).ToNot(HaveKey("imageURL"))
+		Expect(obj.Annotations).ToNot(HaveKey(annotations.DiskImage))
 	})
 
 	It("should let system imageURL override user-provided template_parameters value", func() {

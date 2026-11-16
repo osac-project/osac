@@ -205,6 +205,13 @@ boot artifacts. The next OS install test needs a real iPXE script and boot
 artifacts compatible with the simulated `aarch64` host; a `Ready` result from
 the control plane alone is insufficient.
 
+> **Note:** This section records the simulator run. The BMI path now boots a
+> catalog NICo Operating System selected from the BMI DiskImage, never an
+> inline iPXE script, and always enables phone-home, so NICo `Ready` means the
+> installed OS called back. See the
+> [approved standalone boot path](nico-bmaas-launchpad-pilot.md#approved-standalone-boot-path)
+> and the [binding contract](../../bare-metal-fulfillment-operator/README.md#nico-bmaas-tenant-bindings-pilot).
+
 ## Two-tenant credential binding extension
 
 The next lab run added a second, distinct NICo IdP org, `test-org-2`, with its

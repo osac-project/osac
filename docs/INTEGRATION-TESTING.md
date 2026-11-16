@@ -597,6 +597,7 @@ Touched-area requirements: [component guide](../bare-metal-fulfillment-operator/
 - **Controller deployment, CRDs, pool flows, or Kubernetes wiring:** Envtest alone does not prove the deployed controller path.
 - **Metal3, BCM, Ironic, BMC, power, or hardware semantics:** Static CRDs and HTTP test doubles do not satisfy a real-boundary requirement.
 - **Generated CRDs or Helm CRDs:** Keep generated artifacts synchronized.
+- **NICo BMaaS catalog and create outcome ([DEV] [OSAC-7315](https://redhat.atlassian.net/browse/OSAC-7315)):** `internal/controller/baremetalinstance_nico_test.go` runs under envtest with a fake AAP provider. It covers the bindings `version: 2` Operating System catalog, rejection of unmapped DiskImages before any launch, the Operating System extra var, and delete behavior for `NotCreated`, `Created`, and `Uncertain` create outcomes. No real AAP job or NICo endpoint is exercised.
 
 ### Coverage gaps
 
@@ -634,6 +635,7 @@ Touched-area requirements: [component guide](../osac-aap/AGENTS.md#integration-t
 | Component integration ([DEV] OSAC-5376) | `tests/integration/targets/netris_parent_delete/tasks/baseline.yml`; from `osac-aap/tests/integration/` run `uv run ansible-playbook targets/netris_parent_delete/tasks/baseline.yml -e '@common_vars.yml'`; also registered in `make test` | Real top-level VirtualNetwork and ExternalIPPool delete playbooks dispatch into `osac.templates.netris` and run the VPC/IPAM roles against a local HTTP endpoint; tests cover 404 after lookup, already absent resources, 400 dependency failures, 500 provider failures, allocation → VPC order for VirtualNetwork, and common subnet → allocation order for ExternalIPPool | Real Ansible subprocesses and loopback HTTP transport; the Netris endpoint is a test fixture, and no Kubernetes objects, deployed AAP, operator, switches, or real provider are exercised. No Kind cluster is needed for the focused command; `make test` still creates one for other targets. |
 | Component integration ([DEV] OSAC-6508) | `tests/integration/targets/metallb_l2_detach_annotation/tasks/baseline.yml`; included by `make test` | Two independent Ansible processes read the same ComputeInstance annotation before a barrier releases them to run the detach cleanup task; both must succeed and the annotation must be absent afterward | Real Kind API and Ansible patch behavior; no deployed AAP, operator reconciliation, or MetalLB provider is exercised. |
 | Component integration ([DEV] OSAC-6376) | `tests/integration/targets/netris_external_ip/tasks/baseline.yml`; from `osac-aap/` run `make test`, or after `./setup_test_env.sh` from `tests/integration/` run `KUBECONFIG="$PWD/kubeconfig-osac-test" K8S_AUTH_KUBECONFIG="$PWD/kubeconfig-osac-test" uv run ansible-playbook targets/netris_external_ip/tasks/baseline.yml -e '@common_vars.yml'` | Real top-level ExternalIP create/delete playbooks through the `osac.openshift.io/externalip-contract-version` dispatch into the `osac.templates.netris_external_ip` module against a stateful fake Netris HTTP endpoint: UID-owned /32 reservation, allocation retry reuse, confirmed release absence, exact `osac_result` v1 artifacts, empty-version legacy annotation behavior with real Kind CRs, and zero Kubernetes requests from v1 jobs | Real Kind API and CRs and real Ansible subprocesses; the Netris HTTP endpoint is a stateful test fixture whose atomic duplicate name//32 rejection and lost-create behavior are explicit fixture assumptions, not real Netris rules; no deployed AAP, operator, switches, or real provider. Real-provider Contract coverage is tracked under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). |
+| Unit ([DEV] OSAC-7315) | `tests/unit/test_nico_bmaas_network_mode.py`, `test_nico_bmaas_user_data.py`, `test_nico_bmaas_create_outcome.py`, and `test_nico_bmaas_delete_health.py`; included by `uv run pytest tests/unit` | NICo BMI module: create request body (catalog Operating System, phone-home, user data), Operating System pre-check (Ready, templated iPXE, Site sync, `${tenant-cloudinit-url}` datasource), tenant cloud-config and SSH key composition and rejection before any NICo call, create outcome reported on failure, and delete release checks | NICo REST is a hand-written route-table fake. The `nico_bmaas` role, its user data Secret read, and its `block`/`rescue` artifacts are not executed; no AAP, Kubernetes, or NICo endpoint is contacted. |
 | Component integration (focused) | A target under `tests/integration/targets/`; run the corresponding playbook from `tests/integration/` | The specific role workflow and its documented fixtures | Only the dependencies declared by that target; inspect its setup and overrides before claiming a real boundary. |
 | Contract | No dedicated contract suite; use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task for AAP/provider coverage | No AAP or provider endpoint is exercised as a contract | The Kind API, mock VMS server, and fixture-driven provider behavior do not prove an AAP or provider contract. |
 | E2E | Cross-component OSAC E2E suites | Complete fulfillment and provisioning flows | Depends on the deployed AAP and provider environment. |
@@ -686,6 +688,15 @@ coverage to [OSAC-4850](https://redhat.atlassian.net/browse/OSAC-4850) or the re
 Template publishing OAuth has unit and local mock-server coverage, but no
 deployed test currently proves AAP worker secret delivery or connectivity across
 the Keycloak, AAP, and Fulfillment boundaries. Track that deployed journey under
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+
+NICo BMaaS ([OSAC-7315](https://redhat.atlassian.net/browse/OSAC-7315)) has
+unit coverage of the module only. No Kind target runs the `nico_bmaas` role, so
+its user data Secret read and the `nicoCreateOutcome` artifacts published by
+its `block`/`rescue` are unproven by automation, including whether AWX keeps
+`set_stats` artifacts for failed jobs. The NICo REST contract and the GB300
+install, phone-home, and release behavior are covered only by manual hardware
+evidence; the deployed journey has no runner and remains a gap under
 [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 
 ## osac-csi-driver

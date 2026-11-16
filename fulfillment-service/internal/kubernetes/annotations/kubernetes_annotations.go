@@ -21,3 +21,8 @@ const Project = "osac.openshift.io/project"
 
 // OwnerReference is the annotation key for the OSAC resource that owns a dependent resource.
 const OwnerReference = "osac.openshift.io/owner-reference"
+
+// DiskImage is the ID of the DiskImage a bare-metal instance boots. It is an
+// annotation, not a template parameter, so adding it does not change the
+// provisioning configuration hash of existing instances.
+const DiskImage = "osac.openshift.io/disk-image-id"

@@ -167,11 +167,11 @@ NICo BMaaS requires an administrator-owned ConfigMap in the operator's
 namespace. Set `bmf.configMaps.nicoTenantBindings` to its name; the chart mounts
 its `bindings.yaml` key at `/etc/osac/nico/bindings.yaml`. The optional
 `OSAC_NICO_BINDINGS_CONFIG_PATH` environment variable overrides that path.
-The file contains resource identities and AWX credential IDs, **not** NICo
-credential values:
+The file contains resource identities, AWX credential IDs, and NICo Operating
+System IDs, **not** NICo credential values:
 
 ```yaml
-version: 1
+version: 2
 bindings:
   - osacTenantID: <OSAC tenant ID>
     osacSubnetID: <OSAC Subnet ID>
@@ -179,7 +179,41 @@ bindings:
   - osacTenantID: <second OSAC tenant ID>
     osacSubnetID: <second OSAC Subnet ID>
     credentialIDs: [<AWX required Kubernetes credential ID>, <second AWX NICo credential ID>]
+operatingSystems:
+  - diskImageID: <OSAC DiskImage ID>
+    nicoOperatingSystemID: <NICo Operating System ID that installs that image>
 ```
+
+`operatingSystems` is the site-scoped Operating System catalog. Each entry maps
+one approved OSAC DiskImage (`osac get diskimages <name>` shows its ID) to the
+NICo Operating System that installs that image. Before recording any create
+intent, the operator reads the BMI DiskImage ID from the
+`osac.openshift.io/disk-image-id` annotation, which the fulfillment service
+sets, and passes the mapped Operating System to the AAP create job. A DiskImage
+without an entry fails with `ProvisionTemplateComplete=False`, reason
+`UnsupportedDiskImage`, and never reaches NICo. That rejection is terminal:
+after the DiskImage is added to the catalog, the tenant recreates the BMI.
+Creation requires `version: 2`; a `version: 1` file has no catalog and fails
+creation as a configuration error, which is retried once the ConfigMap is
+fixed. Deletion only needs the tenant binding, so it accepts both versions.
+The NICo Operating System is never taken from the AWX credential.
+
+The catalog Operating System must be a `Ready` templated iPXE definition
+synced to the VPC's Site that references the `${tenant-cloudinit-url}`
+cloud-init datasource (for example `ds=nocloud-net;s=${tenant-cloudinit-url}`
+for the `qcow-image` template). The AAP role checks this before the NICo
+create request. The datasource carries the Instance user data, which holds the
+tenant SSH key, the tenant cloud-config, and the phone-home block. The role
+always creates the Instance with phone-home enabled, so OSAC reports `RUNNING`
+only after the booted OS calls back.
+
+A failed create job reports `nicoCreateOutcome`, which the operator saves in
+`status.nicoCreateOutcome`. `NotCreated` (the job failed before the NICo create
+request) lets delete remove the finalizer without NICo cleanup. `Created`
+saves the Instance and Machine IDs, so delete releases the Instance through
+NICo; an Instance that never got a Machine is released once it is gone.
+`Uncertain` keeps the finalizer until the Site is verified, unless the job
+also reported IDs, which are always saved and released.
 
 `osacTenantID` is the exact BMI `osac.openshift.io/tenant` annotation value
 (currently the OSAC tenant name). `osacSubnetID` is the public OSAC Subnet ID

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -13,11 +14,19 @@ import (
 )
 
 // The binding file is an administrator-owned ConfigMap mount. It contains only
-// OSAC resource IDs and AWX credential IDs; NICo credentials remain in AWX.
-// The selected AWX credential independently checks the tenant and subnet IDs.
+// OSAC resource IDs, AWX credential IDs, and NICo Operating System IDs; NICo
+// credentials remain in AWX. The selected AWX credential independently checks
+// the tenant and subnet IDs.
+//
+// Version 2 adds the site-scoped Operating System catalog, which maps each
+// approved OSAC DiskImage to the NICo Operating System that installs it.
+// Creation requires version 2 and rejects a DiskImage with no catalog entry
+// before any NICo call. Deletion only needs the tenant binding, so it accepts
+// both versions.
 type nicoBindingsFile struct {
-	Version  int                 `json:"version"`
-	Bindings []nicoTenantBinding `json:"bindings"`
+	Version          int                        `json:"version"`
+	Bindings         []nicoTenantBinding        `json:"bindings"`
+	OperatingSystems []nicoOperatingSystemEntry `json:"operatingSystems,omitempty"`
 }
 
 type nicoTenantBinding struct {
@@ -26,17 +35,27 @@ type nicoTenantBinding struct {
 	CredentialIDs []int  `json:"credentialIDs"`
 }
 
-func (r *BareMetalInstanceReconciler) withNicoCredentials(ctx context.Context, bmi *v1alpha1.BareMetalInstance) (context.Context, error) {
+type nicoOperatingSystemEntry struct {
+	DiskImageID           string `json:"diskImageID"`
+	NicoOperatingSystemID string `json:"nicoOperatingSystemID"`
+}
+
+// diskImageIDAnnotation carries the BMI DiskImage ID, set by the fulfillment
+// service. It is an annotation so that it stays out of the provisioning
+// configuration hash.
+const diskImageIDAnnotation = "osac.openshift.io/disk-image-id"
+
+// errNicoDiskImageUnsupported marks a BMI whose DiskImage has no approved NICo
+// Operating System. It is terminal for the create attempt: no NICo call is made.
+var errNicoDiskImageUnsupported = errors.New("DiskImage has no approved NICo Operating System")
+
+func isCleanID(value string) bool {
+	return value != "" && strings.TrimSpace(value) == value
+}
+
+func (r *BareMetalInstanceReconciler) loadNicoBindings() (*nicoBindingsFile, error) {
 	if r.NicoBindingsConfigPath == "" {
 		return nil, fmt.Errorf("NICo tenant bindings are not configured")
-	}
-	if len(bmi.Spec.NetworkAttachments) != 1 {
-		return nil, fmt.Errorf("NICo tenant binding requires one OSAC Subnet")
-	}
-	tenantID := bmi.Annotations["osac.openshift.io/tenant"]
-	subnetID := bmi.Spec.NetworkAttachments[0].SubnetRef
-	if tenantID == "" || subnetID == "" {
-		return nil, fmt.Errorf("NICo tenant binding requires a BMI tenant and Subnet ID")
 	}
 	data, err := os.ReadFile(r.NicoBindingsConfigPath)
 	if err != nil {
@@ -46,17 +65,16 @@ func (r *BareMetalInstanceReconciler) withNicoCredentials(ctx context.Context, b
 	if err := yaml.UnmarshalStrict(data, &config); err != nil {
 		return nil, fmt.Errorf("parse NICo tenant bindings: %w", err)
 	}
-	if config.Version != 1 || len(config.Bindings) == 0 {
-		return nil, fmt.Errorf("NICo tenant bindings require version 1 and at least one binding")
+	if (config.Version != 1 && config.Version != 2) || len(config.Bindings) == 0 {
+		return nil, fmt.Errorf("NICo tenant bindings require version 1 or 2 and at least one binding")
+	}
+	if config.Version == 1 && len(config.OperatingSystems) > 0 {
+		return nil, fmt.Errorf("NICo Operating System catalog requires bindings version 2")
 	}
 	seen := make(map[string]struct{}, len(config.Bindings))
-	var selected *nicoTenantBinding
 	for i := range config.Bindings {
 		binding := &config.Bindings[i]
-		if binding.OSACTenantID == "" || binding.OSACSubnetID == "" ||
-			strings.TrimSpace(binding.OSACTenantID) != binding.OSACTenantID ||
-			strings.TrimSpace(binding.OSACSubnetID) != binding.OSACSubnetID ||
-			len(binding.CredentialIDs) == 0 {
+		if !isCleanID(binding.OSACTenantID) || !isCleanID(binding.OSACSubnetID) || len(binding.CredentialIDs) == 0 {
 			return nil, fmt.Errorf("NICo tenant binding %d is incomplete", i)
 		}
 		key := binding.OSACTenantID + "\x00" + binding.OSACSubnetID
@@ -74,12 +92,62 @@ func (r *BareMetalInstanceReconciler) withNicoCredentials(ctx context.Context, b
 			}
 			credentialIDs[id] = struct{}{}
 		}
+	}
+	diskImages := make(map[string]struct{}, len(config.OperatingSystems))
+	for i, entry := range config.OperatingSystems {
+		if !isCleanID(entry.DiskImageID) || !isCleanID(entry.NicoOperatingSystemID) {
+			return nil, fmt.Errorf("NICo Operating System catalog entry %d is incomplete", i)
+		}
+		if _, exists := diskImages[entry.DiskImageID]; exists {
+			return nil, fmt.Errorf("duplicate NICo Operating System catalog entry for one DiskImage")
+		}
+		diskImages[entry.DiskImageID] = struct{}{}
+	}
+	return &config, nil
+}
+
+// withNicoCredentials selects the AWX credentials bound to the BMI tenant and
+// Subnet. It also returns the validated bindings file, so a reconcile reads it
+// once.
+func (r *BareMetalInstanceReconciler) withNicoCredentials(ctx context.Context, bmi *v1alpha1.BareMetalInstance) (context.Context, *nicoBindingsFile, error) {
+	if len(bmi.Spec.NetworkAttachments) != 1 {
+		return nil, nil, fmt.Errorf("NICo tenant binding requires one OSAC Subnet")
+	}
+	tenantID := bmi.Annotations["osac.openshift.io/tenant"]
+	subnetID := bmi.Spec.NetworkAttachments[0].SubnetRef
+	if tenantID == "" || subnetID == "" {
+		return nil, nil, fmt.Errorf("NICo tenant binding requires a BMI tenant and Subnet ID")
+	}
+	config, err := r.loadNicoBindings()
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range config.Bindings {
+		binding := &config.Bindings[i]
 		if binding.OSACTenantID == tenantID && binding.OSACSubnetID == subnetID {
-			selected = binding
+			return provisioning.WithAAPCredentialIDs(ctx, binding.CredentialIDs), config, nil
 		}
 	}
-	if selected == nil {
-		return nil, fmt.Errorf("no NICo tenant binding for BMI tenant and Subnet")
+	return nil, nil, fmt.Errorf("no NICo tenant binding for BMI tenant and Subnet")
+}
+
+// nicoOperatingSystemFor returns the NICo Operating System approved for the
+// BMI DiskImage. It is only used before a create. A version 1 file has no
+// catalog, so it is a configuration error. A BMI without a DiskImage ID, or
+// with a DiskImage that has no catalog entry, gets errNicoDiskImageUnsupported;
+// there is no default Operating System.
+func nicoOperatingSystemFor(config *nicoBindingsFile, bmi *v1alpha1.BareMetalInstance) (string, error) {
+	if config.Version != 2 {
+		return "", fmt.Errorf("NICo BMI creation requires the Operating System catalog in bindings version 2")
 	}
-	return provisioning.WithAAPCredentialIDs(ctx, selected.CredentialIDs), nil
+	diskImageID := bmi.Annotations[diskImageIDAnnotation]
+	if diskImageID == "" {
+		return "", fmt.Errorf("%w: BMI has no DiskImage ID", errNicoDiskImageUnsupported)
+	}
+	for _, entry := range config.OperatingSystems {
+		if entry.DiskImageID == diskImageID {
+			return entry.NicoOperatingSystemID, nil
+		}
+	}
+	return "", fmt.Errorf("%w: DiskImage %s", errNicoDiskImageUnsupported, diskImageID)
 }

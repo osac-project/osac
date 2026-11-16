@@ -889,6 +889,9 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 			return fmt.Errorf("failed to resolve disk image '%s': %w", diskImageKey, diErr)
 		}
 		params["imageURL"] = diResp.GetObject().GetSpec().GetSourceRef()
+		// Backends that map an approved image to a provider OS (for example
+		// NICo) need the stable DiskImage identity, not only its source.
+		object.Annotations[annotations.DiskImage] = diResp.GetObject().GetId()
 	}
 	if len(params) > 0 {
 		paramsJSON, err := json.Marshal(params)

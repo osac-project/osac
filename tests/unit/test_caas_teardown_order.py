@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock, call
 
 import pytest
+import yaml
 
 from tests.e2e.caas.sanity import test_cluster_create as scenario
 from tests.e2e.core import helpers, runner
@@ -18,6 +19,10 @@ from tests.e2e.core.metering import MeteringCollector
 
 _PARENT = "clusterorder"
 _INFRAENV = "infraenv.agent-install.openshift.io"
+_AAP_HOSTED_CLUSTER_DELETE = (
+    Path(__file__).resolve().parents[2]
+    / "osac-aap/collections/ansible_collections/osac/service/roles/hosted_cluster/tasks/delete_hosted_cluster.yaml"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +49,19 @@ def _wait(k8s: K8sClient, observe: Mock, final_snapshot: Mock) -> None:
     )
 
 
+def test_parent_wait_budget_covers_aap_hostedcluster_wait_with_margin() -> None:
+    tasks = yaml.safe_load(_AAP_HOSTED_CLUSTER_DELETE.read_text())
+    hosted_cluster_wait = next(
+        task for task in tasks if task.get("name") == "Wait for HostedCluster to finish deleting"
+    )
+    aap_scheduled_sleep_seconds = int(hosted_cluster_wait["retries"]) * int(hosted_cluster_wait["delay"])
+    e2e_scheduled_sleep_seconds = (scenario._NATURAL_CLUSTER_ORDER_DELETE_RETRIES - 1) * (
+        scenario._AAP_HOSTED_CLUSTER_DELETE_DELAY_SECONDS
+    )
+
+    assert e2e_scheduled_sleep_seconds >= aap_scheduled_sleep_seconds + 300
+
+
 def test_parent_removal_precedes_dependent_gc_with_separate_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock(spec=K8sClient)
     k8s.is_absent.side_effect = [False, False, True, False, True]
@@ -64,7 +82,7 @@ def test_parent_removal_precedes_dependent_gc_with_separate_budgets(monkeypatch:
     assert observe.call_count == 5
     assert sleep.call_args_list == [call(10), call(10), call(5)]
     parent_kwargs = parent_poll.call_args.kwargs
-    assert (parent_kwargs["retries"], parent_kwargs["delay"]) == (121, 10)
+    assert (parent_kwargs["retries"], parent_kwargs["delay"]) == (scenario._NATURAL_CLUSTER_ORDER_DELETE_RETRIES, 10)
     assert parent_kwargs["retry_on_error"] is True
     infraenv_kwargs = infraenv_poll.call_args.kwargs
     assert (infraenv_kwargs["retries"], infraenv_kwargs["delay"]) == (60, 5)
@@ -98,7 +116,7 @@ def test_existing_parent_without_phase_does_not_start_gc(monkeypatch: pytest.Mon
 @pytest.mark.parametrize(
     ("stage", "message", "polls", "sleeps", "delay"),
     [
-        ("parent", "ClusterOrder natural teardown timed out", 121, 120, 10),
+        ("parent", "ClusterOrder natural teardown timed out", 751, 750, 10),
         ("infraenv", "InfraEnv garbage collection timed out after ClusterOrder removal", 61, 59, 5),
     ],
 )

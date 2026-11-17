@@ -6,6 +6,7 @@
     - [Resume](#resume)
   - [2. Install the Selected Operators](#2-install-the-selected-operators)
     - [One OLM pattern](#one-olm-pattern)
+      - [Install the Selected OLM Operators](#install-the-selected-olm-operators)
     - [Namespace preparation](#namespace-preparation)
     - [Operator acceptance prerequisites](#operator-acceptance-prerequisites)
   - [3. Shared Certificates, Trust and Credentials](#3-shared-certificates-trust-and-credentials)
@@ -123,15 +124,18 @@ Use the [OpenShift operator installation procedure](https://docs.redhat.com/en/d
 
 All OLM rows use `source: redhat-operators` and `sourceNamespace: openshift-marketplace`. `startingCSV` is an initial selection, not a permanent upgrade lock.
 
+#### Install the Selected OLM Operators
+
 | Operator | Namespace | Channel | CSV Pin | Approval Strategy | CatalogSource | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | cert-manager | `cert-manager-operator` | `stable-v1` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `openshift-cert-manager-operator`; use the recommended AllNamespaces installation mode for cert-manager Operator 1.15.0 and later; see the scope note below |
-| trust-manager | `cert-manager` | Not OLM | Not a CSV: standalone `v0.20.0` | Reviewed release manifest/adoption | Not applicable | Install after cert-manager webhook readiness; do not invent a Subscription |
 | MetalLB | `metallb-system` | `stable` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `metallb-operator`; OwnNamespace; only with MetalLB |
 | LVMS | `openshift-storage` | `stable-<cluster-major.minor>` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `lvms-operator`; OwnNamespace; only with LVMS |
 | AMQ Streams | `osac-kafka` | `stable` | No cross-release fixed pin; review resolved CSV | Manual | `redhat-operators` | Package/Subscription `amq-streams`; OwnNamespace; only in-cluster Kafka |
 | AAP | `ansible-aap` | `stable-2.6-cluster-scoped` | `aap-operator.v2.6.0-0.1787258256` | Manual, exact pin | `redhat-operators` | Package `ansible-automation-platform-operator`; Subscription `dev-ansible-automation-platform`; AllNamespaces |
 | OpenShift Virtualization / VMaaS | `openshift-cnv` | `stable` | None specified; record resolved CSV | Automatic | `redhat-operators` | Package/Subscription `kubevirt-hyperconverged`; OperatorGroup `kubevirt-hyperconverged-group` with `spec.targetNamespaces: [openshift-cnv]`; OwnNamespace; VMaaS only |
+
+> trust-manager is a required non-OLM runtime — see §3 "trust-manager release contract" below.
 
 ### Namespace preparation
 

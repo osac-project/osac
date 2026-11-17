@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 
 from tests.e2e.caas.deletion_diagnostics import snapshot_cluster_deletion
+from tests.e2e.core.failure_report import capture_failure, capture_snapshot
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
@@ -634,6 +635,7 @@ def _assert_catalog_created_cluster(
 
 @pytest.mark.metering
 def test_cluster_create(
+    request: pytest.FixtureRequest,
     cli: OsacCLI,
     grpc: GRPCClient,
     private_grpc: GRPCClient,
@@ -711,8 +713,12 @@ def test_cluster_create(
 
         # Scale back before deletion.
         cli.scale_cluster(uuid=uuid, node_set=cluster.worker_node_set, size=cluster.original_size)
+        capture_snapshot(request.config, request.node.nodeid)
         cli.delete_cluster(uuid=uuid)
         _assert_cluster_deleted(grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, cluster=cluster)
+    except (Exception, pytest.fail.Exception) as exc:
+        capture_failure(request.config, exc, request.node.nodeid)
+        raise
     finally:
         if uuid:
             with contextlib.suppress(subprocess.SubprocessError):

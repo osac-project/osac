@@ -108,18 +108,7 @@ def register_host_snapshot(name: str, kubectl: list[str], bmh_namespace: str) ->
 
     def source(directory: Path, window: failure_snapshot.Window) -> None:
         try:
-            hosts = json.loads(
-                run(
-                    *kubectl,
-                    "get",
-                    "bmh",
-                    "-n",
-                    bmh_namespace,
-                    "-o",
-                    "json",
-                    timeout=failure_snapshot.SOURCE_COMMAND_TIMEOUT_S,
-                )
-            )
+            hosts = json.loads(run(*kubectl, "get", "bmh", "-n", bmh_namespace, "-o", "json", timeout=window.timeout()))
         except Exception as exc:
             failure_snapshot.record_error(directory, "bmh", f"{type(exc).__name__}: {exc}")
             return

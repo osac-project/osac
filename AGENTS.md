@@ -72,6 +72,11 @@ Links lead to scoped instructions; use the owning component for implementation.
 
 ## Shared API contracts
 
+- Preserve the checked-in `go.work`, declared module/import paths and relative
+  sibling `replace` entries. For shared Go dependency changes, inspect affected
+  `go.mod` files together with the workspace, Containerfiles and build workflows.
+- Use documented component image targets; builds that copy workspace/sibling
+  modules need the monorepo root as context, not an isolated component directory.
 - `proto/private/` is the fulfillment API source of truth; `proto/tests/`
   contains test-only contracts. `proto/public/` and `proto/gen/` are generated.
 - Fulfillment, operator, metering and CSI Go code import the shared
@@ -110,6 +115,10 @@ Links lead to scoped instructions; use the owning component for implementation.
 
 - Start new work on a feature branch based on upstream's default branch; never
   commit to `main`. Keep an existing PR's branch for updates.
+- Before creating another worktree for an existing task/PR, inspect
+  `git worktree list` and reuse the matching branch/checkout when available.
+  `osac-new-worktree` in `tools/osac-helpers.sh` creates and bootstraps a new
+  branch/worktree; it is not a lookup or resume operation.
 - Before pushing, inspect `git remote -v`; identify upstream and fork by URL,
   not remote name. Push feature branches only to the contributor fork, never
   upstream. Stop and ask if roles are unclear.
@@ -160,6 +169,10 @@ Links lead to scoped instructions; use the owning component for implementation.
 
 ### Task-specific reading
 
+- Before concurrent integration environments, read
+  [multi-branch isolation](docs/MULTI-BRANCH-ISOLATION.md) and verify current
+  Make/script isolation parameters and cleanup scope.
+  A separate checkout or namespace alone does not guarantee environment isolation.
 - Before networking planning, implementation or review (including IP, MAC or
   attachments), read [networking decisions](docs/agent-context/networking-decisions.md)
   and applicable accepted designs; identify overlapping commitments.

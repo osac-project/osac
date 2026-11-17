@@ -48,8 +48,9 @@ Read the applicable references before changing behavior:
 - Edit `api/v1alpha1/`, run `make manifests generate helm-crds check-helm-crds`
   from this component, and review both generated CRDs and chart output.
 - Run `make test` for Envtest coverage and the local chart checks below.
-  Use `test/integration/` for deployed controller wiring; retain the networking
-  cleanup ownership boundary instead of expanding BMF into network teardown.
+  Use `test/integration/` for deployed controller wiring. Leave ExternalIP and
+  ExternalIPAttachment cleanup to the OSAC operator; BMF still owns its
+  NetworkAttachment teardown after the networking cleanup finalizer clears.
 
 ## Integration Testing
 

@@ -93,6 +93,32 @@ def test_create_external_ip_sets_project_metadata(monkeypatch: pytest.MonkeyPatc
     ]
 
 
+def test_create_external_ip_pool_sends_supported_spec_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    calls: list[dict[str, Any]] = []
+
+    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append({"service": service, "data": data})
+        return {"object": {"id": "external-ip-pool-id"}}
+
+    monkeypatch.setattr(client, "call", capture_call)
+
+    result = client.create_external_ip_pool(name="e2e-pool", cidrs=["192.0.2.0/30"])
+
+    assert result == "external-ip-pool-id"
+    assert calls == [
+        {
+            "service": f"{PRIVATE_API}.ExternalIPPools/Create",
+            "data": {
+                "object": {
+                    "metadata": {"name": "e2e-pool"},
+                    "spec": {"cidrs": ["192.0.2.0/30"], "ip_family": "IP_FAMILY_IPV4"},
+                }
+            },
+        }
+    ]
+
+
 def test_create_and_delete_shared_baremetal_instance_type(monkeypatch: pytest.MonkeyPatch) -> None:
     client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
     calls: list[dict[str, Any]] = []
@@ -166,9 +192,7 @@ def test_create_baremetal_instance_type_uses_explicit_host_selector(monkeypatch:
     selector = {"osac.openshift.io/host-type": "ci-worker"}
 
     assert (
-        client.create_baremetal_instance_type(
-            name="ci-worker-bm", fabric_port="data-0", host_label_selector=selector
-        )
+        client.create_baremetal_instance_type(name="ci-worker-bm", fabric_port="data-0", host_label_selector=selector)
         == "bmit-custom-shared"
     )
     assert captured["data"]["object"]["spec"]["host_label_selector"] == {"match_labels": selector}

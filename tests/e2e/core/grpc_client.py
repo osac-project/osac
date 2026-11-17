@@ -326,21 +326,10 @@ class GRPCClient:
 
     # ExternalIPPool operations (private API only)
 
-    def create_external_ip_pool(
-        self, *, name: str, cidrs: list[str], ip_family: str = "IP_FAMILY_IPV4", implementation_strategy: str = ""
-    ) -> str:
+    def create_external_ip_pool(self, *, name: str, cidrs: list[str], ip_family: str = "IP_FAMILY_IPV4") -> str:
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.ExternalIPPools/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name),
-                    "spec": {
-                        "cidrs": cidrs,
-                        "ip_family": ip_family,
-                        "implementation_strategy": implementation_strategy,
-                    },
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name), "spec": {"cidrs": cidrs, "ip_family": ip_family}}},
         )
         return response["object"]["id"]
 
@@ -967,10 +956,7 @@ class GRPCClient:
             data={
                 "object": {
                     "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {
-                        "virtual_network": {"id": virtual_network_id},
-                        "external_ip": {"id": external_ip_id},
-                    },
+                    "spec": {"virtual_network": {"id": virtual_network_id}, "external_ip": {"id": external_ip_id}},
                 }
             },
         )

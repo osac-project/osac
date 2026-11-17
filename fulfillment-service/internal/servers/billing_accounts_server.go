@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -86,7 +87,12 @@ func (b *BillingAccountsServerBuilder) Build() (result *BillingAccountsServer, e
 // provider_account_reference never appears here: the public message does not declare it, because CleanAPI strips
 // it at proto generation.
 func (s *BillingAccountsServer) List(ctx context.Context,
-	request *publicv1.BillingAccountsListRequest) (*publicv1.BillingAccountsListResponse, error) {
+	request *publicv1.BillingAccountsListRequest) (response *publicv1.BillingAccountsListResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
 	privateRequest := &privatev1.BillingAccountsListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
 	if request.HasLimit() {
@@ -111,7 +117,7 @@ func (s *BillingAccountsServer) List(ctx context.Context,
 		publicItems = append(publicItems, publicItem)
 	}
 
-	response := &publicv1.BillingAccountsListResponse{}
+	response = &publicv1.BillingAccountsListResponse{}
 	response.SetSize(int32(len(publicItems))) // #nosec G115 -- bounded by page size
 	response.SetTotal(privateResponse.GetTotal())
 	response.SetItems(publicItems)

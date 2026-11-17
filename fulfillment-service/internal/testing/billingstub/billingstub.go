@@ -13,8 +13,8 @@ language governing permissions and limitations under the License.
 
 // Package billingstub is a deterministic HTTP stand-in for the M360 API, driven by the same
 // billingfake.Scenario as the in-process fake. Pointing a real M360 configuration at it exercises the real adapter
-// without credentials or a live tenant. It serves reads and the scalar externalId account PUT; all other writes
-// are rejected and recorded. Every Stub owns its account state and request log (no globals).
+// without credentials or a live tenant. It serves reads only; all writes are rejected and recorded. External
+// administration is scripted with SetScenario. Every Stub owns its account state and request log (no globals).
 package billingstub
 
 import (
@@ -26,8 +26,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
-	"io"
 	"maps"
 	"math/big"
 	"net"
@@ -54,7 +52,6 @@ type Request struct {
 	Authorization string
 	Op            string
 	Failed        bool
-	ExternalID    string
 }
 
 // Stub is a scripted M360 server that records its requests.
@@ -62,7 +59,6 @@ type Stub struct {
 	mu       sync.Mutex
 	scenario billingfake.Scenario
 	accounts []billingfake.AccountSpec
-	denied   map[string]bool
 	failed   map[string]int
 	requests []Request
 	server   *httptest.Server
@@ -158,22 +154,13 @@ func (s *Stub) Close() {
 	}
 }
 
-// SetScenario replaces account state and restarts failure counting and write denials. The request log is kept.
+// SetScenario replaces account state and restarts failure counting. The request log is kept.
 func (s *Stub) SetScenario(scenario billingfake.Scenario) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.scenario, s.failed = scenario, map[string]int{}
 	s.scenario.Failures = maps.Clone(scenario.Failures)
 	s.accounts = slices.Clone(scenario.Accounts)
-	s.denied = map[string]bool{}
-}
-
-// SetCorrelationWriteDenied injects an account-specific unsupported PUT (405), without affecting reads or other
-// accounts. This is a capability failure fixture, not a claim that M360 authorization failures mean unsupported.
-func (s *Stub) SetCorrelationWriteDenied(id string, denied bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.denied[id] = denied
 }
 
 // Requests returns a copy of the recorded requests in order.
@@ -214,7 +201,7 @@ var (
 	attrsPath     = regexp.MustCompile(`^/services/([^/]+)/priceable-attributes$`)
 )
 
-// ServeHTTP records the request and applies scripted failures. Account reads and writes share the same lock.
+// ServeHTTP records the request and applies scripted failures. Reads and scenario replacement share the same lock.
 func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -237,11 +224,7 @@ func (s *Stub) route(request *Request, r *http.Request) (int, any) {
 	path := versionPrefix.ReplaceAllString(r.URL.Path, "")
 	query := r.URL.Query()
 	var serve func() (int, any)
-	if r.Method == http.MethodPut && strings.HasPrefix(path, "/accounts/") &&
-		!strings.Contains(strings.TrimPrefix(path, "/accounts/"), "/") {
-		request.Op = "SetCorrelationValue"
-		serve = func() (int, any) { return s.updateAccount(request, r, strings.TrimPrefix(path, "/accounts/")) }
-	} else if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet {
 		return http.StatusMethodNotAllowed, nil
 	} else {
 		switch {
@@ -367,35 +350,6 @@ func (s *Stub) account(id string) (int, any) {
 		if a.ID == id {
 			return envelope(wireAccount(a))
 		}
-	}
-	return http.StatusNotFound, nil
-}
-
-// updateAccount implements only the documented scalar externalId PUT. Writes return the camelCase DTO, not
-// the PascalCase GET row or list envelope. Subsequent GETs and lists read the retained value.
-func (s *Stub) updateAccount(request *Request, r *http.Request, id string) (int, any) {
-	var fields map[string]json.RawMessage
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 4096))
-	if decoder.Decode(&fields) != nil || len(fields) != 1 {
-		return http.StatusBadRequest, nil
-	}
-	value, ok := fields["externalId"]
-	if !ok || string(value) == "null" || json.Unmarshal(value, &request.ExternalID) != nil {
-		return http.StatusBadRequest, nil
-	}
-	if !errors.Is(decoder.Decode(new(any)), io.EOF) {
-		return http.StatusBadRequest, nil
-	}
-	for i := range s.accounts {
-		a := &s.accounts[i]
-		if a.ID != id {
-			continue
-		}
-		if s.denied[id] {
-			return http.StatusMethodNotAllowed, nil
-		}
-		a.ExternalID = request.ExternalID
-		return http.StatusOK, map[string]any{"id": a.ID, "name": a.Name, "externalId": a.ExternalID}
 	}
 	return http.StatusNotFound, nil
 }

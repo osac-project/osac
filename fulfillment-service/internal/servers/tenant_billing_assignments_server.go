@@ -118,7 +118,12 @@ func (s *TenantBillingAssignmentsServer) toPrivate(ctx context.Context, in *publ
 
 // List maps the public shared list request to the private one and the private response back to public items.
 func (s *TenantBillingAssignmentsServer) List(ctx context.Context,
-	request *publicv1.TenantBillingAssignmentsListRequest) (*publicv1.TenantBillingAssignmentsListResponse, error) {
+	request *publicv1.TenantBillingAssignmentsListRequest) (response *publicv1.TenantBillingAssignmentsListResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
 	privateRequest := &privatev1.TenantBillingAssignmentsListRequest{}
 	privateRequest.SetOffset(request.GetOffset())
 	if request.HasLimit() {
@@ -142,7 +147,7 @@ func (s *TenantBillingAssignmentsServer) List(ctx context.Context,
 		publicItems = append(publicItems, publicItem)
 	}
 
-	response := &publicv1.TenantBillingAssignmentsListResponse{}
+	response = &publicv1.TenantBillingAssignmentsListResponse{}
 	response.SetSize(int32(len(publicItems))) // #nosec G115 -- bounded by page size
 	response.SetTotal(privateResponse.GetTotal())
 	response.SetItems(publicItems)
@@ -151,7 +156,12 @@ func (s *TenantBillingAssignmentsServer) List(ctx context.Context,
 
 // Get maps the public request to the private one and the result back.
 func (s *TenantBillingAssignmentsServer) Get(ctx context.Context,
-	request *publicv1.TenantBillingAssignmentsGetRequest) (*publicv1.TenantBillingAssignmentsGetResponse, error) {
+	request *publicv1.TenantBillingAssignmentsGetRequest) (response *publicv1.TenantBillingAssignmentsGetResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
 	privateRequest := &privatev1.TenantBillingAssignmentsGetRequest{}
 	privateRequest.SetId(request.GetId())
 
@@ -163,14 +173,19 @@ func (s *TenantBillingAssignmentsServer) Get(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	response := &publicv1.TenantBillingAssignmentsGetResponse{}
+	response = &publicv1.TenantBillingAssignmentsGetResponse{}
 	response.SetObject(publicObject)
 	return response, nil
 }
 
 // Create maps the public request's object to the private shape, delegates, and maps the result back.
 func (s *TenantBillingAssignmentsServer) Create(ctx context.Context,
-	request *publicv1.TenantBillingAssignmentsCreateRequest) (*publicv1.TenantBillingAssignmentsCreateResponse, error) {
+	request *publicv1.TenantBillingAssignmentsCreateRequest) (response *publicv1.TenantBillingAssignmentsCreateResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
 	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
 		return nil, err
 	}
@@ -189,7 +204,7 @@ func (s *TenantBillingAssignmentsServer) Create(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	response := &publicv1.TenantBillingAssignmentsCreateResponse{}
+	response = &publicv1.TenantBillingAssignmentsCreateResponse{}
 	response.SetObject(publicObject)
 	return response, nil
 }
@@ -197,7 +212,12 @@ func (s *TenantBillingAssignmentsServer) Create(ctx context.Context,
 // Update maps the public request's object and update mask to the private shape, delegates, and maps the result
 // back.
 func (s *TenantBillingAssignmentsServer) Update(ctx context.Context,
-	request *publicv1.TenantBillingAssignmentsUpdateRequest) (*publicv1.TenantBillingAssignmentsUpdateResponse, error) {
+	request *publicv1.TenantBillingAssignmentsUpdateRequest) (response *publicv1.TenantBillingAssignmentsUpdateResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
 	// Authorize the stored interval before validating/maps of any caller-controlled fields.
 	if _, err := requireAdapter(s.private.provider); err != nil {
 		return nil, err
@@ -205,9 +225,7 @@ func (s *TenantBillingAssignmentsServer) Update(ctx context.Context,
 	if request.GetObject().GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
-	_, err := database.WithNewTx(ctx, func(c context.Context) (*privatev1.TenantBillingAssignment, error) {
-		return s.private.currentAssignment(c, request.GetObject().GetId())
-	})
+	_, err = s.private.currentAssignment(ctx, request.GetObject().GetId())
 	if err != nil {
 		return nil, s.private.mapTenantBillingAssignmentError(ctx, err)
 	}
@@ -230,7 +248,7 @@ func (s *TenantBillingAssignmentsServer) Update(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	response := &publicv1.TenantBillingAssignmentsUpdateResponse{}
+	response = &publicv1.TenantBillingAssignmentsUpdateResponse{}
 	response.SetObject(publicObject)
 	return response, nil
 }

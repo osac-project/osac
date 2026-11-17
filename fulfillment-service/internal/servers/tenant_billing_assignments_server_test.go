@@ -100,7 +100,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 	It("propagates FAILED_PRECONDITION when billing is disabled", func() {
 		fake := billingfake.New(billingfake.Scenario{})
 		adminCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
-		_, err := build(billing.NewProvider("", fake, nil)).List(adminCtx, &publicv1.TenantBillingAssignmentsListRequest{})
+		_, err := billingRPC(adminCtx, build(billing.NewProvider("", fake, nil)).List, &publicv1.TenantBillingAssignmentsListRequest{})
 		st, ok := status.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(st.Code()).To(Equal(codes.FailedPrecondition))
@@ -119,7 +119,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 	It("rejects reserved public metadata without converting the validation error to Internal", func() {
 		fake := billingfake.New(billingfake.Scenario{})
 		caller := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
-		_, err := build(fake.Provider()).Create(caller, publicv1.TenantBillingAssignmentsCreateRequest_builder{
+		_, err := billingRPC(caller, build(fake.Provider()).Create, publicv1.TenantBillingAssignmentsCreateRequest_builder{
 			Object: publicv1.TenantBillingAssignment_builder{Metadata: publicv1.Metadata_builder{
 				Name: "reserved", Labels: map[string]string{"admin.osac.openshift.io/private": "forbidden"},
 			}.Build()}.Build(),
@@ -128,18 +128,59 @@ var _ = Describe("Tenant billing assignments server", func() {
 		Expect(fake.Calls()).To(BeEmpty())
 	})
 
+	DescribeTable("rolls private assignment writes back when the actual public output mapper fails", func(replace bool) {
+		first, second := uuid.New(), uuid.New()
+		seedAccounts(first, second)
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: first, ExternalID: "first-provider-token", State: billing.AccountActive},
+			{ID: second, ExternalID: "second-provider-token", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		caller := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+		object := publicv1.TenantBillingAssignment_builder{
+			Metadata: publicv1.Metadata_builder{Name: "mapping-rollback"}.Build(),
+			Spec: publicv1.TenantBillingAssignmentSpec_builder{
+				Tenant:         publicv1.TenantReference_builder{Id: testTenant}.Build(),
+				BillingAccount: publicv1.BillingAccountReference_builder{Id: first}.Build(),
+			}.Build(),
+		}.Build()
+		if replace {
+			created, err := billingRPC(caller, server.Create, publicv1.TenantBillingAssignmentsCreateRequest_builder{Object: object}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			object = created.GetObject()
+			object.GetSpec().SetBillingAccount(publicv1.BillingAccountReference_builder{Id: second}.Build())
+		}
+		rows := func(table string) string {
+			var value string
+			// Table names are fixed by this fixture, never request input.
+			Expect(testPool.QueryRow(ctx, `select coalesce(jsonb_agg(to_jsonb(b) order by id),'[]'::jsonb)::text from `+table+` b`).Scan(&value)).To(Succeed())
+			return value
+		}
+		accountsBefore, intervalsBefore := rows("billing_accounts"), rows("tenant_billing_assignments")
+		server.outMapper.strict = true
+		var err error
+		if replace {
+			_, err = billingRPC(caller, server.Update, publicv1.TenantBillingAssignmentsUpdateRequest_builder{Object: object}.Build())
+		} else {
+			_, err = billingRPC(caller, server.Create, publicv1.TenantBillingAssignmentsCreateRequest_builder{Object: object}.Build())
+		}
+		Expect(status.Code(err)).To(Equal(codes.Internal))
+		Expect(rows("billing_accounts")).To(Equal(accountsBefore), "token and observation must roll back after private success")
+		Expect(rows("tenant_billing_assignments")).To(Equal(intervalsBefore), "the old current interval and history must be unchanged")
+		Expect(fake.Count("SetCorrelationValue")).To(BeZero())
+	}, Entry("Create", false), Entry("replacement Update", true))
+
 	DescribeTable("creates, gets, and lists an assignment end to end through the public API", func(tenants collections.Set[string]) {
 		id := uuid.New()
 		fake := billingfake.New(billingfake.Scenario{
-			CorrelationWrite: true,
-			Accounts:         []billingfake.AccountSpec{{ID: id, State: billing.AccountActive}},
+			Accounts: []billingfake.AccountSpec{{ID: id, State: billing.AccountActive}},
 		})
 		server := build(fake.Provider())
 		adminCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: tenants})
 
 		seedAccounts(id)
 
-		created, err := server.Create(adminCtx, publicv1.TenantBillingAssignmentsCreateRequest_builder{
+		created, err := billingRPC(adminCtx, server.Create, publicv1.TenantBillingAssignmentsCreateRequest_builder{
 			Object: publicv1.TenantBillingAssignment_builder{
 				Metadata: publicv1.Metadata_builder{Name: "asg-1"}.Build(),
 				Spec: publicv1.TenantBillingAssignmentSpec_builder{
@@ -149,19 +190,15 @@ var _ = Describe("Tenant billing assignments server", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(created.GetObject().GetStatus().GetConnectionState()).To(Equal(
-			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
+			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING))
 
-		got, err := database.WithNewTx(adminCtx, func(ctx context.Context) (*publicv1.TenantBillingAssignmentsGetResponse, error) {
-			return server.Get(ctx, publicv1.TenantBillingAssignmentsGetRequest_builder{
-				Id: created.GetObject().GetId(),
-			}.Build())
-		})
+		got, err := billingRPC(adminCtx, server.Get, publicv1.TenantBillingAssignmentsGetRequest_builder{
+			Id: created.GetObject().GetId(),
+		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.GetObject().GetSpec().GetTenant().GetId()).To(Equal(testTenant))
 
-		listed, err := database.WithNewTx(adminCtx, func(ctx context.Context) (*publicv1.TenantBillingAssignmentsListResponse, error) {
-			return server.List(ctx, &publicv1.TenantBillingAssignmentsListRequest{})
-		})
+		listed, err := billingRPC(adminCtx, server.List, &publicv1.TenantBillingAssignmentsListRequest{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listed.GetTotal()).To(Equal(int32(1)))
 	}, Entry("universal", auth.AllTenants), Entry("finite", collections.NewSet(testTenant)),
@@ -170,7 +207,6 @@ var _ = Describe("Tenant billing assignments server", func() {
 	DescribeTable("updates an assignment to another account through the public API", func(tenants collections.Set[string]) {
 		id1, id2 := uuid.New(), uuid.New()
 		fake := billingfake.New(billingfake.Scenario{
-			CorrelationWrite: true,
 			Accounts: []billingfake.AccountSpec{
 				{ID: id1, State: billing.AccountActive}, {ID: id2, State: billing.AccountActive},
 			},
@@ -180,7 +216,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 
 		seedAccounts(id1, id2)
 
-		created, err := server.Create(adminCtx, publicv1.TenantBillingAssignmentsCreateRequest_builder{
+		created, err := billingRPC(adminCtx, server.Create, publicv1.TenantBillingAssignmentsCreateRequest_builder{
 			Object: publicv1.TenantBillingAssignment_builder{
 				Metadata: publicv1.Metadata_builder{Name: "asg-1"}.Build(),
 				Spec:     publicv1.TenantBillingAssignmentSpec_builder{Tenant: publicv1.TenantReference_builder{Id: testTenant}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: id1}.Build()}.Build(),
@@ -190,7 +226,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 
 		// The public Update converts the object, passes the update mask through, and converts the response
 		// back: reassigning to a second account must close the first interval and open a new one.
-		updated, err := server.Update(adminCtx, publicv1.TenantBillingAssignmentsUpdateRequest_builder{
+		updated, err := billingRPC(adminCtx, server.Update, publicv1.TenantBillingAssignmentsUpdateRequest_builder{
 			Object: publicv1.TenantBillingAssignment_builder{
 				Id:   created.GetObject().GetId(),
 				Spec: publicv1.TenantBillingAssignmentSpec_builder{Tenant: publicv1.TenantReference_builder{Id: testTenant}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: id2}.Build()}.Build(),
@@ -200,11 +236,9 @@ var _ = Describe("Tenant billing assignments server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(updated.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(id2))
 		Expect(updated.GetObject().GetStatus().GetConnectionState()).To(Equal(
-			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
+			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING))
 
-		listed, err := database.WithNewTx(adminCtx, func(ctx context.Context) (*publicv1.TenantBillingAssignmentsListResponse, error) {
-			return server.List(ctx, &publicv1.TenantBillingAssignmentsListRequest{})
-		})
+		listed, err := billingRPC(adminCtx, server.List, &publicv1.TenantBillingAssignmentsListRequest{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listed.GetTotal()).To(Equal(int32(2)), "the closed interval and the new one are both listed")
 		Expect(listed.GetItems()[0].GetId()).To(Equal(updated.GetObject().GetId()), "default order is latest interval first")
@@ -221,11 +255,9 @@ var _ = Describe("Tenant billing assignments server", func() {
 	DescribeTable("constrains public query paths and pagination", func(filter, order string, offset, limit int32) {
 		fake := billingfake.New(billingfake.Scenario{})
 		caller := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
-		_, err := database.WithNewTx(caller, func(c context.Context) (*publicv1.TenantBillingAssignmentsListResponse, error) {
-			return build(fake.Provider()).List(c, publicv1.TenantBillingAssignmentsListRequest_builder{
-				Filter: &filter, Order: &order, Offset: &offset, Limit: &limit,
-			}.Build())
-		})
+		_, err := billingRPC(caller, build(fake.Provider()).List, publicv1.TenantBillingAssignmentsListRequest_builder{
+			Filter: &filter, Order: &order, Offset: &offset, Limit: &limit,
+		}.Build())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		Expect(fake.Calls()).To(BeEmpty())
 	}, Entry("old scalar filter", `this.spec.tenant_id == "x"`, "", int32(0), int32(0)),
@@ -251,8 +283,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			account = uuid.New()
 			seedAccounts(account)
 			fake = billingfake.New(billingfake.Scenario{
-				CorrelationWrite: true,
-				Accounts:         []billingfake.AccountSpec{{ID: account, State: billing.AccountActive}},
+				Accounts: []billingfake.AccountSpec{{ID: account, State: billing.AccountActive}},
 			})
 			server = build(fake.Provider())
 		})
@@ -288,11 +319,9 @@ var _ = Describe("Tenant billing assignments server", func() {
 				seedHistory()
 				seen := map[string]bool{}
 				for offset := int32(0); offset <= expected; offset++ {
-					response, err := database.WithNewTx(callerCtx(tenants), func(txCtx context.Context) (*publicv1.TenantBillingAssignmentsListResponse, error) {
-						return server.List(txCtx, publicv1.TenantBillingAssignmentsListRequest_builder{
-							Offset: &offset, Limit: new(int32(1)), Order: new("id"),
-						}.Build())
-					})
+					response, err := billingRPC(callerCtx(tenants), server.List, publicv1.TenantBillingAssignmentsListRequest_builder{
+						Offset: &offset, Limit: new(int32(1)), Order: new("id"),
+					}.Build())
 					Expect(err).ToNot(HaveOccurred())
 					Expect(response.GetTotal()).To(Equal(expected))
 					if offset == expected {
@@ -317,11 +346,9 @@ var _ = Describe("Tenant billing assignments server", func() {
 
 		It("cannot widen trusted scope with a public tenant filter", func() {
 			seedHistory()
-			response, err := database.WithNewTx(callerCtx(collections.NewSet(testTenant)), func(txCtx context.Context) (*publicv1.TenantBillingAssignmentsListResponse, error) {
-				return server.List(txCtx, publicv1.TenantBillingAssignmentsListRequest_builder{
-					Filter: new(`this.spec.tenant.id == "foreign-tenant" && has(this.status.effective_to_timestamp)`),
-				}.Build())
-			})
+			response, err := billingRPC(callerCtx(collections.NewSet(testTenant)), server.List, publicv1.TenantBillingAssignmentsListRequest_builder{
+				Filter: new(`this.spec.tenant.id == "foreign-tenant" && has(this.status.effective_to_timestamp)`),
+			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetTotal()).To(BeZero())
 			Expect(response.GetItems()).To(BeEmpty())
@@ -333,18 +360,16 @@ var _ = Describe("Tenant billing assignments server", func() {
 			if empty {
 				tenants = collections.NewSet[string]()
 			}
-			_, err := database.WithNewTx(callerCtx(tenants), func(txCtx context.Context) (*publicv1.TenantBillingAssignmentsGetResponse, error) {
-				return server.Get(txCtx, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: "a"}.Build())
-			})
+			_, err := billingRPC(callerCtx(tenants), server.Get, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: "a"}.Build())
 			Expect(status.Code(err)).To(Equal(codes.NotFound))
-			_, err = server.Update(callerCtx(tenants), publicv1.TenantBillingAssignmentsUpdateRequest_builder{
+			_, err = billingRPC(callerCtx(tenants), server.Update, publicv1.TenantBillingAssignmentsUpdateRequest_builder{
 				Object: publicv1.TenantBillingAssignment_builder{
 					Id: "a", Metadata: publicv1.Metadata_builder{Name: "a", Tenant: testTenant}.Build(),
 					Spec: publicv1.TenantBillingAssignmentSpec_builder{Tenant: publicv1.TenantReference_builder{Id: testTenant}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: account}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.NotFound))
-			_, err = server.Create(callerCtx(tenants), publicv1.TenantBillingAssignmentsCreateRequest_builder{
+			_, err = billingRPC(callerCtx(tenants), server.Create, publicv1.TenantBillingAssignmentsCreateRequest_builder{
 				Object: publicv1.TenantBillingAssignment_builder{
 					Metadata: publicv1.Metadata_builder{Name: "spoofed", Tenant: testTenant}.Build(),
 					Spec:     publicv1.TenantBillingAssignmentSpec_builder{Tenant: publicv1.TenantReference_builder{Id: foreignTenant}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: account}.Build()}.Build(),
@@ -362,7 +387,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 		}, Entry("finite", false), Entry("empty", true))
 
 		DescribeTable("rejects reserved targets without provider I/O or persistence", func(tenantID string) {
-			_, err := server.Create(callerCtx(auth.AllTenants), publicv1.TenantBillingAssignmentsCreateRequest_builder{
+			_, err := billingRPC(callerCtx(auth.AllTenants), server.Create, publicv1.TenantBillingAssignmentsCreateRequest_builder{
 				Object: publicv1.TenantBillingAssignment_builder{
 					Metadata: publicv1.Metadata_builder{Name: "reserved"}.Build(),
 					Spec:     publicv1.TenantBillingAssignmentSpec_builder{Tenant: publicv1.TenantReference_builder{Id: tenantID}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: account}.Build()}.Build(),

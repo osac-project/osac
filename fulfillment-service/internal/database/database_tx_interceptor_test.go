@@ -10,6 +10,9 @@ import (
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Transactions interceptor", func() {
@@ -61,7 +64,8 @@ var _ = Describe("Transactions interceptor", func() {
 		It("supplies only a manager to streams without beginning a lifetime transaction", func() {
 			selected, err := NewTxInterceptor().SetLogger(logger).SetManager(manager).Build()
 			Expect(err).ToNot(HaveOccurred())
-			err = selected.StreamServer(nil, &txManagerStream{ctx: ctx}, &grpc.StreamServerInfo{},
+			inherited := TxIntoContext(ctx, NewMockTx(ctrl))
+			err = selected.StreamServer(nil, &txManagerStream{ctx: inherited}, &grpc.StreamServerInfo{},
 				func(_ any, stream grpc.ServerStream) error {
 					got, err := TxManagerFromContext(stream.Context())
 					Expect(err).ToNot(HaveOccurred())
@@ -73,22 +77,42 @@ var _ = Describe("Transactions interceptor", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("supplies only the manager for explicitly selected provider-backed RPCs", func() {
-			selected, err := NewTxInterceptor().SetLogger(logger).SetManager(manager).
-				AddManagerOnlyMethods("/billing/Resolve").Build()
-			Expect(err).ToNot(HaveOccurred())
-			parentTx := NewMockTx(ctrl)
-			_, err = selected.UnaryServer(TxIntoContext(ctx, parentTx), nil,
-				&grpc.UnaryServerInfo{FullMethod: "/billing/Resolve"}, func(ctx context.Context, _ any) (any, error) {
-					_, err := TxFromContext(ctx)
-					Expect(err).To(HaveOccurred())
-					got, err := TxManagerFromContext(ctx)
-					Expect(err).ToNot(HaveOccurred())
-					Expect(got).To(BeIdenticalTo(manager))
-					return "done", nil
-				})
-			Expect(err).ToNot(HaveOccurred())
-			// Neither Begin nor End may be called (the mocks have no expectations).
+		It("shares one ordinary ambient transaction for all seven provider-backed RPCs", func() {
+			for _, method := range []string{
+				publicv1.BillingAccounts_List_FullMethodName,
+				privatev1.BillingAccounts_List_FullMethodName,
+				publicv1.TenantBillingAssignments_Create_FullMethodName,
+				privatev1.TenantBillingAssignments_Create_FullMethodName,
+				publicv1.TenantBillingAssignments_Update_FullMethodName,
+				privatev1.TenantBillingAssignments_Update_FullMethodName,
+				privatev1.TenantBillingAssignments_Signal_FullMethodName,
+			} {
+				tx := NewMockTx(ctrl)
+				begin := manager.EXPECT().Begin(ctx).Return(tx, nil).Times(1)
+				tx.EXPECT().End(ctx).Return(nil).Times(1).After(begin)
+				response, err := interceptor.UnaryServer(ctx, nil,
+					&grpc.UnaryServerInfo{FullMethod: method}, func(ctx context.Context, _ any) (any, error) {
+						got, err := TxFromContext(ctx)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(got).To(BeIdenticalTo(tx))
+						gotManager, err := TxManagerFromContext(ctx)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(gotManager).To(BeIdenticalTo(manager))
+						return "done", nil
+					})
+				Expect(err).ToNot(HaveOccurred(), method)
+				Expect(response).To(Equal("done"))
+			}
+		})
+
+		It("returns sanitized Internal when a successful handler cannot commit", func() {
+			tx := NewMockTx(ctrl)
+			manager.EXPECT().Begin(ctx).Return(tx, nil).Times(1)
+			tx.EXPECT().End(ctx).Return(errors.New("private database details")).Times(1)
+			_, err := interceptor.UnaryServer(ctx, nil, &grpc.UnaryServerInfo{},
+				func(context.Context, any) (any, error) { return "done", nil })
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Internal))
+			Expect(grpcstatus.Convert(err).Message()).To(Equal("failed to end transaction"))
 		})
 
 		BeforeEach(func() {

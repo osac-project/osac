@@ -111,16 +111,17 @@ by the type system. A handler that panics is rolled back before the panic propag
 Use `Tx.OnCommit` for work that must only happen once a change is stored, such as logging it. It
 never runs after a rollback or a failed commit.
 
-**Provider-backed billing RPCs are an explicit exception.** Account discovery (`BillingAccounts.List`)
-and assignment writes/revalidation (`TenantBillingAssignments.Create`, `Update`, and private `Signal`)
-are configured with `TxInterceptorBuilder.AddManagerOnlyMethods`. The interceptor supplies the transaction
-manager but no ambient transaction; managed-service-account authorization and JIT provisioning use their
-existing independent transaction paths. Billing handlers use short `database.WithNewTx` scopes, with no
-transaction or pooled connection held during provider I/O. Discovery fetches before its atomic store and
-opens its freshness window only after commit. Assignment operations commit expiring account/tenant/correlation
-leases before provider work and revalidate ownership and current state in the final commit transaction.
-The lease fences local finalization, not the external provider: a provider write and PostgreSQL commit
-cannot be atomic, and a paused owner is not remotely fenced after lease expiry.
+**Provider-backed billing RPCs use that same ordinary transaction.** Account discovery
+(`BillingAccounts.List`) includes its full inventory, unseen sweep, requested page and public mapping
+before the outer commit. `Tx.OnCommit` opens freshness only after that commit; a page, mapping or
+commit failure leaves both rows and freshness unchanged. Assignment Create, Update and private Signal
+read an unlocked snapshot, then gather bounded read-only provider evidence before any business locks.
+Finalization locks tenant → the complete original selected/previous account set in SQL id order →
+current interval, rereads material inputs and merges observations before token/interval writes. One
+database clock sample after I/O and locks, clamped to all history, closes and opens contiguous intervals.
+There are no billing nested transactions, durable operation leases or remote account writes. A bounded
+provider read may occupy a pooled connection; cancellation releases admission and the request transaction.
+All public/private billing handlers report their final RPC error, including public mapping failures.
 
 Streaming RPCs use `TxInterceptor.StreamServer`, which supplies a manager-only context and
 shadows any ambient transaction. Authorization, JIT, and each Watch visibility check can use

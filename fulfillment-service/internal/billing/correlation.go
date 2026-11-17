@@ -15,7 +15,6 @@ package billing
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -33,13 +32,9 @@ const (
 	ReasonAccountAmbiguous = "ACCOUNT_AMBIGUOUS"
 	// ReasonAccountCorrelationConflict: another billing_account row already stores the resolved value.
 	ReasonAccountCorrelationConflict = "ACCOUNT_CORRELATION_CONFLICT"
-	// ReasonProviderCorrelationWriteUnsupported: the adapter cannot write the provider's correlation field, so the
-	// write was skipped. Not a failure: Resolution still carries a value to persist.
+	// ReasonProviderCorrelationWriteUnsupported is the static PENDING manual-remediation reason. Resolution never
+	// attempts a provider write or queries a write capability.
 	ReasonProviderCorrelationWriteUnsupported = "BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED"
-	// ReasonBillingCorrelationReadbackMismatch: the provider acknowledged a correlation write, but a follow-up read
-	// did not return exactly the written value, or the value is not carried by exactly one provider account. The
-	// acknowledgement alone never establishes a match, so no assignment may be recorded.
-	ReasonBillingCorrelationReadbackMismatch = "BILLING_CORRELATION_READBACK_MISMATCH"
 )
 
 // CorrelationResolutionError reports why ResolveAccountCorrelationID could not produce a value. Reason is a
@@ -53,8 +48,7 @@ func (e *CorrelationResolutionError) Error() string {
 }
 
 // NewCorrelationValue returns a new, provider-agnostic correlation value, never derived from an OSAC or provider
-// identifier. Generating it here keeps the value format out of each adapter, which owns only the native field and
-// write support.
+// identifier. Generating it here keeps the value format out of each adapter, which owns the native read mapping.
 func NewCorrelationValue() string {
 	return osacuuid.New()
 }
@@ -66,12 +60,12 @@ type LocalCorrelationLookup func(ctx context.Context, value string, excludeAccou
 
 // AccountCorrelationInput is everything ResolveAccountCorrelationID needs for one account.
 type AccountCorrelationInput struct {
-	// Adapter is the billing provider adapter used to read and, where supported, write the correlation value.
+	// Adapter is the billing provider adapter used to read correlation evidence.
 	Adapter Adapter
 	// AccountID is billing_account.id of the account being resolved, excluded from the local-duplicate search so
 	// its own stored value is not a conflict.
 	AccountID string
-	// Ref is the provider-native account reference used for adapter reads and writes.
+	// Ref is the provider-native account reference used for adapter reads.
 	Ref AccountRef
 	// LocalValue is billing_account.external_billing_account_id as currently stored in OSAC; "" when unset.
 	LocalValue string
@@ -84,36 +78,21 @@ type AccountCorrelationInput struct {
 type Resolution struct {
 	// Value is the correlation value to persist in OSAC. Always set on success.
 	Value string
-	// ProviderWritten reports that this call sent a correlation write to the provider and the provider acknowledged
-	// it. An acknowledgement alone proves nothing: see ProviderMatches, which is set from a read-back.
-	ProviderWritten bool
-	// ProviderWriteSkippedReason is ReasonProviderCorrelationWriteUnsupported when a needed provider write was
-	// unsupported, and "" otherwise.
-	ProviderWriteSkippedReason string
-	// ProviderMatches is the number of provider accounts that carried Value in the last uniqueness scan, so 1 means
-	// exactly one provider account holds it and 0 means none does. A count of 1 is only reported once the scan shows
-	// that account is the selected one: a foreign account that is the sole carrier is never counted as this account's
-	// match. A write is never counted from its acknowledgement: when this call wrote the value, ProviderMatches is
-	// measured after a read-back that returned it exactly.
+	// ProviderMatches is 1 only when the selected account reports Value and is its sole carrier in the complete
+	// exact-value scan. Zero means the scan found no carrier, so the caller keeps the assignment PENDING.
 	ProviderMatches int
 }
 
 // ResolveAccountCorrelationID applies the correlation-id precedence for one account: generate, adopt, or report a
-// conflict. It performs provider reads and, where supported, one provider write; the caller commits
-// Resolution.Value itself.
+// conflict. It performs only provider reads; the caller commits Resolution.Value itself under database uniqueness.
 //
-// Every successful outcome runs the same bounded uniqueness scan, so an account sharing its value with another
-// provider account fails with ACCOUNT_AMBIGUOUS. That scan keeps the carrier identity, because a count alone cannot
-// tell the selected account's match from a sole carrier that is a different account when the provider's account read
-// and its match list disagree. A provider write is proven, not assumed: after the provider acknowledges it the
-// account is read back and must return exactly the written value, and a second uniqueness scan must find that value
-// on exactly that account and no other. Resolution.Value is only reported once both hold.
+// Every successful outcome makes one correlation-value read and one complete exact-value carrier walk, bounded by
+// MaxListPages and the caller's context deadline. A provider-present value must have the selected native identity as
+// its sole carrier to count as a match. When the selected account's read was absent, any carrier contradicts that
+// observation and fails with ACCOUNT_AMBIGUOUS. Zero carriers leave the resolved value PENDING for manual remediation.
 //
-// One resolution makes a bounded number of provider calls: one value read, one pre-write uniqueness scan when a
-// write is needed, the write itself, and then one read-back plus one post-write uniqueness scan. Each scan is
-// bounded by MaxListPages and every call by the caller's context deadline, so the budget is a small constant and
-// never grows with the account inventory. The function is idempotent: a repeat call observes the provider write and
-// performs no further write.
+// A nonblank established value is never trimmed or rotated. LocalDuplicate is only a check, not a reservation;
+// final persistence remains the caller's responsibility. Generated local collisions permit at most five attempts.
 func ResolveAccountCorrelationID(ctx context.Context, account AccountCorrelationInput) (Resolution, error) {
 	providerRaw, providerHasValue, err := account.Adapter.CorrelationValue(ctx, account.Ref)
 	if err != nil {
@@ -152,8 +131,7 @@ func ResolveAccountCorrelationID(ctx context.Context, account AccountCorrelation
 		if err := account.checkLocalDuplicate(ctx, account.LocalValue); err != nil {
 			return Resolution{}, err
 		}
-		// Check uniqueness before writing, so a failed check cannot leave an orphaned provider write.
-		return account.commitValue(ctx, account.LocalValue)
+		return account.providerAbsentResolution(ctx, account.LocalValue)
 
 	default:
 		return account.generate(ctx)
@@ -170,8 +148,7 @@ func (account AccountCorrelationInput) generate(ctx context.Context) (Resolution
 			return Resolution{}, err
 		}
 		if !conflict {
-			// As above, check uniqueness before writing so a failed check cannot leave an orphaned write.
-			return account.commitValue(ctx, candidate)
+			return account.providerAbsentResolution(ctx, candidate)
 		}
 	}
 	return Resolution{}, &CorrelationResolutionError{Reason: ReasonAccountCorrelationConflict}
@@ -188,28 +165,6 @@ func (account AccountCorrelationInput) checkLocalDuplicate(ctx context.Context, 
 		return &CorrelationResolutionError{Reason: ReasonAccountCorrelationConflict}
 	}
 	return nil
-}
-
-// writeIfSupported writes value to the provider when the adapter supports it, reporting the skip reason
-// otherwise; it never calls SetCorrelationValue when SupportsCorrelationWrite is false.
-//
-// A provider may advertise the capability yet reject this one account, for example a deployment that disables the
-// account update endpoint or an account configured read-only. A classified UNSUPPORTED is therefore a skip, not a
-// failure: the caller stores the value on the OSAC side and keeps the assignment PENDING with the same stable
-// remediation as an adapter that cannot write at all. Any other failure is returned unchanged.
-func (account AccountCorrelationInput) writeIfSupported(ctx context.Context, value string) (
-	written bool, skipReason string, err error) {
-	if !account.Adapter.SupportsCorrelationWrite() {
-		return false, ReasonProviderCorrelationWriteUnsupported, nil
-	}
-	if err := account.Adapter.SetCorrelationValue(ctx, account.Ref, value); err != nil {
-		var adapterErr *Error
-		if errors.As(err, &adapterErr) && adapterErr.Reason == ReasonUnsupported {
-			return false, ReasonProviderCorrelationWriteUnsupported, nil
-		}
-		return false, "", err
-	}
-	return true, "", nil
 }
 
 // scanProviderCarriers runs one bounded exact-value provider scan, reporting how many accounts carry value and
@@ -251,75 +206,15 @@ func (account AccountCorrelationInput) providerPresentMatches(ctx context.Contex
 	return carriers, nil
 }
 
-// countProviderMatches counts provider accounts carrying value for the pre-write check, failing with
-// ACCOUNT_AMBIGUOUS when more than one does. It is deliberately identity-blind: commitValue runs only when the
-// selected account has no value, so every pre-write match is foreign and any match must reject the write.
-func (account AccountCorrelationInput) countProviderMatches(ctx context.Context, value string) (int, error) {
-	matches, err := CountAccountsWithExternalID(ctx, account.Adapter, value)
-	if err != nil {
-		return 0, err
-	}
-	if matches > 1 {
-		return 0, &CorrelationResolutionError{Reason: ReasonAccountAmbiguous}
-	}
-	return matches, nil
-}
-
-// commitValue finishes a write-performing branch: it confirms the candidate is unique among provider accounts,
-// writes it where supported, and proves the write before reporting a match.
-func (account AccountCorrelationInput) commitValue(ctx context.Context, candidate string) (Resolution, error) {
-	matches, err := account.countProviderMatches(ctx, candidate)
+// providerAbsentResolution retains a local or generated value only if no provider account carries it. Even a
+// sole listed carrier claiming the selected identity contradicts its absent account read, so cannot prove a match.
+func (account AccountCorrelationInput) providerAbsentResolution(ctx context.Context, candidate string) (Resolution, error) {
+	carriers, _, err := account.scanProviderCarriers(ctx, candidate)
 	if err != nil {
 		return Resolution{}, err
 	}
-	// The assigned account must be the unique carrier. This path runs only when it has no value, so every pre-write
-	// match is foreign and must be rejected before writing.
-	if matches > 0 {
+	if carriers > 0 {
 		return Resolution{}, &CorrelationResolutionError{Reason: ReasonAccountAmbiguous}
 	}
-	written, skipReason, err := account.writeIfSupported(ctx, candidate)
-	if err != nil {
-		return Resolution{}, err
-	}
-	if !written {
-		// Nothing reached the provider, so the count stays 0 and the caller keeps the assignment PENDING.
-		return Resolution{
-			Value: candidate, ProviderMatches: matches, ProviderWriteSkippedReason: skipReason,
-		}, nil
-	}
-	matches, err = account.verifyWritten(ctx, candidate)
-	if err != nil {
-		return Resolution{}, err
-	}
-	return Resolution{
-		Value: candidate, ProviderMatches: matches, ProviderWritten: true,
-	}, nil
-}
-
-// verifyWritten proves that a provider write took effect, never trusting its acknowledgement: it reads the account
-// back and requires the exact written value, then re-runs the bounded global uniqueness scan and requires the value
-// to be carried by exactly one account, which must be the assigned one. A read-back that is absent or differs, or a
-// final scan that does not show the assigned account as the sole carrier, fails with
-// BILLING_CORRELATION_READBACK_MISMATCH; a duplicated value still fails with ACCOUNT_AMBIGUOUS from the scan itself.
-func (account AccountCorrelationInput) verifyWritten(ctx context.Context, value string) (int, error) {
-	readBack, present, err := account.Adapter.CorrelationValue(ctx, account.Ref)
-	if err != nil {
-		return 0, err
-	}
-	if !present || readBack != value {
-		return 0, &CorrelationResolutionError{Reason: ReasonBillingCorrelationReadbackMismatch}
-	}
-	carriers, selected, err := account.scanProviderCarriers(ctx, value)
-	if err != nil {
-		return 0, err
-	}
-	if carriers > 1 {
-		return 0, &CorrelationResolutionError{Reason: ReasonAccountAmbiguous}
-	}
-	// Zero carriers, or a sole carrier that is a different account, means the read-back and the match list disagree
-	// about who holds the value; only this account as the unique carrier proves the write.
-	if carriers != 1 || !selected {
-		return 0, &CorrelationResolutionError{Reason: ReasonBillingCorrelationReadbackMismatch}
-	}
-	return carriers, nil
+	return Resolution{Value: candidate}, nil
 }

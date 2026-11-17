@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -58,7 +59,7 @@ var _ = Describe("Billing provider statuses server", func() {
 		return server
 	}
 	get := func(s *BillingProviderStatusesServer) *publicv1.BillingProviderStatus {
-		response, err := s.Get(ctx, &publicv1.BillingProviderStatusesGetRequest{})
+		response, err := billingRPC(ctx, s.Get, &publicv1.BillingProviderStatusesGetRequest{})
 		Expect(err).ToNot(HaveOccurred())
 		return response.GetObject()
 	}
@@ -139,7 +140,7 @@ var _ = Describe("Billing provider statuses server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		before := time.Now().Add(-time.Second)
 		get(public)
-		response, err := private.Get(ctx, &privatev1.BillingProviderStatusesGetRequest{})
+		response, err := billingRPC(ctx, private.Get, &privatev1.BillingProviderStatusesGetRequest{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetObject().GetLastSuccessfulCheck().AsTime()).To(BeTemporally(">", before))
 	})
@@ -168,6 +169,31 @@ var _ = Describe("Billing provider statuses server", func() {
 		status := get(server)
 		Expect(status.GetState()).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_UNAVAILABLE))
 		Expect(status.GetLastSuccessfulCheck().AsTime()).To(Equal(first.AsTime()))
+	})
+
+	It("commits a successful UNAVAILABLE payload instead of reporting its internal probe failure", func() {
+		server := build(billing.NewProvider("m360", &countingAdapter{
+			err: billing.NewError(billing.ReasonUnavailable, "HealthCheck", true, 503),
+		}, nil))
+		committed := 0
+		response, err := billingRPC(ctx, func(c context.Context, request *publicv1.BillingProviderStatusesGetRequest) (*publicv1.BillingProviderStatusesGetResponse, error) {
+			tx, err := database.TxFromContext(c)
+			if err != nil {
+				return nil, err
+			}
+			if _, err = tx.Exec(c, `insert into tenants (id,name,tenant,creator,data)
+				values ('probe-commit','probe-commit','probe-commit','system','{}')`); err != nil {
+				return nil, err
+			}
+			tx.OnCommit(func() { committed++ })
+			return server.Get(c, request)
+		}, &publicv1.BillingProviderStatusesGetRequest{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetObject().GetState()).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_UNAVAILABLE))
+		Expect(committed).To(Equal(1))
+		var count int
+		Expect(testPool.QueryRow(ctx, `select count(*) from tenants where id = 'probe-commit'`).Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(1))
 	})
 })
 

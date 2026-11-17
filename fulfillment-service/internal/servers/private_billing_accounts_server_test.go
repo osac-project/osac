@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -36,6 +37,36 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+// billingRPC invokes the actual handler through the ordinary unary transaction boundary. In particular, it does
+// not report handler errors itself: the server must report its final RPC error, including public mapping errors.
+func billingRPC[Request, Response any](ctx context.Context,
+	handler func(context.Context, Request) (Response, error), request Request,
+) (response Response, err error) {
+	manager, err := database.TxManagerFromContext(ctx)
+	if err != nil {
+		return response, err
+	}
+	interceptor, err := database.NewTxInterceptor().SetLogger(logger).SetManager(manager).Build()
+	if err != nil {
+		return response, err
+	}
+	result, err := interceptor.UnaryServer(ctx, request, &grpc.UnaryServerInfo{FullMethod: "/billing-test/RPC"},
+		func(c context.Context, _ any) (any, error) { return handler(c, request) })
+	if result != nil {
+		response = result.(Response)
+	}
+	return response, err
+}
+
+// billingStore exercises the batch operation with the same outer boundary as List while retaining explicit
+// observation times for the lock/merge protocol fixtures.
+func billingStore(ctx context.Context, server *PrivateBillingAccountsServer, accounts []billing.Account, at time.Time) error {
+	_, err := billingRPC(ctx, func(c context.Context, _ struct{}) (struct{}, error) {
+		return struct{}{}, server.storeAccounts(c, accounts, at)
+	}, struct{}{})
+	return err
+}
 
 // twoPageThenFailAdapter serves one successful page of one account, then fails every call after that - it
 // reproduces a provider that fails partway through a multi-page discovery.
@@ -107,7 +138,7 @@ func (a *gatedDiscoveryAdapter) ListAccounts(_ context.Context, _ billing.Accoun
 }
 
 // gatedTwoPageAdapter serves the first page immediately and holds the second until released, reproducing a
-// multi-page walk waiting on the provider while the suite checks that no database connection is held.
+// multi-page walk waiting on the provider while the suite cancels an occupied ordinary request transaction.
 type gatedTwoPageAdapter struct {
 	billing.Adapter
 	enteredSecondPage chan struct{}
@@ -118,7 +149,7 @@ type gatedTwoPageAdapter struct {
 
 // ListAccounts returns page one on the first call; every later call signals the walk has reached the
 // provider's slow page and then blocks until released.
-func (a *gatedTwoPageAdapter) ListAccounts(_ context.Context, _ billing.AccountFilter, _ billing.Page) (
+func (a *gatedTwoPageAdapter) ListAccounts(ctx context.Context, _ billing.AccountFilter, _ billing.Page) (
 	billing.AccountPage, error) {
 	a.calls++
 	if a.calls == 1 {
@@ -128,7 +159,11 @@ func (a *gatedTwoPageAdapter) ListAccounts(_ context.Context, _ billing.AccountF
 		}, nil
 	}
 	a.once.Do(func() { close(a.enteredSecondPage) })
-	<-a.release
+	select {
+	case <-a.release:
+	case <-ctx.Done():
+		return billing.AccountPage{}, billing.NewError(billing.ReasonTimeout, "ListAccounts", true, 0)
+	}
 	return billing.AccountPage{}, nil
 }
 
@@ -158,6 +193,11 @@ func (a *canceledCallerAdapter) ListAccounts(ctx context.Context, _ billing.Acco
 }
 
 var _ = Describe("Private billing accounts server", func() {
+	BeforeEach(func() {
+		Expect(suiteTx.End(ctx)).To(Succeed())
+		suiteTx = nil
+		ctx = database.TxManagerIntoContext(context.Background(), tm)
+	})
 	build := func(p *billing.Provider) *PrivateBillingAccountsServer {
 		server, err := NewPrivateBillingAccountsServer().SetLogger(logger).SetProvider(p).Build()
 		Expect(err).ToNot(HaveOccurred())
@@ -168,7 +208,7 @@ var _ = Describe("Private billing accounts server", func() {
 		if req == nil {
 			req = &privatev1.BillingAccountsListRequest{}
 		}
-		return s.List(ctx, req)
+		return billingRPC(ctx, s.List, req)
 	}
 	// storedCount reads the billing_accounts row count on the suite pool's own connection, so it observes only
 	// durably committed rows.
@@ -440,7 +480,111 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(fake.Count("ListAccounts")).To(Equal(1), "still inside the freshness window")
 	})
 
-	It("holds no database connection while the provider is slow: an unrelated query still runs on a one-connection pool",
+	It("rolls discovery and its freshness back when the requested filter fails after the complete walk", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "atomic-filter", State: billing.AccountActive}}})
+		server := build(fake.Provider())
+		_, err := list(server, privatev1.BillingAccountsListRequest_builder{Filter: new(`this.state == 1`)}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(storedCount()).To(BeZero())
+		Expect(server.lastDiscovery).To(BeZero())
+		Expect(server.discoverInFlight).To(BeFalse())
+		response, err := list(server, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetTotal()).To(Equal(int32(1)))
+		Expect(storedCount()).To(Equal(1))
+		Expect(server.lastDiscovery).NotTo(BeZero())
+		committed := server.lastDiscovery
+		_, err = list(server, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(server.lastDiscovery).To(Equal(committed))
+		Expect(fake.Count("ListAccounts")).To(Equal(2))
+	})
+
+	DescribeTable("keeps committed rows and freshness unchanged across complete discovery failure boundaries", func(fault string, code codes.Code) {
+		baseline := build(billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{
+			ID: "unseen-retained", ExternalID: "retained-token", Name: "Retained", State: billing.AccountActive,
+		}}}).Provider())
+		_, err := list(baseline, nil)
+		Expect(err).NotTo(HaveOccurred())
+		rows := func() string {
+			var value string
+			Expect(testPool.QueryRow(ctx, `select jsonb_agg(to_jsonb(b) order by id)::text from billing_accounts b`).Scan(&value)).To(Succeed())
+			return value
+		}
+		before := rows()
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{
+			ID: "new-account", ExternalID: "new-token", State: billing.AccountActive,
+		}}})
+		server := build(fake.Provider())
+		request := &privatev1.BillingAccountsListRequest{}
+		var cleanup func()
+		switch fault {
+		case "filter", "empty-inventory":
+			request.SetFilter(`this.state == 1`)
+			if fault == "empty-inventory" {
+				fake = billingfake.New(billingfake.Scenario{})
+				server.provider = fake.Provider()
+			}
+		case "late-page":
+			server.provider = billing.NewProvider(billingfake.Key, &twoPageThenFailAdapter{}, nil)
+			server.discoverFailureBackoff = 0
+		case "page":
+			// Run after the projection validator: the insert itself succeeds, but the actual requested page cannot
+			// decode this deliberately corrupt spec. No production mapper/DAO injection seam is added.
+			_, err = testPool.Exec(ctx, `create function corrupt_billing_requested_page() returns trigger language plpgsql as $$
+			begin new.data := jsonb_set(new.data, '{spec}', '42'::jsonb); return new; end $$;
+			create trigger zz_corrupt_billing_requested_page before insert on billing_accounts
+			for each row execute function corrupt_billing_requested_page()`)
+			Expect(err).NotTo(HaveOccurred())
+			cleanup = func() {
+				_, err := testPool.Exec(ctx, `drop trigger zz_corrupt_billing_requested_page on billing_accounts;
+				drop function corrupt_billing_requested_page()`)
+				Expect(err).NotTo(HaveOccurred())
+			}
+		case "commit":
+			_, err = testPool.Exec(ctx, `create function reject_discovery_commit() returns trigger language plpgsql as $$
+			begin raise exception 'deferred discovery fault'; end $$;
+			create constraint trigger reject_discovery_commit after insert on billing_accounts
+			deferrable initially deferred for each row execute function reject_discovery_commit()`)
+			Expect(err).NotTo(HaveOccurred())
+			cleanup = func() {
+				_, err := testPool.Exec(ctx, `drop trigger reject_discovery_commit on billing_accounts;
+				drop function reject_discovery_commit()`)
+				Expect(err).NotTo(HaveOccurred())
+			}
+		}
+		_, err = list(server, request)
+		Expect(status.Code(err)).To(Equal(code))
+		Expect(rows()).To(Equal(before), "tokens, observations, versions and unseen states must all roll back")
+		Expect(server.lastDiscovery).To(BeZero())
+		Expect(server.discoverInFlight).To(BeFalse())
+		if cleanup != nil {
+			cleanup()
+		}
+		if fault == "late-page" {
+			server.provider = fake.Provider()
+		}
+		_, err = list(server, nil)
+		Expect(err).NotTo(HaveOccurred(), "a failed RPC must not open freshness")
+		Expect(server.lastDiscovery).NotTo(BeZero())
+		committed := server.lastDiscovery
+		_, err = list(server, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(server.lastDiscovery).To(Equal(committed), "one successful complete store advances freshness only once")
+		walks := 2
+		if fault == "late-page" {
+			walks = 1
+		}
+		Expect(fake.Count("ListAccounts")).To(Equal(walks))
+	},
+		Entry("invalid requested filter after unseen sweep", "filter", codes.InvalidArgument),
+		Entry("invalid requested filter after empty inventory sweep", "empty-inventory", codes.InvalidArgument),
+		Entry("requested page materialization", "page", codes.Internal),
+		Entry("deferred outer commit", "commit", codes.Internal),
+		Entry("late provider page", "late-page", codes.Unavailable),
+	)
+
+	It("releases an occupied ordinary connection and in-flight admission when a slow discovery caller cancels",
 		func() {
 			adapter := &gatedTwoPageAdapter{
 				enteredSecondPage: make(chan struct{}),
@@ -451,9 +595,7 @@ var _ = Describe("Private billing accounts server", func() {
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { close(adapter.release) }) }
 
-			// A pool with a single connection, and the server's transaction manager over that pool: if the
-			// discovery walk held a connection (or an open transaction) while waiting on the provider,
-			// nothing else could use the pool.
+			// One connection makes an unreleased ordinary request transaction observable after cancellation.
 			config, err := pgxpool.ParseConfig(testPool.Config().ConnString())
 			Expect(err).ToNot(HaveOccurred())
 			config.MaxConns = 1
@@ -471,6 +613,8 @@ var _ = Describe("Private billing accounts server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			singlePoolCtx := database.TxManagerIntoContext(ctx, singlePoolTm)
+			singlePoolCtx, cancelRPC := context.WithCancel(singlePoolCtx)
+			DeferCleanup(cancelRPC)
 
 			type listOutcome struct {
 				response *privatev1.BillingAccountsListResponse
@@ -479,24 +623,39 @@ var _ = Describe("Private billing accounts server", func() {
 			server := build(billing.NewProvider("m360", adapter, nil))
 			result := make(chan listOutcome, 1)
 			go func() {
-				response, listErr := server.List(singlePoolCtx, &privatev1.BillingAccountsListRequest{})
+				response, listErr := billingRPC(singlePoolCtx,
+					func(c context.Context, req *privatev1.BillingAccountsListRequest) (*privatev1.BillingAccountsListResponse, error) {
+						tx, err := database.TxFromContext(c)
+						if err != nil {
+							return nil, err
+						}
+						if _, err = tx.Exec(c, `select 1`); err != nil {
+							return nil, err
+						}
+						return server.List(c, req)
+					}, &privatev1.BillingAccountsListRequest{})
 				result <- listOutcome{response: response, err: listErr}
 			}()
 			Eventually(adapter.enteredSecondPage, 5*time.Second).
 				Should(BeClosed(), "the walk must reach the provider's second page")
 
-			// The pool's only connection must be free while the provider is being read:
+			Expect(singlePool.Stat().AcquiredConns()).To(Equal(int32(1)))
+			cancelRPC()
+			var outcome listOutcome
+			Eventually(result, 5*time.Second).Should(Receive(&outcome))
+			Expect(status.Code(outcome.err)).To(Equal(codes.Canceled))
+			Expect(server.discoverInFlight).To(BeFalse())
+			Expect(server.lastDiscovery).To(BeZero())
+			Expect(server.lastDiscoveryFailure).To(BeZero())
+			// Cancellation must release the connection within the bounded return window, not leave an orphan walk.
 			probeCtx, probeCancel := context.WithTimeout(ctx, 5*time.Second)
 			defer probeCancel()
 			_, err = singlePool.Exec(probeCtx, `select 1`)
-			Expect(err).ToNot(HaveOccurred(),
-				"the walk must not pin the pool's only connection while the provider is waiting")
+			Expect(err).ToNot(HaveOccurred())
 
 			release()
-			var outcome listOutcome
-			Eventually(result, 5*time.Second).Should(Receive(&outcome))
-			Expect(outcome.err).ToNot(HaveOccurred())
-			Expect(outcome.response.GetTotal()).To(Equal(int32(1)))
+			_, err = billingRPC(database.TxManagerIntoContext(probeCtx, singlePoolTm), server.List, &privatev1.BillingAccountsListRequest{})
+			Expect(err).NotTo(HaveOccurred(), "cancellation must not poison admission or provider backoff")
 		})
 
 	It("fails with FAILED_PRECONDITION/MALFORMED when the provider never reports a last page", func() {
@@ -578,7 +737,7 @@ var _ = Describe("Private billing accounts server", func() {
 		DeferCleanup(cancel)
 		first := make(chan error, 1)
 		go func() {
-			_, err := server.List(callerCtx, &privatev1.BillingAccountsListRequest{})
+			_, err := billingRPC(callerCtx, server.List, &privatev1.BillingAccountsListRequest{})
 			first <- err
 		}()
 		Eventually(adapter.entered, 5*time.Second).Should(BeClosed(),
@@ -591,7 +750,7 @@ var _ = Describe("Private billing accounts server", func() {
 		Eventually(first, 5*time.Second).Should(Receive(&firstErr))
 		Expect(firstErr).To(HaveOccurred())
 
-		response, err := server.List(ctx, &privatev1.BillingAccountsListRequest{})
+		response, err := billingRPC(ctx, server.List, &privatev1.BillingAccountsListRequest{})
 		Expect(err).ToNot(HaveOccurred(), "a live List must walk the provider again, not fail fast")
 		Expect(response.GetTotal()).To(Equal(int32(1)))
 		Expect(adapter.calls).To(Equal(2), "the canceled walk must not have opened the failure backoff")
@@ -628,6 +787,53 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(adapter.calls).To(Equal(1), "the freshness window must serve without starting a new walk")
 	})
 
+	It("releases in-flight admission before outer commit and serializes a competing complete List through SQL", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "precommit", State: billing.AccountActive}}})
+		server := build(fake.Provider())
+		prepared, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		releaseFirst := func() { once.Do(func() { close(release) }) }
+		DeferCleanup(releaseFirst)
+		caller, cancel := context.WithTimeout(ctx, 15*time.Second)
+		DeferCleanup(cancel)
+		first, second := make(chan error, 1), make(chan error, 1)
+		go func() {
+			_, err := billingRPC(caller, func(c context.Context, request *privatev1.BillingAccountsListRequest) (*privatev1.BillingAccountsListResponse, error) {
+				response, err := server.List(c, request)
+				close(prepared)
+				select {
+				case <-release:
+				case <-c.Done():
+				}
+				return response, err
+			}, &privatev1.BillingAccountsListRequest{})
+			first <- err
+		}()
+		Eventually(prepared, 5*time.Second).Should(BeClosed())
+		server.discoverMu.Lock()
+		fresh, inFlight := server.lastDiscovery, server.discoverInFlight
+		server.discoverMu.Unlock()
+		Expect(fresh).To(BeZero(), "preparing a response is not a commit")
+		Expect(inFlight).To(BeFalse(), "admission cannot be held until an OnCommit callback")
+		Expect(storedCount()).To(BeZero())
+		go func() {
+			_, err := billingRPC(caller, server.List, &privatev1.BillingAccountsListRequest{})
+			second <- err
+		}()
+		Eventually(func() int { return fake.Count("ListAccounts") }, 5*time.Second).Should(Equal(2))
+		Eventually(func() bool {
+			var waiting bool
+			err := testPool.QueryRow(ctx, `select exists(select 1 from pg_stat_activity where datname = current_database()
+				and wait_event_type = 'Lock' and query like '%osac/billing-discovery/%')`).Scan(&waiting)
+			return err == nil && waiting
+		}, 5*time.Second).Should(BeTrue(), "the provider guard must coordinate precommit walks")
+		releaseFirst()
+		Eventually(first, 5*time.Second).Should(Receive(Succeed()))
+		Eventually(second, 5*time.Second).Should(Receive(Succeed()))
+		Expect(storedCount()).To(Equal(1))
+		Expect(server.lastDiscovery).NotTo(BeZero())
+	})
+
 	It("re-discovers once the freshness window has passed", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
 			{ID: "acct-1", State: billing.AccountActive},
@@ -661,7 +867,7 @@ var _ = Describe("Private billing accounts server", func() {
 		start := time.Now().UTC().Truncate(time.Microsecond)
 		accounts := []billing.Account{{Ref: billing.NewAccountRef("native"), Name: "Known", BaseCurrency: "usd",
 			ExternalID: " raw token ", State: billing.AccountActive}}
-		Expect(server.storeAccounts(ctx, accounts, start)).To(Succeed())
+		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
 		var id, name, data string
 		var version int32
 		Expect(testPool.QueryRow(ctx, `select id, name, data::text, version from billing_accounts`).
@@ -669,9 +875,9 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(data).To(ContainSubstring(`"BILLING_ACCOUNT_STATE_ACTIVE"`))
 		Expect(data).To(ContainSubstring(`"state_observation_timestamp"`))
 		Expect(data).ToNot(ContainSubstring(`"metadata"`))
-		Expect(server.storeAccounts(ctx, accounts, start)).To(Succeed())
+		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
 		accounts[0].Name, accounts[0].ExternalID, accounts[0].State = "stale", "replacement", billing.AccountInactive
-		Expect(server.storeAccounts(ctx, accounts, start.Add(-time.Second))).To(Succeed())
+		Expect(billingStore(ctx, server, accounts, start.Add(-time.Second))).To(Succeed())
 		var gotID, gotName, token, label, state string
 		var gotVersion int32
 		Expect(testPool.QueryRow(ctx, `select id, name, external_billing_account_id, display_name, state, version
@@ -690,10 +896,10 @@ var _ = Describe("Private billing accounts server", func() {
 		server := build(billingfake.New(billingfake.Scenario{}).Provider())
 		start := time.Now().UTC().Truncate(time.Microsecond)
 		accounts := []billing.Account{{Ref: billing.NewAccountRef("a"), State: billing.AccountActive}}
-		Expect(server.storeAccounts(ctx, accounts, start)).To(Succeed())
+		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
 		accounts[0].ExternalID, accounts[0].Name = "new-raw-token", "Refreshed"
-		Expect(server.storeAccounts(ctx, accounts, start.Add(time.Second))).To(Succeed())
-		Expect(server.storeAccounts(ctx, nil, start.Add(2*time.Second))).To(Succeed())
+		Expect(billingStore(ctx, server, accounts, start.Add(time.Second))).To(Succeed())
+		Expect(billingStore(ctx, server, nil, start.Add(2*time.Second))).To(Succeed())
 		Expect(testPool.QueryRow(ctx, `select count(*) from changes`).Scan(&after)).To(Succeed())
 		Expect(after).To(Equal(before), "no publisher runs in this PostgreSQL fixture to hide billing changes")
 		control, err := dao.NewGenericDAO[*privatev1.ServiceAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
@@ -735,7 +941,7 @@ var _ = Describe("Private billing accounts server", func() {
 			{Ref: billing.NewAccountRef("a"), ExternalID: "same", State: billing.AccountActive},
 			{Ref: billing.NewAccountRef("b"), ExternalID: "same", State: billing.AccountActive},
 		}
-		Expect(server.storeAccounts(ctx, accounts, start)).To(Succeed())
+		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
 		var attempts int
 		Expect(testPool.QueryRow(ctx, `select last_value from token_insert_attempts`).Scan(&attempts)).To(Succeed())
 		Expect(attempts).To(Equal(2), "one token collision permits exactly one same-id/name tokenless insert retry")
@@ -743,7 +949,7 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(testPool.QueryRow(ctx, `select id, name from billing_accounts where provider_account_reference = 'b'`).
 			Scan(&id, &name)).To(Succeed())
 		accounts[1].Name, accounts[1].State = "Observed", billing.AccountInactive
-		Expect(server.storeAccounts(ctx, accounts, start.Add(time.Second))).To(Succeed())
+		Expect(billingStore(ctx, server, accounts, start.Add(time.Second))).To(Succeed())
 		var gotID, gotName, label, state string
 		var token *string
 		Expect(testPool.QueryRow(ctx, `select id, name, display_name, state, external_billing_account_id
@@ -760,7 +966,7 @@ var _ = Describe("Private billing accounts server", func() {
 	It("aborts the whole batch on an unexpected native-key conflict without a late-winner retry", func() {
 		server := build(billingfake.New(billingfake.Scenario{}).Provider())
 		start := time.Now().UTC().Truncate(time.Microsecond)
-		Expect(server.storeAccounts(ctx, []billing.Account{{Ref: billing.NewAccountRef("a"), State: billing.AccountActive}}, start)).To(Succeed())
+		Expect(billingStore(ctx, server, []billing.Account{{Ref: billing.NewAccountRef("a"), State: billing.AccountActive}}, start)).To(Succeed())
 		// Deliberately violate the guard protocol at the SQL boundary. This is a real named native-key index
 		// conflict, not an error-string fake. The previously merged unseen observation must roll back too.
 		_, err := testPool.Exec(ctx, `create sequence native_insert_attempts;
@@ -773,7 +979,7 @@ var _ = Describe("Private billing accounts server", func() {
 		create trigger a_inject_native_conflict before insert on billing_accounts
 		for each row execute function inject_native_conflict()`)
 		Expect(err).ToNot(HaveOccurred())
-		err = server.storeAccounts(ctx, []billing.Account{{Ref: billing.NewAccountRef("b"), State: billing.AccountActive}}, start.Add(time.Second))
+		err = billingStore(ctx, server, []billing.Account{{Ref: billing.NewAccountRef("b"), State: billing.AccountActive}}, start.Add(time.Second))
 		Expect(status.Code(err)).To(Equal(codes.Aborted))
 		var state string
 		var version, attempts int
@@ -787,7 +993,7 @@ var _ = Describe("Private billing accounts server", func() {
 
 	It("rejects duplicate native keys before storing any batch", func() {
 		server := build(billingfake.New(billingfake.Scenario{}).Provider())
-		err := server.storeAccounts(ctx, []billing.Account{
+		err := billingStore(ctx, server, []billing.Account{
 			{Ref: billing.NewAccountRef("same")}, {Ref: billing.NewAccountRef("same")},
 		}, time.Now())
 		var classified *billing.Error
@@ -818,7 +1024,7 @@ var _ = Describe("Private billing accounts server", func() {
 			})
 			Expect(err).ToNot(HaveOccurred())
 		}
-		Expect(server.storeAccounts(ctx, nil, start.Add(time.Second))).To(Succeed())
+		Expect(billingStore(ctx, server, nil, start.Add(time.Second))).To(Succeed())
 		// Mark discovery fresh to inspect the exact completed sweep without another provider observation.
 		server.lastDiscovery = time.Now()
 		response, err := list(server, nil)
@@ -842,7 +1048,7 @@ var _ = Describe("Private billing accounts server", func() {
 		start := time.Now().UTC().Truncate(time.Microsecond)
 		accounts := []billing.Account{{Ref: billing.NewAccountRef("a"), State: billing.AccountActive},
 			{Ref: billing.NewAccountRef("b"), State: billing.AccountActive}}
-		Expect(server.storeAccounts(ctx, accounts, start)).To(Succeed())
+		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
 		_, err := testPool.Exec(ctx, `create sequence discovery_mutations;
 		create function count_discovery_mutations() returns trigger language plpgsql as $$
 		begin perform nextval('discovery_mutations'); return new; end $$;
@@ -864,7 +1070,7 @@ var _ = Describe("Private billing accounts server", func() {
 		waitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		DeferCleanup(cancel)
 		result := make(chan error, 1)
-		go func() { result <- server.storeAccounts(waitCtx, nil, start.Add(time.Second)) }()
+		go func() { result <- billingStore(waitCtx, server, nil, start.Add(time.Second)) }()
 		Eventually(func() int {
 			var count int
 			Expect(testPool.QueryRow(ctx, `select count(*) from pg_stat_activity
@@ -888,7 +1094,7 @@ var _ = Describe("Private billing accounts server", func() {
 		for i := range accounts {
 			accounts[i] = billing.Account{Ref: billing.NewAccountRef(fmt.Sprintf("bounded-%04d", i)), State: billing.AccountActive}
 		}
-		Expect(server.storeAccounts(ctx, accounts, time.Now().UTC())).To(Succeed())
+		Expect(billingStore(ctx, server, accounts, time.Now().UTC())).To(Succeed())
 		server.lastDiscovery = time.Now()
 		request := privatev1.BillingAccountsListRequest_builder{Limit: proto.Int32(0)}.Build()
 		response, err := list(server, request)
@@ -934,7 +1140,7 @@ var _ = Describe("Private billing accounts server", func() {
 		DeferCleanup(cancel)
 		firstResult, result := make(chan error, 1), make(chan error, 1)
 		go func() {
-			firstResult <- first.storeAccounts(waitCtx, []billing.Account{{Ref: billing.NewAccountRef("a"),
+			firstResult <- billingStore(waitCtx, first, []billing.Account{{Ref: billing.NewAccountRef("a"),
 				State: billing.AccountActive}}, start)
 		}()
 		Eventually(func() int {
@@ -945,7 +1151,7 @@ var _ = Describe("Private billing accounts server", func() {
 			return count
 		}, 5*time.Second, 10*time.Millisecond).Should(Equal(1))
 		go func() {
-			result <- second.storeAccounts(waitCtx, []billing.Account{{Ref: billing.NewAccountRef(waitingRef),
+			result <- billingStore(waitCtx, second, []billing.Account{{Ref: billing.NewAccountRef(waitingRef),
 				State: billing.AccountActive}}, start.Add(waitingAge))
 		}()
 		Eventually(func() int {

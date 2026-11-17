@@ -170,7 +170,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			seededAt = seedAccount(accountID, nativeOne, "corr-one")
 			startStub(billingfake.Scenario{Accounts: accounts})
 
-			_, err := server.Create(adminCtx(), createRequest(testTenant, accountID, "asg-1"))
+			_, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, accountID, "asg-1"))
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 			Expect(reason(err)).To(Equal(wantReason))
 			Expect(stub.Count("GetAccount")).To(BeNumerically(">", 0),
@@ -183,10 +183,10 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			Expect(listErr).ToNot(HaveOccurred())
 			Expect(page.GetTotal()).To(BeZero())
 
-			// The normalized observation is persisted without another List, and its time moves forward.
+			// A rejected RPC must not persist a separate eligibility observation.
 			state, observedAt := storedObservation(accountID)
-			Expect(state).To(Equal(wantState))
-			Expect(observedAt).To(BeTemporally(">", seededAt))
+			Expect(state).To(Equal("ACTIVE"))
+			Expect(observedAt).To(BeTemporally("==", seededAt))
 		},
 		Entry("deactivated account", "Inactive", "Approved", "INACTIVE", "ACCOUNT_INACTIVE"),
 		Entry("unknown account", "Active", "", "UNKNOWN", "ACCOUNT_STATE_UNKNOWN"),
@@ -203,7 +203,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			seedAccount(secondID, nativeTwo, "corr-two")
 			startStub(billingfake.Scenario{Accounts: accounts})
 
-			created, err := server.Create(adminCtx(), createRequest(testTenant, accountID, "asg-1"))
+			created, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, accountID, "asg-1"))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(created.GetObject().GetStatus().GetConnectionState()).To(Equal(
 				privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
@@ -212,7 +212,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 
 			// Same-account revalidation reads the current provider state and creates no new interval.
 			before := len(stub.Requests())
-			revalidated, err := server.Update(adminCtx(),
+			revalidated, err := billingRPC(adminCtx(), server.Update,
 				updateRequest(created.GetObject().GetId(), testTenant, accountID))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(revalidated.GetObject().GetId()).To(Equal(created.GetObject().GetId()))
@@ -230,12 +230,12 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			accounts[index].RawStatus, accounts[index].ApprovalStatus = rawStatus, approval
 			stub.SetScenario(billingfake.Scenario{Accounts: accounts})
 			listsBefore := stub.Count("ListAccounts")
-			_, err = server.Update(adminCtx(), updateRequest(created.GetObject().GetId(), testTenant, target))
+			_, err = billingRPC(adminCtx(), server.Update, updateRequest(created.GetObject().GetId(), testTenant, target))
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 			Expect(reason(err)).To(Equal(wantReason))
 			Expect(stub.Count("ListAccounts")).To(Equal(listsBefore), "reject before correlation resolution")
 			state, _ := storedObservation(target)
-			Expect(state).To(Equal(wantState))
+			Expect(state).To(Equal("ACTIVE"), "failed revalidation rolls its observation back")
 
 			prior, getErr := server.bindings.Get().SetId(created.GetObject().GetId()).Do(ctx)
 			Expect(getErr).ToNot(HaveOccurred())
@@ -249,7 +249,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			// Reactivation is observed by the retried Update; the persisted ineligible state must not veto recovery.
 			accounts[index].RawStatus, accounts[index].ApprovalStatus = "Active", "Approved"
 			stub.SetScenario(billingfake.Scenario{Accounts: accounts})
-			recovered, err := server.Update(adminCtx(),
+			recovered, err := billingRPC(adminCtx(), server.Update,
 				updateRequest(created.GetObject().GetId(), testTenant, target))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(recovered.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(target))
@@ -323,12 +323,11 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			BreakerThreshold: 5, BreakerWindow: time.Minute, BreakerOpen: time.Minute,
 		}).SetLogger(privateLogger).Build()
 		Expect(err).ToNot(HaveOccurred())
-		Expect(adapter.SupportsCorrelationWrite()).To(BeFalse())
 		server, err = NewPrivateTenantBillingAssignmentsServer().SetLogger(privateLogger).
 			SetProvider(billing.NewProvider(billing.KeyM360, adapter, nil)).Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		_, err = server.Create(adminCtx(), createRequest(testTenant, accountID, "asg-1"))
+		_, err = billingRPC(adminCtx(), server.Create, createRequest(testTenant, accountID, "asg-1"))
 		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 		Expect(reason(err)).To(Equal(string(billing.ReasonMalformed)))
 		for _, sensitive := range []string{nativeOne, foreignID, "Private Account Payload", "foreign-private-correlation", credential} {
@@ -347,8 +346,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 		var count int
 		Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 		Expect(count).To(BeZero(), "no assignment history may be created")
-		Expect(testPool.QueryRow(ctx, `select count(*) from billing_operation_leases`).Scan(&count)).To(Succeed())
-		Expect(count).To(BeZero())
+		Expect(server.assignSem).To(BeEmpty())
 	})
 
 	It("persists no assignment and no observation when the real adapter read fails", func() {
@@ -358,7 +356,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			Failures: map[string]billingfake.Failure{"GetAccount": {Reason: billing.ReasonUnavailable}},
 		})
 
-		_, err := server.Create(adminCtx(), createRequest(testTenant, accountID, "asg-1"))
+		_, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, accountID, "asg-1"))
 		Expect(status.Code(err)).To(Equal(codes.Unavailable))
 		Expect(stub.Count("GetAccount")).To(Equal(1), "a non-retryable provider read must not be retried")
 		Expect(stub.Writes()).To(BeEmpty())

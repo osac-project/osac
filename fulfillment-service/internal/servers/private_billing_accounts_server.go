@@ -149,11 +149,15 @@ func (b *PrivateBillingAccountsServerBuilder) Build() (result *PrivateBillingAcc
 // UNAVAILABLE rather than serving the stored record as current; a failed walk is retried after the backoff, and a
 // List arriving during a walk or after the deadline fails fast instead of queueing.
 //
-// This handler owns its transaction scopes instead of using the interceptor's per-request transaction (List is a
-// manager-only method): the provider walk holds no transaction or pool connection, one short transaction stores
-// the results, and the page read runs in its own short transaction.
+// Discovery, storage, the requested page and public mapping share the ordinary request transaction. Provider reads
+// finish before any business row locks; freshness is published only after the outer commit succeeds.
 func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 	request *privatev1.BillingAccountsListRequest) (response *privatev1.BillingAccountsListResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
 	if _, err = requireAdapter(s.provider); err != nil {
 		return nil, err
 	}
@@ -164,7 +168,8 @@ func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 		return nil, err
 	}
 
-	if err = s.discoverSync(ctx); err != nil {
+	refreshed, err := s.discoverSync(ctx)
+	if err != nil {
 		s.logger.WarnContext(ctx, "Billing account discovery failed", slog.Any("error", err))
 		if ctx.Err() != nil {
 			return nil, status.FromContextError(ctx.Err()).Err()
@@ -172,16 +177,13 @@ func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 		return nil, mapBillingDiscoveryError(err)
 	}
 
-	// An unset limit serves the DAO default; an explicit one is clamped to its maximum. The read runs in its own
-	// short transaction so it sees only committed discovery results.
-	page, err := database.WithNewTx(ctx, func(ctx context.Context) (*dao.ListResponse[*privatev1.BillingAccount], error) {
-		limit := request.GetLimit()
-		if limit == 0 {
-			limit = 100
-		}
-		return s.dao.List().SetOffset(request.GetOffset()).SetLimit(limit).
-			SetFilter(request.GetFilter()).SetOrder(request.GetOrder()).Do(ctx)
-	})
+	// An unset limit serves the billing default; an explicit one is clamped to the DAO maximum.
+	limit := request.GetLimit()
+	if limit == 0 {
+		limit = 100
+	}
+	page, err := s.dao.List().SetOffset(request.GetOffset()).SetLimit(limit).
+		SetFilter(request.GetFilter()).SetOrder(request.GetOrder()).Do(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, status.FromContextError(ctx.Err()).Err()
@@ -200,6 +202,13 @@ func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 		Total: page.GetTotal(),
 		Items: page.GetItems(),
 	}.Build()
+	if refreshed {
+		tx.OnCommit(func() {
+			s.discoverMu.Lock()
+			s.lastDiscovery = time.Now()
+			s.discoverMu.Unlock()
+		})
+	}
 	return response, nil
 }
 
@@ -207,19 +216,19 @@ func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 // arrives during a walk fails with errDiscoveryInProgress; one inside the failure backoff fails with
 // errDiscoveryBackoff. Only a walk whose store transaction committed durably opens the freshness window. All
 // timestamps and the in-flight flag are guarded by discoverMu; the walk runs with the mutex released.
-func (s *PrivateBillingAccountsServer) discoverSync(ctx context.Context) error {
+func (s *PrivateBillingAccountsServer) discoverSync(ctx context.Context) (refreshed bool, err error) {
 	s.discoverMu.Lock()
 	if time.Since(s.lastDiscovery) < billingAccountsDiscoverFreshness {
 		s.discoverMu.Unlock()
-		return nil
+		return false, nil
 	}
 	if time.Since(s.lastDiscoveryFailure) < s.discoverFailureBackoff {
 		s.discoverMu.Unlock()
-		return errDiscoveryBackoff
+		return false, errDiscoveryBackoff
 	}
 	if s.discoverInFlight {
 		s.discoverMu.Unlock()
-		return errDiscoveryInProgress
+		return false, errDiscoveryInProgress
 	}
 	s.discoverInFlight = true
 	s.discoverMu.Unlock()
@@ -229,7 +238,7 @@ func (s *PrivateBillingAccountsServer) discoverSync(ctx context.Context) error {
 		s.discoverMu.Unlock()
 	}()
 
-	err := s.discoverFresh(ctx)
+	err = s.discoverFresh(ctx)
 	if err != nil {
 		// A caller that cancels its walk or hits its own deadline says nothing about the provider, so its failure
 		// must not open the server-wide backoff. A walk cut off by the child discoverDeadline is still recorded,
@@ -240,18 +249,14 @@ func (s *PrivateBillingAccountsServer) discoverSync(ctx context.Context) error {
 			s.lastDiscoveryFailure = time.Now()
 			s.discoverMu.Unlock()
 		}
-		return err
+		return false, err
 	}
-	s.discoverMu.Lock()
-	s.lastDiscovery = time.Now()
-	s.discoverMu.Unlock()
-	return nil
+	return true, nil
 }
 
 // discoverFresh builds the provider adapter and runs one discovery walk under s.discoverDeadline, in two phases.
-// fetch reads every provider page under the deadline with no transaction open; store applies them in one short
-// independent transaction that commits upserts and the unobserved sweep together, or rolls back entirely. The
-// deadline covers both phases.
+// fetch reads every provider page before store acquires business locks. Both phases use the same ambient request
+// transaction, and the deadline covers both phases.
 func (s *PrivateBillingAccountsServer) discoverFresh(ctx context.Context) error {
 	adapter, err := s.provider.Adapter()
 	if err != nil {
@@ -310,8 +315,8 @@ func mapBillingAccountState(state string) privatev1.BillingAccountState {
 	}
 }
 
-// fetchAccounts reads the provider's full account list into memory without holding a transaction or pool
-// connection while the provider answers. Memory stays bounded because the walk is bounded at most
+// fetchAccounts reads the provider's full account list into memory before taking business locks. The ordinary
+// request may already hold a pooled connection. Memory stays bounded because the walk is bounded at most
 // billing.MaxListPages pages of billingAccountsDiscoverPageSize accounts.
 func (s *PrivateBillingAccountsServer) fetchAccounts(
 	ctx context.Context, adapter billing.Adapter) ([]billing.Account, error) {
@@ -331,132 +336,129 @@ func (s *PrivateBillingAccountsServer) fetchAccounts(
 // storeAccounts owns the complete batch. Provider I/O has finished before the provider guard, active-system-tenant
 // SHARE lock and fresh whole-provider union locks, in that order. The mutex above is only process-local admission;
 // the transaction-scoped provider guard serializes independent instances and remains held outside savepoints.
-// P4 owns replacing this existing short transaction with the ordinary request transaction and atomic List page.
 func (s *PrivateBillingAccountsServer) storeAccounts(
-	ctx context.Context, accounts []billing.Account, observedAt time.Time) error {
+	ctx context.Context, accounts []billing.Account, observedAt time.Time) (err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.ReportError(&err)
 	providerKey := s.provider.Key()
 	observations, err := billingAccountObservations(providerKey, accounts, observedAt)
 	if err != nil {
 		return err
 	}
-	_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
-		tx, txErr := database.TxFromContext(ctx)
-		if txErr != nil {
-			return struct{}{}, txErr
+	if _, err := tx.Exec(ctx,
+		`select pg_advisory_xact_lock(hashtextextended('osac/billing-discovery/' || $1,0))`, providerKey); err != nil {
+		return err
+	}
+	var deleting bool
+	if err := tx.QueryRow(ctx, `select deletion_timestamp <> 'epoch' from tenants where name = 'system' for share`).
+		Scan(&deleting); err != nil {
+		return err
+	}
+	if deleting {
+		return errors.New("system tenant is being deleted")
+	}
+	rows, err := tx.Query(ctx, `select id from billing_accounts where provider_key = $1 order by id for update`, providerKey)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
 		}
-		if _, err := tx.Exec(ctx,
-			`select pg_advisory_xact_lock(hashtextextended('osac/billing-discovery/' || $1,0))`, providerKey); err != nil {
-			return struct{}{}, err
-		}
-		var deleting bool
-		if err := tx.QueryRow(ctx, `select deletion_timestamp <> 'epoch' from tenants where name = 'system' for share`).
-			Scan(&deleting); err != nil {
-			return struct{}{}, err
-		}
-		if deleting {
-			return struct{}{}, errors.New("system tenant is being deleted")
-		}
-		rows, err := tx.Query(ctx, `select id from billing_accounts where provider_key = $1 order by id for update`, providerKey)
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	// Fully consume the union before any mutation. Get materializes canonical metadata/data without new locks.
+	for _, id := range ids {
+		stored, err := s.dao.Get().SetId(id).Do(ctx)
 		if err != nil {
-			return struct{}{}, err
+			return err
 		}
-		var ids []string
-		for rows.Next() {
-			var id string
-			if err = rows.Scan(&id); err != nil {
-				rows.Close()
-				return struct{}{}, err
+		current := stored.GetObject()
+		ref := current.GetStatus().GetProviderAccountReference()
+		observed, seen := observations[ref]
+		if !seen {
+			observed = privatev1.BillingAccountStatus_builder{
+				State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN,
+				StateObservationTimestamp: timestamppb.New(observedAt),
+			}.Build()
+		}
+		delete(observations, ref)
+		merged, changed := mergeBillingAccountObservation(current, observed)
+		if !changed {
+			continue
+		}
+		err = tx.Savepoint(ctx, func(ctx context.Context) error {
+			_, err := s.dao.Update().SetObject(merged).Do(ctx)
+			return err
+		})
+		var conflict *dao.ErrAlreadyExists
+		if errors.As(err, &conflict) && conflict.ConstraintName == "billing_accounts_unique_correlation_id" {
+			// Optional adoption lost a raw-token race. Restore exactly the original presence/value, then keep
+			// the valid observation. Re-merging also avoids an unnecessary version increment for adoption alone.
+			withoutToken := proto.Clone(observed).(*privatev1.BillingAccountStatus)
+			withoutToken.ClearExternalBillingAccountId()
+			merged, changed = mergeBillingAccountObservation(current, withoutToken)
+			err = nil
+			if changed {
+				_, err = s.dao.Update().SetObject(merged).Do(ctx)
 			}
-			ids = append(ids, id)
 		}
-		err = rows.Err()
-		rows.Close()
 		if err != nil {
-			return struct{}{}, err
+			return err
 		}
-		// Fully consume the union before any mutation. Get materializes canonical metadata/data without new locks.
-		for _, id := range ids {
-			stored, err := s.dao.Get().SetId(id).Do(ctx)
-			if err != nil {
-				return struct{}{}, err
-			}
-			current := stored.GetObject()
-			ref := current.GetStatus().GetProviderAccountReference()
-			observed, seen := observations[ref]
-			if !seen {
-				observed = privatev1.BillingAccountStatus_builder{
-					State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN,
-					StateObservationTimestamp: timestamppb.New(observedAt),
-				}.Build()
-			}
-			delete(observations, ref)
-			merged, changed := mergeBillingAccountObservation(current, observed)
-			if !changed {
-				continue
-			}
+	}
+	// Go string ordering compares UTF-8 bytes, independently of database collation. New rows are private to
+	// this transaction; every existing row was already locked above in SQL OSAC-id order.
+	refs := make([]string, 0, len(observations))
+	for ref := range observations {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	for _, ref := range refs {
+		id := uuid.New()
+		name, err := billingAccountName(id)
+		if err != nil {
+			return err
+		}
+		candidate := privatev1.BillingAccount_builder{
+			Id: id, Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SystemTenant, Creator: "system"}.Build(),
+			Spec: &privatev1.BillingAccountSpec{}, Status: observations[ref],
+		}.Build()
+		for attempt := 0; attempt < 2; attempt++ {
 			err = tx.Savepoint(ctx, func(ctx context.Context) error {
-				_, err := s.dao.Update().SetObject(merged).Do(ctx)
+				_, err := s.dao.Create().SetObject(candidate).Do(ctx)
 				return err
 			})
 			var conflict *dao.ErrAlreadyExists
-			if errors.As(err, &conflict) && conflict.ConstraintName == "billing_accounts_unique_correlation_id" {
-				// Optional adoption lost a raw-token race. Restore exactly the original presence/value, then keep
-				// the valid observation. Re-merging also avoids an unnecessary version increment for adoption alone.
-				withoutToken := proto.Clone(observed).(*privatev1.BillingAccountStatus)
-				withoutToken.ClearExternalBillingAccountId()
-				merged, changed = mergeBillingAccountObservation(current, withoutToken)
-				err = nil
-				if changed {
-					_, err = s.dao.Update().SetObject(merged).Do(ctx)
-				}
+			if !errors.As(err, &conflict) {
+				break
 			}
-			if err != nil {
-				return struct{}{}, err
+			if conflict.ConstraintName == "billing_accounts_unique_provider_account" {
+				// Never acquire a late winner lock: an unguarded writer is a protocol violation.
+				return status.Error(codes.Aborted, "billing account inventory changed; retry the request")
 			}
+			if attempt != 0 || conflict.ConstraintName != "billing_accounts_unique_correlation_id" ||
+				!candidate.GetStatus().HasExternalBillingAccountId() {
+				break
+			}
+			candidate.GetStatus().ClearExternalBillingAccountId()
 		}
-		// Go string ordering compares UTF-8 bytes, independently of database collation. New rows are private to
-		// this transaction; every existing row was already locked above in SQL OSAC-id order.
-		refs := make([]string, 0, len(observations))
-		for ref := range observations {
-			refs = append(refs, ref)
+		if err != nil {
+			return err
 		}
-		sort.Strings(refs)
-		for _, ref := range refs {
-			id := uuid.New()
-			name, err := billingAccountName(id)
-			if err != nil {
-				return struct{}{}, err
-			}
-			candidate := privatev1.BillingAccount_builder{
-				Id: id, Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SystemTenant, Creator: "system"}.Build(),
-				Spec: &privatev1.BillingAccountSpec{}, Status: observations[ref],
-			}.Build()
-			for attempt := 0; attempt < 2; attempt++ {
-				err = tx.Savepoint(ctx, func(ctx context.Context) error {
-					_, err := s.dao.Create().SetObject(candidate).Do(ctx)
-					return err
-				})
-				var conflict *dao.ErrAlreadyExists
-				if !errors.As(err, &conflict) {
-					break
-				}
-				if conflict.ConstraintName == "billing_accounts_unique_provider_account" {
-					// Never acquire a late winner lock: an unguarded writer is a protocol violation.
-					return struct{}{}, status.Error(codes.Aborted, "billing account inventory changed; retry the request")
-				}
-				if attempt != 0 || conflict.ConstraintName != "billing_accounts_unique_correlation_id" ||
-					!candidate.GetStatus().HasExternalBillingAccountId() {
-					break
-				}
-				candidate.GetStatus().ClearExternalBillingAccountId()
-			}
-			if err != nil {
-				return struct{}{}, err
-			}
-		}
-		return struct{}{}, nil
-	})
-	return err
+	}
+	return nil
 }
 
 // billingAccountObservations prepares and validates the bounded inventory before any SQL lock is taken.

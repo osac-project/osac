@@ -26,137 +26,48 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 )
 
-// noDuplicate is a LocalCorrelationLookup that never reports a conflict.
 func noDuplicate(context.Context, string, string) (bool, error) { return false, nil }
 
-// alwaysDuplicate is a LocalCorrelationLookup that always reports a conflict.
-func alwaysDuplicate(context.Context, string, string) (bool, error) { return true, nil }
-
-// duplicateTimes returns a LocalCorrelationLookup that reports a conflict for the first n calls, then none.
-func duplicateTimes(n int) billing.LocalCorrelationLookup {
-	calls := 0
-	return func(context.Context, string, string) (bool, error) {
-		calls++
-		return calls <= n, nil
-	}
-}
-
-// endlessPagesAdapter wraps a fake whose listings always report a following page, reproducing a provider that
-// never ends a correlation-value match list.
-type endlessPagesAdapter struct {
+// poisonWriteAdapter exposes legacy-shaped methods outside the read-only Adapter contract. Neither may be called.
+type poisonWriteAdapter struct {
 	*billingfake.Fake
+	capabilityQueries int
+	writes            int
 }
 
-func (a *endlessPagesAdapter) ListAccounts(ctx context.Context, filter billing.AccountFilter, page billing.Page) (billing.AccountPage, error) {
-	result, err := a.Fake.ListAccounts(ctx, filter, page)
-	if err != nil {
-		return result, err
-	}
-	result.Next = "always-more"
-	return result, nil
+func (a *poisonWriteAdapter) SupportsCorrelationWrite() bool {
+	a.capabilityQueries++
+	return true
 }
 
-// foreignCarrierAdapter wraps a fake so every exact-value uniqueness scan reports one extra foreign account
-// carrying the value, scripting the case where another provider account already holds a freshly generated value.
-type foreignCarrierAdapter struct {
-	*billingfake.Fake
-}
-
-func (a *foreignCarrierAdapter) ListAccounts(ctx context.Context, filter billing.AccountFilter, page billing.Page) (billing.AccountPage, error) {
-	result, err := a.Fake.ListAccounts(ctx, filter, page)
-	if err != nil {
-		return result, err
-	}
-	if filter.ExternalID != "" {
-		result.Accounts = append(result.Accounts, billing.Account{
-			Ref: billing.NewAccountRef("acct-foreign"), ExternalID: filter.ExternalID, State: billing.AccountActive,
-		})
-	}
-	return result, nil
-}
-
-// acknowledgedWriteAdapter scripts a provider that acknowledges every correlation write without persisting it: the
-// value never appears in a read-back, which post-write validation must never accept.
-type acknowledgedWriteAdapter struct {
-	*billingfake.Fake
-	writes int
-}
-
-func (a *acknowledgedWriteAdapter) SetCorrelationValue(context.Context, billing.AccountRef, string) error {
+func (a *poisonWriteAdapter) SetCorrelationValue(context.Context, billing.AccountRef, string) error {
 	a.writes++
-	return nil
+	return errors.New("unexpected provider mutation")
 }
 
-// mutatingWriteAdapter scripts a provider that stores a different value than the one written, such as one that
-// rewrites the field, so only an exact read-back comparison can catch it.
-type mutatingWriteAdapter struct {
+// carrierPagesAdapter scripts only the provider's list observations; account reads use the native fake.
+type carrierPagesAdapter struct {
 	*billingfake.Fake
+	pages   []billing.AccountPage
+	filters []billing.AccountFilter
+	tokens  []string
+	errAt   int
+	err     error
+	cancel  context.CancelFunc
 }
 
-func (a *mutatingWriteAdapter) SetCorrelationValue(ctx context.Context, ref billing.AccountRef, value string) error {
-	return a.Fake.SetCorrelationValue(ctx, ref, value+"-rewritten")
-}
-
-// duplicatingWriteAdapter scripts a second provider account picking up the same value between the write and the
-// read-back, so the value is no longer unique even though the assigned account reads back correctly.
-type duplicatingWriteAdapter struct {
-	*billingfake.Fake
-}
-
-func (a *duplicatingWriteAdapter) SetCorrelationValue(ctx context.Context, ref billing.AccountRef, value string) error {
-	if err := a.Fake.SetCorrelationValue(ctx, ref, value); err != nil {
-		return err
+func (a *carrierPagesAdapter) ListAccounts(ctx context.Context, filter billing.AccountFilter, page billing.Page) (
+	billing.AccountPage, error) {
+	a.filters = append(a.filters, filter)
+	a.tokens = append(a.tokens, page.Token)
+	if len(a.filters) == a.errAt {
+		if a.cancel != nil {
+			a.cancel()
+			return billing.AccountPage{}, ctx.Err()
+		}
+		return billing.AccountPage{}, a.err
 	}
-	return a.Fake.SetCorrelationValue(ctx, billing.NewAccountRef("acct-2"), value)
-}
-
-// staleListAdapter reads the written value back but never returns it from a search, scripting a provider whose
-// search index lags its own store.
-type staleListAdapter struct {
-	*billingfake.Fake
-}
-
-func (a *staleListAdapter) ListAccounts(ctx context.Context, filter billing.AccountFilter, page billing.Page) (billing.AccountPage, error) {
-	result, err := a.Fake.ListAccounts(ctx, filter, page)
-	if err != nil {
-		return result, err
-	}
-	if filter.ExternalID != "" {
-		result.Accounts, result.Next = nil, ""
-	}
-	return result, nil
-}
-
-// foreignCarrierListAdapter scripts a provider whose two observations of one value disagree: the selected account's
-// own read reports the value, while the bounded exact-value match list returns only a different account carrying it.
-// With afterWrite set the list keeps serving the selected account until this wrapper performs a write, scripting the
-// same divergence for the post-write read-back validation instead of for a provider-present branch.
-type foreignCarrierListAdapter struct {
-	*billingfake.Fake
-	afterWrite bool
-	writes     int
-}
-
-func (a *foreignCarrierListAdapter) SetCorrelationValue(
-	ctx context.Context, ref billing.AccountRef, value string) error {
-	a.writes++
-	return a.Fake.SetCorrelationValue(ctx, ref, value)
-}
-
-func (a *foreignCarrierListAdapter) ListAccounts(
-	ctx context.Context, filter billing.AccountFilter, page billing.Page) (billing.AccountPage, error) {
-	result, err := a.Fake.ListAccounts(ctx, filter, page)
-	if err != nil {
-		return result, err
-	}
-	if filter.ExternalID == "" || (a.afterWrite && a.writes == 0) {
-		return result, nil
-	}
-	// Only a different provider account is listed for the exact value, so a count of one would name the wrong
-	// carrier and a correct scan must reject the resolution.
-	return billing.AccountPage{Accounts: []billing.Account{{
-		Ref: billing.NewAccountRef("acct-2"), ExternalID: filter.ExternalID, State: billing.AccountActive,
-	}}}, nil
+	return a.pages[min(len(a.filters)-1, len(a.pages)-1)], nil
 }
 
 var _ = Describe("ResolveAccountCorrelationID", func() {
@@ -164,428 +75,302 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 	const acctID = "ba-1"
 	const providerAcctID = "acct-1"
 	ref := billing.NewAccountRef(providerAcctID)
-
-	newFake := func(correlationWrite bool, externalID string) *billingfake.Fake {
-		return billingfake.New(billingfake.Scenario{
-			CorrelationWrite: correlationWrite,
-			Accounts: []billingfake.AccountSpec{
-				{ID: providerAcctID, Name: "Acme", ExternalID: externalID, State: billing.AccountActive},
-			},
-		})
+	newFake := func(externalID string) *billingfake.Fake {
+		return billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: providerAcctID, Name: "Acme", ExternalID: externalID, State: billing.AccountActive},
+		}})
+	}
+	input := func(adapter billing.Adapter, localValue string) billing.AccountCorrelationInput {
+		return billing.AccountCorrelationInput{
+			Adapter: adapter, AccountID: acctID, Ref: ref, LocalValue: localValue, LocalDuplicate: noDuplicate,
+		}
+	}
+	expectReason := func(result billing.Resolution, err error, reason string) {
+		GinkgoHelper()
+		Expect(result).To(Equal(billing.Resolution{}))
+		var resolutionErr *billing.CorrelationResolutionError
+		Expect(errors.As(err, &resolutionErr)).To(BeTrue(), "error was %v", err)
+		Expect(resolutionErr.Reason).To(Equal(reason))
+	}
+	carrier := func(id, value string) billing.Account {
+		return billing.Account{Ref: billing.NewAccountRef(id), ExternalID: value}
 	}
 
 	DescribeTable("the precedence table",
-		func(correlationWrite bool, providerExternalID, localValue string,
-			expectValue string, expectWrite bool, expectSkipReason string,
-			expectMatches int) {
-			fake := newFake(correlationWrite, providerExternalID)
-			res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-				Adapter:        fake,
-				AccountID:      acctID,
-				Ref:            ref,
-				LocalValue:     localValue,
-				LocalDuplicate: noDuplicate,
-			})
+		func(providerExternalID, localValue, expectValue string, expectMatches int) {
+			fake := &poisonWriteAdapter{Fake: newFake(providerExternalID)}
+			var adapter billing.Adapter = fake
+			res, err := billing.ResolveAccountCorrelationID(ctx, input(adapter, localValue))
+			Expect(fake.capabilityQueries).To(BeZero(), "resolution must not query a write capability")
+			Expect(fake.writes).To(BeZero(), "resolution must never invoke a provider setter")
 			Expect(err).ToNot(HaveOccurred())
 			if expectValue == "" {
-				// Generated values are random; every other precedence case returns a known value.
 				Expect(res.Value).ToNot(BeEmpty())
+				Expect(res.Value).ToNot(Equal(acctID))
+				Expect(res.Value).ToNot(Equal(providerAcctID))
 			} else {
 				Expect(res.Value).To(Equal(expectValue))
 			}
-			Expect(res.ProviderWritten).To(Equal(expectWrite))
-			Expect(res.ProviderWriteSkippedReason).To(Equal(expectSkipReason))
-			// ProviderMatches is the post-resolution provider count: a verified write leaves the assigned account
-			// as the only carrier, while a skipped write leaves the count at zero and the caller PENDING.
 			Expect(res.ProviderMatches).To(Equal(expectMatches))
-			if expectWrite {
-				Expect(fake.Succeeded("SetCorrelationValue")).To(Equal(1))
+			Expect(fake.Count("CorrelationValue")).To(Equal(1))
+			Expect(fake.Count("ListAccounts")).To(Equal(1))
+			value, _, err := fake.CorrelationValue(ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(value).To(Equal(providerExternalID), "provider bytes must remain unchanged")
+		},
+		Entry("both absent: generates locally and remains pending", "", "", "", 0),
+		Entry("provider-only: adopts the exact provider value", "ext-1", "", "ext-1", 1),
+		Entry("local-only: retains the local value and remains pending", "", "osac-1", "osac-1", 0),
+		Entry("both equal: retains the established value", "same-1", "same-1", "same-1", 1),
+	)
+
+	DescribeTable("preserves raw nonblank bytes and treats whitespace only as absence",
+		func(providerValue, localValue, want string, matches int) {
+			res, err := billing.ResolveAccountCorrelationID(ctx, input(newFake(providerValue), localValue))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res).To(Equal(billing.Resolution{Value: want, ProviderMatches: matches}))
+		},
+		Entry("adopts padded provider bytes", "  padded\t", "", "  padded\t", 1),
+		Entry("retains padded local bytes", "", "  padded\t", "  padded\t", 0),
+		Entry("equal padded established bytes", "  padded\t", "  padded\t", "  padded\t", 1),
+		Entry("blank provider is absent", " \t\n", "local", "local", 0),
+		Entry("blank local is absent", "provider", " \t\n", "provider", 1),
+	)
+
+	It("generates fresh values when both sides are blank", func() {
+		first, err := billing.ResolveAccountCorrelationID(ctx, input(newFake(" \t"), "\n"))
+		Expect(err).ToNot(HaveOccurred())
+		second, err := billing.ResolveAccountCorrelationID(ctx, input(newFake(""), ""))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(first.Value).ToNot(BeEmpty())
+		Expect(second.Value).ToNot(Equal(first.Value))
+	})
+
+	DescribeTable("rejects unequal established values without scanning or changing either side",
+		func(providerValue, localValue string) {
+			fake := newFake(providerValue)
+			res, err := billing.ResolveAccountCorrelationID(ctx, input(fake, localValue))
+			expectReason(res, err, billing.ReasonBillingCorrelationIDConflict)
+			Expect(fake.Count("CorrelationValue")).To(Equal(1))
+			Expect(fake.Count("ListAccounts")).To(BeZero())
+			value, _, err := fake.CorrelationValue(ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(value).To(Equal(providerValue))
+		},
+		Entry("different values", "provider-value", "local-value"),
+		Entry("padding is not normalized", " value ", "value"),
+	)
+
+	DescribeTable("checks local uniqueness for adoption and retention",
+		func(providerValue, localValue string) {
+			fake := newFake(providerValue)
+			account := input(fake, localValue)
+			account.LocalDuplicate = func(_ context.Context, value, exclude string) (bool, error) {
+				Expect(value).To(Equal(" value "))
+				Expect(exclude).To(Equal(acctID))
+				return true, nil
+			}
+			res, err := billing.ResolveAccountCorrelationID(ctx, account)
+			expectReason(res, err, billing.ReasonAccountCorrelationConflict)
+			Expect(fake.Count("ListAccounts")).To(BeZero())
+		},
+		Entry("provider-only", " value ", ""),
+		Entry("local-only", "", " value "),
+	)
+
+	DescribeTable("bounds local generation collisions to five attempts",
+		func(collisions int, success bool) {
+			fake := newFake("")
+			account := input(fake, "")
+			candidates := []string{}
+			account.LocalDuplicate = func(_ context.Context, value, exclude string) (bool, error) {
+				Expect(exclude).To(Equal(acctID))
+				Expect(value).ToNot(BeEmpty())
+				Expect(candidates).ToNot(ContainElement(value))
+				candidates = append(candidates, value)
+				return len(candidates) <= collisions, nil
+			}
+			res, err := billing.ResolveAccountCorrelationID(ctx, account)
+			Expect(candidates).To(HaveLen(min(collisions+1, 5)))
+			Expect(fake.Count("CorrelationValue")).To(Equal(1))
+			if success {
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res).To(Equal(billing.Resolution{Value: candidates[len(candidates)-1]}))
+				Expect(fake.Count("ListAccounts")).To(Equal(1))
 			} else {
-				Expect(fake.Count("SetCorrelationValue")).To(Equal(0))
+				expectReason(res, err, billing.ReasonAccountCorrelationConflict)
+				Expect(fake.Count("ListAccounts")).To(BeZero())
 			}
 		},
-		Entry("both absent, write supported: adopts the generated value, writes it, and verifies it",
-			true, "", "", "", true, "", 1),
-		Entry("both absent, write unsupported: still generates, reports the write skipped",
-			false, "", "", "", false, billing.ReasonProviderCorrelationWriteUnsupported, 0),
-		Entry("provider-only present: adopts the provider value, no write needed",
-			true, "ext-1", "", "ext-1", false, "", 1),
-		Entry("OSAC-only present, write supported: adopts the local value, writes it, and verifies it",
-			true, "", "osac-1", "osac-1", true, "", 1),
-		Entry("OSAC-only present, write unsupported: adopts locally, reports the write skipped",
-			false, "", "osac-1", "osac-1", false, billing.ReasonProviderCorrelationWriteUnsupported, 0),
-		Entry("both present and equal: returns it, no write",
-			true, "same-1", "same-1", "same-1", false, "", 1),
+		Entry("retries twice", 2, true),
+		Entry("succeeds on the fifth", 4, true),
+		Entry("exhausts five collisions", 5, false),
 	)
 
-	It("generates a value that is not the OSAC account id, the provider account id, or empty", func() {
-		fake := newFake(true, "")
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalDuplicate: noDuplicate,
-		})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(res.Value).ToNot(BeEmpty())
-		Expect(res.Value).ToNot(Equal(acctID))
-		Expect(res.Value).ToNot(Equal(providerAcctID))
-	})
-
-	It("generates a unique value on every call", func() {
-		fake1, fake2 := newFake(true, ""), newFake(true, "")
-		res1, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake1, AccountID: acctID, Ref: ref, LocalDuplicate: noDuplicate,
-		})
-		Expect(err).ToNot(HaveOccurred())
-		res2, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake2, AccountID: acctID, Ref: ref, LocalDuplicate: noDuplicate,
-		})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(res1.Value).ToNot(Equal(res2.Value))
-	})
-
-	It("fails with BILLING_CORRELATION_ID_CONFLICT when both sides disagree, changing neither side", func() {
-		fake := newFake(true, "provider-value")
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "local-value", LocalDuplicate: noDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var correlationErr *billing.CorrelationResolutionError
-		Expect(errors.As(err, &correlationErr)).To(BeTrue())
-		Expect(correlationErr.Reason).To(Equal(billing.ReasonBillingCorrelationIDConflict))
-		Expect(fake.Count("SetCorrelationValue")).To(Equal(0))
-	})
-
-	It("treats an empty or whitespace-only provider value as absent without trimming a real value", func() {
-		fake := newFake(true, "   ")
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "osac-1", LocalDuplicate: noDuplicate,
-		})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(res.Value).To(Equal("osac-1"))
-	})
-
-	It("returns the classified provider error and no value when the correlation read fails", func() {
-		fake := billingfake.New(billingfake.Scenario{
-			Accounts: []billingfake.AccountSpec{{ID: providerAcctID}},
-			Failures: map[string]billingfake.Failure{
-				"CorrelationValue": {Reason: billing.ReasonUnavailable, Retryable: true, Status: 503},
-			},
-		})
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "osac-1", LocalDuplicate: noDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var adapterErr *billing.Error
-		Expect(errors.As(err, &adapterErr)).To(BeTrue())
-		Expect(adapterErr.Reason).To(Equal(billing.ReasonUnavailable))
-	})
-
-	It("returns the classified provider error and writes nothing locally when the provider write fails", func() {
-		fake := billingfake.New(billingfake.Scenario{
-			CorrelationWrite: true,
-			Accounts:         []billingfake.AccountSpec{{ID: providerAcctID}},
-			Failures: map[string]billingfake.Failure{
-				"SetCorrelationValue": {Reason: billing.ReasonUnavailable, Retryable: true, Status: 503},
-			},
-		})
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "osac-1", LocalDuplicate: noDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var adapterErr *billing.Error
-		Expect(errors.As(err, &adapterErr)).To(BeTrue())
-		Expect(adapterErr.Reason).To(Equal(billing.ReasonUnavailable))
-	})
-
-	It("fails with ACCOUNT_CORRELATION_CONFLICT when adopting a value another local account already stores", func() {
-		fake := newFake(true, "ext-1")
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalDuplicate: alwaysDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var correlationErr *billing.CorrelationResolutionError
-		Expect(errors.As(err, &correlationErr)).To(BeTrue())
-		Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountCorrelationConflict))
-	})
-
-	It("regenerates a generated value that collides locally, then succeeds", func() {
-		fake := newFake(true, "")
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalDuplicate: duplicateTimes(2),
-		})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(res.Value).ToNot(BeEmpty())
-	})
-
-	It("fails with a classified error after exhausting generation retries against a persistent local collision", func() {
-		fake := newFake(true, "")
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalDuplicate: alwaysDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var correlationErr *billing.CorrelationResolutionError
-		Expect(errors.As(err, &correlationErr)).To(BeTrue())
-		Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountCorrelationConflict))
-	})
-
-	It("fails with ACCOUNT_AMBIGUOUS when more than one provider account carries the resolved value", func() {
-		fake := billingfake.New(billingfake.Scenario{
-			CorrelationWrite: true,
-			Accounts: []billingfake.AccountSpec{
-				{ID: providerAcctID, ExternalID: "shared-1"},
-				{ID: "acct-2", ExternalID: "shared-1"},
-			},
-		})
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalDuplicate: noDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var correlationErr *billing.CorrelationResolutionError
-		Expect(errors.As(err, &correlationErr)).To(BeTrue())
-		Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountAmbiguous))
-	})
-
-	It("fails with ACCOUNT_AMBIGUOUS when another provider account carries an already-consistent value", func() {
-		fake := billingfake.New(billingfake.Scenario{
-			CorrelationWrite: true,
-			Accounts: []billingfake.AccountSpec{
-				{ID: providerAcctID, ExternalID: "same-1"},
-				{ID: "acct-2", ExternalID: "same-1"},
-			},
-		})
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "same-1", LocalDuplicate: noDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var correlationErr *billing.CorrelationResolutionError
-		Expect(errors.As(err, &correlationErr)).To(BeTrue())
-		Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountAmbiguous))
-	})
-
-	It("fails with a MALFORMED provider error when the uniqueness scan never reaches a last page", func() {
-		fake := &endlessPagesAdapter{Fake: newFake(true, "ext-1")}
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalDuplicate: noDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var adapterErr *billing.Error
-		Expect(errors.As(err, &adapterErr)).To(BeTrue())
-		Expect(adapterErr.Reason).To(Equal(billing.ReasonMalformed))
-	})
-
-	It("checks provider uniqueness before writing an adopted OSAC-only value, so an ambiguous match leaves no orphaned write", func() {
-		fake := billingfake.New(billingfake.Scenario{
-			CorrelationWrite: true,
-			Accounts: []billingfake.AccountSpec{
-				{ID: providerAcctID}, // this account: no correlation value yet
-				{ID: "acct-2", ExternalID: "osac-1"},
-				{ID: "acct-3", ExternalID: "osac-1"},
-			},
-		})
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "osac-1", LocalDuplicate: noDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var correlationErr *billing.CorrelationResolutionError
-		Expect(errors.As(err, &correlationErr)).To(BeTrue())
-		Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountAmbiguous))
-		Expect(fake.Count("SetCorrelationValue")).To(Equal(0), "must not write before the uniqueness check passes")
-	})
-
-	DescribeTable("rejects a single foreign carrier before any provider write when adopting an OSAC-only value",
-		func(correlationWrite bool) {
-			fake := billingfake.New(billingfake.Scenario{
-				CorrelationWrite: correlationWrite,
-				Accounts: []billingfake.AccountSpec{
-					{ID: providerAcctID}, // the assigned account: no correlation value yet
-					{ID: "acct-2", ExternalID: "osac-1"},
-				},
-			})
-			res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-				Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "osac-1", LocalDuplicate: noDuplicate,
-			})
+	DescribeTable("returns no partial result on a local lookup error",
+		func(providerValue, localValue string) {
+			fake := newFake(providerValue)
+			account := input(fake, localValue)
+			lookupErr := errors.New("lookup failed")
+			account.LocalDuplicate = func(context.Context, string, string) (bool, error) { return false, lookupErr }
+			res, err := billing.ResolveAccountCorrelationID(ctx, account)
 			Expect(res).To(Equal(billing.Resolution{}))
-			var correlationErr *billing.CorrelationResolutionError
-			Expect(errors.As(err, &correlationErr)).To(BeTrue())
-			Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountAmbiguous))
-			// The write-capable entry is the orphaned-write regression: the value must never reach the
-			// provider when a foreign account already carries it.
-			Expect(fake.Count("SetCorrelationValue")).To(Equal(0), "must not write before rejecting the foreign carrier")
+			Expect(err).To(MatchError(lookupErr))
+			Expect(fake.Count("ListAccounts")).To(BeZero())
 		},
-		Entry("read-only adapter (M360)", false),
-		Entry("write-capable adapter", true),
+		Entry("generated", "", ""),
+		Entry("adopted", "provider", ""),
+		Entry("retained", "", "local"),
 	)
 
-	It("rejects a single foreign carrier of a freshly generated value before any provider write", func() {
-		fake := &foreignCarrierAdapter{Fake: newFake(true, "")}
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalDuplicate: noDuplicate,
-		})
+	It("returns the classified provider error and no value when the account read fails", func() {
+		fake := billingfake.New(billingfake.Scenario{Failures: map[string]billingfake.Failure{
+			"CorrelationValue": {Reason: billing.ReasonUnavailable, Retryable: true, Status: 503},
+		}})
+		res, err := billing.ResolveAccountCorrelationID(ctx, input(fake, "local"))
 		Expect(res).To(Equal(billing.Resolution{}))
-		var correlationErr *billing.CorrelationResolutionError
-		Expect(errors.As(err, &correlationErr)).To(BeTrue())
-		Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountAmbiguous))
-		Expect(fake.Count("SetCorrelationValue")).To(Equal(0), "must not write before rejecting the foreign carrier")
+		Expect(contractReasonOf(err)).To(Equal(billing.ReasonUnavailable))
+		Expect(fake.Count("ListAccounts")).To(BeZero())
 	})
 
-	It("is idempotent: a second call after a successful write adopts the now-consistent value without writing again", func() {
-		fake := newFake(true, "")
-		first, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalDuplicate: noDuplicate,
-		})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(fake.Succeeded("SetCorrelationValue")).To(Equal(1))
+	DescribeTable("requires the selected native identity to be the only established carrier",
+		func(localValue, carrierID string, count int) {
+			accounts := make([]billing.Account, count)
+			for i := range accounts {
+				accounts[i] = carrier(carrierID, "value")
+			}
+			adapter := &carrierPagesAdapter{Fake: newFake("value"), pages: []billing.AccountPage{{Accounts: accounts}}}
+			res, err := billing.ResolveAccountCorrelationID(ctx, input(adapter, localValue))
+			expectReason(res, err, billing.ReasonAccountAmbiguous)
+			Expect(adapter.filters).To(ConsistOf(billing.AccountFilter{ExternalID: "value"}))
+			Expect(adapter.Count("CorrelationValue")).To(Equal(1))
+		},
+		Entry("adopt: foreign sole carrier", "", "acct-2", 1),
+		Entry("equal: foreign sole carrier", "value", "acct-2", 1),
+		Entry("adopt: multiple carriers", "", providerAcctID, 2),
+		Entry("equal: multiple carriers", "value", providerAcctID, 2),
+	)
 
-		// OSAC has not committed first.Value yet: the provider already has it (self-heal path).
-		second, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalDuplicate: noDuplicate,
-		})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(second.Value).To(Equal(first.Value))
-		Expect(second.ProviderMatches).To(Equal(1))
-		Expect(fake.Succeeded("SetCorrelationValue")).To(Equal(1), "second call must not write again")
+	DescribeTable("rejects every carrier when the selected account read was absent",
+		func(localValue, carrierID string, count int) {
+			adapter := &carrierPagesAdapter{Fake: newFake(""), pages: []billing.AccountPage{{}}}
+			account := input(adapter, localValue)
+			account.LocalDuplicate = func(_ context.Context, value, _ string) (bool, error) {
+				for range count {
+					adapter.pages[0].Accounts = append(adapter.pages[0].Accounts, carrier(carrierID, value))
+				}
+				return false, nil
+			}
+			res, err := billing.ResolveAccountCorrelationID(ctx, account)
+			expectReason(res, err, billing.ReasonAccountAmbiguous)
+			Expect(adapter.filters).To(HaveLen(1))
+			Expect(adapter.Count("CorrelationValue")).To(Equal(1))
+		},
+		Entry("local-only: foreign sole carrier", "local", "acct-2", 1),
+		Entry("local-only: contradictory selected sole carrier", "local", providerAcctID, 1),
+		Entry("local-only: multiple carriers", "local", "acct-2", 2),
+		Entry("generated: foreign sole carrier", "", "acct-2", 1),
+		Entry("generated: contradictory selected sole carrier", "", providerAcctID, 1),
+		Entry("generated: multiple carriers", "", "acct-2", 2),
+	)
 
-		// Once OSAC commits the value, a third call sees both sides equal and still does not write.
-		third, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: first.Value, LocalDuplicate: noDuplicate,
-		})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(third.Value).To(Equal(first.Value))
-		Expect(third.ProviderMatches).To(Equal(1))
-		Expect(fake.Succeeded("SetCorrelationValue")).To(Equal(1))
-	})
-
-	DescribeTable("never infers a match from a write acknowledgement",
+	DescribeTable("keeps established values pending when the complete list has no carrier",
 		func(localValue string) {
-			fake := &acknowledgedWriteAdapter{Fake: newFake(true, "")}
-			res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-				Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: localValue, LocalDuplicate: noDuplicate,
-			})
-			Expect(res).To(Equal(billing.Resolution{}), "an unverified write must not yield a value to persist")
-			var correlationErr *billing.CorrelationResolutionError
-			Expect(errors.As(err, &correlationErr)).To(BeTrue())
-			Expect(correlationErr.Reason).To(Equal(billing.ReasonBillingCorrelationReadbackMismatch))
-			Expect(fake.writes).To(Equal(1), "the mismatch is detected after one write, never by repeating it")
-			Expect(err.Error()).To(Equal("billing correlation resolution: " +
-				billing.ReasonBillingCorrelationReadbackMismatch))
+			adapter := &carrierPagesAdapter{Fake: newFake("value"), pages: []billing.AccountPage{{}}}
+			res, err := billing.ResolveAccountCorrelationID(ctx, input(adapter, localValue))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res).To(Equal(billing.Resolution{Value: "value"}))
+			Expect(adapter.filters).To(HaveLen(1))
+			Expect(adapter.Count("CorrelationValue")).To(Equal(1))
 		},
-		Entry("adopting an OSAC-only value", "osac-1"),
-		Entry("setting a generated value", ""),
+		Entry("adopted", ""),
+		Entry("equal", "value"),
 	)
 
-	It("fails with BILLING_CORRELATION_READBACK_MISMATCH when the provider stores a different value", func() {
-		fake := &mutatingWriteAdapter{Fake: newFake(true, "")}
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "osac-1", LocalDuplicate: noDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var correlationErr *billing.CorrelationResolutionError
-		Expect(errors.As(err, &correlationErr)).To(BeTrue())
-		Expect(correlationErr.Reason).To(Equal(billing.ReasonBillingCorrelationReadbackMismatch))
-	})
-
-	It("fails with ACCOUNT_AMBIGUOUS when a second account carries the value by the read-back", func() {
-		fake := &duplicatingWriteAdapter{Fake: billingfake.New(billingfake.Scenario{
-			CorrelationWrite: true,
-			Accounts: []billingfake.AccountSpec{
-				{ID: providerAcctID},
-				{ID: "acct-2"},
-			},
-		})}
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "osac-1", LocalDuplicate: noDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var correlationErr *billing.CorrelationResolutionError
-		Expect(errors.As(err, &correlationErr)).To(BeTrue())
-		Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountAmbiguous),
-			"a verified read-back still requires the value to be unique in the provider")
-	})
-
-	It("fails with BILLING_CORRELATION_READBACK_MISMATCH when the final scan does not find the value", func() {
-		fake := &staleListAdapter{Fake: newFake(true, "")}
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "osac-1", LocalDuplicate: noDuplicate,
-		})
-		Expect(res).To(Equal(billing.Resolution{}))
-		var correlationErr *billing.CorrelationResolutionError
-		Expect(errors.As(err, &correlationErr)).To(BeTrue())
-		Expect(correlationErr.Reason).To(Equal(billing.ReasonBillingCorrelationReadbackMismatch))
-	})
-
-	DescribeTable("never counts a sole foreign carrier as this account's match",
-		func(providerExternalID, localValue string) {
-			fake := &foreignCarrierListAdapter{Fake: newFake(true, providerExternalID)}
-			res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-				Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: localValue, LocalDuplicate: noDuplicate,
-			})
-			// The count discards carrier identity, so accepting the scan as a match would report
-			// ProviderMatches=1 here and the server would record CONNECTED for an account that does not carry
-			// the value. The resolution must fail and report nothing to persist instead.
-			Expect(res).To(Equal(billing.Resolution{}), "a foreign carrier must not yield a value to persist")
-			var correlationErr *billing.CorrelationResolutionError
-			Expect(errors.As(err, &correlationErr)).To(BeTrue())
-			Expect(correlationErr.Reason).To(Equal(billing.ReasonAccountAmbiguous))
-			Expect(fake.Count("SetCorrelationValue")).To(Equal(0), "neither read branch may write")
-		},
-		Entry("provider-present adoption: the account read reports a value only a foreign account carries",
-			"ext-1", ""),
-		Entry("provider-present equal: the account read and the local value agree, but a foreign account is the "+
-			"sole carrier", "same-1", "same-1"),
-	)
-
-	DescribeTable("never accepts a write whose read-back is proven only by a foreign carrier",
-		func(localValue string) {
-			fake := &foreignCarrierListAdapter{Fake: newFake(true, ""), afterWrite: true}
-			res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-				Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: localValue, LocalDuplicate: noDuplicate,
-			})
-			// The read-back returns exactly the written value, so only the carrier identity separates this
-			// unverified write from a proven one.
-			Expect(res).To(Equal(billing.Resolution{}), "an unproven write must not yield a value to persist")
-			var correlationErr *billing.CorrelationResolutionError
-			Expect(errors.As(err, &correlationErr)).To(BeTrue())
-			Expect(correlationErr.Reason).To(Equal(billing.ReasonBillingCorrelationReadbackMismatch))
-			Expect(fake.writes).To(Equal(1), "the mismatch is detected after one write, never by repeating it")
-		},
-		Entry("adopting an OSAC-only value", "osac-1"),
-		Entry("setting a generated value", ""),
-	)
-
-	It("keeps the assignment PENDING when the provider rejects only this account's write as unsupported", func() {
-		fake := billingfake.New(billingfake.Scenario{
-			CorrelationWrite: true,
-			Accounts:         []billingfake.AccountSpec{{ID: providerAcctID}},
-			Failures: map[string]billingfake.Failure{
-				"SetCorrelationValue": {Reason: billing.ReasonUnsupported},
-			},
-		})
-		res, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "osac-1", LocalDuplicate: noDuplicate,
-		})
+	It("walks empty intermediate pages and keeps exact bytes through one complete carrier scan", func() {
+		const value = " padded value\t"
+		adapter := &carrierPagesAdapter{Fake: newFake(value), pages: []billing.AccountPage{
+			{Next: "second"}, {Accounts: []billing.Account{carrier(providerAcctID, value)}, Next: "third"}, {},
+		}}
+		res, err := billing.ResolveAccountCorrelationID(ctx, input(adapter, ""))
 		Expect(err).ToNot(HaveOccurred())
-		Expect(res.Value).To(Equal("osac-1"))
-		Expect(res.ProviderWritten).To(BeFalse())
-		Expect(res.ProviderWriteSkippedReason).To(Equal(billing.ReasonProviderCorrelationWriteUnsupported))
-		Expect(res.ProviderMatches).To(BeZero(), "an unsupported write leaves the assignment PENDING")
+		Expect(res).To(Equal(billing.Resolution{Value: value, ProviderMatches: 1}))
+		Expect(adapter.tokens).To(Equal([]string{"", "second", "third"}))
+		Expect(adapter.filters).To(HaveEach(Equal(billing.AccountFilter{ExternalID: value})))
+		Expect(adapter.Count("CorrelationValue")).To(Equal(1))
 	})
 
-	It("is idempotent on a repeated conflict: the same error is returned and nothing changes", func() {
-		fake := newFake(true, "provider-value")
-		input := billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "local-value", LocalDuplicate: noDuplicate,
-		}
-		_, err1 := billing.ResolveAccountCorrelationID(ctx, input)
-		_, err2 := billing.ResolveAccountCorrelationID(ctx, input)
-		Expect(err1).To(Equal(err2))
+	DescribeTable("requires exhaustion within the 50-page budget, even after a carrier was seen",
+		func(last bool) {
+			pages := make([]billing.AccountPage, billing.MaxListPages)
+			for i := range pages {
+				pages[i].Next = "more"
+			}
+			pages[0].Accounts = []billing.Account{carrier(providerAcctID, "value")}
+			if last {
+				pages[len(pages)-1].Next = ""
+			}
+			adapter := &carrierPagesAdapter{Fake: newFake("value"), pages: pages}
+			res, err := billing.ResolveAccountCorrelationID(ctx, input(adapter, ""))
+			Expect(adapter.filters).To(HaveLen(billing.MaxListPages))
+			Expect(adapter.Count("CorrelationValue")).To(Equal(1))
+			if last {
+				Expect(err).ToNot(HaveOccurred())
+				Expect(res).To(Equal(billing.Resolution{Value: "value", ProviderMatches: 1}))
+			} else {
+				Expect(res).To(Equal(billing.Resolution{}))
+				Expect(contractReasonOf(err)).To(Equal(billing.ReasonMalformed))
+			}
+		},
+		Entry("page 50 ends the scan", true),
+		Entry("page 50 still has a next page", false),
+	)
+
+	DescribeTable("discards a match on a late-page error or cancellation",
+		func(cancelled bool) {
+			callCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			providerErr := billing.NewError(billing.ReasonUnavailable, "ListAccounts", true, 503)
+			adapter := &carrierPagesAdapter{Fake: newFake("value"), errAt: 2, err: providerErr,
+				pages: []billing.AccountPage{{Accounts: []billing.Account{carrier(providerAcctID, "value")}, Next: "next"}}}
+			if cancelled {
+				adapter.cancel = cancel
+			}
+			res, err := billing.ResolveAccountCorrelationID(callCtx, input(adapter, ""))
+			Expect(res).To(Equal(billing.Resolution{}))
+			if cancelled {
+				Expect(errors.Is(err, context.Canceled)).To(BeTrue())
+			} else {
+				Expect(err).To(MatchError(providerErr))
+			}
+			Expect(adapter.filters).To(HaveLen(2))
+			Expect(adapter.Count("CorrelationValue")).To(Equal(1))
+		},
+		Entry("late provider error", false),
+		Entry("cancellation", true),
+	)
+
+	It("retains the persisted local token on revalidation without assuming external remediation", func() {
+		fake := newFake("")
+		first, err := billing.ResolveAccountCorrelationID(ctx, input(fake, ""))
+		Expect(err).ToNot(HaveOccurred())
+		second, err := billing.ResolveAccountCorrelationID(ctx, input(fake, first.Value))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(second).To(Equal(first))
+		remediated, err := billing.ResolveAccountCorrelationID(ctx, input(newFake(first.Value), first.Value))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(remediated).To(Equal(billing.Resolution{Value: first.Value, ProviderMatches: 1}))
 	})
 
-	It("never embeds the correlation value in an error string", func() {
-		fake := newFake(true, "super-secret-correlation-value")
-		_, err := billing.ResolveAccountCorrelationID(ctx, billing.AccountCorrelationInput{
-			Adapter: fake, AccountID: acctID, Ref: ref, LocalValue: "a-different-value", LocalDuplicate: noDuplicate,
-		})
-		Expect(err).To(HaveOccurred())
-		Expect(strings.Contains(err.Error(), "super-secret-correlation-value")).To(BeFalse())
+	It("returns the same conflict repeatedly and never embeds either correlation value in errors", func() {
+		account := input(newFake("super-secret-correlation-value"), "a-different-value")
+		first, err1 := billing.ResolveAccountCorrelationID(ctx, account)
+		second, err2 := billing.ResolveAccountCorrelationID(ctx, account)
+		expectReason(first, err1, billing.ReasonBillingCorrelationIDConflict)
+		Expect(second).To(Equal(billing.Resolution{}))
+		Expect(err2).To(Equal(err1))
+		Expect(strings.Contains(err1.Error(), "super-secret-correlation-value")).To(BeFalse())
+		Expect(strings.Contains(err1.Error(), "a-different-value")).To(BeFalse())
 	})
 })
 

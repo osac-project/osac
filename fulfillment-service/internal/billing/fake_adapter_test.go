@@ -21,7 +21,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 )
 
-// fakeAdapter is a second provider whose native model differs from M360 and which supports correlation writes.
+// fakeAdapter is a second read-only provider whose native model differs from M360.
 type fakeAdapter struct {
 	mu       sync.Mutex
 	accounts map[string]*fakeNativeAccount
@@ -113,18 +113,3 @@ func (f *fakeAdapter) GetServiceRateCard(_ context.Context, svc billing.ServiceR
 
 // HealthCheck implements billing.Adapter.
 func (f *fakeAdapter) HealthCheck(context.Context) error { return nil }
-
-// SupportsCorrelationWrite implements billing.Adapter.
-func (f *fakeAdapter) SupportsCorrelationWrite() bool { return true }
-
-// SetCorrelationValue implements billing.Adapter by tagging the account.
-func (f *fakeAdapter) SetCorrelationValue(_ context.Context, ref billing.AccountRef, value string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	a, ok := f.accounts[ref.ID()]
-	if !ok {
-		return &billing.Error{Reason: billing.ReasonMalformed, Op: "SetCorrelationValue"}
-	}
-	a.tag = value
-	return nil
-}

@@ -382,7 +382,7 @@ var _ = Describe("typed finalizer updates", func() {
 				object := withFinalizers(f.current).(*privatev1.TenantBillingAssignment)
 				var changes int
 				Expect(testPool.QueryRow(f.caller, `select count(*) from changes`).Scan(&changes)).To(Succeed())
-				_, err := f.private.Update(f.caller, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+				_, err := billingRPC(f.caller, f.private.Update, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
 					Object: object, UpdateMask: mask,
 				}.Build())
 				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
@@ -411,7 +411,7 @@ var _ = Describe("typed finalizer updates", func() {
 					object.SetMetadata(nil)
 				}
 				// Keep the same canonical account: nil masks revalidate, they must not reassign or clear it.
-				response, err := f.public.Update(f.caller, publicv1.TenantBillingAssignmentsUpdateRequest_builder{
+				response, err := billingRPC(f.caller, f.public.Update, publicv1.TenantBillingAssignmentsUpdateRequest_builder{
 					Object: object, UpdateMask: mask,
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
@@ -437,14 +437,14 @@ var _ = Describe("typed finalizer updates", func() {
 
 		It("rejects private and public updates to closed history before provider I/O", func() {
 			f := newFinalizerAssignmentFixture(false)
-			_, err := f.private.Update(f.caller, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+			_, err := billingRPC(f.caller, f.private.Update, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
 				Object: withFinalizers(f.history).(*privatev1.TenantBillingAssignment), UpdateMask: finalizersMask(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 			object, err := f.public.toPublic(f.caller, f.history)
 			Expect(err).ToNot(HaveOccurred())
 			object.SetMetadata(nil)
-			_, err = f.public.Update(f.caller, publicv1.TenantBillingAssignmentsUpdateRequest_builder{Object: object}.Build())
+			_, err = billingRPC(f.caller, f.public.Update, publicv1.TenantBillingAssignmentsUpdateRequest_builder{Object: object}.Build())
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 			f.expectUnchanged()
 			Expect(f.fake.Calls()).To(BeEmpty())

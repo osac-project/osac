@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 
@@ -27,11 +28,17 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Billing accounts server", func() {
+	BeforeEach(func() {
+		Expect(suiteTx.End(ctx)).To(Succeed())
+		suiteTx = nil
+		ctx = database.TxManagerIntoContext(context.Background(), tm)
+	})
 	build := func(p *billing.Provider) *BillingAccountsServer {
 		private, err := NewPrivateBillingAccountsServer().SetLogger(logger).SetProvider(p).Build()
 		Expect(err).ToNot(HaveOccurred())
@@ -45,6 +52,25 @@ var _ = Describe("Billing accounts server", func() {
 		Expect(err).To(MatchError("logger is mandatory"))
 		_, err = NewBillingAccountsServer().SetLogger(logger).Build()
 		Expect(err).To(MatchError("delegate is mandatory"))
+	})
+
+	It("rolls discovery and freshness back on strict public mapping failure, then retries the walk", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "private-native", State: billing.AccountActive}}})
+		server := build(fake.Provider())
+		server.outMapper.strict = true
+		_, err := billingRPC(ctx, server.List, &publicv1.BillingAccountsListRequest{})
+		Expect(status.Code(err)).To(Equal(codes.Internal))
+		var count int
+		Expect(testPool.QueryRow(ctx, `select count(*) from billing_accounts`).Scan(&count)).To(Succeed())
+		Expect(count).To(BeZero())
+		Expect(server.private.lastDiscovery).To(BeZero())
+		Expect(server.private.discoverInFlight).To(BeFalse())
+		server.outMapper.strict = false
+		response, err := billingRPC(ctx, server.List, &publicv1.BillingAccountsListRequest{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetTotal()).To(Equal(int32(1)))
+		Expect(fake.Count("ListAccounts")).To(Equal(2))
+		Expect(server.private.lastDiscovery).NotTo(BeZero())
 	})
 
 	It("keeps account Get, Create and Delete as side-effect-free descriptor stubs", func() {
@@ -69,7 +95,7 @@ var _ = Describe("Billing accounts server", func() {
 			fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
 				{ID: "acct-1", Name: "Acme", ExternalID: "ext-1", State: billing.AccountActive},
 			}})
-			response, err := build(fake.Provider()).List(ctx, &publicv1.BillingAccountsListRequest{})
+			response, err := billingRPC(ctx, build(fake.Provider()).List, &publicv1.BillingAccountsListRequest{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetSize()).To(Equal(int32(1)))
 			Expect(response.GetTotal()).To(Equal(int32(1)))
@@ -104,20 +130,20 @@ var _ = Describe("Billing accounts server", func() {
 		}})
 		server := build(fake.Provider())
 
-		filtered, err := server.List(ctx, publicv1.BillingAccountsListRequest_builder{
+		filtered, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{
 			Filter: proto.String(`this.status.state == 2`),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(filtered.GetTotal()).To(Equal(int32(1)))
 		Expect(filtered.GetItems()[0].GetStatus().GetDisplayName()).To(Equal("Alpha"))
 
-		ordered, err := server.List(ctx, publicv1.BillingAccountsListRequest_builder{
+		ordered, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{
 			Order: proto.String("status.display_name"),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ordered.GetItems()[0].GetStatus().GetDisplayName()).To(Equal("Alpha"))
 
-		paged, err := server.List(ctx, publicv1.BillingAccountsListRequest_builder{
+		paged, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{
 			Order: proto.String("status.display_name"), Offset: proto.Int32(1), Limit: proto.Int32(1),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -127,7 +153,7 @@ var _ = Describe("Billing accounts server", func() {
 
 	It("propagates FAILED_PRECONDITION when billing is disabled", func() {
 		fake := billingfake.New(billingfake.Scenario{})
-		_, err := build(billing.NewProvider("", fake, nil)).List(ctx, &publicv1.BillingAccountsListRequest{})
+		_, err := billingRPC(ctx, build(billing.NewProvider("", fake, nil)).List, &publicv1.BillingAccountsListRequest{})
 		st, ok := status.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(st.Code()).To(Equal(codes.FailedPrecondition))
@@ -137,7 +163,7 @@ var _ = Describe("Billing accounts server", func() {
 		fake := billingfake.New(billingfake.Scenario{
 			Failures: map[string]billingfake.Failure{"ListAccounts": {Reason: billing.ReasonUnavailable}},
 		})
-		_, err := build(fake.Provider()).List(ctx, &publicv1.BillingAccountsListRequest{})
+		_, err := billingRPC(ctx, build(fake.Provider()).List, &publicv1.BillingAccountsListRequest{})
 		st, ok := status.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(st.Code()).To(Equal(codes.Unavailable))
@@ -145,7 +171,7 @@ var _ = Describe("Billing accounts server", func() {
 
 	It("returns an empty items list, not an error, when no accounts are discovered", func() {
 		fake := billingfake.New(billingfake.Scenario{})
-		response, err := build(fake.Provider()).List(ctx, &publicv1.BillingAccountsListRequest{})
+		response, err := billingRPC(ctx, build(fake.Provider()).List, &publicv1.BillingAccountsListRequest{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetItems()).To(BeEmpty())
 		Expect(response.GetTotal()).To(BeZero())
@@ -157,7 +183,7 @@ var _ = Describe("Billing accounts server", func() {
 	// private-only field.
 	It("rejects a filter referencing the private-only provider_account_reference field", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "acct-1"}}})
-		_, err := build(fake.Provider()).List(ctx, publicv1.BillingAccountsListRequest_builder{
+		_, err := billingRPC(ctx, build(fake.Provider()).List, publicv1.BillingAccountsListRequest_builder{
 			// Syntactically valid under this table's own filter grammar (this.<field> == "<value>"); the field
 			// name itself must still be rejected because it is not in the public allowlist.
 			Filter: proto.String(`this.status.provider_account_reference == "acct-1"`),
@@ -170,7 +196,7 @@ var _ = Describe("Billing accounts server", func() {
 
 	It("accepts a filter referencing only the public provider_key field, as a positive control", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "acct-1"}}})
-		response, err := build(fake.Provider()).List(ctx, publicv1.BillingAccountsListRequest_builder{
+		response, err := billingRPC(ctx, build(fake.Provider()).List, publicv1.BillingAccountsListRequest_builder{
 			Filter: proto.String(`this.status.provider_key == "fake"`),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -182,7 +208,7 @@ var _ = Describe("Billing accounts server", func() {
 			{ID: "acct-1", State: billing.AccountActive},
 		}})
 		first := build(fake.Provider())
-		response, err := first.List(ctx, &publicv1.BillingAccountsListRequest{})
+		response, err := billingRPC(ctx, first.List, &publicv1.BillingAccountsListRequest{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetTotal()).To(Equal(int32(1)))
 
@@ -190,7 +216,7 @@ var _ = Describe("Billing accounts server", func() {
 		// first request committed. The freshness window remains per-process: a second pod still re-walks the
 		// provider inside the first pod's window, and cross-pod freshness sharing is not covered here.
 		second := build(fake.Provider())
-		response, err = second.List(ctx, &publicv1.BillingAccountsListRequest{})
+		response, err = billingRPC(ctx, second.List, &publicv1.BillingAccountsListRequest{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetTotal()).To(Equal(int32(1)))
 		Expect(fake.Count("ListAccounts")).To(Equal(2), "a fresh instance has no freshness window yet")
@@ -199,7 +225,7 @@ var _ = Describe("Billing accounts server", func() {
 	DescribeTable("rejects unsupported public order paths",
 		func(order string) {
 			fake := billingfake.New(billingfake.Scenario{})
-			_, err := build(fake.Provider()).List(ctx, publicv1.BillingAccountsListRequest_builder{
+			_, err := billingRPC(ctx, build(fake.Provider()).List, publicv1.BillingAccountsListRequest_builder{
 				Order: proto.String(order),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
@@ -223,20 +249,20 @@ var _ = Describe("Billing accounts server", func() {
 			Filter: proto.String(`this.status.state == 1`), Order: proto.String("status.display_name desc"),
 			Limit: proto.Int32(0),
 		}.Build()
-		all, err := server.List(ctx, request)
+		all, err := billingRPC(ctx, server.List, request)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(all.GetTotal()).To(Equal(int32(2)))
 		Expect(all.GetItems()).To(HaveLen(2))
 		Expect(all.GetItems()[0].GetId() < all.GetItems()[1].GetId()).To(BeTrue())
 		request.SetLimit(1)
 		request.SetOffset(1)
-		page, err := server.List(ctx, request)
+		page, err := billingRPC(ctx, server.List, request)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(page.GetTotal()).To(Equal(int32(2)))
 		Expect(page.GetItems()).To(HaveLen(1))
 		Expect(page.GetItems()[0].GetId()).To(Equal(all.GetItems()[1].GetId()))
 		request.SetOffset(-1)
-		_, err = server.List(ctx, request)
+		_, err = billingRPC(ctx, server.List, request)
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
 
@@ -245,7 +271,7 @@ var _ = Describe("Billing accounts server", func() {
 			fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "a", Name: "Platform"}}})
 			server := build(fake.Provider())
 			caller := auth.ContextWithSubject(ctx, &auth.Subject{User: "authorized-platform-admin", Tenants: tenants})
-			response, err := server.List(caller, publicv1.BillingAccountsListRequest_builder{
+			response, err := billingRPC(caller, server.List, publicv1.BillingAccountsListRequest_builder{
 				Filter: proto.String(`this.metadata.tenant == "system"`), Limit: proto.Int32(1),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -262,7 +288,7 @@ var _ = Describe("Billing accounts server", func() {
 	DescribeTable("rejects private, reserved and legacy filter paths through the public descriptor",
 		func(filter string) {
 			server := build(billingfake.New(billingfake.Scenario{}).Provider())
-			_, err := server.List(ctx, publicv1.BillingAccountsListRequest_builder{Filter: proto.String(filter)}.Build())
+			_, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{Filter: proto.String(filter)}.Build())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		},
 		Entry("private native identity", `this.status.provider_account_reference == "native"`),

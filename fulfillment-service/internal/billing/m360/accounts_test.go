@@ -15,6 +15,7 @@ package m360
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -306,6 +307,22 @@ var _ = Describe("M360 accounts", func() {
 			Expect(v).To(BeEmpty())
 		})
 
+		DescribeTable("preserves correlation bytes and distinguishes null or empty from nonempty reads",
+			func(wireValue, want string, present bool) {
+				build(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte(dataBody(`{"Id":"a1","ExternalId":` + wireValue + `}`)))
+				})
+				value, found, err := adapter.CorrelationValue(context.Background(), billing.NewAccountRef("a1"))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(value).To(Equal(want))
+				Expect(found).To(Equal(present))
+			},
+			Entry("null", `null`, "", false),
+			Entry("empty", `""`, "", false),
+			Entry("whitespace remains raw for the resolver to classify", `" \t"`, " \t", true),
+			Entry("padded established value", `" value\t"`, " value\t", true),
+		)
+
 		It("propagates lookup failure from CorrelationValue", func() {
 			build(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(409) })
 			_, _, err := adapter.CorrelationValue(context.Background(), billing.NewAccountRef("a1"))
@@ -313,15 +330,43 @@ var _ = Describe("M360 accounts", func() {
 		})
 	})
 
-	Describe("correlation write", func() {
-		It("is unsupported and never contacts the provider", func() {
-			build(func(http.ResponseWriter, *http.Request) {})
-			Expect(adapter.SupportsCorrelationWrite()).To(BeFalse())
-			err := adapter.SetCorrelationValue(context.Background(), billing.NewAccountRef("a1"), "v")
-			Expect(reasonOf(err)).To(Equal(billing.ReasonUnsupported))
-			Expect(fake.hits.Load()).To(BeZero())
-		})
-	})
+	DescribeTable("resolves correlation evidence using only GET requests",
+		func(providerValue, localValue string, matches int) {
+			encoded, err := json.Marshal(providerValue)
+			Expect(err).ToNot(HaveOccurred())
+			row := `{"Id":"a1","ExternalId":` + string(encoded) + `}`
+			build(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/accounts/a1") {
+					_, _ = w.Write([]byte(dataBody(row)))
+					return
+				}
+				content := `[]`
+				if providerValue != "" {
+					content = `[` + row + `]`
+				}
+				_, _ = w.Write([]byte(listBody(0, true, content)))
+			})
+			res, err := billing.ResolveAccountCorrelationID(context.Background(), billing.AccountCorrelationInput{
+				Adapter: adapter, AccountID: "ba-1", Ref: billing.NewAccountRef("a1"), LocalValue: localValue,
+				LocalDuplicate: func(context.Context, string, string) (bool, error) { return false, nil },
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(res.Value).ToNot(BeEmpty())
+			if providerValue != "" {
+				Expect(res.Value).To(Equal(providerValue))
+			} else if localValue != "" {
+				Expect(res.Value).To(Equal(localValue))
+			}
+			Expect(res.ProviderMatches).To(Equal(matches))
+			Expect(fake.hits.Load()).To(Equal(int32(2)), "one account read and one complete exact carrier scan")
+			Expect((<-queries).Get("q")).To(BeEmpty())
+			Expect((<-queries).Get("q")).To(Equal(res.Value))
+		},
+		Entry("generates locally", "", "", 0),
+		Entry("retains locally", "", " local\t", 0),
+		Entry("adopts provider bytes", " provider\t", "", 1),
+		Entry("retains equal bytes", " equal\t", " equal\t", 1),
+	)
 
 	Describe("HealthCheck", func() {
 		It("succeeds when the account API answers", func() {

@@ -539,15 +539,15 @@ uppercase, and no currency is invented or defaulted. Rate-card-derived currency 
 is owned by [OSAC-6890](https://redhat.atlassian.net/browse/OSAC-6890); account discovery alone
 does not implement that pricing boundary.
 
-A successful correlation-write response is not enough to establish `CONNECTED`. The adapter
-must read back the exact value, and the selected account must be its sole provider-side
-carrier. An acknowledged write with a differing read-back fails with
-`FAILED_PRECONDITION/BILLING_CORRELATION_READBACK_MISMATCH`. Adapters without correlation-write
-support retain the `PENDING` remediation path. Under the merged design's M360 contract, the
-OSAC adapter reports correlation-write unsupported: an external administrator sets the
-provider `externalId` to the `external_billing_account_id` shown by `BillingAccounts.List`,
-then re-submits Update to validate the unique match.
-Current vendor API capabilities do not silently change this application contract.
+Correlation resolution is read-only for every adapter. It retains, adopts or generates a
+local identifier, then completes one bounded exact-carrier walk. `CONNECTED` requires the
+selected account to be the sole provider-side carrier; zero carriers leaves the assignment
+`PENDING`. An external administrator sets the provider `externalId` to the
+`external_billing_account_id` shown by `BillingAccounts.List`, then re-submits same-account
+Update (or private Signal) to validate the unique match without replacing or retiming the
+interval. Foreign, multiple or inconsistent carriers fail with `ACCOUNT_AMBIGUOUS`.
+Vendor write capabilities do not change this application contract; OSAC never calls an
+account setter.
 
 Assignment creation, replacement, and same-account revalidation read the selected
 account's normalized state from the provider before resolving correlation. The stored
@@ -557,9 +557,21 @@ a stale stored `INACTIVE` or `UNKNOWN` does not block an account the provider re
 active now, and provider-read failure is not permission to fall back to that cache.
 State observations retain their observation time and cannot overwrite a newer stored
 observation; a newer observation already stored, or a stored state change committed
-after the assignment read, still decides the request and can reject it. Provider calls
-run outside database transactions. This is assignment-time validation, not continuous
-provider monitoring.
+after the assignment read, still decides the request and can reject it. State, correlation
+and exact-carrier reads share one provider deadline and finish before business locks.
+This is assignment-time validation, not continuous provider monitoring.
+
+Every billing unary RPC uses the ordinary ambient request transaction, including public
+mapping. Validation, provider, page, mapping or persistence failure rolls back all local
+changes; a failed outer commit returns `Internal`. Discovery's full inventory, unseen sweep
+and requested page are atomic, and its per-process freshness window advances only after
+that commit succeeds. Provider reads may occupy a database connection but hold no business
+row locks. Assignment finalization locks the tenant, the complete original selected/previous
+account set in SQL id order, then the current interval; it rereads material inputs before
+merging observations or adopting a token. Changed snapshots and SQL deadlocks abort without
+hidden provider retries. One post-I/O, post-lock database clock sample, clamped to all-history
+boundaries, is used for both the old interval's end and its replacement's start. No durable
+billing operation lease or separate eligibility transaction is used.
 
 Tenant deletion closes its active assignment in the deletion transaction and records a
 read-only tombstone message, releasing the account for another tenant. Billing history retains

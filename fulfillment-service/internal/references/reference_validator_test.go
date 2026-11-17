@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
@@ -29,12 +30,96 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
 var _ = Describe("Reference validator", func() {
 	var validator *ReferenceValidator
+
+	Describe("Ambient transaction error reporting", func() {
+		DescribeTable("reports final errors without changing their status", func(kind string) {
+			ctrl := gomock.NewController(GinkgoT())
+			v, err := NewReferenceValidator().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			v.Register("osac.tests.v1.TestTargetReference", func(context.Context, string, string, string, string) (*ResolvedRef, error) {
+				if kind == "missing" {
+					return nil, &errRefNotFound{identifier: "missing-target"}
+				}
+				if kind == "internal" {
+					return nil, fmt.Errorf("lookup failed")
+				}
+				return &ResolvedRef{ID: "target-id", Name: "target-name"}, nil
+			})
+			var request any = testsv1.UpdateTestResourceWithRefsRequest_builder{Object: testsv1.TestResourceWithRefs_builder{
+				Spec: testsv1.TestRefSpec_builder{Target: testsv1.TestTargetReference_builder{Name: "target-name"}.Build()}.Build(),
+			}.Build()}.Build()
+			method := "/osac.tests.v1.TestService/Update"
+			if kind == "mask" {
+				request = privatev1.ClustersUpdateRequest_builder{UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec..target"}}}.Build()
+			}
+			if kind == "metadata" {
+				request = privatev1.ClustersUpdateRequest_builder{UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}}}.Build()
+			}
+			if kind == "list" {
+				method = "/osac.tests.v1.TestService/List"
+			}
+			tx := database.NewMockTx(ctrl)
+			var reported error
+			tx.EXPECT().ReportError(gomock.Any()).Do(func(value *error) { reported = *value }).Times(1)
+			called := false
+			_, err = v.UnaryServer(database.TxIntoContext(context.Background(), tx), request,
+				&grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) {
+					called = true
+					return nil, grpcstatus.Error(grpccodes.FailedPrecondition, "handler failed")
+				})
+			Expect(err).To(HaveOccurred(), kind)
+			Expect(reported).To(BeIdenticalTo(err), kind)
+			switch kind {
+			case "mask", "missing":
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(called).To(BeFalse())
+			case "internal":
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Internal))
+				Expect(called).To(BeFalse())
+			default:
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(called).To(BeTrue())
+			}
+			ctrl.Finish()
+		},
+			Entry("canonical mask", "mask"),
+			Entry("missing reference", "missing"),
+			Entry("internal lookup failure", "internal"),
+			Entry("downstream handler", "downstream"),
+			Entry("non-write method", "list"),
+			Entry("metadata-only update", "metadata"),
+		)
+
+		It("preserves a successful response with or without an ambient transaction", func() {
+			ctrl := gomock.NewController(GinkgoT())
+			tx := database.NewMockTx(ctrl)
+			tx.EXPECT().ReportError(gomock.Any()).Do(func(value *error) { Expect(*value).ToNot(HaveOccurred()) }).Times(1)
+			v, err := NewReferenceValidator().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			for _, ctx := range []context.Context{context.Background(), database.TxIntoContext(context.Background(), tx)} {
+				response, err := v.UnaryServer(ctx, "not-a-proto", &grpc.UnaryServerInfo{FullMethod: "/tests/Update"},
+					func(context.Context, any) (any, error) { return "accepted", nil })
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).To(Equal("accepted"))
+			}
+		})
+
+		It("does not turn a missing transaction into a new downstream validation error", func() {
+			v, err := NewReferenceValidator().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			expected := grpcstatus.Error(grpccodes.FailedPrecondition, "handler failed")
+			_, err = v.UnaryServer(context.Background(), "not-a-proto", &grpc.UnaryServerInfo{FullMethod: "/tests/List"},
+				func(context.Context, any) (any, error) { return nil, expected })
+			Expect(err).To(BeIdenticalTo(expected))
+		})
+	})
 
 	Describe("Builder", func() {
 		It("Succeeds when logger is set", func() {

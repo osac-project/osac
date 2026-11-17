@@ -98,11 +98,4 @@ type Adapter interface {
 	ListPriceableAttributes(ctx context.Context, svc ServiceRef) ([]PriceableAttribute, error)
 	GetServiceRateCard(ctx context.Context, svc ServiceRef, currency string) (RateCard, error)
 	HealthCheck(ctx context.Context) error
-
-	// SupportsCorrelationWrite reports whether SetCorrelationValue is implemented by the provider.
-	SupportsCorrelationWrite() bool
-
-	// SetCorrelationValue fails with an UNSUPPORTED *Error when SupportsCorrelationWrite is false, or when
-	// writing is unsupported for the selected account. Resolution retains the PENDING remediation path in either case.
-	SetCorrelationValue(ctx context.Context, ref AccountRef, value string) error
 }

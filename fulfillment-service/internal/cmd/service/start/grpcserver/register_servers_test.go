@@ -24,6 +24,7 @@ package grpcserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -31,6 +32,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
@@ -38,23 +40,31 @@ import (
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	hubscheme "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/scheme"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
+	"github.com/osac-project/osac/fulfillment-service/internal/metrics"
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
+	"github.com/osac-project/osac/fulfillment-service/internal/provisioners"
 	"github.com/osac-project/osac/fulfillment-service/internal/recovery"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
+	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	itesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
+	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -313,6 +323,360 @@ var _ = Describe("Registered billing scaffolds", func() {
 			}
 			Expect(fake.Calls()).To(BeEmpty(), persona.username)
 		}
+	})
+})
+
+var _ = Describe("Production request transaction boundary", func() {
+	const tenantID = "request-tenant"
+	const foreignTenant = "foreign-tenant"
+	var (
+		manager     database.TxManager
+		observer    *pgx.Conn
+		realTenancy auth.TenancyLogic
+		newClient   func(*billing.Provider) *grpc.ClientConn
+		caller      func(string, bool) context.Context
+	)
+
+	BeforeEach(func() {
+		db, err := dbContainer.NewInstance().Build()
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(db.Close)
+		pool, err := db.Pool(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(pool.Close)
+		// This connection never belongs to the server pool or its request transaction.
+		observer, err = db.Connection(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() { Expect(observer.Close(ctx)).To(Succeed()) })
+		for _, tenant := range []string{tenantID, foreignTenant} {
+			_, err = observer.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
+				values ($1, $1, $1, 'system', '{}')`, tenant)
+			Expect(err).ToNot(HaveOccurred())
+		}
+		manager, err = database.NewTxManager().SetLogger(logger).SetPool(pool).Build()
+		Expect(err).ToNot(HaveOccurred())
+		realTenancy, err = auth.NewDefaultTenancyLogic().SetLogger(logger).
+			SetTenantResolver(database.ResolveLiveTenantNames).Build()
+		Expect(err).ToNot(HaveOccurred())
+		localCtrl := gomock.NewController(GinkgoT())
+		DeferCleanup(localCtrl.Finish)
+		jwtValidator := auth.NewMockJwtValidator(localCtrl)
+		tokens := map[string]*jwt.Token{}
+		// Only JWT crypto/issuer validation is mocked. The real authn interceptor
+		// consumes Bearer metadata; OPA constructs the actual trusted subject.
+		jwtValidator.EXPECT().Validate(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, raw string) (*jwt.Token, error) {
+				token, ok := tokens[raw]
+				if !ok {
+					return nil, fmt.Errorf("unknown fixture token")
+				}
+				return token, nil
+			}).AnyTimes()
+		caller = func(username string, admin bool) context.Context {
+			claims := jwt.MapClaims{"username": username, "organization": []any{tenantID},
+				"realm_access": map[string]any{"roles": []any{"tenant-admin"}}}
+			if admin {
+				claims["groups"] = []any{"admins"}
+			}
+			token := itesting.MakeTokenObject(nil, claims)
+			tokens[token.Raw] = token
+			return metadata.NewOutgoingContext(ctx, metadata.Pairs(auth.Authorization, "Bearer "+token.Raw))
+		}
+		newClient = func(provider *billing.Provider) *grpc.ClientConn {
+			registry := prometheus.NewRegistry()
+			privateAttribution, err := auth.NewSystemAttributionLogic().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			users, err := servers.NewPrivateUsersServer().SetLogger(logger).
+				SetAttributionLogic(privateAttribution).SetTenancyLogic(realTenancy).SetMetricsRegisterer(registry).Build()
+			Expect(err).ToNot(HaveOccurred())
+			usersDAO, err := dao.NewGenericDAO[*privatev1.User]().SetLogger(logger).SetTenancyLogic(realTenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			publicAttribution, err := auth.NewDefaultAttributionLogic().SetLogger(logger).
+				SetUserIDResolver(&userIDResolver{usersDAO: usersDAO}).Build()
+			Expect(err).ToNot(HaveOccurred())
+			provisioner, err := provisioners.NewUserProvisioner().SetLogger(logger).SetUsersServer(users).Build()
+			Expect(err).ToNot(HaveOccurred())
+			jit, err := auth.NewGrpcJitProvisioningInterceptor().SetLogger(logger).SetProvisioner(provisioner).Build()
+			Expect(err).ToNot(HaveOccurred())
+			evaluator, err := auth.NewEvaluator().SetManagedServiceAccountResolver(serviceaccounts.ResolveAuthorization).
+				SetTenantResolver(database.ResolveLiveTenantNames).Build()
+			Expect(err).ToNot(HaveOccurred())
+			projects, err := dao.NewMetadataFetcher().SetLogger(logger).SetTable("projects").Build()
+			Expect(err).ToNot(HaveOccurred())
+			memberships, err := dao.NewMetadataFetcher().SetLogger(logger).SetTable("project_memberships").Build()
+			Expect(err).ToNot(HaveOccurred())
+			authz, err := auth.NewGrpcAuthzInterceptor().SetLogger(logger).SetEvaluator(evaluator).
+				SetMetadataFetcher(projects).SetProjectMembershipMetadataFetcher(memberships).Build()
+			Expect(err).ToNot(HaveOccurred())
+			authn, err := auth.NewGrpcAuthnInterceptor().SetLogger(logger).SetJwtValidator(jwtValidator).Build()
+			Expect(err).ToNot(HaveOccurred())
+			refs, err := newReferenceValidator(logger, realTenancy, registry)
+			Expect(err).ToNot(HaveOccurred())
+			tx, err := database.NewTxInterceptor().SetLogger(logger).SetManager(manager).Build()
+			Expect(err).ToNot(HaveOccurred())
+			panicInterceptor, err := recovery.NewGrpcPanicInterceptor().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			metricsInterceptor, err := metrics.NewGrpcInterceptor().SetSubsystem("inbound").SetRegisterer(registry).Build()
+			Expect(err).ToNot(HaveOccurred())
+			loggingInterceptor, err := logging.NewInterceptor().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			validationInterceptor, err := validation.NewProtovalidateInterceptor().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			server := itesting.NewServer(grpc.ChainUnaryInterceptor(
+				panicInterceptor.UnaryServer, metricsInterceptor.UnaryServer, loggingInterceptor.UnaryServer,
+				validationInterceptor.UnaryServer, tx.UnaryServer, authn.UnaryServer,
+				authz.UnaryServer, jit.UnaryServer, refs.UnaryServer,
+			))
+			DeferCleanup(server.Stop)
+			_, err = RegisterResourceServers(ctx, server.Registrar(), ResourceServerDeps{
+				Logger: logger, PrivateAttributionLogic: privateAttribution, PublicAttributionLogic: publicAttribution,
+				TenancyLogic: realTenancy, MetricsRegisterer: registry, HubScheme: hubScheme,
+				SecretStore: vault.NewMockSecretStore(localCtrl), TierResolver: tierResolver,
+				PrivateUsersServer: users, Services: &services.Flags{CaaS: true, VMaaS: true, BMaaS: true, MaaS: true},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(registerBillingResourceServers(ctx, server.Registrar(), logger, provider)).To(Succeed())
+			server.Start()
+			client, err := grpc.NewClient(server.Address(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(client.Close)
+			return client
+		}
+	})
+
+	assertUserEffects := func(username string, expected int) {
+		GinkgoHelper()
+		var count int
+		Expect(observer.QueryRow(ctx, `select count(*) from users where name = $1 and tenant = $2`, username, tenantID).Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(expected), "committed JIT User")
+		Expect(observer.QueryRow(ctx, `select count(*) from changes where "table" = 'users' and data->>'name' = $1`, username).Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(expected), "transactional User changes row")
+	}
+
+	It("rolls back real eligible JIT writes after missing-reference and ordinary handler errors", func() {
+		client := publicv1.NewRoleBindingsClient(newClient(billing.NewProvider("", nil, nil)))
+		for _, failure := range []string{"reference", "filter"} {
+			username := "jit-" + failure
+			identity := caller(username, false)
+			assertUserEffects(username, 0)
+			var err error
+			if failure == "reference" {
+				_, err = client.Create(identity, publicv1.RoleBindingsCreateRequest_builder{Object: publicv1.RoleBinding_builder{
+					Metadata: publicv1.Metadata_builder{Name: "missing-role-binding", Tenant: tenantID}.Build(),
+					Spec:     publicv1.RoleBindingSpec_builder{Role: publicv1.RoleReference_builder{Name: "missing-role"}.Build()}.Build(),
+				}.Build()}.Build())
+				Expect(err).To(MatchError(ContainSubstring("object.spec.role")))
+			} else {
+				_, err = client.List(identity, publicv1.RoleBindingsListRequest_builder{Filter: new("this.spec.role ==")}.Build())
+			}
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			assertUserEffects(username, 0)
+			// The same identity really is eligible: a successful ordinary RPC commits
+			// both the actual provisioner's User and the database trigger's change.
+			_, err = client.List(identity, &publicv1.RoleBindingsListRequest{})
+			Expect(err).ToNot(HaveOccurred())
+			assertUserEffects(username, 1)
+		}
+	})
+
+	It("keeps denied, unconfigured and provider-failed billing discovery free of local effects", func() {
+		for _, private := range []bool{false, true} {
+			failed := billingfake.New(billingfake.Scenario{Failures: map[string]billingfake.Failure{
+				"ListAccounts": {Reason: billing.ReasonUnavailable, Retryable: true},
+			}})
+			client := newClient(failed.Provider())
+			list := func(identity context.Context, client *grpc.ClientConn) error {
+				if private {
+					_, err := privatev1.NewBillingAccountsClient(client).List(identity, &privatev1.BillingAccountsListRequest{})
+					return err
+				}
+				_, err := publicv1.NewBillingAccountsClient(client).List(identity, &publicv1.BillingAccountsListRequest{})
+				return err
+			}
+			Expect(grpcstatus.Code(list(caller("denied-billing", false), client))).To(Equal(grpccodes.PermissionDenied))
+			Expect(failed.Calls()).To(BeEmpty())
+			Expect(grpcstatus.Code(list(caller("billing-admin", true), client))).To(Equal(grpccodes.Unavailable))
+			Expect(failed.Count("ListAccounts")).To(Equal(1))
+			off := newClient(billing.NewProvider("", nil, nil))
+			err := list(caller("billing-admin", true), off)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(fmt.Sprint(grpcstatus.Convert(err).Details())).To(ContainSubstring("BILLING_NOT_CONFIGURED"))
+		}
+		assertUserEffects("billing-admin", 0)
+		assertUserEffects("denied-billing", 0)
+		for _, table := range []string{"billing_accounts", "tenant_billing_assignments"} {
+			var count int
+			Expect(observer.QueryRow(ctx, "select count(*) from "+table).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+		}
+	})
+
+	Describe("billing Update prehandler precedence", func() {
+		const accountID = "request-account"
+		const replacementID = "replacement-account"
+		stableName := func(id string) string { return fmt.Sprintf("ba-%x", sha256.Sum256([]byte(id)))[:63] }
+		accountName := func() string { return stableName(accountID) }
+		var fake *billingfake.Fake
+		var client *grpc.ClientConn
+		BeforeEach(func() {
+			// Commit all setup before transport; it must be visible to its own transaction.
+			setup := auth.ContextWithSubject(database.TxManagerIntoContext(ctx, manager), &auth.Subject{User: "fixture", Tenants: auth.AllTenants})
+			_, err := database.WithNewTx(setup, func(c context.Context) (struct{}, error) {
+				accounts, err := dao.NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(realTenancy).Build()
+				if err != nil {
+					return struct{}{}, err
+				}
+				for _, id := range []string{accountID, replacementID} {
+					_, err = accounts.Create().SetObject(privatev1.BillingAccount_builder{Id: id,
+						Metadata: privatev1.Metadata_builder{Name: stableName(id), Tenant: auth.SystemTenant, Creator: "system"}.Build(),
+						Spec:     &privatev1.BillingAccountSpec{}, Status: privatev1.BillingAccountStatus_builder{
+							ProviderKey: billingfake.Key, ProviderAccountReference: id,
+							State: privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE, StateObservationTimestamp: timestamppb.Now(),
+						}.Build(),
+					}.Build()).Do(c)
+					if err != nil {
+						return struct{}{}, err
+					}
+				}
+				assignments, err := dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().SetLogger(logger).SetTenancyLogic(realTenancy).Build()
+				if err != nil {
+					return struct{}{}, err
+				}
+				for _, historical := range []bool{true, false} {
+					id := "current"
+					state := privatev1.TenantBillingAssignmentStatus_builder{
+						ConnectionState:        privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
+						EffectiveFromTimestamp: timestamppb.New(time.Now().Add(-time.Hour)),
+					}.Build()
+					if historical {
+						id = "historical"
+						state.SetEffectiveToTimestamp(timestamppb.New(time.Now().Add(-time.Minute)))
+					}
+					_, err = assignments.Create().SetObject(privatev1.TenantBillingAssignment_builder{Id: id,
+						Metadata: privatev1.Metadata_builder{Name: id, Tenant: foreignTenant, Creator: "fixture",
+							Annotations: map[string]string{"osac.openshift.io/tenant": foreignTenant}}.Build(),
+						Spec: privatev1.TenantBillingAssignmentSpec_builder{Tenant: privatev1.TenantReference_builder{Id: foreignTenant, Name: foreignTenant}.Build(),
+							BillingAccount: privatev1.BillingAccountReference_builder{Id: accountID, Name: accountName()}.Build()}.Build(), Status: state,
+					}.Build()).Do(c)
+					if err != nil {
+						return struct{}{}, err
+					}
+				}
+				return struct{}{}, nil
+			})
+			Expect(err).ToNot(HaveOccurred())
+			fake = billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+				{ID: accountID, ExternalID: "provider-token", State: billing.AccountActive},
+				{ID: replacementID, ExternalID: "replacement-token", State: billing.AccountActive},
+			}})
+			client = newClient(fake.Provider())
+		})
+		update := func(identity context.Context, private bool, id, tenant, account, name string, mask *fieldmaskpb.FieldMask) error {
+			GinkgoHelper()
+			if private {
+				_, err := privatev1.NewTenantBillingAssignmentsClient(client).Update(identity, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+					Object: privatev1.TenantBillingAssignment_builder{Id: id, Spec: privatev1.TenantBillingAssignmentSpec_builder{
+						Tenant: privatev1.TenantReference_builder{Id: tenant}.Build(), BillingAccount: privatev1.BillingAccountReference_builder{Id: account, Name: name}.Build(),
+					}.Build()}.Build(), UpdateMask: mask,
+				}.Build())
+				return err
+			}
+			_, err := publicv1.NewTenantBillingAssignmentsClient(client).Update(identity, publicv1.TenantBillingAssignmentsUpdateRequest_builder{
+				Object: publicv1.TenantBillingAssignment_builder{Id: id, Spec: publicv1.TenantBillingAssignmentSpec_builder{
+					Tenant: publicv1.TenantReference_builder{Id: tenant}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: account, Name: name}.Build(),
+				}.Build()}.Build(), UpdateMask: mask,
+			}.Build())
+			return err
+		}
+		It("denies non-admins before references and characterizes admin validation before stored-target handling", func() {
+			for _, private := range []bool{false, true} {
+				for _, id := range []string{"missing", "current", "historical"} {
+					err := update(caller("tenant-admin", false), private, id, foreignTenant, "missing-account", "contradictory-name", nil)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+				}
+				admin := caller("billing-admin", true)
+				err := update(admin, private, "missing", foreignTenant, accountID, accountName(), nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+				for _, id := range []string{"missing", "current", "historical"} {
+					err = update(admin, private, id, foreignTenant, "missing-account", "", nil)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(err).To(MatchError(ContainSubstring("object.spec.billing_account")))
+					err = update(admin, private, id, foreignTenant, accountID, "contradictory-name", nil)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(err).To(MatchError(ContainSubstring("object.spec.billing_account")))
+					Expect(grpcstatus.Convert(err).Details()).ToNot(BeEmpty())
+				}
+				err = update(admin, private, "missing", foreignTenant, accountID, accountName(), &fieldmaskpb.FieldMask{Paths: []string{"spec..billing_account"}})
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).To(MatchError(ContainSubstring("non-canonical")))
+				err = update(admin, private, "historical", foreignTenant, accountID, accountName(), nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				err = update(admin, private, "current", tenantID, accountID, accountName(), nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				err = update(admin, private, "current", foreignTenant, accountID, accountName(), &fieldmaskpb.FieldMask{})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(fake.Calls()).To(BeEmpty())
+			}
+			// Authorized billing admins are universal in production policy and skip JIT.
+			assertUserEffects("billing-admin", 0)
+			assertUserEffects("tenant-admin", 0)
+			// Valid references route through both real wrappers into provider revalidation.
+			for _, private := range []bool{false, true} {
+				err := update(caller("billing-admin", true), private, "current", foreignTenant, accountID, accountName(), nil)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			Expect(fake.Count("GetAccount")).To(Equal(2))
+			var intervals int
+			Expect(observer.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&intervals)).To(Succeed())
+			Expect(intervals).To(Equal(2), "same-account revalidation does not create history")
+		})
+
+		It("rolls back assignment effects on provider failure through both registered APIs", func() {
+			for _, private := range []bool{false, true} {
+				failed := billingfake.New(billingfake.Scenario{Failures: map[string]billingfake.Failure{
+					"GetAccount": {Reason: billing.ReasonUnavailable, Retryable: true},
+				}})
+				client = newClient(failed.Provider())
+				err := update(caller("billing-admin", true), private, "current", foreignTenant, replacementID, stableName(replacementID), nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unavailable))
+				Expect(failed.Count("GetAccount")).To(Equal(1))
+			}
+			var intervals, tokens int
+			Expect(observer.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&intervals)).To(Succeed())
+			Expect(intervals).To(Equal(2))
+			Expect(observer.QueryRow(ctx, `select count(*) from billing_accounts where external_billing_account_id is not null`).Scan(&tokens)).To(Succeed())
+			Expect(tokens).To(BeZero())
+		})
+
+		It("returns sanitized Internal for a deferred outer commit failure without token or history partial commits", func() {
+			_, err := observer.Exec(ctx, `create function reject_assignment_commit() returns trigger language plpgsql as $$
+				begin raise exception 'private deferred constraint details'; end $$;
+				create constraint trigger reject_assignment_commit after insert on tenant_billing_assignments
+				deferrable initially deferred for each row execute function reject_assignment_commit()`)
+			Expect(err).ToNot(HaveOccurred())
+			for _, private := range []bool{false, true} {
+				err = update(caller("billing-admin", true), private, "current", foreignTenant, replacementID, stableName(replacementID), nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Internal))
+				Expect(grpcstatus.Convert(err).Message()).To(Equal("failed to end transaction"))
+				var intervals, tokens int
+				var current bool
+				Expect(observer.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&intervals)).To(Succeed())
+				Expect(intervals).To(Equal(2))
+				Expect(observer.QueryRow(ctx, `select effective_to is null from tenant_billing_assignments where id = 'current'`).Scan(&current)).To(Succeed())
+				Expect(current).To(BeTrue())
+				Expect(observer.QueryRow(ctx, `select count(*) from billing_accounts where external_billing_account_id is not null`).Scan(&tokens)).To(Succeed())
+				Expect(tokens).To(BeZero())
+			}
+			Expect(fake.Count("GetAccount")).To(Equal(2), "both requests reached provider reads before the failed commit")
+			assertUserEffects("billing-admin", 0)
+			// Removing only the deferred fault lets the same production chain commit.
+			_, err = observer.Exec(ctx, `drop trigger reject_assignment_commit on tenant_billing_assignments`)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(update(caller("billing-admin", true), false, "current", foreignTenant, replacementID, stableName(replacementID), nil)).To(Succeed())
+			var intervals int
+			Expect(observer.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&intervals)).To(Succeed())
+			Expect(intervals).To(Equal(3))
+		})
 	})
 })
 

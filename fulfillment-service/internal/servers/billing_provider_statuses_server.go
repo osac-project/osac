@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -80,7 +81,12 @@ func (b *BillingProviderStatusesServerBuilder) Build() (result *BillingProviderS
 
 // Get delegates to the private server and maps the status to the public type.
 func (s *BillingProviderStatusesServer) Get(ctx context.Context,
-	request *publicv1.BillingProviderStatusesGetRequest) (*publicv1.BillingProviderStatusesGetResponse, error) {
+	request *publicv1.BillingProviderStatusesGetRequest) (response *publicv1.BillingProviderStatusesGetResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
 	privateResponse, err := s.private.Get(ctx, &privatev1.BillingProviderStatusesGetRequest{})
 	if err != nil {
 		return nil, err

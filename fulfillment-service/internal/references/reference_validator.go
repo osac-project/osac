@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
 
@@ -178,6 +179,11 @@ func (v *ReferenceValidator) HasLookup(fullName protoreflect.FullName) bool {
 // UnaryServer is the unary server interceptor function.
 func (v *ReferenceValidator) UnaryServer(ctx context.Context, request any, info *grpc.UnaryServerInfo,
 	handler grpc.UnaryHandler) (response any, err error) {
+	// A missing reference can follow a successful lookup and earlier JIT writes.
+	// Record the returned error even when no database operation itself failed.
+	if tx, txErr := database.TxFromContext(ctx); txErr == nil {
+		defer tx.ReportError(&err)
+	}
 	v.sealed.CompareAndSwap(false, true)
 	if !isCreateOrUpdate(info.FullMethod) {
 		return handler(ctx, request)

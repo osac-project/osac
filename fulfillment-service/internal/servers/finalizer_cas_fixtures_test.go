@@ -338,9 +338,7 @@ func (f finalizerAssignmentFixture) changeCount() int {
 func (f finalizerAssignmentFixture) expectUnchanged() {
 	GinkgoHelper()
 	for _, before := range []*privatev1.TenantBillingAssignment{f.current, f.history} {
-		got, err := database.WithNewTx(f.caller, func(c context.Context) (*privatev1.TenantBillingAssignmentsGetResponse, error) {
-			return f.private.Get(c, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: before.GetId()}.Build())
-		})
+		got, err := billingRPC(f.caller, f.private.Get, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: before.GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred(), "current and historical intervals must remain readable, not archived")
 		Expect(proto.Equal(got.GetObject(), before)).To(BeTrue(), "all stored metadata, version, spec and status must remain unchanged")
 	}

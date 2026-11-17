@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"buf.build/go/protovalidate"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -53,16 +54,15 @@ const (
 	tbaAccountInactiveReason     = "ACCOUNT_INACTIVE"
 	tbaAccountStateUnknownReason = "ACCOUNT_STATE_UNKNOWN"
 
-	// billingOperationRetryReason reports a retryable conflict on a billing operation lease; the caller retries.
+	// billingOperationRetryReason reports a changed snapshot or SQL conflict; the caller retries.
 	billingOperationRetryReason = "BILLING_OPERATION_RETRY"
 )
 
-// Provider I/O is deadline-bounded and runs without a database transaction or pooled connection. This is a
-// per-process default; deployment tuning is wired separately.
+// Provider I/O shares one bounded child context before any business locks are taken. The ordinary request
+// transaction may hold a pooled connection. This is a per-process default; deployment tuning is wired separately.
 const defaultAssignProviderDeadline = time.Minute
 
-// maxConcurrentAssigns bounds provider load. Durable resource guards are acquired
-// before this semaphore so same-account/tenant contenders never occupy its slots.
+// maxConcurrentAssigns bounds provider load; SQL locks and constraints settle resource contention after I/O.
 const maxConcurrentAssigns = 2
 
 // errAssignBusy reports that maxConcurrentAssigns assigns are already resolving against the provider.
@@ -88,7 +88,7 @@ type PrivateTenantBillingAssignmentsServer struct {
 	bindings    *dao.GenericDAO[*privatev1.TenantBillingAssignment]
 	accounts    *dao.GenericDAO[*privatev1.BillingAccount]
 	tenants     *dao.GenericDAO[*privatev1.Tenant]
-	// assignProviderDeadline bounds provider I/O, not an open transaction.
+	// assignProviderDeadline bounds all provider I/O in a request, before authoritative locks.
 	assignProviderDeadline time.Duration
 	// assignSem caps concurrent assigns in their provider-I/O window, see maxConcurrentAssigns.
 	assignSem chan struct{}
@@ -166,15 +166,14 @@ func (b *PrivateTenantBillingAssignmentsServerBuilder) Build() (
 func (s *PrivateTenantBillingAssignmentsServer) List(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsListRequest) (
 	response *privatev1.TenantBillingAssignmentsListResponse, err error) {
-	if _, err = requireAdapter(s.provider); err != nil {
-		return nil, err
-	}
-
 	tx, err := database.TxFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.ReportError(&err)
+	if _, err = requireAdapter(s.provider); err != nil {
+		return nil, err
+	}
 
 	if request.GetOffset() < 0 || request.GetLimit() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "limit and offset must be non-negative")
@@ -211,15 +210,14 @@ func (s *PrivateTenantBillingAssignmentsServer) List(ctx context.Context,
 func (s *PrivateTenantBillingAssignmentsServer) Get(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsGetRequest) (
 	response *privatev1.TenantBillingAssignmentsGetResponse, err error) {
-	if _, err = requireAdapter(s.provider); err != nil {
-		return nil, err
-	}
-
 	tx, err := database.TxFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.ReportError(&err)
+	if _, err = requireAdapter(s.provider); err != nil {
+		return nil, err
+	}
 
 	if request.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
@@ -242,6 +240,11 @@ func (s *PrivateTenantBillingAssignmentsServer) Get(ctx context.Context,
 func (s *PrivateTenantBillingAssignmentsServer) Create(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsCreateRequest) (
 	response *privatev1.TenantBillingAssignmentsCreateResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
 	if _, err = requireAdapter(s.provider); err != nil {
 		return nil, err
 	}
@@ -257,9 +260,7 @@ func (s *PrivateTenantBillingAssignmentsServer) Create(ctx context.Context,
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 
-	object, err = database.WithNewTx(ctx, func(c context.Context) (*privatev1.TenantBillingAssignment, error) {
-		return s.canonicalAssignment(c, object)
-	})
+	object, err = s.canonicalAssignment(ctx, object)
 	if err != nil {
 		return nil, s.mapTenantBillingAssignmentError(ctx, err)
 	}
@@ -284,8 +285,8 @@ type tenantBillingAssignmentSnapshot struct {
 	floor    time.Time
 }
 
-// assignmentSnapshot is called in short preflight and final transactions; the final call locks authoritative rows
-// until commit. It never calls a provider.
+// assignmentSnapshot first reads without locks, then locks/rereads authoritative rows in the same request
+// transaction after provider I/O. Final locks last until the outer commit. It never calls a provider.
 func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
 	ctx context.Context, accountID, closeID string, in tenantBillingAssignmentAssignInput,
 	expected *tenantBillingAssignmentSnapshot,
@@ -371,6 +372,11 @@ func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
 func (s *PrivateTenantBillingAssignmentsServer) Update(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsUpdateRequest) (
 	response *privatev1.TenantBillingAssignmentsUpdateResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
 	if _, err = requireAdapter(s.provider); err != nil {
 		return nil, err
 	}
@@ -381,9 +387,7 @@ func (s *PrivateTenantBillingAssignmentsServer) Update(ctx context.Context,
 		return nil, status.Errorf(codes.InvalidArgument, "id is required")
 	}
 
-	existing, err := database.WithNewTx(ctx, func(txCtx context.Context) (*privatev1.TenantBillingAssignment, error) {
-		return s.currentAssignment(txCtx, id)
-	})
+	existing, err := s.currentAssignment(ctx, id)
 	if err != nil {
 		return nil, s.mapTenantBillingAssignmentError(ctx, err)
 	}
@@ -412,9 +416,7 @@ func (s *PrivateTenantBillingAssignmentsServer) Update(ctx context.Context,
 	if emptyMask {
 		return privatev1.TenantBillingAssignmentsUpdateResponse_builder{Object: existing}.Build(), nil
 	}
-	merged, err = database.WithNewTx(ctx, func(c context.Context) (*privatev1.TenantBillingAssignment, error) {
-		return s.canonicalAssignment(c, merged)
-	})
+	merged, err = s.canonicalAssignment(ctx, merged)
 	if err != nil {
 		return nil, s.mapTenantBillingAssignmentError(ctx, err)
 	}
@@ -459,16 +461,19 @@ func (s *PrivateTenantBillingAssignmentsServer) currentAssignment(
 // RPC policy separately restricts method access to administrators/controllers.
 func (s *PrivateTenantBillingAssignmentsServer) Signal(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsSignalRequest,
-) (*privatev1.TenantBillingAssignmentsSignalResponse, error) {
-	if _, err := requireAdapter(s.provider); err != nil {
+) (response *privatev1.TenantBillingAssignmentsSignalResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
+	if _, err = requireAdapter(s.provider); err != nil {
 		return nil, err
 	}
 	if request.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
-	existing, err := database.WithNewTx(ctx, func(txCtx context.Context) (*privatev1.TenantBillingAssignment, error) {
-		return s.currentAssignment(txCtx, request.GetId())
-	})
+	existing, err := s.currentAssignment(ctx, request.GetId())
 	if err != nil {
 		return nil, s.mapTenantBillingAssignmentError(ctx, err)
 	}
@@ -520,16 +525,14 @@ type tenantBillingAssignmentAssignInput struct {
 }
 
 // observeSelectedAccount collects read-only evidence. Successful assignment evidence is persisted only with the
-// token and interval changes, after authoritative locks; it never holds a pooled connection across provider I/O.
+// token and interval changes, after authoritative locks. ctx is the shared provider child budget.
 func (s *PrivateTenantBillingAssignmentsServer) observeSelectedAccount(
 	ctx context.Context, adapter billing.Adapter, ref billing.AccountRef,
 ) (*privatev1.BillingAccountStatus, error) {
-	providerCtx, cancel := context.WithTimeout(ctx, s.assignProviderDeadline)
 	// Match discovery's conservative observation-start timestamp: a delayed response may already be stale when
 	// it arrives, so its completion time must not let it supersede a newer observation that committed meanwhile.
 	observedAt := time.Now().UTC()
-	observed, err := adapter.GetAccount(providerCtx, ref)
-	cancel()
+	observed, err := adapter.GetAccount(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -541,15 +544,15 @@ func (s *PrivateTenantBillingAssignmentsServer) observeSelectedAccount(
 	}.Build(), nil
 }
 
-// assign holds committed expiring guards, never a transaction, across provider I/O; local reads and writes use
-// independent short transactions.
+// assign reads an unlocked snapshot, gathers bounded read-only provider evidence, then locks and revalidates the
+// original affected set. All local work uses the same ambient request transaction; provider I/O precedes locks.
 func (s *PrivateTenantBillingAssignmentsServer) assign(
 	ctx context.Context, accountID, closeID string, in tenantBillingAssignmentAssignInput,
 ) (row *privatev1.TenantBillingAssignment, err error) {
 	if !auth.SubjectFromContext(ctx).Tenants.Contains(in.TenantID) {
 		return row, status.Error(codes.PermissionDenied, "tenant is outside the authorized billing assignment scope")
 	}
-	// Reserved platform tenants never have billing accounts or correlation IDs. Reject before acquiring a lease,
+	// Reserved platform tenants never have billing accounts or correlation IDs. Reject before
 	// generating a correlation ID, or performing any provider I/O, including Update/Signal of a legacy row.
 	if in.TenantID == auth.SharedTenant || in.TenantID == auth.SystemTenant {
 		return row, status.Error(codes.InvalidArgument, "reserved tenants cannot have billing assignments")
@@ -563,25 +566,8 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 			}
 		}
 	}()
-	// Do not nest under an ambient transaction: WithNewTx shadows but cannot release its connection. Startup
-	// config supplies a manager-only context.
-	if _, txErr := database.TxFromContext(ctx); txErr == nil {
-		return row, errors.New("billing provider operation requires a manager-only context")
-	}
 	operationCtx, cancelOperation := context.WithTimeout(ctx, s.assignProviderDeadline+10*time.Second)
 	defer cancelOperation()
-	lease, err := database.AcquireBillingOperation(operationCtx, s.assignProviderDeadline+10*time.Second,
-		database.BillingOperationKey("account", accountID), database.BillingOperationKey("tenant", in.TenantID))
-	if err != nil {
-		return row, err
-	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		if releaseErr := lease.Release(cleanupCtx); releaseErr != nil {
-			s.logger.WarnContext(ctx, "Failed to release billing operation guard", slog.Any("error", releaseErr))
-		}
-	}()
 	select {
 	case s.assignSem <- struct{}{}:
 		defer func() { <-s.assignSem }()
@@ -589,9 +575,7 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 		return nil, errAssignBusy
 	}
 
-	snapshot, err := database.WithNewTx(operationCtx, func(txCtx context.Context) (tenantBillingAssignmentSnapshot, error) {
-		return s.assignmentSnapshot(txCtx, accountID, closeID, in, nil)
-	})
+	snapshot, err := s.assignmentSnapshot(operationCtx, accountID, closeID, in, nil)
 	if err != nil {
 		return row, err
 	}
@@ -602,81 +586,43 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 	}
 	ref := billing.NewAccountRef(account.GetStatus().GetProviderAccountReference())
 
-	// Validate the selected account's normalized state from a fresh provider read in the existing bounded provider
-	// phase, before any correlation write or assignment mutation. Preflight stored state alone cannot decide
-	// eligibility: an account the provider reports as inactive or unknown now is rejected even when
-	// discovery stored ACTIVE, and a stale stored INACTIVE or UNKNOWN does not block an account the provider has since
-	// reactivated. The read also refreshes the local observation so a later BillingAccounts.List shows the state that
-	// decided this request.
-	observed, err := s.observeSelectedAccount(operationCtx, adapter, ref)
+	// Share one child budget across state, value and the complete exact-carrier walk. Do not persist observations
+	// or take business locks before correlation I/O. A rejected RPC cannot commit an observation independently.
+	providerCtx, cancel := context.WithTimeout(operationCtx, s.assignProviderDeadline)
+	defer cancel()
+	observed, err := s.observeSelectedAccount(providerCtx, adapter, ref)
 	if err != nil {
+		if providerCtx.Err() != nil && operationCtx.Err() == nil {
+			return nil, billing.NewError(billing.ReasonTimeout, "GetAccount", true, 0)
+		}
 		return row, err
 	}
-	// Check effective eligibility before correlation I/O. Ineligible evidence is still retained as an observation,
-	// but the rejection is returned OUTSIDE the successful transaction so it doesn't roll that observation back.
-	var eligibility error
-	_, err = database.WithNewTx(operationCtx, func(c context.Context) (struct{}, error) {
-		tx, txErr := database.TxFromContext(c)
-		if txErr != nil {
-			return struct{}{}, txErr
-		}
-		if checkErr := lease.Check(c, tx); checkErr != nil {
-			return struct{}{}, checkErr
-		}
-		latest, snapshotErr := s.assignmentSnapshot(c, accountID, closeID, in, &snapshot)
-		if snapshotErr != nil {
-			return struct{}{}, snapshotErr
-		}
-		if !sameBillingAssignmentInputs(snapshot, latest) {
-			return struct{}{}, errAssignChanged
-		}
-		if checkErr := lease.Check(c, tx); checkErr != nil {
-			return struct{}{}, checkErr
-		}
-		merged, changed := mergeBillingAccountObservation(latest.account, observed)
-		eligibility = requireActiveBillingAccountState(assignmentAccountState(merged), accountID)
-		if eligibility != nil && changed {
-			_, updateErr := s.accounts.Update().SetObject(merged).Do(c)
-			return struct{}{}, updateErr
-		}
-		return struct{}{}, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if eligibility != nil {
-		return nil, eligibility
+	switch observed.GetState() {
+	case privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE:
+	case privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_INACTIVE:
+		return nil, requireActiveBillingAccountState(billing.AccountInactive, accountID)
+	default:
+		return nil, requireActiveBillingAccountState(billing.AccountUnknown, accountID)
 	}
 
-	providerCtx, cancel := context.WithTimeout(operationCtx, s.assignProviderDeadline)
 	resolution, err := billing.ResolveAccountCorrelationID(providerCtx, billing.AccountCorrelationInput{
 		Adapter: adapter, AccountID: account.GetId(), Ref: ref, LocalValue: account.GetStatus().GetExternalBillingAccountId(),
 		LocalDuplicate: func(dupCtx context.Context, value, excludeAccountID string) (bool, error) {
-			if reserveErr := lease.Reserve(dupCtx, database.BillingOperationKey("correlation", value)); reserveErr != nil {
-				return false, reserveErr
+			page, listErr := s.accounts.List().SetLimit(0).SetFilter(fmt.Sprintf(
+				"this.status.external_billing_account_id == %q && this.id != %q", value, excludeAccountID)).Do(dupCtx)
+			if listErr != nil {
+				return false, listErr
 			}
-			return database.WithNewTx(dupCtx, func(txCtx context.Context) (bool, error) {
-				page, listErr := s.accounts.List().SetLimit(0).SetFilter(fmt.Sprintf(
-					"this.status.external_billing_account_id == %q && this.id != %q", value, excludeAccountID)).Do(txCtx)
-				if listErr != nil {
-					return false, listErr
-				}
-				return page.GetTotal() > 0, nil
-			})
+			return page.GetTotal() > 0, nil
 		},
 	})
-	cancel()
 	if err != nil {
+		if providerCtx.Err() != nil && operationCtx.Err() == nil {
+			return nil, billing.NewError(billing.ReasonTimeout, "ResolveAccountCorrelationID", true, 0)
+		}
 		return nil, err
 	}
-	// The already-consistent resolver branch performs no write and may skip LocalDuplicate; reserve that value too
-	// before local adoption.
-	if err := lease.Reserve(operationCtx, database.BillingOperationKey("correlation", resolution.Value)); err != nil {
-		return row, err
-	}
-
-	// The resolver validates writes by reading back the provider value and rechecking uniqueness. A successful
-	// write alone is not evidence of a match.
+	// Only the selected account's exact, unique provider-side carrier establishes a match. No remote writes occur.
 	matches := resolution.ProviderMatches
 
 	var state, message string
@@ -685,28 +631,21 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 		state = tbaStateConnected
 	case 0:
 		state = tbaStatePending
-		if resolution.ProviderWriteSkippedReason != "" {
-			message = resolution.ProviderWriteSkippedReason +
-				": set externalId on the account in the provider to the external_billing_account_id shown by BillingAccounts.List"
-		} else {
-			message = "no provider account currently carries the resolved external billing account id; set it on the " +
-				"account in the provider to the value shown by BillingAccounts.List"
-		}
+		message = billing.ReasonProviderCorrelationWriteUnsupported +
+			": set externalId on the account in the provider to the external_billing_account_id shown by BillingAccounts.List"
 	default:
 		return nil, &billing.CorrelationResolutionError{
 			Reason: billing.ReasonAccountAmbiguous,
 		}
 	}
 
-	return database.WithNewTx(operationCtx, func(txCtx context.Context) (*privatev1.TenantBillingAssignment, error) {
-		return s.finalizeAssignment(txCtx, lease, snapshot, in, observed, resolution, state, message)
-	})
+	return s.finalizeAssignment(operationCtx, snapshot, in, observed, resolution, state, message)
 }
 
-// finalizeAssignment owns the post-I/O lock/reread/merge handshake, in the caller's existing short transaction.
+// finalizeAssignment owns the post-I/O lock/reread/merge handshake in the ambient request transaction.
 // The token, observation and interval changes commit or roll back together.
 func (s *PrivateTenantBillingAssignmentsServer) finalizeAssignment(txCtx context.Context,
-	lease *database.BillingOperationLease, snapshot tenantBillingAssignmentSnapshot, in tenantBillingAssignmentAssignInput,
+	snapshot tenantBillingAssignmentSnapshot, in tenantBillingAssignmentAssignInput,
 	observed *privatev1.BillingAccountStatus, resolution billing.Resolution, state, message string,
 ) (row *privatev1.TenantBillingAssignment, err error) {
 	accountID := snapshot.account.GetId()
@@ -716,9 +655,6 @@ func (s *PrivateTenantBillingAssignmentsServer) finalizeAssignment(txCtx context
 		return nil, err
 	}
 	defer tx.ReportError(&err)
-	if err := lease.Check(txCtx, tx); err != nil {
-		return row, err
-	}
 	latest, err := s.assignmentSnapshot(txCtx, accountID, closeID, in, &snapshot)
 	if err != nil {
 		return row, err
@@ -732,10 +668,6 @@ func (s *PrivateTenantBillingAssignmentsServer) finalizeAssignment(txCtx context
 	mergedAccount, _ := mergeBillingAccountObservation(latest.account, observed)
 	if err := requireActiveBillingAccountState(assignmentAccountState(mergedAccount), accountID); err != nil {
 		return nil, err
-	}
-	// Recheck expiry after row-lock waits. These leases fence only this local commit, not remote writes.
-	if err := lease.Check(txCtx, tx); err != nil {
-		return row, err
 	}
 	// Absence, present-empty, whitespace and exact nonempty bytes are distinct. Only an unestablished value
 	// may be adopted; neither this code nor the database can rotate an established token.
@@ -1021,12 +953,13 @@ func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(
 		return status.FromContextError(err).Err()
 	}
 	var deadlock *dao.ErrDeadlock
-	if errors.As(err, &deadlock) {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &deadlock) || (errors.As(err, &pgErr) &&
+		(pgErr.Code == pgerrcode.DeadlockDetected || pgErr.Code == pgerrcode.SerializationFailure)) {
 		return billingFailure(codes.Aborted, "billing operation conflicted; retry", billingOperationRetryReason)
 	}
-	if errors.Is(err, database.ErrBillingOperationBusy) || errors.Is(err, database.ErrBillingOperationExpired) ||
-		errors.Is(err, errAssignChanged) {
-		return billingFailure(codes.Aborted, "billing operation conflicted or expired; retry",
+	if errors.Is(err, errAssignChanged) {
+		return billingFailure(codes.Aborted, "billing operation inputs changed; retry",
 			billingOperationRetryReason)
 	}
 	if _, ok := status.FromError(err); ok {
@@ -1043,7 +976,6 @@ func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(
 		return failedPreconditionWithReason(billing.ReasonAccountCorrelationConflict,
 			"external billing account id is already in use by another account")
 	}
-	var pgErr *pgconn.PgError
 	var conflict *dao.ErrAlreadyExists
 	constraint := ""
 	if errors.As(err, &conflict) {

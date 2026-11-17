@@ -1,12 +1,18 @@
 import { Divider, PageSection, Stack, StackItem, Title } from '@patternfly/react-core';
+import CheckCircleIcon from '@patternfly/react-icons/dist/esm/icons/check-circle-icon';
+import NetworkWiredIcon from '@patternfly/react-icons/dist/esm/icons/network-wired-icon';
 
 import type { Cluster } from '@osac/types';
 
 import { ClusterConfigurationCard } from './ClusterConfigurationCard';
+import ClusterDetailsSummary from './ClusterDetailsSummary';
+import ClusterLifecycleSection from './ClusterLifecycleSection';
+import ClusterNetworkingCard from './ClusterNetworkingCard';
 import ClusterNetworkingSection from './ClusterNetworkingSection';
-import ClusterNodeSetsSection from './ClusterNodeSetsSection';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceConditionsTable } from '../../Resource/ResourceConditionsTable';
+
+import './cluster-details.css';
 
 interface ClusterDetailsSectionsProps {
   cluster: Cluster;
@@ -16,22 +22,23 @@ const ClusterDetailsSections = ({ cluster }: ClusterDetailsSectionsProps) => {
   const { t } = useTranslation();
 
   return (
-    <PageSection hasBodyWrapper={false}>
+    <PageSection hasBodyWrapper={false} className="cluster-details">
       <Stack hasGutter>
         <StackItem>
-          <ClusterConfigurationCard cluster={cluster} />
-        </StackItem>
-        <StackItem>
-          <Divider />
-        </StackItem>
-        <StackItem>
-          <ClusterNetworkingSection cluster={cluster} />
-        </StackItem>
-        <StackItem>
-          <Divider />
-        </StackItem>
-        <StackItem>
-          <ClusterNodeSetsSection cluster={cluster} />
+          <div className="cluster-details__top-region">
+            <div className="cluster-details__overview-grid">
+              <ClusterDetailsSummary cluster={cluster} />
+              <ClusterLifecycleSection cluster={cluster} />
+            </div>
+            <Stack hasGutter className="cluster-details__secondary-column">
+              <StackItem>
+                <ClusterConfigurationCard cluster={cluster} />
+              </StackItem>
+              <StackItem>
+                <ClusterNetworkingSection cluster={cluster} />
+              </StackItem>
+            </Stack>
+          </div>
         </StackItem>
         <StackItem>
           <Divider />
@@ -39,7 +46,24 @@ const ClusterDetailsSections = ({ cluster }: ClusterDetailsSectionsProps) => {
         <StackItem>
           <Stack hasGutter>
             <StackItem>
-              <Title headingLevel="h2" size="lg">
+              <Title headingLevel="h2" size="lg" className="cluster-details__section-title">
+                <NetworkWiredIcon aria-hidden />
+                {t('Networking')}
+              </Title>
+            </StackItem>
+            <StackItem>
+              <ClusterNetworkingCard cluster={cluster} />
+            </StackItem>
+          </Stack>
+        </StackItem>
+        <StackItem>
+          <Divider />
+        </StackItem>
+        <StackItem>
+          <Stack hasGutter>
+            <StackItem>
+              <Title headingLevel="h2" size="lg" className="cluster-details__section-title">
+                <CheckCircleIcon aria-hidden />
                 {t('Conditions')}
               </Title>
             </StackItem>

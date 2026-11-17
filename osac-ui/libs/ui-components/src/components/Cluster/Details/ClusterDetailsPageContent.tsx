@@ -6,7 +6,6 @@ import ClusterDetailsActionButtons from './ClusterDetailsActionButtons';
 import ClusterDetailsSections from './ClusterDetailsSections';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
-import { ClusterStatusLabel } from '../ListPage/ClusterStatusLabel';
 
 interface ClusterDetailViewProps {
   cluster: Cluster;
@@ -30,7 +29,6 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
                 <ResourceDetailHeader
                   parents={[{ to: '/clusters', label: t('Clusters') }]}
                   resourceName={cluster.metadata?.name ?? cluster.id}
-                  titleAddon={<ClusterStatusLabel state={cluster.status?.state} />}
                 />
               </FlexItem>
               <FlexItem>

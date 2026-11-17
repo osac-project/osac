@@ -18,7 +18,7 @@ const ClusterNodeSetsSection = ({ cluster }: ClusterNodeSetsSectionProps) => {
   return (
     <Stack hasGutter>
       <StackItem>
-        <Title headingLevel="h2" size="lg">
+        <Title headingLevel="h3" size="md">
           {t('Node sets')}
         </Title>
       </StackItem>

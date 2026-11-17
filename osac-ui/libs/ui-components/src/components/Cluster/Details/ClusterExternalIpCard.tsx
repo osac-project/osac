@@ -1,6 +1,8 @@
 import {
   Bullseye,
   Button,
+  Card,
+  CardBody,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
@@ -176,34 +178,38 @@ const ClusterExternalIpCard = ({ cluster, onAttach, onDetach }: ClusterExternalI
   ];
 
   return (
-    <Stack hasGutter>
-      <StackItem>
-        <Title headingLevel="h3" size="md">
-          {t('External IP endpoints')}
-        </Title>
-      </StackItem>
-      <StackItem>
-        {isLoading ? (
-          <Bullseye>
-            <Spinner aria-label={t('Loading external IP attachments')} />
-          </Bullseye>
-        ) : error ? (
-          <QueryErrorState error={error} title={t('Failed to load external IP attachments')} />
-        ) : (
-          <DescriptionList isCompact aria-label={t('External IP endpoints')}>
-            {endpointRows.map((row) => (
-              <EndpointRow
-                key={row.endpoint}
-                cluster={cluster}
-                {...row}
-                onAttach={onAttach}
-                onDetach={onDetach}
-              />
-            ))}
-          </DescriptionList>
-        )}
-      </StackItem>
-    </Stack>
+    <Card className="cluster-details__secondary-card" aria-label={t('External IP endpoints')}>
+      <CardBody>
+        <Stack hasGutter>
+          <StackItem>
+            <Title headingLevel="h2" size="lg">
+              {t('External IP endpoints')}
+            </Title>
+          </StackItem>
+          <StackItem>
+            {isLoading ? (
+              <Bullseye>
+                <Spinner aria-label={t('Loading external IP attachments')} />
+              </Bullseye>
+            ) : error ? (
+              <QueryErrorState error={error} title={t('Failed to load external IP attachments')} />
+            ) : (
+              <DescriptionList isCompact aria-label={t('External IP endpoints')}>
+                {endpointRows.map((row) => (
+                  <EndpointRow
+                    key={row.endpoint}
+                    cluster={cluster}
+                    {...row}
+                    onAttach={onAttach}
+                    onDetach={onDetach}
+                  />
+                ))}
+              </DescriptionList>
+            )}
+          </StackItem>
+        </Stack>
+      </CardBody>
+    </Card>
   );
 };
 

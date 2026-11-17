@@ -91,7 +91,7 @@ const endpoints = [
 ] as const;
 
 describe('ClusterDetailsPageContent', () => {
-  it('renders every section together without tabs, cards, or a persistent sidebar', async () => {
+  it('groups version, nodes and settings above endpoints beside overview and lifecycle', async () => {
     const { container } = renderWithProviders(<ClusterDetailsPageContent cluster={cluster} />);
 
     expect(screen.getByRole('heading', { level: 1, name: 'production-cluster' })).toHaveClass(
@@ -100,16 +100,47 @@ describe('ClusterDetailsPageContent', () => {
     expect(screen.getByRole('link', { name: 'Clusters' })).toHaveAttribute('href', '/clusters');
     expect(
       screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent),
-    ).toEqual(['Overview', 'Lifecycle', 'Version', 'Networking', 'Node sets', 'Conditions']);
+    ).toEqual([
+      'Overview',
+      'Lifecycle',
+      'Cluster version',
+      'External IP endpoints',
+      'Networking',
+      'Conditions',
+    ]);
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    expect(container.querySelector('.pf-v6-c-card')).toBeNull();
-    expect(container.querySelector('.pf-m-8-col-on-md')).toBeNull();
+    const cards = container.querySelectorAll<HTMLElement>('.pf-v6-c-card');
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      expect(card).toHaveClass('cluster-details__secondary-card');
+    }
+    expect(cards[0]).toContainElement(screen.getByRole('heading', { name: 'Cluster version' }));
+    expect(cards[0]).toContainElement(screen.getByRole('heading', { name: 'Node sets' }));
+    expect(cards[0]).toContainElement(screen.getByRole('heading', { name: 'Settings' }));
+    expect(cards[1]).toContainElement(
+      screen.getByRole('heading', { name: 'External IP endpoints' }),
+    );
+    expect(cards[0].parentElement?.nextElementSibling).toBe(cards[1].parentElement);
+    const topRegion = container.querySelector('.cluster-details__top-region');
+    expect(topRegion).toContainElement(screen.getByRole('heading', { name: 'Overview' }));
+    expect(topRegion).toContainElement(screen.getByRole('heading', { name: 'Lifecycle' }));
+    expect(topRegion).toContainElement(cards[1]);
+    expect(topRegion).not.toContainElement(screen.getByRole('heading', { name: 'Networking' }));
+    expect(topRegion).not.toContainElement(screen.getByRole('heading', { name: 'Conditions' }));
+    const overview = screen.getByLabelText('Cluster overview');
+    expect(overview.querySelector('dt')?.textContent).toBe('Status');
+    expect(within(overview).getByText('Ready')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 }).parentElement).not.toContainElement(
+      within(overview).getByText('Ready'),
+    );
+    expect(screen.getAllByText('Ready')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Actions' })).not.toBeInTheDocument();
     for (const name of ['Download kubeconfig', 'View password', 'Delete']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
     expect(screen.getByText('Standard')).toBeInTheDocument();
-    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.queryByText('Worker nodes')).not.toBeInTheDocument();
+    expect(screen.queryByText('5')).not.toBeInTheDocument();
     expect(screen.queryByText('99')).not.toBeInTheDocument();
     expect(screen.getByText('https://api.example.com:6443').closest('a')).toBeNull();
     expect(screen.getByText('https://console.example.com').closest('a')).toBeNull();
@@ -132,6 +163,7 @@ describe('ClusterDetailsPageContent', () => {
       within(nodeSets).getByRole('row', { name: 'gpu accelerated-host 2' }),
     ).toBeInTheDocument();
     expect(nodeSets.closest('.pf-v6-l-grid__item')).toBeNull();
+    expect(cards[0]).toContainElement(nodeSets);
     const conditions = screen.getByRole('grid', { name: 'Cluster conditions' });
     expect(
       within(conditions).getByRole('cell', { name: 'All nodes are ready' }),
@@ -252,7 +284,7 @@ describe('ClusterDetailsPageContent', () => {
     );
     expect(screen.getByText('No node sets configured.')).toBeInTheDocument();
     expect(screen.getByText('No conditions reported.')).toBeInTheDocument();
-    expect(screen.getByText('0')).toBeInTheDocument();
+    expect(screen.queryByText('Worker nodes')).not.toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getAllByRole('button', { name: 'Attach External IP' })).toHaveLength(2),
     );

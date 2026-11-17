@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import {
   Button,
+  Card,
+  CardBody,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  Divider,
   Flex,
   FlexItem,
-  Grid,
-  GridItem,
   Stack,
   StackItem,
   Title,
@@ -16,12 +17,11 @@ import {
 
 import type { Cluster } from '@osac/types';
 
-import ClusterDetailsSummary from './ClusterDetailsSummary';
+import ClusterNodeSetsSection from './ClusterNodeSetsSection';
+import ClusterSettingsSection from './ClusterSettingsSection';
 import ClusterUpgradeHistoryModal from './ClusterUpgradeHistoryModal';
 import ClusterVersionControls from './ClusterVersionControls';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { displayValue } from '../../../utils/detailFormatters';
-import { Timestamp } from '../../Primitives/Timestamp';
 import { getControlPlaneUpgradeHistory } from '../ListPage/clusterDisplay';
 
 interface ClusterConfigurationCardProps {
@@ -34,40 +34,12 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
   const upgradeHistory = getControlPlaneUpgradeHistory(cluster);
 
   return (
-    <Grid hasGutter>
-      <GridItem md={4}>
-        <ClusterDetailsSummary cluster={cluster} />
-      </GridItem>
-      <GridItem md={4}>
+    <Card className="cluster-details__secondary-card" aria-label={t('Cluster version')}>
+      <CardBody>
         <Stack hasGutter>
           <StackItem>
             <Title headingLevel="h2" size="lg">
-              {t('Lifecycle')}
-            </Title>
-          </StackItem>
-          <StackItem>
-            <DescriptionList isCompact aria-label={t('Cluster lifecycle')}>
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  <Timestamp value={cluster.metadata?.creationTimestamp} />
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-              <DescriptionListGroup>
-                <DescriptionListTerm>{t('Creator')}</DescriptionListTerm>
-                <DescriptionListDescription>
-                  {displayValue(cluster.metadata?.creator)}
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-            </DescriptionList>
-          </StackItem>
-        </Stack>
-      </GridItem>
-      <GridItem md={4}>
-        <Stack hasGutter>
-          <StackItem>
-            <Title headingLevel="h2" size="lg">
-              {t('Version')}
+              {t('Cluster version')}
             </Title>
           </StackItem>
           <StackItem>
@@ -91,6 +63,18 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
               </DescriptionListGroup>
             </DescriptionList>
           </StackItem>
+          <StackItem>
+            <Divider />
+          </StackItem>
+          <StackItem>
+            <ClusterNodeSetsSection cluster={cluster} />
+          </StackItem>
+          <StackItem>
+            <Divider />
+          </StackItem>
+          <StackItem>
+            <ClusterSettingsSection cluster={cluster} />
+          </StackItem>
         </Stack>
         {clusterHistoryOpen && upgradeHistory.length > 0 && (
           <ClusterUpgradeHistoryModal
@@ -98,7 +82,7 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
             onClose={() => setClusterHistoryOpen(false)}
           />
         )}
-      </GridItem>
-    </Grid>
+      </CardBody>
+    </Card>
   );
 };

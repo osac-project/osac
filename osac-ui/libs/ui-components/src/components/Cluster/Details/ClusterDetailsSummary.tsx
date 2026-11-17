@@ -7,18 +7,19 @@ import {
   StackItem,
   Title,
 } from '@patternfly/react-core';
+import InfoAltIcon from '@patternfly/react-icons/dist/esm/icons/info-alt-icon';
 
-import type { Cluster } from '@osac/types';
+import { type Cluster, ClusterCatalogItems } from '@osac/types';
 
+import ClusterProjectLink from './ClusterProjectLink';
+import ClusterResourceLink from './ClusterResourceLink';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
+import { ClusterStatusLabel } from '../ListPage/ClusterStatusLabel';
 
 interface ClusterDetailsSummaryProps {
   cluster: Cluster;
 }
-
-const sumNodeSetSizes = (nodeSets?: Record<string, { size?: number }>) =>
-  Object.values(nodeSets ?? {}).reduce((sum, nodeSet) => sum + (nodeSet?.size ?? 0), 0);
 
 const ClusterDetailsSummary = ({ cluster }: ClusterDetailsSummaryProps) => {
   const { t } = useTranslation();
@@ -27,22 +28,34 @@ const ClusterDetailsSummary = ({ cluster }: ClusterDetailsSummaryProps) => {
   return (
     <Stack hasGutter>
       <StackItem>
-        <Title headingLevel="h2" size="lg">
+        <Title headingLevel="h2" size="lg" className="cluster-details__section-title">
+          <InfoAltIcon aria-hidden />
           {t('Overview')}
         </Title>
       </StackItem>
       <StackItem>
         <DescriptionList isCompact aria-label={t('Cluster overview')}>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Catalog item')}</DescriptionListTerm>
+            <DescriptionListTerm>{t('Status')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {displayValue(catalogItem?.name || catalogItem?.id)}
+              <ClusterStatusLabel state={cluster.status?.state} />
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Worker nodes')}</DescriptionListTerm>
+            <DescriptionListTerm>{t('Catalog item')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {sumNodeSetSizes(cluster.spec?.nodeSets)}
+              <ClusterResourceLink
+                service={ClusterCatalogItems}
+                basePath="/catalog/cluster"
+                id={catalogItem?.id}
+                name={catalogItem?.name}
+              />
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              <ClusterProjectLink cluster={cluster} />
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

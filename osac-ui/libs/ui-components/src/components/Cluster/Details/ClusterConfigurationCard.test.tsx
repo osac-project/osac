@@ -51,12 +51,9 @@ describe('ClusterConfigurationCard', () => {
       apiFixtures: { clusterVersions: [currentVersion, targetVersion] },
     });
 
-    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Lifecycle' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Version' })).toBeInTheDocument();
-    expect(screen.getByText('Standard')).toBeInTheDocument();
-    expect(screen.getByText('Creator')).toBeInTheDocument();
-    expect(screen.getByText('alice')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Cluster version' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'Node sets' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'Settings' })).toBeInTheDocument();
     expect(screen.getByText('Current version')).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),

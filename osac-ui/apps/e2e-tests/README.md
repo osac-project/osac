@@ -150,7 +150,14 @@ every External IP create with `FailedPrecondition: provider networking is
 disabled` (`private_external_ips_server.go`), so only the list and error-state
 checks can pass. The stock `osac-installer/values/dev/kind-instance.yaml` dev
 profile sets `false`, so a default kind instance is **not** enough for this
-suite; point it at an installation with provider networking enabled.
+suite; point it at an installation with provider networking enabled. See
+[Installing with provider networking](../../../docs/guides/installation/customer-install-guide.md#44-installing-with-provider-networking).
+
+**On a fresh install, create the pool before onboarding the tenant.** Tenant
+onboarding waits for a `READY` pool (its `default-nat` address comes from one),
+so run `--project=external-ip-pool` before the VMaaS tenant flow; a tenant
+onboarded without a pool reports `DefaultNetworkingReady=False` and the
+tenant-admin flows then run against a degraded tenant.
 
 Run the whole suite. `external-ip` depends on `external-ip-pool`, and its
 teardown (`external-ip-delete`) removes the External IP and, when the suite

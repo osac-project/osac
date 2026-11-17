@@ -2113,6 +2113,33 @@ var _ = Describe("syncStatus", func() {
 		Expect(condition.GetMessage()).To(Equal("Network cleanup is in progress."))
 	})
 
+	It("keeps network readiness false after offboarding completes during deletion", func() {
+		t := newTask(0)
+		deletionTimestamp := metav1.NewTime(time.Now())
+		t.syncStatus(&bmfov1alpha1.BareMetalInstance{
+			ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &deletionTimestamp},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase: bmfov1alpha1.BareMetalInstancePhaseReady,
+				Conditions: []metav1.Condition{
+					networkCondition(bmfov1alpha1.HostConditionNetworkOffboardComplete,
+						metav1.ConditionTrue, "Succeeded", "host is powered off"),
+					networkCondition(bmfov1alpha1.HostConditionNetworkAttachmentsReady,
+						metav1.ConditionTrue, "Succeeded", ""),
+					networkCondition(bmfov1alpha1.HostConditionNetworkHandoffComplete,
+						metav1.ConditionTrue, "Succeeded", ""),
+					networkCondition(bmfov1alpha1.HostConditionIPDiscoveryComplete,
+						metav1.ConditionTrue, "Succeeded", ""),
+				},
+			},
+		})
+
+		condition := findNetworkReady(t)
+		Expect(condition).ToNot(BeNil())
+		Expect(condition.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
+		Expect(condition.GetReason()).To(Equal("Deleting"))
+		Expect(condition.GetMessage()).To(Equal("Network cleanup is in progress."))
+	})
+
 	It("should not change state when object is nil", func() {
 		t := newTask(0)
 		t.syncStatus(nil)

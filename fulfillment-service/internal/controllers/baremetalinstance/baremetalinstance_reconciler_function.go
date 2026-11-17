@@ -786,6 +786,16 @@ func (t *task) syncNetworkReady(object *bmfov1alpha1.BareMetalInstance) {
 func networkReadyCondition(object *bmfov1alpha1.BareMetalInstance) (
 	privatev1.ConditionStatus, string, string, bool,
 ) {
+	deleting := object.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseDeleting ||
+		object.DeletionTimestamp != nil
+	if deleting {
+		offboard := object.GetStatusCondition(bmfov1alpha1.HostConditionNetworkOffboardComplete)
+		if offboard != nil && offboard.Status == metav1.ConditionTrue {
+			return privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				"Deleting", messageNetworkCleanupProgressing, true
+		}
+	}
+
 	conditionOrder := []bmfov1alpha1.BareMetalInstanceConditionType{
 		bmfov1alpha1.HostConditionNetworkOffboardComplete,
 		bmfov1alpha1.HostConditionNetworkAttachmentsReady,

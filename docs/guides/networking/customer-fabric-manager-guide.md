@@ -1,12 +1,12 @@
 # OSAC Fabric Manager Guide
 
-**Audience:** a provider whose deployment enables VMaaS and may also enable standard CaaS, with its own Fabric Manager and OSAC's `cudn_evpn` Kubernetes Manager over the `evpn` network type. This guide covers standard CaaS ingress and physical worker attachment tasks; standalone BMaaS provisioning is outside its scope.
+**Audience:** a provider whose deployment enables VMaaS and may also enable standard CaaS, with its own Fabric Manager and OSAC's `cudn_evpn` Kubernetes Manager over the `evpn` network type. This guide covers standard CaaS ingress traffic and physical worker attachment tasks; standalone BMaaS provisioning is outside its scope.
 
 This guide shows how to build, test, deploy, and run an OSAC **Fabric Manager**. A Fabric Manager is the one network manager a provider writes.
 
 The examples call your company **Acme**. Replace `acme` and `ACME` with your own names. Replace every Acme fabric API call (marked `PLACEHOLDER`) with your backend's API.
 
-The guide covers the 16 VMaaS task files, the physical CaaS worker path of `apply_network_attachment`, `delete_network_attachment`, and `query_dhcp_lease`, and the two additional CaaS cluster-ingress task files. You can build a manager for VMaaS and standard CaaS from this guide alone.
+The guide covers the 16 VMaaS task files and the physical CaaS worker path of `apply_network_attachment`, `delete_network_attachment`, and `query_dhcp_lease`. Fulfillment allocates and releases the guest ingress address from the Subnet's recorded `lb_vip_ipv4_cidrs`; the Fabric Manager carries the resulting L2 traffic and has no guest-ingress reservation task.
 
 **Contents**
 
@@ -68,7 +68,7 @@ Open Sovereign AI Cloud (OSAC) is an open-source platform that organizations use
 | Deliverable | What it is | Details |
 |---|---|---|
 | Collection and role | One Ansible collection with one role. | [Create the collection and role](#create-the-collection-and-role) |
-| Task files | 16 Ansible task files for VMaaS; for CaaS add the physical worker path to `apply_network_attachment`, `delete_network_attachment`, and `query_dhcp_lease`, plus `reserve_cluster_ingress_ip` and `release_cluster_ingress_ip`. | [The task files you write](#the-task-files-you-write) |
+| Task files | 16 Ansible task files for VMaaS; for CaaS add the physical worker path to `apply_network_attachment`, `delete_network_attachment`, and `query_dhcp_lease`. | [The task files you write](#the-task-files-you-write) |
 | Image | OSAC's base image with your collection. | [Build the image](#build-the-execution-environment-image) |
 | Settings and secrets | Each key and its value, for the Cloud Infrastructure Admin. | [Settings and secrets](#settings-and-secrets) |
 | Registration manifest | One ConfigMap that registers your manager. | [Registration manifest](#registration-manifest) |
@@ -80,7 +80,7 @@ Read part 1 first. It explains how OSAC uses your manager. Then follow parts 2 t
 
 1. **Plan done.** You know what your fabric must provide ([2. Plan your manager](#2-plan-your-manager)).
 2. **First task runs.** `create_virtual_network` runs without OSAC and returns `l3_vni` ([Run your first task](#run-your-first-task)).
-3. **All tasks built.** The 16 VMaaS task files exist, plus the physical worker path and both CaaS ingress files if the deployment enables CaaS ([3. Build your manager](#3-build-your-manager)).
+3. **All tasks built.** The 16 VMaaS task files exist, plus the physical worker path and DHCP lease query if the deployment enables CaaS ([3. Build your manager](#3-build-your-manager)).
 4. **All tasks tested.** Every task passes without OSAC ([4. Test your tasks](#4-test-your-tasks)).
 5. **Handed over.** The Cloud Infrastructure Admin has what the install needs ([5. Hand over your manager](#5-hand-over-your-manager)).
 6. **Live.** Your manager passes in an OSAC lab and you go live ([6. Verify in a lab and go live](#6-verify-in-a-lab-and-go-live)).
@@ -446,15 +446,13 @@ You write 16 task files for VMaaS:
 
 The segment and EVPN duties of `create_subnet` and `delete_subnet` are never a no-op. Neither are those of `create_virtual_network`.
 
-For standard CaaS, add these three task files:
+For standard CaaS, add this task:
 
 | Tasks | What to do |
 |---|---|
 | `query_dhcp_lease` | Return the DHCP lease of a physical worker interface ([CaaS worker physical attachments](#caas-worker-physical-attachments)). |
-| `reserve_cluster_ingress_ip` | Reserve one stable address from `ipam.lb_vip_ipv4_cidrs` for the ClusterOrder API ID; return `cluster_ingress: {address: <IPv4>}`. |
-| `release_cluster_ingress_ip` | Release the reservation for that same ClusterOrder API ID; treat an already absent reservation as success. |
 
-OSAC calls the reserve task after the Subnet and VirtualNetwork are ready. It calls release after DNS, automatic ExternalIP cleanup, the HostedCluster, and cluster workers are gone.
+Fulfillment assigns the Cluster's guest ingress address from the Subnet's recorded LB VIP ranges and keeps it reserved through teardown. The Fabric Manager only transports the guest's L2 traffic; it does not reserve or release that address.
 
 #### CaaS worker physical attachments
 
@@ -588,7 +586,7 @@ Test each task as soon as it works ([4. Test your tasks](#4-test-your-tasks)).
 
 ### Create the collection and role
 
-Create one Ansible collection with one role that holds the 16 VMaaS task files and, when CaaS is enabled, the physical worker path and the two CaaS ingress task files ([The task files you write](#the-task-files-you-write)). Each task is the file `roles/<role>/tasks/<task>.yaml` (or `.yml`). OSAC runs only the fixed task names.
+Create one Ansible collection with one role that holds the 16 VMaaS task files and, when CaaS is enabled, the physical worker path and `query_dhcp_lease` ([The task files you write](#the-task-files-you-write)). Each task is the file `roles/<role>/tasks/<task>.yaml` (or `.yml`). OSAC runs only the fixed task names.
 
 The role may also hold:
 
@@ -613,8 +611,6 @@ acme_collections/ansible_collections/acme/network/
     ├── apply_network_attachment.yaml
     ├── delete_network_attachment.yaml
     ├── query_dhcp_lease.yaml                 # CaaS physical worker path
-    ├── reserve_cluster_ingress_ip.yaml       # CaaS guest ingress VIP
-    ├── release_cluster_ingress_ip.yaml       # CaaS guest ingress VIP cleanup
     ├── create_external_ip_pool.yaml
     ├── delete_external_ip_pool.yaml
     ├── create_external_ip.yaml
@@ -683,8 +679,7 @@ osac_job_vars:
 - A parent's API ID (`virtual_network.id` here) is enough to find your backend objects for that parent.
 - OSAC passes the whole parent snapshot so that a task never reads OSAC CRs. Retries and the delete then also see the same parent values, taken from the stored input. Beyond the ID, a Subnet task needs only the VirtualNetwork's accepted `l3Vni`.
 - A snapshot `spec` holds only the fields its task section lists ([Task details](#task-details)), in camelCase (`spec: {}` when none). A key the task does not list is absent.
-- Subnet snapshots carry `spec.ipv4Cidr`; the ClusterOrder ingress reservation
-  also carries `spec.addressPlan`. Pool snapshots carry `spec.cidrs`. The
+- Subnet snapshots carry `spec.ipv4Cidr`. Pool snapshots carry `spec.cidrs`. The
   VirtualNetwork snapshot on a Subnet or NetworkAttachment task also carries
   its accepted `status.l3Vni`.
 - Keys and results use snake_case.
@@ -1110,9 +1105,9 @@ OSAC runs jobs of different resources in parallel ([What OSAC guarantees](#what-
 
 Never read the object, change it, and write it back whole. That can lose a parallel job's change. A backend that can do neither is not supported in this release.
 
-For CaaS, `reserve_cluster_ingress_ip` tasks for ClusterOrders on one Subnet
-share that Subnet's LB VIP range. Use distinct addresses for active
-reservations, allocated atomically or with retryable conflict handling.
+Fulfillment owns CaaS guest-ingress allocation. It serializes allocations on
+the Subnet and keeps each assigned address reserved through endpoint and worker
+cleanup. The Fabric Manager does not allocate or release guest-ingress VIPs.
 
 With VMaaS only, tasks of different resources share at least these objects, in creates and deletes alike:
 
@@ -1145,7 +1140,7 @@ The Subnet stays FAILED, and the tenant deletes it.
 
 OSAC computes each Subnet's layout once, at Subnet create, from the address plan stored with the Subnet. It records the layout in `Subnet.status.ipam` and passes it to both managers as `osac_job_vars.ipam`. Every later task gets the recorded layout.
 
-The plan gives the shares `overlay`, `fabric`, and `lbVip` of the Subnet's addresses. With VMaaS only, the default is 0.75/0.25/0. CaaS requires `lbVip` greater than zero for cluster ingress reservations.
+The plan gives the shares `overlay`, `fabric`, and `lbVip` of the Subnet's addresses. With VMaaS only, the default is 0.75/0.25/0. CaaS uses the `lbVip` range for Fulfillment-owned guest ingress allocation, so CaaS Subnets need a non-empty range.
 
 From the network address, OSAC places the ranges in the order overlay, fabric, lbVip. Each range is the fewest aligned CIDRs in ascending order. A share of 0 gives `[]`.
 
@@ -1162,28 +1157,9 @@ ipam:                                    # Subnet 10.0.1.0/24, plan 0.75/0.25/0
 | `gateway_ipv4` | Network address plus one, in every plan. | OVN-Kubernetes, as the VM gateway on every hub node. Your fabric routes VM traffic into the IP-VRF and may also serve it ([Gateway rule](#gateway)). |
 | `overlay_ipv4_cidrs` | The `overlay` share; never empty with `cudn_evpn`. | `cudn_evpn`, for VM addresses. |
 | `physical_ipv4_cidrs` | The `fabric` share. | Your range: your own devices on the Subnet (for example appliances or router ports). |
-| `lb_vip_ipv4_cidrs` | The `lbVip` share. | The Fabric Manager's ClusterOrder ingress reservation task; `[]` with the VMaaS-only default plan. |
+| `lb_vip_ipv4_cidrs` | The `lbVip` share. | Fulfillment allocates guest ingress addresses from this range; `[]` with the VMaaS-only default plan. |
 
-Accept any `lb_vip_ipv4_cidrs` list (a set `addressPlan` may fill it). For CaaS, reserve one address from this range for each ClusterOrder ingress endpoint and release it when that cluster is deleted. Do not use these addresses for other fabric devices.
-
-The ClusterOrder runs `reserve_cluster_ingress_ip` and later
-`release_cluster_ingress_ip` through the Fabric Manager recorded on its
-Subnet. The complete manager input is in [Appendix A](#appendix-a-complete-task-inputs).
-It includes the ClusterOrder snapshot, the stable Cluster API ID, its
-VirtualNetwork and Subnet snapshots, the tenant ID, and the Subnet's recorded
-`ipam` layout.
-For ClusterOrders sharing a Subnet, keep active ingress reservations on
-distinct addresses. Allocate atomically across concurrent reserve tasks; if a
-concurrent task claims the candidate first, return `osac_error.retryable: true`
-without changing the existing reservation.
-Return `cluster_ingress: {address: <IPv4>}` with a canonical address from
-`ipam.lb_vip_ipv4_cidrs`; OSAC rejects an address outside that range or equal
-to the parent Subnet's network, broadcast, or gateway address. The range's
-first and last addresses are eligible unless they equal one of those Subnet
-addresses. Reserve the same address on retry under the Cluster API ID, and make
-release safe when the reservation is already absent. Standard CaaS removes DNS
-and automatic ExternalIP resources, then waits for the HostedCluster and
-workers to disappear before releasing it.
+Accept any `lb_vip_ipv4_cidrs` list (a set `addressPlan` may fill it). Fulfillment assigns one unique address from this range to each CaaS Cluster and releases it after endpoint cleanup, worker cleanup, and SecurityGroup cleanup. Fabric Managers must carry this L2 range and must not use these addresses for other fabric devices.
 Rules:
 
 - Read the lists. Never compute ranges from the Subnet CIDR or the plan.
@@ -1214,7 +1190,6 @@ Implement and test the tasks in the order of this table. Each resource needs the
 | `create_external_ip` / `delete_external_ip` | One public address reserved for a tenant. | `external_ip_pool` | `external_ip` | Address accepted (ALLOCATED) |
 | `attach_external_ip` / `detach_external_ip` | Inbound access to a VM through a public address. | `external_ip`, `destination` | none | Your attach succeeds |
 | `create_nat_gateway` / `delete_nat_gateway` | Outbound access to the outside for a whole VirtualNetwork. | `virtual_network`, `external_ip`, `nat_gateway_context` | none | Your create succeeds |
-| `reserve_cluster_ingress_ip` / `release_cluster_ingress_ip` | Reserve and release a standard CaaS ClusterOrder ingress address from `lb_vip_ipv4_cidrs`. | `cluster_id`, `virtual_network`, `subnet`, `ipam` | Reserve returns `cluster_ingress: {address}`; release returns no result | The reservation is stable for the Cluster API ID and release is safe when already absent |
 
 [Task details](#task-details) has what each task pair must do. Read its section before you write the pair.
 
@@ -1497,7 +1472,7 @@ Record the release, your collection version, your image digest, and the results 
 **Files and design**
 
 - [ ] Manager design published ([Your manager design](#your-manager-design)).
-- [ ] The 16 VMaaS task files exist; when CaaS is enabled, also add `query_dhcp_lease`, `reserve_cluster_ingress_ip`, and `release_cluster_ingress_ip` ([The task files you write](#the-task-files-you-write)).
+- [ ] The 16 VMaaS task files exist; when CaaS is enabled, also add `query_dhcp_lease` and the physical worker attachment path ([The task files you write](#the-task-files-you-write)).
 - [ ] For CaaS physical workers, `apply_network_attachment`, `query_dhcp_lease`, and `delete_network_attachment` implement the physical contract ([CaaS worker physical attachments](#caas-worker-physical-attachments)).
 - [ ] `create_virtual_network` and `create_subnet` always do their IP-VRF and MAC-VRF EVPN duties.
 - [ ] Any Fabric DHCP pool is disjoint from the addresses OVN-Kubernetes allocates.
@@ -1528,7 +1503,7 @@ Record the release, your collection version, your image digest, and the results 
   - the VNI range
   - one SecurityGroup's ACLs
   - the EVPN peering configuration
-  - one Subnet's LB VIP range for ClusterOrder ingress reservations
+  - one Subnet's LB VIP range for Fulfillment-owned CaaS guest ingress allocations
 - [ ] Every task ends well within 60 minutes.
 
 **Fabric duties** ([Fabric requirements](#what-your-fabric-must-provide))
@@ -2391,48 +2366,6 @@ osac_job_vars:
       phase: Ready
 ```
 
-### CaaS ClusterOrder ingress reservation
-
-The reserve task receives the selected Fabric Manager, the ClusterOrder and
-Cluster API ID, the tenant, the parent resource snapshots, and the recorded
-Subnet address layout. OSAC stores this input before launching the task and
-reuses it for `release_cluster_ingress_ip`, changing only `task`.
-
-```yaml
-# fixtures/reserve_cluster_ingress_ip.yaml
-osac_job_vars:
-  manager: {name: acme_fabric, type: fabric, ansible_role: acme.network.fabric}
-  task: reserve_cluster_ingress_ip
-  tenant: tenant-a
-  cluster_id: 9f8e7d6c-5b4a-4321-8765-4c3b2a109876
-  resource:
-    apiVersion: osac.openshift.io/v1alpha1
-    kind: ClusterOrder
-    id: 9f8e7d6c-5b4a-4321-8765-4c3b2a109876
-    metadata: {name: clusterorder-9f8e7d6c, namespace: osac-networking, uid: 00000000-0000-4000-8000-000000000008, generation: 1}
-    spec:
-      networkAttachment: {subnetRef: subnet-8a2b4c6d}
-  virtual_network:
-    apiVersion: osac.openshift.io/v1alpha1
-    kind: VirtualNetwork
-    id: 3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10
-    metadata: {name: vn-3f1c9a2e, namespace: osac-networking, uid: 00000000-0000-4000-8000-000000000001, generation: 1}
-    spec: {ipv4Cidr: 10.0.0.0/16}
-  subnet:
-    apiVersion: osac.openshift.io/v1alpha1
-    kind: Subnet
-    id: 8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12
-    metadata: {name: subnet-8a2b4c6d, namespace: osac-networking, uid: 00000000-0000-4000-8000-000000000002, generation: 1}
-    spec:
-      addressPlan: {fabric: 4, lbVip: 4, overlay: 8}
-      ipv4Cidr: 10.0.1.0/24
-  ipam:
-    gateway_ipv4: 10.0.1.1
-    overlay_ipv4_cidrs: [10.0.1.0/25]
-    physical_ipv4_cidrs: [10.0.1.128/26]
-    lb_vip_ipv4_cidrs: [10.0.1.192/26]
-```
-
 ## Appendix B: OSAC's result checks
 
 OSAC applies these checks to every job of your manager.
@@ -2449,7 +2382,6 @@ OSAC applies these checks to every job of your manager.
 | `create_subnet` | `network_segment: {type, l2_vni}` (required) | [Checks below](#create_subnet-checks) |
 | `create_external_ip` | `external_ip: {address}` (required) | [Checks below](#create_external_ip-checks) |
 | `query_dhcp_lease` | `dhcp_lease: {ip_address, mac_address}` (required) | The MAC matches the input interface. The canonical IPv4 address is in `ipam.physical_ipv4_cidrs` and is not the Subnet network, broadcast, or gateway address; see [CaaS worker physical attachments](#caas-worker-physical-attachments) |
-| `reserve_cluster_ingress_ip` | `cluster_ingress: {address}` (required) | Canonical IPv4 in `ipam.lb_vip_ipv4_cidrs` (not the Subnet network, broadcast, or gateway address); stable for the Cluster API ID; see [CaaS ingress reservation](#caas-clusterorder-ingress-reservation) |
 | Every other task except those listed above | none | No `osac_result` is published. |
 
 For `create_nat_gateway`, OSAC also checks that its dependencies still match the stored input ([NATGateway tasks](#natgateway-tasks)). A mismatch rejects the successful result as a final failure.

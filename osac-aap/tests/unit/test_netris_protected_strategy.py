@@ -227,31 +227,3 @@ def test_generic_network_playbook_protects_netris_launch_vars(tmp_path):
     assert result.returncode != 0
     assert "protected Netris setting 'NETRIS_CONTROLLER_URL'" in output
     assert "Check the job input" not in output
-
-
-def test_generic_network_playbook_does_not_apply_netris_guard_to_agentlessnet(
-    tmp_path,
-):
-    result = _run_network_playbook(
-        tmp_path,
-        {
-            "manager": {
-                "name": "agentless_net",
-                "type": "fabric",
-                "ansible_role": "osac.templates.agentless_net",
-            },
-            "task": "reserve_cluster_ingress_ip",
-            "tenant": "tenant-1",
-            "resource": {
-                "kind": "ClusterOrder",
-                "id": "0e9d8c7b-6a5f-4e3d-8c2b-1a0f9e8d7c6b",
-                "metadata": {"uid": "cluster-order-uid", "generation": 1},
-            },
-        },
-        tmp_path / "missing-aap-extravars",
-    )
-    output = result.stdout + result.stderr
-
-    assert result.returncode != 0
-    assert "AgentlessNet does not support CaaS guest ingress reservation" in output
-    assert "original AAP launch extra_vars are unavailable" not in output

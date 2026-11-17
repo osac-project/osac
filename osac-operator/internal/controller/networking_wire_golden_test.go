@@ -349,43 +349,4 @@ var _ = Describe("Operator and AAP wire contract goldens", func() {
 		}
 	})
 
-	It("launches and accepts the ClusterOrder ingress reservation contract", func() {
-		h := newNetHarness(true)
-		g := newWireGolden(h.ns)
-		vn := h.readyVirtualNetwork(wireVN, false)
-		g.register(vn, "vn-3f1c9a2e", 1)
-		subnet := h.readySubnet(wireSubnet, wireVN, false, testPlan)
-		g.register(subnet, "subnet-8a2b4c6d", 2)
-		instance := &v1alpha1.ClusterOrder{
-			ObjectMeta: h.meta(kindClusterOrder, wireClusterOrder),
-			Spec: v1alpha1.ClusterOrderSpec{
-				TemplateID: "test",
-				NetworkAttachment: &v1alpha1.ClusterNetworkAttachment{
-					SubnetRef: subnet.Name,
-				},
-			},
-		}
-		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
-		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
-		g.register(instance, "clusterorder-9f8e7d6c", 8)
-
-		reconciler := &ClusterOrderReconciler{
-			Client:              k8sClient,
-			Engine:              h.engine,
-			NetworkingNamespace: h.ns,
-		}
-		out, err := reconciler.runReserveClusterIngress(ctx, instance, subnet, vn)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(out.Entry.State).To(Equal(v1alpha1.NetworkJobStateRunning))
-		g.expectLaunch(h, networktask.ReserveClusterIngressIP, netFabric)
-
-		h.aap.finish(networktask.ReserveClusterIngressIP, netFabric, "successful",
-			wireResult(networktask.ReserveClusterIngressIP, netFabric))
-		out, err = reconciler.runReserveClusterIngress(ctx, instance, subnet, vn)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(out.Succeeded()).To(BeTrue())
-		Expect(instance.Status.IngressAllocatedAddress).To(Equal("10.0.1.192"))
-		Expect(taskInput(instance)).To(HaveKeyWithValue("fabric_manager", HaveKeyWithValue(
-			"name", testFabricRef.Name)))
-	})
 })

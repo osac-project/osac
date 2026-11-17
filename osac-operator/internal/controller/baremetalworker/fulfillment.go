@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -67,6 +68,14 @@ type FulfillmentClient interface {
 	ListBareMetalInstanceCatalogItems(ctx context.Context, filter string) ([]*privatev1.BareMetalInstanceCatalogItem, error)
 	// GetBareMetalInstanceType returns the BareMetalInstanceType with the given id (or name).
 	GetBareMetalInstanceType(ctx context.Context, id string) (*privatev1.BareMetalInstanceType, error)
+}
+
+type bareMetalInstanceFinalizerUpdater interface {
+	UpdateBareMetalInstance(
+		ctx context.Context,
+		obj *privatev1.BareMetalInstance,
+		updateMask *fieldmaskpb.FieldMask,
+	) (*privatev1.BareMetalInstance, error)
 }
 
 // fulfillmentClient is the production FulfillmentClient. It wraps the generated gRPC clients
@@ -159,6 +168,25 @@ func (c *fulfillmentClient) DeleteBareMetalInstance(ctx context.Context, id stri
 		_, err := c.bmis.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{Id: id}.Build())
 		return err
 	})
+}
+
+func (c *fulfillmentClient) UpdateBareMetalInstance(
+	ctx context.Context,
+	obj *privatev1.BareMetalInstance,
+	updateMask *fieldmaskpb.FieldMask,
+) (*privatev1.BareMetalInstance, error) {
+	var out *privatev1.BareMetalInstance
+	err := c.call(ctx, func(ctx context.Context) error {
+		resp, err := c.bmis.Update(ctx, privatev1.BareMetalInstancesUpdateRequest_builder{
+			Object: obj, UpdateMask: updateMask,
+		}.Build())
+		if err != nil {
+			return err
+		}
+		out = resp.GetObject()
+		return nil
+	})
+	return out, err
 }
 
 func (c *fulfillmentClient) GetBareMetalInstance(ctx context.Context, id string) (*privatev1.BareMetalInstance, error) {

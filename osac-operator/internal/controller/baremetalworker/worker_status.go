@@ -301,6 +301,8 @@ func newWorkerStatus(nodeSet, instanceType, name, resourceID, phase string) v1al
 func workerCreated(w *v1alpha1.WorkerStatus, name, id string) {
 	w.BareMetalInstance = v1alpha1.BareMetalInstanceReference{Name: name, ID: id}
 	w.Phase = workerPhaseWaitingForAgent
+	w.Agent = nil
+	w.RegistrationDeadline = nil
 	w.NextRetryTime = nil
 	if w.CreationTimestamp.IsZero() {
 		w.CreationTimestamp = metav1.Now()

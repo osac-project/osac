@@ -73,7 +73,20 @@ readiness or packet continuity; deployed provider coverage remains
 Worker specs use the `baremetalworker` label in the `internal/controller/`
 Envtest suite; there is no separate acceptance suite or external framework.
 Fulfillment/ignition doubles and CR fixtures are private to that binary and
-supply only the evidence the worker reads. Keep the minimal
+supply only the evidence the worker reads. The CaaS binding proof is covered by
+`internal/controller/baremetalworker/network_proof_test.go`: management/API
+publication must be ready, the selected NetworkAttachment must be Ready, and
+the Agent inventory must match the accepted DHCP lease. This is fixture-level
+coverage; it does not prove real registry access from the worker network. The
+OSAC-owned runner is covered at unit level by
+`internal/controller/baremetalworker/registry_probe_test.go`: it adds a boot
+service that waits for operator network proof, then pulls the ClusterVersion
+release image and reports through a narrowly scoped guest-cluster ConfigMap
+token. The unit test validates its Ignition and result flow but does not execute
+Podman on a worker. The management-side kubelet pull is covered by
+`internal/controller/registry_probe_test.go`. Both tests simulate image-pull
+outcomes; deployed image pulls from management and worker networks remain owned
+by [OSAC-6654](https://redhat.atlassian.net/browse/OSAC-6654). Keep the minimal
 InfraEnv/ClusterDeployment and Agent/NodePool test CRDs. No fixture runs Assisted
 Service, CAP-Agent, HyperShift, BMF, AAP or hardware provisioning. Run
 `make test`; see the component AGENTS.md.

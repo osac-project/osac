@@ -12,7 +12,6 @@ rules:
   - ""
   resources:
   - configmaps
-  - pods
   - services
   verbs:
   - get
@@ -22,6 +21,8 @@ rules:
   - ""
   resources:
   - namespaces
+  - pods
+  - secrets
   - serviceaccounts
   verbs:
   - create
@@ -30,15 +31,6 @@ rules:
   - list
   - patch
   - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - create
-  - get
-  - list
   - watch
 - apiGroups:
   - agent-install.openshift.io

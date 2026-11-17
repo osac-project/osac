@@ -50,6 +50,12 @@ import (
 
 const objectPrefix = "bmi-"
 
+const caasAgentCleanupFinalizer = "osac.openshift.io/caas-agent-cleanup"
+
+const clusterAPIIDAnnotation = "osac.openshift.io/cluster-api-id"
+
+const clusterOrderUUIDLabel = "osac.openshift.io/clusterorder-uuid"
+
 const userDataSecretSuffix = "-user-data"
 
 const userDataSecretKey = "userdata"
@@ -1026,6 +1032,18 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 		object.Annotations = make(map[string]string)
 	}
 	object.Annotations[annotations.Tenant] = t.bareMetalInstance.GetMetadata().GetTenant()
+	if clusterID := t.bareMetalInstance.GetMetadata().GetAnnotations()[clusterAPIIDAnnotation]; clusterID != "" {
+		object.Annotations[clusterAPIIDAnnotation] = clusterID
+		object.Labels[clusterOrderUUIDLabel] = t.bareMetalInstance.GetMetadata().GetLabels()[clusterOrderUUIDLabel]
+	} else {
+		delete(object.Annotations, clusterAPIIDAnnotation)
+		delete(object.Labels, clusterOrderUUIDLabel)
+	}
+	if slices.Contains(t.bareMetalInstance.GetMetadata().GetFinalizers(), caasAgentCleanupFinalizer) {
+		controllerutil.AddFinalizer(object, caasAgentCleanupFinalizer)
+	} else {
+		controllerutil.RemoveFinalizer(object, caasAgentCleanupFinalizer)
+	}
 
 	// The API materializes the Template; the catalog reference is provenance only.
 	templateID := t.bareMetalInstance.GetSpec().GetTemplate().GetId()

@@ -32,14 +32,19 @@ file and they are applied during `make install-osac`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EXTERNAL_ACCESS_BASE_DOMAIN` | `box.massopen.cloud` | Base domain for cluster DNS records |
+| `EXTERNAL_ACCESS_BASE_DOMAIN` | `box.massopen.cloud` | Base domain for CaaS API and ingress DNS records. Must equal `HOSTED_CLUSTER_BASE_DOMAIN`. |
 | `EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS` | `box.massopen.cloud` | Comma-separated list of allowed domains |
 | `EXTERNAL_ACCESS_API_INTERNAL_NETWORK` | `hypershift` | Internal network for API access |
-| `HOSTED_CLUSTER_BASE_DOMAIN` | `hosted.` plus the hub's apps domain without `apps.` | Base domain for hosted clusters. The chart sets this default from the hub `Ingress`; `box.massopen.cloud` is only the playbook fallback when the variable is absent |
+| `HOSTED_CLUSTER_BASE_DOMAIN` | Deployment-specific | HostedCluster certificate base domain. For CaaS it must equal `EXTERNAL_ACCESS_BASE_DOMAIN`; Helm rejects a mismatch. |
 | `HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY` | `HighlyAvailable` | Control plane HA policy |
 | `HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY` | `HighlyAvailable` | Infrastructure HA policy |
-| `DNS_CLASS` | `dns.route53.dns` | DNS backend driver role (see [DNS Backend](dns-backend.md)) |
-| `DNS_ZONE` | `EXTERNAL_ACCESS_BASE_DOMAIN` | DNS zone for record management |
+| `DNS_CLASS` | `dns.route53.dns` | DNS backend driver role (see [DNS Backend](dns-backend.md)). Cannot change while a Cluster exists. |
+| `DNS_ZONE` | `EXTERNAL_ACCESS_BASE_DOMAIN` | Authoritative DNS zone for record management; it may differ from the base domain. Cannot change while a Cluster exists. |
+
+Before an upgrade, the installer compares the proposed CaaS DNS settings with
+the running `cluster-fulfillment-ig` configuration and lists Clusters through
+Fulfillment. A change to `EXTERNAL_ACCESS_BASE_DOMAIN`, `DNS_ZONE`, or
+`DNS_CLASS` is rejected while any Cluster remains; delete the Clusters first.
 
 ## Secret Variables
 

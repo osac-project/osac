@@ -28,7 +28,7 @@ func handoffFixture() (*v1alpha1.ClusterOrder, *unstructured.Unstructured) {
 	}
 	a := agentPhaseFixture("worker", false)
 	Expect(unstructured.SetNestedMap(a.Object, map[string]interface{}{
-		"name": "hosted", "namespace": "osac-order-hosted",
+		jsonNameField: "hosted", "namespace": "osac-order-hosted",
 	}, "spec", "clusterDeploymentName")).To(Succeed())
 	return co, a
 }
@@ -46,6 +46,7 @@ var _ = Describe("CAP-Agent handoff phase projection", func() {
 			}
 			before := a.DeepCopy()
 			worker := newWorkerStatus("standard", "workers", "worker", "bmi-id", workerPhaseBinding)
+			worker.Agent = &v1alpha1.WorkerAgentReference{Name: a.GetName(), UID: string(a.GetUID())}
 			got, err := projectAgentWorkerPhases(co, []v1alpha1.WorkerStatus{worker}, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*a}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got[0].Phase).To(Equal(want), "handoff projection = %+v, want phase %s with original BMI", got[0], want)
@@ -91,7 +92,7 @@ var _ = It("limits CAP-Agent handoff to the expected cluster and NodePool", func
 			a.SetLabels(map[string]string{clusterOrderLabel: "order", "osac.openshift.io/clusterorder": "foreign", workerNameLabel: "worker"})
 		}},
 	}...)
-	for _, field := range []string{"name", "namespace"} {
+	for _, field := range []string{jsonNameField, "namespace"} {
 		for _, value := range []string{"foreign", "", "osac-order"} {
 			tests = append(tests, scopeCase{name: "deployment " + field + "=" + value, wantErr: true, change: func(_ *v1alpha1.ClusterOrder, a *unstructured.Unstructured) {
 				Expect(unstructured.SetNestedField(a.Object, value, "spec", "clusterDeploymentName", field)).To(Succeed())

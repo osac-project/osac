@@ -96,7 +96,7 @@ var _ = Describe("BMI deletion recovery preserves phase and history", func() {
 
 var _ = Describe("BMI recovery does not overwrite newer reservation", func() {
 	for _, deletion := range []bool{false, true} {
-		for _, field := range []string{"ID", "name", "phase", "retry", "kind"} {
+		for _, field := range []string{"ID", jsonNameField, "phase", "retry", "kind"} {
 			It(map[bool]string{true: "deletion", false: "normal"}[deletion]+"/"+field, func() {
 				r, fc, co := bmiStageHarness(workerPhaseProvisioning, "")
 				kube := r.Client
@@ -109,7 +109,7 @@ var _ = Describe("BMI recovery does not overwrite newer reservation", func() {
 					switch field {
 					case "ID":
 						w.BareMetalInstance.ID = "new-id"
-					case "name":
+					case jsonNameField:
 						w.BareMetalInstance.Name = "new-name"
 					case "phase":
 						w.Phase = workerPhaseDeleting

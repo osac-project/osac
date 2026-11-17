@@ -20,7 +20,6 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const (
@@ -36,6 +35,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="has(self.networkAttachment) == has(oldSelf.networkAttachment) && (!has(self.networkAttachment) || self.networkAttachment == oldSelf.networkAttachment)",message="networkAttachment is immutable after creation"
 // +kubebuilder:validation:XValidation:rule="has(self.sshKey) == has(oldSelf.sshKey) && (!has(self.sshKey) || self.sshKey == oldSelf.sshKey)",message="sshKey is immutable after creation"
 // +kubebuilder:validation:XValidation:rule="(!has(oldSelf.supportsAutomaticCaaSEndpoints) && has(self.supportsAutomaticCaaSEndpoints) && self.supportsAutomaticCaaSEndpoints) || (has(self.supportsAutomaticCaaSEndpoints) == has(oldSelf.supportsAutomaticCaaSEndpoints) && (!has(self.supportsAutomaticCaaSEndpoints) || self.supportsAutomaticCaaSEndpoints == oldSelf.supportsAutomaticCaaSEndpoints))",message="supportsAutomaticCaaSEndpoints is immutable except for migration from unset to true"
+// +kubebuilder:validation:XValidation:rule="has(self.ingressAllocatedAddress) == has(oldSelf.ingressAllocatedAddress) && (!has(self.ingressAllocatedAddress) || self.ingressAllocatedAddress == oldSelf.ingressAllocatedAddress)",message="ingressAllocatedAddress is immutable after creation"
 type ClusterOrderSpec struct {
 	// TemplateID is the unique identigier of the cluster template to use when creating this cluster
 	// +kubebuilder:validation:Required
@@ -91,6 +91,12 @@ type ClusterOrderSpec struct {
 	// default subnet and security groups during creation.
 	// +kubebuilder:validation:Optional
 	NetworkAttachment *ClusterNetworkAttachment `json:"networkAttachment,omitempty"`
+	// IngressAllocatedAddress is the Fulfillment-assigned guest MetalLB address.
+	// The ClusterOrder controller validates it against the Subnet's recorded
+	// load-balancer VIP range and never allocates or releases it.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Format=ipv4
+	IngressAllocatedAddress string `json:"ingressAllocatedAddress,omitempty"`
 }
 
 // ClusterNetworkSpec defines networking configuration for a cluster.
@@ -112,14 +118,14 @@ type ClusterNetworkSpec struct {
 // ClusterNetworkAttachment defines the network attachment for a cluster,
 // connecting it to a tenant subnet with optional security groups.
 type ClusterNetworkAttachment struct {
-	// SubnetRef is the name of the Subnet CR that the cluster connects to.
+	// SubnetRef is the Fulfillment API ID of the Subnet CR that the cluster connects to.
 	// The subnet must be in Ready state at creation time.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	SubnetRef string `json:"subnetRef"`
 
-	// SecurityGroupRefs lists SecurityGroup CR names to apply to the cluster's
+	// SecurityGroupRefs lists Fulfillment API IDs of SecurityGroups to apply to the cluster's
 	// network attachment. All security groups must belong to the same virtual
 	// network as the subnet.
 	// +kubebuilder:validation:Optional
@@ -285,6 +291,9 @@ const (
 	ClusterOrderConditionManagementPublicationReady ClusterOrderConditionType = "ManagementPublicationReady"
 	// ClusterOrderConditionEndpointsReady indicates the requested external endpoints and DNS are ready.
 	ClusterOrderConditionEndpointsReady ClusterOrderConditionType = "EndpointsReady"
+	// ClusterOrderConditionClusterTeardownReady gates core and worker cleanup
+	// until endpoint resources and cancelled endpoint jobs are gone.
+	ClusterOrderConditionClusterTeardownReady ClusterOrderConditionType = "ClusterTeardownReady"
 )
 
 // ClusterOrderClusterReferenceType contains a reference to the namespace created by this ClusterOrder
@@ -394,15 +403,6 @@ type ClusterOrderStatus struct {
 	// +kubebuilder:validation:Optional
 	IngressDNSHostedClusterName string `json:"ingressDNSHostedClusterName,omitempty"`
 
-	// IngressAllocatedAddress is the Fabric Manager-reserved guest ingress address.
-	// +kubebuilder:validation:Optional
-	IngressAllocatedAddress string `json:"ingressAllocatedAddress,omitempty"`
-
-	// TaskInput is the persisted input used to release the Fabric Manager ingress reservation.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:pruning:PreserveUnknownFields
-	TaskInput *runtime.RawExtension `json:"taskInput,omitempty"`
-
 	// Jobs tracks ClusterOrder Fabric Manager and guest endpoint tasks.
 	// +kubebuilder:validation:Optional
 	// +listType=map
@@ -449,6 +449,17 @@ type BareMetalInstanceReference struct {
 	Name string `json:"name,omitempty"`
 	// +kubebuilder:validation:Optional
 	ID string `json:"id,omitempty"`
+}
+
+// WorkerAgentReference is the exact Assisted Agent incarnation correlated to a worker.
+// The UID is persisted before any binding side effect and is required for later recovery.
+type WorkerAgentReference struct {
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	UID string `json:"uid"`
 }
 
 // FulfillmentSecretReference identifies a Secret stored by the fulfillment
@@ -509,6 +520,11 @@ type WorkerStatus struct {
 	// +kubebuilder:validation:Enum=Provisioning;WaitingForAgent;Binding;Ready;Failed;Unbinding;Deleting
 	Phase string `json:"phase"`
 
+	// Agent records the exact Assisted Agent incarnation selected for this BMI.
+	// The reconciler persists it before approval, binding, or NodePool labels.
+	// +kubebuilder:validation:Optional
+	Agent *WorkerAgentReference `json:"agent,omitempty"`
+
 	// CreationTimestamp is when this worker entry was first created.
 	// +kubebuilder:validation:Required
 	CreationTimestamp metav1.Time `json:"creationTimestamp"`
@@ -517,13 +533,28 @@ type WorkerStatus struct {
 	AttemptCount int32 `json:"attemptCount"`
 
 	// AttemptStartedAt is the durable start of the current provisioning attempt.
-	// It is recorded before the first BMI Create and survives lost acknowledgements,
-	// so the agent registration timeout is measured from the attempt, not from the
-	// parent ClusterOrder or an unrelated failure timestamp. It is not refreshed on
-	// errors or re-observation, and is cleared only after the old attempt's cleanup
-	// completes.
+	// It is recorded before the first BMI Create and survives lost acknowledgements.
+	// AgentRegistrationTimeout uses RegistrationDeadline instead, because its clock
+	// starts only after the networking prerequisites have been observed.
 	// +kubebuilder:validation:Optional
 	AttemptStartedAt *metav1.Time `json:"attemptStartedAt,omitempty"`
+
+	// RegistrationDeadline is the persisted Agent registration deadline derived
+	// from network handoff, management publication, and API DNS publication.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Format=date-time
+	RegistrationDeadline *metav1.Time `json:"registrationDeadline,omitempty"`
+
+	// RegistryAccessReady records the OSAC worker-side image-pull probe. The
+	// probe runs after network handoff and the accepted DHCP lease, before Agent
+	// approval or NodePool selection.
+	// +kubebuilder:validation:Optional
+	RegistryAccessReady *metav1.Condition `json:"registryAccessReady,omitempty"`
+	// RegistryProbePrepared records that this BMI create attempt included the
+	// OSAC-owned worker registry probe in discovery Ignition. It lets existing
+	// workers without that attempt marker retain their supported legacy path.
+	// +kubebuilder:validation:Optional
+	RegistryProbePrepared bool `json:"registryProbePrepared,omitempty"`
 
 	// LastFailureReason is a machine-readable reason for the last failure
 	// (e.g. AgentRegistrationTimeout).

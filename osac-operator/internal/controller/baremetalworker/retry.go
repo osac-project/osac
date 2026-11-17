@@ -69,7 +69,7 @@ var backoffSchedules = map[FailureCategory]backoffSchedule{
 // ClassifyFailure maps a LastFailureReason string to a FailureCategory.
 func ClassifyFailure(reason string) FailureCategory {
 	switch reason {
-	case eventReasonAgentRegistrationTimeout:
+	case eventReasonAgentRegistrationTimeout, eventReasonRegistryAccessTimeout:
 		return FailureCategoryAgentTimeout
 	case "NoHostAvailable", "ResourceExhausted":
 		return FailureCategoryResource
@@ -119,6 +119,10 @@ func (r *Reconciler) handleFailedWorkers(
 		retryTime := metav1.NewTime(now.Add(backoff))
 		w.NextRetryTime = &retryTime
 		w.BareMetalInstance.ID = ""
+		w.Agent = nil
+		w.RegistrationDeadline = nil
+		w.RegistryProbePrepared = false
+		w.RegistryAccessReady = nil
 		// Only confirmed old-incarnation absence makes a new reservation safe to
 		// cancel. Unknown Create outcomes never pass this cleanup checkpoint.
 		w.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
@@ -163,7 +167,7 @@ func (r *Reconciler) retryFailedWorker(
 	if !res.IsZero() {
 		return res, nil
 	}
-	log.Info("created replacement BMI for failed worker", "name", prev.Name, "attempt", prev.AttemptCount, "id", bmi.GetId())
+	log.Info("created replacement BMI for failed worker", jsonNameField, prev.Name, "attempt", prev.AttemptCount, "id", bmi.GetId())
 	workerCreated(prev, bmi.GetMetadata().GetName(), bmi.GetId())
 	r.recorder.Eventf(co, nil, corev1.EventTypeNormal, eventReasonWorkerRetry, "RetryWorker",
 		"worker %s: retry attempt %d", prev.Name, prev.AttemptCount)

@@ -713,7 +713,7 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-allow-ssh", "sg-allow-http"}))
 	})
 
-	It("should use GetName() not ID for SubnetRef and SecurityGroupRefs when both are set", func() {
+	It("should use API IDs for SubnetRef and SecurityGroupRefs when both are set", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -771,9 +771,9 @@ var _ = Describe("update tenant annotation", func() {
 
 		createdCR := list.Items[0]
 		Expect(createdCR.Spec.NetworkAttachment).ToNot(BeNil())
-		// Must use CR name, not UUID — the CRD documents these fields as CR names
-		Expect(createdCR.Spec.NetworkAttachment.SubnetRef).To(Equal("my-subnet"))
-		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-allow-ssh", "sg-allow-http"}))
+		// ClusterOrder references are Fulfillment API IDs; CR names are not stable contracts.
+		Expect(createdCR.Spec.NetworkAttachment.SubnetRef).To(Equal("subnet-uuid-1234"))
+		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-uuid-1111", "sg-uuid-2222"}))
 	})
 
 	It("should leave ClusterOrder networkAttachment nil when network_attachment is absent", func() {

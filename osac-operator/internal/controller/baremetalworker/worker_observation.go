@@ -11,8 +11,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -28,17 +30,21 @@ type bmiGetResult struct {
 // mutation: a create/delete/bind ends the invocation and a fresh observation
 // supplies the next one.
 type workerObservation struct {
-	byID   map[string]*privatev1.BareMetalInstance
-	byName map[string][]*privatev1.BareMetalInstance
-	gets   map[string]bmiGetResult
-	agents *unstructured.UnstructuredList
+	byID               map[string]*privatev1.BareMetalInstance
+	byName             map[string][]*privatev1.BareMetalInstance
+	gets               map[string]bmiGetResult
+	agents             *unstructured.UnstructuredList
+	hubBMIs            map[string]*bmfov1alpha1.BareMetalInstance
+	networkAttachments map[string]*v1alpha1.NetworkAttachment
 }
 
 func indexWorkerBMIs(bmis []*privatev1.BareMetalInstance) *workerObservation {
 	o := &workerObservation{
-		byID:   make(map[string]*privatev1.BareMetalInstance),
-		byName: make(map[string][]*privatev1.BareMetalInstance),
-		gets:   make(map[string]bmiGetResult),
+		byID:               make(map[string]*privatev1.BareMetalInstance),
+		byName:             make(map[string][]*privatev1.BareMetalInstance),
+		gets:               make(map[string]bmiGetResult),
+		hubBMIs:            make(map[string]*bmfov1alpha1.BareMetalInstance),
+		networkAttachments: make(map[string]*v1alpha1.NetworkAttachment),
 	}
 	for _, bmi := range bmis {
 		id, name := bmi.GetId(), bmi.GetMetadata().GetName()
@@ -82,6 +88,40 @@ func (r *Reconciler) observeWorkerResources(ctx context.Context, co *v1alpha1.Cl
 		return nil, ctrl.Result{}, fmt.Errorf("observing worker BMIs: %w", err)
 	}
 	o := indexWorkerBMIs(bmis)
+	if co.Spec.SupportsAutomaticCaaSEndpoints {
+		reader := r.apiReader
+		if reader == nil {
+			reader = r.Client
+		}
+		if reader == nil {
+			return nil, ctrl.Result{}, fmt.Errorf("worker observation reader is not configured")
+		}
+		hubBMIs := &bmfov1alpha1.BareMetalInstanceList{}
+		if err := reader.List(ctx, hubBMIs, client.InNamespace(r.networkingNamespace)); err != nil {
+			return nil, ctrl.Result{}, fmt.Errorf("observing hub BareMetalInstances: %w", err)
+		}
+		for i := range hubBMIs.Items {
+			item := &hubBMIs.Items[i]
+			id := item.GetLabels()["osac.openshift.io/baremetalinstance-uuid"]
+			if id != "" {
+				o.hubBMIs[id] = item
+			}
+		}
+		if r.NetworkingProvisioningEnabled {
+			attachments := &v1alpha1.NetworkAttachmentList{}
+			if err := reader.List(ctx, attachments, client.InNamespace(r.networkingNamespace)); err != nil {
+				return nil, ctrl.Result{}, fmt.Errorf("observing worker NetworkAttachments: %w", err)
+			}
+			for i := range attachments.Items {
+				attachment := &attachments.Items[i]
+				if attachment.Spec.Target.Kind != v1alpha1.NetworkAttachmentTargetBareMetalInstance ||
+					attachment.Spec.Target.ID == "" {
+					continue
+				}
+				o.networkAttachments[attachment.Spec.Target.ID] = attachment
+			}
+		}
+	}
 	o.agents, err = r.listAgents(ctx, co)
 	return o, ctrl.Result{}, err
 }
@@ -94,6 +134,12 @@ func (r *Reconciler) workerMACResolver(o *workerObservation) MACResolver {
 		return r.resolveHostMACs
 	}
 	return func(ctx context.Context, id string) []string {
+		if r.NetworkingProvisioningEnabled {
+			attachment := o.networkAttachments[id]
+			if attachment != nil && attachment.Spec.Interface.MACAddress != "" {
+				return []string{attachment.Spec.Interface.MACAddress}
+			}
+		}
 		bmi, err := o.getBMI(ctx, r.fulfillment, id)
 		if err != nil {
 			return nil

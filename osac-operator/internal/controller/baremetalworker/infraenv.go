@@ -365,7 +365,7 @@ func (r *Reconciler) buildInfraEnv(co *v1alpha1.ClusterOrder, name, sshAuthorize
 	// No clusterRef is set (late binding): agents
 	// register unbound and are bound explicitly after MAC correlation (OSAC-4160).
 	spec := map[string]interface{}{
-		"pullSecretRef": map[string]interface{}{"name": co.Name + pullSecretNameSuffix},
+		"pullSecretRef": map[string]interface{}{jsonNameField: co.Name + pullSecretNameSuffix},
 	}
 	if sshAuthorizedKey != "" {
 		spec["sshAuthorizedKey"] = sshAuthorizedKey

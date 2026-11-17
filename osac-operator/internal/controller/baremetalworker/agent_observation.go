@@ -73,6 +73,26 @@ func projectAgentWorkerPhases(
 			return nil, err
 		}
 		if association.state == agentEstablished {
+			// The stronger durable Agent identity is part of the CaaS binding
+			// contract. Legacy worker flows retain their existing single-pass
+			// projection because they do not bind through the CaaS gate.
+			if (co == nil || !co.Spec.SupportsAutomaticCaaSEndpoints) && w.Agent == nil {
+				w.Phase = deriveWorkerPhase(association.agent, w.Name)
+				continue
+			}
+			uid := string(association.agent.GetUID())
+			if uid == "" {
+				return nil, fmt.Errorf("established Agent %s has no UID", association.agent.GetName())
+			}
+			if w.Agent == nil {
+				w.Agent = &v1alpha1.WorkerAgentReference{Name: association.agent.GetName(), UID: uid}
+			}
+			if w.Agent.Name != association.agent.GetName() || w.Agent.UID != uid {
+				// A same-name replacement is a different Agent incarnation and
+				// cannot resume readiness or authorize cleanup.
+				w.Phase = workerPhaseWaitingForAgent
+				continue
+			}
 			w.Phase = deriveWorkerPhase(association.agent, w.Name)
 			continue
 		}
@@ -115,7 +135,7 @@ func agentInstalled(agent *unstructured.Unstructured) bool {
 			continue
 		}
 		status, _, _ := unstructured.NestedString(condition, "status")
-		return status == "True"
+		return status == conditionStatusTrue
 	}
 
 	state, _, _ := unstructured.NestedString(agent.Object, "status", "debugInfo", "state")

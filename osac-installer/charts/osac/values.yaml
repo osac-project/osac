@@ -339,6 +339,8 @@ aap:
     clusterFulfillment:
       enabled: false
       config:
+        # CaaS public names use the HostedCluster certificate base domain.
+        # The installer blocks changes to these DNS settings while Clusters exist.
         DNS_CLASS: "dns.route53.dns"
         DNS_ZONE: ""
         EXTERNAL_ACCESS_BASE_DOMAIN: ""

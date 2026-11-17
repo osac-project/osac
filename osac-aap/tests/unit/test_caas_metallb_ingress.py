@@ -112,7 +112,7 @@ def test_guest_ingress_address_guard_returns_booleans(monkeypatch) -> None:
         assert result is expected
 
 
-def test_ingress_uses_the_reserved_address_and_the_shared_metallb_role() -> None:
+def test_ingress_uses_the_allocated_address_and_the_shared_metallb_role() -> None:
     tasks = load_tasks(TASKS / "caas_ingress_create.yaml")
     text = yaml.safe_dump(tasks)
 
@@ -136,7 +136,7 @@ def test_ingress_uses_the_reserved_address_and_the_shared_metallb_role() -> None
     ("address", "expected"),
     [("192.0.2.11", False), ("192.0.2.10", True)],
 )
-def test_guest_service_address_must_equal_the_reserved_address(address, expected) -> None:
+def test_guest_service_address_must_equal_the_allocated_address(address, expected) -> None:
     tasks = load_tasks(TASKS / "caas_ingress_create.yaml")
     service_wait = next(
         task
@@ -162,7 +162,7 @@ def test_guest_service_address_must_equal_the_reserved_address(address, expected
     assert index_of(tasks, "kind: Service") < index_of(tasks, "kind: EndpointSlice")
 
 
-def test_wildcard_apps_dns_uses_the_reserved_address_before_worker_readiness() -> None:
+def test_wildcard_apps_dns_uses_the_allocated_address_before_worker_readiness() -> None:
     tasks = load_tasks(TASKS / "caas_ingress_create.yaml")
     assert included_tasks(tasks) == ["caas_dns_publish.yaml"]
     publish = next(task for task in tasks if "caas_dns_publish.yaml" in yaml.safe_dump(task))
@@ -207,7 +207,7 @@ def test_vip_reservation_requires_a_provider_supplied_range() -> None:
     assert "external_access_metallb_ingress_ip" in text
 
 
-def test_reserved_address_is_published_as_the_cluster_ingress_endpoint() -> None:
+def test_allocated_address_is_published_as_the_cluster_ingress_endpoint() -> None:
     publish = (TASKS / "publish.yaml").read_text()
 
     assert "external_access_metallb_ingress_ip | default(external_access_ingress_ip, true)" in publish

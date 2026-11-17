@@ -133,8 +133,8 @@ var _ = Describe("BareMetalWorkerReconciler ensureInfraEnv", Label("baremetalwor
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -610,8 +610,8 @@ var _ = Describe("BareMetalWorkerReconciler resolveDiskImage", Label("baremetalw
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -866,8 +866,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -988,9 +988,9 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 
 		netAttachments := bmi.GetSpec().GetNetworkAttachments()
 		Expect(netAttachments).To(HaveLen(1))
-		Expect(netAttachments[0].GetSubnet().GetName()).To(Equal("my-subnet"))
+		Expect(netAttachments[0].GetSubnet().GetId()).To(Equal("subnet-id"))
 		Expect(netAttachments[0].GetSecurityGroups()).To(HaveLen(1))
-		Expect(netAttachments[0].GetSecurityGroups()[0].GetName()).To(Equal("sg-default"))
+		Expect(netAttachments[0].GetSecurityGroups()[0].GetId()).To(Equal("sg-id"))
 	})
 
 	It("does not create catalog item or BMI when the requested BMIT is not found", func() {
@@ -1337,9 +1337,9 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 
 		netAttachments := calls[0].GetSpec().GetNetworkAttachments()
 		Expect(netAttachments).To(HaveLen(1))
-		Expect(netAttachments[0].GetSubnet().GetName()).To(Equal("my-subnet"))
+		Expect(netAttachments[0].GetSubnet().GetId()).To(Equal("subnet-id"))
 		Expect(netAttachments[0].GetSecurityGroups()).To(HaveLen(1))
-		Expect(netAttachments[0].GetSecurityGroups()[0].GetName()).To(Equal("sg-default"))
+		Expect(netAttachments[0].GetSecurityGroups()[0].GetId()).To(Equal("sg-id"))
 		Expect(netAttachments[0].GetInterface()).To(Equal("data-0"), "BMI must use the Create-time NodeRequest interface")
 		Expect(netAttachments[0].GetPrimary()).To(BeTrue())
 	})
@@ -1386,8 +1386,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileWorkers", Label("baremetalw
 					},
 				},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -1509,8 +1509,8 @@ var _ = Describe("BareMetalWorkerReconciler reconcileAgent", Label("baremetalwor
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -2198,8 +2198,8 @@ var _ = Describe("BareMetalWorkerReconciler workerRetry", Label("baremetalworker
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -2488,8 +2488,8 @@ var _ = Describe("BareMetalWorkerReconciler scale-up", Label("baremetalworker"),
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -2798,8 +2798,8 @@ var _ = Describe("BareMetalWorkerReconciler stale ignition", Label("baremetalwor
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -3094,8 +3094,8 @@ var _ = Describe("BareMetalWorkerReconciler scale-down", Label("baremetalworker"
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -3524,8 +3524,8 @@ var _ = Describe("BareMetalWorkerReconciler cluster deletion", Label("baremetalw
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}

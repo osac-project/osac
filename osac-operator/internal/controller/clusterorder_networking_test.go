@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -335,56 +334,32 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		}
 	})
 
-	It("keeps the first recorded Fabric Manager for ingress reservation retries", func() {
-		h := newNetHarness(true)
-		vn := h.readyVirtualNetwork("caas-vn", false)
-		subnet := h.readySubnet("caas-subnet", "caas-vn", false, testPlan)
-		selected := &v1alpha1.NetworkManagerRef{Name: "tenant-fabric", AnsibleRole: "acme.network.fabric"}
-		subnet.Status.NetworkManagers.Fabric = selected.DeepCopy()
-		Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
-		instance := createClusterOrderForIngress(h, "9f8e7d6c-5b4a-4321-8765-4c3b2a109876", subnet.Name)
-		reconciler := &ClusterOrderReconciler{Client: k8sClient, Engine: h.engine}
-
-		out, err := reconciler.runReserveClusterIngress(ctx, instance, subnet, vn)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(out.Entry.State).To(Equal(v1alpha1.NetworkJobStateRunning))
-		first := h.aap.latest(networktask.ReserveClusterIngressIP, string(v1alpha1.NetworkJobManagerFabric))
-		Expect(first.vars["manager"]).To(HaveKeyWithValue("name", selected.Name))
-		Expect(first.vars["manager"]).To(HaveKeyWithValue("ansible_role", selected.AnsibleRole))
-		Expect(first.vars["cluster_id"]).To(Equal(instance.Labels[osacClusterOrderIDLabel]))
-
-		// A later live Subnet manager change must not redirect a retry whose
-		// original task input and manager were already persisted.
-		subnet.Status.NetworkManagers.Fabric = &v1alpha1.NetworkManagerRef{
-			Name: "replacement-fabric", AnsibleRole: "replacement.network.fabric",
+	It("validates the Fulfillment-assigned ingress address against recorded Subnet IPAM", func() {
+		subnet := &v1alpha1.Subnet{
+			Spec: v1alpha1.SubnetSpec{IPv4CIDR: "10.0.0.0/24"},
+			Status: v1alpha1.SubnetStatus{IPAM: &v1alpha1.SubnetIPAM{
+				GatewayIPv4:    "10.0.0.1",
+				LBVIPIPv4CIDRs: []string{"10.0.0.192/26"},
+			}},
 		}
-		Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
-		instance.Status.Jobs[0].State = v1alpha1.NetworkJobStateCancelled
-		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
-		out, err = reconciler.runReserveClusterIngress(ctx, instance, subnet, vn)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(out.Entry.State).To(Equal(v1alpha1.NetworkJobStateRunning))
-		second := h.aap.latest(networktask.ReserveClusterIngressIP, string(v1alpha1.NetworkJobManagerFabric))
-		Expect(second.vars["manager"]).To(HaveKeyWithValue("name", selected.Name))
-		Expect(second.vars["manager"]).To(HaveKeyWithValue("ansible_role", selected.AnsibleRole))
-		input, err := networktask.LoadInput(instance)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(input["fabric_manager"]).To(Equal(map[string]any{
-			"name": selected.Name, "ansible_role": selected.AnsibleRole,
-		}))
-		Expect(input["cluster_id"]).To(Equal(instance.Labels[osacClusterOrderIDLabel]))
+		Expect(validateCommittedClusterIngressAddress("10.0.0.193", subnet)).To(Succeed())
+		Expect(validateCommittedClusterIngressAddress("10.0.0.1", subnet)).To(HaveOccurred())
+		Expect(validateCommittedClusterIngressAddress("10.0.0.64", subnet)).To(HaveOccurred())
+		Expect(validateCommittedClusterIngressAddress("10.0.0.193/32", subnet)).To(HaveOccurred())
 	})
 
 	It("requires the ClusterOrder, Subnet, and VirtualNetwork to share a tenant", func() {
 		h := newNetHarness(true)
 		vn := h.readyVirtualNetwork("tenant-vn", false)
 		subnet := h.readySubnet("tenant-subnet", "tenant-vn", false, testPlan)
+		subnet.Labels[osacSubnetIDLabel] = "tenant-subnet-api-id"
+		Expect(k8sClient.Update(ctx, subnet)).To(Succeed())
 		instance := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{networktask.TenantAnnotation: "tenant-a"},
 		}}
 		reconciler := &ClusterOrderReconciler{Client: k8sClient, NetworkingNamespace: h.ns}
 
-		_, gotVN, err := reconciler.clusterEndpointSubnet(ctx, instanceWithSubnet(instance, subnet.Name))
+		_, gotVN, err := reconciler.clusterEndpointSubnet(ctx, instanceWithSubnet(instance, "tenant-subnet-api-id"))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(gotVN.Name).To(Equal(vn.Name))
 
@@ -589,11 +564,16 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		clusterID := "fb4d3d80-65ad-43d2-9fa0-c26c81467f9c"
 		instance := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
 			Name: "dns-hold-order", Namespace: h.ns,
-			Labels: map[string]string{osacClusterOrderIDLabel: clusterID},
+			Labels:      map[string]string{osacClusterOrderIDLabel: clusterID},
+			Annotations: map[string]string{tenantAnnotation: "tenant-a"},
 		}, Spec: v1alpha1.ClusterOrderSpec{
 			TemplateID:                     standardCaaSTemplateID,
 			SupportsAutomaticCaaSEndpoints: true,
-		}}
+			ReleaseImage:                   "registry.example.test/ocp/release:4.22.0",
+		}, Status: v1alpha1.ClusterOrderStatus{Conditions: []metav1.Condition{{
+			Type: registryAccessReadyCondition, Status: metav1.ConditionTrue,
+			Reason: "ManagementImagePulled", Message: managementRegistryProbeReadyMessage("registry.example.test/ocp/release:4.22.0"),
+		}}}}
 		apiIP := &v1alpha1.ExternalIP{ObjectMeta: metav1.ObjectMeta{
 			Name: "dns-hold-eip", Namespace: h.ns,
 			Labels: map[string]string{
@@ -616,6 +596,7 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 			TargetEndpoint: ptr.To(v1alpha1.ExternalIPAttachmentTargetEndpointAPI),
 		}}
 		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 		Expect(k8sClient.Create(ctx, apiIP)).To(Succeed())
 		apiIP.Status = v1alpha1.ExternalIPStatus{
 			Address: "203.0.113.44",
@@ -658,6 +639,7 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		reconciler := &ClusterOrderReconciler{
 			Client:                        k8sClient,
 			apiReader:                     k8sClient,
+			Scheme:                        k8sClient.Scheme(),
 			Engine:                        h.engine,
 			NetworkingNamespace:           h.ns,
 			NetworkingProvisioningEnabled: true,
@@ -1126,7 +1108,7 @@ func instanceWithSubnet(instance *v1alpha1.ClusterOrder, subnetName string) *v1a
 }
 
 var _ = Describe("ClusterOrder delete dependency sequence", func() {
-	It("does not wait for workers when no ingress reservation was recorded", func() {
+	It("persists the teardown gate before waiting for workers when there are no endpoints", func() {
 		ctx := context.Background()
 		name := crdTestName("delete-without-ingress")
 		instance := &v1alpha1.ClusterOrder{
@@ -1134,6 +1116,7 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 				Name: name, Namespace: crdTestName("orders"),
 				Finalizers: []string{osacFinalizer, "osac.openshift.io/baremetalworker-finalizer"},
 			},
+			Spec: v1alpha1.ClusterOrderSpec{SupportsAutomaticCaaSEndpoints: true},
 			Status: v1alpha1.ClusterOrderStatus{
 				Workers: []v1alpha1.WorkerStatus{{Name: "worker-0"}},
 			},
@@ -1153,29 +1136,27 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 
 		result, err := reconciler.handleDelete(ctx, reconcile.Request{}, instance)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(BeZero())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
 		Expect(aap.tasks("")).To(BeEmpty())
+		Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions,
+			string(v1alpha1.ClusterOrderConditionClusterTeardownReady))).To(BeTrue())
+		Expect(fakeClient.Status().Update(ctx, instance)).To(Succeed())
 
 		latest := &v1alpha1.ClusterOrder{}
 		Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(instance), latest)).To(Succeed())
 		Expect(latest.Status.Workers).To(HaveLen(1), "worker cleanup remains owned by its finalizer")
-		Expect(latest.Finalizers).To(Equal([]string{"osac.openshift.io/baremetalworker-finalizer"}))
+		Expect(latest.Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+		Expect(apimeta.IsStatusConditionTrue(latest.Status.Conditions,
+			string(v1alpha1.ClusterOrderConditionClusterTeardownReady))).To(BeTrue())
 	})
 
-	It("removes DNS and waits for HostedCluster and workers before releasing ingress", func() {
+	It("removes DNS, persists teardown readiness, and waits for HostedCluster and workers", func() {
 		ctx := context.Background()
 		name := crdTestName("delete-ingress")
 		orderNamespace := crdTestName("orders")
 		networkingNamespace := crdTestName("networking")
 		workloadNamespace := crdTestName("cluster")
 		clusterID := "7a9306c1-30a2-48b8-a58a-139193cd0279"
-		fabric := &v1alpha1.NetworkManagerRef{Name: "tenant-fabric", AnsibleRole: "acme.network.fabric"}
-		input, err := json.Marshal(map[string]any{
-			"fabric_manager": map[string]any{"name": fabric.Name, "ansible_role": fabric.AnsibleRole},
-			"cluster_id":     clusterID,
-			"resource":       map[string]any{"id": clusterID, "kind": kindClusterOrder},
-		})
-		Expect(err).NotTo(HaveOccurred())
 		instance := &v1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name, Namespace: orderNamespace, UID: "delete-ingress-uid",
@@ -1184,13 +1165,11 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 					osacClusterOrderNameLabel: name,
 				},
 			},
+			Spec: v1alpha1.ClusterOrderSpec{SupportsAutomaticCaaSEndpoints: true},
 			Status: v1alpha1.ClusterOrderStatus{
 				APIURL:     "https://api.cluster.example.test:6443",
 				ConsoleURL: "https://console-openshift-console.apps.cluster.example.test",
-				TaskInput:  &runtime.RawExtension{Raw: input},
 				Jobs: []v1alpha1.NetworkJobStatus{
-					{Task: networktask.ReserveClusterIngressIP, Manager: v1alpha1.NetworkJobManagerFabric,
-						State: v1alpha1.NetworkJobStateSucceeded},
 					{Task: "publish_public_dns_api", Manager: v1alpha1.NetworkJobManagerNone,
 						State: v1alpha1.NetworkJobStateSucceeded},
 					{Task: "publish_public_dns_ingress", Manager: v1alpha1.NetworkJobManagerNone,
@@ -1287,7 +1266,19 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 		result, err = reconciler.handleDelete(ctx, reconcile.Request{}, instance)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(time.Second))
-		Expect(aap.tasks(clusterID)).To(HaveLen(2), "must wait for the HostedCluster before releasing ingress")
+		Expect(aap.tasks(clusterID)).To(HaveLen(2), "endpoint cleanup must not launch Fabric ingress tasks")
+		for attempts := 0; !apimeta.IsStatusConditionTrue(instance.Status.Conditions,
+			string(v1alpha1.ClusterOrderConditionClusterTeardownReady)); attempts++ {
+			if attempts >= 3 {
+				Fail("ClusterTeardownReady did not become true after endpoint resources disappeared")
+			}
+			result, err = reconciler.handleDelete(ctx, reconcile.Request{}, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		}
+		Expect(fakeClient.Status().Update(ctx, instance)).To(Succeed())
+		Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions,
+			string(v1alpha1.ClusterOrderConditionClusterTeardownReady))).To(BeTrue())
 		attachmentList := &v1alpha1.ExternalIPAttachmentList{}
 		Expect(fakeClient.List(ctx, attachmentList, client.InNamespace(networkingNamespace))).To(Succeed())
 		Expect(attachmentList.Items).To(BeEmpty(), "delete attachments only after successful DNS cleanup")
@@ -1309,43 +1300,39 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(aap.tasks(clusterID)).To(Equal([]string{
 			"remove_public_dns_api/none", "remove_public_dns_ingress/none",
-			"release_cluster_ingress_ip/fabric",
 		}))
 	})
 
-	It("completes a disabled delete without provider cleanup or a removal claim", func() {
+	It("completes a disabled delete without provider cleanup or a release claim", func() {
 		recordedJobs := []v1alpha1.NetworkJobStatus{
-			{Task: networktask.ReserveClusterIngressIP, Manager: v1alpha1.NetworkJobManagerFabric,
-				State: v1alpha1.NetworkJobStateSucceeded},
 			{Task: "publish_public_dns_api", Manager: v1alpha1.NetworkJobManagerNone,
 				State: v1alpha1.NetworkJobStateSucceeded},
 			{Task: "publish_public_dns_ingress", Manager: v1alpha1.NetworkJobManagerNone,
 				State: v1alpha1.NetworkJobStateSucceeded},
 		}
 		fixture := newDisabledEndpointDeleteFixture(recordedJobs)
-		recordedInput := string(fixture.order.Status.TaskInput.Raw)
 
 		result, err := fixture.reconciler.handleDelete(ctx, reconcile.Request{}, fixture.order)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(BeZero())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
 		Expect(fixture.aap.tasks(fixture.clusterID)).To(BeEmpty(),
-			"disabled delete must not launch reserve, release, DNS or remove tasks")
+			"disabled delete must not launch DNS or Fabric ingress tasks")
 		Expect(fixture.aap.cancelledJobs()).To(BeEmpty(),
 			"terminal recorded jobs need no cancellation")
 
 		Expect(fixture.order.Status.Jobs).To(Equal(recordedJobs),
 			"recorded provider jobs must stay untouched")
-		Expect(networktask.FindJob(fixture.order.Status.Jobs, networktask.ReleaseClusterIngressIP,
-			v1alpha1.NetworkJobManagerFabric)).To(BeNil())
 		Expect(networktask.FindJob(fixture.order.Status.Jobs, "remove_public_dns_api",
 			v1alpha1.NetworkJobManagerNone)).To(BeNil())
 		Expect(networktask.FindJob(fixture.order.Status.Jobs, "remove_public_dns_ingress",
 			v1alpha1.NetworkJobManagerNone)).To(BeNil())
 		Expect(fixture.order.Status.APIDNSHostedClusterName).To(Equal("recorded-api-hosted"))
 		Expect(fixture.order.Status.IngressDNSHostedClusterName).To(Equal("recorded-ingress-hosted"))
-		Expect(string(fixture.order.Status.TaskInput.Raw)).To(Equal(recordedInput),
-			"disabled delete must not rewrite the recorded manager input")
+		Expect(apimeta.IsStatusConditionTrue(fixture.order.Status.Conditions,
+			string(v1alpha1.ClusterOrderConditionClusterTeardownReady))).To(BeTrue())
 
+		_, err = fixture.reconciler.handleDelete(ctx, reconcile.Request{}, fixture.order)
+		Expect(err).NotTo(HaveOccurred())
 		latest := &v1alpha1.ClusterOrder{}
 		Expect(fixture.client.Get(ctx, client.ObjectKeyFromObject(fixture.order), latest)).To(Succeed())
 		Expect(latest.Finalizers).NotTo(ContainElement(osacFinalizer),
@@ -1371,12 +1358,6 @@ type disabledEndpointDeleteFixture struct {
 func newDisabledEndpointDeleteFixture(jobs []v1alpha1.NetworkJobStatus) disabledEndpointDeleteFixture {
 	name := crdTestName("disabled-delete")
 	clusterID := "disabled-delete-" + name
-	input, err := json.Marshal(map[string]any{
-		"fabric_manager": map[string]any{"name": "tenant-fabric", "ansible_role": "acme.network.fabric"},
-		"cluster_id":     clusterID,
-		"resource":       map[string]any{"id": clusterID, "kind": kindClusterOrder},
-	})
-	Expect(err).NotTo(HaveOccurred())
 	order := &v1alpha1.ClusterOrder{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: crdTestName("orders"), UID: "disabled-delete-uid",
@@ -1386,12 +1367,12 @@ func newDisabledEndpointDeleteFixture(jobs []v1alpha1.NetworkJobStatus) disabled
 				osacClusterOrderNameLabel: name,
 			},
 		},
+		Spec: v1alpha1.ClusterOrderSpec{SupportsAutomaticCaaSEndpoints: true},
 		Status: v1alpha1.ClusterOrderStatus{
 			APIURL:                      "https://api.cluster.example.test:6443",
 			ConsoleURL:                  "https://console-openshift-console.apps.cluster.example.test",
 			APIDNSHostedClusterName:     "recorded-api-hosted",
 			IngressDNSHostedClusterName: "recorded-ingress-hosted",
-			TaskInput:                   &runtime.RawExtension{Raw: input},
 			Jobs:                        append([]v1alpha1.NetworkJobStatus(nil), jobs...),
 		},
 	}

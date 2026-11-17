@@ -218,6 +218,8 @@ var _ = Describe("Agent Installed phase projection", func() {
 	makeAgent := func(workerName, conditionStatus string, debugInstalled bool) unstructured.Unstructured {
 		agent := unstructured.Unstructured{Object: map[string]interface{}{}}
 		agent.SetGroupVersionKind(agentGVK)
+		agent.SetName("agent")
+		agent.SetUID("agent-uid")
 		agent.SetLabels(map[string]string{workerNameLabel: workerName})
 		if conditionStatus != "" {
 			_ = unstructured.SetNestedSlice(agent.Object, []interface{}{
@@ -248,7 +250,7 @@ var _ = Describe("Agent Installed phase projection", func() {
 
 			Expect(workers[0].Phase).To(Equal(wantPhase))
 		},
-		Entry("Installed=True without debug state", "True", false, workerPhaseReady),
+		Entry("Installed=True without debug state", conditionStatusTrue, false, workerPhaseReady),
 		Entry("Installed=False overrides stale debug state", "False", true, workerPhaseBinding),
 		Entry("Installed=Unknown overrides stale debug state", "Unknown", true, workerPhaseBinding),
 		Entry("legacy debug state when condition is absent", "", true, workerPhaseReady),
@@ -451,11 +453,11 @@ var _ = It("rejects incompatible MAC matches without binding an Agent", func() {
 			map[string]interface{}{"macAddress": "aa"},
 		}, "status", "inventory", "interfaces")
 		_ = unstructured.SetNestedMap(agent.Object, map[string]interface{}{
-			"name": "another-cluster", "namespace": "osac",
+			jsonNameField: "another-cluster", "namespace": "osac",
 		}, "spec", "clusterDeploymentName")
 		r, c := buildReconciler(agent)
 		workers := []v1alpha1.WorkerStatus{worker}
-		bound, err := r.matchAndBindAgents(ctx, co, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agent}}, workers, r.macResolver)
+		bound, err := r.matchAndBindAgents(ctx, co, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agent}}, workers, r.macResolver, nil)
 		Expect(err).To(HaveOccurred(), "a conflicting cluster binding must fail closed, not correlate")
 		Expect(bound).To(BeZero(), "bound %d workers despite a conflicting binding", bound)
 		got := &unstructured.Unstructured{}
@@ -473,7 +475,7 @@ var _ = It("rejects incompatible MAC matches without binding an Agent", func() {
 		}, "status", "inventory", "interfaces")
 		r, _ := buildReconciler(agent)
 		workers := []v1alpha1.WorkerStatus{worker}
-		bound, err := r.matchAndBindAgents(ctx, co, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agent}}, workers, r.macResolver)
+		bound, err := r.matchAndBindAgents(ctx, co, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agent}}, workers, r.macResolver, nil)
 		Expect(err).ToNot(HaveOccurred(), "uninterpretable inventory is unknown, not invalid: %v", err)
 		// A MAC that cannot be read is unknown association, never a match.
 		Expect(bound).To(Equal(0), "malformed inventory correlated: bound=%d phase=%s", bound, workers[0].Phase)
@@ -495,6 +497,7 @@ var _ = Describe("reconcileAgent with transient Agent conflicts", func() {
 			agent.SetGroupVersionKind(agentGVK)
 			agent.SetName(name)
 			agent.SetNamespace(namespace)
+			agent.SetUID(types.UID(name + "-uid"))
 			agent.SetLabels(map[string]string{clusterOrderLabel: clusterOrderName})
 			Expect(unstructured.SetNestedSlice(agent.Object, []interface{}{
 				map[string]interface{}{"macAddress": mac},
@@ -586,7 +589,7 @@ var _ = Describe("reconcileAgent with transient Agent conflicts", func() {
 		Expect(workers).To(HaveLen(2))
 		Expect(workers[0].Phase).To(Equal(workerPhaseBinding), "workers=%+v agents=%+v", workers, agents.Items)
 		Expect(workers[1].Phase).To(Equal(workerPhaseBinding), "workers=%+v agents=%+v", workers, agents.Items)
-		Expect(result).To(BeZero())
+		Expect(result.RequeueAfter).To(Equal(workerBoundaryRequeue().RequeueAfter))
 
 		for _, expected := range []struct {
 			name, workerName, nodeSet, instanceType string
@@ -601,7 +604,7 @@ var _ = Describe("reconcileAgent with transient Agent conflicts", func() {
 			}, agent)).To(Succeed())
 
 			clusterDeploymentName, found, err := unstructured.NestedString(
-				agent.Object, "spec", "clusterDeploymentName", "name")
+				agent.Object, "spec", "clusterDeploymentName", jsonNameField)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(found).To(BeTrue())
 			Expect(clusterDeploymentName).To(Equal(clusterOrderName))
@@ -619,7 +622,7 @@ var _ = Describe("reconcileAgent with transient Agent conflicts", func() {
 			Expect(agent.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/instance_type", expected.instanceType))
 			Expect(agent.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/node-set", expected.nodeSet))
 			Expect(agent.GetLabels()).NotTo(HaveKey("osac.openshift.io/resource_class"))
-			Expect(agent.GetLabels()).To(HaveKeyWithValue(agentBareMetalRoleLabel, "true"))
+			Expect(agent.GetLabels()).To(HaveKeyWithValue(agentBareMetalRoleLabel, literalTrue))
 			Expect(agent.GetLabels()).To(HaveKeyWithValue(clusterOrderLabel, clusterOrderName))
 			Expect(agent.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/clusterorder", clusterOrderName))
 		}

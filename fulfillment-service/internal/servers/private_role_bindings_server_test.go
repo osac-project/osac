@@ -16,6 +16,7 @@ package servers
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -32,12 +33,21 @@ func refIDs[T interface{ GetId() string }](refs []T) []string {
 	return ids
 }
 
-func seedRoleBindingTestRoles() {
+func seedRoleBindingTestReferences() {
 	roles, err := dao.NewGenericDAO[*privatev1.Role]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 	Expect(err).ToNot(HaveOccurred())
 	for _, id := range []string{"admin-role-id", "role-a", "role-b", "role-1", "role-2", "my-role-id"} {
 		_, err := roles.Create().SetObject(privatev1.Role_builder{
 			Id: id, Metadata: privatev1.Metadata_builder{Name: id, Tenant: testTenant}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+	}
+	users, err := dao.NewGenericDAO[*privatev1.User]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+	Expect(err).ToNot(HaveOccurred())
+	for _, id := range []string{"admin-user-1", "admin-user-2", "human-user", "user-1", "user-2", "user-a", "user-b", "user-x"} {
+		_, err := users.Create().SetObject(privatev1.User_builder{
+			Id: id, Metadata: privatev1.Metadata_builder{Name: id, Tenant: testTenant}.Build(),
+			Spec: privatev1.UserSpec_builder{Username: id}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 	}
@@ -48,7 +58,7 @@ var _ = Describe("Private role bindings server", func() {
 
 	BeforeEach(func() {
 		var err error
-		seedRoleBindingTestRoles()
+		seedRoleBindingTestReferences()
 
 		roleBindingsServer, err = NewPrivateRoleBindingsServer().
 			SetLogger(logger).
@@ -85,6 +95,141 @@ var _ = Describe("Private role bindings server", func() {
 				Build()
 			Expect(err).To(MatchError("tenancy logic is mandatory"))
 			Expect(server).To(BeNil())
+		})
+	})
+
+	Describe("User reference validation", func() {
+		var users *dao.GenericDAO[*privatev1.User]
+
+		BeforeEach(func() {
+			var err error
+			users, err = dao.NewGenericDAO[*privatev1.User]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = users.Create().SetObject(privatev1.User_builder{
+				Id: "foreign-user", Metadata: privatev1.Metadata_builder{Name: "foreign-user", Tenant: auth.SharedTenant}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = users.Create().SetObject(privatev1.User_builder{
+				Id: "deleted-user", Metadata: privatev1.Metadata_builder{
+					Name: "deleted-user", Tenant: testTenant, Finalizers: []string{"test/hold"},
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = users.Delete().SetId("deleted-user").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		// Both paths exercise the private handler directly, without a reference interceptor.
+		DescribeTable("canonicalizes subjects after tenant assignment and update-mask merging", func(update bool) {
+			created, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: "canonical-users"}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role:  privatev1.RoleReference_builder{Id: "role-1"}.Build(),
+						Users: []*privatev1.UserReference{privatev1.UserReference_builder{Name: "user-a"}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := "user-a"
+			if update {
+				_, err = roleBindingsServer.Update(ctx, privatev1.RoleBindingsUpdateRequest_builder{
+					Object: privatev1.RoleBinding_builder{
+						Id:       created.GetObject().GetId(),
+						Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+						Spec: privatev1.RoleBindingSpec_builder{Users: []*privatev1.UserReference{
+							privatev1.UserReference_builder{Name: "user-b"}.Build(),
+						}}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.users"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id = "user-b"
+			}
+			stored, err := roleBindingsServer.Get(ctx, privatev1.RoleBindingsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			ref := stored.GetObject().GetSpec().GetUsers()[0]
+			Expect(ref.GetId()).To(Equal(id))
+			Expect(ref.GetName()).To(Equal(id))
+			Expect(ref.GetTenant()).To(Equal(testTenant))
+			Expect(ref.GetShared()).To(BeFalse())
+		}, Entry("Create", false), Entry("Update", true))
+
+		DescribeTable("rejects invalid subjects on Create and Update", func(ref *privatev1.UserReference) {
+			newBinding := func(name string, subject *privatev1.UserReference) *privatev1.RoleBinding {
+				return privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role:  privatev1.RoleReference_builder{Id: "role-1"}.Build(),
+						Users: []*privatev1.UserReference{subject},
+					}.Build(),
+				}.Build()
+			}
+			_, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: newBinding("invalid-user", ref),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			valid, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: newBinding("valid-user", privatev1.UserReference_builder{Id: "user-a"}.Build()),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			candidate := newBinding("ignored", ref)
+			candidate.SetId(valid.GetObject().GetId())
+			_, err = roleBindingsServer.Update(ctx, privatev1.RoleBindingsUpdateRequest_builder{
+				Object: candidate, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.users"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			stored, err := roleBindingsServer.Get(ctx, privatev1.RoleBindingsGetRequest_builder{Id: valid.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetSpec().GetUsers()[0].GetId()).To(Equal("user-a"))
+		},
+			Entry("missing identity", privatev1.UserReference_builder{}.Build()),
+			Entry("unknown ID", privatev1.UserReference_builder{Id: "missing-user"}.Build()),
+			Entry("deleted User", privatev1.UserReference_builder{Id: "deleted-user"}.Build()),
+			Entry("ID/name mismatch", privatev1.UserReference_builder{Id: "user-a", Name: "user-b"}.Build()),
+			Entry("wrong explicit tenant", privatev1.UserReference_builder{Id: "user-a", Tenant: auth.SharedTenant}.Build()),
+			Entry("wrong shared selector", privatev1.UserReference_builder{Id: "user-a", Shared: true}.Build()),
+			Entry("foreign ID without selectors", privatev1.UserReference_builder{Id: "foreign-user"}.Build()),
+			Entry("foreign ID with explicit tenant", privatev1.UserReference_builder{Id: "foreign-user", Tenant: auth.SharedTenant}.Build()),
+		)
+
+		It("allows a shared User only in a shared binding", func() {
+			response, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: "shared-user-binding", Tenant: auth.SharedTenant}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role:  privatev1.RoleReference_builder{Name: "tenant-reader", Shared: true}.Build(),
+						Users: []*privatev1.UserReference{privatev1.UserReference_builder{Name: "foreign-user", Shared: true}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			ref := response.GetObject().GetSpec().GetUsers()[0]
+			Expect(ref.GetId()).To(Equal("foreign-user"))
+			Expect(ref.GetTenant()).To(Equal(auth.SharedTenant))
+			Expect(ref.GetShared()).To(BeTrue())
+		})
+
+		It("preserves an unchanged subject after the User is deleted", func() {
+			created, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: "deleted-subject"}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role:  privatev1.RoleReference_builder{Id: "role-1"}.Build(),
+						Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-a"}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			_, err = users.Delete().SetId("user-a").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = roleBindingsServer.Update(ctx, privatev1.RoleBindingsUpdateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Id:       created.GetObject().GetId(),
+					Metadata: privatev1.Metadata_builder{Labels: map[string]string{"updated": "true"}}.Build(),
+				}.Build(), UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 

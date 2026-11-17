@@ -50,6 +50,7 @@ type PrivateRoleBindingsServer struct {
 	logger  *slog.Logger
 	generic *GenericServer[*privatev1.RoleBinding]
 	roles   *dao.GenericDAO[*privatev1.Role]
+	users   *dao.GenericDAO[*privatev1.User]
 }
 
 // NewPrivateRoleBindingsServer creates a new builder for the private role bindings server.
@@ -120,10 +121,18 @@ func (b *PrivateRoleBindingsServerBuilder) Build() (result *PrivateRoleBindingsS
 	if err != nil {
 		return
 	}
+	users, err := dao.NewGenericDAO[*privatev1.User]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		Build()
+	if err != nil {
+		return
+	}
 	result = &PrivateRoleBindingsServer{
 		logger:  b.logger,
 		generic: generic,
 		roles:   roles,
+		users:   users,
 	}
 	return
 }
@@ -185,6 +194,9 @@ func (s *PrivateRoleBindingsServer) validateRoleBinding(ctx context.Context, cur
 	if err != nil {
 		return err
 	}
+	if err := s.validateUserSubjects(ctx, candidate); err != nil {
+		return err
+	}
 	serviceAccountRefs := candidate.GetSpec().GetServiceAccounts()
 	if len(serviceAccountRefs) == 0 {
 		return nil
@@ -193,6 +205,26 @@ func (s *PrivateRoleBindingsServer) validateRoleBinding(ctx context.Context, cur
 		return err
 	}
 	return validateServiceAccountSubjects(ctx, serviceAccountRefs, candidate.GetMetadata().GetTenant())
+}
+
+// validateUserSubjects resolves input selectors after tenant assignment and update-mask merging.
+// The stored ID is authoritative for grants; retained names and selectors describe the target.
+func (s *PrivateRoleBindingsServer) validateUserSubjects(ctx context.Context, candidate *privatev1.RoleBinding) error {
+	tenant := candidate.GetMetadata().GetTenant()
+	for _, ref := range candidate.GetSpec().GetUsers() {
+		if (ref.GetTenant() != "" && ref.GetTenant() != tenant) || (ref.GetShared() && tenant != auth.SharedTenant) {
+			return status.Error(codes.InvalidArgument, "user reference must belong to the RoleBinding tenant")
+		}
+		user, err := resolveAndCanonicalizeReference(ctx, s.users, candidate.GetMetadata(), ref,
+			"user", codes.InvalidArgument)
+		if err != nil {
+			return err
+		}
+		if user.GetMetadata().GetTenant() != tenant {
+			return status.Error(codes.InvalidArgument, "user reference must belong to the RoleBinding tenant")
+		}
+	}
+	return nil
 }
 
 func validateServiceAccountRole(role *privatev1.Role, bindingTenant string) error {

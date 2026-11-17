@@ -14,12 +14,20 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	"google.golang.org/grpc/codes"
@@ -27,6 +35,32 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
+
+// grantQueryTx counts every SQL read while forwarding to the real transaction.
+type grantQueryTx struct {
+	database.Tx
+	reads int
+	query string
+	args  []any
+}
+
+func (t *grantQueryTx) Query(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
+	t.reads++
+	t.query, t.args = query, args
+	return t.Tx.Query(ctx, query, args...)
+}
+
+func (t *grantQueryTx) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
+	t.reads++
+	return t.Tx.QueryRow(ctx, query, args...)
+}
+
+func (t *grantQueryTx) Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error) {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(query)), "select") {
+		t.reads++
+	}
+	return t.Tx.Exec(ctx, query, args...)
+}
 
 var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 	const (
@@ -46,7 +80,7 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 		rolesDAO          *dao.GenericDAO[*privatev1.Role]
 		bindingsDAO       *dao.GenericDAO[*privatev1.RoleBinding]
 		usersDAO          *dao.GenericDAO[*privatev1.User]
-		store             authz.DAOStore
+		store             dao.GrantStore
 		resolver          *authz.Resolver
 	)
 
@@ -66,7 +100,7 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 		Expect(err).ToNot(HaveOccurred())
 		usersDAO, err = dao.NewGenericDAO[*privatev1.User]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
-		store = authz.DAOStore{Bindings: bindingsDAO, Roles: rolesDAO, Users: usersDAO}
+		store = dao.GrantStore{}
 		resolver, err = authz.NewResolver(store, permissionCatalog)
 		Expect(err).ToNot(HaveOccurred())
 	})
@@ -255,17 +289,7 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 	}
 
 	It("does not use project metadata to scope tenant grants", func() {
-		readTenancy, err := auth.NewDefaultTenancyLogic().SetLogger(logger).Build()
-		Expect(err).ToNot(HaveOccurred())
-		readBindings, err := dao.NewGenericDAO[*privatev1.RoleBinding]().SetLogger(logger).SetTenancyLogic(readTenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		readRoles, err := dao.NewGenericDAO[*privatev1.Role]().SetLogger(logger).SetTenancyLogic(readTenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		readUsers, err := dao.NewGenericDAO[*privatev1.User]().SetLogger(logger).SetTenancyLogic(readTenancy).Build()
-		Expect(err).ToNot(HaveOccurred())
-		readResolver, err := authz.NewResolver(authz.DAOStore{
-			Bindings: readBindings, Roles: readRoles, Users: readUsers,
-		}, permissionCatalog)
+		readResolver, err := authz.NewResolver(dao.GrantStore{}, permissionCatalog)
 		Expect(err).ToNot(HaveOccurred())
 
 		createProject("project-1")
@@ -418,6 +442,135 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 		})
 	})
 
+	Describe("Indexed subject queries", func() {
+		It("uses stored User IDs independently of reference names and selectors", func() {
+			role := createRole(roleSeed{name: "reference-reader"})
+			alice := createUser(userSeed{name: "alice-row", username: "alice"})
+			duplicate := createUser(userSeed{name: "alice-second-row", username: "alice"})
+			bob := createUser(userSeed{name: "bob-row", username: "bob"})
+			references := [][]*privatev1.UserReference{
+				{privatev1.UserReference_builder{Name: "alice-row"}.Build()},
+				{privatev1.UserReference_builder{Id: alice.GetId(), Name: "wrong"}.Build()},
+				{privatev1.UserReference_builder{Id: alice.GetId(), Tenant: auth.SharedTenant}.Build()},
+				{privatev1.UserReference_builder{Id: alice.GetId(), Shared: true}.Build()},
+				// Qualifiers are write-time inputs; a stored matching ID is authoritative.
+				{privatev1.UserReference_builder{Id: alice.GetId(), Name: "wrong"}.Build(),
+					privatev1.UserReference_builder{Id: bob.GetId(), Name: "bob-row", Tenant: testTenant}.Build()},
+				{privatev1.UserReference_builder{Id: "missing"}.Build()},
+				{privatev1.UserReference_builder{Id: alice.GetId(), Tenant: auth.SharedTenant}.Build(),
+					privatev1.UserReference_builder{Name: "alice-row", Tenant: testTenant}.Build()},
+				// Both repeated references and multiple matching User rows yield one grant.
+				{privatev1.UserReference_builder{Id: alice.GetId(), Name: "alice-row", Tenant: testTenant}.Build(),
+					privatev1.UserReference_builder{Id: alice.GetId()}.Build(),
+					privatev1.UserReference_builder{Id: duplicate.GetId()}.Build()},
+			}
+			var expectedIDs []string
+			for i, refs := range references {
+				response, err := bindingsDAO.Create().SetObject(privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("reference-%d", i), Tenant: testTenant}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role: privatev1.RoleReference_builder{Id: role.GetId()}.Build(), Users: refs,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				if i != 0 && i != 5 {
+					expectedIDs = append(expectedIDs, response.GetObject().GetId())
+				}
+			}
+			grants := grantsFor(userSubject("alice"))
+			Expect(grants.Bindings).To(HaveLen(len(expectedIDs)))
+			var actualIDs []string
+			for _, binding := range grants.Bindings {
+				actualIDs = append(actualIDs, binding.BindingID)
+			}
+			Expect(actualIDs).To(ConsistOf(expectedIDs))
+		})
+
+		It("combines bindings for all live User rows with the same username", func() {
+			role := createRole(roleSeed{name: "duplicate-user-reader"})
+			for _, name := range []string{"first-alice", "second-alice"} {
+				user := createUser(userSeed{name: name, username: "alice"})
+				createBinding(bindingSeed{name: name, roleID: role.GetId(), userID: user.GetId()})
+			}
+			Expect(grantsFor(userSubject("alice")).Bindings).To(HaveLen(2))
+		})
+
+		It("restricts User rows, bindings, and Roles to the permitted tenants", func() {
+			role := createRole(roleSeed{name: "scoped-reader"})
+			sharedRole := createRole(roleSeed{name: "scoped-shared-reader", tenant: auth.SharedTenant})
+			foreignRole := createRole(roleSeed{name: "scoped-foreign-reader", tenant: auth.SystemTenant})
+			alice := createUser(userSeed{name: "scoped-alice", username: "alice"})
+			response, err := usersDAO.Create().SetObject(privatev1.User_builder{
+				Metadata: privatev1.Metadata_builder{Name: "shared-alice", Tenant: auth.SharedTenant}.Build(),
+				Spec:     privatev1.UserSpec_builder{Username: "alice"}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			sharedUser := response.GetObject()
+			createBinding(bindingSeed{name: "foreign-binding", tenant: auth.SharedTenant, roleID: sharedRole.GetId(), userID: alice.GetId(), serviceAccountID: "account"})
+			createBinding(bindingSeed{name: "foreign-user", roleID: role.GetId(), userID: sharedUser.GetId()})
+			createBinding(bindingSeed{name: "foreign-role", roleID: foreignRole.GetId(), userID: alice.GetId(), serviceAccountID: "account"})
+			valid := createBinding(bindingSeed{name: "valid-shared-role", roleID: sharedRole.GetId(), userID: alice.GetId(), serviceAccountID: "account"})
+			for _, subject := range []authz.Subject{userSubject("alice"), serviceSubject("account")} {
+				grants := grantsFor(subject)
+				Expect(grants.Bindings).To(HaveLen(1))
+				Expect(grants.Bindings[0].BindingID).To(Equal(valid.GetId()))
+				Expect(grants.Bindings[0].RoleTenant).To(Equal(auth.SharedTenant))
+			}
+			sharedBinding, err := bindingsDAO.Create().SetObject(privatev1.RoleBinding_builder{
+				Metadata: privatev1.Metadata_builder{Name: "shared-user-binding", Tenant: auth.SharedTenant}.Build(),
+				Spec: privatev1.RoleBindingSpec_builder{
+					Role:  privatev1.RoleReference_builder{Id: sharedRole.GetId()}.Build(),
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: sharedUser.GetId(), Shared: true, Tenant: auth.SharedTenant}.Build()},
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			grants, err := resolver.Resolve(ctx, auth.SharedTenant, authz.Subject{Username: "alice", Tenants: collections.NewSet(auth.SharedTenant)})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(grants.Bindings).To(HaveLen(1))
+			Expect(grants.Bindings[0].BindingID).To(Equal(sharedBinding.GetObject().GetId()))
+		})
+
+		It("ignores missing Roles and stored name-only Role references for both subjects", func() {
+			user := createUser(userSeed{name: "missing-role-user", username: "alice"})
+			createRole(roleSeed{name: "name-only-reader"})
+			createBinding(bindingSeed{name: "missing-role", roleID: "missing", userID: user.GetId(), serviceAccountID: "account"})
+			createBinding(bindingSeed{name: "name-only-role", roleName: "name-only-reader", userID: user.GetId(), serviceAccountID: "account"})
+			Expect(grantsFor(userSubject("alice")).Bindings).To(BeEmpty())
+			Expect(grantsFor(serviceSubject("account")).Bindings).To(BeEmpty())
+		})
+
+		DescribeTable("executes one SELECT regardless of the number of matching bindings", func(count int) {
+			role := createRole(roleSeed{name: "fanout-reader"})
+			user := createUser(userSeed{name: "fanout-user", username: "alice"})
+			for i := range count {
+				createBinding(bindingSeed{name: fmt.Sprintf("fanout-%04d", i), roleID: role.GetId(), userID: user.GetId(), serviceAccountID: "account"})
+			}
+			createBinding(bindingSeed{name: "unrelated", roleID: role.GetId(), serviceAccountID: "unrelated"})
+			for _, subject := range []authz.Subject{userSubject("alice"), serviceSubject("account")} {
+				counted := &grantQueryTx{Tx: suiteTx}
+				grants, err := resolver.Resolve(database.TxIntoContext(ctx, counted), testTenant, subject)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(counted.reads).To(Equal(1))
+				Expect(grants.Bindings).To(HaveLen(count))
+				Expect(slices.IsSortedFunc(grants.Bindings, func(a, b authz.BindingGrant) int { return strings.Compare(a.BindingID, b.BindingID) })).To(BeTrue())
+			}
+		}, Entry("zero", 0), Entry("one", 1), Entry("over one hundred", 151))
+
+		It("closes rows when iteration stops early", func() {
+			role := createRole(roleSeed{name: "early-stop-reader"})
+			for i := range 2 {
+				createBinding(bindingSeed{name: fmt.Sprintf("early-%d", i), roleID: role.GetId(), serviceAccountID: "account"})
+			}
+			for _, err := range store.ListServiceAccountGrants(ctx, testTenant, "account") {
+				Expect(err).ToNot(HaveOccurred())
+				break
+			}
+			var one int
+			Expect(suiteTx.QueryRow(ctx, "select 1").Scan(&one)).To(Succeed())
+			Expect(one).To(Equal(1))
+		})
+	})
+
 	When("the bound role changes", func() {
 		It("reflects updated permissions on the next resolve", func() {
 			role := createRole(roleSeed{name: "stable-reader"})
@@ -464,11 +617,11 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 		}
 
 		DescribeTable("stops granting from rows held by finalizers after deletion",
-			func(deleteHeld func(rows heldRows) *privatev1.Metadata) {
+			func(deleteHeld func(rows heldRows) *privatev1.Metadata, remainingAccountGrants int) {
 				user := createUser(userSeed{name: "held-user", username: "held-alice", finalizers: []string{heldFinalizer}})
 				role := createRole(roleSeed{name: "held-reader", finalizers: []string{heldFinalizer}})
 				binding := createBinding(bindingSeed{
-					name: "held-binding", roleID: role.GetId(), userID: user.GetId(),
+					name: "held-binding", roleID: role.GetId(), userID: user.GetId(), serviceAccountID: "held-account",
 					finalizers: []string{heldFinalizer},
 				})
 				Expect(grantsFor(userSubject("held-alice")).Bindings).To(HaveLen(1))
@@ -477,6 +630,7 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 
 				Expect(stored.GetDeletionTimestamp()).ToNot(BeNil())
 				Expect(grantsFor(userSubject("held-alice")).Bindings).To(BeEmpty())
+				Expect(grantsFor(serviceSubject("held-account")).Bindings).To(HaveLen(remainingAccountGrants))
 			},
 			Entry("the binding row", func(rows heldRows) *privatev1.Metadata {
 				_, err := bindingsDAO.Delete().SetId(rows.binding.GetId()).Do(ctx)
@@ -484,21 +638,21 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 				stored, err := bindingsDAO.Get().SetId(rows.binding.GetId()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				return stored.GetObject().GetMetadata()
-			}),
+			}, 0),
 			Entry("the role row", func(rows heldRows) *privatev1.Metadata {
 				_, err := rolesDAO.Delete().SetId(rows.role.GetId()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				stored, err := rolesDAO.Get().SetId(rows.role.GetId()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				return stored.GetObject().GetMetadata()
-			}),
+			}, 0),
 			Entry("the user row", func(rows heldRows) *privatev1.Metadata {
 				_, err := usersDAO.Delete().SetId(rows.user.GetId()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				stored, err := usersDAO.Get().SetId(rows.user.GetId()).Do(ctx)
 				Expect(err).ToNot(HaveOccurred())
 				return stored.GetObject().GetMetadata()
-			}),
+			}, 1),
 		)
 
 		It("lists only the tenant's bindings through the store", func() {
@@ -510,10 +664,13 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 			})
 			createBinding(bindingSeed{name: "foreign-held-binding", tenant: auth.SharedTenant})
 
-			page, err := store.ListBindings(ctx, testTenant, 0, 100)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(page).To(HaveLen(1))
-			Expect(page[0].GetId()).To(Equal(binding.GetId()))
+			var grants []authz.BindingGrant
+			for grant, err := range store.ListUserGrants(ctx, testTenant, "held-alice") {
+				Expect(err).ToNot(HaveOccurred())
+				grants = append(grants, grant)
+			}
+			Expect(grants).To(HaveLen(1))
+			Expect(grants[0].BindingID).To(Equal(binding.GetId()))
 		})
 	})
 

@@ -47,6 +47,8 @@
         storage_provider_backend_connections: "{{ osac_job_vars.storage_backend_connections | default({}) }}"
         storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
 
+    # The integration harness may supply a replacement installer. Its process
+    # environment gate defaults to false and run_tests.sh opts in locally.
     # The umbrella installer owns the shared csi-backends controller Services under
     # OSAC-4252. AAP's csi_driver_install role consumes those Services and fails fast
     # if the umbrella has not provisioned the requested vendor yet.
@@ -57,11 +59,11 @@
         - name: Resolve the CSI installer target
           ansible.builtin.include_role:
             name: osac.service.csi_driver_install
-            tasks_from: select_test_override_target.yaml
+            tasks_from: select_csi_install_target.yaml
           vars:
             csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
 
-        - name: Install the test-only CSI driver override
+        - name: Install the configured CSI driver override
           when:
             - lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
             - csi_driver_install_override is defined

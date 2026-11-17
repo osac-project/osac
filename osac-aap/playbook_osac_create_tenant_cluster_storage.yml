@@ -132,6 +132,8 @@
         storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
         storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"
 
+    # The integration harness may supply a replacement installer. Its process
+    # environment gate defaults to false and run_tests.sh opts in locally.
     # The optional OSAC CSI role uses the AAP execution environment's default
     # context, so keep it separate from native provider driver setup and never
     # invoke it for ClusterOrder guest-cluster storage.
@@ -145,11 +147,11 @@
         - name: Resolve the CSI installer target
           ansible.builtin.include_role:
             name: osac.service.csi_driver_install
-            tasks_from: select_test_override_target.yaml
+            tasks_from: select_csi_install_target.yaml
           vars:
             csi_driver_install_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
 
-        - name: Install the test-only CSI driver override
+        - name: Install the configured CSI driver override
           when:
             - lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
             - csi_driver_install_override is defined

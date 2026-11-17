@@ -32,14 +32,19 @@ storage_provider_csi_driver_matrix:
       install_plan_approval: Manual
       catalog_source: certified-operators
       catalog_namespace: openshift-marketplace
-      trident_namespace: trident
+      # Keep the Trident operand namespace aligned with netapp_storage's
+      # NETAPP_CSI_OPERATOR_NAMESPACE setting; this is separate from the OLM
+      # Subscription namespace above.
+      trident_namespace: "{{ lookup('env', 'NETAPP_CSI_OPERATOR_NAMESPACE') | default('trident', true) }}"
   vast:
     protocols:
       nfs: "csi.vastdata.com"
       block: "block.csi.vastdata.com"
     installer:
       method: olm
-      namespace: vast-csi-system
+      # The VAST Subscription and operator resources share this namespace.
+      # Configurable through the AAP execution environment.
+      namespace: "{{ lookup('env', 'VAST_CSI_OPERATOR_NAMESPACE') | default('vast-csi-system', true) }}"
       package: vast-csi-operator
       channel: stable
       install_plan_approval: Manual

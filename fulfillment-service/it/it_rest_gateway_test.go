@@ -19,9 +19,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
-	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -211,5 +212,96 @@ var _ = Describe("REST gateway", func() {
 		body, err := io.ReadAll(response.Body)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(string(body)).To(ContainSubstring("token expired"))
+	})
+})
+
+var _ = Describe("Projects REST gateway", Label("projects-rest"), func() {
+	It("serves tenant-filtered Lists and administrator Gets through public and private routes", func(ctx context.Context) {
+		projects := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
+		filter := fmt.Sprintf("this.metadata.tenant == %q && this.metadata.name == ''", usersGroup)
+		roots, err := projects.List(ctx, privatev1.ProjectsListRequest_builder{Filter: &filter}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.OK))
+		rootCount := len(roots.GetItems())
+		Expect(rootCount).To(Equal(1))
+		rootID := roots.GetItems()[0].GetId()
+
+		for _, view := range []struct {
+			prefix     string
+			listClient *http.Client
+			getClient  *http.Client
+		}{
+			{prefix: "/api/fulfillment/v1/projects", listClient: tool.ExternalView().UserClient(), getClient: tool.ExternalView().AdminClient()},
+			{prefix: "/api/private/v1/projects", listClient: tool.InternalView().AdminClient(), getClient: tool.InternalView().AdminClient()},
+		} {
+			By("listing the root through " + view.prefix)
+			request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet,
+				view.prefix+"?filter="+url.QueryEscape(filter), nil)
+			Expect(requestErr).ToNot(HaveOccurred())
+			response, requestErr := view.listClient.Do(request)
+			if requestErr != nil {
+				Fail("Project List REST request failed")
+			}
+			DeferCleanup(response.Body.Close)
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			var list struct {
+				Items []struct {
+					ID string `json:"id"`
+				} `json:"items"`
+			}
+			Expect(json.NewDecoder(response.Body).Decode(&list)).To(Succeed())
+			Expect(list.Items).To(HaveLen(1))
+			Expect(list.Items[0].ID).To(Equal(rootID))
+
+			By("getting the same root as an administrator through " + view.prefix)
+			request, requestErr = http.NewRequestWithContext(ctx, http.MethodGet, view.prefix+"/"+rootID, nil)
+			Expect(requestErr).ToNot(HaveOccurred())
+			response, requestErr = view.getClient.Do(request)
+			if requestErr != nil {
+				Fail("Project Get REST request failed")
+			}
+			DeferCleanup(response.Body.Close)
+			Expect(response.StatusCode).To(Equal(http.StatusOK))
+			var object struct {
+				ID string `json:"id"`
+			}
+			Expect(json.NewDecoder(response.Body).Decode(&object)).To(Succeed())
+			Expect(object.ID).To(Equal(rootID))
+		}
+	})
+
+	It("preserves anonymous and foreign-tenant denial through the public routes", func(ctx context.Context) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "/api/fulfillment/v1/projects", nil)
+		Expect(err).ToNot(HaveOccurred())
+		response, err := tool.ExternalView().AnonymousClient().Do(request)
+		if err != nil {
+			Fail("Anonymous Projects REST request failed")
+		}
+		DeferCleanup(response.Body.Close)
+		Expect(response.StatusCode).To(Equal(http.StatusUnauthorized))
+
+		projects := privatev1.NewProjectsClient(tool.InternalView().AdminConn())
+		filter := fmt.Sprintf("this.metadata.tenant == %q && this.metadata.name == ''", auth.SystemTenant)
+		roots, err := projects.List(ctx, privatev1.ProjectsListRequest_builder{Filter: &filter}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.OK))
+		rootCount := len(roots.GetItems())
+		Expect(rootCount).To(Equal(1))
+		foreignID := roots.GetItems()[0].GetId()
+		_, err = publicv1.NewProjectsClient(tool.ExternalView().UserConn()).Get(ctx,
+			publicv1.ProjectsGetRequest_builder{Id: foreignID}.Build())
+		code := grpcstatus.Code(err)
+		Expect(code).To(BeElementOf(grpccodes.PermissionDenied, grpccodes.NotFound))
+		want := http.StatusForbidden
+		if code == grpccodes.NotFound {
+			want = http.StatusNotFound
+		}
+		request, err = http.NewRequestWithContext(ctx, http.MethodGet,
+			"/api/fulfillment/v1/projects/"+foreignID, nil)
+		Expect(err).ToNot(HaveOccurred())
+		response, err = tool.ExternalView().UserClient().Do(request)
+		if err != nil {
+			Fail("Foreign Projects REST request failed")
+		}
+		DeferCleanup(response.Body.Close)
+		Expect(response.StatusCode).To(Equal(want))
 	})
 })

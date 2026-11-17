@@ -21,6 +21,12 @@
 # Protects this file from unauthorized modification
 /CODEOWNERS @osac-project/wg-infra
 /osac-ui/ @osac-project/wg-ui
+# VMaaS QE-owned UI test paths
+/osac-ui/apps/e2e-tests/ @osac-project/wg-qe
+/osac-ui/apps/playwright/ @osac-project/wg-qe
+/osac-ui/libs/locators/ @osac-project/wg-qe
+/osac-ui/libs/test-utils/ @osac-project/wg-qe
+/osac-ui/libs/osac-cli/ @osac-project/wg-qe
 /bare-metal-fulfillment-operator/ @osac-project/wg-bmaas
 
 # CI pipeline definition

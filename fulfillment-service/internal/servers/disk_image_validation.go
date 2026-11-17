@@ -94,10 +94,11 @@ func resolveDiskImage(
 
 // resolveDiskImageReference finds the image named by a Catalog policy or resource.
 // If acme/apps and shared/apps both have "fedora", {name: "fedora"} prefers acme, while
-// {name: "fedora", shared: true} selects shared. Use project when the shared image is in a
+// {name: "fedora", tenant: "shared"} selects shared. The legacy shared selector remains
+// supported during the compatibility period. Use project when the selected image is in a
 // different project. An ID selects a caller-visible image directly.
-// The image must belong to the owner tenant or shared tenant; callers check its lifecycle and
-// fill the stored reference after this function returns.
+// The image must belong to the owner tenant or selected tenant; callers check its lifecycle
+// and fill the stored reference after this function returns.
 func resolveDiskImageReference(ctx context.Context, resourceDao *dao.GenericDAO[*privatev1.DiskImage], scope referenceScope, ref *privatev1.DiskImageReference, source string) (*privatev1.DiskImage, error) {
 	var err error
 	var resolved *privatev1.DiskImage

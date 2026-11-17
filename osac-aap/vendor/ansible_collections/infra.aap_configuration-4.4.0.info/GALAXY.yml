@@ -5,4 +5,4 @@ namespace: infra
 server: https://galaxy.ansible.com/api/
 signatures: []
 version: 4.4.0
-version_url: /api/v3/plugin/ansible/content/published/collections/index/infra/aap_configuration/versions/4.4.0/
+version_url: /api/content/published/v3/plugin/ansible/content/published/collections/index/infra/aap_configuration/versions/4.4.0/

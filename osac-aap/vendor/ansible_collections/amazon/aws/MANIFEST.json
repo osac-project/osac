@@ -2,7 +2,7 @@
  "collection_info": {
   "namespace": "amazon",
   "name": "aws",
-  "version": "9.4.0",
+  "version": "12.0.0",
   "authors": [
    "Ansible (https://github.com/ansible)"
   ],
@@ -25,7 +25,7 @@
   "name": "FILES.json",
   "ftype": "file",
   "chksum_type": "sha256",
-  "chksum_sha256": "5c90bde77852a3d5ff03a1fec04747030d7e913aa032b957fddd7fb7af7546a9",
+  "chksum_sha256": "2db17d0115820218db4ef9673a4f382bc0a818ba5fc4268e0390948fdd3858fa",
   "format": 1
  },
  "format": 1

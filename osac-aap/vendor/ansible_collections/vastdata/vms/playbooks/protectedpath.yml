@@ -1,0 +1,11 @@
+---
+- name: Configure protected paths
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - replicationgroup_protected_path_vars.yml
+
+  roles:
+    - vastdata.vms.protectedpath

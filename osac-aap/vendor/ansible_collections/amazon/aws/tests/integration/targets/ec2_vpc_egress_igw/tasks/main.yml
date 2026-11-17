@@ -31,16 +31,16 @@
       ansible.builtin.assert:
         that:
           - result is failed
-          - e_msg in result.exception
+          - e_msg in result.msg
       vars:
-        e_msg: "The vpc ID 'vpc-02394e50abc1807e8' does not exist"
+        e_msg: "Failed to create egress only internet gateway"
 
     # ============================================================
     - name: Create a VPC
       amazon.aws.ec2_vpc_net:
         name: "{{ resource_prefix }}-vpc"
         state: present
-        cidr_block: "10.232.232.128/26"
+        cidr_block: "{{ vpc_cidr }}"
         tags:
           Name: "{{ resource_prefix }}-vpc"
           Description: "Created by ansible-test"
@@ -232,5 +232,5 @@
       amazon.aws.ec2_vpc_net:
         name: "{{ resource_prefix }}-vpc"
         state: absent
-        cidr_block: "10.232.232.128/26"
+        cidr_block: "{{ vpc_cidr }}"
       ignore_errors: true

@@ -1,7 +1,8 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 # Copyright: (c) 2026, VAST Data
-# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+# Apache License 2.0 (see LICENSE or https://www.apache.org/licenses/LICENSE-2.0)
+# SPDX-License-Identifier: Apache-2.0
 
 from __future__ import absolute_import, division, print_function
 
@@ -17,41 +18,6 @@ description:
   - Supports check_mode and diff for idempotent operations.
 version_added: "1.0.0"
 options:
-  vms:
-    description: VAST VMS connection parameters.
-    type: dict
-    required: true
-    suboptions:
-      host:
-        description: VAST VMS hostname or IP address.
-        required: true
-        type: str
-      validate_certs:
-        description: Validate SSL certificates.
-        type: bool
-        default: true
-      timeout:
-        description: Request timeout in seconds.
-        type: int
-      token:
-        description: API token (VAST 5.3+). Mutually exclusive with username/password.
-        type: str
-      username:
-        description: Username for authentication. Mutually exclusive with token.
-        type: str
-      password:
-        description: Password for authentication. Mutually exclusive with token.
-        type: str
-      tenant:
-        description: Tenant name (optional).
-        type: str
-      api_version:
-        description: API version (optional). Defaults to 'latest' if not specified.
-        type: str
-      debug:
-        description: Enable HTTP debug traces. Traces are emitted as warnings on failure.
-        type: bool
-        default: false
   id:
     description: Resource ID for direct lookup. Mutually exclusive with name-based identification.
     type: int
@@ -85,6 +51,18 @@ options:
       grants access to the All Users group (in S3 Native security flavor) or the permission mode bits on the requested
       file and directory path grant access permission to 'others' (in NFS security flavor).
     type: bool
+
+  allowed_delegations:
+    description: |
+      Defines which types of NFSv4 file delegations are enabled for this view. - `NONE` means NFSv4 file delegations
+      are disabled. - `READ` means read type NFSv4 file delegations can be granted to a client opening a file. -
+      `WRITE` means write type NFSv4 file delegations can be granted to a client opening a file. - `READ_WRITE` means
+      both read and write type NFSv4 file delegations can be granted to a client opening a file. -
+      `USE_TENANT_ALLOWED_DELEG` (default) means the view inherits the tenant's `allowed_delegations`. **Important:**
+      If the tenant has `DISABLED` delegations, this overrides the view entirely. The effective delegations value for
+      this view is forced to `NONE`, regardless of the view's setting. Requires VMS 5.5 or later.
+    type: str
+    choices: ["NONE", "READ", "WRITE", "READ_WRITE", "USE_TENANT_ALLOWED_DELEG"]
 
   auto_commit:
     description: |
@@ -133,7 +111,7 @@ options:
 
   create_dir:
     description: |
-      Create a directory at the specified path (Note: This credential is not returned by the API and only used during
+      Create a directory at the specified path (Note: This field is not returned by the API and only used during
       operations)
     type: bool
 
@@ -394,6 +372,7 @@ options:
 author:
   - VAST Data (@vastdata)
 extends_documentation_fragment:
+  - vastdata.vms.conn
   - ansible.builtin.action_common_attributes
 attributes:
   check_mode:
@@ -491,6 +470,17 @@ ARGUMENT_SPEC: Dict[str, Any] = {
     "alias": {"type": "str", "default": None},
     "allow_anonymous_access": {"type": "bool", "default": None},
     "allow_s3_anonymous_access": {"type": "bool", "default": None},
+    "allowed_delegations": {
+        "type": "str",
+        "default": None,
+        "choices": [
+            "NONE",
+            "READ",
+            "WRITE",
+            "READ_WRITE",
+            "USE_TENANT_ALLOWED_DELEG",
+        ],
+    },
     "auto_commit": {"type": "str", "default": None},
     "bucket": {"type": "str", "default": None},
     "bucket_creators": {"type": "list", "default": None, "elements": "str"},
@@ -498,7 +488,7 @@ ARGUMENT_SPEC: Dict[str, Any] = {
     "bucket_logging": {"type": "dict", "default": None},
     "bucket_owner": {"type": "str", "default": None},
     "bucket_owner_type": {"type": "str", "default": None, "choices": ["USER", "ROLE"]},
-    "create_dir": {"type": "bool", "default": None, "no_log": True},
+    "create_dir": {"type": "bool", "default": None},
     "create_dir_acl": {"type": "list", "default": None, "elements": "dict"},
     "create_dir_mode": {"type": "int", "default": None},
     "default_retention_period": {"type": "str", "default": None},
@@ -582,6 +572,10 @@ class ViewResource(BaseResource):
         "tenant_id",
     }  # Fields only valid during creation
     delete_query_params = {"force"}  # Sent as URL query params on DELETE
+    generated_min_version = (5, 4)  # oldest VMS version these modules were generated for
+    field_versions = {
+        "allowed_delegations": {"min": (5, 5), "max": None},
+    }
 
 
 # END AUTOGENERATED RESOURCE_CLASS

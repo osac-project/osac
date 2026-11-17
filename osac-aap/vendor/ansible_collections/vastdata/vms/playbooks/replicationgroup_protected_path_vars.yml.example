@@ -1,0 +1,167 @@
+# Example vars for protectedpath replication group configuration.
+# Copy this file to replicationgroup_protected_path_vars.yml and replace all
+# example values with your environment-specific cluster names, VMS hosts, VIPs,
+# tenants, directories, policies, and secrets.
+#
+# Store real passwords or tokens in Ansible Vault or another secret manager.
+
+# VMS connection details.
+# The keys under vms are cluster aliases used by the rest of this file.
+vms:
+  cluster1:
+    vms_host: vms-cluster1.example.com # Hostname or IP, without https://.
+    # Token auth example. Use either token auth or basic auth, not both.
+    # vms_auth: token
+    # vms_token: "{{ vault_cluster1_token }}"
+    # Basic auth example.
+    vms_auth: basic
+    vms_username: "{{ vault_cluster1_username }}"
+    vms_password: "{{ vault_cluster1_password }}"
+    validate_certs: true
+    api_version: latest
+  cluster2:
+    vms_host: vms-cluster2.example.com
+    vms_auth: basic
+    vms_username: "{{ vault_cluster2_username }}"
+    vms_password: "{{ vault_cluster2_password }}"
+    validate_certs: true
+    api_version: latest
+  cluster3:
+    vms_host: vms-cluster3.example.com
+    vms_auth: basic
+    vms_username: "{{ vault_cluster3_username }}"
+    vms_password: "{{ vault_cluster3_password }}"
+    validate_certs: true
+    api_version: latest
+
+# Replication VIP pools.
+# Create one REPLICATION pool on every cluster that can receive replicated data.
+# Use VIPs from your actual replication network.
+vippools:
+  - cluster: cluster1
+    name: replication-cluster1
+    role: REPLICATION
+    subnet_cidr: 24
+    ip_ranges:
+      - ["192.0.0.20", "192.0.0.29"]
+  - cluster: cluster2
+    name: replication-cluster2
+    role: REPLICATION
+    subnet_cidr: 24
+    ip_ranges:
+      - ["192.0.2.20", "192.0.2.29"]
+  - cluster: cluster3
+    name: replication-cluster3
+    role: REPLICATION
+    subnet_cidr: 24
+    ip_ranges:
+      - ["192.0.2.30", "192.0.2.39"]
+
+# Native replication peers.
+# Each peer is created on the source cluster and points to a leading VIP in the
+# target cluster's replication VIP pool.
+replicationpeers:
+  - name: cluster1-to-cluster2
+    cluster: cluster1
+    secure_mode: SECURE
+    transport_mode: TCP
+    leading_vip: "192.0.2.20"
+  - name: cluster1-to-cluster3
+    cluster: cluster1
+    secure_mode: SECURE
+    transport_mode: TCP
+    leading_vip: "192.0.2.30"
+  - name: cluster3-to-cluster2
+    cluster: cluster3
+    secure_mode: SECURE
+    transport_mode: TCP
+    leading_vip: "192.0.2.20"
+
+# Protection policies.
+# NATIVE_REPLICATION policies require target_cluster. LOCAL policies do not.
+protectionpolicies:
+  - cluster: cluster1
+    name: replicate-to-cluster2
+    tenant: default
+    target_cluster: cluster2
+    clone_type: NATIVE_REPLICATION
+    prefix: cluster2-copy
+    frames:
+      - every: "10m"
+        keep-local: "3h"
+        keep-remote: "6h"
+        start-at: "2026-01-01 00:00:00"
+  - cluster: cluster1
+    name: replicate-to-cluster3
+    tenant: default
+    target_cluster: cluster3
+    clone_type: NATIVE_REPLICATION
+    prefix: cluster3-copy
+    frames:
+      - every: "10m"
+        keep-local: "3h"
+        keep-remote: "6h"
+        start-at: "2026-01-01 00:00:00"
+  - cluster: cluster3
+    name: standby-to-cluster2
+    tenant: default
+    target_cluster: cluster2
+    clone_type: NATIVE_REPLICATION
+    prefix: cluster3-standby-cluster2
+    frames:
+      - every: "10m"
+        keep-local: "3h"
+        keep-remote: "6h"
+        start-at: "2026-01-01 00:00:00"
+  - cluster: cluster1
+    name: local-snapshots
+    tenant: default
+    clone_type: LOCAL
+    prefix: local
+    frames:
+      - every: "1h"
+        keep-local: "24h"
+        start-at: "2026-01-01 00:00:00"
+
+# Protected paths.
+# A path without streams must use capabilities: LOCAL and protection_policy.
+# A path with streams uses the first stream to create the initial protected path,
+# then adds any remaining streams with protectedpath_streams.
+protectedpaths:
+  - name: local-path-example
+    cluster: cluster1
+    tenant: default
+    dir: /source/local-path
+    capabilities: LOCAL
+    protection_policy: local-snapshots
+  - name: replication-group-example
+    cluster: cluster1
+    tenant: default
+    dir: /source/replicated-path
+    streams:
+      - name: source-to-cluster2
+        remote_cluster: cluster2
+        remote_tenant: default
+        remote_dir: /target/cluster2-path
+        protection_policy: replicate-to-cluster2
+        capabilities: ASYNC_REPLICATION
+      - name: source-to-cluster3
+        remote_cluster: cluster3
+        remote_tenant: default
+        remote_dir: /target/cluster3-path
+        protection_policy: replicate-to-cluster3
+        capabilities: ASYNC_REPLICATION
+        # Optional: trigger failover on the remote protected path after it exists.
+        # graceful defaults to true when omitted.
+        # failover: true
+        # graceful: false
+    standby_streams:
+      # Standby stream created after source-to-cluster3 is ready.
+      # source_cluster must match exactly one streams[].remote_cluster above.
+      - name: cluster3-to-cluster2-standby
+        source_cluster: cluster3
+        remote_cluster: cluster2
+        remote_tenant: default
+        remote_dir: /target/cluster2-standby-path
+        protection_policy: standby-to-cluster2
+        capabilities: ASYNC_REPLICATION

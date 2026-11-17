@@ -11,11 +11,14 @@ Also includes task-waiting logic (previously in waiter.py).
 """
 
 import json
+import mimetypes
+import os
 import time
 import traceback
+from contextlib import ExitStack
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 # Ansible sanity tests import all module_utils in an isolated environment
 # without third-party packages. Guard the import so the module can be loaded
@@ -30,7 +33,28 @@ else:
     HAS_REQUESTS = True
     REQUESTS_IMPORT_ERROR = None
 
-from .errors import VastAPIError
+from .errors import VastAPIError, VastNotFoundError, VastTransportError
+
+# Content types for multipart uploads that Python's ``mimetypes`` does not know
+# (e.g. PEM/DER certificates). VMS validates the per-part Content-Type, so a bare
+# ``application/octet-stream`` is rejected for these.
+_UPLOAD_CONTENT_TYPES: Dict[str, str] = {
+    ".pem": "application/x-pem-file",
+    ".crt": "application/x-x509-ca-cert",
+    ".cert": "application/x-x509-ca-cert",
+    ".cer": "application/pkix-cert",
+    ".der": "application/pkix-cert",
+}
+
+
+def _guess_upload_content_type(file_path: str) -> str:
+    """Best-effort Content-Type for a multipart file part."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in _UPLOAD_CONTENT_TYPES:
+        return _UPLOAD_CONTENT_TYPES[ext]
+    guessed = mimetypes.guess_type(file_path)[0]
+    return guessed or "application/octet-stream"
+
 
 # ---------------------------------------------------------------------------
 # Build / Galaxy metadata (for User-Agent)
@@ -63,6 +87,8 @@ class VastConnection:
     tenant: Optional[str] = None
     api_version: Optional[str] = None
     debug: bool = False
+    client_cert: Optional[str] = None
+    client_key: Optional[str] = None
 
 
 class RESTFailure(VastAPIError):
@@ -82,6 +108,33 @@ class RESTFailure(VastAPIError):
 
 # HTTP verbs that send query-string parameters
 _QUERY_VERBS = {"GET"}
+
+# Gateway statuses returned by the mgmt VIP mid-failover (active VMS down,
+# standby not yet serving). Treated as transport, not an API-level answer.
+_GATEWAY_STATUSES = {502, 503, 504}
+
+
+def select_file_params(file_params: Set[str], source: Dict[str, Any]) -> Dict[str, Any]:
+    """Local file paths for the ``file_params`` actually supplied in ``source``.
+
+    Shared by ``BaseResource`` (create payload) and ``SubEndpointResource``
+    (action params) so the multipart file-collection logic lives in one place.
+    """
+    return {name: source[name] for name in file_params if source.get(name) is not None}
+
+
+def unwrap_list_envelope(results: List[dict]) -> List[Dict[str, Any]]:
+    """Flatten ``{count, next, previous, results}`` list envelopes into resource rows.
+
+    ``_APIPath.get`` wraps a singleton envelope as ``[envelope]``; this helper
+    concatenates each envelope's ``results`` list.
+    """
+    unwrapped: List[Dict[str, Any]] = []
+    for envelope in results:
+        if not isinstance(envelope, dict) or not isinstance(envelope.get("results"), list):
+            raise VastAPIError(f"Expected a list envelope with a 'results' list, got: {envelope!r}")
+        unwrapped.extend(envelope["results"])
+    return unwrapped
 
 
 class _APIPath:
@@ -131,14 +184,51 @@ class _APIPath:
             return result
         return [result]
 
-    def post(self, **params) -> Optional[dict]:
-        return self._client._request("POST", self._segments, data=params)
+    def post(self, *, _query_params: Optional[dict] = None, **params) -> Optional[dict]:
+        # Keep empty ``{}`` body (not None) so callers like trigger_action.post()
+        # still send JSON; only _query_params is additive for SAML-style routes.
+        return self._client._request(
+            "POST",
+            self._segments,
+            data=params,
+            params=_query_params,
+        )
 
-    def patch(self, **params) -> Optional[dict]:
-        return self._client._request("PATCH", self._segments, data=params)
+    def patch(self, *, _query_params: Optional[dict] = None, **params) -> Optional[dict]:
+        return self._client._request(
+            "PATCH",
+            self._segments,
+            data=params,
+            params=_query_params,
+        )
 
     def put(self, **params) -> Optional[dict]:
         return self._client._request("PUT", self._segments, data=params)
+
+    def _upload(self, method: str, files: Dict[str, str], **fields) -> Optional[dict]:
+        """Send ``files`` + ``fields`` as multipart/form-data via ``method``.
+
+        ``files`` maps a form field name to a local file path; ``fields`` are the
+        remaining (non-file) multipart form values.
+        """
+        return self._client._request(
+            method,
+            self._segments,
+            data=fields or None,
+            files=files,
+        )
+
+    def put_file(self, field_name: str, file_path: str, **fields) -> Optional[dict]:
+        """PUT a single file as multipart/form-data (Swagger ``in: formData`` uploads)."""
+        return self._upload("PUT", {field_name: file_path}, **fields)
+
+    def post_file(self, files: Dict[str, str], **fields) -> Optional[dict]:
+        """POST one or more files + form fields as multipart/form-data.
+
+        Used for create operations whose Swagger body is ``in: formData`` with
+        ``type: file`` params (e.g. ``tlscertificates``).
+        """
+        return self._upload("POST", files, **fields)
 
     def delete(self, *, _query_params: Optional[dict] = None, **params) -> Optional[dict]:
         return self._client._request(
@@ -209,6 +299,9 @@ class VastClient:
         if connection.tenant:
             self._session.headers["X-Tenant-Name"] = connection.tenant
 
+        if connection.client_cert and connection.client_key:
+            self._session.cert = (connection.client_cert, connection.client_key)
+
         self._timeout = connection.timeout
 
     # -- public API ----------------------------------------------------------
@@ -248,6 +341,7 @@ class VastClient:
         *,
         params: Optional[dict] = None,
         data: Optional[dict] = None,
+        files: Optional[Dict[str, str]] = None,
     ) -> Any:
         url_parts = [self._base_url, self._version] + [str(s) for s in segments]
         url = "/".join(url_parts) + "/"
@@ -266,20 +360,45 @@ class VastClient:
                     expanded.append((k, v))
             return expanded
 
-        if method in _QUERY_VERBS:
-            if params:
-                kwargs["params"] = _expand_params(params)
-        else:
-            if data is not None:
-                kwargs["data"] = json.dumps(data)
+        with ExitStack() as stack:
+            if method in _QUERY_VERBS:
+                if params:
+                    kwargs["params"] = _expand_params(params)
+            else:
+                if files is not None:
+                    multipart: Dict[str, Any] = {}
+                    for field_name, file_path in files.items():
+                        handle = stack.enter_context(open(file_path, "rb"))
+                        multipart[field_name] = (
+                            os.path.basename(file_path),
+                            handle,
+                            _guess_upload_content_type(file_path),
+                        )
+                    kwargs["files"] = multipart
+                    kwargs["headers"] = {"Content-Type": None}
+                    if data:
+                        # Expand list values into repeated (key, value) tuples so
+                        # array form fields (e.g. ``protocols``) are sent as
+                        # multiple parts rather than a stringified list.
+                        kwargs["data"] = _expand_params(data)
+                elif data is not None:
+                    kwargs["data"] = json.dumps(data)
 
-            if params:
-                kwargs["params"] = _expand_params(params)
+                if params:
+                    kwargs["params"] = _expand_params(params)
 
-        if self.debug:
-            self._debug_traces.append(f">>> {method} {url} params={params} data={data}")
+            if self.debug:
+                self._debug_traces.append(
+                    f">>> {method} {url} params={params} data={data} " f"files={list(files) if files else None}"
+                )
 
-        resp = self._session.request(method, url, **kwargs)
+            try:
+                resp = self._session.request(method, url, **kwargs)
+            except requests.RequestException as e:
+                # Connection refused/reset, read timeouts, DNS failures: the VMS
+                # never answered. Typed as transport so pollers can wait out an
+                # HA failover / service restart instead of failing fast.
+                raise VastTransportError(f"{method} {url} failed: {e}") from e
 
         if self.debug:
             body_preview = (resp.text or "")[:2000]
@@ -288,6 +407,13 @@ class VastClient:
         try:
             resp.raise_for_status()
         except requests.HTTPError:
+            # 404 gets a typed exception so callers can treat "absent" distinctly
+            # from genuine API/transport failures (no message string-matching).
+            if resp.status_code == 404:
+                raise VastNotFoundError(f"{method} {url} -> 404: {resp.text}") from None
+            if resp.status_code in _GATEWAY_STATUSES:
+                # Transport, not an API answer (see _GATEWAY_STATUSES).
+                raise VastTransportError(f"{method} {url} -> {resp.status_code}: {resp.text}") from None
             raise RESTFailure(method, url, resp.status_code, resp.text) from None
 
         if resp.content and "application/json" in resp.headers.get("Content-Type", ""):
@@ -296,6 +422,9 @@ class VastClient:
 
     # -- task waiting (folded from waiter.py) --------------------------------
 
+    # Bounded retries for API-level polling errors (task not found, 401, 4xx):
+    # these are real answers from a live VMS and should fail fast. Transport
+    # errors (see VastTransportError) are retried until the overall timeout.
     _MAX_POLL_RETRIES = 6
 
     def wait_for_task(
@@ -306,26 +435,43 @@ class VastClient:
     ) -> Dict[str, Any]:
         """Poll a VMS async task until it reaches a terminal state.
 
-        Tolerates transient connection errors (e.g. ConnectionResetError)
-        that occur when VMS restarts services during cnode enable/disable.
+        Transport failures (connection reset/refused, timeouts, VIP 502/503/504)
+        are tolerated until the overall ``timeout`` because VMS can be
+        unavailable for several minutes during a restart / HA failover. API-level
+        errors (task not found, 401, other 4xx) fail fast after
+        ``_MAX_POLL_RETRIES`` consecutive occurrences.
 
         Returns the final task dict on success.
         Raises VastAPIError on failure or timeout.
         """
         start = time.time()
         last_state = None
-        consecutive_errors = 0
+        last_error = None
+        api_errors = 0
 
         while True:
             if time.time() - start >= timeout:
-                raise VastAPIError(f"Task {task_id} timed out after {timeout}s. Last state: {last_state}")
+                details = f"Last state: {last_state}"
+                if last_error:
+                    details += f". Last polling error: {last_error}"
+                raise VastAPIError(f"Task {task_id} timed out after {timeout}s. {details}")
 
             try:
                 task = self._get_task(task_id)
-                consecutive_errors = 0
-            except VastAPIError:
-                consecutive_errors += 1
-                if consecutive_errors >= self._MAX_POLL_RETRIES:
+                last_error = None
+                api_errors = 0
+            except VastTransportError as error:
+                # VMS is down/failing over -- keep waiting until timeout. Reset the
+                # API-error budget so it counts only *consecutive* API-level errors.
+                last_error = error
+                api_errors = 0
+                time.sleep(poll_interval)
+                continue
+            except VastAPIError as error:
+                # Real answer from a live VMS (task not found, auth, 4xx): fail fast.
+                last_error = error
+                api_errors += 1
+                if api_errors >= self._MAX_POLL_RETRIES:
                     raise
                 time.sleep(poll_interval)
                 continue

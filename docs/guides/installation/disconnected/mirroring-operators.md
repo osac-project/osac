@@ -169,7 +169,7 @@ mirror:
           defaultChannel: stable-2.6-cluster-scoped
           channels:
             - name: stable-2.6-cluster-scoped
-              maxVersion: '2.6.0+0.1787258256'
+              maxVersion: '2.6.0+0.1787258256' # Revisit it once the core issue is resolved.
 
         - name: amq-streams
           channels:

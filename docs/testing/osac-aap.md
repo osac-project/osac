@@ -72,7 +72,8 @@ and this AAP consumer read the same files. The AAP contract runs the generic
 playbook against a fake Netris endpoint, with no deployed AAP or provider.
 NetworkAttachment overlay delete/detach, other unbound delete/detach tasks,
 SecurityGroup and FabricDomain shapes remain unbound. Cluster ingress is
-already bound by shared input and result goldens.
+reservation (`reserve_cluster_ingress_ip`) is bound by shared input and result
+goldens. Cluster ingress release (`release_cluster_ingress_ip`) is unbound.
 AgentlessNet Fabric and switch-VLAN targets ([OSAC-7156](https://redhat.atlassian.net/browse/OSAC-7156))
 run generic-playbook child jobs with real SQLite against one stateful fake SSH
 switch endpoint: physical NetworkAttachment apply, partial-retry, delete-wins

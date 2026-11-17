@@ -38,7 +38,9 @@ NetworkAttachment apply, delete and query_dhcp_lease inputs are bound with the
 same fixtures as osac-aap; the DHCP lease result is parsed against the input
 MAC and Subnet IPAM. NetworkAttachment overlay delete/detach, other
 delete/detach tasks, SecurityGroup and FabricDomain shapes remain unbound.
-Cluster ingress is already bound by its shared input and result goldens.
+Cluster ingress reservation (`reserve_cluster_ingress_ip`) is bound by its
+shared input and result goldens. Cluster ingress release
+(`release_cluster_ingress_ip`) is unbound.
 
 ExternalIP Envtest specs verify that allocation sends the stable Fulfillment API
 ID separately from Kubernetes `metadata.uid`, and that a failed release retains

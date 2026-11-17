@@ -118,9 +118,8 @@ func (r *BareMetalInstanceCleanupReconciler) reconcileAutomaticExternalIPAttachm
 	bmi *bmfov1alpha1.BareMetalInstance,
 	bmiID string,
 ) (ctrl.Result, error) {
-	if !r.NetworkingProvisioningEnabled || bmi.Status.Phase != bmfov1alpha1.BareMetalInstancePhaseReady ||
-		bmi.Status.RunStrategy != bmfov1alpha1.RunStrategyAlways || !hasPrimaryBareMetalInstanceAddress(bmi) ||
-		r.BareMetalInstancesClient == nil || r.ExternalIPAttachmentsClient == nil {
+	if !r.NetworkingProvisioningEnabled || r.BareMetalInstancesClient == nil || r.ExternalIPAttachmentsClient == nil ||
+		bmi.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseFailed || !bmi.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
 	response, err := r.BareMetalInstancesClient.Get(ctx,
@@ -136,6 +135,9 @@ func (r *BareMetalInstanceCleanupReconciler) reconcileAutomaticExternalIPAttachm
 		return ctrl.Result{}, nil
 	}
 
+	endpointReady := bmi.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseReady &&
+		bmi.Status.RunStrategy == bmfov1alpha1.RunStrategyAlways && hasPrimaryBareMetalInstanceAddress(bmi)
+
 	target := automaticExternalIPAttachmentTarget{
 		owner:     autoExternalIPOwner{kind: bareMetalInstanceOwner, id: bmiID},
 		kind:      bareMetalInstanceOwner,
@@ -143,7 +145,7 @@ func (r *BareMetalInstanceCleanupReconciler) reconcileAutomaticExternalIPAttachm
 		tenant:    instance.GetMetadata().GetTenant(),
 		endpoints: []string{""},
 		availableEndpoints: map[string]bool{
-			"": true,
+			"": endpointReady,
 		},
 	}
 	return reconcileAutomaticExternalIPAttachments(ctx, r.Client, r.networkingNamespace,

@@ -150,13 +150,16 @@ func parseSecretType(value string) (publicv1.SecretType, error) {
 		return publicv1.SecretType_SECRET_TYPE_KUBECONFIG, nil
 	case "user-data":
 		return publicv1.SecretType_SECRET_TYPE_USER_DATA, nil
+	case "windows-user-data":
+		return publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, nil
 	case "value":
 		return publicv1.SecretType_SECRET_TYPE_VALUE, nil
 	case "ssh-public-key":
 		return publicv1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY, nil
 	default:
 		return publicv1.SecretType_SECRET_TYPE_UNSPECIFIED, fmt.Errorf(
-			"invalid secret type %q: must be one of opaque, pull-secret, kubeconfig, user-data, value, or ssh-public-key",
+			"invalid secret type %q: must be one of opaque, pull-secret, kubeconfig, "+
+				"user-data, windows-user-data, value, or ssh-public-key",
 			value,
 		)
 	}
@@ -290,6 +293,15 @@ To create a pull secret:
 {{ binary }} create secret --name registry-credentials --type=pull-secret \
   --from-file=.dockerconfigjson=/path/to/pull-secret.json
 {{ bt 3 }}
+
+To create a Windows user-data Secret:
+
+{{ bt 3 }}shell
+{{ binary }} create secret --name windows-unattend --type=windows-user-data \
+  --from-file=userdata=/path/to/Unattend.xml
+{{ bt 3 }}
+
+The file is read as raw bytes; the server validates Windows user-data content.
 `
 
 const nameFlagHelp = `
@@ -308,6 +320,6 @@ _KEY=VALUE_ - Label to set on the secret. Can be specified multiple times.
 
 const typeFlagHelp = `
 _TYPE_ - Secret type. One of {{ bt }}opaque{{ bt }}, {{ bt }}pull-secret{{ bt }},
-{{ bt }}kubeconfig{{ bt }}, {{ bt }}user-data{{ bt }}, {{ bt }}value{{ bt }}, or
-{{ bt }}ssh-public-key{{ bt }}.
+{{ bt }}kubeconfig{{ bt }}, {{ bt }}user-data{{ bt }}, {{ bt }}windows-user-data{{ bt }},
+{{ bt }}value{{ bt }}, or {{ bt }}ssh-public-key{{ bt }}.
 `

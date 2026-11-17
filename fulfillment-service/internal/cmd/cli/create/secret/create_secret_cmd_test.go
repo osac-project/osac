@@ -35,6 +35,7 @@ var _ = Describe("parseSecretType", func() {
 		Entry("pull secret", "pull-secret", publicv1.SecretType_SECRET_TYPE_PULL_SECRET),
 		Entry("kubeconfig", "kubeconfig", publicv1.SecretType_SECRET_TYPE_KUBECONFIG),
 		Entry("user data", "user-data", publicv1.SecretType_SECRET_TYPE_USER_DATA),
+		Entry("windows user data", "windows-user-data", publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA),
 		Entry("value", "value", publicv1.SecretType_SECRET_TYPE_VALUE),
 		Entry("ssh public key", "ssh-public-key", publicv1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY),
 	)

@@ -108,6 +108,9 @@ describe('ClusterDetailsPageContent', () => {
       'External IP endpoints',
       'Conditions',
     ]);
+    for (const heading of screen.getAllByRole('heading', { level: 2 })) {
+      expect(heading.querySelector('svg')).toBeNull();
+    }
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
     const cards = container.querySelectorAll<HTMLElement>('.pf-v6-c-card');
     expect(cards).toHaveLength(2);
@@ -160,21 +163,26 @@ describe('ClusterDetailsPageContent', () => {
     expect(screen.getByText('cluster-owner')).toBeInTheDocument();
     expect(container.querySelector('time')).toHaveAttribute('datetime', '2025-01-01T00:00:00.000Z');
     expect(screen.getByText('4.17.0')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-      'Upgrade eligibility is unavailable.',
-    );
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+    expect(screen.getByText('Upgrade eligibility is unavailable.')).toBeInTheDocument();
     const networking = screen.getByRole('grid', { name: 'Cluster network attachment' });
     expect(within(networking).getByRole('cell', { name: 'tenant-subnet' })).toBeInTheDocument();
     expect(within(networking).getByRole('cell', { name: 'tenant-security' })).toBeInTheDocument();
     expect(screen.getByText('10.128.0.0/14')).toBeInTheDocument();
     expect(screen.getByText('172.30.0.0/16')).toBeInTheDocument();
-    const nodeSets = screen.getByRole('grid', { name: 'Cluster node sets' });
+    const nodeSets = screen.getByRole('list', { name: 'Cluster node sets' });
     expect(
-      within(nodeSets).getByRole('row', { name: 'compute standard-host 3' }),
-    ).toBeInTheDocument();
-    expect(
-      within(nodeSets).getByRole('row', { name: 'gpu accelerated-host 2' }),
-    ).toBeInTheDocument();
+      within(nodeSets)
+        .getAllByRole('listitem')
+        .map((row) =>
+          within(row)
+            .getAllByRole('definition')
+            .map((value) => value.textContent),
+        ),
+    ).toEqual([
+      ['compute', 'standard-host', '3'],
+      ['gpu', 'accelerated-host', '2'],
+    ]);
     expect(nodeSets.closest('.pf-v6-l-grid__item')).toBeNull();
     expect(cards[0]).toContainElement(nodeSets);
     const conditions = screen.getByRole('grid', { name: 'Cluster conditions' });
@@ -182,8 +190,28 @@ describe('ClusterDetailsPageContent', () => {
       within(conditions).getByRole('cell', { name: 'All nodes are ready' }),
     ).toBeInTheDocument();
     expect(conditions.closest('.pf-v6-l-grid__item')).toBeNull();
+    expect(conditions.closest('.cluster-details__conditions')).toContainElement(conditionsHeading);
+    expect(conditions.closest('.cluster-details__networking-table')).toBeNull();
+    expect(networking.closest('.cluster-details__networking-table')).not.toBeNull();
+    expect(
+      within(conditions)
+        .getAllByRole('columnheader')
+        .map((header) => header.textContent),
+    ).toEqual(['Type', 'Status', 'Reason', 'Message', 'Last transition']);
     await screen.findByText('api.example.com');
     expect(screen.getByText('apps.example.com')).toBeInTheDocument();
+  });
+
+  it('resets open history when the page changes resource identity', async () => {
+    const { user, rerender } = renderWithProviders(<ClusterDetailsPageContent cluster={cluster} />);
+    await user.click(screen.getByRole('button', { name: 'Upgrade history' }));
+    expect(screen.getByRole('dialog', { name: 'Upgrade history' })).toBeInTheDocument();
+    rerender(
+      <ClusterDetailsPageContent
+        cluster={create(ClusterSchema, { ...cluster, id: 'another-cluster' })}
+      />,
+    );
+    expect(screen.queryByRole('dialog', { name: 'Upgrade history' })).not.toBeInTheDocument();
   });
 
   it('starts one real attachment list request on entry, without duplicating it when dialogs open and close', async () => {

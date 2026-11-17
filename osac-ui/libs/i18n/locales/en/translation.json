@@ -781,6 +781,7 @@
   "No clusters are provisioned for your organization yet.": "No clusters are provisioned for your organization yet.",
   "No clusters found": "No clusters found",
   "No clusters match your filters": "No clusters match your filters",
+  "No control plane upgrades have been recorded.": "No control plane upgrades have been recorded.",
   "No definitive result within the timeout.": "No definitive result within the timeout.",
   "No disk images available of guest OS family: {{guestOsFamily}}": "No disk images available of guest OS family: {{guestOsFamily}}",
   "No disk images yet.": "No disk images yet.",

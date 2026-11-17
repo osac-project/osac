@@ -7,7 +7,6 @@ import {
   StackItem,
   Title,
 } from '@patternfly/react-core';
-import InfoAltIcon from '@patternfly/react-icons/dist/esm/icons/info-alt-icon';
 
 import { type Cluster, ClusterCatalogItems } from '@osac/types';
 
@@ -28,8 +27,7 @@ const ClusterDetailsSummary = ({ cluster }: ClusterDetailsSummaryProps) => {
   return (
     <Stack hasGutter>
       <StackItem>
-        <Title headingLevel="h2" size="lg" className="cluster-details__section-title">
-          <InfoAltIcon aria-hidden />
+        <Title headingLevel="h2" size="lg">
           {t('Overview')}
         </Title>
       </StackItem>

@@ -1,6 +1,4 @@
 import { Divider, PageSection, Stack, StackItem, Title } from '@patternfly/react-core';
-import CheckCircleIcon from '@patternfly/react-icons/dist/esm/icons/check-circle-icon';
-import NetworkWiredIcon from '@patternfly/react-icons/dist/esm/icons/network-wired-icon';
 
 import type { Cluster } from '@osac/types';
 
@@ -23,7 +21,7 @@ const ClusterDetailsSections = ({ cluster }: ClusterDetailsSectionsProps) => {
 
   return (
     <PageSection hasBodyWrapper={false} className="cluster-details">
-      <Stack hasGutter>
+      <Stack hasGutter className="cluster-details__sections">
         <StackItem>
           <div className="cluster-details__top-region">
             <div className="cluster-details__overview-grid">
@@ -34,18 +32,17 @@ const ClusterDetailsSections = ({ cluster }: ClusterDetailsSectionsProps) => {
           </div>
         </StackItem>
         <StackItem>
-          <Divider />
+          <Divider className="cluster-details__section-divider" />
         </StackItem>
         <StackItem>
           <div className="cluster-details__networking-region">
             <Stack hasGutter>
               <StackItem>
-                <Title headingLevel="h2" size="lg" className="cluster-details__section-title">
-                  <NetworkWiredIcon aria-hidden />
+                <Title headingLevel="h2" size="lg">
                   {t('Networking')}
                 </Title>
               </StackItem>
-              <StackItem>
+              <StackItem className="cluster-details__networking-table">
                 <ClusterNetworkingCard cluster={cluster} />
               </StackItem>
             </Stack>
@@ -53,13 +50,12 @@ const ClusterDetailsSections = ({ cluster }: ClusterDetailsSectionsProps) => {
           </div>
         </StackItem>
         <StackItem>
-          <Divider />
+          <Divider className="cluster-details__section-divider" />
         </StackItem>
         <StackItem>
-          <Stack hasGutter>
+          <Stack hasGutter className="cluster-details__conditions">
             <StackItem>
-              <Title headingLevel="h2" size="lg" className="cluster-details__section-title">
-                <CheckCircleIcon aria-hidden />
+              <Title headingLevel="h2" size="lg">
                 {t('Conditions')}
               </Title>
             </StackItem>

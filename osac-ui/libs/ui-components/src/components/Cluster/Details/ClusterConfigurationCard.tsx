@@ -42,25 +42,25 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
       <CardBody>
         <Stack hasGutter>
           <StackItem>
-            <Title headingLevel="h2" size="lg">
-              {t('Cluster version')}
-            </Title>
+            <Flex
+              alignItems={{ default: 'alignItemsCenter' }}
+              flexWrap={{ default: 'wrap' }}
+              spaceItems={{ default: 'spaceItemsSm' }}
+            >
+              <Title headingLevel="h2" size="lg">
+                {t('Cluster version')}
+              </Title>
+              <FlexItem>
+                <Button variant="link" isInline onClick={() => setClusterHistoryOpen(true)}>
+                  {t('Upgrade history')}
+                </Button>
+              </FlexItem>
+            </Flex>
           </StackItem>
           <StackItem>
             <DescriptionList isCompact aria-label={t('Cluster version')}>
               <DescriptionListGroup>
-                <DescriptionListTerm>
-                  <Flex spaceItems={{ default: 'spaceItemsXs' }}>
-                    <FlexItem>{t('Current version')}</FlexItem>
-                    {upgradeHistory.length > 0 && (
-                      <FlexItem>
-                        <Button variant="link" isInline onClick={() => setClusterHistoryOpen(true)}>
-                          {t('Upgrade history')}
-                        </Button>
-                      </FlexItem>
-                    )}
-                  </Flex>
-                </DescriptionListTerm>
+                <DescriptionListTerm>{t('Current version')}</DescriptionListTerm>
                 <DescriptionListDescription>
                   <ClusterVersionControls cluster={cluster} />
                 </DescriptionListDescription>
@@ -80,7 +80,7 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
             <ClusterSettingsSection cluster={cluster} />
           </StackItem>
         </Stack>
-        {clusterHistoryOpen && upgradeHistory.length > 0 && (
+        {clusterHistoryOpen && (
           <ClusterUpgradeHistoryModal
             attempts={upgradeHistory}
             onClose={() => setClusterHistoryOpen(false)}

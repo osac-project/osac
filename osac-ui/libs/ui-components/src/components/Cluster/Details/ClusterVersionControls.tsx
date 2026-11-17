@@ -161,15 +161,13 @@ const ClusterVersionControls = ({ cluster }: ClusterVersionControlsProps) => {
           {upgradeInProgress && observedVersion && activeTarget ? ` → ${activeTarget}` : null}
         </FlexItem>
         {upgradeLabel && <FlexItem>{upgradeLabel}</FlexItem>}
-        {action.kind !== 'hidden' && action.kind !== 'in-progress' && !timedOut && (
+        {action.kind === 'available' && (
           <FlexItem>
             <Button
               variant="link"
               isInline
               onClick={() => setOpenClusterId(cluster.id)}
-              isDisabled={action.kind !== 'available'}
               aria-describedby={explanation ? reasonId : undefined}
-              aria-busy={action.kind === 'loading' || undefined}
             >
               {t('Upgrade cluster')}
             </Button>

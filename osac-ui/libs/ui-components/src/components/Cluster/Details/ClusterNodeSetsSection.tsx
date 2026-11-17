@@ -1,5 +1,13 @@
-import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
+import {
+  Content,
+  DescriptionList,
+  DescriptionListDescription,
+  DescriptionListGroup,
+  DescriptionListTerm,
+  Stack,
+  StackItem,
+  Title,
+} from '@patternfly/react-core';
 
 import type { Cluster } from '@osac/types';
 
@@ -24,30 +32,32 @@ const ClusterNodeSetsSection = ({ cluster }: ClusterNodeSetsSectionProps) => {
       </StackItem>
       <StackItem>
         {nodeSetEntries.length > 0 ? (
-          <Table
+          <ul
             aria-label={t('Cluster node sets')}
-            variant="compact"
             className="cluster-details__node-sets"
+            role="list"
           >
-            <Thead>
-              <Tr>
-                <Th>{t('Name')}</Th>
-                <Th>{t('Host type')}</Th>
-                <Th>{t('Size')}</Th>
-              </Tr>
-            </Thead>
-            <Tbody>
-              {nodeSetEntries.map(([key, nodeSet]) => (
-                <Tr key={key}>
-                  <Td dataLabel={t('Name')}>{key}</Td>
-                  <Td dataLabel={t('Host type')}>
-                    {displayValue(nodeSet.baremetalInstanceType?.name)}
-                  </Td>
-                  <Td dataLabel={t('Size')}>{nodeSet.size}</Td>
-                </Tr>
-              ))}
-            </Tbody>
-          </Table>
+            {nodeSetEntries.map(([name, nodeSet]) => (
+              <li key={name}>
+                <DescriptionList isCompact className="cluster-details__node-set-row">
+                  <DescriptionListGroup>
+                    <DescriptionListTerm>{t('Name')}</DescriptionListTerm>
+                    <DescriptionListDescription>{name}</DescriptionListDescription>
+                  </DescriptionListGroup>
+                  <DescriptionListGroup>
+                    <DescriptionListTerm>{t('Host type')}</DescriptionListTerm>
+                    <DescriptionListDescription>
+                      {displayValue(nodeSet.baremetalInstanceType?.name)}
+                    </DescriptionListDescription>
+                  </DescriptionListGroup>
+                  <DescriptionListGroup>
+                    <DescriptionListTerm>{t('Size')}</DescriptionListTerm>
+                    <DescriptionListDescription>{nodeSet.size}</DescriptionListDescription>
+                  </DescriptionListGroup>
+                </DescriptionList>
+              </li>
+            ))}
+          </ul>
         ) : (
           <Content component="p">{t('No node sets configured.')}</Content>
         )}

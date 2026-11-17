@@ -7,7 +7,6 @@ import {
   StackItem,
   Title,
 } from '@patternfly/react-core';
-import HistoryIcon from '@patternfly/react-icons/dist/esm/icons/history-icon';
 
 import type { Cluster } from '@osac/types';
 
@@ -21,8 +20,7 @@ const ClusterLifecycleSection = ({ cluster }: { cluster: Cluster }) => {
   return (
     <Stack hasGutter>
       <StackItem>
-        <Title headingLevel="h2" size="lg" className="cluster-details__section-title">
-          <HistoryIcon aria-hidden />
+        <Title headingLevel="h2" size="lg">
           {t('Lifecycle')}
         </Title>
       </StackItem>

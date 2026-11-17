@@ -194,7 +194,7 @@ describe('ClusterDetailsPage upgrade availability', () => {
     await waitFor(() => expect(screen.getByText('Upgrade in progress')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Upgrade history' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Upgrade history' })).toBeInTheDocument();
   });
 
   it('uses the newest control-plane attempt when a node-set entry comes first', async () => {
@@ -327,18 +327,15 @@ describe('ClusterDetailsPage upgrade availability', () => {
     expect(screen.queryByLabelText('Upgrade progress steps')).not.toBeInTheDocument();
   });
 
-  it('shows a disabled action when the version catalog request fails', async () => {
+  it('shows the catalog error without an unavailable upgrade action', async () => {
     renderPage(readyCluster, [currentVersion, targetVersion], {
       onClusterVersionList: () => {
         throw new ConnectError('catalog unavailable', Code.Unavailable);
       },
     });
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-        'Could not load upgrade options.',
-      ),
-    );
+    expect(await screen.findByText('Could not load upgrade options.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
   });
 
   it('resolves by ID and offers server-visible targets across projects', async () => {

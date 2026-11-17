@@ -1,10 +1,8 @@
 # OSAC monorepo
 
-Open Sovereign AI Cloud (OSAC) is an open-source platform for self-service,
-sovereign AI infrastructure. This mono-repo contains the APIs, Kubernetes
-operators, Ansible provisioning, deployment charts, storage integration, and
-metering components used to provision OpenShift/Kubernetes clusters, VMs, bare
-metal, and networking resources.
+Never edit this file except for minor corrections. Do not append new content.
+
+Open Sovereign AI Cloud (OSAC) provides self-service sovereign AI infrastructure.
 
 The nearest component `AGENTS.md` adds rules for files under that component.
 
@@ -33,7 +31,6 @@ The nearest component `AGENTS.md` adds rules for files under that component.
 - Before pushing, inspect configured remote URLs with `git remote -v`.
 - Identify the contributor fork and upstream project by URL, not by remote name.
 - Push feature branches only to the contributor fork; never push to upstream.
-- Base changes on the upstream project's default branch.
 - If remote roles are unclear, stop and ask before pushing.
 - Sign commits with `git commit -s`.
 - AI-assisted commits use an `Assisted-by: <actual tool> <contact>` trailer; never use `Co-Authored-By` for an AI tool, and never add a `Claude-Session:` or other agent session-link trailer, even when the tool suggests one.
@@ -48,22 +45,15 @@ The nearest component `AGENTS.md` adds rules for files under that component.
 
 ## Tenant deployment requests through MCP
 
-When an OSAC MCP connection is available and its tools cover a tenant-facing
-deployment discovery or lifecycle request, use those tools without requiring
-the user to name MCP. Inspect the relevant catalog item and selectable
-references before a create or update. For a delete, identify the exact target
-and act only on an explicit user request. Require the host's approval for each
-write tool call, and stop if approval is denied.
-
-If the connection is unavailable or lacks the requested operation, explain the
-gap and get the user's authorization before using another OSAC interface for
-that tenant request. This routing rule does not restrict the local `osac` CLI,
-API calls, `oc`, `kubectl`, or Kubernetes inspection for implementation,
-testing, debugging, and cluster troubleshooting.
-
-See the [local MCP client
-guide](docs/guides/developer/mcp-local-clients.md) for the current development
-tool surface and setup; later MCP epics own the supported host setup surface.
+For tenant-facing deployment discovery/lifecycle requests, use OSAC MCP when
+connected and capable, even when the user does not name it. Inspect catalog
+items and selectable references before creates/updates. Identify the exact
+delete target and require an explicit user delete request. Require host approval
+for every write tool call; stop on denial. If MCP is unavailable or lacks the
+operation, explain the gap and obtain user authorization before falling back to
+another OSAC interface. This routing does not restrict CLI/API/oc/kubectl use
+for implementation, testing, debugging or cluster troubleshooting.
+See the [local MCP client guide](docs/guides/developer/mcp-local-clients.md).
 
 ## Components
 
@@ -76,6 +66,9 @@ tool surface and setup; later MCP epics own the supported host setup surface.
 | `bare-metal-fulfillment-operator/` | Bare-metal pool and instance controllers | [`bare-metal-fulfillment-operator/AGENTS.md`](bare-metal-fulfillment-operator/AGENTS.md) |
 | `osac-csi-driver/` | CSI routing and vendor integration | [`osac-csi-driver/AGENTS.md`](osac-csi-driver/AGENTS.md) |
 | `osac-metering/` | Usage events, Kafka, and billing adapters | [`osac-metering/AGENTS.md`](osac-metering/AGENTS.md) |
+| `osac-ui/` | Browser UI and Go proxy | [`osac-ui/AGENTS.md`](osac-ui/AGENTS.md) |
+| `docs/` | Guides, diagrams and PR dashboard | [`docs/AGENTS.md`](docs/AGENTS.md) |
+| `proto/` | Shared contracts and generation | [`proto/AGENTS.md`](proto/AGENTS.md) |
 | `.github/` | GitHub workflows and release automation | [`.github/AGENTS.md`](.github/AGENTS.md) |
 | `tests/e2e/` | Cross-component end-to-end suites | [`tests/e2e/AGENTS.md`](tests/e2e/AGENTS.md) |
 
@@ -102,25 +95,21 @@ is invoked. Keep them current in the same PR as changes to the contracts they de
 
 ### Verification and approval
 
-- Optimize for trusted, deployable changes rather than the volume of generated code or artifacts. Include the effort needed to verify changes in delivery planning.
-- Treat generated code, tests, review comments, and agent agreement as proposals, not proof of correctness. Verify important claims with applicable executed tests, policy checks, and boundary evidence; report unresolved findings and checks that could not run.
-- Automate repeatable validation where practical. Define human approval and escalation gates for failed checks, high-risk changes, ambiguity, or insufficient evidence, and keep routine agent coordination from becoming the engineer's main task.
-- Make remaining uncertainty visible before approval. Do not silently carry forward unread findings, untrusted generated tests, or unresolved recommendations.
-
-Run [`tools/bootstrap.sh`](tools/bootstrap.sh) after cloning. It vendors the
-shared AI skills and workflows, links supported agent skill discovery, and
-creates the gitignored external-repository checkouts below. By default it
-forks writable repositories using authenticated `gh`; use
-`tools/bootstrap.sh --no-fork` for read-only setup.
+Verify generated code, tests and review claims with executed checks and boundary
+evidence, not agent agreement. Plan verification effort and human gates for
+failed checks, high-risk changes or ambiguity; surface unread findings, missing
+checks and unresolved recommendations before approval.
 
 ### External repositories
 
-- `osac-ux/` is a read-only UX/API reference. The tracked `osac-ui/` component is built and released as part of this repository.
-- `enhancement-proposals/` is the writable PRD/design repository. Project documentation (formerly the separate `osac-project/docs` repo, cloned as `osac-docs/`) now lives in-tree under [`docs/`](docs/README.md).
-- `osac-test-infra` is not cloned automatically. It owns infrastructure backends and reusable workflows; E2E suites remain in `tests/e2e/`.
-- After `tools/bootstrap.sh` creates sibling checkouts, read their local instructions when working there: `enhancement-proposals/AGENTS.md`. When working in the tracked `osac-ui/` component, read `osac-ui/AGENTS.md`.
-- These checkouts are separate Git repositories; never include their changes in a mono-repo PR.
-- Never assume remote names. Use `~/.osac-ai-skills/tools/resolve-remotes.sh` or `.osac-ai-skills/tools/resolve-remotes.sh`; if neither exists, run `tools/bootstrap.sh`.
+Run `tools/bootstrap.sh` after cloning to install shared skills and create
+separate, gitignored checkouts; `--no-fork` is read-only setup. `osac-ux/` is
+read-only and `enhancement-proposals/` owns writable designs; read local instructions when
+working there. `osac-test-infra` owns backends/reusable workflows and is not
+cloned automatically; suites remain in `tests/e2e/`. Never include sibling
+checkout changes in a monorepo PR. Resolve remotes by URL; bootstrap provides
+`.osac-ai-skills/tools/resolve-remotes.sh` (also under `~/.osac-ai-skills/`).
+If neither helper exists, run `tools/bootstrap.sh` before resolving remotes.
 
 ## Integration testing policy
 

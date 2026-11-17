@@ -1,19 +1,13 @@
 # OSAC CSI driver
 
+Never edit this file except for minor corrections. Do not append new content.
+
 CSI meta-driver that delegates fulfillment-owned volume lifecycle to the
 fulfillment service and routes vendor operations through CSI plugins.
 
-This component is part of the OSAC monorepo, not an isolated project. Its APIs,
-generated artifacts, deployment configuration, and runtime behavior may affect
-other components. Apply the repository-wide rules in
-[`../AGENTS.md`](../AGENTS.md), consider downstream consumers before changing
-behavior, and follow the instructions for every affected component.
-
 ## Required context
 
-Before changing this component, identify the documents relevant to the change
-below, then read and follow them. These documents are authoritative for their
-respective areas.
+Read the applicable references before changing behavior:
 
 - Component setup: [`README.md`](README.md)
 - Vendor prerequisites: [`charts/csi-backends/README.md`](charts/csi-backends/README.md)
@@ -37,7 +31,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-csi
 |---|---|---|
 | Request/response mapping, validation, or driver helpers | Unit | `make test` |
 | CSI controller/node routing or CSI protocol behavior | Unit (CSI sanity) | `make test` |
-| Fulfillment private Volume API contract | Contract or E2E | Regenerate with `buf generate`, then qualifying cross-component suite |
+| Fulfillment private Volume API contract | Contract or E2E | From `osac-csi-driver/`, run `make -C ../proto generate`; real Volume lifecycle coverage remains a [tracked gap](https://redhat.atlassian.net/browse/OSAC-4845) |
 | Vendor attach, detach, mount, or storage lifecycle | Component integration or E2E | Required suite is currently unavailable; track [OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845) |
 | Helm/deployment changes | Helm validation plus applicable E2E | `helm lint charts/csi-driver`; `helm lint charts/csi-backends` |
 
@@ -45,8 +39,10 @@ CSI sanity uses a fake vendor and fulfillment stub; it does not cover a real bac
 
 ## Generated files
 
-- The fulfillment Volume API types are the shared top-level `proto/` module, imported as `github.com/osac-project/osac/proto/gen/osac/private/v1`. This component no longer generates its own copy (the whole private API is generated once in `proto/gen/`; Go only compiles the volume/storage packages this driver imports).
-- Proto changes are regenerated once in the shared module: `make -C ../proto generate` (see `proto/AGENTS.md`). Do not regenerate anything from `osac-csi-driver/`.
+- Fulfillment types come from shared `../proto/gen/`; never hand-edit them.
+- From this directory, run `make -C ../proto generate` after proto changes
+  (see [proto instructions](../proto/AGENTS.md)); it generates public protos
+  before Go bindings.
 - Keep dependency changes in `go.mod`/`go.sum` synchronized through `go mod tidy`.
 
 ## Validation

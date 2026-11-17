@@ -3,24 +3,9 @@
 gRPC and REST APIs, persistence, authorization, resource lifecycle, and the
 `osac` CLI.
 
-This component is part of the OSAC monorepo, not an isolated project. Its APIs,
-generated artifacts, deployment configuration, and runtime behavior may affect
-other components. Apply the repository-wide rules in
-[`../AGENTS.md`](../AGENTS.md), consider downstream consumers before changing
-behavior, and follow the instructions for every affected component.
-
-## Code style
-
-- Write clear, idiomatic Go consistent with the project's architecture, conventions, and surrounding code.
-- Look for opportunities to reuse existing code and patterns rather than duplicating logic.
-- Keep related code together, favoring existing packages and files where they fit naturally.
-- Favor simplicity, readability, and maintainability over unnecessary abstractions.
-
 ## Required context
 
-Before changing this component, identify the documents relevant to the change
-below, then read and follow them. These documents are authoritative for their
-respective areas.
+Read the applicable references before changing behavior:
 
 - API or proto work: [`docs/API.md`](docs/API.md) and [`docs/CLEANAPI.md`](docs/CLEANAPI.md)
 - Proto changes: [`../proto/AGENTS.md`](../proto/AGENTS.md)
@@ -92,7 +77,3 @@ If setup fails with `failed to lookup host '...'`, read [README.md — Running i
 - Keep cases independent, register cleanup with `DeferCleanup`, and use bounded `Eventually` assertions for asynchronous behavior instead of sleeps.
 - Test observable behavior, including relevant error paths and tenant isolation where applicable. Deployed Fulfillment-only API/CLI workflows belong in `it/`; cross-component provisioning belongs in `tests/e2e/`.
 - Consult [Fulfillment test tiers and coverage](../docs/INTEGRATION-TESTING.md#fulfillment-service) when choosing coverage for a change.
-
-The deployed service-account CLI lifecycle, structured output, credential
-omission, RoleBinding grant/revoke, and client-credentials flow are covered by
-[`it/it_cli_service_accounts_test.go`](it/it_cli_service_accounts_test.go).

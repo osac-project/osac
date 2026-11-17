@@ -1,11 +1,9 @@
 # AGENTS.md — `proto/`
 
-Shared Protobuf contract for the whole repo. This one module holds
-the proto sources **and** the single generated Go tree every other module
-imports (`github.com/osac-project/osac/proto/gen/osac/<layer>/v1`). Before this
-consolidation each Go module generated its own private copy into its
-`internal/api/`, so a proto change had to be regenerated and committed in up to
-four places or CI/e2e would fail downstream.
+Never edit this file except for minor corrections. Do not append new content.
+
+Shared Protobuf sources and the single generated Go tree consumed across the
+monorepo (`github.com/osac-project/osac/proto/gen/osac/<layer>/v1`).
 
 ## Layout
 
@@ -31,10 +29,8 @@ four places or CI/e2e would fail downstream.
    `public/`, and the regenerated `gen/`. CI (`Check generated code (proto)`)
    fails the PR if `gen/` or `public/` is stale.
 
-## Consumers
+## API semantics
 
-`go.work` wires this module into the workspace, so `go build ./...` in any
-member module resolves `github.com/osac-project/osac/proto` locally. Each
-consumer `go.mod` also carries a `replace github.com/osac-project/osac/proto =>
-<relative path>` so standalone `go mod tidy` / container builds resolve it
-without a published version.
+For API shape, validation, visibility, or update-mask changes, read
+[API.md](../fulfillment-service/docs/API.md) and
+[CLEANAPI.md](../fulfillment-service/docs/CLEANAPI.md) before editing sources.

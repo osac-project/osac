@@ -17,6 +17,7 @@ import (
 	"bytes"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -45,14 +46,18 @@ var _ = Describe("Describe Secret", func() {
 			Expect(output).To(ContainSubstring("Data:  (none)"))
 		})
 
-		It("should display the secret type", func() {
-			s := publicv1.Secret_builder{
-				Id:   "sec-typed",
-				Type: publicv1.SecretType_SECRET_TYPE_KUBECONFIG,
-			}.Build()
+		DescribeTable("should display the secret type",
+			func(secretType publicv1.SecretType, expectedPattern string) {
+				s := publicv1.Secret_builder{
+					Id:   "sec-typed",
+					Type: secretType,
+				}.Build()
 
-			Expect(formatSecret(s)).To(MatchRegexp(`Type:\s+Kubeconfig`))
-		})
+				Expect(formatSecret(s)).To(MatchRegexp(expectedPattern))
+			},
+			Entry("kubeconfig", publicv1.SecretType_SECRET_TYPE_KUBECONFIG, `Type:\s+Kubeconfig`),
+			Entry("Windows user data", publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, `Type:\s+Windows User Data`),
+		)
 
 		It("should display all metadata fields when set", func() {
 			s := publicv1.Secret_builder{

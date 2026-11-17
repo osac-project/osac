@@ -49,6 +49,8 @@ class TestSanitizeText:
             '{"password": "hunter2"}',
             '{"token": "abc"}',
             '{"access_token": "abc"}',
+            '{"api_key": "abc123"}',
+            '{"password": "hunter2 token=abc"}',
         ],
     )
     def test_secret_shapes_are_redacted(self, text: str) -> None:

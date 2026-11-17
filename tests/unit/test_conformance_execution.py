@@ -212,6 +212,9 @@ def test_pytest_interrupt_return_code_keeps_completed_outcomes(tmp_path: Path) -
     tree = _one_test_tree(tmp_path)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
     context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    gate = InterruptGate()
+    # What the gate does when the operator's first signal reaches the child.
+    gate.first = True
     tree.popen = _FakeProcess(  # type: ignore[assignment]
         2,
         entries=[{"nodeid": "test_ok.py::test_ok", "outcome": "passed", "duration": 0.1, "stdout": "", "stderr": ""}],
@@ -219,7 +222,7 @@ def test_pytest_interrupt_return_code_keeps_completed_outcomes(tmp_path: Path) -
     )
 
     with pytest.raises(Interrupted) as raised:
-        tree.run(plan, context, keep=False)
+        tree.run(plan, context, keep=False, interrupt=gate)
 
     assert [outcome.result for outcome in raised.value.outcomes] == [Result.PASS]
 
@@ -314,3 +317,63 @@ def test_pytest_process_errors_are_config_errors(tmp_path: Path, returncode: int
 
     with pytest.raises(ConfigError, match=f"pytest exited {returncode}"):
         tree.run(plan, context, keep=False)
+
+
+def test_execution_side_collection_error_is_a_config_error(tmp_path: Path) -> None:
+    tree = _one_test_tree(tmp_path)
+    plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    # pytest exits 2 for a module that fails to import during execution, which is
+    # a configuration error, not user cancellation.
+    tree.popen = _FakeProcess(2, stderr="ImportError while importing test module")  # type: ignore[assignment]
+
+    with pytest.raises(ConfigError) as raised:
+        tree.run(plan, context, keep=False)
+
+    assert "pytest collection failed" in raised.value.checks[0]
+    assert "ImportError" in raised.value.checks[0]
+
+
+def test_a_child_killed_by_the_forwarded_signal_is_an_interrupt(tmp_path: Path) -> None:
+    tree = _one_test_tree(tmp_path)
+    plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    gate = InterruptGate()
+    gate.first = True
+    # pytest died from SIGINT before it could install its own handler.
+    tree.popen = _FakeProcess(-signal.SIGINT)  # type: ignore[assignment]
+
+    with pytest.raises(Interrupted) as raised:
+        tree.run(plan, context, keep=False, interrupt=gate)
+
+    assert [outcome.result for outcome in raised.value.outcomes] == [Result.SKIP]
+
+
+def test_captured_logging_reaches_the_redacted_evidence_log(tmp_path: Path) -> None:
+    tree_dir = tmp_path / "tree"
+    tree_dir.mkdir()
+    (tree_dir / "test_logs.py").write_text(
+        "import logging\n"
+        "import pytest\n"
+        "@pytest.mark.conformance_generic\n"
+        "def test_logs():\n"
+        f"    logging.getLogger('conformance').warning('api_key={_REDACTION_MARKER_C}')\n"
+    )
+    tree = PytestTestTree(root=tree_dir, python=sys.executable)
+    plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
+    results = tmp_path / "results"
+    redactor = Redactor()
+    context = RunContext(
+        run_id="abcdefgh",
+        results_dir=results,
+        config=None,  # type: ignore[arg-type]
+        redactor=redactor,
+        output=OutputSink(results, redactor),
+    )
+
+    outcomes = tree.run(plan, context, keep=False)
+
+    log = (outcomes[0].evidence_dir / "test.log").read_text()
+    assert "WARNING" in log
+    assert _REDACTION_MARKER_C not in log
+    assert "<redacted>" in log

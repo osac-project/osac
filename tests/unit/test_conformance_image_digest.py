@@ -19,6 +19,20 @@ def test_image_name_with_digest_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     assert image.suite_image_digest(Path("/run/podman/podman.sock"), container_id="id") == "sha256:abc"
 
 
+def test_image_digest_wins_over_the_image_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        image,
+        "container_inspect",
+        lambda *_args, **_kwargs: {
+            "ImageName": "quay.io/etabak/osac-conformance:dev",
+            "ImageDigest": "sha256:digest",
+            "Image": "sha256:id",
+        },
+    )
+
+    assert image.suite_image_digest(Path("/run/podman/podman.sock"), container_id="id") == "sha256:digest"
+
+
 def test_image_id_is_the_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(image, "container_inspect", lambda *_args, **_kwargs: {"Image": "sha256:def"})
 

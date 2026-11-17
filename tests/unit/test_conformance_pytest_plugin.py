@@ -101,6 +101,24 @@ def test_teardown_skip_is_recorded(tmp_path: Path) -> None:
     assert {(line["when"], line["outcome"]) for line in lines} == {("call", "passed"), ("teardown", "skipped")}
 
 
+def test_captured_logging_is_recorded(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "test_logs.py").write_text(
+        "import logging\n"
+        "import pytest\n"
+        "@pytest.mark.conformance_generic\n"
+        "def test_logs():\n"
+        f"    logging.getLogger('conformance').warning('api_key={_REDACTION_MARKER_LOG}')\n"
+    )
+
+    result = _run_plugin(tmp_path, "-q", str(tree))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    lines = [json.loads(line) for line in (tmp_path / "results.jsonl").read_text().splitlines()]
+    assert _REDACTION_MARKER_LOG in lines[0]["caplog"]
+
+
 def test_the_unfiltered_pytest_log_file_is_disabled(tmp_path: Path) -> None:
     tree = tmp_path / "tree"
     tree.mkdir()

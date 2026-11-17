@@ -23,6 +23,15 @@ def _xml_text(value: str) -> str:
     return value.translate(_XML_ILLEGAL)
 
 
+def _redacted_xml(value: str, redactor: Redactor) -> str:
+    """Strip XML-illegal characters, then redact.
+
+    Stripping first: a control character inside a secret splits it so the
+    redactor misses it, and the character is dropped from the file anyway.
+    """
+    return _xml_text(redactor.text(_xml_text(value)))
+
+
 def report_document(report: Report, redactor: Redactor) -> dict[str, Any]:
     return {
         "osacRelease": report.osac_release,
@@ -94,7 +103,7 @@ def write_junit(report: Report, results_dir: Path, redactor: Redactor) -> Path:
             suite,
             "testcase",
             {
-                "name": _xml_text(redactor.text(test.identity.name)),
+                "name": _redacted_xml(test.identity.name, redactor),
                 "classname": "conformance",
                 "time": str(test.duration_seconds),
             },
@@ -102,10 +111,10 @@ def write_junit(report: Report, results_dir: Path, redactor: Redactor) -> Path:
         if test.result is Result.FAIL:
             log_path = test.evidence_dir / "test.log"
             body = log_path.read_text(encoding="utf-8") if log_path.is_file() else test.message
-            failure = ElementTree.SubElement(case, "failure", {"message": _xml_text(redactor.text(test.message))})
-            failure.text = _xml_text(redactor.text(body))
+            failure = ElementTree.SubElement(case, "failure", {"message": _redacted_xml(test.message, redactor)})
+            failure.text = _redacted_xml(body, redactor)
         elif test.result is Result.SKIP:
-            ElementTree.SubElement(case, "skipped", {"message": _xml_text(redactor.text(test.message))})
+            ElementTree.SubElement(case, "skipped", {"message": _redacted_xml(test.message, redactor)})
     tree = ElementTree.ElementTree(suite)
     path = results_dir / "junit.xml"
     results_dir.mkdir(parents=True, exist_ok=True)

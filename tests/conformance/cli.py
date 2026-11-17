@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 import yaml
 
+from tests.conformance import yamlio
 from tests.conformance.catalog import Catalog, ProfileDefinition, expand_profiles, load_catalog
 from tests.conformance.config import Config, load_config
 from tests.conformance.diagnostics import DiagnosticsCollector
@@ -72,6 +73,20 @@ def _check_results(path: Path) -> None:
         path.mkdir(parents=True)
 
 
+def _hostname(value: object) -> str:
+    """The host of a configured URL, or "" when it does not parse.
+
+    This runs on the configuration-error path as well, where a malformed URL
+    must not replace the diagnostic that reported it.
+    """
+    if not isinstance(value, str):
+        return ""
+    try:
+        return urlparse(value).hostname or ""
+    except ValueError:
+        return ""
+
+
 def _redactor_from_document(document: Mapping[str, object]) -> Redactor:
     """Build the one redaction boundary from a raw conformance.yaml document."""
     redactor = Redactor()
@@ -87,9 +102,9 @@ def _redactor_from_document(document: Mapping[str, object]) -> Redactor:
         aap_token_file = aap.get("tokenFile")
         if isinstance(aap_token_file, str):
             token_files.append(aap_token_file)
-        aap_url = aap.get("url")
-        if isinstance(aap_url, str) and urlparse(aap_url).hostname:
-            redactor.add_host(urlparse(aap_url).hostname or "")
+        aap_host = _hostname(aap.get("url"))
+        if aap_host:
+            redactor.add_host(aap_host)
     for value in token_files:
         with contextlib.suppress(OSError):
             redactor.add_secret(Path(value).read_text().strip())
@@ -113,12 +128,12 @@ def _redactor_from_document(document: Mapping[str, object]) -> Redactor:
                 settings = cluster.get("cluster") if isinstance(cluster, Mapping) else None
                 if not isinstance(settings, Mapping):
                     continue
-                server = settings.get("server")
-                if isinstance(server, str) and urlparse(server).hostname:
-                    redactor.add_host(urlparse(server).hostname or "")
-    api_url = target.get("apiURL")
-    if isinstance(api_url, str) and urlparse(api_url).hostname:
-        redactor.add_host(urlparse(api_url).hostname or "")
+                server_host = _hostname(settings.get("server"))
+                if server_host:
+                    redactor.add_host(server_host)
+    api_host = _hostname(target.get("apiURL"))
+    if api_host:
+        redactor.add_host(api_host)
     return redactor
 
 
@@ -167,11 +182,10 @@ def _build_runtime(args: argparse.Namespace) -> Runtime:
 
 def _plan_names(plan_path: Path) -> list[str]:
     try:
-        data = yaml.safe_load(plan_path.read_text())
+        text = plan_path.read_text()
     except OSError as exc:
         raise ConfigError([f"{plan_path} cannot be read: {exc}"]) from None
-    except yaml.YAMLError as exc:
-        raise ConfigError([f"{plan_path} is not valid YAML: {exc}"]) from None
+    data = yamlio.loads(text, str(plan_path))
     if not isinstance(data, dict) or not isinstance(data.get("tests"), list):
         raise ConfigError([f"{plan_path} must hold a tests list"])
     names: list[str] = []

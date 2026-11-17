@@ -68,5 +68,7 @@ def pytest_runtest_logreport(report: Any) -> None:  # noqa: ANN401
             "message": message,
             "stdout": report.capstdout,
             "stderr": report.capstderr,
+            # Captured logging is separate from stdout and stderr.
+            "caplog": report.caplog,
         },
     )

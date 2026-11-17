@@ -109,3 +109,30 @@ def test_relative_config_is_resolved_before_the_child_runs(tmp_path: Path, monke
     runtime = cli._build_runtime(args)
 
     assert runtime.config.path == config.resolve()
+
+
+def test_duplicate_keys_in_a_plan_are_a_config_error(tmp_path: Path) -> None:
+    plan = tmp_path / "conformance-plan.yaml"
+    plan.write_text("tests:\n  - a\ntests:\n  - b\n")
+
+    with pytest.raises(ConfigError, match="duplicate key"):
+        cli._plan_names(plan)
+
+
+def test_a_malformed_url_does_not_replace_the_config_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    config = tmp_path / "conformance.yaml"
+    config.write_text(
+        "osacRelease: 1.4.0\n"
+        "unknownKey: 1\n"
+        "target:\n"
+        "  kubeconfig: /config/hub\n"
+        '  apiURL: "https://["\n'
+        "  tokenFile: /config/token\n"
+        "  caFile: /config/ca.pem\n"
+    )
+
+    assert main(["list", "--config", str(config), "--results", str(tmp_path / "results")]) == 2
+
+    err = capsys.readouterr().err
+    assert "unknownKey is not defined by this release" in err
+    assert "absolute URL with a host" in err

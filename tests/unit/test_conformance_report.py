@@ -172,3 +172,18 @@ def test_junit_strips_xml_illegal_characters(tmp_path: Path) -> None:
     failure = root.find("testcase/failure")
     assert failure is not None
     assert "\x1b" not in failure.attrib["message"]
+
+
+def test_junit_redacts_a_secret_split_by_a_control_character(tmp_path: Path) -> None:
+    secret = "alphaomega"
+    split = f"{secret[:5]}\x00{secret[5:]}"
+    report = _report(split)
+    outcome = TestOutcome(report.tests[0].identity, Result.FAIL, 1.0, split, Path())
+    failed = Report(**{**report.__dict__, "tests": (outcome,)})
+
+    path = write_junit(failed, tmp_path, Redactor(secrets=(secret,)))
+
+    assert secret not in path.read_text(encoding="utf-8")
+    failure = ElementTree.parse(path).getroot().find("testcase/failure")
+    assert failure is not None
+    assert failure.text == "<redacted>"

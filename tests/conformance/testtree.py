@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import signal
 import subprocess
 import sys
 from collections import Counter
@@ -188,15 +189,23 @@ class PytestTestTree:
                     if interrupt is not None:
                         interrupt.child = process
                 stdout, stderr = process.communicate()
-                if process.returncode not in (0, 1, 2):
-                    detail = (stderr or "").strip() or (stdout or "").strip() or "no output"
+                # The first signal is forwarded to the child, which can die from
+                # SIGINT before pytest installs its own handler.
+                interrupted = interrupt is not None and interrupt.first
+                killed_by_interrupt = interrupted and process.returncode == -signal.SIGINT
+                detail = (stderr or "").strip() or (stdout or "").strip() or "no output"
+                if process.returncode not in (0, 1, 2) and not killed_by_interrupt:
                     raise ConfigError([f"pytest exited {process.returncode}: {detail}"])
                 if context.output is not None:
                     for line in (stdout + stderr).splitlines():
                         context.output.line(line)
                 outcomes = self._recorded_outcomes(plan, context, results_path)
-                if process.returncode == 2 or (interrupt is not None and interrupt.first):
+                if interrupted:
                     raise Interrupted(outcomes)
+                if process.returncode == 2:
+                    # pytest reports a module that fails to collect during
+                    # execution with the same status it uses for an interrupt.
+                    raise ConfigError([f"pytest collection failed: {detail}"])
                 return outcomes
             finally:
                 # Kept attached until the outcomes are read: a signal inside this
@@ -236,7 +245,9 @@ class PytestTestTree:
                 message = "\n".join(dict.fromkeys(messages))
                 duration = sum(float(entry.get("duration", 0.0)) for entry in group)
                 if context.output is not None:
-                    log = "".join(str(entry.get("stdout", "")) + str(entry.get("stderr", "")) for entry in group)
+                    log = "".join(
+                        str(entry.get(key) or "") for entry in group for key in ("caplog", "stdout", "stderr")
+                    )
                     context.output.evidence(test, Path("test.log"), log)
             outcomes.append(TestOutcome(test, outcome, duration, message, evidence))
         return tuple(outcomes)

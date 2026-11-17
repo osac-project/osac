@@ -57,7 +57,12 @@ _KEY_VALUE = re.compile(
     r"(" + _SHELL_VALUE + r"|\S+)"
 )
 _TOKEN_FLAG = re.compile(r"(--token(?:-script)?)([ =])\S+")
-_JSON_SECRET = re.compile(r'(?i)("[\w-]*(?:password|token|secret)[\w-]*"\s*:\s*)"(?:[^"\\]|\\.)*"')
+# The label may appear anywhere in a JSON key, so "api_key" and "access_key" are
+# covered even though the text rules need the separator right after the label.
+_JSON_SECRET = re.compile(
+    r'(?i)("[\w-]*(?:password|passwd|passphrase|client[_-]?secret|secret[_-]?key|api[_-]?key|access[_-]?key'
+    r'|private[_-]?key|token|session[_-]?id)[\w-]*"[ \t]*:[ \t]*)"(?:[^"\\]|\\.)*"'
+)
 
 # The value after one of these flags is dropped whole: a header holds the token, -d holds the request payload.
 _VALUE_FLAGS = frozenset({"-H", "--header", "-d", "--data", "--token", "--token-script", "--password"})
@@ -72,9 +77,10 @@ def sanitize_text(text: str | bytes) -> str:
         text = text.decode(errors="replace")
     text = _JWT.sub(REDACTED, text)
     text = _AUTH_SCHEME.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
+    # JSON before the assignment rules: a secret value can itself hold "label=".
+    text = _JSON_SECRET.sub(lambda m: f'{m.group(1)}"{REDACTED}"', text)
     text = _KEY_VALUE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
     text = _TOKEN_FLAG.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
-    text = _JSON_SECRET.sub(lambda m: f'{m.group(1)}"{REDACTED}"', text)
     with _ENDPOINT_LOCK:
         hosts = _ENDPOINT_HOSTS
     for host in sorted(hosts, key=len, reverse=True):

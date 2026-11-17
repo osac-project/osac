@@ -65,6 +65,13 @@ const (
 	messageStepNetworkSetupHandoff     = "Network handoff is in progress."
 	messageStepNetworkSetupIPDiscovery = "IP address discovery is in progress."
 	messageStepReadyPowerSync          = "Power synchronization is in progress."
+	messageNetworkSetupProgressing     = "Network setup is in progress."
+	messageNetworkSetupComplete        = "Network setup is complete."
+	messageNetworkSetupFailed          = "Network setup did not complete."
+	messageNetworkHandoffFailed        = "Network handoff did not complete."
+	messageNetworkCleanupProgressing   = "Network cleanup is in progress."
+	messageNetworkCleanupFailed        = "Network cleanup did not complete."
+	messageNetworkingDisabled          = "Provider networking is disabled; this operation was skipped."
 
 	// Curated failure messages — exact strings, one per FailureClassification.
 	messageFailureNoMatchingHosts   = "No bare metal host matched the requested profile."
@@ -404,6 +411,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 		t.removeFinalizer()
 		return
 	}
+	t.syncNetworkReady(object)
 	if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.bareMetalInstance.GetId()); err != nil {
 		return err
 	}
@@ -591,6 +599,19 @@ func (t *task) updateCondition(conditionType privatev1.BareMetalInstanceConditio
 	t.bareMetalInstance.GetStatus().SetConditions(conditions)
 }
 
+func (t *task) removeCondition(conditionType privatev1.BareMetalInstanceConditionType) {
+	conditions := t.bareMetalInstance.GetStatus().GetConditions()
+	filtered := make([]*privatev1.BareMetalInstanceCondition, 0, len(conditions))
+	for _, condition := range conditions {
+		if condition.GetType() != conditionType {
+			filtered = append(filtered, condition)
+		}
+	}
+	if len(filtered) != len(conditions) {
+		t.bareMetalInstance.GetStatus().SetConditions(filtered)
+	}
+}
+
 func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 	if object == nil {
 		return
@@ -603,7 +624,9 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 	// Derive PROVISIONED and READY from the operator's lifecycle conditions. The
 	// Deleting phase is guarded: conditions may still indicate a ready instance, but
 	// provisioning progress is not meaningful while the instance is being deleted.
-	if object.Status.Phase != bmfov1alpha1.BareMetalInstancePhaseDeleting {
+	deleting := object.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseDeleting ||
+		object.GetDeletionTimestamp() != nil
+	if !deleting {
 		progress := bmfov1alpha1.DeriveProvisioningProgress(object.Status.Conditions)
 		switch progress.State {
 		case bmfov1alpha1.StateInProgress:
@@ -666,6 +689,8 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
 	}
+
+	t.syncNetworkReady(object)
 
 	protoStatuses := make([]*privatev1.BareMetalNetworkAttachmentStatus, 0, len(object.Status.NetworkAttachmentStatuses))
 	for _, nas := range object.Status.NetworkAttachmentStatuses {
@@ -744,13 +769,136 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 	}
 }
 
-func (t *task) syncState(object *bmfov1alpha1.BareMetalInstance, powerSynced *metav1.Condition) {
-	switch object.Status.Phase {
-	case bmfov1alpha1.BareMetalInstancePhaseFailed:
-		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, nil)
+func (t *task) syncNetworkReady(object *bmfov1alpha1.BareMetalInstance) {
+	if status, reason, message, ok := networkReadyCondition(object); ok {
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY,
+			status, reason, message)
 		return
-	case bmfov1alpha1.BareMetalInstancePhaseDeleting:
+	}
+
+	if t.bareMetalInstance.GetStatus().GetState() !=
+		privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING {
+		t.removeCondition(privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+	}
+}
+
+func networkReadyCondition(object *bmfov1alpha1.BareMetalInstance) (
+	privatev1.ConditionStatus, string, string, bool,
+) {
+	deleting := object.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseDeleting ||
+		object.DeletionTimestamp != nil
+	if deleting {
+		offboard := object.GetStatusCondition(bmfov1alpha1.HostConditionNetworkOffboardComplete)
+		if offboard != nil && offboard.Status == metav1.ConditionTrue {
+			return privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+				"Deleting", messageNetworkCleanupProgressing, true
+		}
+	}
+
+	conditionOrder := []bmfov1alpha1.BareMetalInstanceConditionType{
+		bmfov1alpha1.HostConditionNetworkOffboardComplete,
+		bmfov1alpha1.HostConditionNetworkAttachmentsReady,
+		bmfov1alpha1.HostConditionNetworkHandoffComplete,
+		bmfov1alpha1.HostConditionIPDiscoveryComplete,
+	}
+	for _, conditionType := range conditionOrder {
+		condition := object.GetStatusCondition(conditionType)
+		if condition == nil || condition.Status == metav1.ConditionTrue {
+			continue
+		}
+		reason, message := networkReadyReasonMessage(
+			bmfov1alpha1.BareMetalInstanceConditionType(condition.Type), condition.Reason)
+		return mapConditionStatus(condition.Status), reason, message, true
+	}
+
+	if networkPhasesComplete(object) {
+		if providerNetworkingDisabled(object) {
+			return privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+				"ProvisioningDisabled", messageNetworkingDisabled, true
+		}
+		return privatev1.ConditionStatus_CONDITION_STATUS_TRUE, "IPDiscovered", messageNetworkSetupComplete, true
+	}
+
+	if object.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseProgressing {
+		return privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "Progressing", messageNetworkSetupProgressing, true
+	}
+	return privatev1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED, "", "", false
+}
+
+func networkPhasesComplete(object *bmfov1alpha1.BareMetalInstance) bool {
+	for _, conditionType := range []bmfov1alpha1.BareMetalInstanceConditionType{
+		bmfov1alpha1.HostConditionNetworkAttachmentsReady,
+		bmfov1alpha1.HostConditionNetworkHandoffComplete,
+		bmfov1alpha1.HostConditionIPDiscoveryComplete,
+	} {
+		condition := object.GetStatusCondition(conditionType)
+		if condition == nil || condition.Status != metav1.ConditionTrue {
+			return false
+		}
+	}
+	return true
+}
+
+func providerNetworkingDisabled(object *bmfov1alpha1.BareMetalInstance) bool {
+	for _, conditionType := range []bmfov1alpha1.BareMetalInstanceConditionType{
+		bmfov1alpha1.HostConditionNetworkAttachmentsReady,
+		bmfov1alpha1.HostConditionNetworkHandoffComplete,
+		bmfov1alpha1.HostConditionIPDiscoveryComplete,
+	} {
+		condition := object.GetStatusCondition(conditionType)
+		if condition == nil || condition.Status != metav1.ConditionTrue {
+			continue
+		}
+		if condition.Reason == "ProvisioningDisabled" ||
+			(condition.Reason == "Skipped" && condition.Message == "Networking provisioning disabled") {
+			return true
+		}
+	}
+	return false
+}
+
+func networkReadyReasonMessage(conditionType bmfov1alpha1.BareMetalInstanceConditionType, reason string) (string, string) {
+	switch reason {
+	case bmfov1alpha1.HostConditionReasonNetworkAttachmentFailed:
+		return reason, messageFailureNetworkAttachment
+	case bmfov1alpha1.HostConditionReasonNetworkHandoffFailed:
+		return reason, messageNetworkHandoffFailed
+	case bmfov1alpha1.HostConditionReasonIPDiscoveryFailed:
+		return reason, messageFailureIPDiscovery
+	case bmfov1alpha1.HostConditionReasonPoweringOff, bmfov1alpha1.HostConditionReasonPoweringOn:
+		return reason, messageStepNetworkSetupHandoff
+	case bmfov1alpha1.HostConditionReasonLeasePending:
+		return reason, messageStepNetworkSetupIPDiscovery
+	case "Offboarding", "NetworkDetaching":
+		return reason, messageNetworkCleanupProgressing
+	case "PowerOffFailed":
+		return reason, messageNetworkCleanupFailed
+	case "ProvisioningDisabled":
+		return reason, messageNetworkingDisabled
+	case bmfov1alpha1.HostConditionReasonProgressing:
+		switch conditionType {
+		case bmfov1alpha1.HostConditionNetworkAttachmentsReady:
+			return reason, messageStepNetworkSetupAttachment
+		case bmfov1alpha1.HostConditionNetworkHandoffComplete:
+			return reason, messageStepNetworkSetupHandoff
+		case bmfov1alpha1.HostConditionIPDiscoveryComplete:
+			return reason, messageStepNetworkSetupIPDiscovery
+		case bmfov1alpha1.HostConditionNetworkOffboardComplete:
+			return reason, messageNetworkCleanupProgressing
+		}
+	}
+
+	return "NetworkSetupFailed", messageNetworkSetupFailed
+}
+
+func (t *task) syncState(object *bmfov1alpha1.BareMetalInstance, powerSynced *metav1.Condition) {
+	if object.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseDeleting || object.GetDeletionTimestamp() != nil {
 		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
+		return
+	}
+	if object.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseFailed {
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, nil)
 		return
 	}
 

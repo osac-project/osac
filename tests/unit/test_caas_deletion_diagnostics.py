@@ -29,7 +29,24 @@ def test_snapshot_reports_blockers_without_dumping_resource_data(monkeypatch: py
                         "name": "order-x",
                         "deletionTimestamp": "2026-01-01T00:00:00Z",
                         "finalizers": ["osac.openshift.io/finalizer"],
-                    }
+                    },
+                    "status": {
+                        "provisioningJobs": [
+                            {
+                                "type": "deprovision",
+                                "state": "Running",
+                                "jobID": "32",
+                                "blockDeletionOnFailure": True,
+                                "message": "secret-value",
+                            },
+                            {
+                                "type": "secret-value",
+                                "state": "secret-value",
+                                "jobID": "secret-value",
+                                "blockDeletionOnFailure": "secret-value",
+                            },
+                        ]
+                    },
                 }
             ],
             "infraenvs.agent-install.openshift.io": [{"metadata": {"name": "order-x-infraenv"}}],
@@ -74,9 +91,17 @@ def test_snapshot_reports_blockers_without_dumping_resource_data(monkeypatch: py
                     "metadata": {
                         "name": "machine-x",
                         "deletionTimestamp": "2026-01-01T00:00:00Z",
+                        "finalizers": ["machine.cluster.x-k8s.io", "secret-value"],
                         "annotations": {
                             "pre-terminate.delete.hook.machine.cluster.x-k8s.io/agentmachine": "secret-value"
                         },
+                    },
+                    "spec": {
+                        "infrastructureRef": {
+                            "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                            "kind": "Metal3Machine",
+                            "name": "metal3machine-x",
+                        }
                     },
                     "status": {
                         "conditions": [
@@ -135,16 +160,19 @@ def test_snapshot_reports_blockers_without_dumping_resource_data(monkeypatch: py
     assert "capi-cluster count=1 terminating=0" in output
     assert "machineset count=1 terminating=0" in output
     assert "machine count=1 terminating=1 preterminate_hook=1" in output
-    assert "machine deletion condition=Deleting status=True reason=WaitingForPreTerminateHook" in output
     assert (
-        "machine deletion condition=PreTerminateDeleteHookSucceeded status=False reason=WaitingForPreTerminateHook"
-        in output
+        "machine name=machine-x finalizers=machine.cluster.x-k8s.io "
+        "infrastructure_ref=Metal3Machine/metal3machine-x" in output
     )
+    assert "machine condition=Deleting status=True reason=WaitingForPreTerminateHook" in output
+    assert "machine condition=PreTerminateDeleteHookSucceeded status=False reason=WaitingForPreTerminateHook" in output
     assert "agent state=added-to-existing-cluster count=1" in output
     assert "agent state=unbinding count=1" in output
     assert "agent state=installed count=1" in output
     assert "agent state=omitted count=1" in output
     assert "agentcluster count=1 deprovision_finalizer=1" in output
+    assert "provisioning job type=deprovision state=Running job_id=32 blocks_deletion=True" in output
+    assert "provisioning job type=omitted state=omitted job_id=omitted blocks_deletion=omitted" in output
     assert "infraenv present=True" in output
     assert "namespace control-plane present=True terminating=True" in output
     assert "secret-value" not in output

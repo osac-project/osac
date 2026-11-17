@@ -66,9 +66,13 @@ in `osac-aap/Makefile`.
 - Wire-contract unit tests: shared operator/AAP goldens against doubles and
   the CUDN planner; no deployed AAP, Kubernetes objects or provider execution.
 
-The shared goldens do not bind delete/detach, SecurityGroup, DHCP-lease,
-FabricDomain, cluster-ingress or physical-interface shapes; those gaps have no
-owning ticket. Read both sides' suites before extending a task contract.
+The shared goldens bind physical NetworkAttachment apply, delete and
+query_dhcp_lease inputs plus the DHCP lease result; both the operator producer
+and this AAP consumer read the same files. The AAP contract runs the generic
+playbook against a fake Netris endpoint, with no deployed AAP or provider.
+NetworkAttachment overlay delete/detach, other unbound delete/detach tasks,
+SecurityGroup and FabricDomain shapes remain unbound. Cluster ingress is
+already bound by shared input and result goldens.
 AgentlessNet Fabric and switch-VLAN targets ([OSAC-7156](https://redhat.atlassian.net/browse/OSAC-7156))
 run generic-playbook child jobs with real SQLite against one stateful fake SSH
 switch endpoint: physical NetworkAttachment apply, partial-retry, delete-wins

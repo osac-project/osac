@@ -153,7 +153,10 @@ def test_two_node_set_scenario_uses_same_natural_teardown_budgets(
     polls = {item.kwargs["description"]: item.kwargs for item in scenario_poll.call_args_list}
     bmi_wait = polls["order-a CaaS worker BMI removal"]
     assert (bmi_wait["retries"], bmi_wait["delay"]) == (480, 5)
-    assert (parent_poll.call_args.kwargs["retries"], parent_poll.call_args.kwargs["delay"]) == (121, 10)
+    assert (parent_poll.call_args.kwargs["retries"], parent_poll.call_args.kwargs["delay"]) == (
+        scenario._NATURAL_CLUSTER_ORDER_DELETE_RETRIES,
+        10,
+    )
     infraenv_wait = polls["InfraEnv removal after ClusterOrder deletion"]
     assert (infraenv_wait["retries"], infraenv_wait["delay"]) == (60, 5)
     assert two_node_set_clients["k8s_hub_client"].is_absent.call_args_list == [

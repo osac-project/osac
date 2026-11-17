@@ -73,14 +73,14 @@ type AccountCorrelationInput struct {
 	AccountID string
 	// Ref is the provider-native account reference used for adapter reads and writes.
 	Ref AccountRef
-	// LocalValue is billing_account.correlation_id as currently stored in OSAC for this account; "" when unset.
+	// LocalValue is billing_account.external_billing_account_id as currently stored in OSAC; "" when unset.
 	LocalValue string
 	// LocalDuplicate is mandatory: it backs the local-uniqueness check against billing_account.
 	LocalDuplicate LocalCorrelationLookup
 }
 
 // Resolution is the outcome of ResolveAccountCorrelationID. The caller persists Value in its own transaction;
-// this function never writes billing_account.correlation_id.
+// this function never writes billing_account.external_billing_account_id.
 type Resolution struct {
 	// Value is the correlation value to persist in OSAC. Always set on success.
 	Value string

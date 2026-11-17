@@ -86,7 +86,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 		err := tm.Run(ctx, func(tx database.Tx) error {
 			_, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
 				ID: id, ProviderKey: billing.KeyM360, ProviderAccountReference: nativeID,
-				CorrelationID: correlation, State: "ACTIVE", StatusObservedAt: observedAt,
+				ExternalBillingAccountID: correlation, State: "ACTIVE", StatusObservedAt: observedAt,
 			})
 			return err
 		})
@@ -320,7 +320,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 		Expect(state).To(Equal("INACTIVE"), "never apply a foreign account's ACTIVE state")
 		Expect(observedAt).To(BeTemporally("==", seededAt))
 		var correlation string
-		Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, accountID).
+		Expect(testPool.QueryRow(ctx, `select coalesce(external_billing_account_id, '') from billing_accounts where id = $1`, accountID).
 			Scan(&correlation)).To(Succeed())
 		Expect(correlation).To(BeEmpty())
 		var count int

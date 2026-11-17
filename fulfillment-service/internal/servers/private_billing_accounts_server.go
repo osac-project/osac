@@ -258,13 +258,13 @@ func mapBillingDiscoveryError(err error) error {
 
 func toPrivateBillingAccount(row database.BillingAccountRow) *privatev1.BillingAccount {
 	return privatev1.BillingAccount_builder{
-		Id:               row.ID,
-		ProviderKey:      row.ProviderKey,
-		DisplayName:      row.DisplayName,
-		BaseCurrency:     row.BaseCurrency,
-		State:            mapBillingAccountState(row.State),
-		StatusObservedAt: timestamppb.New(row.StatusObservedAt),
-		CorrelationId:    row.CorrelationID,
+		Id:                       row.ID,
+		ProviderKey:              row.ProviderKey,
+		DisplayName:              row.DisplayName,
+		BaseCurrency:             row.BaseCurrency,
+		State:                    mapBillingAccountState(row.State),
+		StatusObservedAt:         timestamppb.New(row.StatusObservedAt),
+		ExternalBillingAccountId: row.ExternalBillingAccountID,
 	}.Build()
 }
 
@@ -322,10 +322,10 @@ func (s *PrivateBillingAccountsServer) storeAccounts(
 				// value is stored raw because the resolver compares it exactly, and the CLI sanitizes it for display.
 				DisplayName: billing.SanitizeProviderText(account.Name),
 				// M360 supplies no account currency, and this path assigns no default.
-				BaseCurrency:     validCurrency(account.BaseCurrency),
-				CorrelationID:    account.ExternalID,
-				State:            string(account.State),
-				StatusObservedAt: observedAt,
+				BaseCurrency:             validCurrency(account.BaseCurrency),
+				ExternalBillingAccountID: account.ExternalID,
+				State:                    string(account.State),
+				StatusObservedAt:         observedAt,
 			})
 			if err != nil {
 				return struct{}{}, err

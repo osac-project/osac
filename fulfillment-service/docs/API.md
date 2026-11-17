@@ -517,6 +517,22 @@ Billing list filters use normalized stored values: `this.state == "ACTIVE"` for 
 `this.status.connection_state == "CONNECTED"` for assignments. The type-prefixed enum names
 in JSON responses are not filter literals.
 
+`BillingAccount.external_billing_account_id` is the locally retained, provider-agnostic
+attribution identifier, distinct from the tenant id and the private provider-native account
+reference. It can be established locally while an assignment is `PENDING`, before a provider
+account carries it. Account filters and order expressions use `external_billing_account_id`
+too. The former `correlation_id` name is not an alias: REST and CLI JSON/YAML use the new
+snake-case name, and the table header is `EXTERNAL-BILLING-ACCOUNT-ID`. Protobuf field number
+7 and its string type are unchanged, preserving binary data compatibility, but generated Go
+accessors and JSON names change. The default protoJSON name is `externalBillingAccountId`.
+
+Migration 155 renames the SQL column without rewriting values or assignment links. Coordinate
+the service/database cutover: old service binaries require the old column name. This is a
+forward-only migration; no inverse script is supplied. Stable correlation-related reason
+codes and provider-native `externalId` remain unchanged. This naming change does not change
+assignment resolution or the existing tenant/metering attribution source, and does not add
+an assignment-to-metering bridge.
+
 Discovery refreshes a supplied, nonempty `base_currency` from a non-older provider observation;
 empty or stale observations do not erase it. Three-letter currency codes are normalized to
 uppercase, and no currency is invented or defaulted. Rate-card-derived currency resolution
@@ -529,7 +545,8 @@ carrier. An acknowledged write with a differing read-back fails with
 `FAILED_PRECONDITION/BILLING_CORRELATION_READBACK_MISMATCH`. Adapters without correlation-write
 support retain the `PENDING` remediation path. Under the merged design's M360 contract, the
 OSAC adapter reports correlation-write unsupported: an external administrator sets the
-provider value to the stored correlation, then re-submits Update to validate the unique match.
+provider `externalId` to the `external_billing_account_id` shown by `BillingAccounts.List`,
+then re-submits Update to validate the unique match.
 Current vendor API capabilities do not silently change this application contract.
 
 Assignment creation, replacement, and same-account revalidation read the selected

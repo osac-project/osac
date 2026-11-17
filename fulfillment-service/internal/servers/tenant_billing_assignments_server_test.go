@@ -286,7 +286,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 			Expect(count).To(Equal(4))
 			var correlation string
-			Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+			Expect(testPool.QueryRow(ctx, `select coalesce(external_billing_account_id, '') from billing_accounts where id = $1`, account).
 				Scan(&correlation)).To(Succeed())
 			Expect(correlation).To(BeEmpty())
 		}, Entry("finite", false), Entry("empty", true))
@@ -304,7 +304,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 			Expect(count).To(BeZero())
 			var correlation string
-			Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+			Expect(testPool.QueryRow(ctx, `select coalesce(external_billing_account_id, '') from billing_accounts where id = $1`, account).
 				Scan(&correlation)).To(Succeed())
 			Expect(correlation).To(BeEmpty())
 		}, Entry("shared", auth.SharedTenant), Entry("system", auth.SystemTenant))

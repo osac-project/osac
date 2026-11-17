@@ -109,7 +109,7 @@ func render(ctx context.Context, console *terminal.Console, format string, offse
 
 // renderTable writes a compact table of discovered billing accounts. Empty currency and unknown state are rendered
 // explicitly as "-" and "UNKNOWN" so a viewer can tell "not supplied" from a rendering bug. Display-name and
-// correlation-id cells are sanitized on output: correlation values are stored raw for exact matching. When the page
+// external-billing-account-id cells are sanitized on output: values are stored raw for exact matching. When the page
 // does not reach the total, a continuation hint follows the table on the error stream.
 func renderTable(console *terminal.Console, offset int32,
 	response *publicv1.BillingAccountsListResponse) error {
@@ -122,7 +122,7 @@ func renderTable(console *terminal.Console, offset int32,
 		return output.WritePageNotice(console.Stderr(), "billing accounts", offset, 0, total)
 	}
 	writer := tabwriter.NewWriter(console, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(writer, "ID\tPROVIDER\tDISPLAY-NAME\tCURRENCY\tSTATE\tCORRELATION-ID\tSTATUS-OBSERVED"); err != nil {
+	if _, err := fmt.Fprintln(writer, "ID\tPROVIDER\tDISPLAY-NAME\tCURRENCY\tSTATE\tEXTERNAL-BILLING-ACCOUNT-ID\tSTATUS-OBSERVED"); err != nil {
 		return fmt.Errorf("failed to render billing accounts table header: %w", err)
 	}
 	for _, item := range items {
@@ -138,7 +138,7 @@ func renderTable(console *terminal.Console, offset int32,
 			item.GetId(), output.OrDash(item.GetProviderKey()),
 			output.OrDash(billing.SanitizeProviderText(item.GetDisplayName())),
 			output.OrDash(item.GetBaseCurrency()), state,
-			output.OrDash(billing.SanitizeProviderText(item.GetCorrelationId())), observed); err != nil {
+			output.OrDash(billing.SanitizeProviderText(item.GetExternalBillingAccountId())), observed); err != nil {
 			return fmt.Errorf("failed to render billing accounts table row: %w", err)
 		}
 	}
@@ -156,6 +156,9 @@ discovered yet; it does not mean billing is disabled. {{ bt }}CURRENCY{{ bt }} s
 provider does not supply one. {{ bt }}STATE{{ bt }} is {{ bt }}ACTIVE{{ bt }}, {{ bt }}INACTIVE{{ bt }} or
 {{ bt }}UNKNOWN{{ bt }}; a value OSAC could not classify is always shown as {{ bt }}UNKNOWN{{ bt }}, never guessed
 as {{ bt }}ACTIVE{{ bt }}.
+
+{{ bt }}EXTERNAL-BILLING-ACCOUNT-ID{{ bt }} is the provider-agnostic attribution identifier, not the tenant id or
+the provider's native account id. JSON and YAML expose it as {{ bt }}external_billing_account_id{{ bt }}.
 
 Results are paged. {{ bt }}--limit 0{{ bt }} asks for the server default page of 100 accounts, values above 1000
 are clamped to 1000 by the server rather than rejected, and {{ bt }}--offset{{ bt }} skips ahead. In table mode,

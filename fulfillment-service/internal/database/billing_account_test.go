@@ -215,50 +215,50 @@ var _ = Describe("Billing accounts", func() {
 
 		It("copies the provider correlation value only when the local value is null", func() {
 			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", CorrelationID: "ext-1", State: "ACTIVE",
+				ProviderKey: "m360", ProviderAccountReference: "acct-1", ExternalBillingAccountID: "ext-1", State: "ACTIVE",
 			})
 			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
 			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].CorrelationID).To(Equal("ext-1"))
+			Expect(items[0].ExternalBillingAccountID).To(Equal("ext-1"))
 		})
 
-		It("never overwrites a non-null local correlation_id with a different provider value", func() {
+		It("never overwrites a non-null local external_billing_account_id with a different provider value", func() {
 			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", CorrelationID: "ext-1", State: "ACTIVE",
+				ProviderKey: "m360", ProviderAccountReference: "acct-1", ExternalBillingAccountID: "ext-1", State: "ACTIVE",
 			})
 			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", CorrelationID: "ext-2", State: "ACTIVE",
+				ProviderKey: "m360", ProviderAccountReference: "acct-1", ExternalBillingAccountID: "ext-2", State: "ACTIVE",
 			})
 			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
 			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].CorrelationID).To(Equal("ext-1"), "discovery must never overwrite a differing value")
+			Expect(items[0].ExternalBillingAccountID).To(Equal("ext-1"), "discovery must never overwrite a differing value")
 		})
 
-		It("leaves both rows unchanged when two accounts would share one correlation_id", func() {
+		It("leaves both rows unchanged when two accounts would share one external_billing_account_id", func() {
 			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", CorrelationID: "ext-dup", State: "ACTIVE",
+				ProviderKey: "m360", ProviderAccountReference: "acct-1", ExternalBillingAccountID: "ext-dup", State: "ACTIVE",
 			})
 			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-2", CorrelationID: "ext-dup", State: "ACTIVE",
+				ProviderKey: "m360", ProviderAccountReference: "acct-2", ExternalBillingAccountID: "ext-dup", State: "ACTIVE",
 			})
 			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, `this.provider_key == "m360"`, "id")
 			Expect(err).ToNot(HaveOccurred())
 			var withCorrelation int
 			for _, item := range items {
-				if item.CorrelationID == "ext-dup" {
+				if item.ExternalBillingAccountID == "ext-dup" {
 					withCorrelation++
 				}
 			}
 			Expect(withCorrelation).To(Equal(1), "the unique index must never be violated by a second write")
 		})
 
-		It("leaves correlation_id null when the account has no native value", func() {
+		It("leaves external_billing_account_id null when the account has no native value", func() {
 			upsert(BillingAccountUpsert{
 				ProviderKey: "m360", ProviderAccountReference: "acct-1", State: "ACTIVE",
 			})
 			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
 			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].CorrelationID).To(BeEmpty())
+			Expect(items[0].ExternalBillingAccountID).To(BeEmpty())
 		})
 	})
 
@@ -267,7 +267,7 @@ var _ = Describe("Billing accounts", func() {
 			observed := time.Now().UTC().Truncate(time.Second)
 			id := upsert(BillingAccountUpsert{
 				ProviderKey: "m360", ProviderAccountReference: "acct-1", DisplayName: "Acme",
-				CorrelationID: "corr", State: "ACTIVE", StatusObservedAt: observed,
+				ExternalBillingAccountID: "corr", State: "ACTIVE", StatusObservedAt: observed,
 			})
 			state, at, err := ObserveBillingAccountState(ctx, tx, id, "INACTIVE", observed.Add(time.Minute))
 			Expect(err).ToNot(HaveOccurred())
@@ -278,7 +278,7 @@ var _ = Describe("Billing accounts", func() {
 			Expect(items[0].State).To(Equal("INACTIVE"))
 			Expect(items[0].StatusObservedAt).To(BeTemporally("==", observed.Add(time.Minute)))
 			Expect(items[0].DisplayName).To(Equal("Acme"), "an assignment read must not change account metadata")
-			Expect(items[0].CorrelationID).To(Equal("corr"))
+			Expect(items[0].ExternalBillingAccountID).To(Equal("corr"))
 		})
 
 		It("ignores an older observation and returns the newer stored one", func() {
@@ -454,6 +454,64 @@ var _ = Describe("Billing accounts", func() {
 		It("rejects an order on a private or unknown field", func() {
 			_, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "provider_account_reference")
 			Expect(err).To(HaveOccurred())
+		})
+
+		Describe("external identifier spelling", func() {
+			BeforeEach(func() {
+				// P1 only renames a column, preserving the eight-column flat layout. Positional SQL
+				// keeps this fixture independent of both the old and future Go token member names.
+				// Token ordering deliberately opposes id, native reference, label, currency and state.
+				_, err := tx.Exec(ctx, `insert into billing_accounts values
+					('token-null', 'identifier-contract', 'native-null', '', '', null, 'ACTIVE', now()),
+					('token-empty', 'identifier-contract', 'native-empty', '', '', '', 'ACTIVE', now()),
+					('token-space', 'identifier-contract', 'native-space', '', '', E' \t ', 'ACTIVE', now()),
+					('token-plain', 'identifier-contract', 'native-plain', '', '', 'ext-1', 'ACTIVE', now()),
+					('token-padded', 'identifier-contract', 'native-padded', '', '', ' ext-1 ', 'ACTIVE', now()),
+					('order-a', 'order-contract', 'native-a', 'Label A', 'CAD', 'zulu', 'ACTIVE', now()),
+					('order-z', 'order-contract', 'native-z', 'Label Z', 'USD', 'alpha', 'INACTIVE', now())`)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			DescribeTable("filters through SQL by the canonical flat field without normalizing raw values", func(raw, id string) {
+				filter := `this.provider_key == "identifier-contract" && this.external_billing_account_id == "` + raw + `"`
+				items, total, err := ListBillingAccounts(ctx, tx, 0, 10, filter, "id")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(total).To(Equal(int32(1)))
+				Expect(items).To(HaveLen(1))
+				Expect(items[0].ID).To(Equal(id))
+			},
+				Entry("empty is not NULL", "", "token-empty"),
+				Entry("whitespace is not empty", " \t ", "token-space"),
+				Entry("unpadded token", "ext-1", "token-plain"),
+				Entry("padded token", " ext-1 ", "token-padded"),
+			)
+
+			DescribeTable("orders a real SQL page by the canonical flat field", func(order, first, second string) {
+				items, total, err := ListBillingAccounts(ctx, tx, 0, 1,
+					`this.provider_key == "order-contract"`, order)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(total).To(Equal(int32(2)))
+				Expect(items).To(HaveLen(1))
+				Expect(items[0].ID).To(Equal(first))
+				items, total, err = ListBillingAccounts(ctx, tx, 1, 1,
+					`this.provider_key == "order-contract"`, order)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(total).To(Equal(int32(2)))
+				Expect(items).To(HaveLen(1))
+				Expect(items[0].ID).To(Equal(second))
+			},
+				Entry("ascending", "external_billing_account_id", "order-z", "order-a"),
+				Entry("descending", "external_billing_account_id desc", "order-a", "order-z"),
+			)
+
+			DescribeTable("rejects the former flat query spelling as an invalid API query", func(filter, order string) {
+				_, _, err := ListBillingAccounts(ctx, tx, 0, 10, filter, order)
+				var invalid *ErrInvalidFlatTableQuery
+				Expect(errors.As(err, &invalid)).To(BeTrue())
+			},
+				Entry("filter", `this.correlation_id == "ext-1"`, ""),
+				Entry("order", "", "correlation_id desc"),
+			)
 		})
 	})
 

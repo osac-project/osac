@@ -571,14 +571,14 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 
 	providerCtx, cancel := context.WithTimeout(operationCtx, s.assignProviderDeadline)
 	resolution, err := billing.ResolveAccountCorrelationID(providerCtx, billing.AccountCorrelationInput{
-		Adapter: adapter, AccountID: account.ID, Ref: ref, LocalValue: account.CorrelationID,
+		Adapter: adapter, AccountID: account.ID, Ref: ref, LocalValue: account.ExternalBillingAccountID,
 		LocalDuplicate: func(dupCtx context.Context, value, excludeAccountID string) (bool, error) {
 			if reserveErr := lease.Reserve(dupCtx, database.BillingOperationKey("correlation", value)); reserveErr != nil {
 				return false, reserveErr
 			}
 			return database.WithNewTx(dupCtx, func(txCtx context.Context) (bool, error) {
 				tx, _ := database.TxFromContext(txCtx)
-				return database.BillingAccountCorrelationConflict(txCtx, tx, value, excludeAccountID)
+				return database.BillingAccountExternalIDConflict(txCtx, tx, value, excludeAccountID)
 			})
 		},
 	})
@@ -604,9 +604,9 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 		state = tbaStatePending
 		if resolution.ProviderWriteSkippedReason != "" {
 			message = resolution.ProviderWriteSkippedReason +
-				": set externalId on the account in the provider to the correlation_id shown by BillingAccounts.List"
+				": set externalId on the account in the provider to the external_billing_account_id shown by BillingAccounts.List"
 		} else {
-			message = "no provider account currently carries the resolved correlation id; set it on the " +
+			message = "no provider account currently carries the resolved external billing account id; set it on the " +
 				"account in the provider to the value shown by BillingAccounts.List"
 		}
 	default:
@@ -637,7 +637,7 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 		if err := lease.Check(txCtx, tx); err != nil {
 			return row, err
 		}
-		if err := database.SetBillingAccountCorrelationID(txCtx, tx, account.ID, resolution.Value); err != nil {
+		if err := database.SetExternalBillingAccountID(txCtx, tx, account.ID, resolution.Value); err != nil {
 			return row, err
 		}
 		if closeID != "" && snapshot.current.BillingAccountID == accountID {
@@ -748,9 +748,9 @@ func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(
 	if errors.As(err, &resErr) {
 		return failedPreconditionWithReason(resErr.Reason, "billing correlation resolution failed: %s", resErr.Reason)
 	}
-	if errors.Is(err, database.ErrBillingAccountCorrelationConflict) {
+	if errors.Is(err, database.ErrBillingAccountExternalIDConflict) {
 		return failedPreconditionWithReason(billing.ReasonAccountCorrelationConflict,
-			"billing account correlation id is already in use by another account")
+			"external billing account id is already in use by another account")
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {

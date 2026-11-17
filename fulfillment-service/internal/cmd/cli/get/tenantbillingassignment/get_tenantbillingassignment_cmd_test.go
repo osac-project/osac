@@ -138,7 +138,7 @@ var _ = Describe("render", func() {
 			ConnectionState: publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING,
 			EffectiveFrom:   timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
 			Message: "BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED: set externalId on the account in the " +
-				"provider to the correlation_id shown by BillingAccounts.List",
+				"provider to the external_billing_account_id shown by BillingAccounts.List",
 		}.Build(),
 	}.Build()
 

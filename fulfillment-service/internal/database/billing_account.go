@@ -32,23 +32,23 @@ type BillingAccountUpsert struct {
 	// preserved rather than cleared.
 	DisplayName  string
 	BaseCurrency string
-	// CorrelationID is "" when the provider has no native correlation value for this account.
-	CorrelationID    string
-	State            string
-	StatusObservedAt time.Time
+	// ExternalBillingAccountID is "" when the provider has no native correlation value for this account.
+	ExternalBillingAccountID string
+	State                    string
+	StatusObservedAt         time.Time
 }
 
 // UpsertBillingAccount inserts a billing_accounts row keyed by (ProviderKey, ProviderAccountReference) or
 // refreshes it. State and StatusObservedAt only move forward: an observation older than the stored one is ignored,
 // so out-of-order walks cannot restore a stale state. DisplayName and BaseCurrency change only when the incoming
-// value is non-empty and not older, so discovery never clears a known value. CorrelationID is written only when
+// value is non-empty and not older, so discovery never clears a known value. ExternalBillingAccountID is written only when
 // the local value is null, the incoming value is non-empty, and no other row holds it; otherwise the stored value
 // stays, and any disagreement is left for a later resolver.
 func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (id string, err error) {
 	err = tx.QueryRow(ctx, `
 		insert into billing_accounts (
 			id, provider_key, provider_account_reference, display_name, base_currency,
-			correlation_id, state, status_observed_at
+			external_billing_account_id, state, status_observed_at
 		)
 		select
 			$1, $2, $3, $4, $5,
@@ -56,7 +56,7 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 			-- check below.
 			case
 				when nullif($6, '') is not null
-				 and not exists (select 1 from billing_accounts b2 where b2.correlation_id = nullif($6, ''))
+				 and not exists (select 1 from billing_accounts b2 where b2.external_billing_account_id = nullif($6, ''))
 				then nullif($6, '')
 				else null
 			end,
@@ -84,18 +84,18 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 			end,
 			status_observed_at = greatest(
 				billing_accounts.status_observed_at, excluded.status_observed_at),
-			correlation_id = case
-				when billing_accounts.correlation_id is null
-				 and excluded.correlation_id is not null
+			external_billing_account_id = case
+				when billing_accounts.external_billing_account_id is null
+				 and excluded.external_billing_account_id is not null
 				 and not exists (
-					select 1 from billing_accounts b2 where b2.correlation_id = excluded.correlation_id
+					select 1 from billing_accounts b2 where b2.external_billing_account_id = excluded.external_billing_account_id
 				 )
-				then excluded.correlation_id
-				else billing_accounts.correlation_id
+				then excluded.external_billing_account_id
+				else billing_accounts.external_billing_account_id
 			end
 		returning id`,
 		in.ID, in.ProviderKey, in.ProviderAccountReference, in.DisplayName, in.BaseCurrency,
-		in.CorrelationID, in.State, in.StatusObservedAt).Scan(&id)
+		in.ExternalBillingAccountID, in.State, in.StatusObservedAt).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("upsert billing account: %w", err)
 	}
@@ -107,8 +107,8 @@ func UpsertBillingAccount(ctx context.Context, tx Tx, in BillingAccountUpsert) (
 // and time that decide eligibility: this observation when it applied, or a concurrent newer one already stored.
 // Assignment reads the selected account from the provider before resolving correlation, so this keeps
 // billing_accounts.state and status_observed_at converged with that read without letting a slower observation overwrite
-// a newer discovery. It never changes display_name, base_currency or correlation_id. Returns pgx.ErrNoRows when the
-// account does not exist.
+// a newer discovery. It never changes display_name, base_currency or external_billing_account_id.
+// Returns pgx.ErrNoRows when the account does not exist.
 func ObserveBillingAccountState(
 	ctx context.Context, tx Tx, accountID, state string, observedAt time.Time,
 ) (effectiveState string, effectiveAt time.Time, err error) {
@@ -163,27 +163,27 @@ func MarkBillingAccountsUnobserved(
 	return nil
 }
 
-// BillingAccountRow is one row read back by ListBillingAccounts. CorrelationID is "" when null.
+// BillingAccountRow is one row read back by ListBillingAccounts. ExternalBillingAccountID is "" when null.
 type BillingAccountRow struct {
-	ID               string
-	ProviderKey      string
-	DisplayName      string
-	BaseCurrency     string
-	CorrelationID    string
-	State            string
-	StatusObservedAt time.Time
+	ID                       string
+	ProviderKey              string
+	DisplayName              string
+	BaseCurrency             string
+	ExternalBillingAccountID string
+	State                    string
+	StatusObservedAt         time.Time
 }
 
 // billingAccountColumns maps API field names in filter/order expressions to SQL columns. Only API-visible
 // fields are selectable: provider_account_reference is private and must never be reachable from a filter or
 // order string.
 var billingAccountColumns = map[string]string{
-	"id":             "id",
-	"provider_key":   "provider_key",
-	"display_name":   "display_name",
-	"base_currency":  "base_currency",
-	"state":          "state",
-	"correlation_id": "correlation_id",
+	"id":                          "id",
+	"provider_key":                "provider_key",
+	"display_name":                "display_name",
+	"base_currency":               "base_currency",
+	"state":                       "state",
+	"external_billing_account_id": "external_billing_account_id",
 }
 
 // filterClausePattern matches one `this.<field> == "<value>"` clause.
@@ -234,11 +234,11 @@ func ListBillingAccounts(ctx context.Context, tx Tx, offset, limit int32, filter
 		return nil, 0, err
 	}
 	return listFlatTable(ctx, tx, "billing_accounts", "billing accounts",
-		"id, provider_key, display_name, base_currency, coalesce(correlation_id, ''), state, status_observed_at",
+		"id, provider_key, display_name, base_currency, coalesce(external_billing_account_id, ''), state, status_observed_at",
 		whereSQL, orderSQL, args, limit, offset, func(row pgx.Row) (BillingAccountRow, error) {
 			var item BillingAccountRow
 			if err := row.Scan(&item.ID, &item.ProviderKey, &item.DisplayName, &item.BaseCurrency,
-				&item.CorrelationID, &item.State, &item.StatusObservedAt); err != nil {
+				&item.ExternalBillingAccountID, &item.State, &item.StatusObservedAt); err != nil {
 				return BillingAccountRow{}, fmt.Errorf("scan billing account: %w", err)
 			}
 			return item, nil

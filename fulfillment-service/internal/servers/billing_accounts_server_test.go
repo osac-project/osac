@@ -60,7 +60,7 @@ var _ = Describe("Billing accounts server", func() {
 			item := response.GetItems()[0]
 			Expect(item.GetProviderKey()).To(Equal("fake"))
 			Expect(item.GetDisplayName()).To(Equal("Acme"))
-			Expect(item.GetCorrelationId()).To(Equal("ext-1"))
+			Expect(item.GetExternalBillingAccountId()).To(Equal("ext-1"))
 			Expect(item.GetState()).To(Equal(publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
 			Expect(item.GetBaseCurrency()).To(BeEmpty())
 			typ := reflect.TypeOf(item).Elem()

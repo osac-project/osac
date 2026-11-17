@@ -268,41 +268,41 @@ func LockBillingAccountForAssignment(ctx context.Context, tx Tx, accountID strin
 	return nil
 }
 
-// BillingAccountCorrelationConflict reports whether value is already stored as another billing_accounts row's
-// correlation_id, excluding excludeAccountID. It backs billing.LocalCorrelationLookup.
-func BillingAccountCorrelationConflict(ctx context.Context, tx Tx, value, excludeAccountID string) (bool, error) {
+// BillingAccountExternalIDConflict reports whether value is already stored as another billing_accounts row's
+// external_billing_account_id, excluding excludeAccountID.
+func BillingAccountExternalIDConflict(ctx context.Context, tx Tx, value, excludeAccountID string) (bool, error) {
 	var conflict bool
 	if err := tx.QueryRow(ctx, `
-		select exists(select 1 from billing_accounts where correlation_id = $1 and id <> $2)`,
+		select exists(select 1 from billing_accounts where external_billing_account_id = $1 and id <> $2)`,
 		value, excludeAccountID).Scan(&conflict); err != nil {
-		return false, fmt.Errorf("check billing account correlation conflict: %w", err)
+		return false, fmt.Errorf("check external billing account id conflict: %w", err)
 	}
 	return conflict, nil
 }
 
-// ErrBillingAccountCorrelationConflict reports that the correlation id hit the unique index on
-// billing_accounts.correlation_id. Callers map it to FAILED_PRECONDITION/ACCOUNT_CORRELATION_CONFLICT.
-var ErrBillingAccountCorrelationConflict = errors.New("billing account correlation id already in use")
+// ErrBillingAccountExternalIDConflict reports a duplicate billing_accounts.external_billing_account_id.
+// Callers map it to FAILED_PRECONDITION/ACCOUNT_CORRELATION_CONFLICT.
+var ErrBillingAccountExternalIDConflict = errors.New("external billing account id already in use")
 
-// SetBillingAccountCorrelationID commits the resolved correlation value to billing_accounts.correlation_id.
-func SetBillingAccountCorrelationID(ctx context.Context, tx Tx, accountID, value string) error {
-	if _, err := tx.Exec(ctx, `update billing_accounts set correlation_id = $1 where id = $2`,
+// SetExternalBillingAccountID commits the resolved value to billing_accounts.external_billing_account_id.
+func SetExternalBillingAccountID(ctx context.Context, tx Tx, accountID, value string) error {
+	if _, err := tx.Exec(ctx, `update billing_accounts set external_billing_account_id = $1 where id = $2`,
 		value, accountID); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.ConstraintName == "billing_accounts_unique_correlation_id" {
-			return ErrBillingAccountCorrelationConflict
+			return ErrBillingAccountExternalIDConflict
 		}
-		return fmt.Errorf("set billing account correlation id: %w", err)
+		return fmt.Errorf("set external billing account id: %w", err)
 	}
 	return nil
 }
 
 // BillingAccountForAssignment holds the internal fields needed to resolve and validate a tenant assignment: the
-// provider-native reference, correlation id, and state.
+// provider-native reference, external billing account id, and state.
 type BillingAccountForAssignment struct {
 	ID                       string
 	ProviderAccountReference string
-	CorrelationID            string
+	ExternalBillingAccountID string
 	State                    string
 }
 
@@ -311,9 +311,9 @@ type BillingAccountForAssignment struct {
 func GetBillingAccountForAssignment(ctx context.Context, tx Tx, accountID string) (BillingAccountForAssignment, error) {
 	var row BillingAccountForAssignment
 	err := tx.QueryRow(ctx, `
-		select id, provider_account_reference, coalesce(correlation_id, ''), state
+		select id, provider_account_reference, coalesce(external_billing_account_id, ''), state
 		from billing_accounts where id = $1`, accountID).
-		Scan(&row.ID, &row.ProviderAccountReference, &row.CorrelationID, &row.State)
+		Scan(&row.ID, &row.ProviderAccountReference, &row.ExternalBillingAccountID, &row.State)
 	if err != nil {
 		return BillingAccountForAssignment{}, fmt.Errorf("get billing account for assignment: %w", err)
 	}

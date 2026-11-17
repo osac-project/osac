@@ -176,7 +176,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		err := tm.Run(ctx, func(tx database.Tx) error {
 			_, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
 				ID: id, ProviderKey: billingfake.Key, ProviderAccountReference: id,
-				CorrelationID: correlationID, State: state, StatusObservedAt: time.Now().UTC(),
+				ExternalBillingAccountID: correlationID, State: state, StatusObservedAt: time.Now().UTC(),
 			})
 			return err
 		})
@@ -699,7 +699,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 					"the observation time must never move backwards")
 				Expect(fake.Count("SetCorrelationValue")).To(BeZero())
 				var correlation string
-				Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+				Expect(testPool.QueryRow(ctx, `select coalesce(external_billing_account_id, '') from billing_accounts where id = $1`, account).
 					Scan(&correlation)).To(Succeed())
 				var count int
 				Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
@@ -810,7 +810,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			accountRow, getErr := database.GetBillingAccountForAssignment(ctx, tx, account)
 			Expect(getErr).ToNot(HaveOccurred())
 			fake2 := billingfake.New(billingfake.Scenario{CorrelationWrite: false, Accounts: []billingfake.AccountSpec{
-				{ID: account, ExternalID: accountRow.CorrelationID, State: billing.AccountActive},
+				{ID: account, ExternalID: accountRow.ExternalBillingAccountID, State: billing.AccountActive},
 			}})
 			server2 := build(fake2.Provider())
 
@@ -1079,7 +1079,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 			Expect(count).To(BeZero())
 			var correlation string
-			Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+			Expect(testPool.QueryRow(ctx, `select coalesce(external_billing_account_id, '') from billing_accounts where id = $1`, account).
 				Scan(&correlation)).To(Succeed())
 			Expect(correlation).To(BeEmpty(), "rejected finalization must not persist provider correlation adoption")
 			Expect(testPool.QueryRow(ctx, `select count(*) from billing_operation_leases`).Scan(&count)).To(Succeed())
@@ -1109,7 +1109,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(testPool.QueryRow(ctx, `select id from tenant_billing_assignments where effective_to is null`).Scan(&activeID)).To(Succeed())
 			Expect(activeID).To(Equal(created.GetObject().GetId()))
 			var correlation string
-			Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, second).Scan(&correlation)).To(Succeed())
+			Expect(testPool.QueryRow(ctx, `select coalesce(external_billing_account_id, '') from billing_accounts where id = $1`, second).Scan(&correlation)).To(Succeed())
 			Expect(correlation).To(BeEmpty())
 			providerValue, present, err := fake.CorrelationValue(ctx, billing.NewAccountRef(second))
 			Expect(err).ToNot(HaveOccurred())
@@ -1333,7 +1333,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Entry("tenant deletion", `update tenants set deletion_timestamp = now() where name = 'test-tenant'`, codes.InvalidArgument),
 			Entry("account inactive", `update billing_accounts set state = 'INACTIVE'`, codes.FailedPrecondition),
 			Entry("provider reference changed", `update billing_accounts set provider_account_reference = 'changed'`, codes.Aborted),
-			Entry("correlation changed", `update billing_accounts set correlation_id = 'changed'`, codes.Aborted),
+			Entry("correlation changed", `update billing_accounts set external_billing_account_id = 'changed'`, codes.Aborted),
 		)
 	})
 
@@ -1345,7 +1345,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			created, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
 			Expect(err).ToNot(HaveOccurred())
 			var correlation string
-			Expect(testPool.QueryRow(ctx, `select correlation_id from billing_accounts where id = $1`, account).Scan(&correlation)).To(Succeed())
+			Expect(testPool.QueryRow(ctx, `select external_billing_account_id from billing_accounts where id = $1`, account).Scan(&correlation)).To(Succeed())
 			accounts[0].ExternalID = correlation
 			server = build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
 			_, err = server.Signal(adminCtx(), privatev1.TenantBillingAssignmentsSignalRequest_builder{Id: created.GetObject().GetId()}.Build())
@@ -1504,7 +1504,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 				Expect(count).To(BeZero())
 				var correlation string
-				Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+				Expect(testPool.QueryRow(ctx, `select coalesce(external_billing_account_id, '') from billing_accounts where id = $1`, account).
 					Scan(&correlation)).To(Succeed())
 				Expect(correlation).To(BeEmpty())
 				Expect(testPool.QueryRow(ctx, `select count(*) from billing_operation_leases`).Scan(&count)).To(Succeed())
@@ -1554,7 +1554,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 			Expect(count).To(Equal(1))
 			var correlation string
-			Expect(testPool.QueryRow(ctx, `select coalesce(correlation_id, '') from billing_accounts where id = $1`, account).
+			Expect(testPool.QueryRow(ctx, `select coalesce(external_billing_account_id, '') from billing_accounts where id = $1`, account).
 				Scan(&correlation)).To(Succeed())
 			Expect(correlation).To(BeEmpty())
 			Expect(testPool.QueryRow(ctx, `select count(*) from billing_operation_leases`).Scan(&count)).To(Succeed())

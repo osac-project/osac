@@ -58,7 +58,7 @@ message BillingAccount {
   // OSAC's provider-agnostic attribution id carried on usage events. When the provider exposes a native
   // correlation field (`externalId` in M360), assignment validation matches this value against it. Not the tenant
   // id or the provider's account id. Empty until discovery or assignment establishes one.
-  string correlation_id = 7;
+  string external_billing_account_id = 7;
 
   // Provider-native account id used for backend calls. Never returned to ordinary clients.
   string provider_account_reference = 8 [(cleanapi.field).private = true];

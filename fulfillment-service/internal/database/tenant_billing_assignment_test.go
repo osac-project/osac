@@ -61,7 +61,7 @@ var _ = Describe("Tenant billing assignments", func() {
 		id := uuid.New()
 		_, err := UpsertBillingAccount(ctx, tx, BillingAccountUpsert{
 			ID: id, ProviderKey: "m360", ProviderAccountReference: id,
-			CorrelationID: correlationID, State: "ACTIVE",
+			ExternalBillingAccountID: correlationID, State: "ACTIVE",
 		})
 		Expect(err).ToNot(HaveOccurred())
 		return id
@@ -104,7 +104,7 @@ var _ = Describe("Tenant billing assignments", func() {
 		runCommitted(func(tx Tx) {
 			_, err := UpsertBillingAccount(ctx, tx, BillingAccountUpsert{
 				ID: id, ProviderKey: "m360", ProviderAccountReference: id,
-				CorrelationID: correlationID, State: "ACTIVE",
+				ExternalBillingAccountID: correlationID, State: "ACTIVE",
 			})
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -661,10 +661,10 @@ var _ = Describe("Tenant billing assignments", func() {
 		})
 	})
 
-	Describe("BillingAccountCorrelationConflict and SetBillingAccountCorrelationID", func() {
+	Describe("BillingAccountExternalIDConflict and SetExternalBillingAccountID", func() {
 		It("reports no conflict when the value is unused", func() {
 			account := createAccount("")
-			conflict, err := BillingAccountCorrelationConflict(ctx, tx, "corr-1", account)
+			conflict, err := BillingAccountExternalIDConflict(ctx, tx, "corr-1", account)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(conflict).To(BeFalse())
 		})
@@ -672,7 +672,7 @@ var _ = Describe("Tenant billing assignments", func() {
 		It("reports a conflict when another account already holds the value", func() {
 			other := createAccount("corr-1")
 			mine := createAccount("")
-			conflict, err := BillingAccountCorrelationConflict(ctx, tx, "corr-1", mine)
+			conflict, err := BillingAccountExternalIDConflict(ctx, tx, "corr-1", mine)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(conflict).To(BeTrue())
 			_ = other
@@ -680,7 +680,7 @@ var _ = Describe("Tenant billing assignments", func() {
 
 		It("excludes the given account id from the conflict check", func() {
 			mine := createAccount("corr-1")
-			conflict, err := BillingAccountCorrelationConflict(ctx, tx, "corr-1", mine)
+			conflict, err := BillingAccountExternalIDConflict(ctx, tx, "corr-1", mine)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(conflict).To(BeFalse())
 		})
@@ -692,11 +692,11 @@ var _ = Describe("Tenant billing assignments", func() {
 			spErr := tx.Savepoint(ctx, func(spCtx context.Context) error {
 				spTx, err := TxFromContext(spCtx)
 				Expect(err).ToNot(HaveOccurred())
-				setErr = SetBillingAccountCorrelationID(spCtx, spTx, mine, "corr-dup")
+				setErr = SetExternalBillingAccountID(spCtx, spTx, mine, "corr-dup")
 				return setErr
 			})
 			Expect(spErr).To(HaveOccurred())
-			Expect(errors.Is(setErr, ErrBillingAccountCorrelationConflict)).To(BeTrue())
+			Expect(errors.Is(setErr, ErrBillingAccountExternalIDConflict)).To(BeTrue())
 		})
 	})
 
@@ -706,7 +706,7 @@ var _ = Describe("Tenant billing assignments", func() {
 			row, err := GetBillingAccountForAssignment(ctx, tx, account)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(row.ProviderAccountReference).To(Equal(account))
-			Expect(row.CorrelationID).To(Equal("corr-1"))
+			Expect(row.ExternalBillingAccountID).To(Equal("corr-1"))
 			Expect(row.State).To(Equal("ACTIVE"))
 		})
 

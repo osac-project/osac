@@ -47,8 +47,8 @@ const (
 // with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Administrator method authorization is
 // required, and assignment access is further limited to the caller's trusted tenant scope. Current platform
 // administrators have universal scope. There is no tenant self-service read path.
-// Create and Update resolve billing_account.correlation_id and validate a unique provider-side match before
-// persisting. A provider write is not proof of a match: an exact read-back and the uniqueness check must succeed.
+// Create and Update resolve billing_account.external_billing_account_id and validate a unique provider-side match
+// before persisting. A provider write is not proof of a match: an exact read-back and uniqueness check must succeed.
 type TenantBillingAssignmentsClient interface {
 	// Lists current and historical assignments.
 	List(ctx context.Context, in *TenantBillingAssignmentsListRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsListResponse, error)
@@ -138,8 +138,8 @@ func (c *tenantBillingAssignmentsClient) Signal(ctx context.Context, in *TenantB
 // with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Administrator method authorization is
 // required, and assignment access is further limited to the caller's trusted tenant scope. Current platform
 // administrators have universal scope. There is no tenant self-service read path.
-// Create and Update resolve billing_account.correlation_id and validate a unique provider-side match before
-// persisting. A provider write is not proof of a match: an exact read-back and the uniqueness check must succeed.
+// Create and Update resolve billing_account.external_billing_account_id and validate a unique provider-side match
+// before persisting. A provider write is not proof of a match: an exact read-back and uniqueness check must succeed.
 type TenantBillingAssignmentsServer interface {
 	// Lists current and historical assignments.
 	List(context.Context, *TenantBillingAssignmentsListRequest) (*TenantBillingAssignmentsListResponse, error)

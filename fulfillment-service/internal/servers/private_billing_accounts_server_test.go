@@ -214,7 +214,7 @@ var _ = Describe("Private billing accounts server", func() {
 			Expect(response.GetTotal()).To(BeZero())
 		})
 
-	It("maps provider_key, display_name, state, correlation_id and status_observed_at", func() {
+	It("maps provider_key, display_name, state, external_billing_account_id and status_observed_at", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
 			{ID: "acct-1", Name: "Acme", ExternalID: "ext-1", State: billing.AccountActive},
 		}})
@@ -225,7 +225,7 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(item.GetProviderKey()).To(Equal("fake"))
 		Expect(item.GetDisplayName()).To(Equal("Acme"))
 		Expect(item.GetState()).To(Equal(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
-		Expect(item.GetCorrelationId()).To(Equal("ext-1"))
+		Expect(item.GetExternalBillingAccountId()).To(Equal("ext-1"))
 		Expect(item.HasStatusObservedAt()).To(BeTrue())
 		Expect(item.GetId()).ToNot(BeEmpty())
 		Expect(item.GetId()).ToNot(Equal("acct-1"), "id must be an OSAC-generated id, not the provider reference")

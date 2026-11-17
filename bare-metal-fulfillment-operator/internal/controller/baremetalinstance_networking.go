@@ -47,6 +47,7 @@ const (
 	tenantAnnotation = "osac.openshift.io/tenant"
 
 	networkAttachmentCreateIntentMessage       = "Creating the network attachment"
+	networkAttachmentCreateUncertainMessage    = "Network attachment create may have succeeded"
 	networkAttachmentMACRecordedMessage        = "Recording the selected interface MAC before creating the network attachment"
 	networkAttachmentCreateRejectedMessage     = "Network attachment create was rejected"
 	networkAttachmentAwaitingVisibilityMessage = "Waiting for the network attachment to become visible before cleanup"
@@ -146,6 +147,8 @@ func networkAttachmentMayExist(bmi *v1alpha1.BareMetalInstance) bool {
 		}
 		switch ready.Reason {
 		case v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent,
+			v1alpha1.HostConditionReasonNetworkAttachmentCreateUncertain,
+			v1alpha1.HostConditionReasonNetworkAttachmentCreateRejectedUncertain,
 			v1alpha1.HostConditionReasonNetworkAttachmentAwaitingVisibility,
 			v1alpha1.HostConditionReasonNetworkAttachmentFailed,
 			v1alpha1.HostConditionReasonProgressing:
@@ -160,10 +163,11 @@ func networkAttachmentMayExist(bmi *v1alpha1.BareMetalInstance) bool {
 		(ipDiscovery != nil && ipDiscovery.Status == metav1.ConditionTrue && ipDiscovery.Reason == "Succeeded")
 }
 
-func networkAttachmentCreateIntentPending(bmi *v1alpha1.BareMetalInstance) bool {
+func networkAttachmentCreatePending(bmi *v1alpha1.BareMetalInstance) bool {
 	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 	return ready != nil && ready.Status == metav1.ConditionFalse &&
-		ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent
+		(ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent ||
+			ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateUncertain)
 }
 
 func setNetworkingProvisioningDisabled(bmi *v1alpha1.BareMetalInstance) {
@@ -356,7 +360,13 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-	if ready == nil || ready.Reason != v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent {
+	if ready != nil && (ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected ||
+		ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateRejectedUncertain) &&
+		ready.ObservedGeneration == bmi.Generation {
+		return ctrl.Result{}, nil
+	}
+	wasUncertain := ready != nil && ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateUncertain
+	if ready == nil || (ready.Reason != v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent && !wasUncertain) {
 		// Persist the intent in a separate reconcile before sending Create. If
 		// the API request times out, deletion can distinguish that uncertainty
 		// from the earlier MAC-only state and retain host ownership.
@@ -389,18 +399,30 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 		if apierrors.IsBadRequest(err) || apierrors.IsInvalid(err) ||
 			apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 			logf.FromContext(ctx).Error(err, "NetworkAttachment create was rejected", "networkAttachment", key.Name)
-			setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected, networkAttachmentCreateRejectedMessage)
+			reason := v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected
+			if wasUncertain {
+				reason = v1alpha1.HostConditionReasonNetworkAttachmentCreateRejectedUncertain
+			}
+			setNetworkAttachmentCreateRejected(bmi, reason)
 			r.recordBMIEvent(bmi, corev1.EventTypeWarning,
 				v1alpha1.HostConditionReasonNetworkAttachmentFailed, networkAttachmentCreateRejectedMessage)
 			return ctrl.Result{}, nil
 		}
+		setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonNetworkAttachmentCreateUncertain, networkAttachmentCreateUncertainMessage)
 		return ctrl.Result{}, fmt.Errorf("create NetworkAttachment %s: %w", key.Name, err)
 	}
 	logf.FromContext(ctx).Info("Created NetworkAttachment", "networkAttachment", key.Name)
 	setNetworkAttachmentsReady(bmi, metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
 		"Waiting for the network attachment")
 	return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
+}
+
+func setNetworkAttachmentCreateRejected(bmi *v1alpha1.BareMetalInstance, reason string) {
+	setNetworkAttachmentsReady(bmi, metav1.ConditionFalse, reason, networkAttachmentCreateRejectedMessage)
+	if condition := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady); condition != nil {
+		condition.ObservedGeneration = bmi.Generation
+	}
 }
 
 // failSelectedPortMAC leaves the assigned host in place and records a terminal
@@ -425,6 +447,26 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 	ctx context.Context,
 	bareMetalInstance *v1alpha1.BareMetalInstance,
 ) (ctrl.Result, bool, error) {
+	var observedAttachment *opv1alpha1.NetworkAttachment
+	if controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer) &&
+		r.NetworkingEnabled && r.networkingRequested(bareMetalInstance) {
+		_, attachment, err := r.getNetworkAttachmentForDeletion(ctx, bareMetalInstance)
+		if err != nil {
+			return ctrl.Result{}, false, err
+		}
+		observedAttachment = attachment
+	}
+	return r.reconcileNetworkingDeletionObserved(ctx, bareMetalInstance, observedAttachment)
+}
+
+// reconcileNetworkingDeletionObserved uses the attachment observed by the
+// caller that checked whether offboard shutdown was required. It never looks
+// up or deletes a newly appeared attachment in a pass that did not observe it.
+func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletionObserved(
+	ctx context.Context,
+	bareMetalInstance *v1alpha1.BareMetalInstance,
+	observedAttachment *opv1alpha1.NetworkAttachment,
+) (ctrl.Result, bool, error) {
 	log := logf.FromContext(ctx)
 
 	if !controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer) {
@@ -432,11 +474,9 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 	}
 
 	if attachment := primaryNetworkAttachment(bareMetalInstance); attachment != nil && r.NetworkingEnabled {
-		key, na, err := r.getNetworkAttachmentForDeletion(ctx, bareMetalInstance)
-		if err != nil {
-			return ctrl.Result{}, false, err
-		}
-		if na != nil {
+		if observedAttachment != nil {
+			key := client.ObjectKeyFromObject(observedAttachment)
+			na := observedAttachment
 			if na.DeletionTimestamp.IsZero() {
 				log.Info("Deleting NetworkAttachment", "networkAttachment", key.Name)
 				if err := r.Delete(ctx, na); err != nil && !apierrors.IsNotFound(err) {
@@ -461,7 +501,14 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 				v1alpha1.HostConditionReasonNetworkDetaching, networkAttachmentCleanupMessage)
 			return ctrl.Result{RequeueAfter: networkAttachmentDeleteRetryInterval}, false, nil
 		}
-		if networkAttachmentCreateIntentPending(bareMetalInstance) {
+		if ready := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady); ready != nil &&
+			ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateRejectedUncertain {
+			// This pass observed that the attachment is absent after a rejected
+			// retry. The earlier uncertain request has therefore been resolved.
+			setNetworkAttachmentCreateRejected(bareMetalInstance,
+				v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected)
+		}
+		if networkAttachmentCreatePending(bareMetalInstance) {
 			key, ok := networkAttachmentKey(bareMetalInstance, attachment)
 			if !ok {
 				return ctrl.Result{}, false, fmt.Errorf("cannot resolve NetworkAttachment key for BMI %s", bareMetalInstance.Name)

@@ -748,7 +748,8 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 func isFinalNetworkAttachmentFailure(reason string) bool {
 	return reason == v1alpha1.HostConditionReasonTemplateFailed ||
 		reason == v1alpha1.HostConditionReasonNetworkAttachmentFailed ||
-		reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected
+		reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected ||
+		reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateRejectedUncertain
 }
 
 func (r *BareMetalInstanceReconciler) recordBMIEvent(
@@ -1342,12 +1343,14 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	// Power off only when an attachment exists or an earlier Create may have
 	// reached the API. The networking finalizer is retained while an uncertain
 	// Create is resolved, so inventory ownership cannot be released early.
+	var observedAttachment *opv1alpha1.NetworkAttachment
 	if r.NetworkingEnabled && controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer) &&
 		r.networkingRequested(bareMetalInstance) {
 		_, attachment, lookupErr := r.getNetworkAttachmentForDeletion(ctx, bareMetalInstance)
 		if lookupErr != nil {
 			return ctrl.Result{}, lookupErr
 		}
+		observedAttachment = attachment
 		if attachment != nil && bareMetalInstance.Spec.ExternalHostID != "" {
 			result, err = r.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
 			if err != nil {
@@ -1361,7 +1364,7 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	}
 
 	// Network attachment cleanup (port tenant → provisioning); host is off at this point
-	result, done, err = r.reconcileNetworkingDeletion(ctx, bareMetalInstance)
+	result, done, err = r.reconcileNetworkingDeletionObserved(ctx, bareMetalInstance, observedAttachment)
 	if err != nil {
 		return result, err
 	}

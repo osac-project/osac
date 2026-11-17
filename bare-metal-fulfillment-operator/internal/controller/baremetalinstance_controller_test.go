@@ -2933,8 +2933,12 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 		Expect(k8sClient.Create(ctx, bareMetalInstance)).To(Succeed())
 		attachment := newTestNetworkAttachment("default", "offboard-test-bmi-id", "eth0")
 		Expect(k8sClient.Create(ctx, attachment)).To(Succeed())
-		defer func() { _ = k8sClient.Delete(ctx, bareMetalInstance) }()
-		defer func() { _ = k8sClient.Delete(ctx, attachment) }()
+		defer func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, bareMetalInstance))).To(Succeed())
+		}()
+		defer func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, attachment))).To(Succeed())
+		}()
 
 		now := metav1.Now()
 		bareMetalInstance.DeletionTimestamp = &now
@@ -2961,7 +2965,9 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 		bareMetalInstance.Name = "offboard-no-attachment-test-bmi"
 		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)
 		Expect(k8sClient.Create(ctx, bareMetalInstance)).To(Succeed())
-		defer func() { _ = k8sClient.Delete(ctx, bareMetalInstance) }()
+		defer func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, bareMetalInstance))).To(Succeed())
+		}()
 
 		result, err := reconciler.handleDeletion(ctx, bareMetalInstance)
 

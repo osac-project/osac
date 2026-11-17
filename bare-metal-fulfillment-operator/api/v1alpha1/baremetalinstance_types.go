@@ -238,12 +238,18 @@ const (
 	HostConditionReasonNetworkAttachmentMACRecorded = "NetworkAttachmentMACRecorded"
 
 	// HostConditionReasonNetworkAttachmentCreateIntent indicates a create request
-	// may have been sent and deletion must wait for the attachment to appear.
+	// is about to be sent and deletion must wait for the attachment to appear.
 	HostConditionReasonNetworkAttachmentCreateIntent = "NetworkAttachmentCreateIntent"
+	// HostConditionReasonNetworkAttachmentCreateUncertain indicates a create
+	// request returned an ambiguous error and may have succeeded.
+	HostConditionReasonNetworkAttachmentCreateUncertain = "NetworkAttachmentCreateUncertain"
 
 	// HostConditionReasonNetworkAttachmentCreateRejected indicates the API
-	// definitively rejected a create request, so no attachment can exist.
+	// definitively rejected a create request with no earlier uncertain request.
 	HostConditionReasonNetworkAttachmentCreateRejected = "NetworkAttachmentCreateRejected"
+	// HostConditionReasonNetworkAttachmentCreateRejectedUncertain indicates a
+	// create retry was rejected after an earlier request may have succeeded.
+	HostConditionReasonNetworkAttachmentCreateRejectedUncertain = "NetworkAttachmentCreateRejectedUncertain"
 
 	// HostConditionReasonNetworkAttachmentAwaitingVisibility indicates a possibly
 	// created attachment has not appeared in the API yet.

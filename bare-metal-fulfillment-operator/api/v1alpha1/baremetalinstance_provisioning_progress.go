@@ -282,6 +282,7 @@ func isPendingNetworkConditionReason(condition BareMetalInstanceConditionType, r
 	case HostConditionNetworkAttachmentsReady:
 		return reason == HostConditionReasonNetworkAttachmentMACRecorded ||
 			reason == HostConditionReasonNetworkAttachmentCreateIntent ||
+			reason == HostConditionReasonNetworkAttachmentCreateUncertain ||
 			reason == HostConditionReasonNetworkAttachmentAwaitingVisibility ||
 			reason == HostConditionReasonNetworkDetaching
 	case HostConditionNetworkHandoffComplete:

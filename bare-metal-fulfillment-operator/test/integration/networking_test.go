@@ -145,7 +145,7 @@ var _ = Describe("BareMetalInstance networking", func() {
 			"-n", namespace, "--type=merge", "-p", finalizers)
 		patchOutput, patchErr := patchFinalizers.CombinedOutput()
 		Expect(patchErr).NotTo(HaveOccurred(), string(patchOutput))
-		DeferCleanup(func() { releaseNetworkAttachmentFinalizer(attachmentName) })
+		DeferCleanup(func() { Expect(releaseNetworkAttachmentFinalizer(attachmentName)).To(Succeed()) })
 
 		uid, err := kubectlJSONPath("baremetalinstance", id, namespace, "{.metadata.uid}")
 		Expect(err).NotTo(HaveOccurred())
@@ -177,7 +177,7 @@ var _ = Describe("BareMetalInstance networking", func() {
 		}, 15*time.Second, time.Second).Should(Equal(uid))
 
 		By("releasing network cleanup and waiting for BMF to return the host")
-		releaseNetworkAttachmentFinalizer(attachmentName)
+		Expect(releaseNetworkAttachmentFinalizer(attachmentName)).To(Succeed())
 		Eventually(func() (string, error) {
 			return kubectlJSONPath("baremetalhost", hostName, namespace, "{.spec.consumerRef.name}")
 		}, 2*time.Minute, 2*time.Second).Should(BeEmpty())
@@ -189,11 +189,18 @@ var _ = Describe("BareMetalInstance networking", func() {
 	})
 })
 
-func releaseNetworkAttachmentFinalizer(name string) {
+func releaseNetworkAttachmentFinalizer(name string) error {
 	patch := `{"metadata":{"finalizers":[]}}`
 	cmd := exec.Command("kubectl", "patch", "networkattachment", name,
 		"-n", namespace, "--type=merge", "-p", patch)
-	_, _ = utils.Run(cmd)
+	_, err := utils.Run(cmd)
+	if err != nil && strings.Contains(err.Error(), "(NotFound)") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("release finalizer from NetworkAttachment %s: %w", name, err)
+	}
+	return nil
 }
 
 func createNetworkBareMetalInstanceYAML(name, ns, hostType string) *strings.Reader {

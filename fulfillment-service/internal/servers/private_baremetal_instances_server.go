@@ -311,7 +311,9 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context, request *p
 		return
 	}
 	if !isDryRun(ctx) && response.GetObject().GetSpec().GetAutoExternalIpAttachment() {
-		err = s.autoProvisionExternalIP(ctx, response.GetObject())
+		created := response.GetObject()
+		err = createAutomaticExternalIPs(ctx, s.logger, s.settings, s.externalIPPoolDao, s.externalIPDao,
+			created.GetMetadata(), created.GetId(), "bare_metal_instance")
 		if err != nil {
 			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
 				tx.ReportError(&err)
@@ -1117,62 +1119,6 @@ func validateBareMetalAttachmentsForInstanceType(
 				"%snetwork_attachments[%d]: interface '%s' is not a valid DNS label: %s",
 				prefix, i, iface, strings.Join(errs, ", "))
 		}
-	}
-
-	return nil
-}
-
-func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
-	ctx context.Context, bmi *privatev1.BareMetalInstance,
-) error {
-	if !s.settings.ProvisioningEnabled {
-		return nil
-	}
-
-	pool, err := SelectExternalIPPool(ctx, s.logger, s.externalIPPoolDao, 1)
-	if err != nil {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
-	}
-
-	tenant := bmi.GetMetadata().GetTenant()
-	bmiID := bmi.GetId()
-	shortID := bmiID
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
-
-	eipLabels := map[string]string{
-		autoCreatedLabel:     "true",
-		autoCreatedForLabel:  bmiID,
-		autoCreatedKindLabel: "bare_metal_instance",
-	}
-	eip := privatev1.ExternalIP_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:   fmt.Sprintf("auto-eip-%s", shortID),
-			Tenant: tenant,
-			Labels: eipLabels,
-			Annotations: map[string]string{
-				tenantAnnotation:         tenant,
-				ownerReferenceAnnotation: bmiID,
-			},
-			Creator: systemCreator,
-		}.Build(),
-		Spec: privatev1.ExternalIPSpec_builder{
-			Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
-		}.Build(),
-		Status: privatev1.ExternalIPStatus_builder{
-			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
-		}.Build(),
-	}.Build()
-
-	_, err = s.externalIPDao.Create().SetObject(eip).Do(ctx)
-	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIP: %w", err)
-	}
-
-	err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, pool.GetId(), 1)
-	if err != nil {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}
 
 	return nil

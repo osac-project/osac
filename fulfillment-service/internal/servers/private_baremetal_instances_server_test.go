@@ -2122,7 +2122,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
 		})
 
-		It("skips automatic ExternalIPs and pool reservations when provider networking is disabled", func() {
+		It("skips automatic ExternalIPs when provider networking is disabled", func() {
 			server.settings.ProvisioningEnabled = false
 
 			pools, err := server.externalIPPoolDao.List().Do(ctx)
@@ -2175,6 +2175,14 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
 			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+
+			// With no pool at all, disabled networking still permits BMI creation.
+			_, err = server.externalIPPoolDao.Delete().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			createWithoutExternalIP(fmt.Sprintf("disabled-auto-eip-%s", uuid.NewString()[:8]))
+			pools, err = server.externalIPPoolDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pools.GetItems()).To(BeEmpty())
 		})
 
 		It("auto_external_ip_attachment leaves attachment creation to the ready BareMetalInstance reconciler", func() {
@@ -2203,7 +2211,12 @@ var _ = Describe("Private bare metal instances server", func() {
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
+			Expect(eipList.GetItems()[0].GetMetadata().GetName()).To(Equal(automaticExternalIPPrefix + bmiID))
+			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedForLabel]).To(Equal(bmiID))
 			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("bare_metal_instance"))
+			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
+			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()[tenantAnnotation]).To(Equal(testTenant))
 
 			attDao, err := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
 				SetLogger(logger).SetTenancyLogic(tenancy).Build()

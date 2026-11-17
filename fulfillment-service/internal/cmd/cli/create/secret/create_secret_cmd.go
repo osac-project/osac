@@ -166,7 +166,7 @@ func parseSecretType(value string) (publicv1.SecretType, error) {
 }
 
 // parseFromFileSpec parses a single --from-file flag value into a key and path.
-// Formats: "key=path", "path" (key derived from filename), "-" (stdin, key="stdin").
+// Formats: "key=path", "path" (key derived from filename), "key=-" (stdin).
 func parseFromFileSpec(value string) (key, path string, err error) {
 	if value == "" {
 		return "", "", fmt.Errorf("--from-file value must not be empty")
@@ -301,7 +301,19 @@ To create a Windows user-data Secret:
   --from-file=userdata=/path/to/Unattend.xml
 {{ bt 3 }}
 
-The file is read as raw bytes; the server validates Windows user-data content.
+Use the explicit {{ bt }}userdata={{ bt }} key and supply the XML file directly,
+without base64 encoding. The server requires a nonempty UTF-8 XML 1.0 document
+of at most 65,536 bytes (64 KiB), including any BOM, declaration, and whitespace.
+An XML declaration is optional; a declared encoding must be UTF-8 (case-insensitive).
+DTDs and other declarations are prohibited, except comments and CDATA sections.
+
+Validation checks XML syntax, without enforcing namespace rules, Microsoft schemas,
+or Windows settings. Acceptance does not guarantee a usable Windows answer file.
+The original bytes, including a UTF-8 BOM, are preserved. Data and type cannot be
+changed after creation; create a new Secret to use different content.
+
+Validation errors omit submitted XML. Create output omits Secret data;
+{{ bt }}get secret NAME -o yaml{{ bt }} or {{ bt }}-o json{{ bt }} returns data as base64 strings.
 `
 
 const nameFlagHelp = `
@@ -321,5 +333,7 @@ _KEY=VALUE_ - Label to set on the secret. Can be specified multiple times.
 const typeFlagHelp = `
 _TYPE_ - Secret type. One of {{ bt }}opaque{{ bt }}, {{ bt }}pull-secret{{ bt }},
 {{ bt }}kubeconfig{{ bt }}, {{ bt }}user-data{{ bt }}, {{ bt }}windows-user-data{{ bt }},
-{{ bt }}value{{ bt }}, or {{ bt }}ssh-public-key{{ bt }}.
+{{ bt }}value{{ bt }}, or {{ bt }}ssh-public-key{{ bt }}. Use {{ bt }}user-data{{ bt }}
+for Linux/cloud-init or shell-style data, or {{ bt }}windows-user-data{{ bt }} for
+Windows answer-file XML.
 `

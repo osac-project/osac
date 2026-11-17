@@ -47,7 +47,9 @@ const (
 	SecretType_SECRET_TYPE_PULL_SECRET SecretType = 1
 	// A Kubernetes client configuration. Requires a `kubeconfig` data key.
 	SecretType_SECRET_TYPE_KUBECONFIG SecretType = 2
-	// Cloud-init or other instance user data. Requires a `userdata` data key.
+	// Instance user data, typically Linux cloud-init or a shell script. Requires
+	// a nonempty `userdata` data key; its format is not checked at Secret
+	// creation. Data is immutable after creation.
 	SecretType_SECRET_TYPE_USER_DATA SecretType = 3
 	// An opaque secret with no required data keys.
 	SecretType_SECRET_TYPE_OPAQUE SecretType = 4
@@ -58,10 +60,17 @@ const (
 	// A managed service-account client credential. Tenant administrators may retrieve its data; platform
 	// administrators and controllers may retrieve or mutate its data.
 	SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL SecretType = 7
-	// Windows first-boot user data. Requires a nonempty UTF-8 XML 1.0 document
-	// in the `userdata` data key, limited to 65,536 bytes. The data and type
-	// are immutable, the Hub backend is unsupported, and a UTF-8 BOM is
-	// preserved.
+	// Windows first-boot answer-file XML. Requires a nonempty `userdata` data
+	// key containing one well-formed XML 1.0 document encoded as UTF-8, at most
+	// 65,536 bytes including any BOM, declaration, and whitespace. The limit
+	// applies to the raw value, before base64 encoding for JSON.
+	// An XML declaration is optional; a declared encoding must be UTF-8
+	// (case-insensitive). A UTF-8 BOM is accepted; all bytes are preserved.
+	// DTDs and other `<!...>` declarations, except comments and CDATA sections,
+	// are prohibited. External resources are never resolved.
+	// Validation does not enforce namespace rules, a particular root name,
+	// Microsoft schemas, or Windows settings. Acceptance does not guarantee a
+	// usable Windows answer file. Data and type are immutable after creation.
 	SecretType_SECRET_TYPE_WINDOWS_USER_DATA SecretType = 8
 )
 
@@ -127,9 +136,10 @@ type Secret struct {
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// Metadata of the secret.
 	Metadata *Metadata `protobuf:"bytes,2,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	// Opaque key-value data. Each key identifies a named entry (for example, `crt` or `key`) and the
-	// corresponding value is the raw secret material. Populated in Get responses; omitted from List and
-	// mutating responses.
+	// Opaque key-value data. Each key identifies a named entry, and the value is
+	// the raw secret material. Populated in Get responses; omitted from List and
+	// mutating responses. Data is immutable after creation for USER_DATA and
+	// WINDOWS_USER_DATA Secrets.
 	Data map[string][]byte `protobuf:"bytes,3,rep,name=data,proto3" json:"data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Type of data stored in the secret. Immutable after creation.
 	Type          SecretType `protobuf:"varint,6,opt,name=type,proto3,enum=osac.public.v1.SecretType" json:"type,omitempty"`
@@ -224,9 +234,10 @@ type Secret_builder struct {
 	Id string
 	// Metadata of the secret.
 	Metadata *Metadata
-	// Opaque key-value data. Each key identifies a named entry (for example, `crt` or `key`) and the
-	// corresponding value is the raw secret material. Populated in Get responses; omitted from List and
-	// mutating responses.
+	// Opaque key-value data. Each key identifies a named entry, and the value is
+	// the raw secret material. Populated in Get responses; omitted from List and
+	// mutating responses. Data is immutable after creation for USER_DATA and
+	// WINDOWS_USER_DATA Secrets.
 	Data map[string][]byte
 	// Type of data stored in the secret. Immutable after creation.
 	Type SecretType

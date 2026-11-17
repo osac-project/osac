@@ -20,6 +20,7 @@ import pytest
 
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import env, managed_process, poll_until, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = [pytest.mark.regression, pytest.mark.requires_vmaas]
 
@@ -164,6 +165,8 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                     retries=60,
                     delay=5,
                     description=f"OLM installs {operator['package']} from the stable channel",
+                    resource_kind=WaitResourceKind.SUBSCRIPTION,
+                    resource_id=f"{operator['namespace']}/{operator['subscription']}",
                 )
                 spec = subscription.get("spec", {})
                 installed_csv = subscription.get("status", {}).get("installedCSV", "")
@@ -183,6 +186,8 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                     retries=60,
                     delay=5,
                     description=f"Installed {operator['package']} CSV succeeds",
+                    resource_kind=WaitResourceKind.CLUSTER_SERVICE_VERSION,
+                    resource_id=f"{operator['namespace']}/{installed_csv}",
                 )
                 version = csv.get("spec", {}).get("version", "")
                 assert version, f"Installed CSV {installed_csv} has no version"
@@ -326,6 +331,8 @@ def _launch_stage2_job(
         retries=120,
         delay=15,
         description=description,
+        resource_kind=WaitResourceKind.AAP_JOB,
+        resource_id=str(job_id),
     )
     return str(job_id), job
 
@@ -351,6 +358,8 @@ def _controller_api_proxy(k8s: K8sClient) -> Iterator[str]:
             retries=30,
             delay=1,
             description="AAP Controller port-forward",
+            resource_kind=WaitResourceKind.SERVICE,
+            resource_id=f"{k8s.namespace}/osac-aap",
         )
         if local_port is None:
             raise RuntimeError("kubectl port-forward started without reporting a local port")

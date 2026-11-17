@@ -375,9 +375,8 @@ def check_bmf_invalid_values(netbox_values: pathlib.Path) -> None:
         "--set-string",
         "netbox.bmhNamespace=host-inventory",
     )
-    # Placeholder authority userinfo for the guard check. It is not a
-    # credential; assembled here so the fixture reads as parts rather than as
-    # a URL that carries a secret.
+    # Authority userinfo for the guard check, assembled at run time so the
+    # source keeps the URL in parts.
     userinfo = "render-user" + "@"
     expect_bmf_failure(
         "netbox.url must not include credentials",

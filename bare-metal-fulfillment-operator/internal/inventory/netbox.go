@@ -84,15 +84,14 @@ type NetBoxClientConfig struct {
 	AllowInsecureHTTP bool   `json:"allowInsecureHTTP"`
 	// EnableBMCCertificateVerification is the default for BMC certificate
 	// verification on the BareMetalHosts this backend creates. It is a pointer
-	// so an absent key keeps verification enabled: a plain bool would make the
-	// zero value disable it. The per-device
+	// so an absent key resolves to enabled. The per-device
 	// osac_bmc_certificate_verification NetBox field overrides it.
 	EnableBMCCertificateVerification *bool `json:"enableBMCCertificateVerification"`
 }
 
-// BMCVerificationEnabled resolves the inventory-wide default, treating an
-// absent setting as enabled. Absence happens when an operator runs with an
-// inventory config rendered by an older chart, so it must never weaken TLS.
+// BMCVerificationEnabled resolves the inventory-wide default. An absent setting
+// resolves to enabled, which keeps TLS verification on for an inventory config
+// rendered before this field existed.
 func (c *NetBoxClientConfig) BMCVerificationEnabled() bool {
 	if c == nil || c.EnableBMCCertificateVerification == nil {
 		return true

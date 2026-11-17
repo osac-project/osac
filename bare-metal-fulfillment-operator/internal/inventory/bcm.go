@@ -497,9 +497,8 @@ func (c *BCMClient) ensureBMHExists(ctx context.Context, device *bcmclient.Devic
 		return fmt.Errorf("failed to create BMC credentials Secret for host %q: %w", device.Hostname, err)
 	}
 
-	// BCM has no per-host BMC certificate-verification setting yet, so BCM-created
-	// hosts always verify the BMC certificate. Tracked as a follow-up to
-	// OSAC-7116.
+	// BCM-created hosts verify the BMC certificate. A per-host setting is
+	// tracked as a follow-up to OSAC-7116.
 	params := baremetalhost.NewCreateParams(bmhName, bmcAddress, device.MAC, bareMetalInstanceID,
 		baremetalhost.CreateOptions{})
 	if err := c.bmhManager.CreateBMH(ctx, params); err != nil {

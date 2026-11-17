@@ -37,6 +37,7 @@ export const ExternalIpCreatePage = {
   reviewStepTitle: ['heading', { name: 'Review', exact: true }],
   reviewDetails: ['[aria-label="Review"]'],
   validationAlert: ['Fix the highlighted errors before continuing.'],
+  submitError: ['Failed to create external IP'],
   name: id('metadata-name'),
   project: id('metadata.project'),
   pool: id('create-external-ip-pool'),

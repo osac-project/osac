@@ -264,7 +264,25 @@ export const createExternalIp = async (
   await expect(review).toContainText(params.poolName);
 
   await page.getByRole(...ExternalIpCreatePage.submit).click();
-  await expect(page.getByRole(...ExternalIpsPage.pageTitle)).toBeVisible({ timeout: 60_000 });
+
+  // Surface the wizard's own failure instead of a bare navigation timeout: a
+  // deployment without provider networking rejects the create with
+  // FailedPrecondition, and a pool the cluster cannot serve fails allocation.
+  const listTitle = page.getByRole(...ExternalIpsPage.pageTitle);
+  const submitError = page.getByText(...ExternalIpCreatePage.submitError);
+  await expect(listTitle.or(submitError)).toBeVisible({ timeout: 60_000 });
+  if ((await submitError.count()) > 0) {
+    const alert = page
+      .locator('[class*="c-alert"]')
+      .filter({ hasText: ExternalIpCreatePage.submitError[0] })
+      .first();
+    const detail = (await alert.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+    throw new Error(
+      `Creating external IP "${params.name}" failed: ${detail || 'the wizard reported an error'}. ` +
+        'Check that the deployment enables provider networking ' +
+        '(global.networking.provisioningEnabled) and that the pool can allocate.',
+    );
+  }
 };
 
 /** Press Next on an untouched form and verify the wizard blocks with an alert. */

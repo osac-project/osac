@@ -29,6 +29,11 @@ unit tier gate for this component. The Playwright flows are manual: see
   depends on the configured CIDR being usable on the target cluster, so a
   cluster that cannot route the CIDR surfaces as `Failed` rather than
   `Allocated`.
+- **Provider networking must be enabled.** The fulfillment service rejects
+  External IP creates with `FailedPrecondition: provider networking is disabled`
+  when `global.networking.provisioningEnabled` is `false`, and the stock
+  `osac-installer/values/dev/kind-instance.yaml` profile sets it to `false`.
+  On such a deployment only the list and error-state checks can pass.
 - **VMaaS flows:** the full suite creates tenants, roles, storage, catalog and
   VM resources; run its prerequisites before the tenant-scoped flows.
 

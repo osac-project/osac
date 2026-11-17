@@ -144,6 +144,14 @@ allocate from — the pytest networking suite allocates `172.27.<n>.0/24`
 subnets for the same purpose. If allocation cannot succeed, the flow fails with
 the observed row text instead of a bare timeout.
 
+**The deployment must enable provider networking.** With
+`global.networking.provisioningEnabled: false` the fulfillment service rejects
+every External IP create with `FailedPrecondition: provider networking is
+disabled` (`private_external_ips_server.go`), so only the list and error-state
+checks can pass. The stock `osac-installer/values/dev/kind-instance.yaml` dev
+profile sets `false`, so a default kind instance is **not** enough for this
+suite; point it at an installation with provider networking enabled.
+
 Run the whole suite. `external-ip` depends on `external-ip-pool`, and its
 teardown (`external-ip-delete`) removes the External IP and, when the suite
 created it, the pool:

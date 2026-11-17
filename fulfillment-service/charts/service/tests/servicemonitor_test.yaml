@@ -1,0 +1,93 @@
+suite: fulfillment metrics ServiceMonitor
+templates:
+  - templates/servicemonitor.yaml
+release:
+  namespace: osac
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1/ServiceMonitor
+tests:
+  - it: scrapes every metrics endpoint by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: metadata.name
+          value: fulfillment-metrics
+      - equal:
+          path: metadata.namespace
+          value: osac
+      - equal:
+          path: spec.namespaceSelector.matchNames[0]
+          value: osac
+      - equal:
+          path: spec.selector.matchLabels["osac.openshift.io/metrics"]
+          value: "true"
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 60s
+
+  # The Envoy ingress proxy returns one set of these per worker thread, about
+  # 640 of its 2647 series. The five Go services emit no envoy_ series, so the
+  # rule costs them nothing.
+  - it: drops the Envoy per-worker series
+    asserts:
+      - equal:
+          path: spec.endpoints[0].metricRelabelings[0].action
+          value: drop
+      - equal:
+          path: spec.endpoints[0].metricRelabelings[0].sourceLabels[0]
+          value: __name__
+      - equal:
+          path: spec.endpoints[0].metricRelabelings[0].regex
+          value: envoy_listener_worker_.*|envoy_server_worker_watchdog_.*
+
+  - it: appends configured metricRelabelings after the built-in rule
+    set:
+      serviceMonitor.metricRelabelings:
+        - action: drop
+          sourceLabels: [__name__]
+          regex: db_operation_duration_bucket
+    asserts:
+      - lengthEqual:
+          path: spec.endpoints[0].metricRelabelings
+          count: 2
+      - equal:
+          path: spec.endpoints[0].metricRelabelings[1].regex
+          value: db_operation_duration_bucket
+
+  - it: honours a configured scrape interval
+    set:
+      serviceMonitor.interval: 30s
+    asserts:
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 30s
+
+  - it: merges configured ServiceMonitor labels
+    set:
+      serviceMonitor.labels:
+        release: kube-prometheus-stack
+        team: fulfillment
+    asserts:
+      - equal:
+          path: metadata.labels.release
+          value: kube-prometheus-stack
+      - equal:
+          path: metadata.labels.team
+          value: fulfillment
+
+  - it: renders nothing when scraping is turned off
+    set:
+      serviceMonitor.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

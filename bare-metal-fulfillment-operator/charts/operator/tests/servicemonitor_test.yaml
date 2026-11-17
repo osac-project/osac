@@ -1,0 +1,207 @@
+suite: BMF operator metrics ServiceMonitor
+templates:
+  - templates/servicemonitor.yaml
+  - templates/metrics-service.yaml
+  - templates/metrics-scraper.yaml
+release:
+  name: osac
+  namespace: osac
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1/ServiceMonitor
+tests:
+  - it: scrapes the controller-manager metrics endpoint by default
+    templates:
+      - templates/servicemonitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ServiceMonitor
+      # The prefix comes from the fullname helper, so it depends on the release
+      # name and, under the umbrella chart, on the "bmf" dependency alias.
+      # Only the suffix is fixed.
+      - matchRegex:
+          path: metadata.name
+          pattern: -controller-manager-metrics$
+      - equal:
+          path: metadata.namespace
+          value: osac
+      - equal:
+          path: spec.namespaceSelector.matchNames[0]
+          value: osac
+      - equal:
+          path: spec.endpoints[0].port
+          value: https
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 60s
+
+  # The endpoint is controller-runtime secure serving, not plain HTTP: without
+  # the scheme, token and tlsConfig the scrape gets a 400 or a 401.
+  - it: scrapes over HTTPS with the ServiceAccount token
+    templates:
+      - templates/servicemonitor.yaml
+    asserts:
+      - equal:
+          path: spec.endpoints[0].scheme
+          value: https
+      # Not bearerTokenFile: OpenShift's user-workload Prometheus runs with
+      # arbitraryFSAccessThroughSMs.deny and silently drops any ServiceMonitor
+      # in a workload namespace that reads a token off the filesystem.
+      - equal:
+          path: spec.endpoints[0].authorization.type
+          value: Bearer
+      - equal:
+          path: spec.endpoints[0].authorization.credentials.name
+          value: bmf-operator-metrics-scraper-token
+      - equal:
+          path: spec.endpoints[0].authorization.credentials.key
+          value: token
+      - notExists:
+          path: spec.endpoints[0].bearerTokenFile
+      # controller-runtime self-signs when no CertDir is configured, as here.
+      - equal:
+          path: spec.endpoints[0].tlsConfig.insecureSkipVerify
+          value: true
+
+  # This chart renders only one Service today. The component label keeps the
+  # selector unambiguous if that stops being true.
+  - it: selects the metrics Service
+    templates:
+      - templates/servicemonitor.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: metrics
+      - equal:
+          path: spec.selector.matchLabels["control-plane"]
+          value: controller-manager
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: bare-metal-fulfillment-operator
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: osac
+
+  # The other half of that contract: the Service has to carry what the monitor
+  # selects on, and the port name the endpoint names.
+  - it: labels the metrics Service to match
+    templates:
+      - templates/metrics-service.yaml
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: -controller-manager-metrics-service$
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: metrics
+      - equal:
+          path: metadata.labels["control-plane"]
+          value: controller-manager
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: bare-metal-fulfillment-operator
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: osac
+      - contains:
+          path: spec.ports
+          content:
+            name: https
+            port: 8443
+            protocol: TCP
+            targetPort: 8443
+
+  # The identity Prometheus presents. It must exist, be bound to nothing but
+  # GET /metrics, and own the Secret the endpoint names.
+  - it: creates a scrape identity limited to reading metrics
+    templates:
+      - templates/metrics-scraper.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+      - documentIndex: 0
+        isKind:
+          of: ServiceAccount
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: bmf-operator-metrics-scraper
+      # No Pod runs as this account; Prometheus reads the Secret.
+      - documentIndex: 0
+        equal:
+          path: automountServiceAccountToken
+          value: false
+      - documentIndex: 1
+        isKind:
+          of: ClusterRoleBinding
+      - documentIndex: 1
+        equal:
+          path: roleRef.name
+          value: bmf-operator-metrics-reader
+      - documentIndex: 1
+        contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: bmf-operator-metrics-scraper
+            namespace: osac
+      - documentIndex: 2
+        isKind:
+          of: Secret
+      - documentIndex: 2
+        equal:
+          path: metadata.name
+          value: bmf-operator-metrics-scraper-token
+      - documentIndex: 2
+        equal:
+          path: type
+          value: kubernetes.io/service-account-token
+      - documentIndex: 2
+        equal:
+          path: metadata.annotations["kubernetes.io/service-account.name"]
+          value: bmf-operator-metrics-scraper
+
+  - it: creates no scrape identity when scraping is turned off
+    templates:
+      - templates/metrics-scraper.yaml
+    set:
+      serviceMonitor.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: honours a configured scrape interval
+    templates:
+      - templates/servicemonitor.yaml
+    set:
+      serviceMonitor.interval: 30s
+    asserts:
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 30s
+
+  - it: merges configured ServiceMonitor labels
+    templates:
+      - templates/servicemonitor.yaml
+    set:
+      serviceMonitor.labels:
+        release: kube-prometheus-stack
+    asserts:
+      - equal:
+          path: metadata.labels.release
+          value: kube-prometheus-stack
+
+  # The Service keeps serving metrics; only the scrape config goes away.
+  - it: renders nothing when scraping is turned off
+    templates:
+      - templates/servicemonitor.yaml
+    set:
+      serviceMonitor.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

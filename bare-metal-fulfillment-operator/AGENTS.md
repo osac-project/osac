@@ -45,6 +45,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#bare-met
 | BareMetalInstance host teardown waits for OSAC networking cleanup, then leaves network resources untouched (NET-CLEAN-08) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-08](../docs/INTEGRATION-TESTING.md#net-clean-08-deployed-bmf-ownership-boundary) |
 | Metal3, BCM, Ironic, BMC, power, or hardware semantics | Contract or real-provider integration | Follow the owning [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task |
 | Generated CRDs or Helm CRDs | Envtest plus Kind | `make manifests generate helm-crds check-helm-crds`, then the required test command |
+| Metrics Service labels or ports, the ServiceMonitor, or `serviceMonitor.*` values | Unit (mocked cluster) | `helm unittest charts/operator` (helm-unittest plugin; CI pins v1.2.1 and runs the suite in the `helm-unit` leg) asserts the HTTPS scheme, bearer token and TLS config the controller-runtime endpoint needs, that the Service carries what the monitor selects on, and that nothing renders without the monitoring CRDs; no Prometheus is scraped |
 
 Kind tests require the current operator deployment and simulate provider transitions.
 

@@ -1495,6 +1495,39 @@ render_failure_matching \
   '(global\.fulfillmentTrust|/global/fulfillmentTrust).*additional propert(y|ies).*unknownKey.*(is )?not allowed' \
   --set global.fulfillmentTrust.unknownKey=1
 
+# A scrape interval is a Prometheus duration, not a Go one, so it cannot
+# share positiveDuration with the upgrade timeouts. The three
+# serviceMonitor.interval fields reach the ServiceMonitor endpoint verbatim,
+# where the CRD enforces
+#   ^(0|(([0-9]+)y)?(([0-9]+)w)?(([0-9]+)d)?(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?(([0-9]+)ms)?)$
+# -- integers only, with y/w/d and without Go's ns/us. Accepting a value the
+# API server then rejects is exactly the failure this gate exists to catch,
+# so pin both directions of the mismatch. Checked against the CRD shipped by
+# prometheus-operator, not against the Go time.Duration grammar.
+for sm_chart in service operator bmf; do
+  render_failure_matching \
+    "scrape-interval-fractional-${sm_chart}" \
+    "(${sm_chart}\.serviceMonitor\.interval|/${sm_chart}/serviceMonitor/interval)" \
+    --set-string "${sm_chart}.serviceMonitor.interval=1.5m"
+  render_failure_matching \
+    "scrape-interval-go-only-unit-${sm_chart}" \
+    "(${sm_chart}\.serviceMonitor\.interval|/${sm_chart}/serviceMonitor/interval)" \
+    --set-string "${sm_chart}.serviceMonitor.interval=100us"
+  # Empty renders `interval:` as YAML null, which the CRD rejects for a
+  # string field; omit the key instead to fall back to the global interval.
+  render_failure_matching \
+    "scrape-interval-empty-${sm_chart}" \
+    "(${sm_chart}\.serviceMonitor\.interval|/${sm_chart}/serviceMonitor/interval)" \
+    --set-string "${sm_chart}.serviceMonitor.interval="
+  # Valid Prometheus durations positiveDuration would have rejected.
+  render_success \
+    "scrape-interval-days-${sm_chart}" \
+    --set-string "${sm_chart}.serviceMonitor.interval=1d"
+  render_success \
+    "scrape-interval-global-${sm_chart}" \
+    --set-string "${sm_chart}.serviceMonitor.interval=0"
+done
+
 # bmaas-netbox-ci is a valid profile the gate must not block: it relies on
 # the infra chart's netbox-token-seed hook to create the NetBox token Secret
 # during a real install, and offline rendering cannot see cluster Secrets

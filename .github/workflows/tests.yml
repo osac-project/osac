@@ -591,6 +591,13 @@ jobs:
           helm unittest ../osac-metering/charts/osac-metering
           ../osac-metering/scripts/test-readers-render.sh
           helm unittest charts/osac-infra
+          # The ServiceMonitors the component charts ship are deployment
+          # configuration of the same release the umbrella installs, and their
+          # capability guards are what keeps a Prometheus-operator-less cluster
+          # installable, so they run in this leg too.
+          helm unittest ../fulfillment-service/charts/service
+          helm unittest ../osac-operator/charts/operator
+          helm unittest ../bare-metal-fulfillment-operator/charts/operator
       - name: Test preflight rendering
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer

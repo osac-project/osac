@@ -1,0 +1,64 @@
+{{- if and .Values.serviceMonitor.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
+{{- /*
+The identity Prometheus presents when it scrapes the controller-manager
+metrics endpoint, and the only thing it is allowed to do.
+
+A bearerTokenFile would be the obvious way to hand Prometheus a token, and is
+what the kubebuilder scaffolding suggests, but OpenShift's user-workload
+Prometheus runs with arbitraryFSAccessThroughSMs.deny set by the cluster
+monitoring operator. It rejects any ServiceMonitor in a workload namespace
+that reads a token off the filesystem, with "it accesses file system via
+bearer token file which Prometheus specification prohibits", and the
+ServiceMonitor is dropped rather than failing the scrape. So the token comes
+from a Secret that the endpoint's authorization.credentials names.
+
+The Secret is the kubernetes.io/service-account-token kind, whose token the
+control plane populates and does not expire, because a Helm chart has no way
+to mint a projected token at install time and no controller here to refresh
+one. The blast radius is the ServiceAccount it belongs to, which is this one:
+it has nothing but GET on the /metrics nonResourceURL, and is never used for
+anything else.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-metrics-scraper
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+{{- /*
+No Pod ever runs as this account: Prometheus reads the Secret below. The
+automounted token is a separate mechanism from the one the scrape uses, so
+turning it off removes a credential nothing reads.
+*/}}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-metrics-scraper
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "osac-operator.fullname" . }}-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-operator.fullname" . }}-metrics-scraper
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-metrics-scraper-token
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+  annotations:
+    kubernetes.io/service-account.name: {{ include "osac-operator.fullname" . }}-metrics-scraper
+type: kubernetes.io/service-account-token
+{{- end }}

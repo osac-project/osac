@@ -1,0 +1,64 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{- if and .Values.serviceMonitor.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
+{{- /*
+Scraping for every metrics endpoint this chart deploys. Each of them serves
+/metrics on a port named "metrics" over plain HTTP, so one ServiceMonitor
+covers all of them: grpc-server, controller, rest-gateway, event-publisher,
+console-proxy and the ingress proxy.
+
+Selection is by label rather than one monitor per component because the
+components are gated inconsistently (consoleProxy.disabled is negated,
+eventPublisher.enabled is positive, the rest are ungated). A Service that is
+not rendered is simply not selected, so the gates need no restating here.
+Prometheus still derives a distinct "job" label per Service from
+__meta_kubernetes_service_name, so per-component identity survives.
+
+Rendered only where the ServiceMonitor CRD exists, so a Kind install without a
+Prometheus operator still applies the chart.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: fulfillment-metrics
+  labels:
+    app: fulfillment-metrics
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      osac.openshift.io/metrics: "true"
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: {{ .Values.serviceMonitor.interval }}
+    metricRelabelings:
+    {{- /*
+    Per-worker-thread breakdowns from the Envoy ingress proxy: about 640 of the
+    2647 series it returns, one set per worker, with no operational value. The
+    rule is a no-op for the five Go services, which emit no envoy_ series.
+    */}}
+    - action: drop
+      sourceLabels: [__name__]
+      regex: envoy_listener_worker_.*|envoy_server_worker_watchdog_.*
+    {{- with .Values.serviceMonitor.metricRelabelings }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

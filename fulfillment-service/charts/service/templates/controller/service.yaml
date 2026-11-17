@@ -18,6 +18,10 @@ metadata:
   name: fulfillment-controller
   labels:
     app: fulfillment-controller
+    {{- /* Scraped via templates/servicemonitor.yaml; read it before changing
+    this label or the metrics port. The prometheus.io annotations below are the
+    legacy discovery convention and are inert on OpenShift. */}}
+    osac.openshift.io/metrics: "true"
   annotations:
     prometheus.io/scrape: "true"
     prometheus.io/port: "8002"

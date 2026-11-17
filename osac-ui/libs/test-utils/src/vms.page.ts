@@ -367,6 +367,10 @@ export const deleteVmIfPresent = async (page: Page, name: string): Promise<boole
     await deleteVm(page, name);
   } else {
     await openVmsPage(page);
+    // Clear URL filters and override any persisted project selection before discovery.
+    await page.goto('/vms?project=', { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveURL((url) => url.pathname === '/vms');
+    await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
     const names = await listVmNames(page);
     if (!names.includes(name)) {
       await waitForVmToBeDeleted(page, name);
@@ -456,10 +460,14 @@ export const waitForVmToBeDeleted = async (
           throw new Error('The tenant VM list reported an API error while loading.');
         }
         if (await filteredState.isVisible()) {
-          throw new Error('The tenant VM list is filtered; deletion cannot be verified.');
+          return 'VM list shows no matches; retrying';
         }
         if (await table.isVisible()) {
-          return (await getVmRow(page, name).count()) === 0 ? 'absent' : 'VM still present';
+          const rowCount = await getVmRow(page, name).count();
+          if (!(await table.isVisible())) {
+            return 'VM list still loading';
+          }
+          return rowCount === 0 ? 'absent' : 'VM still present';
         }
         if (await emptyState.isVisible()) {
           return 'absent';

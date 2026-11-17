@@ -1,0 +1,23 @@
+---
+- name: Verify native CSI operator namespaces follow the AAP environment
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    expected_netapp_trident_namespace: trident-integration-test
+    expected_vast_csi_namespace: vast-integration-test
+
+  tasks:
+    - name: Load the storage_provider defaults
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../../../../../collections/ansible_collections/osac/service/roles/storage_provider/defaults/main.yaml"
+
+    - name: Assert provider namespaces follow their environment variables
+      ansible.builtin.assert:
+        that:
+          - storage_provider_csi_driver_matrix.netapp.installer.trident_namespace == expected_netapp_trident_namespace
+          - storage_provider_csi_driver_matrix.vast.installer.namespace == expected_vast_csi_namespace
+        fail_msg: >-
+          Native CSI namespaces must honor NETAPP_CSI_OPERATOR_NAMESPACE and
+          VAST_CSI_OPERATOR_NAMESPACE.
+        success_msg: "Native CSI namespaces honor their environment overrides"

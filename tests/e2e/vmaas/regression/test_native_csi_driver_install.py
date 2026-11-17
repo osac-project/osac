@@ -26,6 +26,8 @@ pytestmark = [pytest.mark.regression, pytest.mark.requires_vmaas]
 _DRIVER_INSTALL_TAG = "provider_csi_driver_install"
 _CONTROLLER_API_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 _LOGGER = logging.getLogger(__name__)
+_NETAPP_CSI_OPERATOR_NAMESPACE = env("NETAPP_CSI_OPERATOR_NAMESPACE", "trident")
+_VAST_CSI_OPERATOR_NAMESPACE = env("VAST_CSI_OPERATOR_NAMESPACE", "vast-csi-system")
 
 
 class _RetryableControllerError(RuntimeError):
@@ -42,7 +44,7 @@ _OPERATORS: tuple[dict[str, Any], ...] = (
     {
         "package": "vast-csi-operator",
         "subscription": "vast-csi-operator",
-        "namespace": "vast-csi-system",
+        "namespace": _VAST_CSI_OPERATOR_NAMESPACE,
         "drivers": ("csi.vastdata.com", "block.csi.vastdata.com"),
     },
 )
@@ -235,6 +237,9 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
             )
             assert trident_orchestrator.get("spec", {}).get("silenceAutosupport") is True, (
                 "Trident AutoSupport must remain disabled unless explicitly opted into"
+            )
+            assert trident_orchestrator.get("spec", {}).get("namespace") == _NETAPP_CSI_OPERATOR_NAMESPACE, (
+                "TridentOrchestrator must install its operand into NETAPP_CSI_OPERATOR_NAMESPACE"
             )
             trident_operand_images = [
                 image.get("image", "")

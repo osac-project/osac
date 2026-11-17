@@ -172,7 +172,7 @@
           'install_plan_approval': 'Manual',
           'catalog_source': 'certified-operators',
           'catalog_namespace': 'openshift-marketplace',
-          'trident_namespace': 'trident'
+          'trident_namespace': lookup('env', 'NETAPP_CSI_OPERATOR_NAMESPACE') | default('trident', true)
         }
       - >-
         storage_provider_csi_driver_matrix.vast.protocols == {
@@ -182,7 +182,7 @@
       - >-
         storage_provider_csi_driver_matrix.vast.installer == {
           'method': 'olm',
-          'namespace': 'vast-csi-system',
+          'namespace': lookup('env', 'VAST_CSI_OPERATOR_NAMESPACE') | default('vast-csi-system', true),
           'package': 'vast-csi-operator',
           'channel': 'stable',
           'install_plan_approval': 'Manual',

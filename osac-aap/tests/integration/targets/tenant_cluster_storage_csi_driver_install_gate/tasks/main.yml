@@ -91,7 +91,7 @@
       # setup_test_env.sh seeds this registration to isolate unrelated VAST tests.
       # The ClusterOrder scenario temporarily removes and then restores it below.
 
-    - name: Read any pre-existing TridentBackendConfig CRD fixture
+    - name: Read the TridentBackendConfig CRD fixture installed by storage test setup
       kubernetes.core.k8s_info:
         api_version: apiextensions.k8s.io/v1
         kind: CustomResourceDefinition
@@ -111,7 +111,7 @@
         name: openshift-marketplace
       register: _native_csi_fixture_marketplace_namespace
 
-    - name: Require clean OLM and Trident fixtures before mutation
+    - name: Require clean OLM and Trident driver fixtures before mutation
       ansible.builtin.assert:
         that:
           - >-
@@ -129,11 +129,12 @@
             | selectattr('metadata.name', 'equalto', 'trident-operator-group')
             | selectattr('metadata.namespace', 'equalto', 'trident-operator')
             | list | length == 0
-          - _native_csi_fixture_trident_crd.resources | length == 0
+          - _native_csi_fixture_trident_crd.resources | length == 1
           - _native_csi_fixture_trident_driver.resources | length == 0
           - _native_csi_fixture_marketplace_namespace.resources | length == 0
         fail_msg: >-
-          Native CSI fixture resources already exist in osac-test. Clean the
+          OLM or Trident driver fixtures already exist in osac-test, or the
+          shared TridentBackendConfig CRD fixture is missing. Clean the
           dedicated test cluster before rerunning this target.
 
 # ── Positive case: Tenant kind -- csi_driver_install must fire ──
@@ -781,15 +782,6 @@
         - block.csi.vastdata.com
       failed_when: false
 
-    - name: Delete TridentBackendConfig CRD fixture
-      kubernetes.core.k8s:
-        state: absent
-        api_version: apiextensions.k8s.io/v1
-        kind: CustomResourceDefinition
-        name: tridentbackendconfigs.trident.netapp.io
-        wait: true
-      failed_when: false
-
     - name: Delete Trident operand namespace fixture
       kubernetes.core.k8s:
         state: absent
@@ -1146,15 +1138,6 @@
       loop:
         - csi.vastdata.com
         - block.csi.vastdata.com
-      failed_when: false
-
-    - name: Delete TridentBackendConfig CRD fixture
-      kubernetes.core.k8s:
-        state: absent
-        api_version: apiextensions.k8s.io/v1
-        kind: CustomResourceDefinition
-        name: tridentbackendconfigs.trident.netapp.io
-        wait: true
       failed_when: false
 
     - name: Delete Trident namespace fixture
@@ -1697,15 +1680,6 @@
             api_version: storage.k8s.io/v1
             kind: CSIDriver
             name: csi.trident.netapp.io
-          failed_when: false
-
-        - name: Delete the TridentBackendConfig CRD fixture
-          kubernetes.core.k8s:
-            state: absent
-            api_version: apiextensions.k8s.io/v1
-            kind: CustomResourceDefinition
-            name: tridentbackendconfigs.trident.netapp.io
-            wait: true
           failed_when: false
 
         - name: Delete the Trident operand namespace fixture

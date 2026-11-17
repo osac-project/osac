@@ -264,6 +264,18 @@ done
 echo "=== Running Storage Provider Dispatcher Unit Tests ==="
 echo ""
 
+# Verify that CSI namespace configuration is read from the AAP process environment.
+CSI_NAMESPACE_DEFAULTS_TEST="targets/storage_provider_csi_namespace_defaults/tasks/baseline.yml"
+if NETAPP_CSI_OPERATOR_NAMESPACE=trident-integration-test \
+  VAST_CSI_OPERATOR_NAMESPACE=vast-integration-test \
+  run_ansible_playbook "${CSI_NAMESPACE_DEFAULTS_TEST}"; then
+  echo "  ✓ CSI operator namespace environment overrides passed"
+  PASSED+=("storage_provider_namespace_defaults")
+else
+  echo "  ✗ CSI operator namespace environment overrides failed"
+  FAILED+=("storage_provider_namespace_defaults")
+fi
+
 # Validation-only tests for the storage_provider role's dispatcher logic -- no kind cluster
 # or mock VMS server required, so these run unconditionally (not gated behind
 # STORAGE_TESTS_ENABLED). Requires two separate invocations: ansible-core raises a

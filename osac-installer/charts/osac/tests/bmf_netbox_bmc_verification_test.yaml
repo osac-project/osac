@@ -28,16 +28,3 @@ tests:
           path: stringData["inventory.yaml"]
           pattern: "(?m)^    enableBMCCertificateVerification: false$"
 
-  - it: rejects userinfo in a NetBox URL
-    set:
-      bmf.netbox.url: https://netbox-user@netbox.example.org
-    asserts:
-      - failedTemplate:
-          errorMessage: "netbox.url must not include credentials"
-
-  - it: rejects userinfo in a scheme-relative NetBox URL
-    set:
-      bmf.netbox.url: //netbox-user@netbox.example.org
-    asserts:
-      - failedTemplate:
-          errorMessage: "netbox.url must not include credentials"

@@ -2321,7 +2321,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			_, err = reconciler.reconcileNetworkHandoffPowerCycle(ctx, bareMetalInstance)
 			Expect(err).NotTo(HaveOccurred())
 			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonPoweringOn))
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkHandoffPowerOnIntent))
 			Expect(cond.Status).To(Equal(metav1.ConditionUnknown))
 			Expect(cond.Message).To(Equal(networkHandoffPowerOffIntentMessage))
 			powerOnStepTime := cond.LastTransitionTime
@@ -2331,9 +2331,11 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			_, err = reconciler.reconcileNetworkHandoffPowerCycle(ctx, bareMetalInstance)
 			Expect(err).NotTo(HaveOccurred())
 			cond = bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonPoweringOn))
 			Expect(cond.Message).To(Equal(networkHandoffPowerOnIntentMessage))
 			Expect(cond.Status).To(Equal(metav1.ConditionUnknown))
-			Expect(cond.LastTransitionTime).To(Equal(powerOnStepTime), "persisting the request intent must preserve its deadline")
+			Expect(cond.LastTransitionTime).To(Equal(powerOnStepTime),
+				"changing the reason must not reset the ON step deadline")
 			Expect(setCalls).To(Equal([]management.PowerState{management.PowerOff}),
 				"the ON intent must be durable before sending the power request")
 
@@ -2358,12 +2360,12 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 				return &management.PowerStatus{State: management.PowerOff}, nil
 			}
 			bareMetalInstance.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-				metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOn,
-				networkHandoffPowerOffIntentMessage)
+				metav1.ConditionUnknown, v1alpha1.HostConditionReasonNetworkHandoffPowerOnIntent, "request not sent")
 
 			_, err := reconciler.reconcileNetworkHandoffPowerCycle(ctx, bareMetalInstance)
 			Expect(err).NotTo(HaveOccurred())
 			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonPoweringOn))
 			Expect(cond.Message).To(Equal(networkHandoffPowerOnIntentMessage))
 			Expect(setCalls).To(BeEmpty())
 
@@ -2413,7 +2415,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete).Reason).
-				To(Equal(v1alpha1.HostConditionReasonPoweringOn))
+				To(Equal(v1alpha1.HostConditionReasonNetworkHandoffPowerOnIntent))
 		})
 
 		It("fails immediately for a non-transitioning SetPowerState error", func() {
@@ -2512,7 +2514,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			Expect(result).To(Equal(ctrl.Result{}))
 			Expect(setCalls).To(Equal(1))
 			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkHandoffFailed))
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkHandoffPowerOnUncertain))
 			Expect(cond.Message).To(ContainSubstring(networkHandoffPowerOnUncertainPrefix))
 			Expect(cond.Message).To(ContainSubstring("within 15 minutes"))
 			Expect(networkHandoffPowerOnMayBeInFlight(bareMetalInstance)).To(BeTrue())
@@ -2538,7 +2540,7 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			Expect(result).To(Equal(ctrl.Result{}))
 			Expect(setCalls).To(Equal(1))
 			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkHandoffFailed))
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkHandoffPowerOnUncertain))
 			Expect(cond.Message).To(ContainSubstring(networkHandoffPowerOnUncertainPrefix))
 			Expect(cond.Message).To(ContainSubstring("request outcome is unknown"))
 			Expect(networkHandoffPowerOnMayBeInFlight(bareMetalInstance)).To(BeTrue())
@@ -2863,8 +2865,7 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 
 	It("does not wait for a handoff power-on request that was not sent", func() {
 		bareMetalInstance.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOn,
-			networkHandoffPowerOffIntentMessage)
+			metav1.ConditionUnknown, v1alpha1.HostConditionReasonNetworkHandoffPowerOnIntent, "human text can vary")
 		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
 			return &management.PowerStatus{State: management.PowerOff}, nil
 		}
@@ -2879,8 +2880,8 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 
 	It("retains a failed but uncertain ON request during deletion", func() {
 		bareMetalInstance.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionFalse, v1alpha1.HostConditionReasonNetworkHandoffFailed,
-			networkHandoffPowerOnUncertainPrefix+": request outcome is unknown")
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonNetworkHandoffPowerOnUncertain,
+			"human text can vary")
 		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
 			return &management.PowerStatus{State: management.PowerOff}, nil
 		}

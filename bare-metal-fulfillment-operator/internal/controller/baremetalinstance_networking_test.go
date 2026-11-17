@@ -168,6 +168,34 @@ var _ = Describe("BareMetalInstance Networking", func() {
 		removeBMI()
 	})
 
+	Describe("networkingRequested", func() {
+		It("returns false when no network attachments are configured", func() {
+			bmi = newBMI(nil)
+
+			Expect(reconciler.networkingRequested(bmi)).To(BeFalse())
+		})
+
+		It("returns true when network attachments are configured", func() {
+			bmi = newBMI(attachments)
+			reconciler.NetworkingEnabled = false
+
+			Expect(reconciler.networkingRequested(bmi)).To(BeTrue())
+		})
+	})
+
+	Describe("networkAttachmentMayExist", func() {
+		It("uses reasons to distinguish an observed attachment failure from a rejected create", func() {
+			bmi = newBMI(attachments)
+			setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonNetworkAttachmentFailed, "message text can vary")
+			Expect(networkAttachmentMayExist(bmi)).To(BeTrue())
+
+			setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected, "message text can vary")
+			Expect(networkAttachmentMayExist(bmi)).To(BeFalse())
+		})
+	})
+
 	Describe("reconcileNetworking", func() {
 		It("skips when no network attachments are configured", func() {
 			bmi = newBMI(nil)
@@ -224,8 +252,9 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			Expect(err).NotTo(HaveOccurred())
 			_, err = reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady).Message).
-				To(Equal("Creating the network attachment"))
+			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent))
+			Expect(cond.Message).To(Equal("Creating the network attachment"))
 
 			reconciler.Client = networkAttachmentCreateErrorClient{
 				Client: k8sClient,
@@ -234,9 +263,9 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			_, err = reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).To(MatchError(ContainSubstring("create request timed out")))
 
-			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+			cond = bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal("Progressing"))
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent))
 			Expect(cond.Message).To(Equal("Creating the network attachment"))
 		})
 
@@ -254,10 +283,14 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 			Expect(networkAttachmentStatusFor(bmi, "subnet-1").MACAddress).To(Equal("aa:bb:cc:dd:ee:ff"))
+			Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady).Reason).
+				To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentMACRecorded))
 
 			result, err = reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady).Reason).
+				To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent))
 			_, getErr := getAttachment()
 			Expect(apierrors.IsNotFound(getErr)).To(BeTrue(),
 				"the create intent is recorded before the request is issued")
@@ -552,7 +585,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				SubnetRef: "subnet-1", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff",
 			}}
 			setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonProgressing, networkAttachmentCreateIntentMessage)
+				v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent, "persisted create intent")
 			Expect(networkAttachmentMayExist(bmi)).To(BeTrue(), "conditions: %+v", bmi.Status.Conditions)
 			Expect(networkAttachmentKeys(bmi)).NotTo(BeEmpty())
 
@@ -587,8 +620,9 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				_, err := reconciler.reconcileNetworking(ctx, bmi)
 				Expect(err).NotTo(HaveOccurred())
 			}
-			Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady).Message).
-				To(Equal(networkAttachmentCreateRejectedMessage))
+			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected))
+			Expect(cond.Message).To(Equal(networkAttachmentCreateRejectedMessage))
 
 			reconciler.Client = k8sClient
 			_, done, err := reconciler.reconcileNetworkingDeletion(ctx, bmi)
@@ -607,6 +641,8 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(done).To(BeFalse())
 			Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+			Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady).Reason).
+				To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentAwaitingVisibility))
 			Expect(controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
 
 			_, done, err = reconciler.reconcileNetworkingDeletion(ctx, bmi)
@@ -619,7 +655,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 			setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonProgressing, networkAttachmentMACRecordedMessage)
+				v1alpha1.HostConditionReasonNetworkAttachmentMACRecorded, "message text is diagnostic only")
 
 			_, done, err := reconciler.reconcileNetworkingDeletion(ctx, bmi)
 

@@ -279,9 +279,15 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 // cannot turn an unrelated failure into pending work.
 func isPendingNetworkConditionReason(condition BareMetalInstanceConditionType, reason string) bool {
 	switch condition {
+	case HostConditionNetworkAttachmentsReady:
+		return reason == HostConditionReasonNetworkAttachmentMACRecorded ||
+			reason == HostConditionReasonNetworkAttachmentCreateIntent ||
+			reason == HostConditionReasonNetworkAttachmentAwaitingVisibility ||
+			reason == HostConditionReasonNetworkDetaching
 	case HostConditionNetworkHandoffComplete:
 		return reason == HostConditionReasonPoweringOff ||
-			reason == HostConditionReasonPoweringOn
+			reason == HostConditionReasonPoweringOn ||
+			reason == HostConditionReasonNetworkHandoffPowerOnIntent
 	case HostConditionIPDiscoveryComplete:
 		return reason == HostConditionReasonLeasePending
 	default:

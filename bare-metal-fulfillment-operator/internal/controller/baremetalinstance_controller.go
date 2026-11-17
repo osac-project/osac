@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -370,7 +369,7 @@ func (r *BareMetalInstanceReconciler) reconcileInventory(ctx context.Context, ba
 		return ctrl.Result{}, nil
 	}
 
-	if r.NetworkingEnabled && len(bareMetalInstance.Spec.NetworkAttachments) > 0 {
+	if r.NetworkingEnabled && r.networkingRequested(bareMetalInstance) {
 		attachment := primaryNetworkAttachment(bareMetalInstance)
 		if attachment == nil {
 			return ctrl.Result{}, fmt.Errorf("BareMetalInstance %s has no primary network attachment", bareMetalInstance.Name)
@@ -678,7 +677,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 		return ctrl.Result{}, nil
 	}
 
-	if len(bareMetalInstance.Spec.NetworkAttachments) == 0 {
+	if !r.networkingRequested(bareMetalInstance) {
 		return ctrl.Result{}, nil
 	}
 
@@ -716,7 +715,8 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 		return result, nil
 	}
 	handoffCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-	if handoffCond != nil && handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
+	if handoffCond != nil && (handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed ||
+		handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffPowerOnUncertain) {
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 		return ctrl.Result{}, nil
 	}
@@ -747,7 +747,8 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 
 func isFinalNetworkAttachmentFailure(reason string) bool {
 	return reason == v1alpha1.HostConditionReasonTemplateFailed ||
-		reason == v1alpha1.HostConditionReasonNetworkAttachmentFailed
+		reason == v1alpha1.HostConditionReasonNetworkAttachmentFailed ||
+		reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected
 }
 
 func (r *BareMetalInstanceReconciler) recordBMIEvent(
@@ -848,7 +849,8 @@ func networkHandoffPowerStep(reason string) (management.PowerState, string, bool
 	switch reason {
 	case v1alpha1.HostConditionReasonPoweringOff:
 		return management.PowerOff, v1alpha1.HostConditionReasonPoweringOff, true
-	case v1alpha1.HostConditionReasonPoweringOn:
+	case v1alpha1.HostConditionReasonNetworkHandoffPowerOnIntent,
+		v1alpha1.HostConditionReasonPoweringOn:
 		return management.PowerOn, v1alpha1.HostConditionReasonPoweringOn, true
 	default:
 		return "", "", false
@@ -915,13 +917,15 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 	if handoffCond != nil && handoffCond.Status == metav1.ConditionTrue {
 		return ctrl.Result{}, nil
 	}
-	if handoffCond != nil && handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
+	if handoffCond != nil && (handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed ||
+		handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffPowerOnUncertain) {
 		return ctrl.Result{}, nil
 	}
 
 	if handoffCond == nil || (handoffCond.Status != metav1.ConditionFalse &&
 		(handoffCond.Status != metav1.ConditionUnknown ||
-			handoffCond.Reason != v1alpha1.HostConditionReasonPoweringOn)) {
+			(handoffCond.Reason != v1alpha1.HostConditionReasonPoweringOn &&
+				handoffCond.Reason != v1alpha1.HostConditionReasonNetworkHandoffPowerOnIntent))) {
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
 			metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOff,
 			"Starting the network handoff power cycle")
@@ -937,16 +941,15 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 	}
 
 	if r.ManagementClient == nil {
-		if target == management.PowerOn {
-			r.failNetworkHandoff(bmi, networkHandoffPowerOnUncertainPrefix+": management client is not configured")
-			return ctrl.Result{}, nil
+		if handoffCond.Reason == v1alpha1.HostConditionReasonPoweringOn {
+			r.setNetworkHandoffPowerOnUncertain(bmi,
+				networkHandoffPowerOnUncertainPrefix+": management client is not configured")
+		} else {
+			r.failNetworkHandoff(bmi, "management client is not configured")
 		}
-		r.failNetworkHandoff(bmi, "management client is not configured")
 		return ctrl.Result{}, nil
 	}
-	if target == management.PowerOn &&
-		(handoffCond.Message == networkHandoffPowerOffIntentMessage ||
-			handoffCond.Message == "Host is off; waiting to confirm power on") {
+	if handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffPowerOnIntent {
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
 			metav1.ConditionUnknown, v1alpha1.HostConditionReasonPoweringOn,
 			networkHandoffPowerOnIntentMessage)
@@ -959,7 +962,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 			r.failNetworkHandoff(bmi, fmt.Sprintf("SetPowerState(%s) failed: %v", target, setErr))
 			return ctrl.Result{}, nil
 		}
-		r.failNetworkHandoff(bmi,
+		r.setNetworkHandoffPowerOnUncertain(bmi,
 			fmt.Sprintf("%s: SetPowerState(%s) failed: %v", networkHandoffPowerOnUncertainPrefix, target, setErr))
 		return ctrl.Result{}, nil
 	}
@@ -968,7 +971,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 	if getErr == nil && powerStatus != nil && !powerStatus.IsTransitioning && powerStatus.State == target {
 		if target == management.PowerOff {
 			bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-				metav1.ConditionUnknown, v1alpha1.HostConditionReasonPoweringOn,
+				metav1.ConditionUnknown, v1alpha1.HostConditionReasonNetworkHandoffPowerOnIntent,
 				networkHandoffPowerOffIntentMessage)
 			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 		}
@@ -981,9 +984,10 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 	if !deadline.IsZero() && !time.Now().Before(deadline) {
 		diagnostic := networkHandoffTimeoutDiagnostic(target, powerStatus, getErr)
 		if target == management.PowerOn {
-			diagnostic = networkHandoffPowerOnUncertainPrefix + ": " + diagnostic
+			r.setNetworkHandoffPowerOnUncertain(bmi, networkHandoffPowerOnUncertainPrefix+": "+diagnostic)
+		} else {
+			r.failNetworkHandoff(bmi, diagnostic)
 		}
-		r.failNetworkHandoff(bmi, diagnostic)
 		return ctrl.Result{}, nil
 	}
 
@@ -998,7 +1002,8 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 }
 
 func networkHandoffDeadline(bmi *v1alpha1.BareMetalInstance, handoffCond *metav1.Condition) time.Time {
-	if handoffCond != nil && handoffCond.Reason == v1alpha1.HostConditionReasonPoweringOn &&
+	if handoffCond != nil && (handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffPowerOnIntent ||
+		handoffCond.Reason == v1alpha1.HostConditionReasonPoweringOn) &&
 		!handoffCond.LastTransitionTime.IsZero() {
 		return handoffCond.LastTransitionTime.Add(networkHandoffTimeout)
 	}
@@ -1013,9 +1018,21 @@ func networkHandoffDeadline(bmi *v1alpha1.BareMetalInstance, handoffCond *metav1
 }
 
 func (r *BareMetalInstanceReconciler) failNetworkHandoff(bmi *v1alpha1.BareMetalInstance, diagnostic string) {
+	r.failNetworkHandoffWithReason(bmi, v1alpha1.HostConditionReasonNetworkHandoffFailed, diagnostic)
+}
+
+func (r *BareMetalInstanceReconciler) setNetworkHandoffPowerOnUncertain(
+	bmi *v1alpha1.BareMetalInstance, diagnostic string,
+) {
+	r.failNetworkHandoffWithReason(bmi, v1alpha1.HostConditionReasonNetworkHandoffPowerOnUncertain, diagnostic)
+}
+
+func (r *BareMetalInstanceReconciler) failNetworkHandoffWithReason(
+	bmi *v1alpha1.BareMetalInstance, conditionReason, diagnostic string,
+) {
 	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete, metav1.ConditionFalse,
-		v1alpha1.HostConditionReasonNetworkHandoffFailed, diagnostic)
+		conditionReason, diagnostic)
 	r.recordBMIEvent(bmi, corev1.EventTypeWarning, v1alpha1.HostConditionReasonNetworkHandoffFailed, diagnostic)
 }
 
@@ -1093,22 +1110,10 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkOffboardShutdown(
 
 func networkHandoffPowerOnMayBeInFlight(bmi *v1alpha1.BareMetalInstance) bool {
 	handoff := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-	if handoff == nil || (handoff.Status != metav1.ConditionFalse &&
-		(handoff.Status != metav1.ConditionUnknown ||
-			handoff.Reason != v1alpha1.HostConditionReasonPoweringOn)) {
-		return false
-	}
-	if handoff.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
-		return strings.HasPrefix(handoff.Message, networkHandoffPowerOnUncertainPrefix)
-	}
-	if handoff.Reason != v1alpha1.HostConditionReasonPoweringOn {
-		return false
-	}
-	if handoff.Message == networkHandoffPowerOffIntentMessage ||
-		handoff.Message == "Host is off; waiting to confirm power on" {
-		return false
-	}
-	return true
+	return handoff != nil &&
+		(handoff.Status == metav1.ConditionFalse || handoff.Status == metav1.ConditionUnknown) &&
+		(handoff.Reason == v1alpha1.HostConditionReasonPoweringOn ||
+			handoff.Reason == v1alpha1.HostConditionReasonNetworkHandoffPowerOnUncertain)
 }
 
 func (r *BareMetalInstanceReconciler) waitForNetworkOffboardPowerState(
@@ -1338,7 +1343,7 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	// reached the API. The networking finalizer is retained while an uncertain
 	// Create is resolved, so inventory ownership cannot be released early.
 	if r.NetworkingEnabled && controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer) &&
-		len(bareMetalInstance.Spec.NetworkAttachments) > 0 {
+		r.networkingRequested(bareMetalInstance) {
 		_, attachment, lookupErr := r.getNetworkAttachmentForDeletion(ctx, bareMetalInstance)
 		if lookupErr != nil {
 			return ctrl.Result{}, lookupErr

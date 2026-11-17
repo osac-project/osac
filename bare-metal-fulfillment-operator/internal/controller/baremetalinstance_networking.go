@@ -74,6 +74,10 @@ func primaryNetworkAttachment(bmi *v1alpha1.BareMetalInstance) *v1alpha1.BareMet
 	return nil
 }
 
+func (r *BareMetalInstanceReconciler) networkingRequested(bmi *v1alpha1.BareMetalInstance) bool {
+	return len(bmi.Spec.NetworkAttachments) > 0
+}
+
 // networkAttachmentKey returns the key of the NetworkAttachment of a
 // BareMetalInstance's attachment: baremetalinstance-<BMI API ID>-<interface>,
 // next to the BareMetalInstance. It returns false when the BareMetalInstance has
@@ -137,15 +141,14 @@ func (r *BareMetalInstanceReconciler) getNetworkAttachmentForDeletion(
 func networkAttachmentMayExist(bmi *v1alpha1.BareMetalInstance) bool {
 	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 	if ready != nil {
-		switch {
-		case ready.Status == metav1.ConditionTrue && ready.Reason == "Succeeded":
+		if ready.Status == metav1.ConditionTrue && ready.Reason == "Succeeded" {
 			return true
-		case ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentFailed:
-			return ready.Message != networkAttachmentCreateRejectedMessage
-		case ready.Reason == v1alpha1.HostConditionReasonNetworkDetaching:
-			return ready.Message == networkAttachmentAwaitingVisibilityMessage
-		case ready.Reason == v1alpha1.HostConditionReasonProgressing &&
-			ready.Message != networkAttachmentMACRecordedMessage:
+		}
+		switch ready.Reason {
+		case v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent,
+			v1alpha1.HostConditionReasonNetworkAttachmentAwaitingVisibility,
+			v1alpha1.HostConditionReasonNetworkAttachmentFailed,
+			v1alpha1.HostConditionReasonProgressing:
 			return true
 		default:
 			return false
@@ -160,8 +163,7 @@ func networkAttachmentMayExist(bmi *v1alpha1.BareMetalInstance) bool {
 func networkAttachmentCreateIntentPending(bmi *v1alpha1.BareMetalInstance) bool {
 	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 	return ready != nil && ready.Status == metav1.ConditionFalse &&
-		ready.Reason == v1alpha1.HostConditionReasonProgressing &&
-		ready.Message == networkAttachmentCreateIntentMessage
+		ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent
 }
 
 func setNetworkingProvisioningDisabled(bmi *v1alpha1.BareMetalInstance) {
@@ -244,7 +246,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 		return ctrl.Result{}, nil
 	}
 
-	if len(bareMetalInstance.Spec.NetworkAttachments) == 0 {
+	if !r.networkingRequested(bareMetalInstance) {
 		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionTrue, "Skipped", "No network attachments configured")
 		return ctrl.Result{}, nil
 	}
@@ -348,18 +350,18 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 			return ctrl.Result{}, err
 		}
 		status.MACAddress = mac
-		setNetworkAttachmentsReady(bmi, metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+		setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonNetworkAttachmentMACRecorded,
 			networkAttachmentMACRecordedMessage)
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-	if ready == nil || ready.Reason != v1alpha1.HostConditionReasonProgressing ||
-		ready.Message != networkAttachmentCreateIntentMessage {
+	if ready == nil || ready.Reason != v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent {
 		// Persist the intent in a separate reconcile before sending Create. If
 		// the API request times out, deletion can distinguish that uncertainty
 		// from the earlier MAC-only state and retain host ownership.
 		setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonProgressing, networkAttachmentCreateIntentMessage)
+			v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent, networkAttachmentCreateIntentMessage)
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 	na := &opv1alpha1.NetworkAttachment{
@@ -388,7 +390,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 			apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 			logf.FromContext(ctx).Error(err, "NetworkAttachment create was rejected", "networkAttachment", key.Name)
 			setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonNetworkAttachmentFailed, networkAttachmentCreateRejectedMessage)
+				v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected, networkAttachmentCreateRejectedMessage)
 			r.recordBMIEvent(bmi, corev1.EventTypeWarning,
 				v1alpha1.HostConditionReasonNetworkAttachmentFailed, networkAttachmentCreateRejectedMessage)
 			return ctrl.Result{}, nil
@@ -442,8 +444,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 				}
 			} else if len(na.Finalizers) == 1 && na.Finalizers[0] == BareMetalInstanceNetworkingFinalizer {
 				ready := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-				if ready == nil || ready.Reason != v1alpha1.HostConditionReasonNetworkDetaching ||
-					ready.Message != networkAttachmentCleanupMessage {
+				if ready == nil || ready.Reason != v1alpha1.HostConditionReasonNetworkDetaching {
 					setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
 						v1alpha1.HostConditionReasonNetworkDetaching, networkAttachmentCleanupMessage)
 					return ctrl.Result{RequeueAfter: networkAttachmentDeleteRetryInterval}, false, nil
@@ -475,7 +476,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 		}
 		if networkAttachmentMayExist(bareMetalInstance) {
 			setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonNetworkDetaching,
+				v1alpha1.HostConditionReasonNetworkAttachmentAwaitingVisibility,
 				"Waiting for the network attachment to become visible before cleanup")
 			return ctrl.Result{RequeueAfter: networkAttachmentDeleteRetryInterval}, false, nil
 		}

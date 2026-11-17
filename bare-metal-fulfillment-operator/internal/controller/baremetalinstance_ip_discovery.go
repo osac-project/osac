@@ -51,7 +51,7 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	if len(bareMetalInstance.Spec.NetworkAttachments) == 0 {
+	if !r.networkingRequested(bareMetalInstance) {
 		setIPDiscoveryComplete(bareMetalInstance, metav1.ConditionTrue, "Skipped", "No network attachments configured")
 		return ctrl.Result{}, nil
 	}

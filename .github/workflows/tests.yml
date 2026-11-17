@@ -369,6 +369,10 @@ jobs:
           ref: ${{ inputs.commit }}
           persist-credentials: false
 
+      - name: Install uv
+        if: inputs.kind == 'it-osac-installer'
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+
       - name: Set up Helm
         if: inputs.kind == 'it-osac-installer'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1

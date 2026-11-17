@@ -305,6 +305,7 @@ var _ = Describe("Validation and Activation", func() {
 				Id: "project-1",
 				Metadata: privatev1.Metadata_builder{
 					Tenant:     "acme",
+					Creator:    "system",
 					Finalizers: []string{finalizers.Controller},
 				}.Build(),
 				Status: privatev1.ProjectStatus_builder{
@@ -312,6 +313,7 @@ var _ = Describe("Validation and Activation", func() {
 				}.Build(),
 			}.Build()
 			functionObj.maskCalculator = masks.NewCalculator().Build()
+			functionObj.projectMembershipsClient = NewMockProjectMembershipsClient(ctrl)
 			keycloakCondition := func(status *privatev1.ProjectStatus) *privatev1.ProjectCondition {
 				for _, condition := range status.GetConditions() {
 					if condition.GetType() == privatev1.ProjectConditionType_PROJECT_CONDITION_TYPE_KEYCLOAK_SYNC {
@@ -1049,6 +1051,32 @@ var _ = Describe("ProjectMembership Creation During Activation", func() {
 		Expect(err.Error()).To(ContainSubstring("failed to create ProjectMembership for creator"))
 		Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_PENDING))
 	})
+
+	DescribeTable("activates system-attributed projects without a creator membership", func(name string) {
+		project := privatev1.Project_builder{
+			Id: "project-1",
+			Metadata: privatev1.Metadata_builder{
+				Name: name, Tenant: "acme", Creator: "system",
+			}.Build(),
+			Status: privatev1.ProjectStatus_builder{
+				State: privatev1.ProjectState_PROJECT_STATE_PENDING,
+			}.Build(),
+		}.Build()
+		path := "/" + name
+		if name == "" {
+			path = ""
+		}
+		mockIdpClient.EXPECT().CreateGroup(gomock.Any(), "acme", path+"/system:viewers").Return("viewers-id", nil)
+		mockIdpClient.EXPECT().CreateGroup(gomock.Any(), "acme", path+"/system:managers").Return("managers-id", nil)
+		task := &task{r: functionObj, project: project}
+
+		Expect(task.validateAndActivate(ctx)).To(Succeed())
+		Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_ACTIVE))
+		Expect(project.GetMetadata().GetCreator()).To(Equal("system"))
+	},
+		Entry("tenant root", ""),
+		Entry("named private-API project", "admin-project"),
+	)
 
 	It("should not attempt ProjectMembership creation when creator is empty", func() {
 		project := privatev1.Project_builder{

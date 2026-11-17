@@ -17,7 +17,7 @@
   min-width: 0;
 }
 
-.cluster-details__secondary-card {
+.cluster-details .cluster-details__secondary-card {
   border: 0;
   border-radius: var(--pf-t--global--border--radius--medium);
   background-color: var(--pf-t--global--background--color--secondary--default);
@@ -37,6 +37,18 @@
 
 .cluster-details .pf-v6-c-table {
   --pf-v6-c-table--BackgroundColor: transparent;
+}
+
+.cluster-details .cluster-details__node-sets {
+  --pf-v6-c-table--cell--PaddingInlineStart: var(--pf-t--global--spacer--sm);
+  --pf-v6-c-table--cell--PaddingInlineEnd: var(--pf-t--global--spacer--sm);
+  --pf-v6-c-table--cell--first-last-child--PaddingInline: var(--pf-t--global--spacer--sm);
+}
+
+.cluster-details .cluster-details__ssh-key {
+  max-height: 6lh;
+  overflow: auto;
+  font-size: var(--pf-t--global--font--size--body--sm);
 }
 
 .cluster-details__section-title {

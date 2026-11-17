@@ -23,6 +23,7 @@ describe('ClusterNodeSetsSection', () => {
 
     const table = screen.getByRole('grid', { name: 'Cluster node sets' });
     expect(table).toHaveClass('pf-m-compact');
+    expect(table).toHaveClass('cluster-details__node-sets');
     expect(within(table).getByRole('row', { name: 'workers — 0' })).toBeInTheDocument();
     expect(screen.queryByText('host-id')).not.toBeInTheDocument();
     expect(table.closest('.pf-v6-c-card')).toBeNull();

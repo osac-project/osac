@@ -58,7 +58,7 @@ describe('ClusterNetworkingCard', () => {
     expect(unary.mock.calls.filter(([method]) => method === Subnets.method.get)).toHaveLength(1);
   });
 
-  it.each(['missing', 'failure', 'denied', 'no-parent'])(
+  it.each(['missing', 'failure', 'denied', 'no-parent', 'wrong-id'])(
     'retains subnet and group fields when subnet lookup is %s',
     async (scenario) => {
       const transport = createMockConnectTransport(
@@ -67,6 +67,14 @@ describe('ClusterNetworkingCard', () => {
           onSubnetGet: () => {
             if (scenario === 'failure') {
               throw new Error('Subnet unavailable');
+            }
+            if (scenario === 'wrong-id') {
+              return {
+                object: create(SubnetSchema, {
+                  id: 'another-subnet',
+                  spec: { virtualNetwork: { id: 'wrong-network', name: 'Wrong network' } },
+                }),
+              };
             }
             return scenario === 'no-parent'
               ? { object: create(SubnetSchema, { id: 'subnet-1' }) }

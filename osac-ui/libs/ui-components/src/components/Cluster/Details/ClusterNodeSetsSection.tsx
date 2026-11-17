@@ -24,7 +24,11 @@ const ClusterNodeSetsSection = ({ cluster }: ClusterNodeSetsSectionProps) => {
       </StackItem>
       <StackItem>
         {nodeSetEntries.length > 0 ? (
-          <Table aria-label={t('Cluster node sets')} variant="compact">
+          <Table
+            aria-label={t('Cluster node sets')}
+            variant="compact"
+            className="cluster-details__node-sets"
+          >
             <Thead>
               <Tr>
                 <Th>{t('Name')}</Th>

@@ -24,6 +24,9 @@ describe('ClusterSettingsSection', () => {
       { transport },
     );
     expect(screen.getByText('ssh-ed25519 PUBLIC_EXAMPLE_ONLY example')).toBeInTheDocument();
+    expect(
+      screen.getByText('ssh-ed25519 PUBLIC_EXAMPLE_ONLY example').closest('dd'),
+    ).toHaveAttribute('tabindex', '0');
     expect(screen.getByText('10.128.0.0/14')).toBeInTheDocument();
     expect(screen.getByText('172.30.0.0/16')).toBeInTheDocument();
     expect(
@@ -39,6 +42,9 @@ describe('ClusterSettingsSection', () => {
     const unary = vi.spyOn(transport, 'unary');
     renderWithProviders(<ClusterSettingsSection cluster={create(ClusterSchema)} />, { transport });
     expect(screen.getAllByText('—')).toHaveLength(3);
+    expect(
+      screen.getAllByText('—').every((value) => !value.closest('dd')?.hasAttribute('tabindex')),
+    ).toBe(true);
     expect(unary).not.toHaveBeenCalled();
   });
 });

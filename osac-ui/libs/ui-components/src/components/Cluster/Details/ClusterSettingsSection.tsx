@@ -27,7 +27,10 @@ const ClusterSettingsSection = ({ cluster }: { cluster: Cluster }) => {
         <DescriptionList isCompact aria-label={t('Cluster settings')}>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('SSH public key')}</DescriptionListTerm>
-            <DescriptionListDescription>
+            <DescriptionListDescription
+              className="cluster-details__ssh-key"
+              tabIndex={cluster.spec?.sshPublicKey?.trim() ? 0 : undefined}
+            >
               {displayValue(cluster.spec?.sshPublicKey)}
             </DescriptionListDescription>
           </DescriptionListGroup>

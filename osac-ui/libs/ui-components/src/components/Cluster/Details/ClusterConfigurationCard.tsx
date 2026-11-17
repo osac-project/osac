@@ -34,7 +34,11 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
   const upgradeHistory = getControlPlaneUpgradeHistory(cluster);
 
   return (
-    <Card className="cluster-details__secondary-card" aria-label={t('Cluster version')}>
+    <Card
+      variant="secondary"
+      className="cluster-details__secondary-card"
+      aria-label={t('Cluster version')}
+    >
       <CardBody>
         <Stack hasGutter>
           <StackItem>

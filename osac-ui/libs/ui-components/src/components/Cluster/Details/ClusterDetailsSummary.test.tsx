@@ -142,6 +142,8 @@ describe('ClusterDetailsSummary', () => {
     'denied-list',
     'denied-get',
     'unavailable',
+    'missing-permission-status',
+    'default-permission',
   ])('keeps root project readable without a broken route when %s', async (scenario) => {
     const root = create(ProjectSchema, {
       id: scenario === 'empty-id' ? '' : 'real-root',
@@ -160,6 +162,12 @@ describe('ClusterDetailsSummary', () => {
         onSelfSubjectAccessReview: (request) => {
           if (scenario === 'unavailable') {
             throw new Error('Permission service unavailable');
+          }
+          if (scenario === 'missing-permission-status') {
+            return { object: {} };
+          }
+          if (scenario === 'default-permission') {
+            return { object: { status: {} } };
           }
           return {
             object: {
@@ -187,7 +195,11 @@ describe('ClusterDetailsSummary', () => {
     );
     await screen.findByText('Project permissions settled');
     await waitFor(() => expect(unary).toHaveBeenCalled());
-    if (!['denied-list', 'unavailable'].includes(scenario)) {
+    if (
+      !['denied-list', 'unavailable', 'missing-permission-status', 'default-permission'].includes(
+        scenario,
+      )
+    ) {
       await waitFor(() =>
         expect(unary.mock.calls.some(([method]) => method === Projects.method.list)).toBe(true),
       );

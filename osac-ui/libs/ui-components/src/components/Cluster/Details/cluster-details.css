@@ -61,8 +61,8 @@
 }
 
 .cluster-details__node-set-summary {
-  color: var(--pf-t--global--text--color--subtle);
-  font-size: var(--pf-t--global--font--size--body--sm);
+  --pf-v6-c-content--Color: var(--pf-t--global--text--color--subtle);
+  --pf-v6-c-content--FontSize: var(--pf-t--global--font--size--body--sm);
 }
 
 .cluster-details__card-header .pf-v6-c-card__header-main {

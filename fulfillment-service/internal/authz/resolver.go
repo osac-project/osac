@@ -35,12 +35,11 @@ type Subject struct {
 
 // BindingGrant records the binding and Role that supplied a tenant's methods.
 type BindingGrant struct {
-	BindingID     string
-	BindingTenant string
-	RoleID        string
-	RoleName      string
-	RoleTenant    string
-	Rules         []*privatev1.PermissionRule
+	BindingID  string
+	RoleID     string
+	RoleName   string
+	RoleTenant string
+	Rules      []*privatev1.PermissionRule
 }
 
 // Grants contains expanded methods for one tenant and their provenance.

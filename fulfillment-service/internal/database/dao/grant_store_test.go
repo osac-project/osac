@@ -43,10 +43,10 @@ func (r *grantRows) Scan(dest ...any) error {
 	if r.scanErr != nil {
 		return r.scanErr
 	}
-	for _, field := range dest[:5] {
+	for _, field := range dest[:4] {
 		*field.(*string) = "test"
 	}
-	*dest[5].(*[]byte) = []byte(r.data)
+	*dest[4].(*[]byte) = []byte(r.data)
 	return nil
 }
 

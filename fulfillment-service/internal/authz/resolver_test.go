@@ -78,9 +78,9 @@ var _ = Describe("Resolver", func() {
 		permissionCatalog, err = catalog.Build(protoregistry.GlobalFiles)
 		Expect(err).ToNot(HaveOccurred())
 		store = &stubStore{grants: []BindingGrant{
-			{BindingID: "b1", BindingTenant: "tenant-a", RoleID: "read", RoleName: "reader", RoleTenant: "shared",
+			{BindingID: "b1", RoleID: "read", RoleName: "reader", RoleTenant: "shared",
 				Rules: rule("osac.public.clusters", "list", "get", "get")},
-			{BindingID: "b2", BindingTenant: "tenant-a", RoleID: "read", RoleName: "reader", RoleTenant: "shared",
+			{BindingID: "b2", RoleID: "read", RoleName: "reader", RoleTenant: "shared",
 				Rules: rule("osac.public.clusters", "list", "get")},
 		}}
 		resolver, err = NewResolver(store, permissionCatalog)

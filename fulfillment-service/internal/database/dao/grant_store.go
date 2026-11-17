@@ -33,7 +33,7 @@ var _ authz.Store = GrantStore{}
 
 // Base query for users or service accounts
 const grantColumns = `
- select b.id, b.tenant, r.id, r.name, r.tenant, r.data
+ select b.id, r.id, r.name, r.tenant, r.data
  from role_bindings b
  join roles r on r.id = b.data->'spec'->'role'->>'id'
   and r.tenant in ($1, 'shared') and r.deletion_timestamp = 'epoch'
@@ -87,7 +87,7 @@ func (s GrantStore) listGrants(ctx context.Context, query, tenant, subject strin
 		for rows.Next() {
 			var grant authz.BindingGrant
 			var data []byte
-			err = rows.Scan(&grant.BindingID, &grant.BindingTenant, &grant.RoleID,
+			err = rows.Scan(&grant.BindingID, &grant.RoleID,
 				&grant.RoleName, &grant.RoleTenant, &data)
 			if err != nil {
 				yield(authz.BindingGrant{}, err)

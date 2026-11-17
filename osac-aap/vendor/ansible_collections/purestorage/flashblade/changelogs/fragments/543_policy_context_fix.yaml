@@ -1,3 +1,0 @@
-bugfixes:
- - purefb_policy - Only send context_names when a context is set, and only default it for fleet members, avoiding empty-context errors and "not in a fleet" errors on standalone arrays
- - purefb_policy - Create a policy rule when the client lookup returns no match or an error, fixing failures adding the first rule for a client while keeping the task idempotent

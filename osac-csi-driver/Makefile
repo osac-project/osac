@@ -7,7 +7,7 @@ IMG ?= ghcr.io/osac-project/osac-csi-driver:latest
 CONTAINERFILE ?= Containerfile
 
 # Go version for local make targets. Keep in sync with go.mod.
-GO_VERSION ?= 1.26.3
+GO_VERSION ?= 1.26.10
 GOTOOLCHAIN ?= go$(GO_VERSION)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)

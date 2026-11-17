@@ -184,6 +184,7 @@ var _ = Describe("Catalog Item typed field policies", func() {
 		)
 		Expect(clusterVersion.GetId()).To(Equal("version-id"))
 		Expect(clusterVersion.GetName()).To(Equal("current-version"))
+		Expect(clusterVersion.GetTenant()).To(Equal(auth.SharedTenant))
 		Expect(clusterVersion.GetProject()).To(Equal("project-b"))
 		Expect(clusterVersion.GetShared()).To(BeTrue())
 

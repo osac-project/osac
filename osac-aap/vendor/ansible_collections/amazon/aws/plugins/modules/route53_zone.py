@@ -67,8 +67,19 @@ options:
         description:
             - Enables DNSSEC signing in a specific hosted zone.
         type: bool
-        default: false
         version_added: 9.2.0
+    wait:
+        description:
+            - Wait until the DNSSEC changes have been replicated.
+        type: bool
+        default: false
+        version_added: 11.4.0
+    wait_timeout:
+        description:
+            - How long to wait for the DNSSEC changes to be replicated, in seconds.
+        default: 300
+        type: int
+        version_added: 11.4.0
 extends_documentation_fragment:
     - amazon.aws.common.modules
     - amazon.aws.region.modules
@@ -128,6 +139,13 @@ EXAMPLES = r"""
     tags:
       Support: Ansible Community
     purge_tags: true
+
+- name: enable DNSSEC signing and wait for changes to propagate
+  amazon.aws.route53_zone:
+    zone: example.com
+    dnssec: true
+    wait: true
+    wait_timeout: 600
 """
 
 RETURN = r"""
@@ -286,12 +304,15 @@ from ansible.module_utils.common.dict_transformations import camel_dict_to_snake
 from ansible_collections.amazon.aws.plugins.module_utils.botocore import is_boto3_error_code
 from ansible_collections.amazon.aws.plugins.module_utils.modules import AnsibleAWSModule
 from ansible_collections.amazon.aws.plugins.module_utils.retries import AWSRetry
+from ansible_collections.amazon.aws.plugins.module_utils.route53 import AnsibleRoute53Error
 from ansible_collections.amazon.aws.plugins.module_utils.route53 import get_tags
 from ansible_collections.amazon.aws.plugins.module_utils.route53 import manage_tags
+from ansible_collections.amazon.aws.plugins.module_utils.waiters import get_waiter
 
 try:
     from botocore.exceptions import BotoCoreError
     from botocore.exceptions import ClientError
+    from botocore.exceptions import WaiterError
 except ImportError:
     pass  # caught by AnsibleAWSModule
 
@@ -327,18 +348,36 @@ def get_dnssec(hosted_zone_id: str) -> Dict[str, Any]:
         module.fail_json_aws(e, msg=f"Could not get dnssec details about hosted zone {hosted_zone_id}")
 
 
-def enable_hosted_zone_dnssec(zone_id: str) -> None:
+def enable_hosted_zone_dnssec(zone_id: str) -> Dict[str, Any]:
     try:
-        client.enable_hosted_zone_dnssec(HostedZoneId=zone_id)
+        return client.enable_hosted_zone_dnssec(HostedZoneId=zone_id)
     except (BotoCoreError, ClientError) as e:
         module.fail_json_aws(e, msg=f"Could not enable DNSSEC for {zone_id}")
 
 
-def disable_hosted_zone_dnssec(zone_id: str) -> None:
+def disable_hosted_zone_dnssec(zone_id: str) -> Dict[str, Any]:
     try:
-        client.disable_hosted_zone_dnssec(HostedZoneId=zone_id)
+        return client.disable_hosted_zone_dnssec(HostedZoneId=zone_id)
     except (BotoCoreError, ClientError) as e:
         module.fail_json_aws(e, msg=f"Could not enable DNSSEC for {zone_id}")
+
+
+def wait_for_dnssec_change(change_id: str) -> None:
+    """Wait for DNSSEC changes to propagate using Route53 change waiter."""
+    if not module.params.get("wait"):
+        return
+
+    try:
+        waiter = get_waiter(client, "resource_record_sets_changed")
+        waiter.wait(
+            Id=change_id,
+            WaiterConfig=dict(
+                Delay=5,
+                MaxAttempts=module.params.get("wait_timeout") // 5,
+            ),
+        )
+    except WaiterError as e:
+        module.fail_json_aws(e, msg="Timeout waiting for DNSSEC changes to be replicated")
 
 
 def get_hosted_zone(hosted_zone_id: str) -> Dict[str, Any]:
@@ -352,6 +391,9 @@ def ensure_dnssec(zone_id: str) -> bool:
     changed = False
     dnssec = module.params.get("dnssec")
 
+    if dnssec is None:
+        return changed
+
     response = get_dnssec(zone_id)
     dnssec_status = response["Status"]["ServeSignature"]
 
@@ -362,7 +404,8 @@ def ensure_dnssec(zone_id: str) -> bool:
         if dnssec_status == "NOT_SIGNING":
             # Enable DNSSEC
             if not module.check_mode:
-                enable_hosted_zone_dnssec(zone_id)
+                result = enable_hosted_zone_dnssec(zone_id)
+                wait_for_dnssec_change(result["ChangeInfo"]["Id"])
             changed = True
         elif dnssec_status == "DELETING":
             # DNSSEC signing is in the process of being removed for the hosted zone.
@@ -374,7 +417,8 @@ def ensure_dnssec(zone_id: str) -> bool:
         if dnssec_status == "SIGNING":
             # Disable DNSSEC
             if not module.check_mode:
-                disable_hosted_zone_dnssec(zone_id)
+                result = disable_hosted_zone_dnssec(zone_id)
+                wait_for_dnssec_change(result["ChangeInfo"]["Id"])
             changed = True
         # if dnssec_status == "DELETING":
         # DNSSEC signing is in the process of being removed for the hosted zone.
@@ -425,8 +469,8 @@ def create(matching_zones):
 
         # Handle Tags
         if tags is not None:
-            changed |= manage_tags(module, client, "hostedzone", zone_id, tags, purge_tags)
-        result["tags"] = get_tags(module, client, "hostedzone", zone_id)
+            changed |= manage_tags(client, "hostedzone", zone_id, tags, purge_tags, module.check_mode)
+        result["tags"] = get_tags(client, "hostedzone", zone_id)
     else:
         result["tags"] = tags
 
@@ -661,7 +705,9 @@ def main():
         delegation_set_id=dict(),
         tags=dict(type="dict", aliases=["resource_tags"]),
         purge_tags=dict(type="bool", default=True),
-        dnssec=dict(type="bool", default=False),
+        dnssec=dict(type="bool"),
+        wait=dict(type="bool", default=False),
+        wait_timeout=dict(type="int", default=300),
     )
 
     mutually_exclusive = [
@@ -678,29 +724,32 @@ def main():
         supports_check_mode=True,
     )
 
-    zone_in = module.params.get("zone").lower()
-    state = module.params.get("state").lower()
-    vpc_id = module.params.get("vpc_id")
-    vpc_region = module.params.get("vpc_region")
-    vpcs = module.params.get("vpcs")
+    try:
+        zone_in = module.params.get("zone").lower()
+        state = module.params.get("state").lower()
+        vpc_id = module.params.get("vpc_id")
+        vpc_region = module.params.get("vpc_region")
+        vpcs = module.params.get("vpcs")
 
-    if not zone_in.endswith("."):
-        zone_in += "."
+        if not zone_in.endswith("."):
+            zone_in += "."
 
-    private_zone = bool(vpcs or (vpc_id and vpc_region))
+        private_zone = bool(vpcs or (vpc_id and vpc_region))
 
-    client = module.client("route53", retry_decorator=AWSRetry.jittered_backoff())
+        client = module.client("route53", retry_decorator=AWSRetry.jittered_backoff())
 
-    zones = find_zones(zone_in, private_zone)
-    if state == "present":
-        changed, result = create(matching_zones=zones)
-    elif state == "absent":
-        changed, result = delete(matching_zones=zones)
+        zones = find_zones(zone_in, private_zone)
+        if state == "present":
+            changed, result = create(matching_zones=zones)
+        elif state == "absent":
+            changed, result = delete(matching_zones=zones)
 
-    if isinstance(result, dict):
-        module.exit_json(changed=changed, result=result, **result)
-    else:
-        module.exit_json(changed=changed, result=result)
+        if isinstance(result, dict):
+            module.exit_json(changed=changed, result=result, **result)
+        else:
+            module.exit_json(changed=changed, result=result)
+    except AnsibleRoute53Error as e:
+        module.fail_json_aws_error(e)
 
 
 if __name__ == "__main__":

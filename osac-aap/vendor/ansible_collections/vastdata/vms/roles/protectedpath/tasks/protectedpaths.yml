@@ -1,0 +1,571 @@
+---
+- name: Require protected path inputs
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.tenant is defined
+      - item.dir is defined
+      - item.protection_policy is defined or (_streams_present | length) > 0
+      - _streams is iterable
+      - _streams is not string
+      - _streams is not mapping
+      - (_streams_present | length) > 0 or _path_capabilities in ['LOCAL', 'ASYNC_REPLICATION']
+    fail_msg: >-
+      Protected path "{{ item.name | default('?') }}" must define name, tenant,
+      and dir. If streams is omitted or empty, capabilities must be
+      LOCAL or ASYNC_REPLICATION and protection_policy must reference a local policy.
+      If streams is provided, at least one non-absent stream must be present.
+  loop: "{{ protectedpaths }}"
+  loop_control:
+    label: "{{ item.cluster }}:{{ item.name | default('?') }}"
+  vars:
+    _streams: "{{ item.streams | default([]) }}"
+    _streams_present: >-
+      {{
+        _streams | rejectattr('state', 'defined') | list
+        + (_streams | selectattr('state', 'defined') | rejectattr('state', 'equalto', 'absent') | list)
+      }}
+    _path_capabilities: "{{ item.capabilities | default('ASYNC_REPLICATION') }}"
+
+- name: Require protected path stream inputs
+  ansible.builtin.assert:
+    that:
+      - item.1 is mapping
+      - item.1.remote_cluster is defined
+      - (item.1.remote_cluster | default('')) in protectedpath_vms
+      - item.1.remote_tenant is defined
+      - item.1.remote_dir is defined
+      - item.1.protection_policy is defined
+      - _stream_capabilities != 'LOCAL'
+    fail_msg: >-
+      Stream for protected path "{{ item.0.name | default('?') }}" must define
+      remote_cluster, remote_tenant, remote_dir, and protection_policy.
+      Stream capabilities defaults to ASYNC_REPLICATION when omitted; LOCAL is
+      not supported for streams.
+  loop: "{{ protectedpaths | subelements('streams', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.0.cluster | default('?') }}:{{ item.0.name | default('?') }}:{{ item.1.name | default(item.1.protection_policy | default('?')) }}"
+  vars:
+    _stream_capabilities: "{{ item.1.capabilities | default('ASYNC_REPLICATION') }}"
+
+- name: Read ungraceful failover remote protected paths
+  vastdata.vms.protectedpaths:
+    vms: "{{ protectedpath_vms[_stream.remote_cluster] }}"
+    name: "{{ _path.name }}"
+    tenant_id: "{{ _failover_remote_tenant_id | int }}"
+    state: present
+  check_mode: true
+  register: _ungraceful_failover_remote_paths_result
+  until: (_failover_remote_path_id | int) > 0
+  retries: "{{ _stream.failover_path_retries | default(_path.failover_path_retries | default(30)) }}"
+  delay: "{{ _stream.failover_path_retry_delay | default(_path.failover_path_retry_delay | default(10)) }}"
+  loop: "{{ protectedpaths | subelements('streams', skip_missing=True) }}"
+  loop_control:
+    label: "{{ _path.cluster | default('?') }}:{{ _path.name | default('?') }}:failover:{{ _stream.remote_cluster | default('?') }}"
+  when:
+    - (_path.state | default('present')) == 'present'
+    - (_stream.state | default('present')) == 'present'
+    - _stream.failover | default(false) | bool
+    - not (_stream.graceful | default(true) | bool)
+  vars:
+    _path: "{{ item.0 }}"
+    _stream: "{{ item.1 }}"
+    _failover_remote_tenant_id: "{{ lookup('vastdata.vms.vast_name_to_id', _stream.remote_tenant, protectedpath_vms[_stream.remote_cluster], 'tenants') }}"
+    _failover_remote_raw: "{{ _ungraceful_failover_remote_paths_result.protectedpaths | default({}) }}"
+    _failover_remote_path_id: "{{ _failover_remote_raw.id | default(_failover_remote_raw.Id | default(0)) }}"
+
+- name: Trigger ungraceful protected path failover on remote clusters
+  vastdata.vms.protectedpaths:
+    vms: "{{ protectedpath_vms[_stream.remote_cluster] }}"
+    id: "{{ _failover_remote_path_id | int }}"
+    failover: true
+    graceful: false
+    state: present
+    wait: "{{ _stream.wait | default(_path.wait | default(_path.protectedpaths_wait | default(omit))) }}"
+    wait_timeout: "{{ _stream.wait_timeout | default(_path.wait_timeout | default(_path.protectedpaths_wait_timeout | default(omit))) }}"
+  loop: "{{ _ungraceful_failover_remote_paths_result.results | default([]) }}"
+  loop_control:
+    label: "{{ _path.cluster | default('?') }}:{{ _path.name | default('?') }}:failover:{{ _stream.remote_cluster | default('?') }}"
+  when:
+    - (_path.state | default('present')) == 'present'
+    - (_stream.state | default('present')) == 'present'
+    - _stream.failover | default(false) | bool
+    - not (_stream.graceful | default(true) | bool)
+    - (_failover_remote_path_id | int) > 0
+  vars:
+    _path: "{{ item.item.0 }}"
+    _stream: "{{ item.item.1 }}"
+    _failover_remote_path_id: "{{ item.protectedpaths.id | default(item.protectedpaths.Id | default(0)) }}"
+
+- name: Require standby stream inputs
+  ansible.builtin.assert:
+    that:
+      - item.1 is mapping
+      - item.1.source_cluster is defined
+      - (item.1.source_cluster | default('')) in protectedpath_vms
+      - item.1.remote_cluster is defined
+      - (item.1.remote_cluster | default('')) in protectedpath_vms
+      - item.1.protection_policy is defined
+      - _standby_capabilities != 'LOCAL'
+      - (_source_streams | length) == 1
+    fail_msg: >-
+      Standby stream for protected path "{{ item.0.name | default('?') }}"
+      must define source_cluster, remote_cluster, and protection_policy.
+      source_cluster must match exactly one regular stream remote_cluster on the
+      same protected path. Stream capabilities defaults to ASYNC_REPLICATION;
+      LOCAL is not supported for streams.
+  loop: "{{ protectedpaths | subelements('standby_streams', skip_missing=True) }}"
+  loop_control:
+    label: >-
+      {{ item.0.cluster | default('?') }}:{{ item.0.name | default('?') }}:standby:{{ item.1.source_cluster | default('?') }}:{{
+      item.1.protection_policy | default('?') }}
+  vars:
+    _standby_capabilities: "{{ item.1.capabilities | default('ASYNC_REPLICATION') }}"
+    _source_streams: "{{ item.0.streams | default([]) | selectattr('remote_cluster', 'equalto', item.1.source_cluster | default('')) | list }}"
+
+- name: Ensure protected paths
+  vastdata.vms.protectedpaths:
+    vms: "{{ protectedpath_vms[item.cluster] }}"
+    id: "{{ item.id | default(omit) }}"
+    name: "{{ item.name }}"
+    tenant_id: "{{ _tenant_id | int }}"
+    remote_tenant_guid: "{{ _initial_remote_tenant_guid if _has_streams else omit }}"
+    remote_target_id: "{{ (_initial_remote_target_id | int) if _initial_needs_remote_target else omit }}"
+    capabilities: "{{ _initial_capabilities }}"
+    source_member_capabilities: >-
+      {{
+        item.source_member_capabilities | default(_initial_stream.source_member_capabilities | default(omit))
+        if _has_streams
+        else item.source_member_capabilities | default(omit)
+      }}
+    source_dir: "{{ item.dir }}"
+    target_exported_dir: "{{ _initial_stream.remote_dir if _has_streams else item.dir }}"
+    protection_policy_id: "{{ _initial_protection_policy_id | string }}"
+    replication_policy_id: >-
+      {{
+        item.replication_policy_id | default(_initial_stream.replication_policy_id | default(omit))
+        if _has_streams
+        else item.replication_policy_id | default(omit)
+      }}
+    lease_expiry_time: >-
+      {{
+        item.lease_expiry_time | default(_initial_stream.lease_expiry_time | default(omit))
+        if _has_streams
+        else item.lease_expiry_time | default(omit)
+      }}
+    sync_disconnect_time: >-
+      {{
+        item.sync_disconnect_time | default(_initial_stream.sync_disconnect_time | default(omit))
+        if _has_streams
+        else item.sync_disconnect_time | default(omit)
+      }}
+    sync_interval: >-
+      {{
+        item.sync_interval | default(_initial_stream.sync_interval | default(omit))
+        if _has_streams
+        else item.sync_interval | default(omit)
+      }}
+    enabled: "{{ item.enabled | default(true) }}"
+    state: "{{ item.state | default('present') }}"
+    wait: "{{ item.wait | default(item.protectedpaths_wait | default(omit)) }}"
+    wait_timeout: "{{ item.wait_timeout | default(item.protectedpaths_wait_timeout | default(omit)) }}"
+  loop: "{{ protectedpaths }}"
+  loop_control:
+    label: "{{ item.cluster }}:{{ item.name | default('?') }}"
+  register: _protectedpaths_result
+  when:
+    - not _path_skip_source_cluster
+  vars:
+    _streams: "{{ item.streams | default([]) }}"
+    _streams_present: >-
+      {{
+        _streams | rejectattr('state', 'defined') | list
+        + (_streams | selectattr('state', 'defined') | rejectattr('state', 'equalto', 'absent') | list)
+      }}
+    _source_streams_present: >-
+      {{
+        (_streams_present | rejectattr('failover', 'defined') | list)
+        + (_streams_present | selectattr('failover', 'defined') | rejectattr('failover') | list)
+        + (_streams_present | selectattr('failover', 'defined') | selectattr('failover') | rejectattr('graceful', 'defined') | list)
+        + (_streams_present | selectattr('failover', 'defined') | selectattr('failover') | selectattr('graceful', 'defined') | selectattr('graceful') | list)
+      }}
+    _path_skip_source_cluster: "{{ (_streams_present | length) > 0 and (_source_streams_present | length) < (_streams_present | length) }}"
+    _has_streams: "{{ (_source_streams_present | length) > 0 }}"
+    _initial_stream: "{{ _source_streams_present | first | default({}) }}"
+    _raw_capabilities: >-
+      {{
+        _initial_stream.capabilities
+        | default(item.capabilities | default('ASYNC_REPLICATION'))
+      }}
+    _initial_capabilities: "{{ 'ASYNC_REPLICATION' if (_raw_capabilities == 'LOCAL') else _raw_capabilities }}"
+    _initial_needs_remote_target: "{{ _initial_capabilities == 'SYNC_REPLICATION' }}"
+    _tenant_id: "{{ lookup('vastdata.vms.vast_name_to_id', item.tenant, protectedpath_vms[item.cluster], 'tenants') }}"
+    _initial_remote_tenant_guid: >-
+      {{
+        lookup('vastdata.vms.vast_name_to_id', _initial_stream.remote_tenant, protectedpath_vms[_initial_stream.remote_cluster], 'tenants', id_field='guid')
+        if _has_streams
+        else none
+      }}
+    _initial_remote_target_id: >-
+      {{
+        lookup('vastdata.vms.vast_target_cluster_to_remote_target_id',
+               item.cluster,
+               _initial_stream.remote_cluster,
+               protectedpath_vms[item.cluster],
+               replicationpeers,
+               vippools)
+        if _initial_needs_remote_target
+        else none
+      }}
+    _initial_protection_policy_id: >-
+      {{
+        lookup('vastdata.vms.vast_name_to_id',
+               (_initial_stream.protection_policy if _has_streams else item.protection_policy),
+               protectedpath_vms[item.cluster], 'protectionpolicies')
+      }}
+
+- name: Ensure protected path initial stream capabilities
+  vastdata.vms.protectedpath_streams:
+    vms: "{{ protectedpath_vms[_path.cluster] }}"
+    protectedpath_id: "{{ _protected_path_id | int }}"
+    name: "{{ _initial_stream.name | default(_path.name) }}"
+    capabilities: "{{ _initial_capabilities }}"
+    source_member_capabilities: "{{ _path.source_member_capabilities | default(_initial_stream.source_member_capabilities | default(omit)) }}"
+    state: present
+    wait: "{{ _path.wait | default(_path.protectedpaths_wait | default(omit)) }}"
+    wait_timeout: "{{ _path.wait_timeout | default(_path.protectedpaths_wait_timeout | default(omit)) }}"
+  register: _initial_stream_capabilities_result
+  loop: "{{ _protectedpaths_result.results | default([]) }}"
+  loop_control:
+    label: "{{ _path.cluster }}:{{ _path.name | default('?') }}"
+  when:
+    - (_path.state | default('present')) == 'present'
+    - (_protected_path_id | int) > 0
+    - (_streams_present | length) > 0
+    - _initial_stream_exists
+  vars:
+    _path_result: "{{ item }}"
+    _path: "{{ item.item }}"
+    _protected_path_raw: "{{ _path_result.protectedpaths | default({}) }}"
+    _protected_path_id: "{{ _protected_path_raw.id | default(_protected_path_raw.Id | default(0)) }}"
+    _streams: "{{ _path.streams | default([]) }}"
+    _current_streams: "{{ _path_result.protectedpaths.replication_streams | default([]) }}"
+    _streams_present_all: >-
+      {{
+        _streams | rejectattr('state', 'defined') | list
+        + (_streams | selectattr('state', 'defined') | rejectattr('state', 'equalto', 'absent') | list)
+      }}
+    _streams_present: >-
+      {{
+        (_streams_present_all | rejectattr('failover', 'defined') | list)
+        + (_streams_present_all | selectattr('failover', 'defined') | rejectattr('failover') | list)
+        + (_streams_present_all | selectattr('failover', 'defined') | selectattr('failover') | rejectattr('graceful', 'defined') | list)
+        + (
+          _streams_present_all | selectattr('failover', 'defined') | selectattr('failover')
+          | selectattr('graceful', 'defined') | selectattr('graceful') | list
+        )
+      }}
+    _initial_stream: "{{ _streams_present | first | default({}) }}"
+    _initial_stream_name: "{{ _initial_stream.name | default(_path.name) }}"
+    _initial_stream_exists: "{{ (_current_streams | selectattr('name', 'equalto', _initial_stream_name) | list | length) > 0 }}"
+    _raw_capabilities: "{{ _initial_stream.capabilities | default(_path.capabilities | default('ASYNC_REPLICATION')) }}"
+    _initial_capabilities: "{{ 'ASYNC_REPLICATION' if (_raw_capabilities == 'LOCAL') else _raw_capabilities }}"
+
+- name: Ensure protected path streams
+  vastdata.vms.protectedpath_streams:
+    vms: "{{ protectedpath_vms[_path.cluster] }}"
+    protectedpath_id: "{{ _protected_path_id | int }}"
+    stream_id: "{{ _stream.stream_id | default(omit) }}"
+    name: "{{ _stream_name }}"
+    target_exported_dir: "{{ _stream.remote_dir }}"
+    protection_policy_id: "{{ (_stream_protection_policy_id | string) if (_stream_state == 'present') else omit }}"
+    remote_tenant_guid: "{{ _stream_remote_tenant_guid if _stream_state == 'present' else omit }}"
+    capabilities: "{{ _stream_capabilities if _stream_state == 'present' else omit }}"
+    remote_target_id: "{{ (_stream_remote_target_id | int) if _stream_needs_remote_target and _stream_state == 'present' else omit }}"
+    sync_interval: "{{ _stream.sync_interval | default(omit) }}"
+    sync_disconnect_time: "{{ _stream.sync_disconnect_time | default(omit) }}"
+    lease_expiry_time: "{{ _stream.lease_expiry_time | default(omit) }}"
+    source_member_capabilities: "{{ _stream.source_member_capabilities | default(omit) }}"
+    view_replication_enabled: "{{ _stream.view_replication_enabled | default(true) }}"
+    state: "{{ _stream_state }}"
+    wait: "{{ _stream.wait | default(_path.wait | default(_path.protectedpaths_wait | default(omit))) }}"
+    wait_timeout: "{{ _stream.wait_timeout | default(_path.wait_timeout | default(_path.protectedpaths_wait_timeout | default(omit))) }}"
+  register: _stream_result
+  until: _stream_result is succeeded or not (_stream_retryable_create | bool)
+  retries: "{{ _stream.retries | default(_path.stream_retries | default(18)) }}"
+  delay: "{{ _stream.retry_delay | default(_path.stream_retry_delay | default(10)) }}"
+  loop: "{{ _protectedpaths_result.results | default([]) | subelements('item.streams', skip_missing=True) }}"
+  loop_control:
+    label: "{{ _path.cluster }}:{{ _path.name | default('?') }}:{{ _stream_name }}"
+  when:
+    - (_path.state | default('present')) == 'present'
+    - (_protected_path_id | int) > 0
+    - not (_stream_is_existing_initial | bool)
+    - not (_stream_remote_only_ungraceful_failover | bool)
+  vars:
+    _path_result: "{{ item.0 }}"
+    _path: "{{ item.0.item }}"
+    _stream: "{{ item.1 }}"
+    _protected_path_raw: "{{ _path_result.protectedpaths | default({}) }}"
+    _protected_path_id: "{{ _protected_path_raw.id | default(_protected_path_raw.Id | default(0)) }}"
+    _streams: "{{ _path.streams | default([]) }}"
+    _current_streams: "{{ _path_result.protectedpaths.replication_streams | default([]) }}"
+    _streams_present_all: >-
+      {{
+        _streams | rejectattr('state', 'defined') | list
+        + (_streams | selectattr('state', 'defined') | rejectattr('state', 'equalto', 'absent') | list)
+      }}
+    _streams_present: >-
+      {{
+        (_streams_present_all | rejectattr('failover', 'defined') | list)
+        + (_streams_present_all | selectattr('failover', 'defined') | rejectattr('failover') | list)
+        + (_streams_present_all | selectattr('failover', 'defined') | selectattr('failover') | rejectattr('graceful', 'defined') | list)
+        + (
+          _streams_present_all | selectattr('failover', 'defined') | selectattr('failover')
+          | selectattr('graceful', 'defined') | selectattr('graceful') | list
+        )
+      }}
+    _initial_stream: "{{ _streams_present | first | default({}) }}"
+    _stream_state: "{{ _stream.state | default('present') }}"
+    _stream_capabilities: "{{ _stream.capabilities | default('ASYNC_REPLICATION') }}"
+    _stream_needs_remote_target: "{{ _stream_capabilities == 'SYNC_REPLICATION' }}"
+    _stream_name: "{{ _stream.name | default(_path.name ~ '_' ~ (_stream.protection_policy | default(_stream.remote_cluster))) }}"
+    _stream_exists: "{{ (_current_streams | selectattr('name', 'equalto', _stream_name) | list | length) > 0 }}"
+    _path_name_stream_matches_policy: >-
+      {{
+        (
+          _current_streams
+          | selectattr('name', 'equalto', _path.name)
+          | selectattr('protection_policy_name', 'equalto', _stream.protection_policy | default(''))
+          | list
+          | length
+        ) > 0
+      }}
+    _stream_is_existing_initial: "{{ _stream_state != 'absent' and _path_name_stream_matches_policy }}"
+    _stream_remote_only_ungraceful_failover: "{{ _stream.failover | default(false) | bool and not (_stream.graceful | default(true) | bool) }}"
+    _stream_remote_tenant_guid: >-
+      {{
+        lookup('vastdata.vms.vast_name_to_id', _stream.remote_tenant, protectedpath_vms[_stream.remote_cluster], 'tenants', id_field='guid')
+        if _stream_state == 'present'
+        else none
+      }}
+    _stream_remote_target_id: >-
+      {{
+        lookup('vastdata.vms.vast_target_cluster_to_remote_target_id',
+               _path.cluster,
+               _stream.remote_cluster,
+               protectedpath_vms[_path.cluster],
+               replicationpeers,
+               vippools)
+        if _stream_needs_remote_target and _stream_state == 'present'
+        else none
+      }}
+    _stream_protection_policy_id: >-
+      {{
+        lookup('vastdata.vms.vast_name_to_id', _stream.protection_policy, protectedpath_vms[_path.cluster], 'protectionpolicies')
+        if _stream_state == 'present'
+        else none
+      }}
+    _stream_msg: "{{ _stream_result.msg | default('') | string | lower }}"
+    _stream_retryable: >-
+      {{
+        (_stream_result is failed)
+        and (
+          'being added/removed' in _stream_msg
+          or 'service_unavailable' in _stream_msg
+          or 'communication_error' in _stream_msg
+          or '503' in _stream_msg
+        )
+        and ('already exists' not in _stream_msg)
+      }}
+    _stream_retryable_create: "{{ (_stream_state == 'present') and (not _stream_exists) and (_stream_retryable | bool) }}"
+
+- name: Read failover remote protected paths
+  vastdata.vms.protectedpaths:
+    vms: "{{ protectedpath_vms[_stream.remote_cluster] }}"
+    name: "{{ _path.name }}"
+    tenant_id: "{{ _failover_remote_tenant_id | int }}"
+    state: present
+  check_mode: true
+  register: _failover_remote_paths_result
+  until: (_failover_remote_path_id | int) > 0
+  retries: "{{ _stream.failover_path_retries | default(_path.failover_path_retries | default(30)) }}"
+  delay: "{{ _stream.failover_path_retry_delay | default(_path.failover_path_retry_delay | default(10)) }}"
+  loop: "{{ _protectedpaths_result.results | default([]) | subelements('item.streams', skip_missing=True) }}"
+  loop_control:
+    label: "{{ _path.cluster }}:{{ _path.name | default('?') }}:failover:{{ _stream.remote_cluster }}"
+  when:
+    - (_path.state | default('present')) == 'present'
+    - (_stream.state | default('present')) == 'present'
+    - _stream.failover | default(false) | bool
+    - _stream.graceful | default(true) | bool
+  vars:
+    _path_result: "{{ item.0 }}"
+    _path: "{{ item.0.item }}"
+    _stream: "{{ item.1 }}"
+    _failover_remote_tenant_id: "{{ lookup('vastdata.vms.vast_name_to_id', _stream.remote_tenant, protectedpath_vms[_stream.remote_cluster], 'tenants') }}"
+    _failover_remote_raw: "{{ _failover_remote_paths_result.protectedpaths | default({}) }}"
+    _failover_remote_path_id: "{{ _failover_remote_raw.id | default(_failover_remote_raw.Id | default(0)) }}"
+
+- name: Trigger protected path failover on remote clusters
+  vastdata.vms.protectedpaths:
+    vms: "{{ protectedpath_vms[_stream.remote_cluster] }}"
+    id: "{{ _failover_remote_path_id | int }}"
+    failover: true
+    graceful: "{{ _stream.graceful | default(true) }}"
+    state: present
+    wait: "{{ _stream.wait | default(_path.wait | default(_path.protectedpaths_wait | default(omit))) }}"
+    wait_timeout: "{{ _stream.wait_timeout | default(_path.wait_timeout | default(_path.protectedpaths_wait_timeout | default(omit))) }}"
+  loop: "{{ _failover_remote_paths_result.results | default([]) }}"
+  loop_control:
+    label: "{{ _path.cluster }}:{{ _path.name | default('?') }}:failover:{{ _stream.remote_cluster }}"
+  when:
+    - (_path.state | default('present')) == 'present'
+    - (_stream.state | default('present')) == 'present'
+    - _stream.failover | default(false) | bool
+    - _stream.graceful | default(true) | bool
+    - (_failover_remote_path_id | int) > 0
+  vars:
+    _path: "{{ item.item.0.item }}"
+    _stream: "{{ item.item.1 }}"
+    _failover_remote_path_id: "{{ item.protectedpaths.id | default(item.protectedpaths.Id | default(0)) }}"
+
+- name: Check standby source stream readiness
+  vastdata.vms.protectedpaths:
+    vms: "{{ protectedpath_vms[_path.cluster] }}"
+    name: "{{ _path.name }}"
+    tenant_id: "{{ _standby_source_tenant_id | int }}"
+    state: present
+  check_mode: true
+  register: _standby_source_read
+  loop: "{{ protectedpaths | subelements('standby_streams', skip_missing=True) }}"
+  loop_control:
+    label: "{{ _path.cluster }}:{{ _path.name }}:{{ _source_stream_name }}"
+  when:
+    - (_standby.state | default('present')) == 'present'
+    - not _path_skip_source_cluster
+  vars:
+    _path: "{{ item.0 }}"
+    _standby: "{{ item.1 }}"
+    _streams: "{{ _path.streams | default([]) }}"
+    _streams_present: >-
+      {{
+        _streams | rejectattr('state', 'defined') | list
+        + (_streams | selectattr('state', 'defined') | rejectattr('state', 'equalto', 'absent') | list)
+      }}
+    _source_streams_present: >-
+      {{
+        (_streams_present | rejectattr('failover', 'defined') | list)
+        + (_streams_present | selectattr('failover', 'defined') | rejectattr('failover') | list)
+        + (_streams_present | selectattr('failover', 'defined') | selectattr('failover') | rejectattr('graceful', 'defined') | list)
+        + (_streams_present | selectattr('failover', 'defined') | selectattr('failover') | selectattr('graceful', 'defined') | selectattr('graceful') | list)
+      }}
+    _path_skip_source_cluster: "{{ (_streams_present | length) > 0 and (_source_streams_present | length) < (_streams_present | length) }}"
+    _standby_source_tenant_id: "{{ lookup('vastdata.vms.vast_name_to_id', _path.tenant, protectedpath_vms[_path.cluster], 'tenants') }}"
+    _source_stream: "{{ (_path.streams | default([]) | selectattr('remote_cluster', 'equalto', _standby.source_cluster) | list | first) }}"
+    _source_stream_name: "{{ _source_stream.name | default(_path.name ~ '_' ~ _source_stream.protection_policy) }}"
+
+- name: Read standby protected paths
+  vastdata.vms.protectedpaths:
+    vms: "{{ protectedpath_vms[_standby.source_cluster] }}"
+    name: "{{ _path.name }}"
+    tenant_id: "{{ _standby_source_cluster_tenant_id | int }}"
+    state: present
+  check_mode: true
+  register: _standby_paths_result
+  until: (_standby_path_id | int) > 0
+  retries: "{{ _standby.path_retries | default(_path.standby_path_retries | default(30)) }}"
+  delay: "{{ _standby.path_retry_delay | default(_path.standby_path_retry_delay | default(10)) }}"
+  loop: "{{ protectedpaths | subelements('standby_streams', skip_missing=True) }}"
+  loop_control:
+    label: "{{ _standby.source_cluster }}:{{ _path.name }}"
+  vars:
+    _path: "{{ item.0 }}"
+    _standby: "{{ item.1 }}"
+    _source_stream: "{{ (_path.streams | default([]) | selectattr('remote_cluster', 'equalto', _standby.source_cluster) | list | first) }}"
+    _standby_source_cluster_tenant_id: >-
+      {{
+        lookup('vastdata.vms.vast_name_to_id',
+               (_source_stream.remote_tenant | default(_path.tenant)),
+               protectedpath_vms[_standby.source_cluster], 'tenants')
+      }}
+    _raw: "{{ _standby_paths_result.protectedpaths | default({}) }}"
+    _standby_path_id: "{{ _raw.id | default(_raw.Id | default(0)) }}"
+
+- name: Ensure standby protected path streams
+  vastdata.vms.protectedpath_streams:
+    vms: "{{ protectedpath_vms[_standby.source_cluster] }}"
+    protectedpath_id: "{{ _standby_path_id | int }}"
+    stream_id: "{{ _standby.stream_id | default(omit) }}"
+    name: "{{ _standby_stream_name }}"
+    target_exported_dir: "{{ _standby_remote_dir }}"
+    protection_policy_id: "{{ (_standby_protection_policy_id | string) if _standby_state == 'present' else omit }}"
+    remote_tenant_guid: "{{ _standby_remote_tenant_guid if _standby_state == 'present' else omit }}"
+    capabilities: "{{ _standby_capabilities if _standby_state == 'present' else omit }}"
+    remote_target_id: "{{ (_standby_remote_target_id | int) if _standby_needs_remote_target and _standby_state == 'present' else omit }}"
+    sync_interval: "{{ _standby.sync_interval | default(omit) }}"
+    sync_disconnect_time: "{{ _standby.sync_disconnect_time | default(omit) }}"
+    lease_expiry_time: "{{ _standby.lease_expiry_time | default(omit) }}"
+    source_member_capabilities: "{{ _standby.source_member_capabilities | default(omit) }}"
+    view_replication_enabled: "{{ _standby.view_replication_enabled | default(true) }}"
+    state: "{{ _standby_state }}"
+    wait: "{{ _standby.wait | default(_path.wait | default(_path.protectedpaths_wait | default(omit))) }}"
+    wait_timeout: "{{ _standby.wait_timeout | default(_path.wait_timeout | default(_path.protectedpaths_wait_timeout | default(omit))) }}"
+  register: _standby_stream_result
+  until: _standby_stream_result is succeeded or not (_standby_retryable_create | bool)
+  retries: "{{ _standby.retries | default(_path.standby_stream_retries | default(18)) }}"
+  delay: "{{ _standby.retry_delay | default(_path.standby_stream_retry_delay | default(10)) }}"
+  loop: "{{ _standby_paths_result.results | default([]) }}"
+  loop_control:
+    label: "{{ _standby.source_cluster }}:{{ _path.name }}:{{ _standby_stream_name }}"
+  when:
+    - (_standby_path_id | int) > 0
+  vars:
+    _path: "{{ item.item.0 }}"
+    _standby: "{{ item.item.1 }}"
+    _standby_path_id: "{{ item.protectedpaths.id | default(item.protectedpaths.Id | default(0)) }}"
+    _source_stream: "{{ (_path.streams | default([]) | selectattr('remote_cluster', 'equalto', _standby.source_cluster) | list | first) }}"
+    _standby_state: "{{ _standby.state | default('present') }}"
+    _standby_capabilities: "{{ _standby.capabilities | default('ASYNC_REPLICATION') }}"
+    _standby_needs_remote_target: "{{ _standby_capabilities == 'SYNC_REPLICATION' }}"
+    _standby_stream_name: "{{ _standby.name | default(_path.name ~ '_' ~ _standby.protection_policy) }}"
+    _standby_remote_dir: "{{ _standby.remote_dir | default(_source_stream.remote_dir) }}"
+    _standby_current_streams: "{{ item.protectedpaths.replication_streams | default([]) }}"
+    _standby_stream_exists: "{{ (_standby_current_streams | selectattr('name', 'equalto', _standby_stream_name) | list | length) > 0 }}"
+    _standby_remote_tenant_guid: >-
+      {{
+        lookup('vastdata.vms.vast_name_to_id',
+               (_standby.remote_tenant | default(_path.tenant)),
+               protectedpath_vms[_standby.remote_cluster], 'tenants', id_field='guid')
+        if _standby_state == 'present'
+        else none
+      }}
+    _standby_remote_target_id: >-
+      {{
+        lookup('vastdata.vms.vast_target_cluster_to_remote_target_id',
+               _standby.source_cluster,
+               _standby.remote_cluster,
+               protectedpath_vms[_standby.source_cluster],
+               replicationpeers,
+               vippools)
+        if _standby_needs_remote_target and _standby_state == 'present'
+        else none
+      }}
+    _standby_protection_policy_id: >-
+      {{
+        lookup('vastdata.vms.vast_name_to_id', _standby.protection_policy, protectedpath_vms[_standby.source_cluster], 'protectionpolicies')
+        if _standby_state == 'present'
+        else none
+      }}
+    _standby_msg: "{{ _standby_stream_result.msg | default('') | string | lower }}"
+    _standby_retryable: >-
+      {{
+        (_standby_stream_result is failed)
+        and (
+          'being added/removed' in _standby_msg
+          or 'service_unavailable' in _standby_msg
+          or 'communication_error' in _standby_msg
+          or '503' in _standby_msg
+        )
+      }}
+    _standby_retryable_create: "{{ (_standby_state == 'present') and (not _standby_stream_exists) and (_standby_retryable | bool) }}"

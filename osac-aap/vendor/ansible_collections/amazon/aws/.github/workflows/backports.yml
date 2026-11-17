@@ -1,0 +1,22 @@
+---
+name: mergeit-backport
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request_target:
+    types:
+      - labeled
+      - opened
+      - synchronize
+    branches:
+      - main
+
+jobs:
+  changelog-labeller:
+    uses: ansible-network/github_actions/.github/workflows/backport-labeller.yml@4678c74a7d712d55e663c88f66eec6d9c3642550 # @main as of 2026-10-05
+    with:
+      label_minor_release: backport-11
+      label_bugfix_release: backport-10

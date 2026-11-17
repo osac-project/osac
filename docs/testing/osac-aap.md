@@ -71,7 +71,7 @@ query_dhcp_lease inputs plus the DHCP lease result; both the operator producer
 and this AAP consumer read the same files. The AAP contract runs the generic
 playbook against a fake Netris endpoint, with no deployed AAP or provider.
 NetworkAttachment overlay delete/detach, other unbound delete/detach tasks,
-SecurityGroup and FabricDomain shapes remain unbound. Cluster ingress is
+SecurityGroup and FabricDomain shapes remain unbound. Cluster ingress
 reservation (`reserve_cluster_ingress_ip`) is bound by shared input and result
 goldens. Cluster ingress release (`release_cluster_ingress_ip`) is unbound.
 AgentlessNet Fabric and switch-VLAN targets ([OSAC-7156](https://redhat.atlassian.net/browse/OSAC-7156))

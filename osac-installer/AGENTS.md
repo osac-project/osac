@@ -58,7 +58,8 @@ checks require an explicitly selected disposable environment and prerequisites.
 
 From the repository root, run
 `yamllint --strict -c .yamllint.yaml osac-installer/`; the shared config excludes
-Helm templates. Other commands here run from `osac-installer/`.
+the entire `osac-installer/charts/` tree, including chart metadata and values.
+Other commands here run from `osac-installer/`.
 
 Deployment and integration targets require explicit parameters, for example:
 

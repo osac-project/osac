@@ -105,8 +105,15 @@ observer credentials are not required.
   `OSAC_TRUST_ROTATION_EXPECTED_HASH` before switching the leaf certificate.
   Run `OSAC_TRUST_ROTATION_PHASE=post-switch` before removing the retired root,
   then `OSAC_TRUST_ROTATION_PHASE=final` after removal. Each run requires deployed
-  operator/metering metrics and separate old/new root PEM files for leaf checks.
+  operator/metering metrics and these leaf-check inputs:
+  - `OSAC_TRUST_OLD_ROOT_PEM_PATH`: path to the old root PEM file.
+  - `OSAC_TRUST_NEW_ROOT_PEM_PATH`: path to the new root PEM file.
+  - `OSAC_TRUST_LEAF_ENDPOINT`: leaf listener as `host:port`, without a URL scheme.
 
-The rotation gate only reads resources and metrics; it never mutates CA or
-leaf certificates. An operator or administrator performs rotation between
-passing gates, following the linked release prerequisites.
+Operator metrics collection runs `kubectl create token` before port-forwarding.
+The caller needs `create` permission on `serviceaccounts/token` for the
+operator deployment's service account in its namespace, in addition to the
+resource-read and port-forward permissions. This TokenRequest is distinct from
+certificate rotation: the gate never mutates CA or leaf certificates. An
+operator or administrator performs rotation between passing gates, following
+the linked release prerequisites.

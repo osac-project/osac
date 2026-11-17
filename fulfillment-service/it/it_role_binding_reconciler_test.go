@@ -153,7 +153,7 @@ var _ = Describe("Role binding reconciler", func() {
 
 		userBName := fmt.Sprintf("my-user-b-%s", uuid.New()[24:])
 		userBID, userBKeycloakID := createRoleBindingTestUser(testCtx, usersClient, userBName, nil)
-		bindingID := createReaderRoleBinding(testCtx, testUserID, testRoleName)
+		bindingID := createReaderRoleBinding(testCtx, testUserID, testRoleName, auth.SharedTenant)
 
 		initialMappingPollCtx, cancelInitialMappingPoll := context.WithTimeout(testCtx, time.Minute)
 		defer cancelInitialMappingPoll()
@@ -312,7 +312,7 @@ var _ = Describe("Role binding reconciler", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetId()).To(Equal(original.GetId()))
 
-			createReaderRoleBinding(ctx, testUserID, roleName)
+			createReaderRoleBinding(ctx, testUserID, roleName, auth.SharedTenant)
 			Expect(readerTokenRoles(ctx, staticOldTokenSource)).ToNot(ContainElement(roleName))
 
 			getResponse, err = oldClient.Get(ctx, publicv1.ClustersGetRequest_builder{

@@ -45,6 +45,30 @@ CSI sanity uses a fake vendor and fulfillment stub; it does not cover a real bac
   before Go bindings.
 - Keep dependency changes in `go.mod`/`go.sum` synchronized through `go mod tidy`.
 
+## Common Tasks
+
+### Change volume mapping or backend routing
+
+- Start in `pkg/driver/` for CSI request handling, `pkg/fulfillment/` for the
+  fulfillment client and `pkg/proxy/` for vendor forwarding. Trace the operation
+  to its owner before changing behavior: creation/deletion and mount/attach
+  are deliberately split.
+- Keep backend selection and volume identity consistent between controller
+  and node paths. Follow existing tests for idempotent Create/Delete, context
+  cancellation and error translation instead of adding real provider calls to
+  the unit suite.
+- Put regression cases alongside the owning package. Run `make test` from
+  `osac-csi-driver/`, then select real integration/E2E evidence where the
+  changed boundary is not covered by the stubbed CSI sanity suite.
+
+### Change deployment settings
+
+- Inspect `charts/csi-driver/` for this driver and `charts/csi-backends/` for
+  backend prerequisites. Check both sides when changing endpoints or routing
+  keys; the `none` controller endpoint is a supported no-op, not a missing URL.
+- Run both Helm lint commands below. Build with `make image-build` for
+  container inputs so the sibling Go modules remain in the build context.
+
 ## Validation
 
 ### Local build and checks

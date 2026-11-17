@@ -72,6 +72,34 @@ forced cleanup as proof. Preserve API worker tenant/order/owner identity and CR
 tenant/BMI identity (the API owner-reference annotation is not copied to the CR).
 Local mocks do not establish hardware, provider or storage behavior; report gaps.
 
+## Common Tasks
+
+### Add a deployed lifecycle case
+
+- Select the owning service and tier using `docs/testing/e2e.md` from the
+  repository root. Read its nested README and `conftest.py` before adding new
+  setup; shared session fixtures live in `tests/e2e/conftest.py`.
+- Reuse `tests/e2e/core/` clients, naming and polling helpers. Track resources
+  created by the test and arrange cleanup even when setup or an assertion
+  fails; avoid assuming a global tenant or an otherwise idle shared backend.
+- Make assertions about observable API/CR state and the real boundary under
+  test. Distinguish readiness from traffic, storage I/O and deletion evidence.
+  Preserve the ordered-suite and ownership requirements above.
+- Collect the affected suite before a deployed run. Add helper logic tests
+  under `tests/unit/` rather than requiring cluster credentials just to test
+  parsing, selection or failure classification.
+
+### Change fixtures or failure reporting
+
+- Inspect all fixture consumers before changing scope or teardown. Shared
+  fixtures affect service suites beyond the test that motivated the change;
+  collect every affected suite and run the local unit gate below.
+- Use the existing sanitized runner and failure kinds. Register guest
+  snapshots where applicable and keep optional telemetry/diagnostic failures
+  from masking the original test result.
+- Report which real dependencies ran. Collection, unit doubles and forced
+  cleanup are not evidence of successful deployed lifecycle teardown.
+
 ## Fulfillment trust enablement
 
 Trust checks require `OSAC_FULFILLMENT_TRUST_E2E=true` and an explicitly

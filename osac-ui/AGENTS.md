@@ -35,7 +35,7 @@ React/PatternFly browser applications, shared UI packages and a Go API proxy.
 
 ## Validation
 
-From `osac-ui/`, before commit/push/PR for UI code:
+For UI code changes, run from `osac-ui/`:
 
 ```bash
 pnpm run typecheck
@@ -101,7 +101,47 @@ pnpm test
 - Memoization requires measured production-profiler evidence, not correctness
   workarounds; prefer state locality and stable, narrow props first.
 
-### Live browser harness
+## Common Tasks
+
+### Add a resource view or API operation
+
+- Keep application routing and transport setup in `apps/app-frontend/src/`;
+  shared pages, components and domain hooks live in `libs/ui-components/src/`.
+  Reuse a domain hook under `libs/ui-components/src/api/v1/` before adding a call.
+- For a new query, register its route in `libs/ui-components/src/api/types.ts`,
+  use the typed query
+  key and follow a neighboring hook for response selection and mutation cache
+  invalidation. Keep pagination/filter state in the key so distinct lists do
+  not share cached results accidentally.
+- Use the existing pinned `@osac/types` contract. If it lacks the requested
+  API, surface the baseline dependency instead of silently regenerating it.
+- Place `*.test.ts` or `*.test.tsx` beside the implementation. Follow
+  `libs/ui-components/src/api/v1/disk-image.test.ts` and the shared
+  `libs/ui-components/src/test-utils/createMockConnectTransport.ts` for typed fixtures;
+  exercise loading, empty, success and error states through the UI.
+
+### Add a form field or change translated text
+
+- Compose pages from existing shared fields and `OsacForm`; keep reusable
+  field behavior in `components/Form/` and primitives in `components/Form/base/`.
+  Test keyboard interaction, labels, field errors and the user-text boundary,
+  not only the submitted payload.
+- Keep literal English translation keys in source. Pass `t` into pure
+  formatting/validation utilities rather than calling a React hook there.
+- From `osac-ui/`, run `pnpm i18n` after changing strings, then the typecheck,
+  lint and test sequence above. Review the generated locale diff with the
+  source change. Translation extraction does not discover dynamic keys.
+
+### Change the proxy or a cross-package import
+
+- Trace requests through `proxy/bridge/connectjson.go`; the browser's Connect
+  JSON and upstream native gRPC are different boundaries. Preserve auth/error
+  handling rather than replacing the bridge with a REST mock or generated stub.
+- Run `make -C proxy test lint` for proxy changes and `pnpm build` for
+  cross-package/build changes, from `osac-ui/`. Frontend production compilation
+  excludes test files, so retain the separate `pnpm run typecheck` gate.
+
+## Live browser harness
 
 From `osac-ui/`, with browser binaries, deployment access and a test identity
 prepared as described in [the harness README](apps/playwright/README.md):

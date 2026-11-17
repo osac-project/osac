@@ -16,6 +16,24 @@ read the [CLI UX guidelines](CLI_UX.md).
 - Wrap private-API commands with `help.MarkPrivateAPI`.
 - Add every private command to the corresponding `privateNames` annotation test.
 
+## Common tasks
+
+### Add or extend a command
+
+- Follow existing verbs and registration in `root_cmd.go` rather than adding
+  a synonym. Keep the command non-interactive and scriptable by default, as
+  described in `CLI_UX.md`.
+- Start with the corresponding verb package, such as `get/` or `create/`.
+  Inspect shared lookup, rendering and help helpers before adding a new path.
+  Keep human-readable and structured output behavior consistent with nearby
+  commands; do not expose credentials through generic object rendering.
+- Trace flags and input through routing/filtering/transformation to the server
+  using the parent component's request-path guide. A flag accepted by Cobra
+  is not proof that the handler receives or applies it.
+- Add regression tests beside the command for parsing, registration and help.
+  Use the existing `it/` CLI harness from the parent component for deployed
+  behavior against a running service.
+
 ## Validation
 
 Run from `fulfillment-service/`, not this nested CLI directory:

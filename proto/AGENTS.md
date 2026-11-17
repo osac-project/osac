@@ -48,3 +48,32 @@ every consumer. Validate affected consumers after API changes. Do not invoke
 For API shape, validation, visibility, or update-mask changes, read
 [API.md](../fulfillment-service/docs/API.md) and
 [CLEANAPI.md](../fulfillment-service/docs/CLEANAPI.md) before editing sources.
+
+## Common Tasks
+
+### Add a field or change validation
+
+- Edit the owning resource in `private/osac/private/v1/`. Follow neighboring
+  field numbering, visibility and validation annotations; preserve protobuf
+  wire compatibility when retiring or replacing fields.
+- Keep field/cross-field validation in proto annotations where supported.
+  Resource messages must satisfy `OSAC_OBJECT_SHAPE`; use the documented
+  explicit lint exception only for an intentional non-resource shape.
+- For update behavior, inspect the fulfillment server's mask application and
+  stored-object validation as well as the request message. A partial update
+  request is not the complete resource being validated.
+- Run the ordered generation/lint/build sequence above and inspect both the
+  public API projection and Go diff. Exercise affected server and consumer
+  tests; generated compilation alone does not establish semantic compatibility.
+
+### Change visibility or generator behavior
+
+- Read the linked `CLEANAPI.md` before changing private annotations. Verify
+  that the generated public tree excludes private-only elements without
+  breaking public service references; do not repair the public output by hand.
+- Generator implementations and their tests live in `../fulfillment-service/`;
+  `tests/osac/tests/v1/` supplies test-only contracts. Follow that component's
+  checks when the generator or lint plugin changes.
+- The shared Go tree does not update the UI's separately pinned TypeScript
+  baseline. Follow the explicit authorization rule in
+  [the UI guide](../osac-ui/AGENTS.md#generated-api-bindings).

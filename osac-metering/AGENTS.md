@@ -65,6 +65,42 @@ fold, round, or relay behavior; they are the determinism gate for billing.
 - A published version file is pinned in `schema/published.sha256`. A new version file needs its own entry; CI fails when an existing file's bytes differ from the manifest.
 - Use `go mod tidy` for dependency updates in the affected module.
 
+## Common Tasks
+
+### Change event ingestion or usage calculation
+
+- Follow the event through `metering-service/internal/kafka/`, `fold/`,
+  `round/` and `relay/` rather than treating collection and billing as one
+  operation. Check event offsets, persisted facts and replay behavior together.
+- Use neighboring tests and the `testenv`, `kafkatest` and `pipelinetest`
+  helpers under `metering-service/internal/` for the relevant boundary. Keep
+  restart/replay and duplicate-event cases tied to the real PostgreSQL/Kafka
+  harness when persistence or delivery semantics change.
+- For event-shape changes, update `schema/` and validate both service and
+  adapter consumers with `make test` from `osac-metering/`.
+
+### Add a rule revision or update the published contract
+
+- Add a new revision under `charts/osac-metering/rules/`; never modify a
+  released revision in place. Keep the selected default and rendered rule
+  configuration consistent with the usage evaluator.
+- Change the contract's registry/schema/chart sources, not `docs/contract/`.
+  From `osac-metering/`, run `make contract`, review the generated reference,
+  then run `make contract-check schemas-unchanged-test` and `make test`.
+  Preserve full release history for the immutability comparison.
+
+### Add a billing adapter
+
+- Implement the `ProviderAdapter` interface defined in `adapters/adapter.go`
+  in a concrete package following `adapters/echo/` or `adapters/m360/`.
+  Use the shared Runner for delivery, retry and shutdown rather than starting
+  an independent consumer.
+- Test provider mapping and Submit/Flush error handling locally. Error text
+  can reach DLQ headers, so it must not contain credentials or raw secrets.
+- Run `make -C adapters test` from `osac-metering/` for adapter work, plus the
+  relevant provider contract when its authorized prerequisites are available.
+  A fake provider does not prove external acceptance or billing behavior.
+
 ## Validation
 
 ### Component checks

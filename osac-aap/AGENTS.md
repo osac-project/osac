@@ -41,6 +41,48 @@ Read the applicable references before changing behavior:
 - Manager credentials and networking CA mounts must stay out of unrelated
   cluster-fulfillment workers.
 
+## Common Tasks
+
+Run task commands from `osac-aap/` unless another cwd is stated.
+
+### Change a provisioning role or workflow
+
+- Trace the `playbook_osac_*.yml` entry point into the selected collection.
+  `osac/workflows` owns orchestration, `osac/templates` owns pluggable resource
+  roles, `osac/service` holds shared helpers and `osac/config_as_code` configures
+  AAP. These paths are under `collections/ansible_collections/`.
+- Keep inputs and defaults with the role; inspect its task entry points and
+  metadata before copying another resource's variables. Use named tasks and
+  fully qualified modules so execution and coverage reports identify the step.
+- Reuse service roles for kubeconfig lookup, waits, leases and finalizers.
+  Keep tenant/owner annotations and retry-safe cleanup through every included
+  role, not just the top-level playbook.
+- Extend `tests/unit/` for isolated transforms/plugins and the owning target
+  under `tests/integration/targets/` for role execution. Follow its README for
+  fixtures; the focused baseline command below does not prepare them itself.
+
+### Add or change a network manager task
+
+- Check the real role's `meta/osac.yaml`, its dispatcher entry points and the
+  operator's `../osac-operator/internal/networktask/doc.go`. Manager identity
+  and `template_type` must agree with installer registration.
+- Update shared `../tests/contract/network-task` fixtures with the operator
+  consumer when changing inputs/results. Exercise failure and retry branches,
+  not only the happy-path task, through the measured coverage gate below.
+- Keep network credentials/CA mounts scoped to network jobs; do not copy them
+  into unrelated cluster jobs. Consult the installer
+  [network-backend guide](../osac-installer/docs/network-backend.md)
+  when changing selection rather than publishing another ComputeClass.
+
+### Update collections or the execution environment
+
+- Change `collections/requirements.yml` for dependencies and follow the
+  vendoring procedure below; do not patch installed third-party code manually.
+- Development Python dependencies and execution-environment inputs serve
+  different consumers. Run `uv sync --all-groups` for development changes;
+  run `make execution-environment-build` for image inputs, then the applicable
+  role tests. A successful local Ansible import is not an image-build check.
+
 <a id="integration-testing"></a>
 
 ## Validation

@@ -56,6 +56,33 @@ Read the applicable references before changing behavior:
   Do not run a separate component-local protobuf generator.
 - Never hand-edit `config/crd/`, `zz_generated.deepcopy.go`, or `go.sum`; run `go mod tidy` for module changes.
 
+## Common tasks
+
+### Change a resource or its reconciliation
+
+- Start with `api/v1alpha1/` for the Kubernetes shape and
+  `internal/controller/` for lifecycle behavior. Follow both the resource
+  controller and its feedback controller when status changes; an API field,
+  CR field and feedback update are not interchangeable representations.
+- Check watches, predicates and RBAC alongside reconciliation code. Preserve
+  the unmanaged-resource guard and tenant ownership before dispatching work.
+- For CRD changes, run `make manifests generate helm-crds check-helm-crds`
+  from `osac-operator/`, then the applicable checks below. Review schema and
+  Helm CRD output together rather than fixing generated YAML directly.
+
+### Extend controller coverage
+
+- Put regression cases beside the controller in `internal/controller/` and
+  reuse the Ginkgo/Envtest suite setup in `suite_test.go`. Use real API-server
+  writes for CR status/version behavior instead of assuming fake-client
+  updates reproduce conflicts or watch delivery.
+- Keep dependency doubles inside test files, register cleanup and wait for
+  observable conditions with bounded assertions. For deployed watches/RBAC,
+  add coverage under `test/integration/` and use the selected Kind boundary.
+- For AAP job or networking changes, trace `pkg/provisioning`, `pkg/aap` and
+  `internal/networktask` into the AAP role. Update shared contract fixtures
+  with the producer and consumer; local success does not validate a provider.
+
 <a id="integration-testing"></a>
 
 ## Validation

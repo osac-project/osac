@@ -28,6 +28,29 @@ Read the applicable references before changing behavior:
 - Never hand-edit `config/crd/` or `zz_generated.deepcopy.go`.
 - After dependency changes, run `go mod tidy` and commit the resulting `go.mod` and `go.sum` changes.
 
+## Common tasks
+
+### Change allocation or host lifecycle
+
+- Trace both pool and instance controllers under `internal/controller/`
+  before changing shared reconciliation. Pool selection and instance teardown
+  must agree about ownership and when a host can be reused.
+- Keep inventory lookup/allocation under `internal/inventory/` separate from
+  power and management behavior under `internal/management/`. Follow the
+  existing client interfaces when adding a backend rather than embedding
+  provider requests in the controller.
+- Add controller regression cases beside the implementation. Exercise retry
+  and deletion transitions as well as allocation; provider doubles cannot
+  establish actual BMC, hardware or networking behavior.
+
+### Change a Kubernetes API or chart
+
+- Edit `api/v1alpha1/`, run `make manifests generate helm-crds check-helm-crds`
+  from this component, and review both generated CRDs and chart output.
+- Run `make test` for Envtest coverage and the local chart checks below.
+  Use `test/integration/` for deployed controller wiring; retain the networking
+  cleanup ownership boundary instead of expanding BMF into network teardown.
+
 ## Integration Testing
 
 See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#bare-metal-fulfillment-operator).

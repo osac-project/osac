@@ -92,3 +92,28 @@ If setup fails with `failed to lookup host '...'`, read [README.md — Running i
 - Keep cases independent, register cleanup with `DeferCleanup`, and use bounded `Eventually` assertions for asynchronous behavior instead of sleeps.
 - Test observable behavior, including relevant error paths and tenant isolation where applicable. Deployed Fulfillment-only API/CLI workflows belong in `it/`; cross-component provisioning belongs in `tests/e2e/`.
 - Consult [Fulfillment test tiers and coverage](../docs/INTEGRATION-TESTING.md#fulfillment-service) when choosing coverage for a change.
+
+## Common tasks
+
+### Change a resource API
+
+- Start with the private contract in `../proto/private/`, then trace its
+  public wrapper and private implementation under `internal/servers/`.
+  [CODEWALK.md](docs/CODEWALK.md) follows BareMetalInstance through these layers
+  and the generic persistence path; use it to locate extension points rather
+  than adding a parallel CRUD implementation.
+- Keep request transformations, update masks and stored-object validation in
+  the same review. Add server cases for partial updates and the relevant tenant
+  boundary, using the existing database/transaction harness.
+- Run the ordered proto generation and focused server checks above. If the
+  change affects resource intent or observed state, also inspect the owning
+  reconciler in `internal/controllers/` and its downstream operator consumer.
+
+### Change persistence or command behavior
+
+- Add schema changes as new migrations under `internal/database/migrations/`;
+  follow neighboring migration pairs and exercise the server behavior that
+  reads and writes the changed data. Do not modify an applied migration.
+- For CLI work, use the nested CLI guide and trace the request as described in
+  `docs/REQUEST_PATH_TRACING.md`. Keep local command parsing/help tests separate
+  from deployed API/CLI tests in `it/`; neither replaces the other.

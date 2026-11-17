@@ -35,9 +35,8 @@ uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s .github/
 pre-commit run --all-files
 ```
 
-Stage intended changes before `pre-commit run gitleaks`; the all-files run
-does not scan commit history. Preserve the workflow's separate PR-range secret
-scan with base-owned configuration.
+Preserve `workflows/pre-commit.yaml`'s separate PR-range secret-scan consumer
+with base-owned configuration; contribution-level scanning is covered at root.
 
 | Touched area | Additional repository-root validation |
 |---|---|
@@ -58,6 +57,28 @@ changes that skip execution.
 Its path filter uses one brace-alternation entry because `predicate-quantifier:
 every` combines separate entries with AND. Keep overlay/helper, test, and Python
 setup paths in that entry. See the [sandbox coverage boundary](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox).
+
+## Common workflow changes
+
+### Add or change a cheap check
+
+- Trace selection from `filters/ci-filters.yml` through the `workflows/ci.yml`
+  plan and aggregate job. Test execution belongs in the reusable workflow;
+  selection belongs in the caller, not in duplicated path logic.
+- For a unit/integration matrix leg, inspect `ci-tests.yml` and
+  `workflows/tests.yml` together. Ensure a selected failure reaches `CI` and
+  an unrelated change still produces the required aggregate result.
+- Use the validation map above for changed helpers and workflow syntax. Check
+  both pull-request and merge-group consumers rather than only manual dispatch.
+
+### Rename or extend an E2E workflow
+
+- Read `CI.md`, then update policy dispatch references and `workflow_run`
+  names together. A correct YAML file is not enough if the decision workflow
+  no longer receives completion events or dispatches the intended suite.
+- Keep default-branch decision code separate from approved-head execution.
+  Preserve fork authorization, suite tier selection and required reporting;
+  do not fix a missing result by weakening readiness or approval gates.
 
 ## Release safety
 

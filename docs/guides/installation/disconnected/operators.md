@@ -20,6 +20,7 @@
     - [Kafka](#kafka)
     - [AAP Git source handoff](#aap-git-source-handoff)
     - [AAP instance boundary and production TLS](#aap-instance-boundary-and-production-tls)
+    - [Known Limitation — AAP Communication Security](#known-limitation--aap-communication-security)
   - [5. Optional VMaaS Operands](#5-optional-vmaas-operands)
     - [LVMS](#lvms)
     - [MetalLB](#metallb)
@@ -624,6 +625,30 @@ The string `"false"` is deliberate for the 0.0.62 template. The shipped default 
 **AAP input gate** — exact approved ZIP, Secret ownership/label, pinned operator/API, Git source and rendered explicit HTTPS/verification settings.
 
 Record the listed AAP input observations separately; they are not an aggregate delivery or runtime-readiness result. Phase 2 must additionally prove the actual operator-to-AAP HTTPS request validates hostname and serving chain, plus bootstrap/project-sync revision. An unavailable trust mechanism blocks that acceptance; do not restore skip-verification.
+
+### Known Limitation — AAP Communication Security
+
+> **Warning:** AAP API communication is currently insecure by default. The
+> default Helm chart values set `operator.aap.insecureSkipVerify` and
+> `bmf.env.aapInsecureSkipVerify` to `"true"` for the OSAC Operator and the
+> Bare Metal Fulfillment Operator, respectively. The AAP endpoint defaults
+> to plaintext HTTP (`http://osac-aap/api/controller`).
+
+Even when `insecureSkipVerify` is set to `"false"`, the AAP client uses the
+operating system's default certificate store (Go `x509.SystemCertPool`),
+not the OSAC shared CA bundle distributed by trust-manager at
+`/etc/ca-bundle/bundle.pem`. The Fulfillment CA configuration does not
+configure AAP client trust, and there is no chart value to supply a custom
+CA certificate for the AAP connection.
+
+This known gap affects AAP-consuming components across the platform,
+including both operators. Work is being tracked to provide configurable
+CA trust for all AAP API clients and cert-manager-issued TLS certificates
+for the AAP endpoint.
+
+Until these gaps are resolved, treat AAP communication as insecure.
+Deployers in security-sensitive or disconnected environments should
+account for this limitation when evaluating their trust boundaries.
 
 ## 5. Optional VMaaS Operands
 

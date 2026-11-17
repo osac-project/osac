@@ -608,7 +608,18 @@ def test_active_active_bgp() -> None:
             node(
                 "worker-0",
                 "10.200.255.1",
-                [uplink("ens6", "169.254.133.1"), uplink("ens7", "169.254.134.1")],
+                [
+                    uplink(
+                        "ens6",
+                        "169.254.133.1",
+                        address="169.254.133.0/31",
+                    ),
+                    uplink(
+                        "ens7",
+                        "169.254.134.1",
+                        address="169.254.134.2/30",
+                    ),
+                ],
             )
         ]
     )
@@ -629,9 +640,23 @@ def test_active_active_bgp() -> None:
             "metric": 100,
             "next-hop-interface": "ens6",
             "table-id": 254,
+            "state": "absent",
+        },
+        {
+            "destination": "169.254.133.0/31",
+            "metric": 100,
+            "next-hop-interface": "ens6",
+            "table-id": 254,
         },
         {
             "destination": "169.254.134.1/32",
+            "metric": 100,
+            "next-hop-interface": "ens7",
+            "table-id": 254,
+            "state": "absent",
+        },
+        {
+            "destination": "169.254.134.2/30",
             "metric": 100,
             "next-hop-interface": "ens7",
             "table-id": 254,
@@ -653,6 +678,75 @@ def test_active_active_bgp() -> None:
     assert "neighbor 169.254.133.1 activate" in raw_config
     assert "neighbor 169.254.134.1 activate" in raw_config
     assert "route-map EVPN-" not in raw_config
+
+
+def test_non_active_active_cleans_metric_routes() -> None:
+    """Remove routes previously installed for active-active uplinks."""
+    values = base_values(
+        [
+            node(
+                "worker-0",
+                "10.200.255.1",
+                [
+                    uplink("ens6", "169.254.133.1", address="169.254.133.0/31"),
+                    uplink("ens7", "169.254.134.1", address="169.254.134.2/30"),
+                ],
+            )
+        ]
+    )
+    with tempfile.TemporaryDirectory(prefix="evpn-metric-route-cleanup-") as temp:
+        values_file = write_values(pathlib.Path(temp), "inactive.yaml", values)
+        infra = render("osac-infra", INFRA_CHART, "--values", str(values_file))
+
+    nncp = named(
+        parse_documents(config_data(infra)["nncp.yaml"]),
+        "NodeNetworkConfigurationPolicy",
+        "osac-evpn-worker-0",
+    )
+    assert nncp["spec"]["desiredState"]["routes"]["config"] == [
+        {
+            "destination": "169.254.133.1/32",
+            "metric": 100,
+            "next-hop-interface": "ens6",
+            "table-id": 254,
+            "state": "absent",
+        },
+        {
+            "destination": "169.254.133.0/31",
+            "metric": 100,
+            "next-hop-interface": "ens6",
+            "table-id": 254,
+            "state": "absent",
+        },
+        {
+            "destination": "169.254.134.1/32",
+            "metric": 100,
+            "next-hop-interface": "ens7",
+            "table-id": 254,
+            "state": "absent",
+        },
+        {
+            "destination": "169.254.134.2/30",
+            "metric": 100,
+            "next-hop-interface": "ens7",
+            "table-id": 254,
+            "state": "absent",
+        },
+    ]
+
+
+def test_active_active_numbered_uplink_requires_address() -> None:
+    """Numbered active-active peers need the prefix for an equal-cost route."""
+    values = base_values(
+        [node("worker-0", "10.200.255.1", [uplink("ens6", "169.254.133.1")])]
+    )
+    values["evpn"]["bgp"]["activeActive"] = True
+    with tempfile.TemporaryDirectory(prefix="evpn-active-active-address-") as temp:
+        values_file = write_values(pathlib.Path(temp), "missing-address.yaml", values)
+        result = render_failure_result(INFRA_CHART, values_file)
+
+    assert result.returncode != 0, "active-active numbered uplink without address rendered"
+    assert "requires address when activeActive is enabled" in result.stderr
 
 
 def test_unnumbered_active_active_bgp() -> None:
@@ -1270,6 +1364,8 @@ def main() -> None:
     test_single_node()
     test_multiple_nodes()
     test_active_active_bgp()
+    test_non_active_active_cleans_metric_routes()
+    test_active_active_numbered_uplink_requires_address()
     test_unnumbered_active_active_bgp()
     test_active_backup_bgp()
     test_unnumbered_active_backup_bgp()

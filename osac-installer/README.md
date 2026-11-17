@@ -425,12 +425,12 @@ evpn:
 ```
 
 Set `evpn.bgp.activeActive: true` to enable FRR's `as-path multipath-relax`
-and `maximum-paths 16` for IPv4 unicast. The chart also sets the same local
-route metric for numbered peers by installing a `/32` route to each peer on
-its uplink with metric `100`. Unnumbered peers use IPv6 link-local next hops
-and retain the node's route costs. The default `false` leaves these settings
-unchanged. FRR still installs only paths that meet its other multipath
-eligibility checks.
+and `maximum-paths 16` for IPv4 unicast. For numbered uplinks, also set each
+`address` to the interface's static CIDR. The chart installs a route for each
+connected subnet with metric `100`, so FRR resolves those peers at equal IGP
+cost. Unnumbered peers use IPv6 link-local next hops and retain the node's
+route costs. The default `false` leaves these settings unchanged. FRR still
+installs only paths that meet its other multipath eligibility checks.
 
 For active/backup forwarding, set `evpn.bgp.activeBackup: true` instead; it is
 mutually exclusive with `activeActive`. Set `role: active` or `role: backup`

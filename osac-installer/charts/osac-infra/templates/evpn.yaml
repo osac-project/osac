@@ -68,6 +68,9 @@
       {{- if not $uplink.peerAddress }}
         {{- fail (printf "evpn.nodes: node index %d numbered uplink index %d requires peerAddress" $index $uplinkIndex) }}
       {{- end }}
+      {{- if and $.Values.evpn.bgp.activeActive (not $uplink.address) }}
+        {{- fail (printf "evpn.nodes: node index %d numbered uplink index %d requires address when activeActive is enabled" $index $uplinkIndex) }}
+      {{- end }}
       {{- if hasKey $seenPeers $uplink.peerAddress }}
         {{- fail (printf "evpn.nodes: duplicate peerAddress in uplinks of node index %d" $index) }}
       {{- end }}
@@ -106,10 +109,13 @@ data:
     ---
     {{- end }}
     {{- $metricRoutes := list }}
-    {{- if $.Values.evpn.bgp.activeActive }}
-      {{- range $uplink := $node.uplinks }}
-        {{- if $uplink.peerAddress }}
-          {{- $metricRoutes = append $metricRoutes (dict "destination" (printf "%s/32" $uplink.peerAddress) "interface" $uplink.interface) }}
+    {{- range $uplink := $node.uplinks }}
+      {{- if and $uplink.peerAddress $uplink.address }}
+        {{- $metricRoutes = append $metricRoutes (dict "destination" (printf "%s/32" $uplink.peerAddress) "interface" $uplink.interface "state" "absent") }}
+        {{- if $.Values.evpn.bgp.activeActive }}
+          {{- $metricRoutes = append $metricRoutes (dict "destination" $uplink.address "interface" $uplink.interface "state" "present") }}
+        {{- else }}
+          {{- $metricRoutes = append $metricRoutes (dict "destination" $uplink.address "interface" $uplink.interface "state" "absent") }}
         {{- end }}
       {{- end }}
     {{- end }}
@@ -173,6 +179,9 @@ data:
             metric: 100
             next-hop-interface: {{ $route.interface | quote }}
             table-id: 254
+        {{- if eq $route.state "absent" }}
+            state: absent
+        {{- end }}
       {{- end }}
     {{- end }}
     {{- end }}

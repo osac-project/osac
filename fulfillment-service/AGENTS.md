@@ -15,7 +15,6 @@ gRPC and REST APIs, persistence, authorization, resource lifecycle, and the
 Read the applicable references before changing behavior:
 
 - API or proto work: [`docs/API.md`](docs/API.md) and [`docs/CLEANAPI.md`](docs/CLEANAPI.md)
-- Proto changes: [`../proto/AGENTS.md`](../proto/AGENTS.md)
 - API or CLI request input changes:
   [`docs/REQUEST_PATH_TRACING.md`](docs/REQUEST_PATH_TRACING.md). Trace the path
   from the user-facing entry point through routing, filtering, and
@@ -42,11 +41,10 @@ Use the Go version in `go.mod` and the tools listed in [README.md](README.md):
 uv/Python for development tasks, Buf/protoc for protobuf generation, Ginkgo
 for unit suites, and Helm for chart checks.
 
-Run from `fulfillment-service/` when applicable:
+For schema changes, follow [shared proto generation](../proto/AGENTS.md).
+Run from `fulfillment-service/` for other generated files:
 
 ```bash
-make -C ../proto generate # After proto changes.
-make -C ../proto lint
 go generate ./... # After changes affecting mocks or other generated Go files.
 go mod tidy # After module dependency changes.
 ```
@@ -81,8 +79,6 @@ make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```
 
-If a fresh environment is needed, confirm that `osac-dev` is a disposable test cluster before deleting it with `kind delete cluster --name osac-dev`.
-
 If setup fails with `failed to lookup host '...'`, read [README.md — Running integration tests](README.md#running-integration-tests) for host entries.
 
 ## Writing tests
@@ -92,28 +88,3 @@ If setup fails with `failed to lookup host '...'`, read [README.md — Running i
 - Keep cases independent, register cleanup with `DeferCleanup`, and use bounded `Eventually` assertions for asynchronous behavior instead of sleeps.
 - Test observable behavior, including relevant error paths and tenant isolation where applicable. Deployed Fulfillment-only API/CLI workflows belong in `it/`; cross-component provisioning belongs in `tests/e2e/`.
 - Consult [Fulfillment test tiers and coverage](../docs/INTEGRATION-TESTING.md#fulfillment-service) when choosing coverage for a change.
-
-## Common tasks
-
-### Change a resource API
-
-- Start with the private contract in `../proto/private/`, then trace its
-  public wrapper and private implementation under `internal/servers/`.
-  [CODEWALK.md](docs/CODEWALK.md) follows BareMetalInstance through these layers
-  and the generic persistence path; use it to locate extension points rather
-  than adding a parallel CRUD implementation.
-- Keep request transformations, update masks and stored-object validation in
-  the same review. Add server cases for partial updates and the relevant tenant
-  boundary, using the existing database/transaction harness.
-- Run the ordered proto generation and focused server checks above. If the
-  change affects resource intent or observed state, also inspect the owning
-  reconciler in `internal/controllers/` and its downstream operator consumer.
-
-### Change persistence or command behavior
-
-- Add schema changes as new migrations under `internal/database/migrations/`;
-  follow neighboring migration pairs and exercise the server behavior that
-  reads and writes the changed data. Do not modify an applied migration.
-- For CLI work, use the nested CLI guide and trace the request as described in
-  `docs/REQUEST_PATH_TRACING.md`. Keep local command parsing/help tests separate
-  from deployed API/CLI tests in `it/`; neither replaces the other.

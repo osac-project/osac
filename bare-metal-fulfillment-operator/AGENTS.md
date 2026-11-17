@@ -16,10 +16,11 @@ Read the applicable references before changing behavior:
 ## Invariants
 
 - Preserve the pool-to-instance ownership, finalizer, provisioning, and status lifecycle.
-- Keep inventory allocation and power-management abstractions separate.
-- Preserve tenant isolation metadata on tenant-scoped resources and avoid credentials in logs or samples.
+- Keep `internal/inventory/` allocation separate from `internal/management/`
+  power-management abstractions; controllers use their client interfaces.
 - BareMetalInstance host teardown waits while the OSAC networking cleanup
-  finalizer is present. Leave ExternalIP and ExternalIPAttachment untouched.
+  finalizer is present. Leave ExternalIP and ExternalIPAttachment untouched;
+  BMF owns NetworkAttachment teardown after that finalizer clears.
 
 ## Generated files
 
@@ -27,30 +28,6 @@ Read the applicable references before changing behavior:
 - Then run `make helm-crds` to synchronize the CRD and operator Helm charts; use `make check-helm-crds` to verify synchronization.
 - Never hand-edit `config/crd/` or `zz_generated.deepcopy.go`.
 - After dependency changes, run `go mod tidy` and commit the resulting `go.mod` and `go.sum` changes.
-
-## Common tasks
-
-### Change allocation or host lifecycle
-
-- Trace both pool and instance controllers under `internal/controller/`
-  before changing shared reconciliation. Pool selection and instance teardown
-  must agree about ownership and when a host can be reused.
-- Keep inventory lookup/allocation under `internal/inventory/` separate from
-  power and management behavior under `internal/management/`. Follow the
-  existing client interfaces when adding a backend rather than embedding
-  provider requests in the controller.
-- Add controller regression cases beside the implementation. Exercise retry
-  and deletion transitions as well as allocation; provider doubles cannot
-  establish actual BMC, hardware or networking behavior.
-
-### Change a Kubernetes API or chart
-
-- Edit `api/v1alpha1/`, run `make manifests generate helm-crds check-helm-crds`
-  from this component, and review both generated CRDs and chart output.
-- Run `make test` for Envtest coverage and the local chart checks below.
-  Use `test/integration/` for deployed controller wiring. Leave ExternalIP and
-  ExternalIPAttachment cleanup to the OSAC operator; BMF still owns its
-  NetworkAttachment teardown after the networking cleanup finalizer clears.
 
 ## Integration Testing
 
@@ -64,8 +41,6 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#bare-met
 | Networking teardown ownership | Kind component integration | [Isolated installer boundary](../docs/INTEGRATION-TESTING.md#net-clean-08-deployed-bmf-ownership-boundary) |
 | Metal3, BCM, Ironic, BMC, power, or hardware semantics | Contract or real-provider integration | Follow the owning [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task |
 | Generated CRDs or Helm CRDs | Envtest plus Kind | `make manifests generate helm-crds check-helm-crds`, then the required test command |
-
-Kind tests require the current operator deployment and simulate provider transitions.
 
 ## Validation
 

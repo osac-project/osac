@@ -35,7 +35,11 @@ React/PatternFly browser applications, shared UI packages and a Go API proxy.
 
 ## Validation
 
-For UI code changes, run from `osac-ui/`:
+Run from `osac-ui/`. After string edits, run `pnpm i18n` before the checks below:
+its `extract --ci` writes locale updates and exits nonzero when files change.
+Review the diff, fix real errors and rerun until clean; do not add another `--ci`.
+
+For UI code changes:
 
 ```bash
 pnpm run typecheck
@@ -44,8 +48,8 @@ pnpm test
 ```
 
 - Vitest and production builds do not replace checking test-file types.
-- Lint checks ESLint, Prettier and i18n synchronization. Use `pnpm format` to
-  apply formatting fixes, then review the diff and rerun lint.
+- Lint checks ESLint, Prettier and i18n synchronization. Use `pnpm format`
+  for formatting fixes.
 - Run `pnpm build` for build/config or cross-package import changes. For a
   frontend-only build, use `pnpm --filter @osac/app-frontend run build`.
 - For proxy changes, also run `make -C proxy test lint`.
@@ -56,13 +60,15 @@ pnpm test
 
 ### API access
 
+- Application routing lives in `apps/app-frontend/src/`; shared pages and
+  domain hooks live in `libs/ui-components/src/`. Reuse `api/v1/` hooks.
 - Browser Connect JSON at `/api/fulfillment/*` passes through
   `proxy/bridge/connectjson.go` to native gRPC using reflection, not proxy stubs.
 - `ApiProvider` holds the transport; obtain typed clients with `useApiFetch`.
 - Reads use `useApiQuery`/`useApiQueryClient`, not direct TanStack equivalents;
   mutations may use `useMutation`.
-- Register routes in `ApiRoute` and use `apiQueryKey`. Unwrap `.items`/`.object`
-  in hook `select`, not components.
+- Register routes in `ApiRoute` and use `apiQueryKey`, including pagination
+  and filters. Unwrap `.items`/`.object` in hook `select`, not components.
 - Lists use `filter`, `limit`, `offset`, `order`, not cursors. See
   [API query architecture](docs/api-query-arch.md) for reference implementations.
 
@@ -71,9 +77,8 @@ pnpm test
 - Use `@osac/ui-components/hooks/useTranslation`, not `react-i18next` directly.
 - Use literal English keys (`t('Save')`), never dynamic keys. Pure utilities
   receive `t: TFunction`.
-- Run `pnpm i18n` and commit generated `libs/i18n/locales/en/translation.json`
-  with source strings; never hand-edit it. The package script already passes
-  `--ci` to extraction, so do not add a second `--ci` argument.
+- Commit generated `libs/i18n/locales/en/translation.json` with source strings;
+  never hand-edit it. Extraction cannot discover dynamic keys.
 
 ### Generated API bindings
 
@@ -100,46 +105,6 @@ pnpm test
   as persisted regression coverage. See its [README](apps/playwright/README.md).
 - Memoization requires measured production-profiler evidence, not correctness
   workarounds; prefer state locality and stable, narrow props first.
-
-## Common Tasks
-
-### Add a resource view or API operation
-
-- Keep application routing and transport setup in `apps/app-frontend/src/`;
-  shared pages, components and domain hooks live in `libs/ui-components/src/`.
-  Reuse a domain hook under `libs/ui-components/src/api/v1/` before adding a call.
-- For a new query, register its route in `libs/ui-components/src/api/types.ts`,
-  use the typed query
-  key and follow a neighboring hook for response selection and mutation cache
-  invalidation. Keep pagination/filter state in the key so distinct lists do
-  not share cached results accidentally.
-- Use the existing pinned `@osac/types` contract. If it lacks the requested
-  API, surface the baseline dependency instead of silently regenerating it.
-- Place `*.test.ts` or `*.test.tsx` beside the implementation. Follow
-  `libs/ui-components/src/api/v1/disk-image.test.ts` and the shared
-  `libs/ui-components/src/test-utils/createMockConnectTransport.ts` for typed fixtures;
-  exercise loading, empty, success and error states through the UI.
-
-### Add a form field or change translated text
-
-- Compose pages from existing shared fields and `OsacForm`; keep reusable
-  field behavior in `components/Form/` and primitives in `components/Form/base/`.
-  Test keyboard interaction, labels, field errors and the user-text boundary,
-  not only the submitted payload.
-- Keep literal English translation keys in source. Pass `t` into pure
-  formatting/validation utilities rather than calling a React hook there.
-- From `osac-ui/`, run `pnpm i18n` after changing strings, then the typecheck,
-  lint and test sequence above. Review the generated locale diff with the
-  source change. Translation extraction does not discover dynamic keys.
-
-### Change the proxy or a cross-package import
-
-- Trace requests through `proxy/bridge/connectjson.go`; the browser's Connect
-  JSON and upstream native gRPC are different boundaries. Preserve auth/error
-  handling rather than replacing the bridge with a REST mock or generated stub.
-- Run `make -C proxy test lint` for proxy changes and `pnpm build` for
-  cross-package/build changes, from `osac-ui/`. Frontend production compilation
-  excludes test files, so retain the separate `pnpm run typecheck` gate.
 
 ## Live browser harness
 

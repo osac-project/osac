@@ -15,7 +15,6 @@ resource-reference workflows.
   different directories and therefore skip these suites.
 - Avoid fixed sleeps; wait for observable resource conditions with bounded timeouts.
 - Tests clean up resources they create and never assume the caller's shared-cluster namespace or context.
-- Shared fixture changes require collecting all affected suites.
 - A new long wait or traffic check reports a failure kind from
   `tests/e2e/core/failures.py`: `Kind`, `E2EFailure`, or `poll_or_fail(kind=...)`
   in the VMaaS stack.
@@ -72,33 +71,13 @@ forced cleanup as proof. Preserve API worker tenant/order/owner identity and CR
 tenant/BMI identity (the API owner-reference annotation is not copied to the CR).
 Local mocks do not establish hardware, provider or storage behavior; report gaps.
 
-## Common Tasks
-
-### Add a deployed lifecycle case
-
-- Select the owning service and tier using `docs/testing/e2e.md` from the
-  repository root. Read its nested README and `conftest.py` before adding new
-  setup; shared session fixtures live in `tests/e2e/conftest.py`.
-- Reuse `tests/e2e/core/` clients, naming and polling helpers. Track resources
-  created by the test and arrange cleanup even when setup or an assertion
-  fails; avoid assuming a global tenant or an otherwise idle shared backend.
-- Make assertions about observable API/CR state and the real boundary under
-  test. Distinguish readiness from traffic, storage I/O and deletion evidence.
-  Preserve the ordered-suite and ownership requirements above.
-- Collect the affected suite before a deployed run. Add helper logic tests
-  under `tests/unit/` rather than requiring cluster credentials just to test
-  parsing, selection or failure classification.
-
-### Change fixtures or failure reporting
-
-- Inspect all fixture consumers before changing scope or teardown. Shared
-  fixtures affect service suites beyond the test that motivated the change;
-  collect every affected suite and run the local unit gate below.
-- Use the existing sanitized runner and failure kinds. Register guest
-  snapshots where applicable and keep optional telemetry/diagnostic failures
-  from masking the original test result.
-- Report which real dependencies ran. Collection, unit doubles and forced
-  cleanup are not evidence of successful deployed lifecycle teardown.
+The CaaS CatalogItem sanity and two-NodeSet regression commands listed here
+also cover add-on installation: cert-manager/serverless from the catalog, and
+direct nvidia-gpu input with NFD dependency resolution, respectively. They use
+deployed Fulfillment/operator/AAP, a HostedCluster and OLM CatalogSources,
+checking AddOnOperatorsReady, OLM Subscription/CSV and public API status.
+These are installation checks, not GPU workload proof; they require no GPU
+hardware. Combined catalog+direct input and negative installation are not covered.
 
 ## Fulfillment trust enablement
 
@@ -114,6 +93,9 @@ on `serviceaccounts/token` for that service account/namespace. Follow the linked
 gate input and authorization requirements; do not perform rotation in the test.
 
 ## Validation
+
+Reuse the owning suite's `conftest.py` and `tests/e2e/core/` helpers; helper
+logic tests belong in `tests/unit/`, without cluster credentials.
 
 ### Local checks
 

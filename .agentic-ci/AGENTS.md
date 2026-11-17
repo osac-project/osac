@@ -2,8 +2,7 @@
 
 Never edit this file except for minor corrections. Do not append new content.
 
-Follow the repository root instructions. This overlay supplies early Autofix
-feedback; ordinary GitHub CI remains authoritative.
+Early Autofix sandbox feedback; ordinary GitHub CI remains authoritative.
 
 ## Helper contract
 
@@ -25,12 +24,10 @@ bash tools/test/component-hooks-smoke.sh
 These smoke checks do not replace the production scenarios below. Workflow
 changes also require actionlint and the applicable root pre-commit checks.
 
-## Touched-area map
+<a id="touched-area-map"></a>
 
-| Area | Required validation | Command / boundary |
-|---|---|---|
-| Overlay selectors, shared change detection, setup or skip declarations | [DEV] Unit plus production component integration | Run the local smoke checks above, then the [production scenarios](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox) |
-| Dependency discard paths | [DEV] Production component integration | Follow the [profiling and restoration requirements](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox) |
-| Regression workflow or path filter | [DEV] Unit and workflow validation | Run the local checks and actionlint; retain [PR and merge-group reporting](../.github/AGENTS.md#component-hooks-and-sandbox-regression-smoke-tests) |
+## Production boundary
 
-See [testing boundaries and production evidence](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox).
+Selector/setup changes also require [production component scenarios](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox).
+Dependency-discard changes require the profiling/restoration checks there.
+Workflow/filter changes must retain [PR and merge-group reporting](../.github/AGENTS.md#component-hooks-and-sandbox-regression-smoke-tests).

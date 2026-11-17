@@ -24,7 +24,6 @@ Read the applicable references before changing behavior:
 - `pkg/provisioning` and `pkg/aap` have external consumers, including the bare-metal fulfillment operator; interface changes are cross-component changes.
 - Networking manager tasks run only through `internal/networktask` (see its `doc.go`): one generic job template per task, `status.jobs` entries, typed result validation.
 - When debugging operators, check for stale `vendor/` dependencies and cached images before rebuilding.
-- Never put credentials in logs, samples, or manifests.
 - Worker recovery retains attempted or uncertain Create intent, including
   legacy state and empty List results; do not equate missing evidence with
   deletion. Only an invocation entering with explicit Reserved intent may
@@ -55,33 +54,6 @@ Read the applicable references before changing behavior:
   `make -C ../proto generate` (see [proto instructions](../proto/AGENTS.md)).
   Do not run a separate component-local protobuf generator.
 - Never hand-edit `config/crd/`, `zz_generated.deepcopy.go`, or `go.sum`; run `go mod tidy` for module changes.
-
-## Common tasks
-
-### Change a resource or its reconciliation
-
-- Start with `api/v1alpha1/` for the Kubernetes shape and
-  `internal/controller/` for lifecycle behavior. Follow both the resource
-  controller and its feedback controller when status changes; an API field,
-  CR field and feedback update are not interchangeable representations.
-- Check watches, predicates and RBAC alongside reconciliation code. Preserve
-  the unmanaged-resource guard and tenant ownership before dispatching work.
-- For CRD changes, run `make manifests generate helm-crds check-helm-crds`
-  from `osac-operator/`, then the applicable checks below. Review schema and
-  Helm CRD output together rather than fixing generated YAML directly.
-
-### Extend controller coverage
-
-- Put regression cases beside the controller in `internal/controller/` and
-  reuse the Ginkgo/Envtest suite setup in `suite_test.go`. Use real API-server
-  writes for CR status/version behavior instead of assuming fake-client
-  updates reproduce conflicts or watch delivery.
-- Keep dependency doubles inside test files, register cleanup and wait for
-  observable conditions with bounded assertions. For deployed watches/RBAC,
-  add coverage under `test/integration/` and use the selected Kind boundary.
-- For AAP job or networking changes, trace `pkg/provisioning`, `pkg/aap` and
-  `internal/networktask` into the AAP role. Update shared contract fixtures
-  with the producer and consumer; local success does not validate a provider.
 
 <a id="integration-testing"></a>
 
@@ -118,6 +90,10 @@ generated changes. `make build` also runs that unit-test path before building
 the manager and console proxy, so it is not a compile-only shortcut.
 
 ### Select coverage by boundary
+
+Controller regressions reuse `internal/controller/suite_test.go` and real
+Envtest API-server writes for status/version behavior. Fake updates do not
+establish conflicts or watch delivery.
 
 All commands below also run from `osac-operator/`. Integration targets require
 the current image/manifests deployed into an explicitly selected Kind cluster.

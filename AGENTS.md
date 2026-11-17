@@ -6,53 +6,19 @@ Open Sovereign AI Cloud provides self-service sovereign AI infrastructure.
 Read applicable `AGENTS.md` files from root to target, including every affected
 component for cross-component work. Consider downstream consumers.
 
-## Architecture
+## Architecture and components
 
-### Request, control and status flow
+Clients reach fulfillment's tenant-scoped public API, which wraps private
+services and persists resource intent. A separate fulfillment controller
+projects that intent into hub Kubernetes resources. Operators reconcile them
+through AAP or other providers; feedback returns observed state through the
+private API. Not every resource traverses every component or invokes AAP.
 
-- Clients use fulfillment's gRPC/REST API. Public servers enforce the tenant
-  boundary around private services; validation and persistence record resource
-  intent in the database.
-- The fulfillment controller is a separate process from the API servers.
-  Its reconcilers read the private API and project resource intent into hub
-  Kubernetes custom resources, such as `ClusterOrder` and `ComputeInstance`.
-- Kubernetes operators reconcile those resources. Resource-specific paths
-  dispatch AAP jobs or use other provider integrations; not every resource
-  invokes AAP or traverses every component.
-- Feedback controllers report observed state through fulfillment's private
-  API. Persisted status, conditions and finalizers drive subsequent reconciliation
-  and the state clients see.
-- Read [Architecture](docs/ARCHITECTURE.md) for control-loop boundaries and
-  [Conventions](docs/CONVENTIONS.md) for cross-component change dependencies.
-
-### Component boundaries
-
-- `osac-operator/` owns platform resource controllers and provisioning feedback.
-  `osac-aap/` supplies the Ansible workflows used by AAP provisioning.
-- `bare-metal-fulfillment-operator/` owns bare-metal pools and instances,
-  including allocation and host lifecycle; preserve provider-specific ownership.
-- `osac-csi-driver/` separates fulfillment-owned Volume lifecycle from
-  vendor-proxied CSI operations. `osac-metering/` consumes fulfillment events
-  and produces usage for billing adapters.
-- `osac-ui/` provides browser clients and a Go API proxy; the fulfillment
-  service also owns the `osac` CLI.
-
-### Deployment and cross-component tests
-
-- `osac-installer/` composes sibling charts and installs dependencies,
-  infrastructure and the platform in that order. Change a component chart at
-  its source, not through a packaged installer dependency.
-- `tests/e2e/` exercises cross-component provisioning and lifecycle behavior:
-  resource creation, readiness, networking/storage behavior and deletion cleanup
-  against deployed services and the selected providers.
-- Unit, Envtest and component-integration suites belong to their components.
-  Mocks and collection-only runs do not establish real provider behavior.
-  Use [integration testing](docs/INTEGRATION-TESTING.md) and
-  [E2E boundaries](docs/testing/e2e.md#suite-boundaries) to select evidence.
-
-## Components
-
-Links lead to scoped instructions; use the owning component for implementation.
+The installer composes sibling charts in dependency, infrastructure and platform
+order. Component unit/integration suites test local boundaries; `tests/e2e/`
+tests deployed cross-component lifecycles with selected providers.
+Read [Architecture](docs/ARCHITECTURE.md) and [Conventions](docs/CONVENTIONS.md)
+for control-loop boundaries and cross-component dependencies.
 
 | Component | Responsibility and relationships |
 |---|---|
@@ -77,18 +43,10 @@ Links lead to scoped instructions; use the owning component for implementation.
   `go.mod` files together with the workspace, Containerfiles and build workflows.
 - Use documented component image targets; builds that copy workspace/sibling
   modules need the monorepo root as context, not an isolated component directory.
-- `proto/private/` is the fulfillment API source of truth; `proto/tests/`
-  contains test-only contracts. `proto/public/` and `proto/gen/` are generated.
-- Fulfillment, operator, metering and CSI Go code import the shared
-  `github.com/osac-project/osac/proto/gen/...` tree. AAP workflows consume the
-  fulfillment API contract through their API interactions, not a separate Go
-  generation tree.
-- From the repository root, run `make -C proto generate` after source changes.
-  It generates public protos before Go bindings. Commit source and both
-  generated trees together; follow [proto rules](proto/AGENTS.md).
-- Validate affected consumers and review generated diffs. UI TypeScript bindings
-  have a separately pinned API baseline; follow [UI rules](osac-ui/AGENTS.md)
-  rather than regenerating them opportunistically.
+- Fulfillment, operator, metering and CSI share the generated Go API tree.
+  Follow [proto rules](proto/AGENTS.md) for sources and ordered generation;
+  validate affected consumers. UI bindings have a separately authorized,
+  pinned baseline: follow [UI rules](osac-ui/AGENTS.md#generated-api-bindings).
 - Fulfillment finalizer writes require an object read in the same pass and its
   fresh `metadata.version`. Propagate stale-update `Aborted` errors so the loop
   re-reads and retries. See [API updates](fulfillment-service/docs/API.md#update-when-supported).
@@ -142,11 +100,9 @@ Links lead to scoped instructions; use the owning component for implementation.
 - Check staged changes for secrets. `pre-commit run --all-files` is not a full
   secret scan: run `pre-commit run gitleaks` with the intended files staged.
   CI separately scans the PR diff using base-owned configuration.
-- Verify generated code, tests and review claims through executed checks and
-  boundary evidence, not agent agreement. Automate repeatable checks where
-  practical. Plan human approval/escalation for failed checks, high risk,
-  ambiguity or insufficient evidence; surface unread findings, missing checks
-  and unresolved recommendations before approval.
+- Base review claims on executed checks and boundary evidence. Surface failed
+  or missing checks, unread findings and unresolved risks before approval.
+  Escalate high risk, ambiguity or insufficient evidence for a human decision.
 - Jira implementation issues are Tasks. Every created issue needs its parent
   Feature's Component; use the `jira` CLI.
 

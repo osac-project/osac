@@ -7,7 +7,9 @@ Ansible Automation Platform.
 
 ## Required context
 
-Read the applicable references before changing behavior:
+Under `collections/ansible_collections/osac/`, `workflows` orchestrates,
+`templates` supplies resource roles, `service` supplies shared helpers and
+`config_as_code` configures AAP.
 
 - Component setup and playbook entry points: [`README.md`](README.md)
 - Role and workflow examples: `collections/ansible_collections/osac/`
@@ -31,57 +33,15 @@ Read the applicable references before changing behavior:
 - Only one NetworkClass may exist per deployment. Adding a backend replaces
   the configured NetworkClass rather than creating another.
 - Preserve tenant and owner-reference annotations on resources created by playbooks.
-- Remote workflows use `collections/ansible_collections/osac/service/roles/common/tasks/get_remote_cluster_kubeconfig.yaml`.
+- Reuse service helpers for waits, leases and finalizers. Remote workflows use
+  `collections/ansible_collections/osac/service/roles/common/tasks/get_remote_cluster_kubeconfig.yaml`.
 - Create `cudn_evpn` VirtualNetwork namespaces with `k8s.ovn.org/primary-user-defined-network: ""`
   at creation time; adding the label later is ignored by OVN-Kubernetes. See
   `collections/ansible_collections/osac/templates/roles/cudn_evpn/tasks/create_virtual_network.yaml`.
-- Never expose credentials in tasks, logs, fixtures, examples, or generated artifacts.
 - Keep supplied and response-derived Netris session cookies off redirect
   targets; preserve tenant-isolated API-ID ownership and retry-safe deletes.
 - Manager credentials and networking CA mounts must stay out of unrelated
   cluster-fulfillment workers.
-
-## Common Tasks
-
-Run task commands from `osac-aap/` unless another cwd is stated.
-
-### Change a provisioning role or workflow
-
-- Trace the `playbook_osac_*.yml` entry point into the selected collection.
-  `osac/workflows` owns orchestration, `osac/templates` owns pluggable resource
-  roles, `osac/service` holds shared helpers and `osac/config_as_code` configures
-  AAP. These paths are under `collections/ansible_collections/`.
-- Keep inputs and defaults with the role; inspect its task entry points and
-  metadata before copying another resource's variables. Use named tasks and
-  fully qualified modules so execution and coverage reports identify the step.
-- Reuse service roles for kubeconfig lookup, waits, leases and finalizers.
-  Keep tenant/owner annotations and retry-safe cleanup through every included
-  role, not just the top-level playbook.
-- Extend `tests/unit/` for isolated transforms/plugins and the owning target
-  under `tests/integration/targets/` for role execution. Follow its README for
-  fixtures; the focused baseline command below does not prepare them itself.
-
-### Add or change a network manager task
-
-- Check the real role's `meta/osac.yaml`, its dispatcher entry points and the
-  operator's `../osac-operator/internal/networktask/doc.go`. Manager identity
-  and `template_type` must agree with installer registration.
-- Update shared `../tests/contract/network-task` fixtures with the operator
-  consumer when changing inputs/results. Exercise failure and retry branches,
-  not only the happy-path task, through the measured coverage gate below.
-- Keep network credentials/CA mounts scoped to network jobs; do not copy them
-  into unrelated cluster jobs. Consult the installer
-  [network-backend guide](../osac-installer/docs/network-backend.md)
-  when changing selection rather than publishing another ComputeClass.
-
-### Update collections or the execution environment
-
-- Change `collections/requirements.yml` for dependencies and follow the
-  vendoring procedure below; do not patch installed third-party code manually.
-- Development Python dependencies and execution-environment inputs serve
-  different consumers. Run `uv sync --all-groups` for development changes;
-  run `make execution-environment-build` for image inputs, then the applicable
-  role tests. A successful local Ansible import is not an image-build check.
 
 <a id="integration-testing"></a>
 
@@ -150,6 +110,12 @@ in `tests/coverage/exclusions.yaml`; `netris.controller` roles are reported, not
 - Deployed AgentlessNet VN retry/delete and packet isolation have no qualifying
   tracked runner. HostedCluster transforms do not prove provisioning.
 
+For focused playbooks, run from `tests/integration/`, for example
+`uv run --group development ansible-playbook targets/cudn_evpn/tasks/baseline.yml -e '@common_vars.yml'`.
+Use `targets/netris_fabric/tasks/baseline.yml` for that manager. Prepare the
+fixtures described in the target README first; invoking a playbook directly
+does not perform the Make target's setup or cleanup.
+
 ## Generated and vendored files
 
 - There is no source-code generator for roles. Do not hand-edit third-party content under `vendor/`.
@@ -159,10 +125,3 @@ in `tests/coverage/exclusions.yaml`; `netris.controller` roles are reported, not
   `rm -rf vendor && ansible-galaxy collection install -r collections/requirements.yml`.
 - Review the complete vendor diff and commit it with the requirements change
   when vendoring is required.
-
-`make test` manages Kind setup, integration tests, teardown and coverage.
-For focused playbooks, run from `tests/integration/`, for example
-`uv run --group development ansible-playbook targets/cudn_evpn/tasks/baseline.yml -e '@common_vars.yml'`.
-Use `targets/netris_fabric/tasks/baseline.yml` for that manager. Prepare the
-fixtures described in the target README first; invoking a playbook directly
-does not perform the Make target's setup or cleanup.

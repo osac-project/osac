@@ -12,9 +12,6 @@ Read the applicable references before changing behavior:
 - Deployment architecture: [`../docs/guides/installation/helm-deployment-guide.md`](../docs/guides/installation/helm-deployment-guide.md)
 - Script behavior: [`README.md`](README.md) and `scripts/`
 - Values and schema: `charts/osac/values.yaml` and `charts/osac/values.schema.json`
-- Changes to installer values or schema: read the
-  [Enclave Wizard pipeline](../docs/agent-context/enclave-wizard-pipeline.md)
-  and account for schema consumption by the Enclave plugin and UI.
 - Sibling component contracts: the relevant `../<component>/AGENTS.md`
 
 ## Invariants
@@ -27,39 +24,13 @@ Read the applicable references before changing behavior:
 - Always pass an explicit namespace to `oc` and `kubectl` on shared clusters.
 - Do not modify cluster-scoped prerequisites on shared clusters; coordinate with cluster administrators before changing them.
 - The cluster-scoped `ca-bundle` resource is intentionally shared; do not rename it to avoid collisions.
-- Review chart dependency and values changes as deployment changes, including their rendered output.
+- Review values, schema, passthrough and `values/` overlays together with
+  rendered output; profile overrides can differ from umbrella defaults.
 
 ## Generated and dependency files
 
 - After changing chart dependencies, run `make helm-deps` and review `Chart.lock`/packaged dependency diffs.
-- Do not edit sibling component sources through installer chart paths.
 - `make sync-charts` is an alias for `make helm-deps`, not another generation step.
-
-## Common Tasks
-
-### Add a value or change component wiring
-
-- Trace the value from `charts/osac/values.yaml` and `values.schema.json`
-  through the umbrella templates into the owning sibling chart. Keep default,
-  validation, passthrough and rendered-resource behavior consistent.
-- Inspect affected overlays under `values/` rather than assuming every
-  profile uses the umbrella default. A value exposed to the Enclave Wizard
-  also needs the schema-consumer review described above.
-- Add render assertions to the owning chart's `tests/` or existing focused
-  script contract. Run `make helm-validate` and the relevant helm-unittest
-  suite; select additional wiring contracts from the table below.
-
-### Change a dependency or installation step
-
-- Put component chart changes in the sibling source chart. Update umbrella
-  dependency metadata only when composition changes, then run `make helm-deps`
-  and inspect locks and packaged chart changes before rendering.
-- Trace the Makefile target into `scripts/` and reuse `scripts/lib.sh` for
-  shared shell behavior. Keep dependency, infrastructure and platform phases
-  ordered; a successful template render does not establish readiness.
-- For script changes, use the input-validation, readiness/runtime or preflight
-  stub checks below before selecting a deployed check. Read the profile's
-  prerequisites and cleanup behavior before running any installation target.
 
 <a id="integration-testing"></a>
 
@@ -127,9 +98,6 @@ From the repository root, run
 `yamllint --strict -c .yamllint.yaml osac-installer/`; the shared config excludes
 the entire `osac-installer/charts/` tree, including chart metadata and values.
 Other commands here run from `osac-installer/`.
-
-Apply the repository-wide checks in the root guide in addition to these
-installer-specific checks.
 
 ### Deployed integration checks
 

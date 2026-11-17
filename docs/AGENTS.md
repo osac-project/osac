@@ -23,15 +23,12 @@ sources live in [`../proto/`](../proto/), implementations in the owning componen
 
 ### Content Organization
 
-- Put component relationships, state machines and control-loop explanations
-  in `architecture/`. Explain which component owns each transition and how
-  observed status returns to the caller; a sequence diagram should match code.
-- Put user-facing feature behavior in `features/`, with links to the relevant
-  setup and usage guides rather than copied installation instructions.
-- Put reproducible procedures in `guides/`: `developer/` for API/resource
-  workflows, `admin/` for backend administration and `installation/` for
-  deployment. State required access and distinguish local checks from changes
-  to a deployed environment.
+- Put component relationships and state transitions in `architecture/`;
+  diagrams must match implementation and status-feedback ownership.
+- Put feature behavior in `features/`; link to setup rather than copying it.
+- Put procedures in `guides/developer/`, `guides/admin/` or
+  `guides/installation/`. State access requirements and distinguish local
+  checks from deployed changes. Update indexes/navigation for new sections.
 - Keep cross-component policy in its canonical document, such as
   [CONVENTIONS.md](CONVENTIONS.md) or [INTEGRATION-TESTING.md](INTEGRATION-TESTING.md).
   Link to it instead of creating a competing policy in a feature guide.
@@ -61,43 +58,7 @@ sources live in [`../proto/`](../proto/), implementations in the owning componen
 - For breaking changes, update the architecture explanation and affected
   developer/admin procedures together, including migration or compatibility
   notes where needed.
-- For AI-assisted documentation, read [AI-POLICY.md](AI-POLICY.md); contribution
-  mechanics are inherited from the root guide.
-
-## Common Tasks
-
-### Add or extend an architecture document
-
-1. Check `architecture/README.md` and related documents before adding a new
-   topic. Extend an existing document when it owns the same flow; use a
-   topic directory with a `README.md` when diagrams and subtopics need grouping.
-2. Explain responsibilities, inputs, state transitions and failure handling
-   against the current component sources. Link API contracts and designs.
-3. Add diagrams where they clarify interactions. Update the relevant index
-   and `docs/README.md` navigation when adding a major section.
-
-### Update a developer guide
-
-1. Find the owning procedure under `guides/developer/` and trace its commands
-   through the CLI/API and component configuration used by that procedure.
-2. Update prerequisites, ordered steps, payloads and expected results together.
-   Keep troubleshooting tied to observable failures, not security bypasses.
-3. Check examples with the closest local consumer. Run live examples only in
-   an authorized environment; report examples not executed rather than implying
-   that prose review validates a deployment.
-4. Add version context when behavior changed and check incoming links if a
-   heading or file moved.
-
-### Add or update a PlantUML diagram
-
-1. For the existing AAP pipeline, edit or add `.puml` sources under
-   `architecture/aap-provisioning/diagrams/` with matching `@startuml` and
-   `@enduml` delimiters.
-2. Run the generator below, then inspect the PNG under the sibling `images/`
-   directory. Include source and output together.
-3. Embed the image using a path relative to the Markdown file and descriptive
-   alt text. Generation outside this pipeline needs its own verified setup;
-   do not assume this script scans all of `docs/`.
+- For AI-assisted documentation, read [AI-POLICY.md](AI-POLICY.md).
 
 ## Diagrams
 
@@ -119,7 +80,6 @@ Do not disable host security controls to troubleshoot generation.
 
 - Review facts, relative links, heading anchors and code examples against their
   actual consumers. Distinguish documented commands from checks executed.
-- Apply the repository-wide checks in the root guide.
 - Markdown-only changes do not require live deployments, diagram regeneration
   or unrelated dashboard tests.
 

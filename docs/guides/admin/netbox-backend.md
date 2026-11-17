@@ -83,6 +83,8 @@ Keep both at their defaults outside lab hardware. Disabling the check lets anyon
 
 BMF applies the setting only at BMH creation, and the operator reads it from the inventory config at startup, so restart the BMF operator after changing `bmf.netbox.enableBMCCertificateVerification`. BMO writes `redfish_verify_ca` into Ironic when it enrolls the node and does not resend driver info when this flag changes, so a host whose BMH predates the setting keeps failing after an upgrade. Delete and re-create its BareMetalInstance, pinning `spec.selector.hostSelector` to that device first so the re-creation cannot claim a different free chassis; the manual BMH and Ironic `driver_info` patches in [OSAC-7116](https://redhat.atlassian.net/browse/OSAC-7116) remain the fallback when the host must not be re-created. The reverse applies too: a host created with verification disabled keeps skipping BMC certificate checks after the device field and `bmf.netbox.enableBMCCertificateVerification` return to verifying, until its BareMetalInstance is re-created.
 
+> **Warning:** re-creating a `BareMetalInstance` deprovisions its host first: any workload on it stops, and Metal3 may wipe disks during automated cleaning. Back up host data and plan for downtime before re-creating.
+
 ## Configuring the installer
 
 Use the OSAC umbrella chart values. The token Secret must be in the BMF release namespace and contain the configured key (default name `osac-netbox-token`, default key `token`). If that Secret is absent, the chart requires `bmf.netbox.tokenValue` and creates it; use a pre-created Secret for production rather than storing a token in a values file.

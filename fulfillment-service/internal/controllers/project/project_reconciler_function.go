@@ -307,10 +307,10 @@ func (t *task) validateAndActivate(ctx context.Context) error {
 		)
 	}
 
-	// Create a ProjectMembership for the project creator with manager role.
-	// The ProjectMembership reconciler will handle adding the user to the Keycloak group.
+	// Create a manager membership only for a User creator. Private API attribution uses the
+	// synthetic "system" identity, which is not a User and must not block activation.
 	creatorID := t.project.GetMetadata().GetCreator()
-	if creatorID != "" {
+	if creatorID != "" && creatorID != "system" {
 		if err := t.createProjectMembershipForCreator(ctx, creatorID); err != nil {
 			return fmt.Errorf("failed to create ProjectMembership for creator: %w", err)
 		}

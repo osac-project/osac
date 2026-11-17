@@ -27,11 +27,14 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing/m360"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingstub"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -84,10 +87,23 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 	seedAccount := func(id, nativeID, correlation string) time.Time {
 		observedAt := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
 		err := tm.Run(ctx, func(tx database.Tx) error {
-			_, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-				ID: id, ProviderKey: billing.KeyM360, ProviderAccountReference: nativeID,
-				ExternalBillingAccountID: correlation, State: "ACTIVE", StatusObservedAt: observedAt,
-			})
+			d, err := dao.NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			if err != nil {
+				return err
+			}
+			name, err := billingAccountName(id)
+			if err != nil {
+				return err
+			}
+			observed := privatev1.BillingAccountStatus_builder{ProviderKey: billing.KeyM360, ProviderAccountReference: nativeID,
+				State: privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE, StateObservationTimestamp: timestamppb.New(observedAt)}.Build()
+			if correlation != "" {
+				observed.SetExternalBillingAccountId(correlation)
+			}
+			_, err = d.Create().SetObject(privatev1.BillingAccount_builder{Id: id,
+				Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SystemTenant, Creator: "system"}.Build(),
+				Spec:     &privatev1.BillingAccountSpec{}, Status: observed,
+			}.Build()).Do(database.TxIntoContext(ctx, tx))
 			return err
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -104,7 +120,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			Object: privatev1.TenantBillingAssignment_builder{
 				Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 				Spec: privatev1.TenantBillingAssignmentSpec_builder{
-					TenantId: tenantID, BillingAccountId: account,
+					Tenant: privatev1.TenantReference_builder{Id: tenantID}.Build(), BillingAccount: privatev1.BillingAccountReference_builder{Id: account}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build()
@@ -115,7 +131,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			Object: privatev1.TenantBillingAssignment_builder{
 				Id: id,
 				Spec: privatev1.TenantBillingAssignmentSpec_builder{
-					TenantId: tenantID, BillingAccountId: account,
+					Tenant: privatev1.TenantReference_builder{Id: tenantID}.Build(), BillingAccount: privatev1.BillingAccountReference_builder{Id: account}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build()
@@ -163,12 +179,9 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 				"an ineligible account must be rejected before correlation resolution")
 			Expect(stub.Writes()).To(BeEmpty(), "M360 correlation writes must remain unsupported")
 
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			_, total, listErr := database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-				`this.spec.tenant_id == "`+testTenant+`"`, "")
+			page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.tenant.id == "` + testTenant + `"`).Do(ctx)
 			Expect(listErr).ToNot(HaveOccurred())
-			Expect(total).To(BeZero())
+			Expect(page.GetTotal()).To(BeZero())
 
 			// The normalized observation is persisted without another List, and its time moves forward.
 			state, observedAt := storedObservation(accountID)
@@ -224,17 +237,14 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			state, _ := storedObservation(target)
 			Expect(state).To(Equal(wantState))
 
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			prior, getErr := database.GetTenantBillingAssignment(ctx, tx, created.GetObject().GetId())
+			prior, getErr := server.bindings.Get().SetId(created.GetObject().GetId()).Do(ctx)
 			Expect(getErr).ToNot(HaveOccurred())
-			Expect(prior.EffectiveTo).To(BeNil(), "the prior interval must remain current after a rejected replacement")
-			Expect(prior.BillingAccountID).To(Equal(accountID))
-			Expect(prior.EffectiveFrom).To(BeTemporally("==", created.GetObject().GetStatus().GetEffectiveFrom().AsTime()))
-			_, total, listErr := database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-				`this.spec.tenant_id == "`+testTenant+`"`, "")
+			Expect(prior.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil(), "the prior interval must remain current after a rejected replacement")
+			Expect(prior.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(accountID))
+			Expect(prior.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()).To(BeTemporally("==", created.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()))
+			page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.tenant.id == "` + testTenant + `"`).Do(ctx)
 			Expect(listErr).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(1)), "a rejection must not add or close history")
+			Expect(page.GetTotal()).To(Equal(int32(1)), "a rejection must not add or close history")
 
 			// Reactivation is observed by the retried Update; the persisted ineligible state must not veto recovery.
 			accounts[index].RawStatus, accounts[index].ApprovalStatus = "Active", "Approved"
@@ -242,26 +252,25 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			recovered, err := server.Update(adminCtx(),
 				updateRequest(created.GetObject().GetId(), testTenant, target))
 			Expect(err).ToNot(HaveOccurred())
-			Expect(recovered.GetObject().GetSpec().GetBillingAccountId()).To(Equal(target))
+			Expect(recovered.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(target))
 			Expect(recovered.GetObject().GetStatus().GetConnectionState()).To(Equal(
 				privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 
-			_, total, listErr = database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-				`this.spec.tenant_id == "`+testTenant+`"`, "")
+			page, listErr = server.bindings.List().SetLimit(10).SetFilter(`this.spec.tenant.id == "` + testTenant + `"`).Do(ctx)
 			Expect(listErr).ToNot(HaveOccurred())
-			prior, getErr = database.GetTenantBillingAssignment(ctx, tx, created.GetObject().GetId())
+			prior, getErr = server.bindings.Get().SetId(created.GetObject().GetId()).Do(ctx)
 			Expect(getErr).ToNot(HaveOccurred())
 			if replace {
 				Expect(recovered.GetObject().GetId()).ToNot(Equal(created.GetObject().GetId()))
-				Expect(total).To(Equal(int32(2)), "the successful replacement retains contiguous history")
-				Expect(prior.EffectiveTo).ToNot(BeNil())
-				Expect(*prior.EffectiveTo).To(BeTemporally("==", recovered.GetObject().GetStatus().GetEffectiveFrom().AsTime()))
+				Expect(page.GetTotal()).To(Equal(int32(2)), "the successful replacement retains contiguous history")
+				Expect(prior.GetObject().GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil())
+				Expect(prior.GetObject().GetStatus().GetEffectiveToTimestamp().AsTime()).To(BeTemporally("==", recovered.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()))
 			} else {
 				Expect(recovered.GetObject().GetId()).To(Equal(created.GetObject().GetId()))
-				Expect(recovered.GetObject().GetStatus().GetEffectiveFrom()).To(Equal(
-					created.GetObject().GetStatus().GetEffectiveFrom()))
-				Expect(total).To(Equal(int32(1)), "same-account recovery creates no new history")
-				Expect(prior.EffectiveTo).To(BeNil())
+				Expect(proto.Equal(recovered.GetObject().GetStatus().GetEffectiveFromTimestamp(),
+					created.GetObject().GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
+				Expect(page.GetTotal()).To(Equal(int32(1)), "same-account recovery creates no new history")
+				Expect(prior.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil())
 			}
 			Expect(stub.Writes()).To(BeEmpty(), "reassignment must never attempt an M360 account write")
 		},
@@ -274,8 +283,20 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 	It("rejects a foreign account in a selected-account HTTP response before any observation or correlation mutation", func() {
 		const foreignID = "m360-foreign-native"
 		seededAt = seedAccount(accountID, nativeOne, "")
-		_, err := testPool.Exec(ctx, `update billing_accounts set state = 'INACTIVE' where id = $1`, accountID)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(tm.Run(ctx, func(tx database.Tx) error {
+			c := database.TxIntoContext(ctx, tx)
+			d, err := dao.NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			if err != nil {
+				return err
+			}
+			r, err := d.Get().SetId(accountID).Do(c)
+			if err != nil {
+				return err
+			}
+			r.GetObject().GetStatus().SetState(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_INACTIVE)
+			_, err = d.Update().SetObject(r.GetObject()).Do(c)
+			return err
+		})).To(Succeed())
 		// The selected account is locally INACTIVE. An inconsistent Get returns a different ACTIVE account,
 		// whose private correlation must never be adopted. The fallback would allow resolution to succeed if
 		// the server ignored that mismatched reference, making this a behavioral regression rather than an HTTP error.
@@ -342,12 +363,9 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 		Expect(stub.Count("GetAccount")).To(Equal(1), "a non-retryable provider read must not be retried")
 		Expect(stub.Writes()).To(BeEmpty())
 
-		tx, txErr := database.TxFromContext(ctx)
-		Expect(txErr).ToNot(HaveOccurred())
-		_, total, listErr := database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-			`this.spec.tenant_id == "`+testTenant+`"`, "")
+		page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.tenant.id == "` + testTenant + `"`).Do(ctx)
 		Expect(listErr).ToNot(HaveOccurred())
-		Expect(total).To(BeZero())
+		Expect(page.GetTotal()).To(BeZero())
 
 		state, observedAt := storedObservation(accountID)
 		Expect(state).To(Equal("ACTIVE"), "a failed read must not invent an observation")

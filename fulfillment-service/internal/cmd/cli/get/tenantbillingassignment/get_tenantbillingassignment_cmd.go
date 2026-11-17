@@ -125,19 +125,19 @@ func renderTable(console *terminal.Console, offset int32,
 	}
 	for _, item := range items {
 		from := "-"
-		if item.GetStatus().HasEffectiveFrom() {
-			from = item.GetStatus().GetEffectiveFrom().AsTime().Format(time.RFC3339)
+		if item.GetStatus().HasEffectiveFromTimestamp() {
+			from = item.GetStatus().GetEffectiveFromTimestamp().AsTime().Format(time.RFC3339)
 		}
 		to := "-"
-		if item.GetStatus().HasEffectiveTo() {
-			to = item.GetStatus().GetEffectiveTo().AsTime().Format(time.RFC3339)
+		if item.GetStatus().HasEffectiveToTimestamp() {
+			to = item.GetStatus().GetEffectiveToTimestamp().AsTime().Format(time.RFC3339)
 		}
 		state := strings.TrimPrefix(item.GetStatus().GetConnectionState().String(), "TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_")
 		if state == "" || state == "UNSPECIFIED" {
 			state = "UNKNOWN"
 		}
 		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			item.GetId(), output.OrDash(item.GetSpec().GetTenantId()), output.OrDash(item.GetSpec().GetBillingAccountId()),
+			item.GetId(), output.OrDash(item.GetSpec().GetTenant().GetId()), output.OrDash(item.GetSpec().GetBillingAccount().GetId()),
 			state, from, to, output.OrDash(item.GetStatus().GetMessage())); err != nil {
 			return fmt.Errorf("failed to render tenant billing assignments table row: %w", err)
 		}

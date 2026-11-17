@@ -7,599 +7,217 @@ License. You may obtain a copy of the License at
   http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
-"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
-specific language governing permissions and limitations under the License.
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
+language governing permissions and limitations under the License.
 */
 
-package database
+package database_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	. "github.com/onsi/ginkgo/v2/dsl/core"
-	. "github.com/onsi/ginkgo/v2/dsl/table"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-var _ = Describe("Billing accounts", func() {
-	var (
-		ctx  context.Context
-		pool *pgxpool.Pool
-		tx   Tx
-	)
+// The external test package avoids database -> dao -> database's import cycle. It uses the same
+// native Container/NewInstance harness as TestDatabase, not a substitute persistence implementation.
+// Only the container is shared; every spec gets a fresh migrated database and transaction.
+type billingPersistenceFixture struct {
+	ctx         context.Context
+	tx          database.Tx
+	tm          database.TxManager
+	pool        *pgxpool.Pool
+	accounts    *dao.GenericDAO[*privatev1.BillingAccount]
+	assignments *dao.GenericDAO[*privatev1.TenantBillingAssignment]
+	tenants     *dao.GenericDAO[*privatev1.Tenant]
+	visibility  *auth.Visibility
+}
 
+var _ = Describe("Canonical billing database contracts", Ordered, ContinueOnFailure, func() {
+	var container *database.Container
+	var logger *slog.Logger
+	var f *billingPersistenceFixture
+	BeforeAll(func() {
+		logger = slog.New(slog.NewTextHandler(GinkgoWriter, nil))
+		var err error
+		container, err = database.NewContainer().SetLogger(logger).Build()
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(container.Stop(context.Background())).To(Succeed()) })
+		Expect(container.Start(context.Background())).To(Succeed())
+	})
 	BeforeEach(func() {
-		ctx = context.Background()
-		db, err := server.NewInstance().Build()
-		Expect(err).ToNot(HaveOccurred())
+		f = &billingPersistenceFixture{ctx: context.Background(), visibility: auth.TotalVisibility()}
+		db, err := container.NewInstance().Build()
+		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(db.Close)
-		pool, err = db.Pool(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(pool.Close)
-		manager, err := NewTxManager().SetLogger(logger).SetPool(pool).Build()
-		Expect(err).ToNot(HaveOccurred())
-		tx, err = manager.Begin(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func() { Expect(tx.End(ctx)).To(Succeed()) })
+		f.pool, err = db.Pool(f.ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(f.pool.Close)
+		f.tm, err = database.NewTxManager().SetLogger(logger).SetPool(f.pool).Build()
+		Expect(err).NotTo(HaveOccurred())
+		f.tx, err = f.tm.Begin(f.ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(f.tx.End(context.Background())).To(Succeed()) })
+		f.ctx = database.TxIntoContext(f.ctx, f.tx)
+		tenancy := auth.NewMockTenancyLogic(gomock.NewController(GinkgoT()))
+		tenancy.EXPECT().DetermineVisibility(gomock.Any()).DoAndReturn(func(context.Context) (*auth.Visibility, error) {
+			return f.visibility, nil
+		}).AnyTimes()
+		f.accounts, err = dao.NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(tenancy).
+			SetFilterDesc((*publicv1.BillingAccount)(nil).ProtoReflect().Descriptor()).Build()
+		Expect(err).NotTo(HaveOccurred())
+		f.assignments, err = dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().SetLogger(logger).
+			SetTenancyLogic(tenancy).Build()
+		Expect(err).NotTo(HaveOccurred())
+		f.tenants, err = dao.NewGenericDAO[*privatev1.Tenant]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).NotTo(HaveOccurred())
 	})
 
-	upsert := func(in BillingAccountUpsert) string {
-		if in.ID == "" {
-			in.ID = uuid.New()
-		}
-		if in.State == "" {
-			in.State = "UNKNOWN"
-		}
-		if in.StatusObservedAt.IsZero() {
-			in.StatusObservedAt = time.Now().UTC().Truncate(time.Second)
-		}
-		id, err := UpsertBillingAccount(ctx, tx, in)
-		Expect(err).ToNot(HaveOccurred())
-		return id
-	}
-
-	Describe("UpsertBillingAccount", func() {
-		It("inserts a new row with the given id", func() {
-			id := uuid.New()
-			got := upsert(BillingAccountUpsert{
-				ID: id, ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				DisplayName: "Acme", State: "ACTIVE",
-			})
-			Expect(got).To(Equal(id))
-			items, total, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(1)))
-			Expect(items[0].DisplayName).To(Equal("Acme"))
-			Expect(items[0].State).To(Equal("ACTIVE"))
-		})
-
-		It("refreshes display_name, base_currency and state on a second discovery", func() {
-			observed := time.Now().UTC().Truncate(time.Second)
-			first := upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				DisplayName: "Acme", BaseCurrency: "USD", State: "ACTIVE", StatusObservedAt: observed,
-			})
-			second := upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				DisplayName: "Acme Renamed", BaseCurrency: "EUR", State: "INACTIVE",
-				StatusObservedAt: observed.Add(time.Minute),
-			})
-			Expect(second).To(Equal(first), "same provider_key+reference must keep the same OSAC id")
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].DisplayName).To(Equal("Acme Renamed"))
-			Expect(items[0].BaseCurrency).To(Equal("EUR"), "a newer provider currency must refresh the stored value")
-			Expect(items[0].State).To(Equal("INACTIVE"))
-		})
-
-		It("keeps state and status_observed_at when an older observation is applied last", func() {
-			observed := time.Now().UTC().Truncate(time.Second)
-			older := observed.Add(-time.Minute)
-			id := upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				DisplayName: "Acme", State: "ACTIVE", StatusObservedAt: observed,
-			})
-			// A walk that started before the one above - a rolling update briefly runs two servers - can
-			// still commit after it, so its older observation must not overwrite the stored one.
-			got := upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				DisplayName: "Acme Stale", State: "INACTIVE", StatusObservedAt: older,
-			})
-			// The guard must be a conditional assignment, never a WHERE on the conflict branch: a WHERE
-			// would suppress the row, and returning id would then yield no row at all.
-			Expect(got).To(Equal(id), "the stale upsert must still return the existing row's id")
-			items, total, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(1)))
-			Expect(items[0].State).To(Equal("ACTIVE"), "a stale walk must not restore its state")
-			Expect(items[0].StatusObservedAt).To(BeTemporally("==", observed),
-				"the observation time must never move backwards")
-			Expect(items[0].DisplayName).To(Equal("Acme"),
-				"a stale walk must not revert a newer display_name")
-		})
-
-		DescribeTable("applies an observation that is not older than the stored one",
-			func(delta time.Duration) {
-				observed := time.Now().UTC().Truncate(time.Second)
-				upsert(BillingAccountUpsert{
-					ProviderKey: "m360", ProviderAccountReference: "acct-1",
-					State: "ACTIVE", StatusObservedAt: observed,
-				})
-				upsert(BillingAccountUpsert{
-					ProviderKey: "m360", ProviderAccountReference: "acct-1",
-					State: "INACTIVE", StatusObservedAt: observed.Add(delta),
-				})
-				items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-				Expect(err).ToNot(HaveOccurred())
-				Expect(items[0].State).To(Equal("INACTIVE"),
-					"the observation-order guard must not freeze state updates")
-				Expect(items[0].StatusObservedAt).To(BeTemporally("==", observed.Add(delta)))
-			},
-			Entry("equal observation time", time.Duration(0)),
-			Entry("newer observation time", time.Minute),
-		)
-
-		It("never clears display_name or base_currency when the provider does not supply one", func() {
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				DisplayName: "Acme", BaseCurrency: "USD", State: "ACTIVE",
-			})
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				DisplayName: "", BaseCurrency: "", State: "ACTIVE",
-			})
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].DisplayName).To(Equal("Acme"))
-			Expect(items[0].BaseCurrency).To(Equal("USD"))
-		})
-
-		DescribeTable("refreshes a nonempty base_currency only from a not-older observation",
-			func(delta time.Duration, currency, expected string) {
-				observed := time.Now().UTC().Truncate(time.Second)
-				upsert(BillingAccountUpsert{
-					ProviderKey: "m360", ProviderAccountReference: "acct-1", BaseCurrency: "USD",
-					StatusObservedAt: observed,
-				})
-				upsert(BillingAccountUpsert{
-					ProviderKey: "m360", ProviderAccountReference: "acct-1", BaseCurrency: currency,
-					StatusObservedAt: observed.Add(delta),
-				})
-				items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-				Expect(err).ToNot(HaveOccurred())
-				Expect(items[0].BaseCurrency).To(Equal(expected))
-			},
-			Entry("equal observation time refreshes", time.Duration(0), "EUR", "EUR"),
-			Entry("newer observation time refreshes", time.Minute, "EUR", "EUR"),
-			Entry("stale observation cannot re-denominate", -time.Minute, "EUR", "USD"),
-			Entry("empty currency never erases a known value", time.Minute, "", "USD"),
-		)
-
-		It("keeps a known currency when the observation carries a zero timestamp", func() {
-			observed := time.Now().UTC().Truncate(time.Second)
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", BaseCurrency: "USD",
-				StatusObservedAt: observed,
-			})
-			_, err := UpsertBillingAccount(ctx, tx, BillingAccountUpsert{
-				ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				BaseCurrency: "EUR", State: "UNKNOWN",
-			})
-			Expect(err).ToNot(HaveOccurred())
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].BaseCurrency).To(Equal("USD"),
-				"a zero observation time is older than the stored observation and must not overwrite currency")
-		})
-
-		It("does not initialize currency from an older observation", func() {
-			observed := time.Now().UTC().Truncate(time.Second)
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", StatusObservedAt: observed,
-			})
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", BaseCurrency: "USD",
-				StatusObservedAt: observed.Add(-time.Second),
-			})
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].BaseCurrency).To(BeEmpty())
-		})
-
-		It("copies the provider correlation value only when the local value is null", func() {
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", ExternalBillingAccountID: "ext-1", State: "ACTIVE",
-			})
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].ExternalBillingAccountID).To(Equal("ext-1"))
-		})
-
-		It("never overwrites a non-null local external_billing_account_id with a different provider value", func() {
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", ExternalBillingAccountID: "ext-1", State: "ACTIVE",
-			})
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", ExternalBillingAccountID: "ext-2", State: "ACTIVE",
-			})
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].ExternalBillingAccountID).To(Equal("ext-1"), "discovery must never overwrite a differing value")
-		})
-
-		It("leaves both rows unchanged when two accounts would share one external_billing_account_id", func() {
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", ExternalBillingAccountID: "ext-dup", State: "ACTIVE",
-			})
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-2", ExternalBillingAccountID: "ext-dup", State: "ACTIVE",
-			})
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, `this.provider_key == "m360"`, "id")
-			Expect(err).ToNot(HaveOccurred())
-			var withCorrelation int
-			for _, item := range items {
-				if item.ExternalBillingAccountID == "ext-dup" {
-					withCorrelation++
-				}
-			}
-			Expect(withCorrelation).To(Equal(1), "the unique index must never be violated by a second write")
-		})
-
-		It("leaves external_billing_account_id null when the account has no native value", func() {
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", State: "ACTIVE",
-			})
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].ExternalBillingAccountID).To(BeEmpty())
-		})
-	})
-
-	Describe("ObserveBillingAccountState", func() {
-		It("applies a not-older observation and returns the stored one", func() {
-			observed := time.Now().UTC().Truncate(time.Second)
-			id := upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", DisplayName: "Acme",
-				ExternalBillingAccountID: "corr", State: "ACTIVE", StatusObservedAt: observed,
-			})
-			state, at, err := ObserveBillingAccountState(ctx, tx, id, "INACTIVE", observed.Add(time.Minute))
-			Expect(err).ToNot(HaveOccurred())
-			Expect(state).To(Equal("INACTIVE"))
-			Expect(at).To(BeTemporally("==", observed.Add(time.Minute)))
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].State).To(Equal("INACTIVE"))
-			Expect(items[0].StatusObservedAt).To(BeTemporally("==", observed.Add(time.Minute)))
-			Expect(items[0].DisplayName).To(Equal("Acme"), "an assignment read must not change account metadata")
-			Expect(items[0].ExternalBillingAccountID).To(Equal("corr"))
-		})
-
-		It("ignores an older observation and returns the newer stored one", func() {
-			observed := time.Now().UTC().Truncate(time.Second)
-			id := upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", State: "INACTIVE",
-				StatusObservedAt: observed,
-			})
-			// A concurrent discovery stored a newer state while this read was in flight. The older assignment
-			// read must not move the observation backwards or restore its own state, and the newer state is
-			// what eligibility must evaluate.
-			state, at, err := ObserveBillingAccountState(ctx, tx, id, "ACTIVE", observed.Add(-time.Minute))
-			Expect(err).ToNot(HaveOccurred())
-			Expect(state).To(Equal("INACTIVE"))
-			Expect(at).To(BeTemporally("==", observed))
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].State).To(Equal("INACTIVE"))
-			Expect(items[0].StatusObservedAt).To(BeTemporally("==", observed))
-		})
-
-		It("returns not found for an unknown account", func() {
-			_, _, err := ObserveBillingAccountState(ctx, tx, "missing", "ACTIVE", time.Now().UTC())
-			Expect(errors.Is(err, pgx.ErrNoRows)).To(BeTrue())
-		})
-	})
-
-	Describe("MarkBillingAccountsUnobserved", func() {
-		It("marks UNKNOWN an account missing from the latest discovery pass, retaining the row", func() {
-			upsert(BillingAccountUpsert{ProviderKey: "m360", ProviderAccountReference: "acct-1", DisplayName: "Kept", State: "ACTIVE"})
-			upsert(BillingAccountUpsert{ProviderKey: "m360", ProviderAccountReference: "acct-2", DisplayName: "Vanished", State: "ACTIVE"})
-			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", []string{"acct-1"}, time.Now().UTC())).To(Succeed())
-			items, total, err := ListBillingAccounts(ctx, tx, 0, 10, "", "display_name")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(2)), "the row must be retained, not deleted")
-			Expect(items[0].DisplayName).To(Equal("Kept"))
-			Expect(items[0].State).To(Equal("ACTIVE"))
-			Expect(items[1].DisplayName).To(Equal("Vanished"))
-			Expect(items[1].State).To(Equal("UNKNOWN"))
-		})
-
-		It("leaves a row untouched when its observation is newer than the sweep", func() {
-			sweepAt := time.Now().UTC().Truncate(time.Second)
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1", DisplayName: "Fresh",
-				State: "ACTIVE", StatusObservedAt: sweepAt.Add(time.Minute),
-			})
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-2", DisplayName: "Stale",
-				State: "ACTIVE", StatusObservedAt: sweepAt.Add(-time.Minute),
-			})
-			// A walk that started after this sweep already stored acct-1, so the older sweep committing last must
-			// not demote it.
-			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, sweepAt)).To(Succeed())
-			items, total, err := ListBillingAccounts(ctx, tx, 0, 10, "", "display_name")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(2)))
-			Expect(items[0].DisplayName).To(Equal("Fresh"))
-			Expect(items[0].State).To(Equal("ACTIVE"),
-				"a sweep older than the stored observation must not demote")
-			Expect(items[0].StatusObservedAt).To(BeTemporally("==", sweepAt.Add(time.Minute)))
-			Expect(items[1].DisplayName).To(Equal("Stale"))
-			Expect(items[1].State).To(Equal("UNKNOWN"))
-		})
-
-		It("advances the observation time of an account a later sweep also omits", func() {
-			first := time.Now().UTC().Truncate(time.Second).Add(-time.Minute)
-			second := first.Add(30 * time.Second)
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				State: "ACTIVE", StatusObservedAt: first,
-			})
-			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, first)).To(Succeed())
-			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, second)).To(Succeed())
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].State).To(Equal("UNKNOWN"))
-			Expect(items[0].StatusObservedAt).To(BeTemporally("==", second),
-				"a sweep must move an already UNKNOWN row's observation forward")
-		})
-
-		It("keeps an account UNKNOWN when a walk that read it earlier commits after the newer sweep", func() {
-			walkAt := time.Now().UTC().Truncate(time.Second).Add(-time.Minute)
-			sweepAt := walkAt.Add(30 * time.Second)
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				State: "ACTIVE", StatusObservedAt: walkAt,
-			})
-			// The sweep that omits the account commits first, carrying the newer observation. The walk that still
-			// listed it commits last, carrying the older one, and must not restore it.
-			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, walkAt)).To(Succeed())
-			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, sweepAt)).To(Succeed())
-			upsert(BillingAccountUpsert{
-				ProviderKey: "m360", ProviderAccountReference: "acct-1",
-				State: "ACTIVE", StatusObservedAt: walkAt,
-			})
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].State).To(Equal("UNKNOWN"),
-				"the newer sweep must win over a walk that read the account earlier")
-		})
-
-		It("does not touch accounts under a different provider_key", func() {
-			upsert(BillingAccountUpsert{ProviderKey: "m360", ProviderAccountReference: "acct-1", State: "ACTIVE"})
-			upsert(BillingAccountUpsert{ProviderKey: "fake", ProviderAccountReference: "acct-1", State: "ACTIVE"})
-			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", []string{}, time.Now().UTC())).To(Succeed())
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, `this.provider_key == "fake"`, "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].State).To(Equal("ACTIVE"))
-		})
-
-		It("marks every account of the provider UNKNOWN when seenReferences is nil, like empty", func() {
-			upsert(BillingAccountUpsert{ProviderKey: "m360", ProviderAccountReference: "acct-1", State: "ACTIVE"})
-			// A nil slice must behave like an empty one: pgx would encode it as SQL NULL, and the sweep's
-			// not-in predicate would match no rows, silently skipping the vanished-account sweep.
-			Expect(MarkBillingAccountsUnobserved(ctx, tx, "m360", nil, time.Now().UTC())).To(Succeed())
-			items, total, err := ListBillingAccounts(ctx, tx, 0, 10, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(1)), "the row must be retained, not deleted")
-			Expect(items[0].State).To(Equal("UNKNOWN"))
-		})
-	})
-
-	Describe("ListBillingAccounts", func() {
+	Describe("account queries", func() {
 		BeforeEach(func() {
-			upsert(BillingAccountUpsert{ProviderKey: "m360", ProviderAccountReference: "acct-1", DisplayName: "Beta", State: "ACTIVE"})
-			upsert(BillingAccountUpsert{ProviderKey: "m360", ProviderAccountReference: "acct-2", DisplayName: "Alpha", State: "INACTIVE"})
+			for i, label := range []string{"Beta", "Alpha"} {
+				object := billingAccountFixture(fmt.Sprintf("query-%d", i), nil)
+				object.GetStatus().SetDisplayName(label)
+				if i == 1 {
+					object.GetStatus().SetState(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_INACTIVE)
+				}
+				_, err := f.accounts.Create().SetObject(object).Do(f.ctx)
+				Expect(err).NotTo(HaveOccurred())
+			}
 		})
-
-		It("filters by an exact field match", func() {
-			items, total, err := ListBillingAccounts(ctx, tx, 0, 10, `this.state == "INACTIVE"`, "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(1)))
-			Expect(items[0].DisplayName).To(Equal("Alpha"))
+		It("filters an exact nested enum and returns the total independently of its page", func() {
+			page, err := f.accounts.List().SetFilter("this.status.state == 2").SetLimit(1).Do(f.ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(int32(1)))
+			Expect(page.GetItems()).To(HaveLen(1))
+			Expect(page.GetItems()[0].GetStatus().GetDisplayName()).To(Equal("Alpha"))
 		})
-
-		It("orders by a known field ascending and descending", func() {
-			items, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "display_name")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].DisplayName).To(Equal("Alpha"))
-			items, _, err = ListBillingAccounts(ctx, tx, 0, 10, "", "display_name desc")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(items[0].DisplayName).To(Equal("Beta"))
-		})
-
-		It("applies offset and limit", func() {
-			items, total, err := ListBillingAccounts(ctx, tx, 1, 1, "", "display_name")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(2)))
-			Expect(items).To(HaveLen(1))
-			Expect(items[0].DisplayName).To(Equal("Beta"))
-		})
-
-		It("rejects a negative limit or offset as an invalid query, not a SQL error", func() {
-			_, _, err := ListBillingAccounts(ctx, tx, 0, -1, "", "")
-			var invalid *ErrInvalidFlatTableQuery
-			Expect(errors.As(err, &invalid)).To(BeTrue(),
-				"a negative limit must reach the caller as INVALID_ARGUMENT, not an opaque INTERNAL")
-			_, _, err = ListBillingAccounts(ctx, tx, -1, 0, "", "")
+		DescribeTable("orders and pages nested labels with an explicit unique tie breaker", func(direction, want string) {
+			page, err := f.accounts.List().SetOrder("status.display_name " + direction + ", id").SetOffset(1).SetLimit(1).Do(f.ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(int32(2)))
+			Expect(page.GetItems()).To(HaveLen(1))
+			Expect(page.GetItems()[0].GetStatus().GetDisplayName()).To(Equal(want))
+		}, Entry("ascending", "asc", "Beta"), Entry("descending", "desc", "Alpha"))
+		DescribeTable("rejects private, unknown and retired filter paths", func(filter string) {
+			err := f.tx.Savepoint(f.ctx, func(ctx context.Context) error {
+				_, err := f.accounts.List().SetFilter(filter).Do(ctx)
+				return err
+			})
+			var invalid *dao.ErrInvalidFilter
+			Expect(errors.As(err, &invalid)).To(BeTrue())
+		}, Entry("private", `this.status.provider_account_reference == "query-1"`),
+			Entry("old flat", `this.state == "ACTIVE"`), Entry("old token", `this.status.correlation_id == "x"`))
+		DescribeTable("rejects private and retired order paths", func(order string) {
+			err := f.tx.Savepoint(f.ctx, func(ctx context.Context) error {
+				_, err := f.accounts.List().SetOrder(order).Do(ctx)
+				return err
+			})
+			var invalid *dao.ErrValidation
+			Expect(errors.As(err, &invalid)).To(BeTrue())
+		}, Entry("private", "status.provider_account_reference"), Entry("old flat", "display_name"),
+			Entry("old token", "correlation_id desc"))
+		It("rejects negative limits before SQL", func() {
+			err := f.tx.Savepoint(f.ctx, func(ctx context.Context) error {
+				_, err := f.accounts.List().SetLimit(-1).Do(ctx)
+				return err
+			})
+			var invalid *dao.ErrValidation
 			Expect(errors.As(err, &invalid)).To(BeTrue())
 		})
-
-		It("rejects a filter outside the supported grammar", func() {
-			_, _, err := ListBillingAccounts(ctx, tx, 0, 10, `this.state != "ACTIVE"`, "")
-			Expect(err).To(HaveOccurred())
-		})
-
-		It("rejects a filter on a private or unknown field", func() {
-			_, _, err := ListBillingAccounts(ctx, tx, 0, 10, `this.provider_account_reference == "acct-1"`, "")
-			Expect(err).To(HaveOccurred())
-		})
-
-		It("rejects an order on a private or unknown field", func() {
-			_, _, err := ListBillingAccounts(ctx, tx, 0, 10, "", "provider_account_reference")
-			Expect(err).To(HaveOccurred())
-		})
-
-		Describe("external identifier spelling", func() {
-			BeforeEach(func() {
-				// P1 only renames a column, preserving the eight-column flat layout. Positional SQL
-				// keeps this fixture independent of both the old and future Go token member names.
-				// Token ordering deliberately opposes id, native reference, label, currency and state.
-				_, err := tx.Exec(ctx, `insert into billing_accounts values
-					('token-null', 'identifier-contract', 'native-null', '', '', null, 'ACTIVE', now()),
-					('token-empty', 'identifier-contract', 'native-empty', '', '', '', 'ACTIVE', now()),
-					('token-space', 'identifier-contract', 'native-space', '', '', E' \t ', 'ACTIVE', now()),
-					('token-plain', 'identifier-contract', 'native-plain', '', '', 'ext-1', 'ACTIVE', now()),
-					('token-padded', 'identifier-contract', 'native-padded', '', '', ' ext-1 ', 'ACTIVE', now()),
-					('order-a', 'order-contract', 'native-a', 'Label A', 'CAD', 'zulu', 'ACTIVE', now()),
-					('order-z', 'order-contract', 'native-z', 'Label Z', 'USD', 'alpha', 'INACTIVE', now())`)
-				Expect(err).ToNot(HaveOccurred())
-			})
-
-			DescribeTable("filters through SQL by the canonical flat field without normalizing raw values", func(raw, id string) {
-				filter := `this.provider_key == "identifier-contract" && this.external_billing_account_id == "` + raw + `"`
-				items, total, err := ListBillingAccounts(ctx, tx, 0, 10, filter, "id")
-				Expect(err).ToNot(HaveOccurred())
-				Expect(total).To(Equal(int32(1)))
-				Expect(items).To(HaveLen(1))
-				Expect(items[0].ID).To(Equal(id))
-			},
-				Entry("empty is not NULL", "", "token-empty"),
-				Entry("whitespace is not empty", " \t ", "token-space"),
-				Entry("unpadded token", "ext-1", "token-plain"),
-				Entry("padded token", " ext-1 ", "token-padded"),
-			)
-
-			DescribeTable("orders a real SQL page by the canonical flat field", func(order, first, second string) {
-				items, total, err := ListBillingAccounts(ctx, tx, 0, 1,
-					`this.provider_key == "order-contract"`, order)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(total).To(Equal(int32(2)))
-				Expect(items).To(HaveLen(1))
-				Expect(items[0].ID).To(Equal(first))
-				items, total, err = ListBillingAccounts(ctx, tx, 1, 1,
-					`this.provider_key == "order-contract"`, order)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(total).To(Equal(int32(2)))
-				Expect(items).To(HaveLen(1))
-				Expect(items[0].ID).To(Equal(second))
-			},
-				Entry("ascending", "external_billing_account_id", "order-z", "order-a"),
-				Entry("descending", "external_billing_account_id desc", "order-a", "order-z"),
-			)
-
-			DescribeTable("rejects the former flat query spelling as an invalid API query", func(filter, order string) {
-				_, _, err := ListBillingAccounts(ctx, tx, 0, 10, filter, order)
-				var invalid *ErrInvalidFlatTableQuery
-				Expect(errors.As(err, &invalid)).To(BeTrue())
-			},
-				Entry("filter", `this.correlation_id == "ext-1"`, ""),
-				Entry("order", "", "correlation_id desc"),
-			)
-		})
 	})
 
-	Describe("ListBillingAccounts pagination", func() {
-		// seedAccounts inserts count accounts with unique provider references and, when non-empty, one shared
-		// display_name. The zero-padded fixed-shape ids order the same in Go and PostgreSQL, so expected pages are
-		// exact.
-		seedAccounts := func(count int, displayName string) []string {
-			ids := make([]string, count)
-			for i := 0; i < count; i++ {
-				ids[i] = fmt.Sprintf("seed-%03d", i)
-				upsert(BillingAccountUpsert{
-					ID: ids[i], ProviderKey: "m360",
-					ProviderAccountReference: fmt.Sprintf("acct-%03d", i),
-					DisplayName:              displayName, State: "ACTIVE",
-				})
+	Describe("raw account tokens", func() {
+		BeforeEach(func() {
+			for id, token := range map[string]*string{
+				"token-null": nil, "token-empty": proto.String(""), "token-space": proto.String(" \t "),
+				"token-plain": proto.String("ext-1"), "token-padded": proto.String(" ext-1 "),
+			} {
+				_, err := f.accounts.Create().SetObject(billingAccountFixture(id, token)).Do(f.ctx)
+				Expect(err).NotTo(HaveOccurred())
 			}
-			return ids
-		}
-
-		idsOf := func(items []BillingAccountRow) []string {
-			ids := make([]string, len(items))
-			for i, item := range items {
-				ids[i] = item.ID
+		})
+		DescribeTable("filters present values without normalizing bytes or matching NULL", func(raw, id string) {
+			page, err := f.accounts.List().SetFilter(fmt.Sprintf("has(this.status.external_billing_account_id) && "+
+				"this.status.external_billing_account_id == %q", raw)).Do(f.ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(int32(1)))
+			Expect(page.GetItems()).To(HaveLen(1))
+			Expect(page.GetItems()[0].GetId()).To(Equal(id))
+		}, Entry("empty", "", "token-empty"), Entry("whitespace", " \t ", "token-space"),
+			Entry("plain", "ext-1", "token-plain"), Entry("padded", " ext-1 ", "token-padded"))
+		DescribeTable("orders actual SQL pages by raw token, not label or id", func(direction, first, second string) {
+			for id, token := range map[string]string{"order-a": "zulu", "order-z": "alpha"} {
+				_, err := f.accounts.Create().SetObject(billingAccountFixture(id, &token)).Do(f.ctx)
+				Expect(err).NotTo(HaveOccurred())
 			}
-			return ids
-		}
-
-		It("serves the default page of 100 and continues at offset 100 without overlap or loss", func() {
-			ids := seedAccounts(105, "Acme")
-			first, total, err := ListBillingAccounts(ctx, tx, 0, 0, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(105)))
-			Expect(first).To(HaveLen(100))
-			// The default order is the unique id, so page one is exactly the first 100 ids ascending.
-			Expect(idsOf(first)).To(Equal(ids[:100]))
-
-			second, total, err := ListBillingAccounts(ctx, tx, 100, 0, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(105)))
-			Expect(second).To(HaveLen(5))
-			Expect(idsOf(second)).To(Equal(ids[100:]))
-
-			union := append(append([]string{}, idsOf(first)...), idsOf(second)...)
-			seen := map[string]bool{}
-			for _, id := range union {
-				Expect(seen[id]).To(BeFalse(), "the two pages must not overlap: %q appears twice", id)
-				seen[id] = true
+			for offset, id := range []string{first, second} {
+				page, err := f.accounts.List().SetFilter(`this.id.startsWith("order-")`).
+					SetOrder("status.external_billing_account_id " + direction + ", id").SetOffset(int32(offset)).SetLimit(1).Do(f.ctx)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(page.GetTotal()).To(Equal(int32(2)))
+				Expect(page.GetItems()).To(HaveLen(1))
+				Expect(page.GetItems()[0].GetId()).To(Equal(id))
 			}
-			Expect(seen).To(HaveLen(105), "the two pages must cover all 105 unique ids")
-		})
-
-		It("breaks ties on an explicit non-unique order with ascending id across pages", func() {
-			ids := seedAccounts(6, "Same Name")
-			first, total, err := ListBillingAccounts(ctx, tx, 0, 3, "", "display_name")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(6)))
-			Expect(first).To(HaveLen(3))
-			// All six rows tie on display_name, so the pages must fall back to the ascending-id
-			// tie-breaker rather than an arbitrary within-tie order.
-			Expect(idsOf(first)).To(Equal(ids[:3]))
-
-			second, total, err := ListBillingAccounts(ctx, tx, 3, 3, "", "display_name")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(6)))
-			Expect(second).To(HaveLen(3))
-			Expect(idsOf(second)).To(Equal(ids[3:]))
-			Expect(append(idsOf(first), idsOf(second)...)).To(Equal(ids),
-				"the concatenation must be the full ascending-id sequence")
-		})
-
-		It("serves the full default page at exactly 100 rows and an empty page at offset 100", func() {
-			seedAccounts(100, "Acme")
-			page, total, err := ListBillingAccounts(ctx, tx, 0, 0, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(100)))
-			Expect(page).To(HaveLen(100))
-			rest, total, err := ListBillingAccounts(ctx, tx, 100, 0, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(100)))
-			Expect(rest).To(BeEmpty())
-		})
-
-		It("returns no items and total 0 for an empty collection", func() {
-			items, total, err := ListBillingAccounts(ctx, tx, 0, 0, "", "")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(0)))
-			Expect(items).To(BeEmpty())
-		})
+		}, Entry("ascending", "asc", "order-z", "order-a"), Entry("descending", "desc", "order-a", "order-z"))
 	})
+
+	DescribeTable("paginates accounts at the old boundary without overlap or loss", func(count int, order string) {
+		ids := make([]string, count)
+		for i := range count {
+			ids[i] = fmt.Sprintf("seed-%03d", i)
+			object := billingAccountFixture(ids[i], nil)
+			object.GetStatus().SetDisplayName("Same Name")
+			_, err := f.accounts.Create().SetObject(object).Do(f.ctx)
+			Expect(err).NotTo(HaveOccurred())
+		}
+		var got []string
+		for _, offset := range []int32{0, 100} {
+			page, err := f.accounts.List().SetOrder(order).SetOffset(offset).SetLimit(100).Do(f.ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(int32(count)))
+			Expect(page.GetItems()).To(HaveLen(max(0, min(count-int(offset), 100))))
+			for _, object := range page.GetItems() {
+				got = append(got, object.GetId())
+			}
+		}
+		Expect(got).To(Equal(ids))
+	}, Entry("105 accounts", 105, "id"), Entry("exactly 100", 100, "id"),
+		Entry("nonunique label ties", 105, "status.display_name, id"))
+	It("returns an empty account collection with total zero", func() {
+		page, err := f.accounts.List().Do(f.ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(page.GetTotal()).To(BeZero())
+		Expect(page.GetItems()).To(BeEmpty())
+	})
+
+	tenantBillingPersistenceSpecs(func() *billingPersistenceFixture { return f })
 })
+
+func billingAccountFixture(id string, token *string) *privatev1.BillingAccount {
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(id)))
+	return privatev1.BillingAccount_builder{Id: id,
+		Metadata: privatev1.Metadata_builder{Name: "ba-" + hash[:60], Tenant: auth.SystemTenant, Creator: "system"}.Build(),
+		Spec:     privatev1.BillingAccountSpec_builder{}.Build(),
+		Status: privatev1.BillingAccountStatus_builder{ProviderKey: "m360", ProviderAccountReference: id,
+			State: privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE, ExternalBillingAccountId: token,
+			StateObservationTimestamp: timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		}.Build(),
+	}.Build()
+}

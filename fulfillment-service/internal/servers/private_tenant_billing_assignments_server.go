@@ -18,20 +18,24 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"buf.build/go/protovalidate"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // Stable connection_state column values; see TenantBillingAssignmentConnectionState in the proto.
@@ -77,9 +81,13 @@ var _ privatev1.TenantBillingAssignmentsServer = (*PrivateTenantBillingAssignmen
 // PrivateTenantBillingAssignmentsServer reads and changes tenant/billing-account assignments.
 type PrivateTenantBillingAssignmentsServer struct {
 	privatev1.UnimplementedTenantBillingAssignmentsServer
-	logger    *slog.Logger
-	provider  *billing.Provider
-	validator protovalidate.Validator
+	logger      *slog.Logger
+	provider    *billing.Provider
+	validator   protovalidate.Validator
+	assignments *dao.GenericDAO[*privatev1.TenantBillingAssignment]
+	bindings    *dao.GenericDAO[*privatev1.TenantBillingAssignment]
+	accounts    *dao.GenericDAO[*privatev1.BillingAccount]
+	tenants     *dao.GenericDAO[*privatev1.Tenant]
 	// assignProviderDeadline bounds provider I/O, not an open transaction.
 	assignProviderDeadline time.Duration
 	// assignSem caps concurrent assigns in their provider-I/O window, see maxConcurrentAssigns.
@@ -120,10 +128,33 @@ func (b *PrivateTenantBillingAssignmentsServerBuilder) Build() (
 		err = fmt.Errorf("failed to create protovalidate validator: %w", err)
 		return
 	}
+	assignments, err := dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().SetLogger(b.logger).
+		SetTableName("tenant_billing_assignments").SetTenancyLogic(billingAssignmentTenancy{}).
+		SetFilterDesc((*publicv1.TenantBillingAssignment)(nil).ProtoReflect().Descriptor()).Build()
+	if err != nil {
+		return nil, err
+	}
+	// Binding checks must detect foreign current assignments too, without disclosing their contents.
+	bindings, err := dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().SetLogger(b.logger).
+		SetTableName("tenant_billing_assignments").SetTenancyLogic(billingAssignmentTenancy{inventory: true}).Build()
+	if err != nil {
+		return nil, err
+	}
+	accounts, err := dao.NewGenericDAO[*privatev1.BillingAccount]().SetLogger(b.logger).
+		SetTableName("billing_accounts").SetTenancyLogic(billingAccountsTenancy{}).Build()
+	if err != nil {
+		return nil, err
+	}
+	tenants, err := dao.NewGenericDAO[*privatev1.Tenant]().SetLogger(b.logger).
+		SetTenancyLogic(billingAssignmentTenancy{inventory: true}).Build()
+	if err != nil {
+		return nil, err
+	}
 	result = &PrivateTenantBillingAssignmentsServer{
-		logger:                 b.logger,
-		provider:               b.provider,
-		validator:              validator,
+		logger:      b.logger,
+		provider:    b.provider,
+		validator:   validator,
+		assignments: assignments, bindings: bindings, accounts: accounts, tenants: tenants,
 		assignProviderDeadline: defaultAssignProviderDeadline,
 		assignSem:              make(chan struct{}, maxConcurrentAssigns),
 	}
@@ -145,19 +176,34 @@ func (s *PrivateTenantBillingAssignmentsServer) List(ctx context.Context,
 	}
 	defer tx.ReportError(&err)
 
-	// An unset limit serves the DAO's default page; an explicit one is clamped to its maximum.
-	rows, total, err := database.ListTenantBillingAssignmentsForTenants(
-		ctx, tx, request.GetOffset(), request.GetLimit(), request.GetFilter(), request.GetOrder(),
-		auth.SubjectFromContext(ctx).Tenants)
+	if request.GetOffset() < 0 || request.GetLimit() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "limit and offset must be non-negative")
+	}
+	if err = validateBillingAssignmentOrder(request.GetOrder()); err != nil {
+		return nil, err
+	}
+	limit := request.GetLimit()
+	if limit == 0 {
+		limit = 100
+	}
+	order := request.GetOrder()
+	if strings.TrimSpace(order) == "" {
+		order = "status.effective_from_timestamp desc,id"
+	}
+	page, err := s.assignments.List().SetOffset(request.GetOffset()).SetLimit(limit).
+		SetFilter(request.GetFilter()).SetOrder(order).Do(ctx)
 	if err != nil {
-		var invalid *database.ErrInvalidFlatTableQuery
-		if errors.As(err, &invalid) {
+		var invalid *dao.ErrValidation
+		var invalidFilter *dao.ErrInvalidFilter
+		if errors.As(err, &invalid) || errors.As(err, &invalidFilter) {
 			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 		}
 		s.logger.ErrorContext(ctx, "Failed to list tenant billing assignments", slog.Any("error", err))
 		return nil, status.Errorf(codes.Internal, "failed to list tenant billing assignments")
 	}
-	return buildTenantBillingAssignmentsListResponse(rows, total), nil
+	return privatev1.TenantBillingAssignmentsListResponse_builder{
+		Size: page.GetSize(), Total: page.GetTotal(), Items: page.GetItems(),
+	}.Build(), nil
 }
 
 // Get returns one assignment interval. Only is_admin callers reach this method (authz.rego's explicit billing
@@ -175,20 +221,20 @@ func (s *PrivateTenantBillingAssignmentsServer) Get(ctx context.Context,
 	}
 	defer tx.ReportError(&err)
 
-	row, err := database.GetTenantBillingAssignment(ctx, tx, request.GetId())
+	if request.GetId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+	stored, err := s.assignments.Get().SetId(request.GetId()).Do(ctx)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		var missing *dao.ErrNotFound
+		if errors.As(err, &missing) {
 			return nil, status.Errorf(codes.NotFound, "tenant billing assignment %q not found", request.GetId())
 		}
 		s.logger.ErrorContext(ctx, "Failed to get tenant billing assignment", slog.Any("error", err))
 		return nil, status.Errorf(codes.Internal, "failed to get tenant billing assignment")
 	}
-	if !auth.SubjectFromContext(ctx).Tenants.Contains(row.TenantID) {
-		return nil, status.Errorf(codes.NotFound, "tenant billing assignment %q not found", request.GetId())
-	}
-
 	return privatev1.TenantBillingAssignmentsGetResponse_builder{
-		Object: toTenantBillingAssignmentProto(row),
+		Object: stored.GetObject(),
 	}.Build(), nil
 }
 
@@ -200,7 +246,10 @@ func (s *PrivateTenantBillingAssignmentsServer) Create(ctx context.Context,
 		return nil, err
 	}
 
-	object := request.GetObject()
+	if request.GetObject() == nil {
+		return nil, status.Error(codes.InvalidArgument, "object is required")
+	}
+	object := proto.Clone(request.GetObject()).(*privatev1.TenantBillingAssignment)
 	if object.GetSpec() == nil {
 		return nil, status.Errorf(codes.InvalidArgument, "spec is required")
 	}
@@ -208,101 +257,113 @@ func (s *PrivateTenantBillingAssignmentsServer) Create(ctx context.Context,
 		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 
-	tenantID := object.GetSpec().GetTenantId()
-	accountID := object.GetSpec().GetBillingAccountId()
-
-	row, err := s.assign(ctx, accountID, "", tenantBillingAssignmentAssignInput{
-		Name: object.GetMetadata().GetName(), TenantID: tenantID, Creator: auth.SubjectFromContext(ctx).User,
+	object, err = database.WithNewTx(ctx, func(c context.Context) (*privatev1.TenantBillingAssignment, error) {
+		return s.canonicalAssignment(c, object)
+	})
+	if err != nil {
+		return nil, s.mapTenantBillingAssignmentError(ctx, err)
+	}
+	row, err := s.assign(ctx, object.GetSpec().GetBillingAccount().GetId(), "", tenantBillingAssignmentAssignInput{
+		Name: object.GetMetadata().GetName(), TenantID: object.GetSpec().GetTenant().GetId(),
+		Creator: auth.SubjectFromContext(ctx).User, Object: object,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	return privatev1.TenantBillingAssignmentsCreateResponse_builder{
-		Object: toTenantBillingAssignmentProto(row),
+		Object: row,
 	}.Build(), nil
 }
 
 type tenantBillingAssignmentSnapshot struct {
-	account database.BillingAccountForAssignment
-	current database.TenantBillingAssignmentRow
+	tenant   *privatev1.Tenant
+	account  *privatev1.BillingAccount
+	previous *privatev1.BillingAccount
+	current  *privatev1.TenantBillingAssignment
+	floor    time.Time
 }
 
 // assignmentSnapshot is called in short preflight and final transactions; the final call locks authoritative rows
 // until commit. It never calls a provider.
 func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
-	ctx context.Context, accountID, closeID string, in tenantBillingAssignmentAssignInput, lock bool,
+	ctx context.Context, accountID, closeID string, in tenantBillingAssignmentAssignInput,
+	expected *tenantBillingAssignmentSnapshot,
 ) (tenantBillingAssignmentSnapshot, error) {
 	var snapshot tenantBillingAssignmentSnapshot
-	tx, err := database.TxFromContext(ctx)
-	if err != nil {
-		return snapshot, err
-	}
-	if lock {
-		var name string
-		err = tx.QueryRow(ctx, `select name from tenants where name = $1
-			and deletion_timestamp = 'epoch' for update`, in.TenantID).Scan(&name)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return snapshot, status.Error(codes.InvalidArgument, "spec.tenant_id does not reference an existing tenant")
+	// Preflight is strictly read-only. Finalization locks the original complete set, never a newly discovered
+	// previous account (which could have a lower SQL id). A changed required set aborts instead.
+	if expected != nil {
+		if _, err := s.tenants.Lock().AddId(in.TenantID).SetReturnObjects(true).Do(ctx); err != nil {
+			return snapshot, billingSnapshotLockError(err)
 		}
-		if err != nil {
-			return snapshot, err
+		ids := []string{accountID}
+		if expected.current != nil {
+			ids = append(ids, expected.current.GetSpec().GetBillingAccount().GetId())
 		}
-		if err = database.LockBillingAccountForAssignment(ctx, tx, accountID); err != nil {
-			return snapshot, err
-		}
-		var id string
-		err = tx.QueryRow(ctx, `select id from billing_accounts where id = $1 for update`, accountID).Scan(&id)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return snapshot, err
+		if _, err := s.accounts.Lock().AddIds(ids...).SetReturnObjects(true).Do(ctx); err != nil {
+			return snapshot, billingSnapshotLockError(err)
 		}
 		if closeID != "" {
-			err = tx.QueryRow(ctx, `select id from tenant_billing_assignments where id = $1 for update`, closeID).Scan(&id)
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return snapshot, err
+			if _, err := s.assignments.Lock().AddId(closeID).SetReturnObjects(true).Do(ctx); err != nil {
+				return snapshot, billingSnapshotLockError(err)
 			}
 		}
 	}
-	// The tenant FK alone cannot reject a deleted tenant: the deletion tombstone keeps the row live-but-marked so
-	// assignment history stays queryable. Reject it here, before any account or provider work, with the same
-	// contract the FK violation reports for a tenant that never existed.
-	live, err := database.TenantLiveForAssignment(ctx, tx, in.TenantID)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to read tenant", slog.Any("error", err))
-		return snapshot, status.Errorf(codes.Internal, "failed to read tenant")
-	}
-	if !live {
-		return snapshot,
-			status.Errorf(codes.InvalidArgument, "spec.tenant_id does not reference an existing tenant")
-	}
-	account, err := database.GetBillingAccountForAssignment(ctx, tx, accountID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return snapshot, status.Errorf(codes.InvalidArgument,
-				"billing account %q does not exist", accountID)
-		}
-		s.logger.ErrorContext(ctx, "Failed to read billing account", slog.Any("error", err))
-		return snapshot, status.Errorf(codes.Internal, "failed to read billing account")
-	}
-	// The stored account state is not an eligibility gate here: it is only the last observation, and assign
-	// validates the state the provider reports after this snapshot. A stale INACTIVE or UNKNOWN row must not veto an
-	// account the provider has since reactivated.
-	snapshot.account = account
-	if closeID == "" {
-		return snapshot, s.rejectIfAlreadyBound(ctx, tx, in.TenantID, accountID)
-	}
-	existing, err := s.currentAssignment(ctx, closeID)
+	tenant, err := s.tenants.Get().SetId(in.TenantID).Do(ctx)
 	if err != nil {
 		return snapshot, err
 	}
-	if existing.TenantID != in.TenantID {
+	snapshot.tenant = tenant.GetObject()
+	if !billingResourceLive(snapshot.tenant.GetMetadata()) {
+		return snapshot, status.Error(codes.InvalidArgument, "spec.tenant does not reference an existing tenant")
+	}
+	account, err := s.accounts.Get().SetId(accountID).Do(ctx)
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot.account = account.GetObject()
+	if !billingResourceLive(snapshot.account.GetMetadata()) {
 		return snapshot, errAssignChanged
 	}
-	snapshot.current = existing
-	if existing.BillingAccountID != accountID {
-		return snapshot, s.rejectIfAccountAlreadyBound(ctx, tx, accountID)
+	if closeID != "" {
+		snapshot.current, err = s.currentAssignment(ctx, closeID)
+		if err != nil {
+			if expected != nil && (status.Code(err) == codes.FailedPrecondition || status.Code(err) == codes.NotFound) {
+				return snapshot, errAssignChanged
+			}
+			return snapshot, err
+		}
+		if !sameBillingAssignmentSelection(snapshot.current, in, expected) {
+			return snapshot, errAssignChanged
+		}
+		previousID := snapshot.current.GetSpec().GetBillingAccount().GetId()
+		previous, getErr := s.accounts.Get().SetId(previousID).Do(ctx)
+		if getErr != nil {
+			return snapshot, getErr
+		}
+		snapshot.previous = previous.GetObject()
 	}
-	return snapshot, nil
+	active, err := s.bindings.List().SetFilter(fmt.Sprintf("this.spec.tenant.id == %q && !has(this.status.effective_to_timestamp)", in.TenantID)).SetLimit(1).Do(ctx)
+	if err != nil {
+		return snapshot, err
+	}
+	if closeID == "" && active.GetTotal() != 0 {
+		if expected != nil {
+			return snapshot, errAssignChanged
+		}
+		return snapshot, failedPreconditionWithReason(tbaTenantAlreadyBoundReason, "tenant already has an active billing assignment")
+	}
+	if closeID != "" && (active.GetTotal() != 1 || active.GetItems()[0].GetId() != closeID) {
+		return snapshot, errAssignChanged
+	}
+	if snapshot.current == nil || snapshot.current.GetSpec().GetBillingAccount().GetId() != accountID {
+		if err = s.rejectIfAccountAlreadyBound(ctx, accountID); err != nil {
+			return snapshot, err
+		}
+	}
+	snapshot.floor, err = dao.TenantBillingHistoryFloor(ctx, in.TenantID)
+	return snapshot, err
 }
 
 // Update replaces the tenant's active account, or revalidates the current one without opening a new billing
@@ -315,64 +376,79 @@ func (s *PrivateTenantBillingAssignmentsServer) Update(ctx context.Context,
 	}
 
 	object := request.GetObject()
-	if object.GetSpec() == nil {
-		return nil, status.Errorf(codes.InvalidArgument, "spec is required")
-	}
-	if err = s.validator.Validate(object); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	id := object.GetId()
 	if id == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "id is required")
 	}
 
-	existing, err := database.WithNewTx(ctx, func(txCtx context.Context) (database.TenantBillingAssignmentRow, error) {
+	existing, err := database.WithNewTx(ctx, func(txCtx context.Context) (*privatev1.TenantBillingAssignment, error) {
 		return s.currentAssignment(txCtx, id)
 	})
 	if err != nil {
 		return nil, s.mapTenantBillingAssignmentError(ctx, err)
 	}
 
-	// spec.tenant_id is required and non-empty (validator.Validate above), so a mismatch here is real, never an
-	// omitted field.
-	if object.GetSpec().GetTenantId() != existing.TenantID {
-		return nil, status.Errorf(codes.InvalidArgument, "spec.tenant_id is immutable and cannot be changed by Update")
+	// Stored target authorization above deliberately precedes all caller-controlled fields and mask validation.
+	if err = validateBillingAssignmentIdentity(existing, object); err != nil {
+		return nil, err
 	}
-
-	accountID := object.GetSpec().GetBillingAccountId()
-
-	row, err := s.assign(ctx, accountID, existing.ID, tenantBillingAssignmentAssignInput{
-		Name: existing.Name, TenantID: existing.TenantID, Creator: existing.Creator,
+	for _, path := range request.GetUpdateMask().GetPaths() {
+		if path != "spec.billing_account" {
+			return nil, status.Error(codes.InvalidArgument, "only atomic spec.billing_account is writable")
+		}
+	}
+	merged := proto.Clone(existing).(*privatev1.TenantBillingAssignment)
+	emptyMask := request.GetUpdateMask() != nil && len(request.GetUpdateMask().GetPaths()) == 0
+	if !emptyMask {
+		if object.GetSpec().GetBillingAccount() == nil {
+			merged.GetSpec().ClearBillingAccount()
+		} else {
+			merged.GetSpec().SetBillingAccount(proto.Clone(object.GetSpec().GetBillingAccount()).(*privatev1.BillingAccountReference))
+		}
+	}
+	if err = s.validator.Validate(merged); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if emptyMask {
+		return privatev1.TenantBillingAssignmentsUpdateResponse_builder{Object: existing}.Build(), nil
+	}
+	merged, err = database.WithNewTx(ctx, func(c context.Context) (*privatev1.TenantBillingAssignment, error) {
+		return s.canonicalAssignment(c, merged)
+	})
+	if err != nil {
+		return nil, s.mapTenantBillingAssignmentError(ctx, err)
+	}
+	row, err := s.assign(ctx, merged.GetSpec().GetBillingAccount().GetId(), existing.GetId(), tenantBillingAssignmentAssignInput{
+		Name: existing.GetMetadata().GetName(), TenantID: existing.GetSpec().GetTenant().GetId(),
+		Creator: auth.SubjectFromContext(ctx).User, Object: merged,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	return privatev1.TenantBillingAssignmentsUpdateResponse_builder{
-		Object: toTenantBillingAssignmentProto(row),
+		Object: row,
 	}.Build(), nil
 }
 
 func (s *PrivateTenantBillingAssignmentsServer) currentAssignment(
 	ctx context.Context, id string,
-) (database.TenantBillingAssignmentRow, error) {
-	tx, err := database.TxFromContext(ctx)
-	if err != nil {
-		return database.TenantBillingAssignmentRow{}, err
-	}
-	row, err := database.GetTenantBillingAssignment(ctx, tx, id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return row, status.Errorf(codes.NotFound, "tenant billing assignment %q not found", id)
+) (*privatev1.TenantBillingAssignment, error) {
+	stored, err := s.assignments.Get().SetId(id).Do(ctx)
+	var missing *dao.ErrNotFound
+	if errors.As(err, &missing) {
+		return nil, status.Errorf(codes.NotFound, "tenant billing assignment %q not found", id)
 	}
 	if err != nil {
-		return row, err
+		return nil, err
 	}
-	// Check the stored tenant before interval state or caller-supplied spec.tenant_id. Otherwise a spoofed tenant
+	row := stored.GetObject()
+	// Check the stored tenant before interval state or caller-supplied spec.tenant. Otherwise a spoofed tenant
 	// could authorize a foreign row, including a historical interval.
-	if !auth.SubjectFromContext(ctx).Tenants.Contains(row.TenantID) {
+	if !auth.SubjectFromContext(ctx).Tenants.Contains(row.GetSpec().GetTenant().GetId()) {
 		return row, status.Errorf(codes.NotFound, "tenant billing assignment %q not found", id)
 	}
-	if row.EffectiveTo != nil {
+	if row.GetStatus().GetEffectiveToTimestamp() != nil {
 		return row, status.Errorf(codes.FailedPrecondition,
 			"tenant billing assignment %q is no longer the current interval", id)
 	}
@@ -390,14 +466,15 @@ func (s *PrivateTenantBillingAssignmentsServer) Signal(ctx context.Context,
 	if request.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
-	existing, err := database.WithNewTx(ctx, func(txCtx context.Context) (database.TenantBillingAssignmentRow, error) {
+	existing, err := database.WithNewTx(ctx, func(txCtx context.Context) (*privatev1.TenantBillingAssignment, error) {
 		return s.currentAssignment(txCtx, request.GetId())
 	})
 	if err != nil {
 		return nil, s.mapTenantBillingAssignmentError(ctx, err)
 	}
-	_, err = s.assign(ctx, existing.BillingAccountID, existing.ID, tenantBillingAssignmentAssignInput{
-		Name: existing.Name, TenantID: existing.TenantID, Creator: existing.Creator,
+	_, err = s.assign(ctx, existing.GetSpec().GetBillingAccount().GetId(), existing.GetId(), tenantBillingAssignmentAssignInput{
+		Name: existing.GetMetadata().GetName(), TenantID: existing.GetSpec().GetTenant().GetId(),
+		Creator: auth.SubjectFromContext(ctx).User, Object: existing,
 	})
 	if err != nil {
 		return nil, err
@@ -405,29 +482,17 @@ func (s *PrivateTenantBillingAssignmentsServer) Signal(ctx context.Context,
 	return &privatev1.TenantBillingAssignmentsSignalResponse{}, nil
 }
 
-// rejectIfAlreadyBound fails with ACCOUNT_ALREADY_BOUND or TENANT_ALREADY_BOUND when tenantID or accountID
-// already has an active assignment. Only Create uses it: Update only needs the account-side check.
-func (s *PrivateTenantBillingAssignmentsServer) rejectIfAlreadyBound(
-	ctx context.Context, tx database.Tx, tenantID, accountID string) error {
-	if _, err := database.GetActiveTenantBillingAssignmentByTenant(ctx, tx, tenantID); err == nil {
-		return failedPreconditionWithReason(tbaTenantAlreadyBoundReason,
-			"tenant %q already has an active billing assignment", tenantID)
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		s.logger.ErrorContext(ctx, "Failed to check tenant billing assignment", slog.Any("error", err))
-		return status.Errorf(codes.Internal, "failed to check tenant billing assignment")
-	}
-	return s.rejectIfAccountAlreadyBound(ctx, tx, accountID)
-}
-
 // rejectIfAccountAlreadyBound fails with ACCOUNT_ALREADY_BOUND when accountID already has an active assignment.
 func (s *PrivateTenantBillingAssignmentsServer) rejectIfAccountAlreadyBound(
-	ctx context.Context, tx database.Tx, accountID string) error {
-	if _, err := database.GetActiveTenantBillingAssignmentByAccount(ctx, tx, accountID); err == nil {
+	ctx context.Context, accountID string) error {
+	page, err := s.bindings.List().SetLimit(0).SetFilter(fmt.Sprintf(
+		"this.spec.billing_account.id == %q && !has(this.status.effective_to_timestamp)", accountID)).Do(ctx)
+	if err != nil {
+		return err
+	}
+	if page.GetTotal() > 0 {
 		return failedPreconditionWithReason(tbaAccountAlreadyBoundReason,
 			"billing account %q is already linked to a tenant", accountID)
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		s.logger.ErrorContext(ctx, "Failed to check billing account assignment", slog.Any("error", err))
-		return status.Errorf(codes.Internal, "failed to check billing account assignment")
 	}
 	return nil
 }
@@ -451,17 +516,14 @@ type tenantBillingAssignmentAssignInput struct {
 	Name     string
 	TenantID string
 	Creator  string
+	Object   *privatev1.TenantBillingAssignment
 }
 
-// observeSelectedAccount reads one account from the provider under the assign provider deadline and records its
-// normalized state in a short independent transaction. It holds no transaction or pool connection across the read.
-// The durable lease fences the local write, so a superseded assign cannot publish an observation, and the database
-// helper keeps the stored observation monotonic: a slower read never overwrites a newer discovery's state. The
-// returned state is the effective stored observation, so a concurrent newer observation decides eligibility too.
+// observeSelectedAccount collects read-only evidence. Successful assignment evidence is persisted only with the
+// token and interval changes, after authoritative locks; it never holds a pooled connection across provider I/O.
 func (s *PrivateTenantBillingAssignmentsServer) observeSelectedAccount(
-	ctx context.Context, lease *database.BillingOperationLease, adapter billing.Adapter,
-	account database.BillingAccountForAssignment, ref billing.AccountRef,
-) (state billing.AccountState, err error) {
+	ctx context.Context, adapter billing.Adapter, ref billing.AccountRef,
+) (*privatev1.BillingAccountStatus, error) {
 	providerCtx, cancel := context.WithTimeout(ctx, s.assignProviderDeadline)
 	// Match discovery's conservative observation-start timestamp: a delayed response may already be stale when
 	// it arrives, so its completion time must not let it supersede a newer observation that committed meanwhile.
@@ -469,39 +531,21 @@ func (s *PrivateTenantBillingAssignmentsServer) observeSelectedAccount(
 	observed, err := adapter.GetAccount(providerCtx, ref)
 	cancel()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if observed.Ref != ref {
-		return "", billing.NewError(billing.ReasonMalformed, "GetAccount", false, 0)
+		return nil, billing.NewError(billing.ReasonMalformed, "GetAccount", false, 0)
 	}
-	_, err = database.WithNewTx(ctx, func(txCtx context.Context) (struct{}, error) {
-		tx, txErr := database.TxFromContext(txCtx)
-		if txErr != nil {
-			return struct{}{}, txErr
-		}
-		if checkErr := lease.Check(txCtx, tx); checkErr != nil {
-			return struct{}{}, checkErr
-		}
-		effective, _, observeErr := database.ObserveBillingAccountState(txCtx, tx, account.ID,
-			string(observed.State), observedAt)
-		if observeErr != nil {
-			return struct{}{}, observeErr
-		}
-		state = billing.AccountState(effective)
-		return struct{}{}, nil
-	})
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to record billing account observation", slog.Any("error", err))
-		return "", err
-	}
-	return state, nil
+	return privatev1.BillingAccountStatus_builder{State: mapBillingAccountState(string(observed.State)),
+		StateObservationTimestamp: timestamppb.New(observedAt.UTC().Truncate(time.Microsecond)),
+	}.Build(), nil
 }
 
 // assign holds committed expiring guards, never a transaction, across provider I/O; local reads and writes use
 // independent short transactions.
 func (s *PrivateTenantBillingAssignmentsServer) assign(
 	ctx context.Context, accountID, closeID string, in tenantBillingAssignmentAssignInput,
-) (row database.TenantBillingAssignmentRow, err error) {
+) (row *privatev1.TenantBillingAssignment, err error) {
 	if !auth.SubjectFromContext(ctx).Tenants.Contains(in.TenantID) {
 		return row, status.Error(codes.PermissionDenied, "tenant is outside the authorized billing assignment scope")
 	}
@@ -512,7 +556,11 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 	}
 	defer func() {
 		if err != nil {
-			err = s.mapTenantBillingAssignmentError(ctx, err)
+			if ctx.Err() != nil {
+				err = status.FromContextError(ctx.Err()).Err()
+			} else {
+				err = s.mapTenantBillingAssignmentError(ctx, err)
+			}
 		}
 	}()
 	// Do not nest under an ambient transaction: WithNewTx shadows but cannot release its connection. Startup
@@ -528,7 +576,9 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 		return row, err
 	}
 	defer func() {
-		if releaseErr := lease.Release(operationCtx); releaseErr != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if releaseErr := lease.Release(cleanupCtx); releaseErr != nil {
 			s.logger.WarnContext(ctx, "Failed to release billing operation guard", slog.Any("error", releaseErr))
 		}
 	}()
@@ -536,11 +586,11 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 	case s.assignSem <- struct{}{}:
 		defer func() { <-s.assignSem }()
 	default:
-		return database.TenantBillingAssignmentRow{}, errAssignBusy
+		return nil, errAssignBusy
 	}
 
 	snapshot, err := database.WithNewTx(operationCtx, func(txCtx context.Context) (tenantBillingAssignmentSnapshot, error) {
-		return s.assignmentSnapshot(txCtx, accountID, closeID, in, false)
+		return s.assignmentSnapshot(txCtx, accountID, closeID, in, nil)
 	})
 	if err != nil {
 		return row, err
@@ -550,7 +600,7 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 	if err != nil {
 		return row, mapBillingProviderBuildError(err)
 	}
-	ref := billing.NewAccountRef(account.ProviderAccountReference)
+	ref := billing.NewAccountRef(account.GetStatus().GetProviderAccountReference())
 
 	// Validate the selected account's normalized state from a fresh provider read in the existing bounded provider
 	// phase, before any correlation write or assignment mutation. Preflight stored state alone cannot decide
@@ -558,33 +608,66 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 	// discovery stored ACTIVE, and a stale stored INACTIVE or UNKNOWN does not block an account the provider has since
 	// reactivated. The read also refreshes the local observation so a later BillingAccounts.List shows the state that
 	// decided this request.
-	observedState, err := s.observeSelectedAccount(operationCtx, lease, adapter, account, ref)
+	observed, err := s.observeSelectedAccount(operationCtx, adapter, ref)
 	if err != nil {
 		return row, err
 	}
-	if err = requireActiveBillingAccountState(observedState, account.ID); err != nil {
-		return row, err
+	// Check effective eligibility before correlation I/O. Ineligible evidence is still retained as an observation,
+	// but the rejection is returned OUTSIDE the successful transaction so it doesn't roll that observation back.
+	var eligibility error
+	_, err = database.WithNewTx(operationCtx, func(c context.Context) (struct{}, error) {
+		tx, txErr := database.TxFromContext(c)
+		if txErr != nil {
+			return struct{}{}, txErr
+		}
+		if checkErr := lease.Check(c, tx); checkErr != nil {
+			return struct{}{}, checkErr
+		}
+		latest, snapshotErr := s.assignmentSnapshot(c, accountID, closeID, in, &snapshot)
+		if snapshotErr != nil {
+			return struct{}{}, snapshotErr
+		}
+		if !sameBillingAssignmentInputs(snapshot, latest) {
+			return struct{}{}, errAssignChanged
+		}
+		if checkErr := lease.Check(c, tx); checkErr != nil {
+			return struct{}{}, checkErr
+		}
+		merged, changed := mergeBillingAccountObservation(latest.account, observed)
+		eligibility = requireActiveBillingAccountState(assignmentAccountState(merged), accountID)
+		if eligibility != nil && changed {
+			_, updateErr := s.accounts.Update().SetObject(merged).Do(c)
+			return struct{}{}, updateErr
+		}
+		return struct{}{}, nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	// The preflight snapshot now carries the observation that decided this request, so the final comparison detects
-	// only a state change that happens after it, not its own refresh.
-	snapshot.account.State = string(observedState)
+	if eligibility != nil {
+		return nil, eligibility
+	}
 
 	providerCtx, cancel := context.WithTimeout(operationCtx, s.assignProviderDeadline)
 	resolution, err := billing.ResolveAccountCorrelationID(providerCtx, billing.AccountCorrelationInput{
-		Adapter: adapter, AccountID: account.ID, Ref: ref, LocalValue: account.ExternalBillingAccountID,
+		Adapter: adapter, AccountID: account.GetId(), Ref: ref, LocalValue: account.GetStatus().GetExternalBillingAccountId(),
 		LocalDuplicate: func(dupCtx context.Context, value, excludeAccountID string) (bool, error) {
 			if reserveErr := lease.Reserve(dupCtx, database.BillingOperationKey("correlation", value)); reserveErr != nil {
 				return false, reserveErr
 			}
 			return database.WithNewTx(dupCtx, func(txCtx context.Context) (bool, error) {
-				tx, _ := database.TxFromContext(txCtx)
-				return database.BillingAccountExternalIDConflict(txCtx, tx, value, excludeAccountID)
+				page, listErr := s.accounts.List().SetLimit(0).SetFilter(fmt.Sprintf(
+					"this.status.external_billing_account_id == %q && this.id != %q", value, excludeAccountID)).Do(txCtx)
+				if listErr != nil {
+					return false, listErr
+				}
+				return page.GetTotal() > 0, nil
 			})
 		},
 	})
 	cancel()
 	if err != nil {
-		return database.TenantBillingAssignmentRow{}, err
+		return nil, err
 	}
 	// The already-consistent resolver branch performs no write and may skip LocalDuplicate; reserve that value too
 	// before local adoption.
@@ -610,92 +693,290 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 				"account in the provider to the value shown by BillingAccounts.List"
 		}
 	default:
-		return database.TenantBillingAssignmentRow{}, &billing.CorrelationResolutionError{
+		return nil, &billing.CorrelationResolutionError{
 			Reason: billing.ReasonAccountAmbiguous,
 		}
 	}
 
-	return database.WithNewTx(operationCtx, func(txCtx context.Context) (database.TenantBillingAssignmentRow, error) {
-		tx, _ := database.TxFromContext(txCtx)
-		if err := lease.Check(txCtx, tx); err != nil {
-			return row, err
-		}
-		latest, err := s.assignmentSnapshot(txCtx, accountID, closeID, in, true)
-		if err != nil {
-			return row, err
-		}
-		// The stored state can change between the preflight read and this commit, from discovery or another
-		// assignment. A change committed after this request's provider read is news the observation cannot supersede,
-		// so reject the now-known-inactive account instead of opening an interval for it.
-		if err := requireActiveBillingAccountState(billing.AccountState(latest.account.State), account.ID); err != nil {
-			return row, err
-		}
-		if latest != snapshot {
-			return row, errAssignChanged
-		}
-		// Recheck expiry after row-lock waits. These leases fence only this local commit, not remote writes.
-		if err := lease.Check(txCtx, tx); err != nil {
-			return row, err
-		}
-		if err := database.SetExternalBillingAccountID(txCtx, tx, account.ID, resolution.Value); err != nil {
-			return row, err
-		}
-		if closeID != "" && snapshot.current.BillingAccountID == accountID {
-			_, err = tx.Exec(txCtx, `update tenant_billing_assignments set connection_state = $2, message = $3
-				where id = $1 and effective_to is null`, closeID, state, message)
-			if err != nil {
-				return row, err
-			}
-			return database.GetTenantBillingAssignment(txCtx, tx, closeID)
-		}
-		newID, err := database.CloseAndInsertTenantBillingAssignment(txCtx, tx, closeID,
-			database.TenantBillingAssignmentInsert{
-				ID: uuid.New(), Name: in.Name, TenantID: in.TenantID, BillingAccountID: account.ID,
-				ConnectionState: state, Message: message, Creator: in.Creator,
-			})
-		if err != nil {
-			return row, err
-		}
-		return database.GetTenantBillingAssignment(txCtx, tx, newID)
+	return database.WithNewTx(operationCtx, func(txCtx context.Context) (*privatev1.TenantBillingAssignment, error) {
+		return s.finalizeAssignment(txCtx, lease, snapshot, in, observed, resolution, state, message)
 	})
 }
 
-// buildTenantBillingAssignmentsListResponse converts rows to their proto form and wraps them with the page total.
-func buildTenantBillingAssignmentsListResponse(
-	rows []database.TenantBillingAssignmentRow, total int32) *privatev1.TenantBillingAssignmentsListResponse {
-	items := make([]*privatev1.TenantBillingAssignment, 0, len(rows))
-	for _, row := range rows {
-		items = append(items, toTenantBillingAssignmentProto(row))
+// finalizeAssignment owns the post-I/O lock/reread/merge handshake, in the caller's existing short transaction.
+// The token, observation and interval changes commit or roll back together.
+func (s *PrivateTenantBillingAssignmentsServer) finalizeAssignment(txCtx context.Context,
+	lease *database.BillingOperationLease, snapshot tenantBillingAssignmentSnapshot, in tenantBillingAssignmentAssignInput,
+	observed *privatev1.BillingAccountStatus, resolution billing.Resolution, state, message string,
+) (row *privatev1.TenantBillingAssignment, err error) {
+	accountID := snapshot.account.GetId()
+	closeID := snapshot.current.GetId()
+	tx, err := database.TxFromContext(txCtx)
+	if err != nil {
+		return nil, err
 	}
-	return privatev1.TenantBillingAssignmentsListResponse_builder{
-		Size:  int32(len(items)), // #nosec G115 -- bounded by page size
-		Total: total,
-		Items: items,
-	}.Build()
+	defer tx.ReportError(&err)
+	if err := lease.Check(txCtx, tx); err != nil {
+		return row, err
+	}
+	latest, err := s.assignmentSnapshot(txCtx, accountID, closeID, in, &snapshot)
+	if err != nil {
+		return row, err
+	}
+	// The stored state can change between the preflight read and this commit, from discovery or another
+	// assignment. A change committed after this request's provider read is news the observation cannot supersede,
+	// so reject the now-known-inactive account instead of opening an interval for it.
+	if !sameBillingAssignmentInputs(snapshot, latest) {
+		return row, errAssignChanged
+	}
+	mergedAccount, _ := mergeBillingAccountObservation(latest.account, observed)
+	if err := requireActiveBillingAccountState(assignmentAccountState(mergedAccount), accountID); err != nil {
+		return nil, err
+	}
+	// Recheck expiry after row-lock waits. These leases fence only this local commit, not remote writes.
+	if err := lease.Check(txCtx, tx); err != nil {
+		return row, err
+	}
+	// Absence, present-empty, whitespace and exact nonempty bytes are distinct. Only an unestablished value
+	// may be adopted; neither this code nor the database can rotate an established token.
+	storedToken := mergedAccount.GetStatus().GetExternalBillingAccountId()
+	if strings.TrimSpace(storedToken) != "" && storedToken != resolution.Value {
+		return nil, errAssignChanged
+	}
+	mergedAccount.GetStatus().SetExternalBillingAccountId(resolution.Value)
+	if !proto.Equal(mergedAccount, latest.account) {
+		if _, err = s.accounts.Update().SetObject(mergedAccount).Do(txCtx); err != nil {
+			return nil, err
+		}
+	}
+	if closeID != "" && latest.current.GetSpec().GetBillingAccount().GetId() == accountID {
+		updated := proto.Clone(latest.current).(*privatev1.TenantBillingAssignment)
+		updated.GetStatus().SetConnectionState(mapTenantBillingAssignmentConnectionState(state))
+		updated.GetStatus().SetMessage(message)
+		if proto.Equal(updated, latest.current) {
+			return latest.current, nil
+		}
+		result, updateErr := s.assignments.Update().SetObject(updated).Do(txCtx)
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		return result.GetObject(), nil
+	}
+	at, err := dao.BillingFinalizationTime(txCtx, latest.floor)
+	if err != nil {
+		return nil, err
+	}
+	if closeID != "" {
+		closed := proto.Clone(latest.current).(*privatev1.TenantBillingAssignment)
+		closed.GetStatus().SetEffectiveToTimestamp(timestamppb.New(at))
+		if _, err = s.assignments.Update().SetObject(closed).Do(txCtx); err != nil {
+			var missing *dao.ErrNotFound
+			if errors.As(err, &missing) {
+				return nil, errAssignChanged
+			}
+			return nil, err
+		}
+	}
+	candidate := proto.Clone(in.Object).(*privatev1.TenantBillingAssignment)
+	candidate.SetId(uuid.New())
+	candidate.GetMetadata().SetCreator(in.Creator)
+	candidate.GetMetadata().ClearCreationTimestamp()
+	candidate.GetMetadata().ClearDeletionTimestamp()
+	candidate.GetMetadata().SetVersion(0)
+	candidate.SetStatus(privatev1.TenantBillingAssignmentStatus_builder{
+		ConnectionState: mapTenantBillingAssignmentConnectionState(state), Message: message,
+		EffectiveFromTimestamp: timestamppb.New(at),
+	}.Build())
+	created, err := s.assignments.Create().SetObject(candidate).Do(txCtx)
+	if err != nil {
+		return nil, err
+	}
+	return created.GetObject(), nil
 }
 
-// toTenantBillingAssignmentProto converts a database row into its private proto representation.
-func toTenantBillingAssignmentProto(row database.TenantBillingAssignmentRow) *privatev1.TenantBillingAssignment {
-	statusBuilder := privatev1.TenantBillingAssignmentStatus_builder{
-		ConnectionState: mapTenantBillingAssignmentConnectionState(row.ConnectionState),
-		EffectiveFrom:   timestamppb.New(row.EffectiveFrom),
-		Message:         row.Message,
+// canonicalAssignment owns a detached candidate and resolves only live write targets. Historical Get/List never
+// call it: canonical references already stored in intervals remain readable after their targets are removed.
+func (s *PrivateTenantBillingAssignmentsServer) canonicalAssignment(ctx context.Context,
+	object *privatev1.TenantBillingAssignment) (*privatev1.TenantBillingAssignment, error) {
+	object = proto.Clone(object).(*privatev1.TenantBillingAssignment)
+	ref := object.GetSpec().GetTenant()
+	if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
+		return nil, status.Error(codes.InvalidArgument, "spec.tenant is required")
 	}
-	if row.EffectiveTo != nil {
-		statusBuilder.EffectiveTo = timestamppb.New(*row.EffectiveTo)
+	id := ref.GetId()
+	if id == "" {
+		page, err := s.tenants.List().SetLimit(2).SetFilter(fmt.Sprintf("this.metadata.name == %q", ref.GetName())).Do(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if page.GetTotal() != 1 {
+			return nil, status.Error(codes.InvalidArgument, "spec.tenant does not reference an existing tenant")
+		}
+		id = page.GetItems()[0].GetId()
 	}
-	return privatev1.TenantBillingAssignment_builder{
-		Id: row.ID,
-		Metadata: privatev1.Metadata_builder{
-			Name:   row.Name,
-			Tenant: row.TenantID,
-		}.Build(),
-		Spec: privatev1.TenantBillingAssignmentSpec_builder{
-			TenantId:         row.TenantID,
-			BillingAccountId: row.BillingAccountID,
-		}.Build(),
-		Status: statusBuilder.Build(),
-	}.Build()
+	if !auth.SubjectFromContext(ctx).Tenants.Contains(id) {
+		return nil, status.Error(codes.PermissionDenied, "tenant is outside the authorized billing assignment scope")
+	}
+	if id == auth.SystemTenant || id == auth.SharedTenant {
+		return nil, status.Error(codes.InvalidArgument, "reserved tenants cannot have billing assignments")
+	}
+	tenant, err := s.tenants.Get().SetId(id).Do(ctx)
+	if err != nil {
+		var missing *dao.ErrNotFound
+		if errors.As(err, &missing) {
+			return nil, status.Error(codes.InvalidArgument, "spec.tenant does not reference an existing tenant")
+		}
+		return nil, err
+	}
+	if !billingResourceLive(tenant.GetObject().GetMetadata()) {
+		return nil, status.Error(codes.InvalidArgument, "spec.tenant does not reference an existing tenant")
+	}
+	if ref.GetName() != "" && ref.GetName() != tenant.GetObject().GetMetadata().GetName() {
+		return nil, status.Error(codes.InvalidArgument, "spec.tenant id and name contradict")
+	}
+	canonicalizeResourceReference(ref, tenant.GetObject())
+	metadata := object.GetMetadata()
+	if metadata == nil {
+		return nil, status.Error(codes.InvalidArgument, "metadata is required")
+	}
+	if metadata.GetProject() != "" || (metadata.GetTenant() != "" && metadata.GetTenant() != id) {
+		return nil, status.Error(codes.InvalidArgument, "assignment ownership must match its nonproject tenant")
+	}
+	metadata.SetTenant(id)
+	annotations := metadata.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	if owner, exists := annotations["osac.openshift.io/tenant"]; exists && owner != id {
+		return nil, status.Error(codes.InvalidArgument, "assignment tenant annotation contradicts spec.tenant")
+	}
+	annotations["osac.openshift.io/tenant"] = id
+	metadata.SetAnnotations(annotations)
+	accountRef := object.GetSpec().GetBillingAccount()
+	if accountRef == nil {
+		return nil, status.Error(codes.InvalidArgument, "spec.billing_account is required")
+	}
+	account, err := resolveResourceInScope(ctx, s.accounts, referenceScope{tenant: auth.SystemTenant},
+		accountRef.GetId(), accountRef.GetName(), "billing account", "", codes.InvalidArgument)
+	if err != nil {
+		return nil, err
+	}
+	if !billingResourceLive(account.GetMetadata()) {
+		return nil, status.Error(codes.InvalidArgument, "billing account is deleted")
+	}
+	canonicalizeResourceReference(accountRef, account)
+	if err = s.validator.Validate(object); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	return object, nil
+}
+
+func billingResourceLive(metadata *privatev1.Metadata) bool {
+	return metadata != nil && (metadata.GetDeletionTimestamp() == nil || metadata.GetDeletionTimestamp().AsTime().Equal(time.Unix(0, 0)))
+}
+
+func validateBillingAssignmentIdentity(current, request *privatev1.TenantBillingAssignment) error {
+	if ref := request.GetSpec().GetTenant(); ref != nil &&
+		((ref.GetId() != "" && ref.GetId() != current.GetSpec().GetTenant().GetId()) ||
+			(ref.GetName() != "" && ref.GetName() != current.GetSpec().GetTenant().GetName())) {
+		return status.Error(codes.InvalidArgument, "spec.tenant is immutable")
+	}
+	before, after := current.GetMetadata(), request.GetMetadata()
+	if after != nil && ((after.GetName() != "" && after.GetName() != before.GetName()) ||
+		(after.GetTenant() != "" && after.GetTenant() != before.GetTenant()) ||
+		after.GetProject() != before.GetProject() ||
+		(after.GetCreator() != "" && after.GetCreator() != before.GetCreator()) ||
+		(after.GetCreationTimestamp() != nil && !proto.Equal(after.GetCreationTimestamp(), before.GetCreationTimestamp())) ||
+		(after.GetDeletionTimestamp() != nil && !proto.Equal(after.GetDeletionTimestamp(), before.GetDeletionTimestamp()))) {
+		return status.Error(codes.InvalidArgument, "assignment metadata identity is immutable")
+	}
+	return nil
+}
+
+func sameBillingAccountIdentity(a, b *privatev1.BillingAccount) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	x, y := a.GetStatus(), b.GetStatus()
+	return a.GetId() == b.GetId() && a.GetMetadata().GetName() == b.GetMetadata().GetName() &&
+		proto.Equal(a.GetMetadata().GetCreationTimestamp(), b.GetMetadata().GetCreationTimestamp()) &&
+		x.GetProviderKey() == y.GetProviderKey() && x.GetProviderAccountReference() == y.GetProviderAccountReference() &&
+		x.HasExternalBillingAccountId() == y.HasExternalBillingAccountId() &&
+		x.GetExternalBillingAccountId() == y.GetExternalBillingAccountId()
+}
+
+func sameBillingAssignmentSelection(current *privatev1.TenantBillingAssignment, in tenantBillingAssignmentAssignInput,
+	expected *tenantBillingAssignmentSnapshot) bool {
+	return current.GetSpec().GetTenant().GetId() == in.TenantID &&
+		current.GetMetadata().GetVersion() == in.Object.GetMetadata().GetVersion() &&
+		proto.Equal(current.GetStatus().GetEffectiveFromTimestamp(), in.Object.GetStatus().GetEffectiveFromTimestamp()) &&
+		(expected == nil || current.GetSpec().GetBillingAccount().GetId() == expected.current.GetSpec().GetBillingAccount().GetId())
+}
+
+func billingSnapshotLockError(err error) error {
+	var missing *dao.ErrNotFound
+	if errors.As(err, &missing) {
+		return errAssignChanged
+	}
+	return err
+}
+
+func sameBillingAssignmentInputs(a, b tenantBillingAssignmentSnapshot) bool {
+	return a.tenant.GetId() == b.tenant.GetId() &&
+		proto.Equal(a.tenant.GetMetadata().GetCreationTimestamp(), b.tenant.GetMetadata().GetCreationTimestamp()) &&
+		sameBillingAccountIdentity(a.account, b.account) && sameBillingAccountIdentity(a.previous, b.previous) &&
+		proto.Equal(a.current, b.current) && a.floor.Equal(b.floor)
+}
+
+func assignmentAccountState(account *privatev1.BillingAccount) billing.AccountState {
+	switch account.GetStatus().GetState() {
+	case privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE:
+		return billing.AccountActive
+	case privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_INACTIVE:
+		return billing.AccountInactive
+	default:
+		return billing.AccountUnknown
+	}
+}
+
+// The read DAO intersects trusted visibility separately from the caller filter, for both count and page. Only
+// internal binding checks/tenant resolution use complete inventory; they cannot grant method or object access.
+type billingAssignmentTenancy struct{ inventory bool }
+
+func (billingAssignmentTenancy) DetermineAssignableTenants(context.Context) (collections.Set[string], error) {
+	return auth.AllTenants, nil
+}
+func (billingAssignmentTenancy) DetermineDefaultTenant(context.Context) (string, error) {
+	return "", nil
+}
+func (t billingAssignmentTenancy) DetermineVisibility(ctx context.Context) (*auth.Visibility, error) {
+	if t.inventory {
+		return auth.TotalVisibility(), nil
+	}
+	set := auth.SubjectFromContext(ctx).Tenants
+	if !set.Finite() {
+		return auth.TotalVisibility(), nil
+	}
+	return auth.NewVisibility().AddVisibleTenants(set.Inclusions()...).Build()
+}
+
+func validateBillingAssignmentOrder(order string) error {
+	if strings.TrimSpace(order) == "" {
+		return nil
+	}
+	for _, term := range strings.Split(order, ",") {
+		words := strings.Fields(term)
+		if len(words) == 0 {
+			return status.Error(codes.InvalidArgument, "invalid assignment order")
+		}
+		switch words[0] {
+		case "id", "metadata.name", "spec.tenant.id", "spec.tenant.name", "spec.billing_account.id", "spec.billing_account.name",
+			"status.connection_state", "status.message", "status.effective_from_timestamp", "status.effective_to_timestamp":
+		default:
+			return status.Error(codes.InvalidArgument, "unsupported assignment order path")
+		}
+	}
+	return nil
 }
 
 // mapTenantBillingAssignmentConnectionState maps a connection_state value to its proto enum, returning
@@ -733,6 +1014,16 @@ func mapBillingProviderBuildError(err error) error {
 // tenant, or an infrastructure error. The fallback logs the cause and returns a fixed message, because pgx error
 // strings can leak constraint and schema detail.
 func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return status.FromContextError(ctx.Err()).Err()
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err).Err()
+	}
+	var deadlock *dao.ErrDeadlock
+	if errors.As(err, &deadlock) {
+		return billingFailure(codes.Aborted, "billing operation conflicted; retry", billingOperationRetryReason)
+	}
 	if errors.Is(err, database.ErrBillingOperationBusy) || errors.Is(err, database.ErrBillingOperationExpired) ||
 		errors.Is(err, errAssignChanged) {
 		return billingFailure(codes.Aborted, "billing operation conflicted or expired; retry",
@@ -753,8 +1044,18 @@ func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(
 			"external billing account id is already in use by another account")
 	}
 	var pgErr *pgconn.PgError
+	var conflict *dao.ErrAlreadyExists
+	constraint := ""
+	if errors.As(err, &conflict) {
+		constraint = conflict.ConstraintName
+	}
 	if errors.As(err, &pgErr) {
-		switch pgErr.ConstraintName {
+		constraint = pgErr.ConstraintName
+	}
+	if constraint != "" {
+		switch constraint {
+		case "billing_accounts_unique_correlation_id":
+			return failedPreconditionWithReason(billing.ReasonAccountCorrelationConflict, "external billing account id is already in use by another account")
 		case "tenant_billing_assignments_unique_active_tenant":
 			return failedPreconditionWithReason(tbaTenantAlreadyBoundReason,
 				"tenant already has an active billing assignment")
@@ -762,7 +1063,7 @@ func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(
 			return failedPreconditionWithReason(tbaAccountAlreadyBoundReason,
 				"billing account is already linked to a tenant")
 		case "tenant_billing_assignments_tenant_id_fkey":
-			return status.Errorf(codes.InvalidArgument, "spec.tenant_id does not reference an existing tenant")
+			return status.Errorf(codes.InvalidArgument, "spec.tenant does not reference an existing tenant")
 		}
 	}
 	var provErr *billing.Error

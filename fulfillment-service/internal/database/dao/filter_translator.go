@@ -288,6 +288,89 @@ func (t *FilterTranslator) Translate(ctx context.Context, filter string) (sql st
 	return
 }
 
+// TranslateOrder translates up to sixteen canonical descriptor paths, each optionally followed by asc or desc.
+// The descriptor (including a public descriptor supplied over private storage) is the field allow-list; maps,
+// repeated fields and non-Timestamp message leaves are never sortable. Resource servers may further restrict paths.
+// No caller-supplied SQL fragments are used: all field names come from descriptors and directions are constants.
+func (t *FilterTranslator) TranslateOrder(ctx context.Context, order string) (string, error) {
+	if order == "" {
+		return "id", nil
+	}
+	terms := strings.Split(order, ",")
+	if len(terms) > 16 {
+		return "", errors.New("order cannot contain more than 16 terms")
+	}
+	clauses := make([]string, 0, len(terms)+1)
+	hasID := false
+	for _, term := range terms {
+		parts := strings.Fields(term)
+		if len(parts) < 1 || len(parts) > 2 {
+			return "", errors.New("order term must be a field path with an optional asc or desc")
+		}
+		direction := "asc"
+		if len(parts) == 2 {
+			switch strings.ToLower(parts[1]) {
+			case "asc":
+			case "desc":
+				direction = "desc"
+			default:
+				return "", errors.New("order direction must be asc or desc")
+			}
+		}
+		value, err := t.translateOrderPath(parts[0])
+		if err != nil {
+			return "", err
+		}
+		clauses = append(clauses, value+" "+direction+" nulls last")
+		hasID = hasID || parts[0] == "id"
+	}
+	if !hasID {
+		clauses = append(clauses, "id asc nulls last")
+	}
+	return strings.Join(clauses, ", "), nil
+}
+
+func (t *FilterTranslator) translateOrderPath(path string) (string, error) {
+	desc := t.thisDesc
+	value := filterTranslatorResult{kind: filterTranslatorThisKind}
+	parts := strings.Split(path, ".")
+	for i, part := range parts {
+		field := desc.Fields().ByName(protoreflect.Name(part))
+		if field == nil || field.IsMap() || field.IsList() {
+			return "", fmt.Errorf("unsupported order path '%s'", path)
+		}
+		// Use only the canonical proto name obtained from the validated descriptor, never a JSON-name alias.
+		name := string(field.Name())
+		var err error
+		switch value.kind {
+		case filterTranslatorThisKind:
+			value, err = t.translateSelectThisField(name, false)
+		case filterTranslatorMdKind:
+			value, err = t.translateSelectThisMdField(name, false)
+		case filterTranslatorJsonKind:
+			value, err = t.translateSelectJsonField(value.sql, desc, name, false)
+		default:
+			return "", fmt.Errorf("unsupported order path '%s'", path)
+		}
+		if err != nil {
+			return "", err
+		}
+		if i < len(parts)-1 {
+			if field.Kind() != protoreflect.MessageKind || field.Message().FullName() == t.tsDesc.FullName() {
+				return "", fmt.Errorf("order path '%s' traverses a scalar or Timestamp leaf", path)
+			}
+			desc = field.Message()
+		}
+	}
+	switch value.kind {
+	case filterTranslatorBooleanKind, filterTranslatorNumericKind, filterTranslatorTimeKind,
+		filterTranslatorStringKind, filterTranslatorLtreeKind:
+		return value.sql, nil
+	default:
+		return "", fmt.Errorf("order path '%s' must end at a scalar or Timestamp leaf", path)
+	}
+}
+
 func (t *FilterTranslator) translate(expr ast.Expr) (result filterTranslatorResult, err error) {
 	switch expr.Kind() {
 	case ast.CallKind:
@@ -1010,41 +1093,25 @@ func (t *FilterTranslator) translateSelectThisMdField(fieldName string,
 			result.kind = filterTranslatorLtreeKind
 			result.precedence = filterTranslatorMaxPrecedence
 		}
-	case "creation_timestamp":
-		// Note that we don't need to worry about this being null, because it will never be.
+	case "creation_timestamp", "deletion_timestamp":
+		// Only the exact epoch is absent, matching metadata materialization. Subsecond epoch values are present.
 		if testOnly {
-			result.sql = "true"
+			result.sql = fmt.Sprintf("%s <> 'epoch'::timestamptz", fieldName)
 			result.kind = filterTranslatorBooleanKind
-			result.precedence = filterTranslatorMaxPrecedence
+			result.precedence = filterTranslatorComparisonPrecedence
 		} else {
-			result.sql = fieldName
+			result.sql = fmt.Sprintf("nullif(%s, 'epoch'::timestamptz)", fieldName)
 			result.kind = filterTranslatorTimeKind
 			result.precedence = filterTranslatorMaxPrecedence
 		}
-	case "deletion_timestamp":
-		// The deletion timestamp doesn't accept null values in the database, instead it is set to the Unix
-		// epoch when there object hasn't been deleted, so we need to translate that into a null in order to be
-		// able to compare to other things that may be null. For example the following filter expression:
-		//
-		//	this.metadata.deletion_timestamp != null
-		//
-		// Can't be translated into this, because the result will always be `true``:
-		//
-		//	deletion_timestamp is not null
-		//
-		// Instead we will translate into this:
-		//
-		//	nullif(deletion_timestamp, '1970-01-01 00:00:00Z') is not null
-		//
-		// That will return `false` if the date is set to the Unix epoch, and `true` if the date has any other
-		// value.
+	case "version":
 		if testOnly {
-			result.sql = fmt.Sprintf("%s != '1970-01-01 00:00:00Z'", fieldName)
+			result.sql = "version <> 0"
 			result.kind = filterTranslatorBooleanKind
-			result.precedence = filterTranslatorMaxPrecedence
+			result.precedence = filterTranslatorComparisonPrecedence
 		} else {
-			result.sql = fmt.Sprintf("nullif(%s, '1970-01-01 00:00:00Z')", fieldName)
-			result.kind = filterTranslatorTimeKind
+			result.sql = "version"
+			result.kind = filterTranslatorNumericKind
 			result.precedence = filterTranslatorMaxPrecedence
 		}
 	case "creator", "tenant":

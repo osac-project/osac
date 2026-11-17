@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -26,12 +27,16 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -174,10 +179,23 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	// billingfake.AccountSpec using the same id as its provider reference.
 	seedAccountRow := func(id, correlationID, state string) {
 		err := tm.Run(ctx, func(tx database.Tx) error {
-			_, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-				ID: id, ProviderKey: billingfake.Key, ProviderAccountReference: id,
-				ExternalBillingAccountID: correlationID, State: state, StatusObservedAt: time.Now().UTC(),
-			})
+			accounts, err := dao.NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			if err != nil {
+				return err
+			}
+			name, err := billingAccountName(id)
+			if err != nil {
+				return err
+			}
+			observed := privatev1.BillingAccountStatus_builder{ProviderKey: billingfake.Key, ProviderAccountReference: id,
+				State: mapBillingAccountState(state), StateObservationTimestamp: timestamppb.Now()}.Build()
+			if correlationID != "" {
+				observed.SetExternalBillingAccountId(correlationID)
+			}
+			_, err = accounts.Create().SetObject(privatev1.BillingAccount_builder{Id: id,
+				Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SystemTenant, Creator: "system"}.Build(),
+				Spec:     &privatev1.BillingAccountSpec{}, Status: observed,
+			}.Build()).Do(database.TxIntoContext(ctx, tx))
 			return err
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -202,7 +220,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Object: privatev1.TenantBillingAssignment_builder{
 				Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 				Spec: privatev1.TenantBillingAssignmentSpec_builder{
-					TenantId: tenantID, BillingAccountId: accountID,
+					Tenant: privatev1.TenantReference_builder{Id: tenantID}.Build(), BillingAccount: privatev1.BillingAccountReference_builder{Id: accountID}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build()
@@ -212,7 +230,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Object: privatev1.TenantBillingAssignment_builder{
 				Id: id,
 				Spec: privatev1.TenantBillingAssignmentSpec_builder{
-					TenantId: tenantID, BillingAccountId: accountID,
+					Tenant: privatev1.TenantReference_builder{Id: tenantID}.Build(), BillingAccount: privatev1.BillingAccountReference_builder{Id: accountID}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build()
@@ -223,6 +241,35 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		Expect(ok).To(BeTrue())
 		Expect(st.Details()).ToNot(BeEmpty())
 		return st.Details()[0].(*errdetails.ErrorInfo).GetReason()
+	}
+	seedHistoryInterval := func(id, tenantID, accountID string, from time.Time, to *time.Time) {
+		Expect(tm.Run(ctx, func(tx database.Tx) error {
+			c := database.TxIntoContext(ctx, tx)
+			d, err := dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			if err != nil {
+				return err
+			}
+			name, err := billingAccountName(accountID)
+			if err != nil {
+				return err
+			}
+			observed := privatev1.TenantBillingAssignmentStatus_builder{
+				ConnectionState:        privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
+				EffectiveFromTimestamp: timestamppb.New(from),
+			}.Build()
+			if to != nil {
+				observed.SetEffectiveToTimestamp(timestamppb.New(*to))
+			}
+			_, err = d.Create().SetObject(privatev1.TenantBillingAssignment_builder{Id: id,
+				Metadata: privatev1.Metadata_builder{Name: id, Tenant: tenantID, Creator: "original-actor",
+					Annotations: map[string]string{"osac.openshift.io/tenant": tenantID}}.Build(),
+				Spec: privatev1.TenantBillingAssignmentSpec_builder{
+					Tenant:         privatev1.TenantReference_builder{Id: tenantID, Name: tenantID}.Build(),
+					BillingAccount: privatev1.BillingAccountReference_builder{Id: accountID, Name: name}.Build(),
+				}.Build(), Status: observed,
+			}.Build()).Do(c)
+			return err
+		})).To(Succeed())
 	}
 
 	It("requires a logger and a provider", func() {
@@ -250,6 +297,88 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	})
 
 	Describe("Create", func() {
+		DescribeTable("preserves raw token presence and exact bytes through resolution", func(local *string, providerValue string) {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, providerValue, "", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			server := build(fake.Provider())
+			if local != nil {
+				Expect(tm.Run(ctx, func(tx database.Tx) error {
+					c := database.TxIntoContext(ctx, tx)
+					r, err := server.accounts.Get().SetId(id).Do(c)
+					if err != nil {
+						return err
+					}
+					r.GetObject().GetStatus().SetExternalBillingAccountId(*local)
+					_, err = server.accounts.Update().SetObject(r.GetObject()).Do(c)
+					return err
+				})).To(Succeed())
+			}
+			_, err := server.Create(adminCtx(), createRequest(testTenant, id, "raw-token"))
+			Expect(err).NotTo(HaveOccurred())
+			stored, err := database.WithNewTx(adminCtx(), func(c context.Context) (*dao.GetResponse[*privatev1.BillingAccount], error) {
+				return server.accounts.Get().SetId(id).Do(c)
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stored.GetObject().GetStatus().HasExternalBillingAccountId()).To(BeTrue())
+			Expect(stored.GetObject().GetStatus().GetExternalBillingAccountId()).To(Equal(providerValue))
+		}, Entry("absent", (*string)(nil), "provider"), Entry("present empty", new(""), "provider"),
+			Entry("present whitespace", new(" \t "), "provider"), Entry("padded established", new(" padded "), " padded "))
+		DescribeTable("canonicalizes typed id/name references without borrowing a project scope", func(byName bool) {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, "exact", "exact", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			request := createRequest(testTenant, id, "canonical")
+			if byName {
+				name, err := billingAccountName(id)
+				Expect(err).NotTo(HaveOccurred())
+				request.GetObject().GetSpec().SetTenant(privatev1.TenantReference_builder{Name: testTenant}.Build())
+				request.GetObject().GetSpec().SetBillingAccount(privatev1.BillingAccountReference_builder{Name: name}.Build())
+			}
+			created, err := build(fake.Provider()).Create(adminCtx(), request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(created.GetObject().GetSpec().GetTenant().GetId()).To(Equal(testTenant))
+			Expect(created.GetObject().GetSpec().GetTenant().GetName()).To(Equal(testTenant))
+			Expect(created.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(id))
+			Expect(created.GetObject().GetSpec().GetBillingAccount().GetName()).NotTo(BeEmpty())
+			Expect(created.GetObject().GetMetadata().GetCreator()).To(Equal("admin"))
+			Expect(created.GetObject().GetMetadata().GetCreationTimestamp()).NotTo(BeNil())
+			Expect(created.GetObject().GetMetadata().GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/tenant", testTenant))
+		}, Entry("id", false), Entry("name", true))
+
+		DescribeTable("rejects contradictory references and ownership before provider I/O", func(change string) {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, "exact", "exact", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			request := createRequest(testTenant, id, "bad-reference")
+			switch change {
+			case "tenant":
+				request.GetObject().GetSpec().GetTenant().SetName("contradiction")
+			case "account":
+				request.GetObject().GetSpec().GetBillingAccount().SetName("contradiction")
+			case "project":
+				request.GetObject().GetMetadata().SetProject("forbidden")
+			case "metadata":
+				request.GetObject().GetMetadata().SetTenant("contradiction")
+			case "annotation":
+				request.GetObject().GetMetadata().SetAnnotations(map[string]string{"osac.openshift.io/tenant": "contradiction"})
+			}
+			_, err := build(fake.Provider()).Create(adminCtx(), request)
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(fake.Calls()).To(BeEmpty())
+		}, Entry("tenant id/name", "tenant"), Entry("account id/name", "account"), Entry("project", "project"),
+			Entry("metadata tenant", "metadata"), Entry("tenant annotation", "annotation"))
+
+		It("clamps creation to closed-only history and samples the start after provider I/O", func() {
+			var accounts []billingfake.AccountSpec
+			oldID := newAccount(&accounts, "old", "old", "ACTIVE")
+			id := newAccount(&accounts, "new", "new", "ACTIVE")
+			floor := time.Now().UTC().Truncate(time.Microsecond).Add(time.Hour)
+			seedHistoryInterval("closed-history", testTenant, oldID, floor.Add(-time.Hour), &floor)
+			response, err := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider()).Create(adminCtx(), createRequest(testTenant, id, "after-history"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()).To(BeTemporally("==", floor))
+		})
 		It("rejects an acknowledged but unpersisted provider write instead of inferring CONNECTED", func() {
 			var accounts []billingfake.AccountSpec
 			account := newAccount(&accounts, "", "", "ACTIVE")
@@ -274,8 +403,8 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(resp.GetObject().GetStatus().GetConnectionState()).To(Equal(
 				privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 			Expect(resp.GetObject().GetStatus().GetMessage()).To(BeEmpty())
-			Expect(resp.GetObject().GetSpec().GetTenantId()).To(Equal(testTenant))
-			Expect(resp.GetObject().GetSpec().GetBillingAccountId()).To(Equal(account))
+			Expect(resp.GetObject().GetSpec().GetTenant().GetId()).To(Equal(testTenant))
+			Expect(resp.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(account))
 			Expect(resp.GetObject().GetId()).ToNot(BeEmpty())
 		})
 
@@ -303,7 +432,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			st, ok := status.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(st.Code()).To(Equal(codes.InvalidArgument))
-			Expect(st.Message()).To(ContainSubstring("spec.tenant_id does not reference an existing tenant"))
+			Expect(st.Message()).To(ContainSubstring("spec.tenant does not reference an existing tenant"))
 
 			// Update runs through the same shared tail, so reassigning a tenant that was deleted after its
 			// assignment exists is rejected the same way:
@@ -313,7 +442,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			st, ok = status.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(st.Code()).To(Equal(codes.InvalidArgument))
-			Expect(st.Message()).To(ContainSubstring("spec.tenant_id does not reference an existing tenant"))
+			Expect(st.Message()).To(ContainSubstring("spec.tenant does not reference an existing tenant"))
 		})
 
 		It("generates a correlation id and stays PENDING with the stable reason when the provider cannot write it", func() {
@@ -378,12 +507,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(err.Error()).ToNot(ContainSubstring("osac-side"))
 			Expect(err.Error()).ToNot(ContainSubstring("provider-side"))
 
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			_, total, listErr := database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-				`this.spec.billing_account_id == "`+account+`"`, "")
+			page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.billing_account.id == "` + account + `"`).Do(ctx)
 			Expect(listErr).ToNot(HaveOccurred())
-			Expect(total).To(BeZero())
+			Expect(page.GetTotal()).To(BeZero())
 		})
 
 		It("rejects two provider accounts carrying the same value with ACCOUNT_AMBIGUOUS and creates no row", func() {
@@ -399,12 +525,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 			Expect(reason(err)).To(Equal("ACCOUNT_AMBIGUOUS"))
 
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			_, total, listErr := database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-				`this.spec.billing_account_id == "`+account+`"`, "")
+			page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.billing_account.id == "` + account + `"`).Do(ctx)
 			Expect(listErr).ToNot(HaveOccurred())
-			Expect(total).To(BeZero())
+			Expect(page.GetTotal()).To(BeZero())
 		})
 
 		It("rejects a foreign provider carrier before writing or creating an assignment", func() {
@@ -437,12 +560,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			_, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
 			Expect(status.Code(err)).To(Equal(codes.Unavailable))
 
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			_, total, listErr := database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-				`this.spec.billing_account_id == "`+account+`"`, "")
+			page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.billing_account.id == "` + account + `"`).Do(ctx)
 			Expect(listErr).ToNot(HaveOccurred())
-			Expect(total).To(BeZero())
+			Expect(page.GetTotal()).To(BeZero())
 		})
 
 		It("fails as UNAVAILABLE/TIMEOUT and releases its durable guard when the provider hangs", func() {
@@ -515,11 +635,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 			Expect(reason(err)).To(Equal("TENANT_ALREADY_BOUND"))
 
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			active, getErr := database.GetActiveTenantBillingAssignmentByTenant(ctx, tx, testTenant)
+			active, getErr := server.bindings.List().SetLimit(1).SetFilter(`this.spec.tenant.id == "test-tenant" && !has(this.status.effective_to_timestamp)`).Do(ctx)
 			Expect(getErr).ToNot(HaveOccurred())
-			Expect(active.BillingAccountID).To(Equal(account1), "the original binding must be unchanged")
+			Expect(active.GetItems()[0].GetSpec().GetBillingAccount().GetId()).To(Equal(account1), "the original binding must be unchanged")
 		})
 
 		It("rejects an account already linked to another tenant", func() {
@@ -569,15 +687,26 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				account := newAccount(&accounts, "corr-live", "", "ACTIVE")
 				// Make the stored observation old enough that the assignment read's refresh is observable.
 				seedObservedAt := time.Now().UTC().Add(-time.Hour)
-				_, err := testPool.Exec(ctx,
-					`update billing_accounts set status_observed_at = $2 where id = $1`, account, seedObservedAt)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(tm.Run(ctx, func(tx database.Tx) error {
+					c := database.TxIntoContext(ctx, tx)
+					d, err := dao.NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+					if err != nil {
+						return err
+					}
+					r, err := d.Get().SetId(account).Do(c)
+					if err != nil {
+						return err
+					}
+					r.GetObject().GetStatus().SetStateObservationTimestamp(timestamppb.New(seedObservedAt))
+					_, err = d.Update().SetObject(r.GetObject()).Do(c)
+					return err
+				})).To(Succeed())
 				// Only the provider changes: the stored row stays ACTIVE and no BillingAccounts.List runs.
 				accounts[0].State = state
 				fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
 				server := build(fake.Provider())
 
-				_, err = server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
+				_, err := server.Create(adminCtx(), createRequest(testTenant, account, "asg-1"))
 				Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 				Expect(reason(err)).To(Equal(expectedReason))
 				Expect(fake.Count("GetAccount")).To(BeNumerically(">", 0),
@@ -672,10 +801,14 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				concurrentAt := concurrentNow.UTC().Truncate(time.Microsecond)
 				Expect(concurrentAt).To(BeTemporally(">", adapter.sampledAt.UTC()))
 				Expect(tm.Run(ctx, func(tx database.Tx) error {
-					_, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-						ID: account, ProviderKey: billingfake.Key, ProviderAccountReference: account,
-						State: injectedState, StatusObservedAt: concurrentAt,
-					})
+					c := database.TxIntoContext(ctx, tx)
+					r, err := server.accounts.Get().SetId(account).Do(c)
+					if err != nil {
+						return err
+					}
+					r.GetObject().GetStatus().SetState(mapBillingAccountState(injectedState))
+					r.GetObject().GetStatus().SetStateObservationTimestamp(timestamppb.New(concurrentAt))
+					_, err = server.accounts.Update().SetObject(r.GetObject()).Do(c)
 					return err
 				})).To(Succeed())
 				Expect(adapter.release).NotTo(BeClosed())
@@ -715,6 +848,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			},
 			Entry("newer concurrent ACTIVE observation", "ACTIVE", codes.OK, ""),
 			Entry("newer concurrent INACTIVE observation", "INACTIVE", codes.FailedPrecondition, "ACCOUNT_INACTIVE"),
+			Entry("newer concurrent UNKNOWN observation", "UNKNOWN", codes.FailedPrecondition, "ACCOUNT_STATE_UNKNOWN"),
 		)
 
 		It("rejects a nonexistent billing account", func() {
@@ -726,6 +860,88 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	})
 
 	Describe("Update", func() {
+		It("validates a partial atomic account mask against stored state and attributes only the new interval", func() {
+			var accounts []billingfake.AccountSpec
+			first := newAccount(&accounts, "first", "first", "ACTIVE")
+			second := newAccount(&accounts, "second", "second", "ACTIVE")
+			server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
+			created, err := server.Create(adminCtx(), createRequest(testTenant, first, "masked"))
+			Expect(err).NotTo(HaveOccurred())
+			original := proto.Clone(created.GetObject()).(*privatev1.TenantBillingAssignment)
+			actor := auth.ContextWithSubject(adminCtx(), &auth.Subject{User: "replacement-actor", Tenants: auth.AllTenants})
+			updated, err := server.Update(actor, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+				Object: privatev1.TenantBillingAssignment_builder{Id: original.GetId(), Spec: privatev1.TenantBillingAssignmentSpec_builder{
+					BillingAccount: privatev1.BillingAccountReference_builder{Id: second}.Build(),
+				}.Build()}.Build(), UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.billing_account"}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updated.GetObject().GetMetadata().GetCreator()).To(Equal("replacement-actor"))
+			var storedCreator string
+			var storedCreation time.Time
+			var storedVersion int32
+			Expect(testPool.QueryRow(ctx, `select creator, creation_timestamp, version from tenant_billing_assignments where id = $1`,
+				updated.GetObject().GetId()).Scan(&storedCreator, &storedCreation, &storedVersion)).To(Succeed())
+			Expect(storedCreator).To(Equal("replacement-actor"))
+			Expect(storedCreation).To(BeTemporally("==", updated.GetObject().GetMetadata().GetCreationTimestamp().AsTime()))
+			Expect(storedVersion).To(Equal(updated.GetObject().GetMetadata().GetVersion()))
+			Expect(updated.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
+			Expect(updated.GetObject().GetMetadata().GetProject()).To(BeEmpty())
+			Expect(updated.GetObject().GetMetadata().GetAnnotations()).To(HaveKeyWithValue("osac.openshift.io/tenant", testTenant))
+			Expect(updated.GetObject().GetSpec().GetTenant().GetId()).To(Equal(testTenant))
+			Expect(updated.GetObject().GetSpec().GetBillingAccount().GetName()).NotTo(BeEmpty())
+			old, err := database.WithNewTx(adminCtx(), func(c context.Context) (*privatev1.TenantBillingAssignmentsGetResponse, error) {
+				return server.Get(c, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: original.GetId()}.Build())
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(old.GetObject().GetMetadata().GetCreator()).To(Equal(original.GetMetadata().GetCreator()))
+			Expect(proto.Equal(old.GetObject().GetMetadata().GetCreationTimestamp(), original.GetMetadata().GetCreationTimestamp())).To(BeTrue())
+			Expect(proto.Equal(old.GetObject().GetStatus().GetEffectiveToTimestamp(), updated.GetObject().GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
+		})
+
+		It("treats an explicit empty mask as a validated no-provider no-version-change operation", func() {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, "equal", "equal", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			server := build(fake.Provider())
+			created, err := server.Create(adminCtx(), createRequest(testTenant, id, "noop"))
+			Expect(err).NotTo(HaveOccurred())
+			calls := len(fake.Calls())
+			response, err := server.Update(adminCtx(), privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+				Object:     privatev1.TenantBillingAssignment_builder{Id: created.GetObject().GetId()}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(proto.Equal(response.GetObject(), created.GetObject())).To(BeTrue())
+			Expect(fake.Calls()).To(HaveLen(calls))
+		})
+
+		DescribeTable("rejects non-atomic, identity, and output mask paths before provider I/O", func(path string) {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, "equal", "equal", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			server := build(fake.Provider())
+			created, err := server.Create(adminCtx(), createRequest(testTenant, id, "immutable"))
+			Expect(err).NotTo(HaveOccurred())
+			calls := len(fake.Calls())
+			_, err = server.Update(adminCtx(), privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+				Object:     proto.Clone(created.GetObject()).(*privatev1.TenantBillingAssignment),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(fake.Calls()).To(HaveLen(calls))
+		}, Entry("reference leaf", "spec.billing_account.id"), Entry("tenant", "spec.tenant"),
+			Entry("metadata", "metadata"), Entry("status", "status"), Entry("status leaf", "status.message"))
+
+		It("revalidates an unchanged interval without rewriting its metadata or version", func() {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, "equal", "equal", "ACTIVE")
+			server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
+			created, err := server.Create(adminCtx(), createRequest(testTenant, id, "stable"))
+			Expect(err).NotTo(HaveOccurred())
+			response, err := server.Update(adminCtx(), updateRequest(created.GetObject().GetId(), testTenant, id))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(proto.Equal(response.GetObject(), created.GetObject())).To(BeTrue())
+		})
 		It("rejects a deleted tenant even when revalidating a CONNECTED same-account interval", func() {
 			var accounts []billingfake.AccountSpec
 			account := newAccount(&accounts, "connected", "connected", "ACTIVE")
@@ -778,18 +994,16 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			updated, err := server.Update(adminCtx(), updateRequest(firstID, testTenant, account2))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updated.GetObject().GetId()).ToNot(Equal(firstID))
-			Expect(updated.GetObject().GetSpec().GetBillingAccountId()).To(Equal(account2))
+			Expect(updated.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(account2))
 
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			closedRow, getErr := database.GetTenantBillingAssignment(ctx, tx, firstID)
+			closedRow, getErr := server.bindings.Get().SetId(firstID).Do(ctx)
 			Expect(getErr).ToNot(HaveOccurred())
-			Expect(closedRow.EffectiveTo).ToNot(BeNil())
+			Expect(closedRow.GetObject().GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil())
 
-			active, getErr := database.GetActiveTenantBillingAssignmentByTenant(ctx, tx, testTenant)
+			active, getErr := server.bindings.List().SetLimit(1).SetFilter(`this.spec.tenant.id == "test-tenant" && !has(this.status.effective_to_timestamp)`).Do(ctx)
 			Expect(getErr).ToNot(HaveOccurred())
-			Expect(active.ID).To(Equal(updated.GetObject().GetId()))
-			Expect(active.EffectiveFrom.Equal(*closedRow.EffectiveTo)).To(BeTrue())
+			Expect(active.GetItems()[0].GetId()).To(Equal(updated.GetObject().GetId()))
+			Expect(active.GetItems()[0].GetStatus().GetEffectiveFromTimestamp().AsTime().Equal(closedRow.GetObject().GetStatus().GetEffectiveToTimestamp().AsTime())).To(BeTrue())
 		})
 
 		It("re-runs resolution for a PENDING assignment resubmitted for the same tenant and account", func() {
@@ -805,25 +1019,23 @@ var _ = Describe("Private tenant billing assignments server", func() {
 
 			// The admin sets the provider's externalId to the OSAC-stored value and resubmits Update. The fake
 			// is rebuilt with that value preset, standing in for the out-of-band provider change.
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			accountRow, getErr := database.GetBillingAccountForAssignment(ctx, tx, account)
+			accountRow, getErr := server.accounts.Get().SetId(account).Do(ctx)
 			Expect(getErr).ToNot(HaveOccurred())
 			fake2 := billingfake.New(billingfake.Scenario{CorrelationWrite: false, Accounts: []billingfake.AccountSpec{
-				{ID: account, ExternalID: accountRow.ExternalBillingAccountID, State: billing.AccountActive},
+				{ID: account, ExternalID: accountRow.GetObject().GetStatus().GetExternalBillingAccountId(), State: billing.AccountActive},
 			}})
 			server2 := build(fake2.Provider())
 
 			updated, err := server2.Update(adminCtx(), updateRequest(pendingID, testTenant, account))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updated.GetObject().GetId()).To(Equal(pendingID))
-			Expect(updated.GetObject().GetStatus().GetEffectiveFrom()).To(Equal(created.GetObject().GetStatus().GetEffectiveFrom()))
+			Expect(proto.Equal(updated.GetObject().GetStatus().GetEffectiveFromTimestamp(), created.GetObject().GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
 			Expect(updated.GetObject().GetStatus().GetConnectionState()).To(Equal(
 				privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 
-			closedRow, getErr := database.GetTenantBillingAssignment(ctx, tx, pendingID)
+			closedRow, getErr := server.bindings.Get().SetId(pendingID).Do(ctx)
 			Expect(getErr).ToNot(HaveOccurred())
-			Expect(closedRow.EffectiveTo).To(BeNil())
+			Expect(closedRow.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil())
 		})
 
 		It("revalidates the same account on a CONNECTED assignment without changing history", func() {
@@ -840,14 +1052,11 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updated.GetObject().GetId()).To(Equal(connectedID), "no new interval must be created")
 			Expect(fake.Count("CorrelationValue")).To(BeNumerically(">", reads))
-			Expect(updated.GetObject().GetStatus().GetEffectiveFrom()).To(Equal(created.GetObject().GetStatus().GetEffectiveFrom()))
+			Expect(proto.Equal(updated.GetObject().GetStatus().GetEffectiveFromTimestamp(), created.GetObject().GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
 
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			_, total, listErr := database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-				`this.spec.tenant_id == "`+testTenant+`"`, "")
+			page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.tenant.id == "` + testTenant + `"`).Do(ctx)
 			Expect(listErr).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(1)))
+			Expect(page.GetTotal()).To(Equal(int32(1)))
 		})
 
 		It("reads the selected account's current provider state on same-account revalidation", func() {
@@ -882,47 +1091,44 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				}
 				accounts[index].State = providerState
 				fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
-				_, err = build(fake.Provider()).Update(adminCtx(), updateRequest(priorID, testTenant, target))
+				server := build(fake.Provider())
+				_, err = server.Update(adminCtx(), updateRequest(priorID, testTenant, target))
 				Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 				Expect(reason(err)).To(Equal(expectedReason))
 				Expect(fake.Count("CorrelationValue")).To(BeZero())
 				Expect(fake.Count("SetCorrelationValue")).To(BeZero())
 
-				tx, txErr := database.TxFromContext(ctx)
-				Expect(txErr).ToNot(HaveOccurred())
-				prior, getErr := database.GetTenantBillingAssignment(ctx, tx, priorID)
+				prior, getErr := server.bindings.Get().SetId(priorID).Do(ctx)
 				Expect(getErr).ToNot(HaveOccurred())
-				Expect(prior.EffectiveTo).To(BeNil(), "the prior interval must remain the current one")
-				Expect(prior.BillingAccountID).To(Equal(first))
-				Expect(prior.EffectiveFrom).To(BeTemporally("==", created.GetObject().GetStatus().GetEffectiveFrom().AsTime()))
-				_, total, listErr := database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-					`this.spec.tenant_id == "`+testTenant+`"`, "")
+				Expect(prior.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil(), "the prior interval must remain the current one")
+				Expect(prior.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(first))
+				Expect(prior.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()).To(BeTemporally("==", created.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()))
+				page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.tenant.id == "` + testTenant + `"`).Do(ctx)
 				Expect(listErr).ToNot(HaveOccurred())
-				Expect(total).To(Equal(int32(1)), "a rejected assignment must not add history")
+				Expect(page.GetTotal()).To(Equal(int32(1)), "a rejected assignment must not add history")
 
 				accounts[index].State = billing.AccountActive
 				recovered, err := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider()).
 					Update(adminCtx(), updateRequest(priorID, testTenant, target))
 				Expect(err).ToNot(HaveOccurred())
-				Expect(recovered.GetObject().GetSpec().GetBillingAccountId()).To(Equal(target))
+				Expect(recovered.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(target))
 				Expect(recovered.GetObject().GetStatus().GetConnectionState()).To(Equal(
 					privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
-				prior, getErr = database.GetTenantBillingAssignment(ctx, tx, priorID)
+				prior, getErr = server.bindings.Get().SetId(priorID).Do(ctx)
 				Expect(getErr).ToNot(HaveOccurred())
-				_, total, listErr = database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-					`this.spec.tenant_id == "`+testTenant+`"`, "")
+				page, listErr = server.bindings.List().SetLimit(10).SetFilter(`this.spec.tenant.id == "` + testTenant + `"`).Do(ctx)
 				Expect(listErr).ToNot(HaveOccurred())
 				if replacement {
 					Expect(recovered.GetObject().GetId()).NotTo(Equal(priorID))
-					Expect(prior.EffectiveTo).NotTo(BeNil())
-					Expect(*prior.EffectiveTo).To(BeTemporally("==", recovered.GetObject().GetStatus().GetEffectiveFrom().AsTime()))
-					Expect(total).To(Equal(int32(2)))
+					Expect(prior.GetObject().GetStatus().GetEffectiveToTimestamp()).NotTo(BeNil())
+					Expect(prior.GetObject().GetStatus().GetEffectiveToTimestamp().AsTime()).To(BeTemporally("==", recovered.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()))
+					Expect(page.GetTotal()).To(Equal(int32(2)))
 				} else {
 					Expect(recovered.GetObject().GetId()).To(Equal(priorID))
-					Expect(prior.EffectiveTo).To(BeNil())
-					Expect(recovered.GetObject().GetStatus().GetEffectiveFrom()).To(Equal(
-						created.GetObject().GetStatus().GetEffectiveFrom()))
-					Expect(total).To(Equal(int32(1)))
+					Expect(prior.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil())
+					Expect(proto.Equal(recovered.GetObject().GetStatus().GetEffectiveFromTimestamp(),
+						created.GetObject().GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
+					Expect(page.GetTotal()).To(Equal(int32(1)))
 				}
 			},
 			Entry("INACTIVE same-account revalidation", false, billing.AccountInactive, "ACCOUNT_INACTIVE"),
@@ -944,19 +1150,17 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				Accounts: accounts,
 				Failures: map[string]billingfake.Failure{"GetAccount": {Reason: billing.ReasonUnavailable}},
 			})
-			_, err = build(fake.Provider()).Update(adminCtx(), updateRequest(priorID, testTenant, second))
+			server := build(fake.Provider())
+			_, err = server.Update(adminCtx(), updateRequest(priorID, testTenant, second))
 			Expect(status.Code(err)).To(Equal(codes.Unavailable))
 
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			prior, getErr := database.GetTenantBillingAssignment(ctx, tx, priorID)
+			prior, getErr := server.bindings.Get().SetId(priorID).Do(ctx)
 			Expect(getErr).ToNot(HaveOccurred())
-			Expect(prior.EffectiveTo).To(BeNil())
-			Expect(prior.BillingAccountID).To(Equal(first))
-			_, total, listErr := database.ListTenantBillingAssignments(ctx, tx, 0, 10,
-				`this.spec.tenant_id == "`+testTenant+`"`, "")
+			Expect(prior.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil())
+			Expect(prior.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(first))
+			page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.tenant.id == "` + testTenant + `"`).Do(ctx)
 			Expect(listErr).ToNot(HaveOccurred())
-			Expect(total).To(Equal(int32(1)))
+			Expect(page.GetTotal()).To(Equal(int32(1)))
 		})
 
 		It("hazard: fails with BILLING_CORRELATION_ID_CONFLICT when the provider value was set to something else, "+
@@ -978,11 +1182,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 			Expect(reason(err)).To(Equal("BILLING_CORRELATION_ID_CONFLICT"))
 
-			tx, txErr := database.TxFromContext(ctx)
-			Expect(txErr).ToNot(HaveOccurred())
-			unchanged, getErr := database.GetTenantBillingAssignment(ctx, tx, pendingID)
+			unchanged, getErr := server.bindings.Get().SetId(pendingID).Do(ctx)
 			Expect(getErr).ToNot(HaveOccurred())
-			Expect(unchanged.EffectiveTo).To(BeNil(), "the PENDING interval must remain the current one")
+			Expect(unchanged.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil(), "the PENDING interval must remain the current one")
 		})
 
 		It("rejects changing spec.tenant_id", func() {
@@ -998,7 +1200,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				Object: privatev1.TenantBillingAssignment_builder{
 					Id: created.GetObject().GetId(),
 					Spec: privatev1.TenantBillingAssignmentSpec_builder{
-						TenantId: otherTenant, BillingAccountId: account,
+						Tenant: privatev1.TenantReference_builder{Id: otherTenant}.Build(), BillingAccount: privatev1.BillingAccountReference_builder{Id: account}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build()
@@ -1015,6 +1217,149 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	})
 
 	Describe("short transactions and durable guards", func() {
+		It("keeps the unlocked preflight valid in a read-only PostgreSQL transaction", func() {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, "exact", "exact", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			server := build(fake.Provider())
+			_, err := database.WithNewTx(adminCtx(), func(c context.Context) (tenantBillingAssignmentSnapshot, error) {
+				tx, err := database.TxFromContext(c)
+				if err != nil {
+					return tenantBillingAssignmentSnapshot{}, err
+				}
+				if _, err = tx.Exec(c, `set transaction read only`); err != nil {
+					return tenantBillingAssignmentSnapshot{}, err
+				}
+				return server.assignmentSnapshot(c, id, "", tenantBillingAssignmentAssignInput{TenantID: testTenant}, nil)
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fake.Calls()).To(BeEmpty())
+		})
+
+		It("locks the previous account before the interval and waits without changing history", func() {
+			var accounts []billingfake.AccountSpec
+			first := newAccount(&accounts, "first", "first", "ACTIVE")
+			second := newAccount(&accounts, "second", "second", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			created, err := build(fake.Provider()).Create(adminCtx(), createRequest(testTenant, first, "lock-set"))
+			Expect(err).NotTo(HaveOccurred())
+			adapter := &gatedCorrelationAdapter{Fake: fake, entered: make(chan struct{}), release: make(chan struct{})}
+			server := build(billing.NewProvider(billingfake.Key, adapter, nil))
+			result := make(chan error, 1)
+			go func() {
+				_, err := server.Update(adminCtx(), updateRequest(created.GetObject().GetId(), testTenant, second))
+				result <- err
+			}()
+			DeferCleanup(func() {
+				select {
+				case <-adapter.release:
+				default:
+					close(adapter.release)
+				}
+			})
+			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
+			blocker, err := tm.Begin(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			ended := false
+			DeferCleanup(func() {
+				if !ended {
+					Expect(blocker.End(context.Background())).To(Succeed())
+				}
+			})
+			_, err = blocker.Exec(ctx, `select id from billing_accounts where id = $1 for update`, first)
+			Expect(err).NotTo(HaveOccurred())
+			close(adapter.release)
+			Eventually(func() bool {
+				var waiting bool
+				err := testPool.QueryRow(ctx, `select exists(select 1 from pg_stat_activity
+					where datname = current_database() and wait_event_type = 'Lock'
+					and query like '%from billing_accounts%order by id for update%')`).Scan(&waiting)
+				return err == nil && waiting
+			}, 5*time.Second).Should(BeTrue(), "finalization must lock the previous account too")
+			Expect(result).NotTo(Receive())
+			Expect(tm.Run(ctx, func(tx database.Tx) error {
+				_, err := tx.Exec(ctx, `select id from tenant_billing_assignments where id = $1 for update nowait`, created.GetObject().GetId())
+				return err
+			})).To(Succeed(), "account locks precede interval locks")
+			Expect(blocker.End(ctx)).To(Succeed())
+			ended = true
+			var updateErr error
+			Eventually(result, 5*time.Second).Should(Receive(&updateErr))
+			Expect(updateErr).NotTo(HaveOccurred())
+		})
+		DescribeTable("samples finalization after provider I/O and honors caller cancellation", func(cancelRequest bool) {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, "exact", "exact", "ACTIVE")
+			adapter := &gatedAccountReadAdapter{Fake: billingfake.New(billingfake.Scenario{Accounts: accounts}),
+				entered: make(chan struct{}), release: make(chan struct{})}
+			server := build(billing.NewProvider(billingfake.Key, adapter, nil))
+			c, cancel := context.WithCancel(adminCtx())
+			DeferCleanup(cancel)
+			result := make(chan error, 1)
+			var created *privatev1.TenantBillingAssignment
+			go func() {
+				r, err := server.Create(c, createRequest(testTenant, id, "clock-and-cancel"))
+				if r != nil {
+					created = r.GetObject()
+				}
+				result <- err
+			}()
+			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
+			var afterProviderStarted time.Time
+			Expect(testPool.QueryRow(ctx, `select clock_timestamp()`).Scan(&afterProviderStarted)).To(Succeed())
+			if cancelRequest {
+				cancel()
+			} else {
+				close(adapter.release)
+			}
+			var err error
+			Eventually(result, 5*time.Second).Should(Receive(&err))
+			if cancelRequest {
+				Expect(status.Code(err)).To(Equal(codes.Canceled))
+				var count int
+				Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+				Expect(count).To(BeZero())
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(created.GetStatus().GetEffectiveFromTimestamp().AsTime()).To(BeTemporally(">=", afterProviderStarted))
+			}
+			var leases int
+			Expect(testPool.QueryRow(ctx, `select count(*) from billing_operation_leases`).Scan(&leases)).To(Succeed())
+			Expect(leases).To(BeZero())
+		}, Entry("post-I/O database clock", false), Entry("caller cancellation", true))
+
+		It("rejects a current interval appearing after an initially absent snapshot without adopting the selected token", func() {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, "selected", "", "ACTIVE")
+			other := newAccount(&accounts, "other", "other", "ACTIVE")
+			adapter := &gatedCorrelationAdapter{Fake: billingfake.New(billingfake.Scenario{Accounts: accounts}),
+				entered: make(chan struct{}), release: make(chan struct{})}
+			server := build(billing.NewProvider(billingfake.Key, adapter, nil))
+			result := make(chan error, 1)
+			go func() {
+				_, err := server.Create(adminCtx(), createRequest(testTenant, id, "absence-race"))
+				result <- err
+			}()
+			DeferCleanup(func() {
+				select {
+				case <-adapter.release:
+				default:
+					close(adapter.release)
+				}
+			})
+			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
+			seedHistoryInterval("concurrent-current", testTenant, other, time.Now().UTC().Truncate(time.Microsecond), nil)
+			close(adapter.release)
+			var err error
+			Eventually(result, 5*time.Second).Should(Receive(&err))
+			Expect(status.Code(err)).To(Equal(codes.Aborted))
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(Equal(1))
+			var token *string
+			Expect(testPool.QueryRow(ctx, `select external_billing_account_id from billing_accounts where id = $1`, id).Scan(&token)).To(Succeed())
+			Expect(token).To(BeNil())
+		})
 		It("commits Tenant Delete during gated provider I/O and rejects assignment at the liveness commit fence", func() {
 			const tenantName = "gated-delete-tenant"
 			tenantsServer, err := NewPrivateTenantsServer().SetLogger(logger).
@@ -1073,7 +1418,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			var finalErr error
 			Eventually(result, 5*time.Second).Should(Receive(&finalErr))
 			Expect(status.Code(finalErr)).To(Equal(codes.InvalidArgument))
-			Expect(status.Convert(finalErr).Message()).To(ContainSubstring("spec.tenant_id does not reference an existing tenant"))
+			Expect(status.Convert(finalErr).Message()).To(ContainSubstring("spec.tenant does not reference an existing tenant"))
 			Expect(fake.Count("CorrelationValue")).To(Equal(1), "provider resolution completed after the delete")
 			var count int
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
@@ -1102,6 +1447,8 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				after insert on tenant_billing_assignments deferrable initially deferred
 				for each row execute function reject_billing_assignment_commit();`)
 			Expect(err).ToNot(HaveOccurred())
+			var beforeObservation time.Time
+			Expect(testPool.QueryRow(ctx, `select status_observed_at from billing_accounts where id = $1`, second).Scan(&beforeObservation)).To(Succeed())
 			_, err = server.Update(adminCtx(), updateRequest(created.GetObject().GetId(), testTenant, second))
 			Expect(status.Code(err)).To(Equal(codes.Internal))
 			Expect(err.Error()).ToNot(ContainSubstring("injected"))
@@ -1111,6 +1458,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			var correlation string
 			Expect(testPool.QueryRow(ctx, `select coalesce(external_billing_account_id, '') from billing_accounts where id = $1`, second).Scan(&correlation)).To(Succeed())
 			Expect(correlation).To(BeEmpty())
+			var afterObservation time.Time
+			Expect(testPool.QueryRow(ctx, `select status_observed_at from billing_accounts where id = $1`, second).Scan(&afterObservation)).To(Succeed())
+			Expect(afterObservation).To(BeTemporally("==", beforeObservation), "active evidence must roll back with token and interval changes")
 			providerValue, present, err := fake.CorrelationValue(ctx, billing.NewAccountRef(second))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(present).To(BeTrue())
@@ -1301,7 +1651,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(fake.Count("SetCorrelationValue")).To(Equal(1), "the provider write cannot be rolled back by Postgres")
 		})
 
-		DescribeTable("revalidates authoritative local state after provider I/O", func(changeSQL string, expected codes.Code) {
+		DescribeTable("revalidates authoritative local state after provider I/O", func(change string, expected codes.Code) {
 			var accounts []billingfake.AccountSpec
 			account := newAccount(&accounts, "", "", "ACTIVE")
 			fake := billingfake.New(billingfake.Scenario{CorrelationWrite: true, Accounts: accounts})
@@ -1320,20 +1670,61 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				}
 			})
 			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
-			_, err := testPool.Exec(ctx, changeSQL)
-			Expect(err).ToNot(HaveOccurred())
+			if change == "tenant" {
+				_, err := testPool.Exec(ctx, `update tenants set deletion_timestamp = now() where name = 'test-tenant'`)
+				Expect(err).ToNot(HaveOccurred())
+			} else {
+				Expect(tm.Run(ctx, func(tx database.Tx) error {
+					c := database.TxIntoContext(ctx, tx)
+					r, err := server.accounts.Get().SetId(account).Do(c)
+					if err != nil {
+						return err
+					}
+					object := r.GetObject()
+					switch change {
+					case "INACTIVE", "UNKNOWN":
+						object.GetStatus().SetState(mapBillingAccountState(change))
+						object.GetStatus().SetStateObservationTimestamp(timestamppb.Now())
+					case "reference":
+						if _, err = server.accounts.Delete().SetId(account).Do(c); err != nil {
+							return err
+						}
+						object.GetStatus().SetProviderAccountReference("changed")
+						_, err = server.accounts.Create().SetObject(object).Do(c)
+						return err
+					case "token":
+						object.GetStatus().SetExternalBillingAccountId("changed")
+					case "empty-token":
+						object.GetStatus().SetExternalBillingAccountId("")
+					case "whitespace-token":
+						object.GetStatus().SetExternalBillingAccountId(" \t")
+					case "display":
+						object.GetStatus().SetDisplayName("harmless display update")
+					}
+					_, err = server.accounts.Update().SetObject(object).Do(c)
+					return err
+				})).To(Succeed())
+			}
 			close(adapter.release)
 			var finalErr error
 			Eventually(result, 5*time.Second).Should(Receive(&finalErr))
 			Expect(status.Code(finalErr)).To(Equal(expected))
 			var count int
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
-			Expect(count).To(BeZero())
+			if expected == codes.OK {
+				Expect(count).To(Equal(1))
+			} else {
+				Expect(count).To(BeZero())
+			}
 		},
-			Entry("tenant deletion", `update tenants set deletion_timestamp = now() where name = 'test-tenant'`, codes.InvalidArgument),
-			Entry("account inactive", `update billing_accounts set state = 'INACTIVE'`, codes.FailedPrecondition),
-			Entry("provider reference changed", `update billing_accounts set provider_account_reference = 'changed'`, codes.Aborted),
-			Entry("correlation changed", `update billing_accounts set external_billing_account_id = 'changed'`, codes.Aborted),
+			Entry("tenant deletion", "tenant", codes.InvalidArgument),
+			Entry("account inactive", "INACTIVE", codes.FailedPrecondition),
+			Entry("account unknown", "UNKNOWN", codes.FailedPrecondition),
+			Entry("provider reference changed", "reference", codes.Aborted),
+			Entry("correlation changed", "token", codes.Aborted),
+			Entry("token absence changed to present-empty", "empty-token", codes.Aborted),
+			Entry("token absence changed to whitespace", "whitespace-token", codes.Aborted),
+			Entry("display/version-only update is not material", "display", codes.OK),
 		)
 	})
 
@@ -1355,7 +1746,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(testPool.QueryRow(ctx, `select id, effective_from, connection_state from tenant_billing_assignments
 				where effective_to is null`).Scan(&id, &from, &state)).To(Succeed())
 			Expect(id).To(Equal(created.GetObject().GetId()))
-			Expect(from.Equal(created.GetObject().GetStatus().GetEffectiveFrom().AsTime())).To(BeTrue())
+			Expect(from.Equal(created.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime())).To(BeTrue())
 			Expect(state).To(Equal(tbaStateConnected))
 			var count int
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
@@ -1393,11 +1784,12 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			return auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: tenants})
 		}
 		seedInterval := func(id, tenantID, accountID string, historical bool) {
-			_, err := testPool.Exec(ctx, `insert into tenant_billing_assignments
-				(id, name, tenant_id, billing_account_id, effective_to, connection_state, creator)
-				values ($1, $1, $2, $3, case when $4 then now() else null end, 'CONNECTED', 'admin')`,
-				id, tenantID, accountID, historical)
-			Expect(err).ToNot(HaveOccurred())
+			from := time.Now().UTC().Truncate(time.Microsecond)
+			var to *time.Time
+			if historical {
+				to = &from
+			}
+			seedHistoryInterval(id, tenantID, accountID, from, to)
 		}
 
 		DescribeTable("scopes list totals and every page, including historical rows",
@@ -1426,7 +1818,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 					}
 					Expect(response.GetSize()).To(Equal(int32(1)))
 					item := response.GetItems()[0]
-					Expect(tenants.Contains(item.GetSpec().GetTenantId())).To(BeTrue())
+					Expect(tenants.Contains(item.GetSpec().GetTenant().GetId())).To(BeTrue())
 					Expect(seen[item.GetId()]).To(BeFalse())
 					seen[item.GetId()] = true
 				}
@@ -1448,7 +1840,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
 			response, err := server.List(readCtx(collections.NewSet(testTenant)),
 				privatev1.TenantBillingAssignmentsListRequest_builder{
-					Filter: new(`this.spec.tenant_id == "other-tenant" && has(this.status.effective_to)`),
+					Filter: new(`this.spec.tenant.id == "other-tenant" && has(this.status.effective_to_timestamp)`),
 				}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetTotal()).To(BeZero())
@@ -1528,7 +1920,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			got, err := server.Get(readCtx(tenants), privatev1.TenantBillingAssignmentsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(got.GetObject().GetStatus().GetEffectiveTo()).ToNot(BeNil())
+			Expect(got.GetObject().GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil())
 		})
 
 		DescribeTable("rejects reserved tenant targets before provider I/O or correlation generation", func(tenantID string) {
@@ -1564,6 +1956,70 @@ var _ = Describe("Private tenant billing assignments server", func() {
 
 	// Method authorization remains admin-only; universal administrators retain deployment-wide reads.
 	Describe("List and Get", func() {
+		It("uses the billing zero-limit default, maximum page size, and latest-first descriptor order", func() {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, "exact", "exact", "ACTIVE")
+			server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
+			name, err := billingAccountName(id)
+			Expect(err).NotTo(HaveOccurred())
+			from := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
+			_, err = database.WithNewTx(adminCtx(), func(c context.Context) (struct{}, error) {
+				for i := range 1002 {
+					at := timestamppb.New(from.Add(time.Duration(i) * time.Microsecond))
+					_, err := server.bindings.Create().SetObject(privatev1.TenantBillingAssignment_builder{Id: fmt.Sprintf("page-%04d", i),
+						Metadata: privatev1.Metadata_builder{Name: "page-history", Tenant: testTenant, Creator: "admin",
+							Annotations: map[string]string{"osac.openshift.io/tenant": testTenant}}.Build(),
+						Spec: privatev1.TenantBillingAssignmentSpec_builder{
+							Tenant:         privatev1.TenantReference_builder{Id: testTenant, Name: testTenant}.Build(),
+							BillingAccount: privatev1.BillingAccountReference_builder{Id: id, Name: name}.Build(),
+						}.Build(), Status: privatev1.TenantBillingAssignmentStatus_builder{
+							EffectiveFromTimestamp: at, EffectiveToTimestamp: at,
+							ConnectionState: privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
+						}.Build(),
+					}.Build()).Do(c)
+					if err != nil {
+						return struct{}{}, err
+					}
+				}
+				return struct{}{}, nil
+			})
+			Expect(err).NotTo(HaveOccurred())
+			read := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+			page, err := server.List(read, privatev1.TenantBillingAssignmentsListRequest_builder{Limit: new(int32(0))}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(int32(1002)))
+			Expect(page.GetSize()).To(Equal(int32(100)))
+			Expect(page.GetItems()[0].GetId()).To(Equal("page-1001"))
+			page, err = server.List(read, privatev1.TenantBillingAssignmentsListRequest_builder{Limit: new(int32(1500))}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(int32(1002)))
+			Expect(page.GetSize()).To(Equal(int32(1000)))
+			page, err = server.List(read, privatev1.TenantBillingAssignmentsListRequest_builder{
+				Filter: new(`this.status.connection_state == 2`), Order: new("status.message asc,spec.billing_account.name desc"),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(int32(1002)))
+			Expect(page.GetSize()).To(Equal(int32(100)))
+		})
+
+		It("reads stored canonical history without resolving a now-deleted live tenant", func() {
+			var accounts []billingfake.AccountSpec
+			id := newAccount(&accounts, "exact", "exact", "ACTIVE")
+			at := time.Now().UTC().Truncate(time.Microsecond)
+			seedHistoryInterval("retained-history", testTenant, id, at, &at)
+			_, err := testPool.Exec(ctx, `update tenants set deletion_timestamp = now() where name = $1`, testTenant)
+			Expect(err).NotTo(HaveOccurred())
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			server := build(fake.Provider())
+			read := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: collections.NewSet(testTenant)})
+			got, err := server.Get(read, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: "retained-history"}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.GetObject().GetSpec().GetTenant().GetName()).To(Equal(testTenant))
+			listed, err := server.List(read, &privatev1.TenantBillingAssignmentsListRequest{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(listed.GetTotal()).To(Equal(int32(1)))
+			Expect(fake.Calls()).To(BeEmpty())
+		})
 		It("lists every assignment", func() {
 			createOtherTenant()
 			var accounts []billingfake.AccountSpec
@@ -1619,7 +2075,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		It("maps a tenant_billing_assignments_tenant_id_fkey violation to INVALID_ARGUMENT", func() {
 			err := server.mapTenantBillingAssignmentError(ctx, &pgconn.PgError{ConstraintName: "tenant_billing_assignments_tenant_id_fkey"})
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring("spec.tenant_id"))
+			Expect(err.Error()).To(ContainSubstring("spec.tenant"))
 		})
 
 		It("returns a fixed Internal message for an unmapped error, without echoing its detail", func() {

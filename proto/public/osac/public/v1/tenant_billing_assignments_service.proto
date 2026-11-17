@@ -33,19 +33,21 @@ message TenantBillingAssignmentsListRequest {
   // built-in `this` variable refers to the object being tested. For example, to retrieve only the assignments for
   // one tenant:
   //
-  //     this.spec.tenant_id == "tenant-a"
+  //     this.spec.tenant.id == "tenant-a"
   //
   // To select a tenant's current validated assignment:
   //
-  //     this.spec.tenant_id == "tenant-a" && !has(this.status.effective_to) && this.status.connection_state == "CONNECTED"
+  //     this.spec.tenant.id == "tenant-a" && !has(this.status.effective_to_timestamp) && this.status.connection_state == 2
   //
-  // Connection-state filters use PENDING, CONNECTED, or FAILED, not type-prefixed protobuf enum names.
+  // Enum comparisons use numeric values; JSON responses use full type-prefixed protobuf enum names.
   optional string filter = 3;
 
   // Order criteria.
   //
   // The syntax of this parameter is similar to the syntax of the _order by_ clause of a SQL statement, but using
-  // the names of the attributes of the assignment instead of the names of the columns of a table.
+  // the names of the attributes of the assignment instead of the names of the columns of a table. At most 16 scalar
+  // or supported Timestamp paths are accepted. Nulls sort last in either direction, with id ascending as a tie-breaker
+  // unless explicitly ordered. Defaults to `status.effective_from_timestamp desc, id asc`.
   optional string order = 4;
 }
 
@@ -80,8 +82,9 @@ message TenantBillingAssignmentsCreateResponse {
 message TenantBillingAssignmentsUpdateRequest {
   TenantBillingAssignment object = 1;
 
-  // Fields of spec to update. billing_account_id is the only field this method accepts changes to; it is
-  // required on the wire regardless of the mask, so the mask carries no additional information today.
+  // Only `spec.billing_account` is writable, as an atomic reference. Subpaths, whole spec, metadata, status and
+  // legacy paths are rejected. An omitted mask revalidates the supplied account; an explicit empty mask is a
+  // validated no-op without provider calls. Validation applies to the stored object after the selected merge.
   google.protobuf.FieldMask update_mask = 2;
 }
 
@@ -89,12 +92,18 @@ message TenantBillingAssignmentsUpdateResponse {
   TenantBillingAssignment object = 1;
 }
 
-// Reads or changes a tenant's time-versioned billing-account assignment. With billing disabled every method fails
-// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Administrator method authorization is
+message TenantBillingAssignmentsDeleteRequest {
+  string id = 1;
+}
+
+message TenantBillingAssignmentsDeleteResponse {}
+
+// Reads or changes a tenant's time-versioned billing-account assignment. Implemented methods fail with
+// FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call when billing is disabled. Administrator method authorization is
 // required, and assignment access is further limited to the caller's trusted tenant scope. Current platform
 // administrators have universal scope. There is no tenant self-service read path.
-// Create and Update resolve billing_account.external_billing_account_id and validate a unique provider-side match
-// before persisting. A provider write is not proof of a match: an exact read-back and uniqueness check must succeed.
+// Create and Update resolve billing_account.status.external_billing_account_id and validate a unique provider-side
+// match before persisting. Provider evidence is read-only; a locally established token alone is not a validated match.
 service TenantBillingAssignments {
   // Lists current and historical assignments.
   rpc List(TenantBillingAssignmentsListRequest) returns (TenantBillingAssignmentsListResponse) {
@@ -113,8 +122,7 @@ service TenantBillingAssignments {
   // FAILED_PRECONDITION/TENANT_ALREADY_BOUND, an account already linked to another tenant with
   // FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN account with
   // FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN. Reserved shared/system tenants cannot be linked.
-  // An acknowledged correlation write that cannot be
-  // verified fails with FAILED_PRECONDITION/BILLING_CORRELATION_READBACK_MISMATCH rather than becoming CONNECTED.
+  // A locally retained token without a provider-side carrier remains PENDING with remediation, not CONNECTED.
   rpc Create(TenantBillingAssignmentsCreateRequest) returns (TenantBillingAssignmentsCreateResponse) {
     option (google.api.http) = {
       post: "/api/fulfillment/v1/billing/tenant_billing_assignments"
@@ -132,5 +140,11 @@ service TenantBillingAssignments {
       body: "object"
       response_body: "object"
     };
+  }
+
+  // Descriptor-only scaffold: not implemented or authorized, including for administrators. This is not unlinking
+  // or deletion of assignment history; closing an interval remains part of reassignment or tenant deletion.
+  rpc Delete(TenantBillingAssignmentsDeleteRequest) returns (TenantBillingAssignmentsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/fulfillment/v1/billing/tenant_billing_assignments/{id}"};
   }
 }

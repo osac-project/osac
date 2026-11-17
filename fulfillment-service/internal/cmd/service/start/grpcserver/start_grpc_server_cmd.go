@@ -735,54 +735,9 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
 	privatev1.RegisterBillingProviderStatusesServer(grpcServer, privateBillingProviderStatusesServer)
 
-	// Create the billing accounts servers. BillingAccounts.List supports filter/order, but billing_accounts is a
-	// flat, provider-global table, not the generic Metadata/Spec/Status jsonb shape, so it uses its own
-	// allowlist-based translator (internal/database/billing_account.go).
-	c.logger.InfoContext(ctx, "Creating billing accounts servers")
-	privateBillingAccountsServer, err := servers.NewPrivateBillingAccountsServer().
-		SetLogger(c.logger).
-		SetProvider(billingProvider).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create private billing accounts server: %w", err)
+	if err := registerBillingResourceServers(ctx, grpcServer, c.logger, billingProvider); err != nil {
+		return err
 	}
-	billingAccountsServer, err := servers.NewBillingAccountsServer().
-		SetLogger(c.logger).
-		SetDelegate(privateBillingAccountsServer).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create public billing accounts server: %w", err)
-	}
-	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
-	// billing_account.go), not dao.FilterTranslator/GenericDAO.
-	publicv1.RegisterBillingAccountsServer(grpcServer, billingAccountsServer)
-	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
-	// billing_account.go), not dao.FilterTranslator/GenericDAO.
-	privatev1.RegisterBillingAccountsServer(grpcServer, privateBillingAccountsServer)
-
-	// Create the tenant billing assignments servers. Like billing accounts, tenant_billing_assignments is a flat,
-	// history-shaped table, so it uses its own filter/order translator.
-	c.logger.InfoContext(ctx, "Creating tenant billing assignments servers")
-	privateTenantBillingAssignmentsServer, err := servers.NewPrivateTenantBillingAssignmentsServer().
-		SetLogger(c.logger).
-		SetProvider(billingProvider).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create private tenant billing assignments server: %w", err)
-	}
-	tenantBillingAssignmentsServer, err := servers.NewTenantBillingAssignmentsServer().
-		SetLogger(c.logger).
-		SetDelegate(privateTenantBillingAssignmentsServer).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create public tenant billing assignments server: %w", err)
-	}
-	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
-	// tenant_billing_assignment.go), not dao.FilterTranslator/GenericDAO.
-	publicv1.RegisterTenantBillingAssignmentsServer(grpcServer, tenantBillingAssignmentsServer)
-	// filterable-resource-exempt: filter/order use a bespoke flat-table translator (internal/database/
-	// tenant_billing_assignment.go), not dao.FilterTranslator/GenericDAO.
-	privatev1.RegisterTenantBillingAssignmentsServer(grpcServer, privateTenantBillingAssignmentsServer)
 
 	// Create the capabilities servers:
 	c.logger.InfoContext(ctx, "Creating capabilities servers")

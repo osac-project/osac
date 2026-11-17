@@ -15,17 +15,20 @@ package servers
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -42,14 +45,23 @@ var _ = Describe("Tenant billing assignments server", func() {
 
 	seedAccounts := func(ids ...string) {
 		_, err := database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
-			tx, err := database.TxFromContext(ctx)
+			accounts, err := dao.NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 			if err != nil {
 				return struct{}{}, err
 			}
 			for _, id := range ids {
-				_, err = database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-					ID: id, ProviderKey: billingfake.Key, ProviderAccountReference: id, State: "ACTIVE",
-				})
+				name, nameErr := billingAccountName(id)
+				if nameErr != nil {
+					return struct{}{}, nameErr
+				}
+				_, err = accounts.Create().SetObject(privatev1.BillingAccount_builder{Id: id,
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SystemTenant, Creator: "system"}.Build(),
+					Spec:     &privatev1.BillingAccountSpec{}, Status: privatev1.BillingAccountStatus_builder{
+						ProviderKey: billingfake.Key, ProviderAccountReference: id,
+						State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+						StateObservationTimestamp: timestamppb.Now(),
+					}.Build(),
+				}.Build()).Do(ctx)
 				if err != nil {
 					return struct{}{}, err
 				}
@@ -94,6 +106,28 @@ var _ = Describe("Tenant billing assignments server", func() {
 		Expect(st.Code()).To(Equal(codes.FailedPrecondition))
 	})
 
+	It("keeps assignment Delete an embedded unimplemented scaffold", func() {
+		fake := billingfake.New(billingfake.Scenario{})
+		server := build(fake.Provider())
+		_, err := server.Delete(ctx, publicv1.TenantBillingAssignmentsDeleteRequest_builder{Id: "unused"}.Build())
+		Expect(status.Code(err)).To(Equal(codes.Unimplemented))
+		_, err = server.private.Delete(ctx, privatev1.TenantBillingAssignmentsDeleteRequest_builder{Id: "unused"}.Build())
+		Expect(status.Code(err)).To(Equal(codes.Unimplemented))
+		Expect(fake.Calls()).To(BeEmpty())
+	})
+
+	It("rejects reserved public metadata without converting the validation error to Internal", func() {
+		fake := billingfake.New(billingfake.Scenario{})
+		caller := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+		_, err := build(fake.Provider()).Create(caller, publicv1.TenantBillingAssignmentsCreateRequest_builder{
+			Object: publicv1.TenantBillingAssignment_builder{Metadata: publicv1.Metadata_builder{
+				Name: "reserved", Labels: map[string]string{"admin.osac.openshift.io/private": "forbidden"},
+			}.Build()}.Build(),
+		}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(fake.Calls()).To(BeEmpty())
+	})
+
 	DescribeTable("creates, gets, and lists an assignment end to end through the public API", func(tenants collections.Set[string]) {
 		id := uuid.New()
 		fake := billingfake.New(billingfake.Scenario{
@@ -109,7 +143,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			Object: publicv1.TenantBillingAssignment_builder{
 				Metadata: publicv1.Metadata_builder{Name: "asg-1"}.Build(),
 				Spec: publicv1.TenantBillingAssignmentSpec_builder{
-					TenantId: testTenant, BillingAccountId: id,
+					Tenant: publicv1.TenantReference_builder{Id: testTenant}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: id}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -123,7 +157,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			}.Build())
 		})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(got.GetObject().GetSpec().GetTenantId()).To(Equal(testTenant))
+		Expect(got.GetObject().GetSpec().GetTenant().GetId()).To(Equal(testTenant))
 
 		listed, err := database.WithNewTx(adminCtx, func(ctx context.Context) (*publicv1.TenantBillingAssignmentsListResponse, error) {
 			return server.List(ctx, &publicv1.TenantBillingAssignmentsListRequest{})
@@ -149,7 +183,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 		created, err := server.Create(adminCtx, publicv1.TenantBillingAssignmentsCreateRequest_builder{
 			Object: publicv1.TenantBillingAssignment_builder{
 				Metadata: publicv1.Metadata_builder{Name: "asg-1"}.Build(),
-				Spec:     publicv1.TenantBillingAssignmentSpec_builder{TenantId: testTenant, BillingAccountId: id1}.Build(),
+				Spec:     publicv1.TenantBillingAssignmentSpec_builder{Tenant: publicv1.TenantReference_builder{Id: testTenant}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: id1}.Build()}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -159,12 +193,12 @@ var _ = Describe("Tenant billing assignments server", func() {
 		updated, err := server.Update(adminCtx, publicv1.TenantBillingAssignmentsUpdateRequest_builder{
 			Object: publicv1.TenantBillingAssignment_builder{
 				Id:   created.GetObject().GetId(),
-				Spec: publicv1.TenantBillingAssignmentSpec_builder{TenantId: testTenant, BillingAccountId: id2}.Build(),
+				Spec: publicv1.TenantBillingAssignmentSpec_builder{Tenant: publicv1.TenantReference_builder{Id: testTenant}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: id2}.Build()}.Build(),
 			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.billing_account_id"}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.billing_account"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(updated.GetObject().GetSpec().GetBillingAccountId()).To(Equal(id2))
+		Expect(updated.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(id2))
 		Expect(updated.GetObject().GetStatus().GetConnectionState()).To(Equal(
 			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 
@@ -173,15 +207,32 @@ var _ = Describe("Tenant billing assignments server", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listed.GetTotal()).To(Equal(int32(2)), "the closed interval and the new one are both listed")
+		Expect(listed.GetItems()[0].GetId()).To(Equal(updated.GetObject().GetId()), "default order is latest interval first")
 		current := 0
 		for _, item := range listed.GetItems() {
-			if item.GetStatus().GetEffectiveTo() == nil {
+			if item.GetStatus().GetEffectiveToTimestamp() == nil {
 				current++
-				Expect(item.GetSpec().GetBillingAccountId()).To(Equal(id2))
+				Expect(item.GetSpec().GetBillingAccount().GetId()).To(Equal(id2))
 			}
 		}
 		Expect(current).To(Equal(1), "exactly one current interval remains after the reassignment")
 	}, Entry("universal", auth.AllTenants), Entry("finite", collections.NewSet(testTenant)))
+
+	DescribeTable("constrains public query paths and pagination", func(filter, order string, offset, limit int32) {
+		fake := billingfake.New(billingfake.Scenario{})
+		caller := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+		_, err := database.WithNewTx(caller, func(c context.Context) (*publicv1.TenantBillingAssignmentsListResponse, error) {
+			return build(fake.Provider()).List(c, publicv1.TenantBillingAssignmentsListRequest_builder{
+				Filter: &filter, Order: &order, Offset: &offset, Limit: &limit,
+			}.Build())
+		})
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(fake.Calls()).To(BeEmpty())
+	}, Entry("old scalar filter", `this.spec.tenant_id == "x"`, "", int32(0), int32(0)),
+		Entry("status object order", "", "status", int32(0), int32(0)),
+		Entry("private finalizers", "", "metadata.finalizers", int32(0), int32(0)),
+		Entry("negative offset", "", "", int32(-1), int32(0)),
+		Entry("negative limit", "", "", int32(0), int32(-1)))
 
 	Describe("trusted tenant scope through the public delegate", func() {
 		const foreignTenant = "foreign-tenant"
@@ -207,9 +258,28 @@ var _ = Describe("Tenant billing assignments server", func() {
 		})
 		seedHistory := func() {
 			for i, tenantID := range []string{foreignTenant, testTenant, foreignTenant, testTenant} {
-				_, err := testPool.Exec(ctx, `insert into tenant_billing_assignments
-					(id, name, tenant_id, billing_account_id, effective_to, creator)
-					values ($1, $1, $2, $3, now(), 'admin')`, string(rune('a'+i)), tenantID, account)
+				_, err := database.WithNewTx(ctx, func(c context.Context) (*dao.CreateResponse[*privatev1.TenantBillingAssignment], error) {
+					d, err := dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+					if err != nil {
+						return nil, err
+					}
+					name, err := billingAccountName(account)
+					if err != nil {
+						return nil, err
+					}
+					at := time.Now().UTC().Truncate(time.Microsecond)
+					return d.Create().SetObject(privatev1.TenantBillingAssignment_builder{Id: string(rune('a' + i)),
+						Metadata: privatev1.Metadata_builder{Name: string(rune('a' + i)), Tenant: tenantID, Creator: "admin",
+							Annotations: map[string]string{"osac.openshift.io/tenant": tenantID}}.Build(),
+						Spec: privatev1.TenantBillingAssignmentSpec_builder{
+							Tenant:         privatev1.TenantReference_builder{Id: tenantID, Name: tenantID}.Build(),
+							BillingAccount: privatev1.BillingAccountReference_builder{Id: account, Name: name}.Build(),
+						}.Build(), Status: privatev1.TenantBillingAssignmentStatus_builder{
+							EffectiveFromTimestamp: timestamppb.New(at), EffectiveToTimestamp: timestamppb.New(at),
+							ConnectionState: privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
+						}.Build(),
+					}.Build()).Do(c)
+				})
 				Expect(err).ToNot(HaveOccurred())
 			}
 		}
@@ -232,7 +302,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 					}
 					Expect(response.GetSize()).To(Equal(int32(1)))
 					item := response.GetItems()[0]
-					Expect(tenants.Contains(item.GetSpec().GetTenantId())).To(BeTrue())
+					Expect(tenants.Contains(item.GetSpec().GetTenant().GetId())).To(BeTrue())
 					Expect(seen[item.GetId()]).To(BeFalse())
 					seen[item.GetId()] = true
 				}
@@ -249,7 +319,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			seedHistory()
 			response, err := database.WithNewTx(callerCtx(collections.NewSet(testTenant)), func(txCtx context.Context) (*publicv1.TenantBillingAssignmentsListResponse, error) {
 				return server.List(txCtx, publicv1.TenantBillingAssignmentsListRequest_builder{
-					Filter: new(`this.spec.tenant_id == "foreign-tenant" && has(this.status.effective_to)`),
+					Filter: new(`this.spec.tenant.id == "foreign-tenant" && has(this.status.effective_to_timestamp)`),
 				}.Build())
 			})
 			Expect(err).ToNot(HaveOccurred())
@@ -270,14 +340,14 @@ var _ = Describe("Tenant billing assignments server", func() {
 			_, err = server.Update(callerCtx(tenants), publicv1.TenantBillingAssignmentsUpdateRequest_builder{
 				Object: publicv1.TenantBillingAssignment_builder{
 					Id: "a", Metadata: publicv1.Metadata_builder{Name: "a", Tenant: testTenant}.Build(),
-					Spec: publicv1.TenantBillingAssignmentSpec_builder{TenantId: testTenant, BillingAccountId: account}.Build(),
+					Spec: publicv1.TenantBillingAssignmentSpec_builder{Tenant: publicv1.TenantReference_builder{Id: testTenant}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: account}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.NotFound))
 			_, err = server.Create(callerCtx(tenants), publicv1.TenantBillingAssignmentsCreateRequest_builder{
 				Object: publicv1.TenantBillingAssignment_builder{
 					Metadata: publicv1.Metadata_builder{Name: "spoofed", Tenant: testTenant}.Build(),
-					Spec:     publicv1.TenantBillingAssignmentSpec_builder{TenantId: foreignTenant, BillingAccountId: account}.Build(),
+					Spec:     publicv1.TenantBillingAssignmentSpec_builder{Tenant: publicv1.TenantReference_builder{Id: foreignTenant}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: account}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
@@ -295,7 +365,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			_, err := server.Create(callerCtx(auth.AllTenants), publicv1.TenantBillingAssignmentsCreateRequest_builder{
 				Object: publicv1.TenantBillingAssignment_builder{
 					Metadata: publicv1.Metadata_builder{Name: "reserved"}.Build(),
-					Spec:     publicv1.TenantBillingAssignmentSpec_builder{TenantId: tenantID, BillingAccountId: account}.Build(),
+					Spec:     publicv1.TenantBillingAssignmentSpec_builder{Tenant: publicv1.TenantReference_builder{Id: tenantID}.Build(), BillingAccount: publicv1.BillingAccountReference_builder{Id: account}.Build()}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))

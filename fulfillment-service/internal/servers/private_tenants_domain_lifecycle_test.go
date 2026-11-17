@@ -127,15 +127,12 @@ var _ = Describe("Billed tenant domain lifecycle", func() {
 			where domain = 'reusable.example.com'), '')`).Scan(&result)).To(Succeed())
 		return result
 	}
-	assignment := func(id string) database.TenantBillingAssignmentRow {
+	assignment := func(id string) *privatev1.TenantBillingAssignment {
 		GinkgoHelper()
-		var result database.TenantBillingAssignmentRow
+		var result *privatev1.TenantBillingAssignment
 		Expect(run(func(ctx context.Context) error {
-			tx, err := database.TxFromContext(ctx)
-			if err != nil {
-				return err
-			}
-			result, err = database.GetTenantBillingAssignment(ctx, tx, id)
+			var err error
+			result, err = readTenantBillingInterval(ctx, id)
 			return err
 		})).To(Succeed())
 		return result
@@ -150,25 +147,8 @@ var _ = Describe("Billed tenant domain lifecycle", func() {
 		Expect(err).ToNot(HaveOccurred())
 		var closedID, activeID string
 		Expect(run(func(ctx context.Context) error {
-			tx, err := database.TxFromContext(ctx)
-			if err != nil {
-				return err
-			}
 			for i := range 2 {
-				account, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-					ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: uuid.New(), State: "ACTIVE",
-				})
-				if err != nil {
-					return err
-				}
-				id, err := database.CloseAndInsertTenantBillingAssignment(ctx, tx, closedID,
-					database.TenantBillingAssignmentInsert{
-						ID: uuid.New(), Name: uuid.New(), TenantID: "domain-history",
-						BillingAccountID: account, ConnectionState: "CONNECTED",
-					})
-				if err != nil {
-					return err
-				}
+				id := seedTenantBillingInterval(ctx, "domain-history", seedTenantBillingAccount(ctx), uuid.New(), i == 0)
 				if i == 0 {
 					closedID = id
 				} else {
@@ -178,8 +158,8 @@ var _ = Describe("Billed tenant domain lifecycle", func() {
 			return nil
 		})).To(Succeed())
 		closedBefore := assignment(closedID)
-		Expect(closedBefore.EffectiveTo).NotTo(BeNil())
-		Expect(assignment(activeID).EffectiveTo).To(BeNil())
+		Expect(closedBefore.GetStatus().GetEffectiveToTimestamp()).NotTo(BeNil())
+		Expect(assignment(activeID).GetStatus().GetEffectiveToTimestamp()).To(BeNil())
 		_, err = create("live-collision", nil)
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
 		Expect(owner()).To(Equal("domain-history"))
@@ -188,13 +168,13 @@ var _ = Describe("Billed tenant domain lifecycle", func() {
 			Expect(grpcstatus.Code(deleteTenant())).To(Equal(grpccodes.FailedPrecondition))
 			Expect(get().GetMetadata().GetDeletionTimestamp()).To(BeNil())
 			Expect(owner()).To(Equal("domain-history"))
-			Expect(assignment(activeID).EffectiveTo).To(BeNil())
+			Expect(assignment(activeID).GetStatus().GetEffectiveToTimestamp()).To(BeNil())
 			removeProjects()
 		}
 		Expect(deleteTenant()).To(Succeed())
 		closedOnDelete := assignment(activeID)
-		Expect(closedOnDelete.EffectiveTo).NotTo(BeNil())
-		Expect(closedOnDelete.Message).To(Equal(database.TenantBillingAssignmentDeletedMessage))
+		Expect(closedOnDelete.GetStatus().GetEffectiveToTimestamp()).NotTo(BeNil())
+		Expect(closedOnDelete.GetStatus().GetMessage()).To(Equal(database.TenantBillingAssignmentDeletedMessage))
 		Expect(assignment(closedID)).To(Equal(closedBefore))
 
 		if withFinalizers {

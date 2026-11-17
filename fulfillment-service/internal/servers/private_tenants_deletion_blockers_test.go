@@ -91,20 +91,8 @@ var _ = Describe("Tenant archive dependency blockers", func() {
 			Expect(err).NotTo(HaveOccurred())
 		}
 		if billed {
-			tx, err := database.TxFromContext(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			previous := ""
-			for range 2 {
-				account, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-					ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: uuid.New(), State: "ACTIVE",
-				})
-				Expect(err).NotTo(HaveOccurred())
-				previous, err = database.CloseAndInsertTenantBillingAssignment(ctx, tx, previous,
-					database.TenantBillingAssignmentInsert{
-						ID: uuid.New(), Name: uuid.New(), TenantID: id,
-						BillingAccountID: account, ConnectionState: "CONNECTED",
-					})
-				Expect(err).NotTo(HaveOccurred())
+			for i := range 2 {
+				seedTenantBillingInterval(ctx, id, seedTenantBillingAccount(ctx), uuid.New(), i == 0)
 			}
 		}
 		return id

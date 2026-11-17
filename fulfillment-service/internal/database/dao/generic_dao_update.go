@@ -189,7 +189,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 	r.setMetadata(object, metadata)
 
 	// If the object has been deleted and there are no finalizers we can now archive the object:
-	if deletionTs.Unix() != 0 && len(finalizers) == 0 {
+	if !deletionTs.Equal(time.Unix(0, 0)) && len(finalizers) == 0 {
 		err = r.archive(ctx, archiveArgs{
 			id:              id,
 			creationTs:      creationTs,
@@ -225,14 +225,16 @@ func (r *UpdateRequest[O]) translateError(ctx context.Context, id, name, tenant 
 	case pgerrcode.UniqueViolation:
 		if strings.Contains(pgErr.ConstraintName, "_unique_name") {
 			return &ErrAlreadyExists{
-				ID:   id,
-				Name: name,
-				Kind: r.dao.kind,
+				ID:             id,
+				Name:           name,
+				Kind:           r.dao.kind,
+				ConstraintName: pgErr.ConstraintName,
 			}
 		}
 		return &ErrAlreadyExists{
-			ID:   id,
-			Kind: r.dao.kind,
+			ID:             id,
+			Kind:           r.dao.kind,
+			ConstraintName: pgErr.ConstraintName,
 		}
 	case pgerrcode.ForeignKeyViolation:
 		switch {

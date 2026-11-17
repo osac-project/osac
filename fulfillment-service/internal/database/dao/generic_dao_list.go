@@ -26,6 +26,7 @@ import (
 type ListRequest[O Object] struct {
 	request[O]
 	filter   string
+	order    string
 	limit    int32
 	offset   int32
 	limitSet bool
@@ -34,6 +35,13 @@ type ListRequest[O Object] struct {
 // SetFilter sets the CEL expression that defines which objects should be returned.
 func (r *ListRequest[O]) SetFilter(value string) *ListRequest[O] {
 	r.filter = value
+	return r
+}
+
+// SetOrder sets comma-separated canonical field paths with optional asc or desc directions.
+// Only descriptor-validated scalar and Timestamp leaves can be ordered.
+func (r *ListRequest[O]) SetOrder(value string) *ListRequest[O] {
+	r.order = value
 	return r
 }
 
@@ -98,7 +106,11 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 	}
 
 	// Calculate the order clause:
-	const order = "id"
+	order, err := r.dao.filterTranslator.TranslateOrder(ctx, r.order)
+	if err != nil {
+		err = &ErrValidation{Reason: fmt.Sprintf("invalid order: %s", err)}
+		return
+	}
 
 	// Count the total number of results, disregarding the offset and the limit:
 	var buffer strings.Builder

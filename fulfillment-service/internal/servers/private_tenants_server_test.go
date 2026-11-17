@@ -26,7 +26,9 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -565,48 +567,48 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		// both the current and a past row reference it.
 		tx, err := database.TxFromContext(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		account1, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-			ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: uuid.New(), State: "ACTIVE",
-		})
+		account1 := seedTenantBillingAccount(ctx)
+		account2 := seedTenantBillingAccount(ctx)
+		firstAssignment := seedTenantBillingInterval(ctx, "billed-tenant", account1, "billed-tenant-account-1", true)
+		currentAssignment := seedTenantBillingInterval(ctx, "billed-tenant", account2, "billed-tenant-account-2", false)
+		historyBefore, err := readTenantBillingInterval(ctx, firstAssignment)
 		Expect(err).ToNot(HaveOccurred())
-		account2, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-			ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: uuid.New(), State: "ACTIVE",
-		})
+		currentBefore, err := readTenantBillingInterval(ctx, currentAssignment)
 		Expect(err).ToNot(HaveOccurred())
-		firstAssignment, err := database.CloseAndInsertTenantBillingAssignment(ctx, tx, "",
-			database.TenantBillingAssignmentInsert{
-				ID: uuid.New(), Name: "billed-tenant-account-1", TenantID: "billed-tenant",
-				BillingAccountID: account1, ConnectionState: "CONNECTED",
-			})
-		Expect(err).ToNot(HaveOccurred())
-		currentAssignment, err := database.CloseAndInsertTenantBillingAssignment(ctx, tx, firstAssignment,
-			database.TenantBillingAssignmentInsert{
-				ID: uuid.New(), Name: "billed-tenant-account-2", TenantID: "billed-tenant",
-				BillingAccountID: account2, ConnectionState: "CONNECTED",
-			})
-		Expect(err).ToNot(HaveOccurred())
-		historyBefore, err := database.GetTenantBillingAssignment(ctx, tx, firstAssignment)
-		Expect(err).ToNot(HaveOccurred())
+		floor := historyBefore.GetStatus().GetEffectiveFromTimestamp().AsTime()
+		for _, timestamp := range []*timestamppb.Timestamp{
+			historyBefore.GetStatus().GetEffectiveToTimestamp(),
+			currentBefore.GetStatus().GetEffectiveFromTimestamp(),
+		} {
+			if at := timestamp.AsTime(); at.After(floor) {
+				floor = at
+			}
+		}
 
 		// Delete the tenant: it must proceed, not be rejected because an assignment
-		// references it.
+		// references it. Bound the shared post-lock clock sample with real database time,
+		// not the ambient transaction's earlier now() used for the tenant deletion timestamp.
+		var beforeDelete, afterDelete time.Time
+		Expect(tx.QueryRow(ctx, "select clock_timestamp()").Scan(&beforeDelete)).To(Succeed())
 		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
 			Id: tenant.GetId(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		Expect(tx.QueryRow(ctx, "select clock_timestamp()").Scan(&afterDelete)).To(Succeed())
 
 		// Neither assignment row was cascade-deleted; history stays intact as a tombstone.
-		closedRow, err := database.GetTenantBillingAssignment(ctx, tx, firstAssignment)
+		closedRow, err := readTenantBillingInterval(ctx, firstAssignment)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(closedRow.TenantID).To(Equal("billed-tenant"))
-		Expect(closedRow.EffectiveTo).ToNot(BeNil())
+		Expect(closedRow.GetSpec().GetTenant().GetId()).To(Equal("billed-tenant"))
+		Expect(closedRow.GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil())
 		Expect(closedRow).To(Equal(historyBefore), "already closed history must not be rewritten by deletion")
-		currentRow, err := database.GetTenantBillingAssignment(ctx, tx, currentAssignment)
+		currentRow, err := readTenantBillingInterval(ctx, currentAssignment)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(currentRow.TenantID).To(Equal("billed-tenant"))
-		Expect(currentRow.EffectiveTo).ToNot(BeNil())
-		Expect(currentRow.Message).To(Equal(database.TenantBillingAssignmentDeletedMessage))
-		Expect(currentRow.ConnectionState).To(Equal("CONNECTED"))
+		Expect(currentRow.GetSpec().GetTenant().GetId()).To(Equal("billed-tenant"))
+		Expect(currentRow.GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil())
+		Expect(currentRow.GetStatus().GetMessage()).To(Equal(database.TenantBillingAssignmentDeletedMessage))
+		Expect(currentRow.GetStatus().GetConnectionState()).To(Equal(
+			privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 
 		// The tenant row stays live-but-deleted rather than archived, so the tombstone intervals stay queryable: it
 		// carries a deletion timestamp and has no archived copy.
@@ -616,8 +618,24 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(deletedAt.After(time.Unix(1, 0))).To(BeTrue(),
 			"the live tenant row must carry the deletion timestamp, not the epoch default")
-		Expect(currentRow.EffectiveTo.Equal(deletedAt)).To(BeTrue(),
-			"the interval must close at the deletion transaction's timestamp")
+		closedAt := currentRow.GetStatus().GetEffectiveToTimestamp()
+		Expect(closedAt.CheckValid()).To(Succeed())
+		Expect(closedAt.AsTime()).To(BeTemporally(">", time.Unix(1, 0)))
+		Expect(closedAt.AsTime()).To(BeTemporally(">=", beforeDelete),
+			"the interval must close using the post-lock database clock, not transaction now()")
+		Expect(closedAt.AsTime()).To(BeTemporally(">=", deletedAt))
+		Expect(closedAt.AsTime()).To(BeTemporally(">=", floor),
+			"the close must not precede any historical boundary or the current interval start")
+		upperBound := afterDelete
+		if floor.After(upperBound) {
+			upperBound = floor
+		}
+		Expect(closedAt.AsTime()).To(BeTemporally("<=", upperBound),
+			"the close must not exceed the post-delete database clock or its history-floor clamp")
+		var persistedEnd time.Time
+		Expect(tx.QueryRow(ctx, "select effective_to from tenant_billing_assignments where id = $1",
+			currentAssignment).Scan(&persistedEnd)).To(Succeed())
+		Expect(persistedEnd).To(BeTemporally("==", closedAt.AsTime()))
 		var archived int
 		err = tx.QueryRow(ctx,
 			"select count(*) from archived_tenants where name = 'billed-tenant'").Scan(&archived)
@@ -647,9 +665,16 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		// A repeated delete must not rewrite either closed interval or reserve the released account again.
 		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: tenant.GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		repeated, err := database.GetTenantBillingAssignment(ctx, tx, currentAssignment)
+		repeated, err := readTenantBillingInterval(ctx, currentAssignment)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(repeated).To(Equal(currentRow))
+		repeatedHistory, err := readTenantBillingInterval(ctx, firstAssignment)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(repeatedHistory).To(Equal(historyBefore))
+		var repeatedDeletedAt time.Time
+		Expect(tx.QueryRow(ctx, "select deletion_timestamp from tenants where name = 'billed-tenant'").
+			Scan(&repeatedDeletedAt)).To(Succeed())
+		Expect(repeatedDeletedAt).To(BeTemporally("==", deletedAt))
 
 		_, err = tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
@@ -657,17 +682,15 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		live, err := database.TenantLiveForAssignment(ctx, tx, "replacement-tenant")
+		replacementTenant, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: "replacement-tenant"}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(live).To(BeTrue())
-		_, err = database.CloseAndInsertTenantBillingAssignment(ctx, tx, "", database.TenantBillingAssignmentInsert{
-			ID: uuid.New(), Name: "replacement-account", TenantID: "replacement-tenant",
-			BillingAccountID: account2, ConnectionState: "CONNECTED",
-		})
-		Expect(err).ToNot(HaveOccurred(), "the deleted tenant's account must be reusable by another live tenant")
-		active, err := database.GetActiveTenantBillingAssignmentByAccount(ctx, tx, account2)
+		Expect(replacementTenant.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+		replacement := seedTenantBillingInterval(ctx, "replacement-tenant", account2, "replacement-account", false)
+		active, err := readTenantBillingInterval(ctx, replacement)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(active.TenantID).To(Equal("replacement-tenant"))
+		Expect(active.GetSpec().GetTenant().GetId()).To(Equal("replacement-tenant"))
+		Expect(active.GetSpec().GetBillingAccount().GetId()).To(Equal(account2))
+		Expect(active.GetStatus().HasEffectiveToTimestamp()).To(BeFalse())
 
 		// Billed identities remain reserved even after all intervals close. Isolate the expected duplicate
 		// error so the assertions above can commit rather than being undone by this rejected create.
@@ -686,28 +709,8 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 	// past and the active row reference it. It mirrors the helpers of the assignment-only spec above.
 	insertBillingHistory := func(tenant string) (closed, current string) {
 		GinkgoHelper()
-		tx, err := database.TxFromContext(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		account1, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-			ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: uuid.New(), State: "ACTIVE",
-		})
-		Expect(err).ToNot(HaveOccurred())
-		account2, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-			ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: uuid.New(), State: "ACTIVE",
-		})
-		Expect(err).ToNot(HaveOccurred())
-		closed, err = database.CloseAndInsertTenantBillingAssignment(ctx, tx, "",
-			database.TenantBillingAssignmentInsert{
-				ID: uuid.New(), Name: tenant + "-account-1", TenantID: tenant,
-				BillingAccountID: account1, ConnectionState: "CONNECTED",
-			})
-		Expect(err).ToNot(HaveOccurred())
-		current, err = database.CloseAndInsertTenantBillingAssignment(ctx, tx, closed,
-			database.TenantBillingAssignmentInsert{
-				ID: uuid.New(), Name: tenant + "-account-2", TenantID: tenant,
-				BillingAccountID: account2, ConnectionState: "CONNECTED",
-			})
-		Expect(err).ToNot(HaveOccurred())
+		closed = seedTenantBillingInterval(ctx, tenant, seedTenantBillingAccount(ctx), tenant+"-account-1", true)
+		current = seedTenantBillingInterval(ctx, tenant, seedTenantBillingAccount(ctx), tenant+"-account-2", false)
 		return
 	}
 
@@ -724,10 +727,14 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		first, second := insertBillingHistory(id)
 		tx, err := database.TxFromContext(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(database.CloseTenantBillingAssignmentOnDeletion(ctx, tx, id)).To(Succeed())
-		firstBefore, err := database.GetTenantBillingAssignment(ctx, tx, first)
+		floor, err := dao.LockTenantBillingAssignmentForDeletion(ctx, id)
 		Expect(err).ToNot(HaveOccurred())
-		secondBefore, err := database.GetTenantBillingAssignment(ctx, tx, second)
+		at, err := dao.BillingFinalizationTime(ctx, floor)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(dao.CloseTenantBillingAssignmentOnDeletion(ctx, id, at)).To(Succeed())
+		firstBefore, err := readTenantBillingInterval(ctx, first)
+		Expect(err).ToNot(HaveOccurred())
+		secondBefore, err := readTenantBillingInterval(ctx, second)
 		Expect(err).ToNot(HaveOccurred())
 
 		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
@@ -751,10 +758,10 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(retained.GetObject().GetMetadata().GetFinalizers()).To(BeEmpty())
 		Expect(retained.GetObject().GetMetadata().GetDeletionTimestamp()).NotTo(BeNil())
-		firstAfter, err := database.GetTenantBillingAssignment(ctx, tx, first)
+		firstAfter, err := readTenantBillingInterval(ctx, first)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(firstAfter).To(Equal(firstBefore))
-		secondAfter, err := database.GetTenantBillingAssignment(ctx, tx, second)
+		secondAfter, err := readTenantBillingInterval(ctx, second)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(secondAfter).To(Equal(secondBefore))
 		var archived int
@@ -775,9 +782,9 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		first, current := insertBillingHistory(id)
 		tx, err := database.TxFromContext(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		historyBefore, err := database.GetTenantBillingAssignment(ctx, tx, first)
+		historyBefore, err := readTenantBillingInterval(ctx, first)
 		Expect(err).ToNot(HaveOccurred())
-		currentBefore, err := database.GetTenantBillingAssignment(ctx, tx, current)
+		currentBefore, err := readTenantBillingInterval(ctx, current)
 		Expect(err).ToNot(HaveOccurred())
 		// Inject a database failure after generic.Delete has set the tenant deletion timestamp.
 		_, err = tx.Exec(ctx, `
@@ -800,16 +807,12 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 				return struct{}{}, err
 			}
 			Expect(retained.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
-			tx, err := database.TxFromContext(ctx)
-			if err != nil {
-				return struct{}{}, err
-			}
-			historyAfter, err := database.GetTenantBillingAssignment(ctx, tx, first)
+			historyAfter, err := readTenantBillingInterval(ctx, first)
 			if err != nil {
 				return struct{}{}, err
 			}
 			Expect(historyAfter).To(Equal(historyBefore))
-			currentAfter, err := database.GetTenantBillingAssignment(ctx, tx, current)
+			currentAfter, err := readTenantBillingInterval(ctx, current)
 			if err != nil {
 				return struct{}{}, err
 			}
@@ -843,14 +846,14 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		err = tx.QueryRow(ctx, "select count(*) from tenants where name = $1", tenant).Scan(&count)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(count).To(Equal(1))
-		closedRow, err := database.GetTenantBillingAssignment(ctx, tx, closed)
+		closedRow, err := readTenantBillingInterval(ctx, closed)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(closedRow.TenantID).To(Equal(tenant))
-		Expect(closedRow.EffectiveTo).ToNot(BeNil())
-		currentRow, err := database.GetTenantBillingAssignment(ctx, tx, current)
+		Expect(closedRow.GetSpec().GetTenant().GetId()).To(Equal(tenant))
+		Expect(closedRow.GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil())
+		currentRow, err := readTenantBillingInterval(ctx, current)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(currentRow.TenantID).To(Equal(tenant))
-		Expect(currentRow.EffectiveTo).To(BeNil())
+		Expect(currentRow.GetSpec().GetTenant().GetId()).To(Equal(tenant))
+		Expect(currentRow.GetStatus().GetEffectiveToTimestamp()).To(BeNil())
 		err = tx.QueryRow(ctx, "select count(*) from archived_tenants where name = $1", tenant).Scan(&count)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(count).To(BeZero())
@@ -942,9 +945,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		id := createResponse.GetObject().GetId()
 
 		closed, current := insertBillingHistory("finalizer-tenant")
-		tx, err := database.TxFromContext(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		historyBefore, err := database.GetTenantBillingAssignment(ctx, tx, closed)
+		historyBefore, err := readTenantBillingInterval(ctx, closed)
 		Expect(err).ToNot(HaveOccurred())
 		deferProjectsFK()
 
@@ -953,10 +954,10 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			Id: id,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		closedOnDelete, err := database.GetTenantBillingAssignment(ctx, tx, current)
+		closedOnDelete, err := readTenantBillingInterval(ctx, current)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(closedOnDelete.EffectiveTo).ToNot(BeNil(), "do not wait for finalizers before closing billing")
-		Expect(closedOnDelete.Message).To(Equal(database.TenantBillingAssignmentDeletedMessage))
+		Expect(closedOnDelete.GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil(), "do not wait for finalizers before closing billing")
+		Expect(closedOnDelete.GetStatus().GetMessage()).To(Equal(database.TenantBillingAssignmentDeletedMessage))
 
 		// Commit the soft-deleted state and run the finalizer-clearing update in its own
 		// transaction, so its rejection rolls back completely and can be verified against the
@@ -1015,17 +1016,17 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 				return struct{}{}, err
 			}
 			archived = count
-			closedRow, err := database.GetTenantBillingAssignment(ctx, tx, closed)
+			closedRow, err := readTenantBillingInterval(ctx, closed)
 			if err != nil {
 				return struct{}{}, err
 			}
-			Expect(closedRow.TenantID).To(Equal("finalizer-tenant"))
+			Expect(closedRow.GetSpec().GetTenant().GetId()).To(Equal("finalizer-tenant"))
 			Expect(closedRow).To(Equal(historyBefore))
-			currentRow, err := database.GetTenantBillingAssignment(ctx, tx, current)
+			currentRow, err := readTenantBillingInterval(ctx, current)
 			if err != nil {
 				return struct{}{}, err
 			}
-			Expect(currentRow.TenantID).To(Equal("finalizer-tenant"))
+			Expect(currentRow.GetSpec().GetTenant().GetId()).To(Equal("finalizer-tenant"))
 			Expect(currentRow).To(Equal(closedOnDelete), "a failed finalizer update cannot reopen billing")
 			return struct{}{}, nil
 		})
@@ -1086,16 +1087,16 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			}
 			Expect(deletedAt.After(time.Unix(1, 0))).To(BeFalse(),
 				"the tenant must not carry a deletion timestamp after the rejected delete")
-			closedRow, err := database.GetTenantBillingAssignment(ctx, tx, closed)
+			closedRow, err := readTenantBillingInterval(ctx, closed)
 			if err != nil {
 				return struct{}{}, err
 			}
-			Expect(closedRow.TenantID).To(Equal("committed-tenant"))
-			currentRow, err := database.GetTenantBillingAssignment(ctx, tx, current)
+			Expect(closedRow.GetSpec().GetTenant().GetId()).To(Equal("committed-tenant"))
+			currentRow, err := readTenantBillingInterval(ctx, current)
 			if err != nil {
 				return struct{}{}, err
 			}
-			Expect(currentRow.TenantID).To(Equal("committed-tenant"))
+			Expect(currentRow.GetSpec().GetTenant().GetId()).To(Equal("committed-tenant"))
 			var count int
 			err = tx.QueryRow(ctx,
 				"select count(*) from archived_tenants where name = 'committed-tenant'").Scan(&count)
@@ -1548,3 +1549,63 @@ var _ = Describe("Break-glass credentials secret reference", func() {
 		Expect(getResponse.GetObject().GetSpec().GetBreakGlassCredentialsSecret()).To(BeNil())
 	})
 })
+
+// These fixtures seed canonical objects directly, not the assignment RPC or a legacy SQL writer.
+func seedTenantBillingAccount(ctx context.Context) string {
+	GinkgoHelper()
+	accounts, err := dao.NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+	Expect(err).NotTo(HaveOccurred())
+	id := uuid.New()
+	name, err := billingAccountName(id)
+	Expect(err).NotTo(HaveOccurred())
+	_, err = accounts.Create().SetObject(privatev1.BillingAccount_builder{Id: id,
+		Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SystemTenant, Creator: "system"}.Build(),
+		Spec:     privatev1.BillingAccountSpec_builder{}.Build(),
+		Status: privatev1.BillingAccountStatus_builder{ProviderKey: "m360", ProviderAccountReference: uuid.New(),
+			State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+			StateObservationTimestamp: timestamppb.Now(),
+		}.Build(),
+	}.Build()).Do(ctx)
+	Expect(err).NotTo(HaveOccurred())
+	return id
+}
+
+func seedTenantBillingInterval(ctx context.Context, tenant, account, name string, closed bool) string {
+	GinkgoHelper()
+	assignments, err := dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+	Expect(err).NotTo(HaveOccurred())
+	accountName, err := billingAccountName(account)
+	Expect(err).NotTo(HaveOccurred())
+	from := timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	state := privatev1.TenantBillingAssignmentStatus_builder{
+		ConnectionState:        privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
+		EffectiveFromTimestamp: from,
+	}.Build()
+	if closed {
+		state.SetEffectiveToTimestamp(from)
+	}
+	id := uuid.New()
+	_, err = assignments.Create().SetObject(privatev1.TenantBillingAssignment_builder{Id: id,
+		Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant, Creator: "fixture",
+			Annotations: map[string]string{"osac.openshift.io/tenant": tenant},
+		}.Build(),
+		Spec: privatev1.TenantBillingAssignmentSpec_builder{
+			Tenant:         privatev1.TenantReference_builder{Id: tenant, Name: tenant}.Build(),
+			BillingAccount: privatev1.BillingAccountReference_builder{Id: account, Name: accountName}.Build(),
+		}.Build(), Status: state,
+	}.Build()).Do(ctx)
+	Expect(err).NotTo(HaveOccurred())
+	return id
+}
+
+func readTenantBillingInterval(ctx context.Context, id string) (*privatev1.TenantBillingAssignment, error) {
+	assignments, err := dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+	if err != nil {
+		return nil, err
+	}
+	response, err := assignments.Get().SetId(id).Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}

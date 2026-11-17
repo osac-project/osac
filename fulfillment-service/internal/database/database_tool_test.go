@@ -14,11 +14,13 @@ language governing permissions and limitations under the License.
 package database
 
 import (
+	"context"
 	neturl "net/url"
 	"os"
 	"path/filepath"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/pflag"
 )
@@ -38,6 +40,42 @@ var _ = Describe("Database tool", func() {
 		tmpDir, err = os.MkdirTemp("", "*.test")
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(os.RemoveAll, tmpDir)
+	})
+
+	Describe("Normalized billing schema and nonpublication", func() {
+		var checker Tool
+
+		BeforeEach(func(ctx context.Context) {
+			instance, err := server.NewInstance().Build()
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(instance.Close)
+			url, err := instance.Url(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			checker, err = NewTool().SetLogger(logger).SetURL(url).Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("validates the normalized objects without requiring billing enqueue triggers", func(ctx context.Context) {
+			Expect(checker.CheckSchema(ctx)).To(Succeed())
+		})
+
+		DescribeTable("detects bounded billing drift while retaining nonbilling requirements",
+			func(ctx context.Context, mutation string) {
+				pool, err := checker.Pool(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				DeferCleanup(pool.Close)
+				_, err = pool.Exec(ctx, mutation)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(checker.CheckSchema(ctx)).ToNot(Succeed())
+			},
+			Entry("billing account metadata", `alter table billing_accounts drop column labels`),
+			Entry("assignment metadata", `alter table tenant_billing_assignments drop column labels`),
+			Entry("account publication", `create trigger enqueue_change after insert on billing_accounts
+				for each row execute function enqueue_change()`),
+			Entry("assignment publication", `create trigger enqueue_change after insert on tenant_billing_assignments
+				for each row execute function enqueue_change()`),
+			Entry("nonbilling enqueue requirement", `drop trigger enqueue_change on tenants`),
+		)
 	})
 
 	Describe("URL configuration via builder methods", func() {

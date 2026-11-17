@@ -41,6 +41,10 @@ var _ = Describe("finalizer CAS", func() {
 		for _, c := range finalizerCases() {
 			covered[c.service] = true
 		}
+		for _, c := range descriptorOnlyFinalizerCases() {
+			c.verify()
+			covered[c.service] = true
+		}
 		expected := map[string]bool{}
 		for _, service := range finalizerBearingServices() {
 			expected[service] = true

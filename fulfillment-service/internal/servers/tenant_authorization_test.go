@@ -337,13 +337,6 @@ func seedAuthorizationTenant(c context.Context, name string) {
 }
 
 func seedAuthorizationBillingAssignment(c context.Context, tenant string) {
-	tx, err := database.TxFromContext(c)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	_, err = tx.Exec(c, `insert into billing_accounts (id, provider_key, provider_account_reference, state)
-		values ('authorization-billing-account', 'fixture', 'fixture-account', 'ACTIVE')`)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
-	_, err = tx.Exec(c, `insert into tenant_billing_assignments
-		(id, name, tenant_id, billing_account_id, connection_state)
-		values ('authorization-assignment', 'authorization-assignment', $1, 'authorization-billing-account', 'CONNECTED')`, tenant)
-	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+	GinkgoHelper()
+	seedTenantBillingInterval(c, tenant, seedTenantBillingAccount(c), "authorization-assignment", false)
 }

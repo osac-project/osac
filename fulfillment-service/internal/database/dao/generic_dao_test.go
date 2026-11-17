@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
@@ -237,6 +239,288 @@ var _ = Describe("Generic DAO", func() {
 				SetMaxLimit(maxLimit).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		Describe("Shared query contract", func() {
+			seed := func(id string, creation, deletion time.Time, data string) {
+				_, err := tx.Exec(ctx, `insert into objects
+					(id, name, tenant, creation_timestamp, deletion_timestamp, data)
+					values ($1, $1, 'my-tenant', $2, $3, $4)`, id, creation, deletion, data)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			ids := func(response *ListResponse[*testsv1.Object]) []string {
+				result := []string{}
+				for _, item := range response.GetItems() {
+					result = append(result, item.GetId())
+				}
+				return result
+			}
+
+			It("Materializes only exact metadata epoch as absent", func() {
+				epoch := time.Unix(0, 0).UTC()
+				seed("absent", epoch, epoch, `{}`)
+				seed("present", epoch.Add(time.Microsecond), epoch.Add(time.Microsecond), `{}`)
+				for _, id := range []string{"absent", "present"} {
+					response, err := generic.Get().SetId(id).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					md := response.GetObject().GetMetadata()
+					if id == "absent" {
+						Expect(md.HasCreationTimestamp()).To(BeFalse())
+						Expect(md.HasDeletionTimestamp()).To(BeFalse())
+					} else {
+						Expect(md.HasCreationTimestamp()).To(BeTrue())
+						Expect(md.HasDeletionTimestamp()).To(BeTrue())
+						Expect(md.GetCreationTimestamp().AsTime()).To(Equal(epoch.Add(time.Microsecond)))
+						Expect(md.GetDeletionTimestamp().AsTime()).To(Equal(epoch.Add(time.Microsecond)))
+					}
+				}
+			})
+
+			It("Filters metadata presence, nulls, ranges and version zero through PostgreSQL", func() {
+				epoch := time.Unix(0, 0).UTC()
+				seed("absent", epoch, epoch, `{}`)
+				seed("present", epoch.Add(time.Microsecond), epoch.Add(time.Microsecond), `{}`)
+				cases := []struct {
+					filter string
+					want   []string
+				}{
+					{`has(this.metadata.creation_timestamp)`, []string{"present"}},
+					{`!has(this.metadata.creation_timestamp)`, []string{"absent"}},
+					{`this.metadata.creation_timestamp == null`, []string{"absent"}},
+					{`null == this.metadata.creation_timestamp`, []string{"absent"}},
+					{`null != this.metadata.creation_timestamp`, []string{"present"}},
+					{`this.metadata.creation_timestamp < now`, []string{"present"}},
+					{`has(this.metadata.deletion_timestamp)`, []string{"present"}},
+					{`this.metadata.deletion_timestamp == null`, []string{"absent"}},
+					{`null != this.metadata.deletion_timestamp`, []string{"present"}},
+					{`this.metadata.version == 0`, []string{"absent", "present"}},
+					{`has(this.metadata.version)`, []string{}},
+					{`this.metadata.version in [0, 2]`, []string{"absent", "present"}},
+				}
+				for _, tc := range cases {
+					response, err := generic.List().SetFilter(tc.filter).Do(ctx)
+					Expect(err).ToNot(HaveOccurred(), tc.filter)
+					Expect(ids(response)).To(Equal(tc.want), tc.filter)
+					Expect(response.GetTotal()).To(Equal(int32(len(tc.want))), tc.filter)
+				}
+				current, err := generic.Get().SetId("absent").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				updated, err := generic.Update().SetObject(current.GetObject()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updated.GetObject().GetMetadata().GetVersion()).To(Equal(int32(1)))
+				for _, filter := range []string{`has(this.metadata.version)`, `this.metadata.version > 0`, `this.metadata.version in [1, 2]`} {
+					response, err := generic.List().SetFilter(filter).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(ids(response)).To(Equal([]string{"absent"}))
+				}
+			})
+
+			It("Archives after finalizer removal at epoch plus one microsecond but not exact epoch", func() {
+				epoch := time.Unix(0, 0).UTC()
+				for _, id := range []string{"active", "deleting"} {
+					deletion := epoch
+					if id == "deleting" {
+						deletion = deletion.Add(time.Microsecond)
+					}
+					seed(id, epoch, deletion, `{}`)
+					_, err := tx.Exec(ctx, `update objects set finalizers = array['controller'] where id = $1`, id)
+					Expect(err).ToNot(HaveOccurred())
+					current, err := generic.Get().SetId(id).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					current.GetObject().GetMetadata().SetFinalizers(nil)
+					_, err = generic.Update().SetObject(current.GetObject()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+				var live, archived []string
+				Expect(tx.QueryRow(ctx, `select array_agg(id order by id) from objects`).Scan(&live)).To(Succeed())
+				Expect(tx.QueryRow(ctx, `select array_agg(id order by id) from archived_objects`).Scan(&archived)).To(Succeed())
+				Expect(live).To(Equal([]string{"active"}))
+				Expect(archived).To(Equal([]string{"deleting"}))
+				var deletion time.Time
+				Expect(tx.QueryRow(ctx, `select deletion_timestamp from archived_objects where id = 'deleting'`).Scan(&deletion)).To(Succeed())
+				Expect(deletion.Equal(epoch.Add(time.Microsecond))).To(BeTrue())
+			})
+
+			It("Preserves actual unique constraint names on Update errors", func() {
+				for _, constraint := range []string{"objects_unique_name", "objects_native_key", "objects_token_key"} {
+					req := generic.Update()
+					err := req.translateError(ctx, "id", "name", "my-tenant", fmt.Errorf("wrapped: %w", &pgconn.PgError{
+						Code: pgerrcode.UniqueViolation, ConstraintName: constraint, Message: "not a constraint name",
+					}))
+					var exists *ErrAlreadyExists
+					Expect(errors.As(err, &exists)).To(BeTrue())
+					Expect(exists.ConstraintName).To(Equal(constraint))
+				}
+			})
+
+			It("Returns the real PostgreSQL Update constraint and preserves savepoint recovery", func() {
+				epoch := time.Unix(0, 0).UTC()
+				seed("first", epoch, epoch, `{"my_string":"first"}`)
+				seed("second", epoch, epoch, `{"my_string":"second"}`)
+				_, err := tx.Exec(ctx, `create unique index objects_query_unique_payload on objects ((data->>'my_string'))`)
+				Expect(err).ToNot(HaveOccurred())
+				current, err := generic.Get().SetId("second").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				current.GetObject().SetMyString("first")
+				err = tx.Savepoint(ctx, func(spCtx context.Context) error {
+					_, err := generic.Update().SetObject(current.GetObject()).Do(spCtx)
+					return err
+				})
+				var exists *ErrAlreadyExists
+				Expect(errors.As(err, &exists)).To(BeTrue())
+				Expect(exists.ConstraintName).To(Equal("objects_query_unique_payload"))
+				stored, err := generic.Get().SetId("second").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMyString()).To(Equal("second"))
+				Expect(stored.GetObject().GetMetadata().GetVersion()).To(BeZero())
+				seed("after-recovery", epoch, epoch, `{"my_string":"third"}`)
+			})
+
+			It("Retains CEL type checks for numeric version versus null", func() {
+				epoch := time.Unix(0, 0).UTC()
+				seed("zero", epoch, epoch, `{}`)
+				for _, filter := range []string{
+					`this.metadata.version == null`, `null == this.metadata.version`,
+					`this.metadata.version != null`, `null != this.metadata.version`,
+				} {
+					// CEL versions may reject scalar/null equality. Do not weaken typing to make it queryable.
+					_, issues := generic.filterTranslator.celEnv.Compile(filter)
+					if issues != nil && issues.Err() != nil {
+						_, err := generic.filterTranslator.Translate(ctx, filter)
+						Expect(err).To(HaveOccurred())
+						continue
+					}
+					response, err := generic.List().SetFilter(filter).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					if strings.Contains(filter, "!=") {
+						Expect(ids(response)).To(Equal([]string{"zero"}))
+					} else {
+						Expect(response.GetTotal()).To(BeZero())
+					}
+				}
+			})
+
+			It("Orders metadata epoch absence last without suppressing subsecond instants", func() {
+				epoch := time.Unix(0, 0).UTC()
+				seed("absent", epoch, epoch, `{}`)
+				seed("early", epoch.Add(time.Microsecond), epoch.Add(time.Microsecond), `{}`)
+				seed("later", epoch.Add(2*time.Microsecond), epoch.Add(2*time.Microsecond), `{}`)
+				for _, field := range []string{"creation_timestamp", "deletion_timestamp"} {
+					for _, tc := range []struct {
+						direction string
+						want      []string
+					}{
+						{"asc", []string{"early", "later", "absent"}},
+						{"desc", []string{"later", "early", "absent"}},
+					} {
+						response, err := generic.List().SetOrder("metadata." + field + " " + tc.direction).Do(ctx)
+						Expect(err).ToNot(HaveOccurred())
+						Expect(ids(response)).To(Equal(tc.want))
+					}
+				}
+			})
+
+			It("Intersects trusted tenant and project visibility before ordered counts and pages", func() {
+				createTenant(ctx, "other-tenant")
+				for _, object := range []struct{ id, tenant, project string }{
+					{"a", "my-tenant", ""}, {"b", "my-tenant", ""},
+					{"c", "my-tenant", "my-project"}, {"d", "other-tenant", ""},
+				} {
+					_, err := generic.Create().SetObject(testsv1.Object_builder{
+						Id: object.id,
+						Metadata: testsv1.Metadata_builder{
+							Name: object.id, Tenant: object.tenant, Project: object.project,
+						}.Build(),
+					}.Build()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+				visibility, err := auth.NewVisibility().AddVisibleTenant("my-tenant").Build()
+				Expect(err).ToNot(HaveOccurred())
+				req := generic.List().SetOrder("id desc").SetOffset(1).SetLimit(1).
+					SetFilter(`this.metadata.tenant == 'other-tenant' || this.metadata.tenant == 'my-tenant'`)
+				req.visibility = visibility
+				response, err := req.Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetTotal()).To(Equal(int32(2)))
+				Expect(ids(response)).To(Equal([]string{"a"}))
+				req = generic.List().SetOrder("id desc").SetLimit(0)
+				req.visibility = visibility
+				response, err = req.Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetTotal()).To(Equal(int32(2)))
+				Expect(response.GetItems()).To(BeEmpty())
+				req = generic.List().SetOrder("id desc")
+				req.visibility = auth.ZeroVisibility()
+				response, err = req.Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetTotal()).To(BeZero())
+				Expect(response.GetItems()).To(BeEmpty())
+			})
+
+			It("Rejects invalid order and private queries through the DAO even for count-only requests", func() {
+				publicDAO, err := NewGenericDAO[*testsv1.Object]().SetLogger(logger).SetTenancyLogic(tenancy).
+					SetFilterDesc((*publicv1.Cluster)(nil).ProtoReflect().Descriptor()).Build()
+				Expect(err).ToNot(HaveOccurred())
+				for _, order := range []string{
+					"metadata.finalizers", "status.hub", "metadata.labels", "metadata.creation_timestamp.seconds",
+					"id desc; select pg_sleep(60)", "metadata.annotations['admin.osac.openshift.io/key']",
+				} {
+					err = tx.Savepoint(ctx, func(spCtx context.Context) error {
+						_, err := publicDAO.List().SetOrder(order).SetLimit(0).Do(spCtx)
+						return err
+					})
+					var invalid *ErrValidation
+					Expect(errors.As(err, &invalid)).To(BeTrue(), order)
+				}
+				for _, filter := range []string{
+					`has(this.metadata.finalizers)`, `this.metadata.finalizers == this.metadata.finalizers`,
+				} {
+					for _, d := range []*GenericDAO[*testsv1.Object]{generic, publicDAO} {
+						err = tx.Savepoint(ctx, func(spCtx context.Context) error {
+							_, err := d.List().SetFilter(filter).SetLimit(0).Do(spCtx)
+							return err
+						})
+						var invalid *ErrInvalidFilter
+						Expect(errors.As(err, &invalid)).To(BeTrue(), filter)
+					}
+				}
+				response, err := generic.List().Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetTotal()).To(BeZero())
+			})
+
+			It("Orders Timestamp instants, NULLs and id ties before offset and limit in PostgreSQL", func() {
+				epoch := time.Unix(0, 0).UTC()
+				for id, data := range map[string]string{
+					"a": `{"status":{"status_timestamp":"2026-01-01T01:00:00.000001+01:00"}}`,
+					"b": `{"status":{"status_timestamp":"2026-01-01T00:00:00.000001Z"}}`,
+					"c": `{"status":{"status_timestamp":"2025-12-31T23:00:00.000002-01:00"}}`,
+					"d": `{}`,
+					"e": `{"status":{"status_timestamp":null}}`,
+					"f": `{"status":{"status_timestamp":"1970-01-01T00:00:00Z"}}`,
+				} {
+					seed(id, epoch, epoch, data)
+				}
+				for _, tc := range []struct {
+					order string
+					want  []string
+				}{
+					{"status.status_timestamp asc", []string{"f", "a", "b", "c", "d", "e"}},
+					{"status.status_timestamp desc", []string{"c", "a", "b", "f", "d", "e"}},
+				} {
+					response, err := generic.List().SetOrder(tc.order).SetLimit(10).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(ids(response)).To(Equal(tc.want))
+					Expect(response.GetTotal()).To(Equal(int32(6)))
+					response, err = generic.List().SetOrder(tc.order).SetOffset(1).SetLimit(2).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(ids(response)).To(Equal(tc.want[1:3]))
+					Expect(response.GetTotal()).To(Equal(int32(6)))
+				}
+				response, err := generic.List().SetLimit(10).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(ids(response)).To(Equal([]string{"a", "b", "c", "d", "e", "f"}))
+			})
 		})
 
 		It("Creates object", func() {

@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -119,15 +120,19 @@ var _ = Describe("render", func() {
 	}
 
 	active := publicv1.BillingAccount_builder{
-		Id: "ba-1", ProviderKey: "m360", DisplayName: "Acme production", BaseCurrency: "USD",
-		State:                    publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
-		StatusObservedAt:         timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
-		ExternalBillingAccountId: "acct-corr-1001",
+		Id: "ba-1", Status: publicv1.BillingAccountStatus_builder{
+			ProviderKey: "m360", DisplayName: "Acme production", BaseCurrency: "USD",
+			State:                     publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+			StateObservationTimestamp: timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
+			ExternalBillingAccountId:  proto.String("acct-corr-1001"),
+		}.Build(),
 	}.Build()
 
 	unknownNoCurrency := publicv1.BillingAccount_builder{
-		Id: "ba-2", ProviderKey: "m360", DisplayName: "Acme staging",
-		State: publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN,
+		Id: "ba-2", Status: publicv1.BillingAccountStatus_builder{
+			ProviderKey: "m360", DisplayName: "Acme staging",
+			State: publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN,
+		}.Build(),
 	}.Build()
 
 	It("shows an empty currency and an unknown state explicitly, never blank", func() {
@@ -147,9 +152,11 @@ var _ = Describe("render", func() {
 
 	It("strips control characters from provider-supplied cells in table mode", func() {
 		dirty := publicv1.BillingAccount_builder{
-			Id: "ba-3", ProviderKey: "m360", DisplayName: "Acme\x1b]52;x;wg\x07",
-			State:                    publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
-			ExternalBillingAccountId: "corr\t\n1001",
+			Id: "ba-3", Status: publicv1.BillingAccountStatus_builder{
+				ProviderKey: "m360", DisplayName: "Acme\x1b]52;x;wg\x07",
+				State:                    publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+				ExternalBillingAccountId: proto.String("corr\t\n1001"),
+			}.Build(),
 		}.Build()
 		output, stderr := run("table", 0, listWith(dirty))
 		Expect(output).ToNot(ContainSubstring("\x1b"), "a terminal escape must not reach the console")
@@ -191,9 +198,11 @@ var _ = Describe("render", func() {
 			"total": 1,
 			"items": [{
 				"id": "ba-2",
+				"status": {
 				"provider_key": "m360",
 				"display_name": "Acme staging",
 				"state": "BILLING_ACCOUNT_STATE_UNKNOWN"
+				}
 			}]
 		}`))
 		Expect(stderr).To(BeEmpty())
@@ -224,8 +233,10 @@ var _ = Describe("render failures", func() {
 	}
 
 	active := publicv1.BillingAccount_builder{
-		Id: "ba-1", ProviderKey: "m360", DisplayName: "Acme production", BaseCurrency: "USD",
-		State: publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+		Id: "ba-1", Status: publicv1.BillingAccountStatus_builder{
+			ProviderKey: "m360", DisplayName: "Acme production", BaseCurrency: "USD",
+			State: publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+		}.Build(),
 	}.Build()
 
 	It("reports a failed empty-collection message write", func() {

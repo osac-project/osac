@@ -127,18 +127,18 @@ func renderTable(console *terminal.Console, offset int32,
 	}
 	for _, item := range items {
 		observed := "-"
-		if item.HasStatusObservedAt() {
-			observed = item.GetStatusObservedAt().AsTime().Format(time.RFC3339)
+		if item.GetStatus().HasStateObservationTimestamp() {
+			observed = item.GetStatus().GetStateObservationTimestamp().AsTime().Format(time.RFC3339)
 		}
-		state := strings.TrimPrefix(item.GetState().String(), "BILLING_ACCOUNT_STATE_")
+		state := strings.TrimPrefix(item.GetStatus().GetState().String(), "BILLING_ACCOUNT_STATE_")
 		if state == "" || state == "UNSPECIFIED" {
 			state = "UNKNOWN"
 		}
 		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			item.GetId(), output.OrDash(item.GetProviderKey()),
-			output.OrDash(billing.SanitizeProviderText(item.GetDisplayName())),
-			output.OrDash(item.GetBaseCurrency()), state,
-			output.OrDash(billing.SanitizeProviderText(item.GetExternalBillingAccountId())), observed); err != nil {
+			item.GetId(), output.OrDash(item.GetStatus().GetProviderKey()),
+			output.OrDash(billing.SanitizeProviderText(item.GetStatus().GetDisplayName())),
+			output.OrDash(item.GetStatus().GetBaseCurrency()), state,
+			output.OrDash(billing.SanitizeProviderText(item.GetStatus().GetExternalBillingAccountId())), observed); err != nil {
 			return fmt.Errorf("failed to render billing accounts table row: %w", err)
 		}
 	}
@@ -158,7 +158,7 @@ provider does not supply one. {{ bt }}STATE{{ bt }} is {{ bt }}ACTIVE{{ bt }}, {
 as {{ bt }}ACTIVE{{ bt }}.
 
 {{ bt }}EXTERNAL-BILLING-ACCOUNT-ID{{ bt }} is the provider-agnostic attribution identifier, not the tenant id or
-the provider's native account id. JSON and YAML expose it as {{ bt }}external_billing_account_id{{ bt }}.
+the provider's native account id. JSON and YAML expose it as {{ bt }}status.external_billing_account_id{{ bt }}.
 
 Results are paged. {{ bt }}--limit 0{{ bt }} asks for the server default page of 100 accounts, values above 1000
 are clamped to 1000 by the server rather than rejected, and {{ bt }}--offset{{ bt }} skips ahead. In table mode,

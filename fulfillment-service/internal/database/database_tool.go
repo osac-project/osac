@@ -487,9 +487,8 @@ func (t *tool) CheckSchema(ctx context.Context) error {
 	return nil
 }
 
-// listObjectTables returns the sorted list of object table names from the public schema, excluding active companion
-// such as billing_accounts and tenant_billing_assignments, which intentionally have no Metadata/Spec/Status
-// columns, archive table, or object triggers.
+// listObjectTables returns the sorted list of object table names from the public schema, excluding active companions
+// and non-object storage. Normalized billing objects participate, with their named nonpublication exception below.
 func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result []string, err error) {
 	rows, err := pool.Query(
 		ctx,
@@ -506,14 +505,12 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 			c.relname not like 'active_%' and
 			c.relname not like 'archived_%' and
 				c.relname not in (
-					'billing_accounts',
 					'billing_operation_leases',
 				'changes',
 				'installation_settings',
 				'project_membership_subjects',
 				'schema_migrations',
 				'storage_tier_backends',
-				'tenant_billing_assignments',
 				'tenant_domains'
 			)
 		order by
@@ -616,6 +613,28 @@ func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table s
 		issues += t.checkPrimaryKey(ctx, pool, table, "tenant", "name")
 	default:
 		issues += t.checkPrimaryKey(ctx, pool, table, "id")
+	}
+
+	// These two objects intentionally do not publish changes. Do not install enqueue triggers merely to satisfy
+	// the ordinary object checks. Assignment history retains its existing tenant_id FK until the identity cutover;
+	// it must not gain a second live-tenant FK through metadata.tenant.
+	if table == "billing_accounts" || table == "tenant_billing_assignments" {
+		if table == "billing_accounts" {
+			issues += t.checkTenantForeignKey(ctx, pool, table)
+		}
+		issues += t.checkTableExists(ctx, pool, "archived_"+table)
+		issues += t.checkTableExists(ctx, pool, "active_"+table)
+		var publishes bool
+		err := pool.QueryRow(ctx, `select exists (
+			select 1 from pg_trigger t join pg_proc p on p.oid = t.tgfoid
+			where t.tgrelid = ('public.' || $1)::regclass and not t.tgisinternal
+			and (t.tgname = 'enqueue_change' or p.proname = 'enqueue_change'))`, table).Scan(&publishes)
+		if err != nil || publishes {
+			t.logger.ErrorContext(ctx, "Billing object must not enqueue changes",
+				slog.String("table", table), slog.Any("error", err))
+			issues++
+		}
+		return issues
 	}
 
 	issues += t.checkTenantForeignKey(ctx, pool, table)

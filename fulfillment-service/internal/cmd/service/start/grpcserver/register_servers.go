@@ -25,6 +25,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
@@ -64,6 +65,50 @@ type ResourceServers struct {
 	PrivateComputeInstancesServer privatev1.ComputeInstancesServer
 	PrivateSecretsServer          privatev1.SecretsServer
 	HubClientProvider             servers.HubClientProvider
+}
+
+// registerBillingResourceServers shares the configured provider and private delegates between both APIs.
+// Billing resources use GenericDAO with public filter descriptors, while registration remains separate from the
+// ordinary resource servers because the provider is constructed by the caller. Unreviewed CRUD methods remain
+// generated Unimplemented scaffolds, denied by the closed billing authorization allow-list.
+func registerBillingResourceServers(ctx context.Context, registrar grpc.ServiceRegistrar, logger *slog.Logger,
+	provider *billing.Provider) error {
+	logger.InfoContext(ctx, "Creating billing accounts servers")
+	privateBillingAccountsServer, err := servers.NewPrivateBillingAccountsServer().
+		SetLogger(logger).
+		SetProvider(provider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private billing accounts server: %w", err)
+	}
+	billingAccountsServer, err := servers.NewBillingAccountsServer().
+		SetLogger(logger).
+		SetDelegate(privateBillingAccountsServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public billing accounts server: %w", err)
+	}
+	publicv1.RegisterBillingAccountsServer(registrar, billingAccountsServer)
+	privatev1.RegisterBillingAccountsServer(registrar, privateBillingAccountsServer)
+
+	logger.InfoContext(ctx, "Creating tenant billing assignments servers")
+	privateTenantBillingAssignmentsServer, err := servers.NewPrivateTenantBillingAssignmentsServer().
+		SetLogger(logger).
+		SetProvider(provider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private tenant billing assignments server: %w", err)
+	}
+	tenantBillingAssignmentsServer, err := servers.NewTenantBillingAssignmentsServer().
+		SetLogger(logger).
+		SetDelegate(privateTenantBillingAssignmentsServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public tenant billing assignments server: %w", err)
+	}
+	publicv1.RegisterTenantBillingAssignmentsServer(registrar, tenantBillingAssignmentsServer)
+	privatev1.RegisterTenantBillingAssignmentsServer(registrar, privateTenantBillingAssignmentsServer)
+	return nil
 }
 
 // RegisterResourceServers constructs and registers every filterable resource's public and private server onto

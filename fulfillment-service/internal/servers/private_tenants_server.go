@@ -284,7 +284,18 @@ func (s *PrivateTenantsServer) Delete(ctx context.Context,
 	}
 	// Close at deletion acceptance, not at finalizer removal. The tenant lock acquired above also
 	// fences assignment finalization; the interval close and deletion timestamp commit together.
-	if closeErr := database.CloseTenantBillingAssignmentOnDeletion(ctx, tx, request.GetId()); closeErr != nil {
+	closeErr := func() error {
+		floor, lockErr := dao.LockTenantBillingAssignmentForDeletion(ctx, request.GetId())
+		if lockErr != nil {
+			return lockErr
+		}
+		at, clockErr := dao.BillingFinalizationTime(ctx, floor)
+		if clockErr != nil {
+			return clockErr
+		}
+		return dao.CloseTenantBillingAssignmentOnDeletion(ctx, request.GetId(), at)
+	}()
+	if closeErr != nil {
 		s.logger.ErrorContext(ctx, "Failed to close tenant billing assignment on deletion", slog.Any("error", closeErr))
 		err = grpcstatus.Error(grpccodes.Internal, "failed to close tenant billing assignment on deletion")
 		response = nil

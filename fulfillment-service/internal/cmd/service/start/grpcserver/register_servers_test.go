@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
@@ -53,8 +54,10 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	"github.com/osac-project/osac/fulfillment-service/internal/services"
 	itesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 func TestRegisterServers(t *testing.T) {
@@ -63,15 +66,16 @@ func TestRegisterServers(t *testing.T) {
 }
 
 var (
-	ctx          context.Context
-	ctrl         *gomock.Controller
-	logger       *slog.Logger
-	dbContainer  *database.Container
-	attribution  *auth.MockAttributionLogic
-	tenancy      *auth.MockTenancyLogic
-	conn         *grpc.ClientConn
-	hubScheme    *k8sruntime.Scheme
-	tierResolver servers.TierResolverFunc
+	ctx           context.Context
+	ctrl          *gomock.Controller
+	logger        *slog.Logger
+	dbContainer   *database.Container
+	attribution   *auth.MockAttributionLogic
+	tenancy       *auth.MockTenancyLogic
+	conn          *grpc.ClientConn
+	hubScheme     *k8sruntime.Scheme
+	tierResolver  servers.TierResolverFunc
+	txInterceptor *database.TxInterceptor
 )
 
 var _ = BeforeSuite(func() {
@@ -136,7 +140,7 @@ var _ = BeforeSuite(func() {
 		SetPool(pool).
 		Build()
 	Expect(err).ToNot(HaveOccurred())
-	txInterceptor, err := database.NewTxInterceptor().
+	txInterceptor, err = database.NewTxInterceptor().
 		SetLogger(logger).
 		SetManager(txManager).
 		Build()
@@ -228,16 +232,89 @@ type filterOracleCase struct {
 // built early (for JIT provisioning, before RegisterResourceServers is even called) and its public half is built
 // afterward in run() — a targeted filter-oracle regression test for Users (covering the private-only
 // UserStatus.keycloak_user_id field) is added separately in users_server_test.go as part of this same fix.
-// BillingAccount is excluded because it is a flat, non-object-shaped resource registered standalone in
-// start_grpc_server_cmd.go, not through RegisterResourceServers, and uses a bespoke allowlist-based translator
-// rather than dao.FilterTranslator; its targeted filter-oracle regression test lives in
-// billing_accounts_server_test.go. TenantBillingAssignment is excluded for the same reason, and its message has no
-// private-only field, so no targeted test is needed.
+// BillingAccount and TenantBillingAssignment are registered separately through registerBillingResourceServers,
+// sharing the configured provider between their public/private servers. Both use GenericDAO with public filter
+// descriptors; their targeted filter regressions live in the corresponding billing server suites.
 var resourcesExcludedFromDiscovery = map[string]bool{
 	"User":                    true,
 	"BillingAccount":          true,
 	"TenantBillingAssignment": true,
 }
+
+var _ = Describe("Registered billing scaffolds", func() {
+	It("keeps scaffolds unimplemented and denies them through OPA even to administrators before provider access", func(ctx context.Context) {
+		fake := billingfake.New(billingfake.Scenario{})
+		newClient := func(interceptors ...grpc.UnaryServerInterceptor) *grpc.ClientConn {
+			interceptors = append([]grpc.UnaryServerInterceptor{txInterceptor.UnaryServer}, interceptors...)
+			server := itesting.NewServer(grpc.ChainUnaryInterceptor(interceptors...))
+			DeferCleanup(server.Stop)
+			Expect(registerBillingResourceServers(ctx, server.Registrar(), logger, fake.Provider())).To(Succeed())
+			server.Start()
+			client, err := grpc.NewClient(server.Address(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(client.Close)
+			return client
+		}
+		methods := []struct {
+			method   string
+			request  proto.Message
+			response proto.Message
+		}{
+			{publicv1.BillingAccounts_Get_FullMethodName, &publicv1.BillingAccountsGetRequest{}, &publicv1.BillingAccountsGetResponse{}},
+			{privatev1.BillingAccounts_Get_FullMethodName, &privatev1.BillingAccountsGetRequest{}, &privatev1.BillingAccountsGetResponse{}},
+			{publicv1.BillingAccounts_Create_FullMethodName, &publicv1.BillingAccountsCreateRequest{}, &publicv1.BillingAccountsCreateResponse{}},
+			{privatev1.BillingAccounts_Create_FullMethodName, &privatev1.BillingAccountsCreateRequest{}, &privatev1.BillingAccountsCreateResponse{}},
+			{publicv1.BillingAccounts_Delete_FullMethodName, &publicv1.BillingAccountsDeleteRequest{}, &publicv1.BillingAccountsDeleteResponse{}},
+			{privatev1.BillingAccounts_Delete_FullMethodName, &privatev1.BillingAccountsDeleteRequest{}, &privatev1.BillingAccountsDeleteResponse{}},
+			{publicv1.TenantBillingAssignments_Delete_FullMethodName, &publicv1.TenantBillingAssignmentsDeleteRequest{}, &publicv1.TenantBillingAssignmentsDeleteResponse{}},
+			{privatev1.TenantBillingAssignments_Delete_FullMethodName, &privatev1.TenantBillingAssignmentsDeleteRequest{}, &privatev1.TenantBillingAssignmentsDeleteResponse{}},
+		}
+		// Without authorization, these registered methods must still be the generated scaffolds, not CRUD handlers.
+		raw := newClient()
+		for _, method := range methods {
+			err := raw.Invoke(ctx, method.method, method.request, method.response)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unimplemented), method.method)
+		}
+		Expect(fake.Calls()).To(BeEmpty())
+
+		evaluator, err := auth.NewEvaluator().Build()
+		Expect(err).ToNot(HaveOccurred())
+		authz, err := auth.NewGrpcAuthzInterceptor().SetLogger(logger).SetEvaluator(evaluator).Build()
+		Expect(err).ToNot(HaveOccurred())
+		referenceValidator, err := newReferenceValidator(logger, tenancy, prometheus.NewRegistry())
+		Expect(err).ToNot(HaveOccurred())
+		for _, persona := range []struct {
+			username string
+			groups   []any
+			admin    bool
+		}{
+			{"billing-admin", []any{"admins"}, true},
+			{"service-account-osac-admin", nil, true},
+			{"service-account-osac-controller", nil, true},
+			{"tenant-user", nil, false},
+		} {
+			token := itesting.MakeTokenObject(nil, jwt.MapClaims{
+				"username": persona.username, "groups": persona.groups, "organization": []any{"tenant-a"},
+			})
+			client := newClient(func(ctx context.Context, request any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+				return handler(auth.ContextWithToken(ctx, token), request)
+			}, authz.UnaryServer, referenceValidator.UnaryServer)
+			for _, method := range methods {
+				err := client.Invoke(ctx, method.method, method.request, method.response)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied), persona.username+" "+method.method)
+			}
+			// Positive control: the reviewed Get path reaches the real handler's required-id check for admins.
+			_, err := publicv1.NewTenantBillingAssignmentsClient(client).Get(ctx, &publicv1.TenantBillingAssignmentsGetRequest{})
+			if persona.admin {
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(Equal("id is required"))
+			} else {
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			}
+			Expect(fake.Calls()).To(BeEmpty(), persona.username)
+		}
+	})
+})
 
 // discoverFilterOracleCases walks the public/private proto registries, pairs every public/private message by
 // name, and for each pair with a public List RPC computes the private-only field paths. This makes the resulting

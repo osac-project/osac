@@ -32,7 +32,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BillingAccounts_List_FullMethodName = "/osac.private.v1.BillingAccounts/List"
+	BillingAccounts_List_FullMethodName   = "/osac.private.v1.BillingAccounts/List"
+	BillingAccounts_Get_FullMethodName    = "/osac.private.v1.BillingAccounts/Get"
+	BillingAccounts_Create_FullMethodName = "/osac.private.v1.BillingAccounts/Create"
+	BillingAccounts_Delete_FullMethodName = "/osac.private.v1.BillingAccounts/Delete"
 )
 
 // BillingAccountsClient is the client API for BillingAccounts service.
@@ -43,6 +46,12 @@ type BillingAccountsClient interface {
 	// accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled and `UNAVAILABLE` when the provider
 	// cannot be reached; it never serves a stale list unmarked as current. Deployment-wide administrator access only.
 	List(ctx context.Context, in *BillingAccountsListRequest, opts ...grpc.CallOption) (*BillingAccountsListResponse, error)
+	// Descriptor-only scaffold: not implemented or authorized, including for administrators.
+	Get(ctx context.Context, in *BillingAccountsGetRequest, opts ...grpc.CallOption) (*BillingAccountsGetResponse, error)
+	// Descriptor-only scaffold: not implemented or authorized. Does not create a local or provider account.
+	Create(ctx context.Context, in *BillingAccountsCreateRequest, opts ...grpc.CallOption) (*BillingAccountsCreateResponse, error)
+	// Descriptor-only scaffold: not implemented or authorized. Does not delete a local or provider account.
+	Delete(ctx context.Context, in *BillingAccountsDeleteRequest, opts ...grpc.CallOption) (*BillingAccountsDeleteResponse, error)
 }
 
 type billingAccountsClient struct {
@@ -63,6 +72,36 @@ func (c *billingAccountsClient) List(ctx context.Context, in *BillingAccountsLis
 	return out, nil
 }
 
+func (c *billingAccountsClient) Get(ctx context.Context, in *BillingAccountsGetRequest, opts ...grpc.CallOption) (*BillingAccountsGetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BillingAccountsGetResponse)
+	err := c.cc.Invoke(ctx, BillingAccounts_Get_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *billingAccountsClient) Create(ctx context.Context, in *BillingAccountsCreateRequest, opts ...grpc.CallOption) (*BillingAccountsCreateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BillingAccountsCreateResponse)
+	err := c.cc.Invoke(ctx, BillingAccounts_Create_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *billingAccountsClient) Delete(ctx context.Context, in *BillingAccountsDeleteRequest, opts ...grpc.CallOption) (*BillingAccountsDeleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BillingAccountsDeleteResponse)
+	err := c.cc.Invoke(ctx, BillingAccounts_Delete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BillingAccountsServer is the server API for BillingAccounts service.
 // All implementations must embed UnimplementedBillingAccountsServer
 // for forward compatibility.
@@ -71,6 +110,12 @@ type BillingAccountsServer interface {
 	// accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled and `UNAVAILABLE` when the provider
 	// cannot be reached; it never serves a stale list unmarked as current. Deployment-wide administrator access only.
 	List(context.Context, *BillingAccountsListRequest) (*BillingAccountsListResponse, error)
+	// Descriptor-only scaffold: not implemented or authorized, including for administrators.
+	Get(context.Context, *BillingAccountsGetRequest) (*BillingAccountsGetResponse, error)
+	// Descriptor-only scaffold: not implemented or authorized. Does not create a local or provider account.
+	Create(context.Context, *BillingAccountsCreateRequest) (*BillingAccountsCreateResponse, error)
+	// Descriptor-only scaffold: not implemented or authorized. Does not delete a local or provider account.
+	Delete(context.Context, *BillingAccountsDeleteRequest) (*BillingAccountsDeleteResponse, error)
 	mustEmbedUnimplementedBillingAccountsServer()
 }
 
@@ -83,6 +128,15 @@ type UnimplementedBillingAccountsServer struct{}
 
 func (UnimplementedBillingAccountsServer) List(context.Context, *BillingAccountsListRequest) (*BillingAccountsListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedBillingAccountsServer) Get(context.Context, *BillingAccountsGetRequest) (*BillingAccountsGetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedBillingAccountsServer) Create(context.Context, *BillingAccountsCreateRequest) (*BillingAccountsCreateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
+}
+func (UnimplementedBillingAccountsServer) Delete(context.Context, *BillingAccountsDeleteRequest) (*BillingAccountsDeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
 func (UnimplementedBillingAccountsServer) mustEmbedUnimplementedBillingAccountsServer() {}
 func (UnimplementedBillingAccountsServer) testEmbeddedByValue()                         {}
@@ -123,6 +177,60 @@ func _BillingAccounts_List_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BillingAccounts_Get_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BillingAccountsGetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingAccountsServer).Get(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingAccounts_Get_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingAccountsServer).Get(ctx, req.(*BillingAccountsGetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BillingAccounts_Create_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BillingAccountsCreateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingAccountsServer).Create(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingAccounts_Create_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingAccountsServer).Create(ctx, req.(*BillingAccountsCreateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BillingAccounts_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BillingAccountsDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingAccountsServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingAccounts_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingAccountsServer).Delete(ctx, req.(*BillingAccountsDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BillingAccounts_ServiceDesc is the grpc.ServiceDesc for BillingAccounts service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -133,6 +241,18 @@ var BillingAccounts_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "List",
 			Handler:    _BillingAccounts_List_Handler,
+		},
+		{
+			MethodName: "Get",
+			Handler:    _BillingAccounts_Get_Handler,
+		},
+		{
+			MethodName: "Create",
+			Handler:    _BillingAccounts_Create_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _BillingAccounts_Delete_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

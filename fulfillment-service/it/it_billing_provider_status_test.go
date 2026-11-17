@@ -155,17 +155,17 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		var account *publicv1.BillingAccount
 		Eventually(ctx, func(g Gomega) {
 			response, err := client.List(ctx, publicv1.BillingAccountsListRequest_builder{
-				Filter: new(fmt.Sprintf("this.display_name == %q", name)),
+				Filter: new(fmt.Sprintf("this.status.display_name == %q", name)),
 			}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(response.GetItems()).To(HaveLen(1))
 			account = response.GetItems()[0]
 		}, time.Minute, time.Second).Should(Succeed())
-		Expect(account.GetProviderKey()).To(Equal("m360"))
-		Expect(account.GetState()).To(Equal(publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
-		Expect(account.GetStatusObservedAt()).ToNot(BeNil())
-		if account.GetExternalBillingAccountId() != "" {
-			correlationIDs = append(correlationIDs, account.GetExternalBillingAccountId())
+		Expect(account.GetStatus().GetProviderKey()).To(Equal("m360"))
+		Expect(account.GetStatus().GetState()).To(Equal(publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
+		Expect(account.GetStatus().GetStateObservationTimestamp()).ToNot(BeNil())
+		if account.GetStatus().GetExternalBillingAccountId() != "" {
+			correlationIDs = append(correlationIDs, account.GetStatus().GetExternalBillingAccountId())
 		}
 		return account
 	}
@@ -212,8 +212,8 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(second.GetId()).ToNot(BeEmpty())
 		Expect(first.GetId()).ToNot(BeElementOf(accounts[0].ID, accounts[1].ID))
 		Expect(second.GetId()).ToNot(BeElementOf(accounts[0].ID, accounts[1].ID, first.GetId()))
-		Expect(first.GetExternalBillingAccountId()).To(Equal(accounts[0].ExternalID))
-		Expect(second.GetExternalBillingAccountId()).To(Equal(accounts[1].ExternalID))
+		Expect(first.GetStatus().GetExternalBillingAccountId()).To(Equal(accounts[0].ExternalID))
+		Expect(second.GetStatus().GetExternalBillingAccountId()).To(Equal(accounts[1].ExternalID))
 		Expect(stub.Succeeded("ListAccounts")).To(BeNumerically(">", 0))
 		Expect(stub.Writes()).To(BeEmpty(), "discovery must not perform account writes")
 		tenant := newTenant(ctx)
@@ -222,62 +222,68 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		created, err := client.Create(ctx, publicv1.TenantBillingAssignmentsCreateRequest_builder{
 			Object: publicv1.TenantBillingAssignment_builder{
 				Metadata: publicv1.Metadata_builder{Name: "billing-" + uuid.New()}.Build(),
-				Spec:     publicv1.TenantBillingAssignmentSpec_builder{TenantId: tenant, BillingAccountId: first.GetId()}.Build(),
+				Spec: publicv1.TenantBillingAssignmentSpec_builder{
+					Tenant:         publicv1.TenantReference_builder{Id: tenant}.Build(),
+					BillingAccount: publicv1.BillingAccountReference_builder{Id: first.GetId()}.Build(),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		assignment := created.GetObject()
 		Expect(assignment.GetId()).ToNot(BeEmpty())
-		Expect(assignment.GetSpec().GetTenantId()).To(Equal(tenant))
-		Expect(assignment.GetSpec().GetBillingAccountId()).To(Equal(first.GetId()))
+		Expect(assignment.GetSpec().GetTenant().GetId()).To(Equal(tenant))
+		Expect(assignment.GetSpec().GetBillingAccount().GetId()).To(Equal(first.GetId()))
 		Expect(assignment.GetStatus().GetConnectionState()).To(Equal(
 			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 		Expect(assignment.GetStatus().GetMessage()).To(BeEmpty())
-		Expect(assignment.GetStatus().GetEffectiveFrom()).ToNot(BeNil())
-		Expect(assignment.GetStatus().GetEffectiveTo()).To(BeNil())
-		expectReadOnlyResolution(accounts[0].ID, first.GetExternalBillingAccountId(), beforeCreate)
+		Expect(assignment.GetStatus().GetEffectiveFromTimestamp()).ToNot(BeNil())
+		Expect(assignment.GetStatus().GetEffectiveToTimestamp()).To(BeNil())
+		expectReadOnlyResolution(accounts[0].ID, first.GetStatus().GetExternalBillingAccountId(), beforeCreate)
 		refreshed := findAccount(ctx, accounts[0].Name)
 		Expect(refreshed.GetId()).To(Equal(first.GetId()))
-		Expect(refreshed.GetExternalBillingAccountId()).To(Equal(accounts[0].ExternalID))
-		Expect(first.GetExternalBillingAccountId()).ToNot(BeElementOf(tenant, accounts[0].ID, first.GetId()))
+		Expect(refreshed.GetStatus().GetExternalBillingAccountId()).To(Equal(accounts[0].ExternalID))
+		Expect(first.GetStatus().GetExternalBillingAccountId()).ToNot(BeElementOf(tenant, accounts[0].ID, first.GetId()))
 
 		beforeUpdate := len(stub.Requests())
 		updated, err := client.Update(ctx, publicv1.TenantBillingAssignmentsUpdateRequest_builder{
 			Object: publicv1.TenantBillingAssignment_builder{
-				Id:   assignment.GetId(),
-				Spec: publicv1.TenantBillingAssignmentSpec_builder{TenantId: tenant, BillingAccountId: second.GetId()}.Build(),
+				Id: assignment.GetId(),
+				Spec: publicv1.TenantBillingAssignmentSpec_builder{
+					Tenant:         publicv1.TenantReference_builder{Id: tenant}.Build(),
+					BillingAccount: publicv1.BillingAccountReference_builder{Id: second.GetId()}.Build(),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(updated.GetObject().GetId()).ToNot(Equal(assignment.GetId()))
-		Expect(updated.GetObject().GetSpec().GetTenantId()).To(Equal(tenant))
-		Expect(updated.GetObject().GetSpec().GetBillingAccountId()).To(Equal(second.GetId()))
+		Expect(updated.GetObject().GetSpec().GetTenant().GetId()).To(Equal(tenant))
+		Expect(updated.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(second.GetId()))
 		Expect(updated.GetObject().GetStatus().GetConnectionState()).To(Equal(
 			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 		Expect(updated.GetObject().GetStatus().GetMessage()).To(BeEmpty())
-		Expect(updated.GetObject().GetStatus().GetEffectiveFrom()).ToNot(BeNil())
-		Expect(updated.GetObject().GetStatus().GetEffectiveTo()).To(BeNil())
-		expectReadOnlyResolution(accounts[1].ID, second.GetExternalBillingAccountId(), beforeUpdate)
+		Expect(updated.GetObject().GetStatus().GetEffectiveFromTimestamp()).ToNot(BeNil())
+		Expect(updated.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil())
+		expectReadOnlyResolution(accounts[1].ID, second.GetStatus().GetExternalBillingAccountId(), beforeUpdate)
 		refreshed = findAccount(ctx, accounts[1].Name)
 		Expect(refreshed.GetId()).To(Equal(second.GetId()))
-		Expect(refreshed.GetExternalBillingAccountId()).To(Equal(accounts[1].ExternalID))
-		Expect(second.GetExternalBillingAccountId()).ToNot(BeElementOf(tenant, accounts[1].ID, second.GetId(), first.GetExternalBillingAccountId()))
+		Expect(refreshed.GetStatus().GetExternalBillingAccountId()).To(Equal(accounts[1].ExternalID))
+		Expect(second.GetStatus().GetExternalBillingAccountId()).ToNot(BeElementOf(tenant, accounts[1].ID, second.GetId(), first.GetStatus().GetExternalBillingAccountId()))
 		old, err := client.Get(ctx, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: assignment.GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(old.GetObject().GetSpec().GetBillingAccountId()).To(Equal(first.GetId()))
-		Expect(proto.Equal(old.GetObject().GetStatus().GetEffectiveFrom(),
-			assignment.GetStatus().GetEffectiveFrom())).To(BeTrue())
-		Expect(old.GetObject().GetStatus().GetEffectiveTo()).ToNot(BeNil())
-		Expect(proto.Equal(old.GetObject().GetStatus().GetEffectiveTo(),
-			updated.GetObject().GetStatus().GetEffectiveFrom())).To(BeTrue())
+		Expect(old.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(first.GetId()))
+		Expect(proto.Equal(old.GetObject().GetStatus().GetEffectiveFromTimestamp(),
+			assignment.GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
+		Expect(old.GetObject().GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil())
+		Expect(proto.Equal(old.GetObject().GetStatus().GetEffectiveToTimestamp(),
+			updated.GetObject().GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
 		history, err := client.List(ctx, publicv1.TenantBillingAssignmentsListRequest_builder{
-			Filter: new(fmt.Sprintf("this.spec.tenant_id == %q", tenant)),
+			Filter: new(fmt.Sprintf("this.spec.tenant.id == %q", tenant)),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(history.GetItems()).To(HaveLen(2), "reassignment must retain both contiguous intervals")
 		active := 0
 		for _, interval := range history.GetItems() {
-			if interval.GetStatus().GetEffectiveTo() == nil {
+			if interval.GetStatus().GetEffectiveToTimestamp() == nil {
 				active++
 				Expect(interval.GetId()).To(Equal(updated.GetObject().GetId()))
 			}
@@ -291,40 +297,43 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		accounts[0].ExternalID = ""
 		stub.SetScenario(billingfake.Scenario{Accounts: accounts})
 		account := findAccount(ctx, accounts[0].Name)
-		Expect(account.GetExternalBillingAccountId()).To(BeEmpty())
+		Expect(account.GetStatus().GetExternalBillingAccountId()).To(BeEmpty())
 		tenant := newTenant(ctx)
 		client := publicv1.NewTenantBillingAssignmentsClient(tool.ExternalView().AdminConn())
 		beforeCreate := len(stub.Requests())
 		created, err := client.Create(ctx, publicv1.TenantBillingAssignmentsCreateRequest_builder{
 			Object: publicv1.TenantBillingAssignment_builder{
 				Metadata: publicv1.Metadata_builder{Name: "billing-" + uuid.New()}.Build(),
-				Spec:     publicv1.TenantBillingAssignmentSpec_builder{TenantId: tenant, BillingAccountId: account.GetId()}.Build(),
+				Spec: publicv1.TenantBillingAssignmentSpec_builder{
+					Tenant:         publicv1.TenantReference_builder{Id: tenant}.Build(),
+					BillingAccount: publicv1.BillingAccountReference_builder{Id: account.GetId()}.Build(),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		pending := created.GetObject()
 		Expect(pending.GetId()).ToNot(BeEmpty())
-		Expect(pending.GetSpec().GetTenantId()).To(Equal(tenant))
-		Expect(pending.GetSpec().GetBillingAccountId()).To(Equal(account.GetId()))
+		Expect(pending.GetSpec().GetTenant().GetId()).To(Equal(tenant))
+		Expect(pending.GetSpec().GetBillingAccount().GetId()).To(Equal(account.GetId()))
 		Expect(pending.GetStatus().GetConnectionState()).To(Equal(
 			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING))
 		remediation := billing.ReasonProviderCorrelationWriteUnsupported +
 			": set externalId on the account in the provider to the external_billing_account_id shown by BillingAccounts.List"
 		Expect(pending.GetStatus().GetMessage()).To(Equal(remediation))
-		Expect(pending.GetStatus().GetEffectiveFrom()).ToNot(BeNil())
-		Expect(pending.GetStatus().GetEffectiveTo()).To(BeNil())
+		Expect(pending.GetStatus().GetEffectiveFromTimestamp()).ToNot(BeNil())
+		Expect(pending.GetStatus().GetEffectiveToTimestamp()).To(BeNil())
 		Expect(stub.Writes()).To(BeEmpty(), "unsupported capability must not attempt even a failed PUT")
 		accountID := account.GetId()
 		account = findAccount(ctx, accounts[0].Name)
 		Expect(account.GetId()).To(Equal(accountID))
-		Expect(account.GetExternalBillingAccountId()).ToNot(BeEmpty(), "PENDING must retain the OSAC-side correlation")
-		Expect(account.GetExternalBillingAccountId()).ToNot(BeElementOf(tenant, accounts[0].ID, accountID, accounts[1].ExternalID))
-		expectReadOnlyResolution(accounts[0].ID, account.GetExternalBillingAccountId(), beforeCreate)
+		Expect(account.GetStatus().GetExternalBillingAccountId()).ToNot(BeEmpty(), "PENDING must retain the OSAC-side correlation")
+		Expect(account.GetStatus().GetExternalBillingAccountId()).ToNot(BeElementOf(tenant, accounts[0].ID, accountID, accounts[1].ExternalID))
+		expectReadOnlyResolution(accounts[0].ID, account.GetStatus().GetExternalBillingAccountId(), beforeCreate)
 		persisted, err := client.Get(ctx, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: pending.GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(persisted.GetObject().GetStatus().GetConnectionState()).To(Equal(pending.GetStatus().GetConnectionState()))
 		Expect(persisted.GetObject().GetStatus().GetMessage()).To(Equal(remediation))
-		Expect(persisted.GetObject().GetSpec().GetBillingAccountId()).To(Equal(accountID))
+		Expect(persisted.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(accountID))
 
 		// A retry without provider-side remediation stays PENDING and must not rotate the OSAC correlation or interval.
 		beforeRetry := len(stub.Requests())
@@ -333,15 +342,15 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(retried.GetObject().GetId()).To(Equal(pending.GetId()))
 		Expect(retried.GetObject().GetStatus().GetConnectionState()).To(Equal(pending.GetStatus().GetConnectionState()))
 		Expect(retried.GetObject().GetStatus().GetMessage()).To(Equal(remediation))
-		Expect(proto.Equal(retried.GetObject().GetStatus().GetEffectiveFrom(),
-			pending.GetStatus().GetEffectiveFrom())).To(BeTrue())
-		Expect(retried.GetObject().GetStatus().GetEffectiveTo()).To(BeNil())
-		expectReadOnlyResolution(accounts[0].ID, account.GetExternalBillingAccountId(), beforeRetry)
-		Expect(findAccount(ctx, accounts[0].Name).GetExternalBillingAccountId()).To(Equal(account.GetExternalBillingAccountId()))
+		Expect(proto.Equal(retried.GetObject().GetStatus().GetEffectiveFromTimestamp(),
+			pending.GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
+		Expect(retried.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil())
+		expectReadOnlyResolution(accounts[0].ID, account.GetStatus().GetExternalBillingAccountId(), beforeRetry)
+		Expect(findAccount(ctx, accounts[0].Name).GetStatus().GetExternalBillingAccountId()).To(Equal(account.GetStatus().GetExternalBillingAccountId()))
 
 		// Simulate the external provider admin, not an OSAC API write. Preserve every native ID, name and state;
 		// only this account's provider-side correlation changes. SetScenario keeps the HTTP request log intact.
-		accounts[0].ExternalID = account.GetExternalBillingAccountId()
+		accounts[0].ExternalID = account.GetStatus().GetExternalBillingAccountId()
 		stub.SetScenario(billingfake.Scenario{Accounts: accounts})
 		persisted, err = client.Get(ctx, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: pending.GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -354,19 +363,19 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 		Expect(updated.GetObject().GetStatus().GetMessage()).To(BeEmpty())
 		Expect(updated.GetObject().GetId()).To(Equal(pending.GetId()))
-		Expect(updated.GetObject().GetSpec().GetBillingAccountId()).To(Equal(accountID))
-		Expect(proto.Equal(updated.GetObject().GetStatus().GetEffectiveFrom(),
-			pending.GetStatus().GetEffectiveFrom())).To(BeTrue())
-		Expect(updated.GetObject().GetStatus().GetEffectiveTo()).To(BeNil())
-		expectReadOnlyResolution(accounts[0].ID, account.GetExternalBillingAccountId(), beforeUpdate)
-		Expect(findAccount(ctx, accounts[0].Name).GetExternalBillingAccountId()).To(Equal(account.GetExternalBillingAccountId()))
+		Expect(updated.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(accountID))
+		Expect(proto.Equal(updated.GetObject().GetStatus().GetEffectiveFromTimestamp(),
+			pending.GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
+		Expect(updated.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil())
+		expectReadOnlyResolution(accounts[0].ID, account.GetStatus().GetExternalBillingAccountId(), beforeUpdate)
+		Expect(findAccount(ctx, accounts[0].Name).GetStatus().GetExternalBillingAccountId()).To(Equal(account.GetStatus().GetExternalBillingAccountId()))
 		persisted, err = client.Get(ctx, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: pending.GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(persisted.GetObject().GetStatus().GetConnectionState()).To(Equal(
 			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 		Expect(persisted.GetObject().GetStatus().GetMessage()).To(BeEmpty())
 		history, err := client.List(ctx, publicv1.TenantBillingAssignmentsListRequest_builder{
-			Filter: new(fmt.Sprintf("this.spec.tenant_id == %q", tenant)),
+			Filter: new(fmt.Sprintf("this.spec.tenant.id == %q", tenant)),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(history.GetItems()).To(HaveLen(1), "same-account revalidation must not create another interval")

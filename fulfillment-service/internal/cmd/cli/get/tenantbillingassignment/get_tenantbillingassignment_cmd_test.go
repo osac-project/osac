@@ -121,22 +121,24 @@ var _ = Describe("render", func() {
 	connected := publicv1.TenantBillingAssignment_builder{
 		Id: "asg-1",
 		Spec: publicv1.TenantBillingAssignmentSpec_builder{
-			TenantId: "tenant-a", BillingAccountId: "ba-1",
+			Tenant:         publicv1.TenantReference_builder{Id: "tenant-a"}.Build(),
+			BillingAccount: publicv1.BillingAccountReference_builder{Id: "ba-1"}.Build(),
 		}.Build(),
 		Status: publicv1.TenantBillingAssignmentStatus_builder{
-			ConnectionState: publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
-			EffectiveFrom:   timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
+			ConnectionState:        publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
+			EffectiveFromTimestamp: timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
 		}.Build(),
 	}.Build()
 
 	pending := publicv1.TenantBillingAssignment_builder{
 		Id: "asg-2",
 		Spec: publicv1.TenantBillingAssignmentSpec_builder{
-			TenantId: "tenant-b", BillingAccountId: "ba-2",
+			Tenant:         publicv1.TenantReference_builder{Id: "tenant-b"}.Build(),
+			BillingAccount: publicv1.BillingAccountReference_builder{Id: "ba-2"}.Build(),
 		}.Build(),
 		Status: publicv1.TenantBillingAssignmentStatus_builder{
-			ConnectionState: publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING,
-			EffectiveFrom:   timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
+			ConnectionState:        publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING,
+			EffectiveFromTimestamp: timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
 			Message: "BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED: set externalId on the account in the " +
 				"provider to the external_billing_account_id shown by BillingAccounts.List",
 		}.Build(),
@@ -145,7 +147,8 @@ var _ = Describe("render", func() {
 	failed := publicv1.TenantBillingAssignment_builder{
 		Id: "asg-3",
 		Spec: publicv1.TenantBillingAssignmentSpec_builder{
-			TenantId: "tenant-c", BillingAccountId: "ba-3",
+			Tenant:         publicv1.TenantReference_builder{Id: "tenant-c"}.Build(),
+			BillingAccount: publicv1.BillingAccountReference_builder{Id: "ba-3"}.Build(),
 		}.Build(),
 		Status: publicv1.TenantBillingAssignmentStatus_builder{
 			ConnectionState: publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_FAILED,
@@ -207,10 +210,10 @@ var _ = Describe("render", func() {
 			"total": 1,
 			"items": [{
 				"id": "asg-1",
-				"spec": {"tenant_id": "tenant-a", "billing_account_id": "ba-1"},
+				"spec": {"tenant": {"id": "tenant-a"}, "billing_account": {"id": "ba-1"}},
 				"status": {
 					"connection_state": "TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED",
-					"effective_from": "2026-01-02T03:04:05Z"
+					"effective_from_timestamp": "2026-01-02T03:04:05Z"
 				}
 			}]
 		}`))
@@ -219,7 +222,15 @@ var _ = Describe("render", func() {
 
 	It("renders YAML with API field names", func() {
 		output, stderr := run("yaml", 0, listWith(pending))
-		Expect(output).To(ContainSubstring("tenant_id: tenant-b"))
+		Expect(output).To(MatchYAML(`{
+			"size": 1, "total": 1,
+			"items": [{"id": "asg-2",
+				"spec": {"tenant": {"id": "tenant-b"}, "billing_account": {"id": "ba-2"}},
+				"status": {"connection_state": "TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING",
+					"effective_from_timestamp": "2026-01-02T03:04:05Z",
+					"message": "BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED: set externalId on the account in the provider to the external_billing_account_id shown by BillingAccounts.List"}
+			}]
+		}`))
 		Expect(output).To(ContainSubstring("BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED"))
 		Expect(stderr).To(BeEmpty())
 	})
@@ -244,7 +255,8 @@ var _ = Describe("render failures", func() {
 	connected := publicv1.TenantBillingAssignment_builder{
 		Id: "asg-1",
 		Spec: publicv1.TenantBillingAssignmentSpec_builder{
-			TenantId: "tenant-a", BillingAccountId: "ba-1",
+			Tenant:         publicv1.TenantReference_builder{Id: "tenant-a"}.Build(),
+			BillingAccount: publicv1.BillingAccountReference_builder{Id: "ba-1"}.Build(),
 		}.Build(),
 		Status: publicv1.TenantBillingAssignmentStatus_builder{
 			ConnectionState: publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,

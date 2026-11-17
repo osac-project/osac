@@ -467,10 +467,10 @@ type makeMetadataArgs struct {
 func (r *request[O]) makeMetadata(args makeMetadataArgs) metadataIface {
 	result := r.dao.metadataTemplate.New().Interface().(metadataIface)
 	result.SetName(args.name)
-	if args.creationTs.Unix() != 0 {
+	if !args.creationTs.Equal(time.Unix(0, 0)) {
 		result.SetCreationTimestamp(timestamppb.New(args.creationTs))
 	}
-	if args.deletionTs.Unix() != 0 {
+	if !args.deletionTs.Equal(time.Unix(0, 0)) {
 		result.SetDeletionTimestamp(timestamppb.New(args.deletionTs))
 	}
 	result.SetFinalizers(args.finalizers)

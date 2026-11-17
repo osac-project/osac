@@ -31,6 +31,30 @@ func registerReferenceLookups(
 	tenancyLogic auth.TenancyLogic,
 	metricsRegisterer prometheus.Registerer,
 ) error {
+	// Billing references are platform scoped: assignment ownership must not scope a
+	// system-owned account name to the billed tenant/project. DAO visibility still applies.
+	billingAccountsDAO, err := dao.NewGenericDAO[*privatev1.BillingAccount]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create BillingAccount DAO for reference lookups: %w", err)
+	}
+	references.RegisterPlatformScopedDAOLookup(validator, "osac.private.v1.BillingAccountReference", billingAccountsDAO)
+	references.RegisterPlatformScopedDAOLookup(validator, "osac.public.v1.BillingAccountReference", billingAccountsDAO)
+
+	tenantsDAO, err := dao.NewGenericDAO[*privatev1.Tenant]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create Tenant DAO for reference lookups: %w", err)
+	}
+	references.RegisterPlatformScopedDAOLookup(validator, "osac.private.v1.TenantReference", tenantsDAO)
+	references.RegisterPlatformScopedDAOLookup(validator, "osac.public.v1.TenantReference", tenantsDAO)
+
 	// Networking references
 	virtualNetworksDAO, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
 		SetLogger(logger).

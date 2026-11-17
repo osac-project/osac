@@ -15,7 +15,10 @@ syntax = "proto3";
 
 package osac.public.v1;
 
+import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
+import "osac/public/v1/metadata_type.proto";
 
 // Last observed normalized state of a billing account. ACTIVE accounts can be linked for new priced publish and
 // launch; INACTIVE accounts cannot be newly linked, though existing resources keep running and usage submission
@@ -24,36 +27,78 @@ enum BillingAccountState {
   // Unset. Never reported by the server.
   BILLING_ACCOUNT_STATE_UNSPECIFIED = 0;
 
+  // The provider reports an active account eligible for a new assignment.
   BILLING_ACCOUNT_STATE_ACTIVE = 1;
 
+  // The provider reports an inactive account; new assignments are not permitted.
   BILLING_ACCOUNT_STATE_INACTIVE = 2;
 
+  // OSAC could not classify the provider's native state, or a complete inventory did not observe the account.
   BILLING_ACCOUNT_STATE_UNKNOWN = 3;
 }
 
-// An account discovered from the configured billing provider.
+// An account discovered from the configured billing provider. Discovery owns its metadata and observed status;
+// this object does not expose a provider-account mutation API.
 message BillingAccount {
   // OSAC-generated opaque identifier used by APIs and tenant assignments. It is not the provider's account id.
   string id = 1;
 
-  // Adapter that discovered the account, such as `m360`.
-  string provider_key = 2;
+  // System-owned metadata: tenant is `system`, project is empty, and name is `ba-` followed by the first 60
+  // lowercase hexadecimal characters of SHA-256 over the UTF-8 OSAC id. Provider labels do not determine identity.
+  Metadata metadata = 2;
 
-  // Provider-supplied account label.
-  string display_name = 3;
+  BillingAccountSpec spec = 3;
+
+  // System-provided, read-only observations.
+  BillingAccountStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Former flat fields are not aliases. Reusing tags 2-4 for the standard envelope is a breaking amendment.
+  reserved 5 to 8;
+  reserved "provider_key", "display_name", "base_currency", "state", "status_observed_at", "correlation_id",
+    "external_billing_account_id", "provider_account_reference";
+}
+
+// Discovered accounts have no user-configurable desired state.
+message BillingAccountSpec {}
+
+// Last provider observations and locally retained attribution for a discovered account.
+message BillingAccountStatus {
+  // Adapter that discovered the account, such as `m360`. This is not the provider-native account identity.
+  string provider_key = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Provider-supplied display label, not a stable OSAC or provider-native identifier.
+  string display_name = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
 
   // ISO-4217 currency used to interpret this account's prices, provider-supplied. Empty when the provider has no
   // currency field (M360) or does not supply one; a missing currency is never invented or defaulted.
-  string base_currency = 4;
+  string base_currency = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
 
   // Last normalized provider-account state.
-  BillingAccountState state = 5;
+  BillingAccountState state = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
 
-  // Time OSAC last read the normalized account state from the provider.
-  google.protobuf.Timestamp status_observed_at = 6;
+  // Start of the OSAC observation that supplied the stored state. Not the provider's transition time or the
+  // completion time of the provider read; older observations cannot replace newer evidence.
+  google.protobuf.Timestamp state_observation_timestamp = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
 
-  // OSAC's provider-agnostic attribution id carried on usage events. When the provider exposes a native
-  // correlation field (`externalId` in M360), assignment validation matches this value against it. Not the tenant
-  // id or the provider's account id. Empty until discovery or assignment establishes one.
-  string external_billing_account_id = 7;
+  // Locally retained provider-agnostic attribution token, distinct from OSAC id, display label and native account
+  // reference. It may be established while an assignment is PENDING and absent from M360's `externalId`.
+  // Assignment validation checks for a unique provider-side carrier; this field alone is not evidence of a
+  // native identity or metering integration. Absence and a present empty value are distinct; raw bytes are retained.
+  optional string external_billing_account_id = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Platform-scoped reference to a discovered billing account by immutable OSAC id, stable name, or both.
+// When both are supplied they must identify the same account. Neither token nor provider label is a reference.
+message BillingAccountReference {
+  option (buf.validate.message).cel = {
+    id: "billing_account_reference_identity",
+    message: "at least one of id or name is required",
+    expression: "this.id != '' || this.name != ''"
+  };
+
+  string id = 1;
+  string name = 2 [(buf.validate.field).string = {
+    max_len: 63,
+    pattern: "^$|^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
 }

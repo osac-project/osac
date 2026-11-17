@@ -357,7 +357,100 @@ func expectStaleTypedWriteRejected(t finalizerTarget, update typedUpdater) {
 	t.expectFinalizerConflict(ctx, err, finalizerController)
 }
 
+func verifyAssignmentDeleteUnsupported() {
+	GinkgoHelper()
+	f := newFinalizerAssignmentFixture(false)
+	for _, object := range []*privatev1.TenantBillingAssignment{f.current, f.history} {
+		_, err := f.private.Delete(f.caller, privatev1.TenantBillingAssignmentsDeleteRequest_builder{Id: object.GetId()}.Build())
+		Expect(status.Code(err)).To(Equal(codes.Unimplemented),
+			"private assignment Delete is now supported: replace the descriptor-only case with full CAS/lifecycle coverage")
+		_, err = f.public.Delete(f.caller, publicv1.TenantBillingAssignmentsDeleteRequest_builder{Id: object.GetId()}.Build())
+		Expect(status.Code(err)).To(Equal(codes.Unimplemented),
+			"public assignment Delete is now supported: replace the descriptor-only case with full CAS/lifecycle coverage")
+	}
+	f.expectUnchanged()
+	Expect(f.fake.Calls()).To(BeEmpty())
+}
+
 var _ = Describe("typed finalizer updates", func() {
+	Describe("descriptor-only assignment lifecycle", func() {
+		It("keeps private and public Delete unsupported without mutating current or closed history", verifyAssignmentDeleteUnsupported)
+
+		DescribeTable("rejects a private finalizer mask without changing any stored field or calling the provider",
+			func(mask *fieldmaskpb.FieldMask) {
+				f := newFinalizerAssignmentFixture(false)
+				object := withFinalizers(f.current).(*privatev1.TenantBillingAssignment)
+				var changes int
+				Expect(testPool.QueryRow(f.caller, `select count(*) from changes`).Scan(&changes)).To(Succeed())
+				_, err := f.private.Update(f.caller, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+					Object: object, UpdateMask: mask,
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(status.Convert(err).Message()).To(ContainSubstring("only atomic spec.billing_account is writable"))
+				f.expectUnchanged()
+				var after int
+				Expect(testPool.QueryRow(f.caller, `select count(*) from changes`).Scan(&after)).To(Succeed())
+				Expect(after).To(Equal(changes), "a rejected mask must not write any resource")
+				Expect(f.fake.Calls()).To(BeEmpty())
+			},
+			Entry("finalizers only", finalizersMask()),
+			Entry("finalizers and the writable account", finalizerMaskOf("metadata.finalizers", "spec.billing_account")),
+		)
+
+		DescribeTable("preserves private finalizers and all history through supported public updates",
+			func(mask *fieldmaskpb.FieldMask, metadata string, deleting bool) {
+				f := newFinalizerAssignmentFixture(deleting)
+				Expect(f.current.GetMetadata().GetVersion()).To(BeNumerically(">", 0))
+				Expect(f.current.GetMetadata().HasDeletionTimestamp()).To(Equal(deleting))
+				object, err := f.public.toPublic(f.caller, f.current)
+				Expect(err).ToNot(HaveOccurred())
+				switch metadata {
+				case "stale":
+					object.GetMetadata().SetVersion(f.current.GetMetadata().GetVersion() - 1)
+				case "missing":
+					object.SetMetadata(nil)
+				}
+				// Keep the same canonical account: nil masks revalidate, they must not reassign or clear it.
+				response, err := f.public.Update(f.caller, publicv1.TenantBillingAssignmentsUpdateRequest_builder{
+					Object: object, UpdateMask: mask,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetId()).To(Equal(f.current.GetId()))
+				Expect(response.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(f.current.GetSpec().GetBillingAccount().GetId()))
+				f.expectUnchanged()
+				Expect(f.fake.Count("SetCorrelationValue")).To(BeZero(), "the configured read-only provider already has the matching token")
+				if mask == nil {
+					Expect(f.fake.Succeeded("GetAccount")).To(BeNumerically(">", 0))
+					Expect(f.fake.Succeeded("CorrelationValue")).To(BeNumerically(">", 0))
+				} else {
+					Expect(f.fake.Calls()).To(BeEmpty(), "an empty mask must be a true no-op")
+				}
+			},
+			Entry("nil mask, current version", (*fieldmaskpb.FieldMask)(nil), "current", false),
+			Entry("nil mask, stale version", (*fieldmaskpb.FieldMask)(nil), "stale", false),
+			Entry("nil mask, missing metadata", (*fieldmaskpb.FieldMask)(nil), "missing", false),
+			Entry("empty mask, stale version", &fieldmaskpb.FieldMask{}, "stale", false),
+			Entry("nil mask, deleting with stale version", (*fieldmaskpb.FieldMask)(nil), "stale", true),
+			Entry("nil mask, deleting without metadata", (*fieldmaskpb.FieldMask)(nil), "missing", true),
+			Entry("empty mask, deleting without metadata", &fieldmaskpb.FieldMask{}, "missing", true),
+		)
+
+		It("rejects private and public updates to closed history before provider I/O", func() {
+			f := newFinalizerAssignmentFixture(false)
+			_, err := f.private.Update(f.caller, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+				Object: withFinalizers(f.history).(*privatev1.TenantBillingAssignment), UpdateMask: finalizersMask(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			object, err := f.public.toPublic(f.caller, f.history)
+			Expect(err).ToNot(HaveOccurred())
+			object.SetMetadata(nil)
+			_, err = f.public.Update(f.caller, publicv1.TenantBillingAssignmentsUpdateRequest_builder{Object: object}.Build())
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			f.expectUnchanged()
+			Expect(f.fake.Calls()).To(BeEmpty())
+		})
+	})
+
 	Describe("private wrappers with their own update path", func() {
 		// Volumes merges the request into the stored object, ignoring metadata paths, before the generic update.
 		It("rejects a stale finalizer write through the Volumes server", func() {
@@ -397,6 +490,10 @@ var _ = Describe("typed finalizer updates", func() {
 		It("covers every public server that has an Update method", func() {
 			covered := map[string]bool{}
 			for _, c := range slices.Concat(publicFinalizerCases(), catalogItemFinalizerCases()) {
+				covered[string(protoreflect.FullName(c.service).Name())] = true
+			}
+			for _, c := range descriptorOnlyFinalizerCases() {
+				c.verify()
 				covered[string(protoreflect.FullName(c.service).Name())] = true
 			}
 			// Finalizers only matter for a resource that can be deleted. A public service whose private counterpart has

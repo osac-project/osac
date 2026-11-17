@@ -34,8 +34,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
 
-// BillingAccount.external_billing_account_id replaced the former correlation_id name without touching protobuf field
-// number 7. The generated REST/CLI unit tests pin the marshaling contract; this spec proves the renamed property,
+// BillingAccount.status.external_billing_account_id is the canonical nested attribution property.
+// The generated REST/CLI unit tests pin the marshaling contract; this spec checks the property,
 // filter and order spellings are what the deployed service actually serves. It reuses the serial TLS stub fixture,
 // which the cluster must reach, so the spec is skipped unless both variables are set. The fixture restarts the shared
 // grpc-server, so the spec must not overlap other specs.
@@ -97,8 +97,8 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 			By("filtering each account by the new field at " + route.path)
 			for _, fixture := range fixtures {
 				query := url.Values{
-					"filter": {fmt.Sprintf("this.external_billing_account_id == %q", fixture.ExternalID)},
-					"order":  {"external_billing_account_id desc"},
+					"filter": {fmt.Sprintf("this.status.external_billing_account_id == %q", fixture.ExternalID)},
+					"order":  {"status.external_billing_account_id desc"},
 				}
 				Eventually(ctx, func(g Gomega) {
 					body, statusCode, err := get(route.client, route.path+"?"+query.Encode())
@@ -107,15 +107,15 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 					items, err := decode(body)
 					g.Expect(err).ToNot(HaveOccurred())
 					g.Expect(items).To(HaveLen(1))
-					g.Expect(items[0]).To(HaveKeyWithValue("external_billing_account_id", fixture.ExternalID))
+					g.Expect(items[0]["status"]).To(HaveKeyWithValue("external_billing_account_id", fixture.ExternalID))
 					g.Expect(items[0]).ToNot(HaveKey("correlation_id"))
 				}, time.Minute, time.Second).Should(Succeed())
 			}
 
 			By("ordering by the new field in descending order at " + route.path)
 			query := url.Values{
-				"filter": {`this.provider_key == "m360"`},
-				"order":  {"external_billing_account_id desc"},
+				"filter": {`this.status.provider_key == "m360"`},
+				"order":  {"status.external_billing_account_id desc"},
 				"limit":  {"1000"},
 			}
 			body, statusCode, err := get(route.client, route.path+"?"+query.Encode())
@@ -125,7 +125,9 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 			Expect(err).ToNot(HaveOccurred())
 			selected := []string{}
 			for _, item := range items {
-				if value, ok := item["external_billing_account_id"].(string); ok &&
+				status, ok := item["status"].(map[string]any)
+				Expect(ok).To(BeTrue())
+				if value, ok := status["external_billing_account_id"].(string); ok &&
 					(value == fixtures[0].ExternalID || value == fixtures[1].ExternalID) {
 					selected = append(selected, value)
 				}
@@ -192,11 +194,13 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 			for _, fixture := range fixtures {
 				matched := 0
 				for _, item := range items {
-					if item["display_name"] != fixture.Name {
+					status, ok := item["status"].(map[string]any)
+					Expect(ok).To(BeTrue())
+					if status["display_name"] != fixture.Name {
 						continue
 					}
-					Expect(item).To(HaveKeyWithValue("external_billing_account_id", fixture.ExternalID))
-					Expect(item).ToNot(HaveKey("correlation_id"))
+					Expect(status).To(HaveKeyWithValue("external_billing_account_id", fixture.ExternalID))
+					Expect(status).ToNot(HaveKey("correlation_id"))
 					matched++
 				}
 				Expect(matched).To(Equal(1), "the fixture account must appear exactly once in %s output", format)

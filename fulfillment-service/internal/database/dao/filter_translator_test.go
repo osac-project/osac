@@ -15,6 +15,7 @@ package dao
 
 import (
 	"context"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
@@ -28,6 +29,95 @@ import (
 )
 
 var _ = Describe("Filter translator", func() {
+	Describe("Shared query contract", func() {
+		var translator *FilterTranslator
+
+		BeforeEach(func() {
+			var err error
+			translator, err = NewFilterTranslator().SetLogger(logger).
+				SetDescriptor((*testsv1.Object)(nil).ProtoReflect().Descriptor()).Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		DescribeTable("Lowers metadata presence and numeric version",
+			func(ctx context.Context, filter, expected string) {
+				actual, err := translator.Translate(ctx, filter)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(actual).To(Equal(expected))
+			},
+			Entry("unknown creation", `this.metadata.creation_timestamp == null`, `nullif(creation_timestamp, 'epoch'::timestamptz) is null`),
+			Entry("reverse creation null", `null != this.metadata.creation_timestamp`, `nullif(creation_timestamp, 'epoch'::timestamptz) is not null`),
+			Entry("creation presence", `has(this.metadata.creation_timestamp)`, `creation_timestamp <> 'epoch'::timestamptz`),
+			Entry("deletion presence", `has(this.metadata.deletion_timestamp)`, `deletion_timestamp <> 'epoch'::timestamptz`),
+			Entry("zero version", `this.metadata.version == 0`, `version = 0`),
+			Entry("version presence", `has(this.metadata.version)`, `version <> 0`),
+			Entry("version range", `this.metadata.version >= 1`, `version >= 1`),
+			Entry("version membership", `this.metadata.version in [0, 1]`, `version in (0, 1)`),
+		)
+
+		It("Rejects finalizer filters even for private descriptors", func(ctx context.Context) {
+			for _, desc := range []protoreflect.MessageDescriptor{
+				(*privatev1.Cluster)(nil).ProtoReflect().Descriptor(),
+				(*publicv1.Cluster)(nil).ProtoReflect().Descriptor(),
+			} {
+				tr, err := NewFilterTranslator().SetLogger(logger).SetDescriptor(desc).Build()
+				Expect(err).ToNot(HaveOccurred())
+				for _, filter := range []string{
+					`has(this.metadata.finalizers)`,
+					`this.metadata.finalizers == this.metadata.finalizers`,
+					`'controller' in this.metadata.finalizers`,
+				} {
+					_, err = tr.Translate(ctx, filter)
+					Expect(err).To(HaveOccurred(), filter)
+				}
+			}
+		})
+
+		DescribeTable("Orders only descriptor-validated scalar and Timestamp leaves",
+			func(ctx context.Context, order, expected string) {
+				actual, err := translator.TranslateOrder(ctx, order)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(actual).To(Equal(expected))
+			},
+			Entry("default", "", "id"),
+			Entry("scalar", "spec.spec_string desc", "data->'spec'->>'spec_string' desc nulls last, id asc nulls last"),
+			Entry("Timestamp leaf", "status.status_timestamp desc", "cast(data->'status'->>'status_timestamp' as timestamp with time zone) desc nulls last, id asc nulls last"),
+			Entry("explicit id", "metadata.name asc, id desc", "name asc nulls last, id desc nulls last"),
+			Entry("metadata sentinel", "metadata.creation_timestamp", "nullif(creation_timestamp, 'epoch'::timestamptz) asc nulls last, id asc nulls last"),
+		)
+
+		It("Rejects malformed, noncanonical, collection and SQL order terms", func(ctx context.Context) {
+			for _, order := range []string{
+				" ", ",", "id,", "id sideways", "id asc nulls first", "id; drop table objects",
+				"this.id", "metadata.creationTimestamp", "metadata.finalizers", "metadata.labels",
+				"metadata.annotations['admin.osac.openshift.io/key']", "status", "my_msg", "my_repeated.id",
+				"my_map.id", "my_timestamp.seconds", "unknown", "spec.spec_string collate C",
+				strings.Repeat("id,", 16) + "id",
+			} {
+				_, err := translator.TranslateOrder(ctx, order)
+				Expect(err).To(HaveOccurred(), order)
+			}
+			_, err := translator.TranslateOrder(ctx, strings.Repeat("id,", 15)+"id")
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("Uses the configured public descriptor for order privacy", func(ctx context.Context) {
+			tr, err := NewFilterTranslator().SetLogger(logger).
+				SetDescriptor((*publicv1.Cluster)(nil).ProtoReflect().Descriptor()).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = tr.TranslateOrder(ctx, "status.hub")
+			Expect(err).To(HaveOccurred())
+			tr, err = NewFilterTranslator().SetLogger(logger).
+				SetDescriptor((*privatev1.Cluster)(nil).ProtoReflect().Descriptor()).Build()
+			Expect(err).ToNot(HaveOccurred())
+			actual, err := tr.TranslateOrder(ctx, "status.hub")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(actual).To(Equal("data->'status'->>'hub' asc nulls last, id asc nulls last"))
+			_, err = tr.TranslateOrder(ctx, "metadata.finalizers")
+			Expect(err).To(HaveOccurred())
+		})
+	})
+
 	Describe("Construction", func() {
 		It("Fails without a descriptor", func() {
 			_, err := NewFilterTranslator().
@@ -178,22 +268,22 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Creation timestamp is null",
 				`this.metadata.creation_timestamp == null`,
-				`creation_timestamp is null`,
+				`nullif(creation_timestamp, 'epoch'::timestamptz) is null`,
 			),
 			Entry(
 				"Creation timestamp is not null",
 				`this.metadata.creation_timestamp != null`,
-				`creation_timestamp is not null`,
+				`nullif(creation_timestamp, 'epoch'::timestamptz) is not null`,
 			),
 			Entry(
 				"Deletion timestamp is null",
 				`this.metadata.deletion_timestamp == null`,
-				`nullif(deletion_timestamp, '1970-01-01 00:00:00Z') is null`,
+				`nullif(deletion_timestamp, 'epoch'::timestamptz) is null`,
 			),
 			Entry(
 				"Deletion timestamp is not null",
 				`this.metadata.deletion_timestamp != null`,
-				`nullif(deletion_timestamp, '1970-01-01 00:00:00Z') is not null`,
+				`nullif(deletion_timestamp, 'epoch'::timestamptz) is not null`,
 			),
 			Entry(
 				"Timestamp in the past",
@@ -228,12 +318,12 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Check presence of creation timestamp",
 				`has(this.metadata.creation_timestamp)`,
-				`true`,
+				`creation_timestamp <> 'epoch'::timestamptz`,
 			),
 			Entry(
 				"Check presence of deletion timestamp",
 				`has(this.metadata.deletion_timestamp)`,
-				`deletion_timestamp != '1970-01-01 00:00:00Z'`,
+				`deletion_timestamp <> 'epoch'::timestamptz`,
 			),
 			Entry(
 				"Boolean true check",
@@ -323,7 +413,7 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Check if object is deleted",
 				`!has(this.metadata.deletion_timestamp)`,
-				`not deletion_timestamp != '1970-01-01 00:00:00Z'`,
+				`not deletion_timestamp <> 'epoch'::timestamptz`,
 			),
 			Entry(
 				"Filter by creator",

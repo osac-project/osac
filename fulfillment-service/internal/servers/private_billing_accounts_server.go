@@ -15,20 +15,30 @@ package servers
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // billingAccountsDiscoverPageSize is the page size discovery requests from the provider on every call.
@@ -73,6 +83,7 @@ type PrivateBillingAccountsServer struct {
 	privatev1.UnimplementedBillingAccountsServer
 	logger   *slog.Logger
 	provider *billing.Provider
+	dao      *dao.GenericDAO[*privatev1.BillingAccount]
 	// discoverMu guards the discovery timestamps and in-flight flag, and serializes the decision to start a walk,
 	// so at most one walk runs at a time.
 	discoverMu sync.Mutex
@@ -115,8 +126,18 @@ func (b *PrivateBillingAccountsServerBuilder) Build() (result *PrivateBillingAcc
 		err = errors.New("provider is mandatory")
 		return
 	}
+	accountsDAO, err := dao.NewGenericDAO[*privatev1.BillingAccount]().
+		SetLogger(b.logger).
+		SetTableName("billing_accounts").
+		SetFilterDesc((*publicv1.BillingAccount)(nil).ProtoReflect().Descriptor()).
+		SetTenancyLogic(billingAccountsTenancy{}).
+		Build()
+	if err != nil {
+		return nil, err
+	}
 	result = &PrivateBillingAccountsServer{
 		logger: b.logger, provider: b.provider, discoverDeadline: defaultDiscoverDeadline,
+		dao:                    accountsDAO,
 		discoverFailureBackoff: defaultDiscoverFailureBackoff,
 	}
 	return
@@ -136,48 +157,50 @@ func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 	if _, err = requireAdapter(s.provider); err != nil {
 		return nil, err
 	}
+	if request.GetLimit() < 0 || request.GetOffset() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "limit and offset must be non-negative")
+	}
+	if err = validateBillingAccountOrder(request.GetOrder()); err != nil {
+		return nil, err
+	}
 
 	if err = s.discoverSync(ctx); err != nil {
 		s.logger.WarnContext(ctx, "Billing account discovery failed", slog.Any("error", err))
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
 		return nil, mapBillingDiscoveryError(err)
 	}
 
 	// An unset limit serves the DAO default; an explicit one is clamped to its maximum. The read runs in its own
 	// short transaction so it sees only committed discovery results.
-	page, err := database.WithNewTx(ctx, func(ctx context.Context) (billingAccountsPage, error) {
-		tx, txErr := database.TxFromContext(ctx)
-		if txErr != nil {
-			return billingAccountsPage{}, txErr
+	page, err := database.WithNewTx(ctx, func(ctx context.Context) (*dao.ListResponse[*privatev1.BillingAccount], error) {
+		limit := request.GetLimit()
+		if limit == 0 {
+			limit = 100
 		}
-		rows, total, listErr := database.ListBillingAccounts(
-			ctx, tx, request.GetOffset(), request.GetLimit(), request.GetFilter(), request.GetOrder())
-		return billingAccountsPage{rows: rows, total: total}, listErr
+		return s.dao.List().SetOffset(request.GetOffset()).SetLimit(limit).
+			SetFilter(request.GetFilter()).SetOrder(request.GetOrder()).Do(ctx)
 	})
 	if err != nil {
-		var invalid *database.ErrInvalidFlatTableQuery
-		if errors.As(err, &invalid) {
+		if ctx.Err() != nil {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+		var invalidFilter *dao.ErrInvalidFilter
+		var invalid *dao.ErrValidation
+		if errors.As(err, &invalid) || errors.As(err, &invalidFilter) {
 			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 		}
 		s.logger.ErrorContext(ctx, "Failed to list billing accounts", slog.Any("error", err))
 		return nil, status.Errorf(codes.Internal, "failed to list billing accounts")
 	}
 
-	items := make([]*privatev1.BillingAccount, 0, len(page.rows))
-	for _, row := range page.rows {
-		items = append(items, toPrivateBillingAccount(row))
-	}
 	response = privatev1.BillingAccountsListResponse_builder{
-		Size:  int32(len(items)), // #nosec G115 -- bounded by page size
-		Total: page.total,
-		Items: items,
+		Size:  page.GetSize(),
+		Total: page.GetTotal(),
+		Items: page.GetItems(),
 	}.Build()
 	return response, nil
-}
-
-// billingAccountsPage carries one List read's rows and total out of its short transaction.
-type billingAccountsPage struct {
-	rows  []database.BillingAccountRow
-	total int32
 }
 
 // discoverSync refreshes the stored page when it is stale, running at most one walk at a time. A List that
@@ -211,7 +234,8 @@ func (s *PrivateBillingAccountsServer) discoverSync(ctx context.Context) error {
 		// A caller that cancels its walk or hits its own deadline says nothing about the provider, so its failure
 		// must not open the server-wide backoff. A walk cut off by the child discoverDeadline is still recorded,
 		// because that child never cancels this context.
-		if ctx.Err() == nil {
+		var providerErr *billing.Error
+		if ctx.Err() == nil && errors.As(err, &providerErr) {
 			s.discoverMu.Lock()
 			s.lastDiscoveryFailure = time.Now()
 			s.discoverMu.Unlock()
@@ -248,24 +272,30 @@ func (s *PrivateBillingAccountsServer) discoverFresh(ctx context.Context) error 
 // UNAVAILABLE/BILLING_PROVIDER_UNAVAILABLE, while any other classified provider error surfaces its own reason as
 // FAILED_PRECONDITION. Backoff and in-progress failures map to the same UNAVAILABLE.
 func mapBillingDiscoveryError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return status.Error(codes.Canceled, "billing account discovery canceled")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return status.Error(codes.DeadlineExceeded, "billing account discovery deadline exceeded")
+	}
+	if status.Code(err) == codes.Aborted {
+		return status.Error(codes.Aborted, "billing account inventory changed; retry the request")
+	}
+	var deadlock *dao.ErrDeadlock
+	var pgErr *pgconn.PgError
+	if errors.As(err, &deadlock) || (errors.As(err, &pgErr) &&
+		(pgErr.Code == pgerrcode.DeadlockDetected || pgErr.Code == pgerrcode.SerializationFailure)) {
+		return status.Error(codes.Aborted, "billing account inventory changed; retry the request")
+	}
 	var providerErr *billing.Error
 	if errors.As(err, &providerErr) {
 		return mapClassifiedBillingError(providerErr, billingProviderUnavailableReason)
 	}
-	return billingFailure(codes.Unavailable, "billing provider account API is unavailable",
-		billingProviderUnavailableReason)
-}
-
-func toPrivateBillingAccount(row database.BillingAccountRow) *privatev1.BillingAccount {
-	return privatev1.BillingAccount_builder{
-		Id:                       row.ID,
-		ProviderKey:              row.ProviderKey,
-		DisplayName:              row.DisplayName,
-		BaseCurrency:             row.BaseCurrency,
-		State:                    mapBillingAccountState(row.State),
-		StatusObservedAt:         timestamppb.New(row.StatusObservedAt),
-		ExternalBillingAccountId: row.ExternalBillingAccountID,
-	}.Build()
+	if errors.Is(err, errDiscoveryInProgress) || errors.Is(err, errDiscoveryBackoff) {
+		return billingFailure(codes.Unavailable, "billing provider account API is unavailable",
+			billingProviderUnavailableReason)
+	}
+	return status.Error(codes.Internal, "failed to store billing account inventory")
 }
 
 // mapBillingAccountState maps a billing_accounts.state value to its proto enum, returning UNKNOWN otherwise.
@@ -298,42 +328,239 @@ func (s *PrivateBillingAccountsServer) fetchAccounts(
 	return accounts, nil
 }
 
-// storeAccounts normalizes and persists one fetched walk in a single short transaction: every upsert and the
-// unobserved sweep commit together or not at all. Each account becomes one row keyed by (ProviderKey,
-// ProviderAccountReference); accounts the provider no longer returns are marked UNKNOWN and retained. seen starts
-// empty and never nil so an empty provider list still marks every known account, since pgx encodes nil as SQL
-// NULL.
+// storeAccounts owns the complete batch. Provider I/O has finished before the provider guard, active-system-tenant
+// SHARE lock and fresh whole-provider union locks, in that order. The mutex above is only process-local admission;
+// the transaction-scoped provider guard serializes independent instances and remains held outside savepoints.
+// P4 owns replacing this existing short transaction with the ordinary request transaction and atomic List page.
 func (s *PrivateBillingAccountsServer) storeAccounts(
 	ctx context.Context, accounts []billing.Account, observedAt time.Time) error {
 	providerKey := s.provider.Key()
-	seen := []string{}
-	_, err := database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+	observations, err := billingAccountObservations(providerKey, accounts, observedAt)
+	if err != nil {
+		return err
+	}
+	_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
 		tx, txErr := database.TxFromContext(ctx)
 		if txErr != nil {
 			return struct{}{}, txErr
 		}
-		for _, account := range accounts {
-			seen = append(seen, account.Ref.ID())
-			_, err := database.UpsertBillingAccount(ctx, tx, database.BillingAccountUpsert{
-				ID:                       uuid.New(),
-				ProviderKey:              providerKey,
-				ProviderAccountReference: account.Ref.ID(),
-				// The display name is provider-supplied free text and is sanitized before storage; the correlation
-				// value is stored raw because the resolver compares it exactly, and the CLI sanitizes it for display.
-				DisplayName: billing.SanitizeProviderText(account.Name),
-				// M360 supplies no account currency, and this path assigns no default.
-				BaseCurrency:             validCurrency(account.BaseCurrency),
-				ExternalBillingAccountID: account.ExternalID,
-				State:                    string(account.State),
-				StatusObservedAt:         observedAt,
+		if _, err := tx.Exec(ctx,
+			`select pg_advisory_xact_lock(hashtextextended('osac/billing-discovery/' || $1,0))`, providerKey); err != nil {
+			return struct{}{}, err
+		}
+		var deleting bool
+		if err := tx.QueryRow(ctx, `select deletion_timestamp <> 'epoch' from tenants where name = 'system' for share`).
+			Scan(&deleting); err != nil {
+			return struct{}{}, err
+		}
+		if deleting {
+			return struct{}{}, errors.New("system tenant is being deleted")
+		}
+		rows, err := tx.Query(ctx, `select id from billing_accounts where provider_key = $1 order by id for update`, providerKey)
+		if err != nil {
+			return struct{}{}, err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				rows.Close()
+				return struct{}{}, err
+			}
+			ids = append(ids, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return struct{}{}, err
+		}
+		// Fully consume the union before any mutation. Get materializes canonical metadata/data without new locks.
+		for _, id := range ids {
+			stored, err := s.dao.Get().SetId(id).Do(ctx)
+			if err != nil {
+				return struct{}{}, err
+			}
+			current := stored.GetObject()
+			ref := current.GetStatus().GetProviderAccountReference()
+			observed, seen := observations[ref]
+			if !seen {
+				observed = privatev1.BillingAccountStatus_builder{
+					State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN,
+					StateObservationTimestamp: timestamppb.New(observedAt),
+				}.Build()
+			}
+			delete(observations, ref)
+			merged, changed := mergeBillingAccountObservation(current, observed)
+			if !changed {
+				continue
+			}
+			err = tx.Savepoint(ctx, func(ctx context.Context) error {
+				_, err := s.dao.Update().SetObject(merged).Do(ctx)
+				return err
 			})
+			var conflict *dao.ErrAlreadyExists
+			if errors.As(err, &conflict) && conflict.ConstraintName == "billing_accounts_unique_correlation_id" {
+				// Optional adoption lost a raw-token race. Restore exactly the original presence/value, then keep
+				// the valid observation. Re-merging also avoids an unnecessary version increment for adoption alone.
+				withoutToken := proto.Clone(observed).(*privatev1.BillingAccountStatus)
+				withoutToken.ClearExternalBillingAccountId()
+				merged, changed = mergeBillingAccountObservation(current, withoutToken)
+				err = nil
+				if changed {
+					_, err = s.dao.Update().SetObject(merged).Do(ctx)
+				}
+			}
 			if err != nil {
 				return struct{}{}, err
 			}
 		}
-		return struct{}{}, database.MarkBillingAccountsUnobserved(ctx, tx, providerKey, seen, observedAt)
+		// Go string ordering compares UTF-8 bytes, independently of database collation. New rows are private to
+		// this transaction; every existing row was already locked above in SQL OSAC-id order.
+		refs := make([]string, 0, len(observations))
+		for ref := range observations {
+			refs = append(refs, ref)
+		}
+		sort.Strings(refs)
+		for _, ref := range refs {
+			id := uuid.New()
+			name, err := billingAccountName(id)
+			if err != nil {
+				return struct{}{}, err
+			}
+			candidate := privatev1.BillingAccount_builder{
+				Id: id, Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SystemTenant, Creator: "system"}.Build(),
+				Spec: &privatev1.BillingAccountSpec{}, Status: observations[ref],
+			}.Build()
+			for attempt := 0; attempt < 2; attempt++ {
+				err = tx.Savepoint(ctx, func(ctx context.Context) error {
+					_, err := s.dao.Create().SetObject(candidate).Do(ctx)
+					return err
+				})
+				var conflict *dao.ErrAlreadyExists
+				if !errors.As(err, &conflict) {
+					break
+				}
+				if conflict.ConstraintName == "billing_accounts_unique_provider_account" {
+					// Never acquire a late winner lock: an unguarded writer is a protocol violation.
+					return struct{}{}, status.Error(codes.Aborted, "billing account inventory changed; retry the request")
+				}
+				if attempt != 0 || conflict.ConstraintName != "billing_accounts_unique_correlation_id" ||
+					!candidate.GetStatus().HasExternalBillingAccountId() {
+					break
+				}
+				candidate.GetStatus().ClearExternalBillingAccountId()
+			}
+			if err != nil {
+				return struct{}{}, err
+			}
+		}
+		return struct{}{}, nil
 	})
 	return err
+}
+
+// billingAccountObservations prepares and validates the bounded inventory before any SQL lock is taken.
+func billingAccountObservations(providerKey string, accounts []billing.Account,
+	observedAt time.Time) (map[string]*privatev1.BillingAccountStatus, error) {
+	if len(accounts) > billing.MaxListPages*billingAccountsDiscoverPageSize {
+		return nil, billing.NewError(billing.ReasonMalformed, "ListAccounts", false, 0)
+	}
+	observations := make(map[string]*privatev1.BillingAccountStatus, len(accounts))
+	for _, account := range accounts {
+		ref := account.Ref.ID()
+		if _, duplicate := observations[ref]; duplicate || ref == "" {
+			return nil, billing.NewError(billing.ReasonMalformed, "ListAccounts", false, 0)
+		}
+		observed := privatev1.BillingAccountStatus_builder{
+			ProviderKey: providerKey, ProviderAccountReference: ref,
+			DisplayName: billing.SanitizeProviderText(account.Name), BaseCurrency: validCurrency(account.BaseCurrency),
+			State: mapBillingAccountState(string(account.State)), StateObservationTimestamp: timestamppb.New(observedAt),
+		}.Build()
+		// The adapter's empty scalar means no candidate. Optional presence on stored protobufs is never collapsed.
+		if strings.TrimSpace(account.ExternalID) != "" {
+			observed.SetExternalBillingAccountId(account.ExternalID)
+		}
+		observations[ref] = observed
+	}
+	return observations, nil
+}
+
+// billingAccountName never derives an identity from a mutable provider label/native reference.
+func billingAccountName(id string) (string, error) {
+	if id == "" {
+		return "", errors.New("billing account id is mandatory")
+	}
+	digest := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("ba-%x", digest)[:63], nil
+}
+
+// mergeBillingAccountObservation is shared with assignment revalidation. It owns its result, preserves all
+// metadata and immutable provider identity, and never persists or increments a version itself.
+func mergeBillingAccountObservation(current *privatev1.BillingAccount,
+	observed *privatev1.BillingAccountStatus) (merged *privatev1.BillingAccount, changed bool) {
+	merged = proto.Clone(current).(*privatev1.BillingAccount)
+	if observed == nil || observed.GetStateObservationTimestamp() == nil {
+		return merged, false
+	}
+	previous := current.GetStatus()
+	if previous.GetStateObservationTimestamp() != nil && observed.GetStateObservationTimestamp().AsTime().
+		Before(previous.GetStateObservationTimestamp().AsTime()) {
+		return merged, false
+	}
+	if merged.GetStatus() == nil {
+		merged.SetStatus(&privatev1.BillingAccountStatus{})
+	}
+	next := merged.GetStatus()
+	next.SetState(observed.GetState())
+	next.SetStateObservationTimestamp(proto.Clone(observed.GetStateObservationTimestamp()).(*timestamppb.Timestamp))
+	if label := billing.SanitizeProviderText(observed.GetDisplayName()); strings.TrimSpace(label) != "" {
+		next.SetDisplayName(label)
+	}
+	if currency := validCurrency(observed.GetBaseCurrency()); currency != "" {
+		next.SetBaseCurrency(currency)
+	}
+	if strings.TrimSpace(previous.GetExternalBillingAccountId()) == "" &&
+		observed.HasExternalBillingAccountId() && strings.TrimSpace(observed.GetExternalBillingAccountId()) != "" {
+		next.SetExternalBillingAccountId(observed.GetExternalBillingAccountId())
+	}
+	return merged, !proto.Equal(current, merged)
+}
+
+// Accounts are platform inventory, not resources of the caller-selected customer tenant. This fixed visibility
+// is deliberately narrower than total visibility and does not replace the public method authorization layer.
+type billingAccountsTenancy struct{}
+
+func (billingAccountsTenancy) DetermineAssignableTenants(context.Context) (collections.Set[string], error) {
+	return auth.SystemTenants, nil
+}
+
+func (billingAccountsTenancy) DetermineDefaultTenant(context.Context) (string, error) {
+	return auth.SystemTenant, nil
+}
+
+func (billingAccountsTenancy) DetermineVisibility(context.Context) (*auth.Visibility, error) {
+	return auth.NewVisibility().AddVisibleTenant(auth.SystemTenant).Build()
+}
+
+// The generic translator validates descriptor leaves/directions/term bounds. Billing further limits the
+// resource's approved sortable paths; metadata filtering remains supported independently of this order policy.
+func validateBillingAccountOrder(order string) error {
+	if strings.TrimSpace(order) == "" {
+		return nil
+	}
+	for _, term := range strings.Split(order, ",") {
+		words := strings.Fields(term)
+		if len(words) == 0 {
+			return status.Error(codes.InvalidArgument, "invalid billing account order")
+		}
+		switch words[0] {
+		case "id", "metadata.name", "status.provider_key", "status.display_name", "status.base_currency",
+			"status.state", "status.state_observation_timestamp", "status.external_billing_account_id":
+		default:
+			return status.Error(codes.InvalidArgument, "unsupported billing account order path")
+		}
+	}
+	return nil
 }
 
 // validCurrency returns code in uppercase when it is exactly three ASCII letters, and "" otherwise.

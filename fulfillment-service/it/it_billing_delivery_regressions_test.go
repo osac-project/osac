@@ -71,12 +71,12 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 		var account *publicv1.BillingAccount
 		Eventually(ctx, func(g Gomega) {
 			response, err := client.List(ctx, publicv1.BillingAccountsListRequest_builder{
-				Filter: new(fmt.Sprintf("this.display_name == %q", name)),
+				Filter: new(fmt.Sprintf("this.status.display_name == %q", name)),
 			}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(response.GetItems()).To(HaveLen(1))
 			account = response.GetItems()[0]
-			g.Expect(account.GetState()).To(Equal(publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
+			g.Expect(account.GetStatus().GetState()).To(Equal(publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
 		}, time.Minute, time.Second).Should(Succeed())
 		return account
 	}
@@ -85,7 +85,8 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 			Object: publicv1.TenantBillingAssignment_builder{
 				Metadata: publicv1.Metadata_builder{Name: "delivery-" + uuid.New()}.Build(),
 				Spec: publicv1.TenantBillingAssignmentSpec_builder{
-					TenantId: tenant, BillingAccountId: account,
+					Tenant:         publicv1.TenantReference_builder{Name: tenant}.Build(),
+					BillingAccount: publicv1.BillingAccountReference_builder{Id: account}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -93,7 +94,7 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 	history := func(ctx context.Context, tenant string) []*publicv1.TenantBillingAssignment {
 		GinkgoHelper()
 		response, err := assignments.List(ctx, publicv1.TenantBillingAssignmentsListRequest_builder{
-			Filter: new(fmt.Sprintf("this.spec.tenant_id == %q", tenant)),
+			Filter: new(fmt.Sprintf("this.spec.tenant.name == %q", tenant)),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		return response.GetItems()
@@ -151,11 +152,11 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 		initial, err := createAssignment(ctx, name, first.GetId())
 		Expect(err).ToNot(HaveOccurred())
 		seedReplacement := proto.Clone(initial.GetObject()).(*publicv1.TenantBillingAssignment)
-		seedReplacement.GetSpec().SetBillingAccountId(second.GetId())
+		seedReplacement.GetSpec().SetBillingAccount(publicv1.BillingAccountReference_builder{Id: second.GetId()}.Build())
 		created, err := assignments.Update(ctx, publicv1.TenantBillingAssignmentsUpdateRequest_builder{Object: seedReplacement}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		original := created.GetObject()
-		Expect(original.GetStatus().GetEffectiveTo()).To(BeNil())
+		Expect(original.GetStatus().GetEffectiveToTimestamp()).To(BeNil())
 		originalHistory := history(ctx, name)
 		Expect(originalHistory).To(HaveLen(2), "exercise a closed interval as well as the current interval")
 		// Neither mutation nor recovery below performs discovery. State comes only from assignment-time reads.
@@ -163,7 +164,7 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 		stub.SetScenario(billingfake.Scenario{Accounts: accounts})
 		before := len(stub.Requests())
 		replacement := proto.Clone(original).(*publicv1.TenantBillingAssignment)
-		replacement.GetSpec().SetBillingAccountId(first.GetId())
+		replacement.GetSpec().SetBillingAccount(publicv1.BillingAccountReference_builder{Id: first.GetId()}.Build())
 		_, err = assignments.Update(ctx, publicv1.TenantBillingAssignmentsUpdateRequest_builder{Object: replacement}.Build())
 		expectBillingReason(err, "ACCOUNT_INACTIVE")
 		expectProviderRead(accounts[0].ID, before)
@@ -186,8 +187,8 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 		Expect(err).ToNot(HaveOccurred())
 		expectProviderRead(accounts[1].ID, before)
 		Expect(revalidated.GetObject().GetId()).To(Equal(original.GetId()))
-		Expect(proto.Equal(revalidated.GetObject().GetStatus().GetEffectiveFrom(), original.GetStatus().GetEffectiveFrom())).To(BeTrue())
-		Expect(revalidated.GetObject().GetStatus().GetEffectiveTo()).To(BeNil())
+		Expect(proto.Equal(revalidated.GetObject().GetStatus().GetEffectiveFromTimestamp(), original.GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
+		Expect(revalidated.GetObject().GetStatus().GetEffectiveToTimestamp()).To(BeNil())
 		Expect(history(ctx, name)).To(HaveLen(2))
 
 		accounts[0].RawStatus = "Active"
@@ -200,7 +201,7 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 		Expect(history(ctx, name)).To(HaveLen(3))
 		old, err := assignments.Get(ctx, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: original.GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(proto.Equal(old.GetObject().GetStatus().GetEffectiveTo(), updated.GetObject().GetStatus().GetEffectiveFrom())).To(BeTrue())
+		Expect(proto.Equal(old.GetObject().GetStatus().GetEffectiveToTimestamp(), updated.GetObject().GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
 	})
 
 	It("releases billed tenant domains only after all cleanup finalizers complete and preserves history on reuse", func(ctx context.Context) {
@@ -228,7 +229,7 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 		closed := history(ctx, name)
 		Expect(closed).To(HaveLen(1))
 		Expect(closed[0].GetId()).To(Equal(created.GetObject().GetId()))
-		Expect(closed[0].GetStatus().GetEffectiveTo()).ToNot(BeNil())
+		Expect(closed[0].GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil())
 
 		collision, err := tenants.Create(ctx, privatev1.TenantsCreateRequest_builder{Object: privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{Name: "domain-collision-" + uuid.New()}.Build(),
@@ -349,7 +350,7 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 		closed := history(ctx, name)
 		Expect(closed).To(HaveLen(1), "accepted deletion must retain the interval instead of removing history")
 		Expect(closed[0].GetId()).To(Equal(created.GetObject().GetId()))
-		Expect(closed[0].GetStatus().GetEffectiveTo()).ToNot(BeNil(),
+		Expect(closed[0].GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil(),
 			"accepted deletion must close the interval even though the billed tenant tombstone remains")
 		Eventually(ctx, func(g Gomega) {
 			tombstone, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())

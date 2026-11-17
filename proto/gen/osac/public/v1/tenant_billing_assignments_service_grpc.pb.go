@@ -36,18 +36,19 @@ const (
 	TenantBillingAssignments_Get_FullMethodName    = "/osac.public.v1.TenantBillingAssignments/Get"
 	TenantBillingAssignments_Create_FullMethodName = "/osac.public.v1.TenantBillingAssignments/Create"
 	TenantBillingAssignments_Update_FullMethodName = "/osac.public.v1.TenantBillingAssignments/Update"
+	TenantBillingAssignments_Delete_FullMethodName = "/osac.public.v1.TenantBillingAssignments/Delete"
 )
 
 // TenantBillingAssignmentsClient is the client API for TenantBillingAssignments service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Reads or changes a tenant's time-versioned billing-account assignment. With billing disabled every method fails
-// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Administrator method authorization is
+// Reads or changes a tenant's time-versioned billing-account assignment. Implemented methods fail with
+// FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call when billing is disabled. Administrator method authorization is
 // required, and assignment access is further limited to the caller's trusted tenant scope. Current platform
 // administrators have universal scope. There is no tenant self-service read path.
-// Create and Update resolve billing_account.external_billing_account_id and validate a unique provider-side match
-// before persisting. A provider write is not proof of a match: an exact read-back and uniqueness check must succeed.
+// Create and Update resolve billing_account.status.external_billing_account_id and validate a unique provider-side
+// match before persisting. Provider evidence is read-only; a locally established token alone is not a validated match.
 type TenantBillingAssignmentsClient interface {
 	// Lists current and historical assignments.
 	List(ctx context.Context, in *TenantBillingAssignmentsListRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsListResponse, error)
@@ -57,13 +58,15 @@ type TenantBillingAssignmentsClient interface {
 	// FAILED_PRECONDITION/TENANT_ALREADY_BOUND, an account already linked to another tenant with
 	// FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN account with
 	// FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN. Reserved shared/system tenants cannot be linked.
-	// An acknowledged correlation write that cannot be
-	// verified fails with FAILED_PRECONDITION/BILLING_CORRELATION_READBACK_MISMATCH rather than becoming CONNECTED.
+	// A locally retained token without a provider-side carrier remains PENDING with remediation, not CONNECTED.
 	Create(ctx context.Context, in *TenantBillingAssignmentsCreateRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsCreateResponse, error)
 	// Replaces the tenant's active account, closing the previous interval and opening a new one in the same
 	// transaction. Resubmitting the same tenant and account revalidates the current interval in place instead of
 	// opening a new one, re-running correlation resolution against the provider.
 	Update(ctx context.Context, in *TenantBillingAssignmentsUpdateRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsUpdateResponse, error)
+	// Descriptor-only scaffold: not implemented or authorized, including for administrators. This is not unlinking
+	// or deletion of assignment history; closing an interval remains part of reassignment or tenant deletion.
+	Delete(ctx context.Context, in *TenantBillingAssignmentsDeleteRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsDeleteResponse, error)
 }
 
 type tenantBillingAssignmentsClient struct {
@@ -114,16 +117,26 @@ func (c *tenantBillingAssignmentsClient) Update(ctx context.Context, in *TenantB
 	return out, nil
 }
 
+func (c *tenantBillingAssignmentsClient) Delete(ctx context.Context, in *TenantBillingAssignmentsDeleteRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsDeleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TenantBillingAssignmentsDeleteResponse)
+	err := c.cc.Invoke(ctx, TenantBillingAssignments_Delete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TenantBillingAssignmentsServer is the server API for TenantBillingAssignments service.
 // All implementations must embed UnimplementedTenantBillingAssignmentsServer
 // for forward compatibility.
 //
-// Reads or changes a tenant's time-versioned billing-account assignment. With billing disabled every method fails
-// with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call. Administrator method authorization is
+// Reads or changes a tenant's time-versioned billing-account assignment. Implemented methods fail with
+// FAILED_PRECONDITION/BILLING_NOT_CONFIGURED before any provider call when billing is disabled. Administrator method authorization is
 // required, and assignment access is further limited to the caller's trusted tenant scope. Current platform
 // administrators have universal scope. There is no tenant self-service read path.
-// Create and Update resolve billing_account.external_billing_account_id and validate a unique provider-side match
-// before persisting. A provider write is not proof of a match: an exact read-back and uniqueness check must succeed.
+// Create and Update resolve billing_account.status.external_billing_account_id and validate a unique provider-side
+// match before persisting. Provider evidence is read-only; a locally established token alone is not a validated match.
 type TenantBillingAssignmentsServer interface {
 	// Lists current and historical assignments.
 	List(context.Context, *TenantBillingAssignmentsListRequest) (*TenantBillingAssignmentsListResponse, error)
@@ -133,13 +146,15 @@ type TenantBillingAssignmentsServer interface {
 	// FAILED_PRECONDITION/TENANT_ALREADY_BOUND, an account already linked to another tenant with
 	// FAILED_PRECONDITION/ACCOUNT_ALREADY_BOUND, and an INACTIVE or UNKNOWN account with
 	// FAILED_PRECONDITION/ACCOUNT_INACTIVE or ACCOUNT_STATE_UNKNOWN. Reserved shared/system tenants cannot be linked.
-	// An acknowledged correlation write that cannot be
-	// verified fails with FAILED_PRECONDITION/BILLING_CORRELATION_READBACK_MISMATCH rather than becoming CONNECTED.
+	// A locally retained token without a provider-side carrier remains PENDING with remediation, not CONNECTED.
 	Create(context.Context, *TenantBillingAssignmentsCreateRequest) (*TenantBillingAssignmentsCreateResponse, error)
 	// Replaces the tenant's active account, closing the previous interval and opening a new one in the same
 	// transaction. Resubmitting the same tenant and account revalidates the current interval in place instead of
 	// opening a new one, re-running correlation resolution against the provider.
 	Update(context.Context, *TenantBillingAssignmentsUpdateRequest) (*TenantBillingAssignmentsUpdateResponse, error)
+	// Descriptor-only scaffold: not implemented or authorized, including for administrators. This is not unlinking
+	// or deletion of assignment history; closing an interval remains part of reassignment or tenant deletion.
+	Delete(context.Context, *TenantBillingAssignmentsDeleteRequest) (*TenantBillingAssignmentsDeleteResponse, error)
 	mustEmbedUnimplementedTenantBillingAssignmentsServer()
 }
 
@@ -161,6 +176,9 @@ func (UnimplementedTenantBillingAssignmentsServer) Create(context.Context, *Tena
 }
 func (UnimplementedTenantBillingAssignmentsServer) Update(context.Context, *TenantBillingAssignmentsUpdateRequest) (*TenantBillingAssignmentsUpdateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
+}
+func (UnimplementedTenantBillingAssignmentsServer) Delete(context.Context, *TenantBillingAssignmentsDeleteRequest) (*TenantBillingAssignmentsDeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
 }
 func (UnimplementedTenantBillingAssignmentsServer) mustEmbedUnimplementedTenantBillingAssignmentsServer() {
 }
@@ -256,6 +274,24 @@ func _TenantBillingAssignments_Update_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TenantBillingAssignments_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TenantBillingAssignmentsDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantBillingAssignmentsServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantBillingAssignments_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantBillingAssignmentsServer).Delete(ctx, req.(*TenantBillingAssignmentsDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TenantBillingAssignments_ServiceDesc is the grpc.ServiceDesc for TenantBillingAssignments service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -278,6 +314,10 @@ var TenantBillingAssignments_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Update",
 			Handler:    _TenantBillingAssignments_Update_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _TenantBillingAssignments_Delete_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

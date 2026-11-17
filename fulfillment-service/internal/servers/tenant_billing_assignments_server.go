@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -36,7 +37,7 @@ var _ publicv1.TenantBillingAssignmentsServer = (*TenantBillingAssignmentsServer
 // TenantBillingAssignmentsServer is the public server; it delegates to the private one.
 //
 // authz.rego grants method access only to is_admin callers. The private delegate enforces the trusted subject's
-// tenant scope for both APIs; spec.tenant_id and metadata.tenant are data, never authorization credentials.
+// tenant scope for both APIs; spec.tenant and metadata.tenant are data, never authorization credentials.
 type TenantBillingAssignmentsServer struct {
 	publicv1.UnimplementedTenantBillingAssignmentsServer
 	logger    *slog.Logger
@@ -110,7 +111,7 @@ func (s *TenantBillingAssignmentsServer) toPrivate(ctx context.Context, in *publ
 	out := &privatev1.TenantBillingAssignment{}
 	if err := s.inMapper.Copy(ctx, in, out); err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map public tenant billing assignment to private", slog.Any("error", err))
-		return nil, status.Errorf(codes.Internal, "failed to process tenant billing assignment")
+		return nil, publicInputMappingError(err, "failed to process tenant billing assignment")
 	}
 	return out, nil
 }
@@ -170,6 +171,9 @@ func (s *TenantBillingAssignmentsServer) Get(ctx context.Context,
 // Create maps the public request's object to the private shape, delegates, and maps the result back.
 func (s *TenantBillingAssignmentsServer) Create(ctx context.Context,
 	request *publicv1.TenantBillingAssignmentsCreateRequest) (*publicv1.TenantBillingAssignmentsCreateResponse, error) {
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
 	privateObject, err := s.toPrivate(ctx, request.GetObject())
 	if err != nil {
 		return nil, err
@@ -194,6 +198,22 @@ func (s *TenantBillingAssignmentsServer) Create(ctx context.Context,
 // back.
 func (s *TenantBillingAssignmentsServer) Update(ctx context.Context,
 	request *publicv1.TenantBillingAssignmentsUpdateRequest) (*publicv1.TenantBillingAssignmentsUpdateResponse, error) {
+	// Authorize the stored interval before validating/maps of any caller-controlled fields.
+	if _, err := requireAdapter(s.private.provider); err != nil {
+		return nil, err
+	}
+	if request.GetObject().GetId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+	_, err := database.WithNewTx(ctx, func(c context.Context) (*privatev1.TenantBillingAssignment, error) {
+		return s.private.currentAssignment(c, request.GetObject().GetId())
+	})
+	if err != nil {
+		return nil, s.private.mapTenantBillingAssignmentError(ctx, err)
+	}
+	if err = validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
 	privateObject, err := s.toPrivate(ctx, request.GetObject())
 	if err != nil {
 		return nil, err

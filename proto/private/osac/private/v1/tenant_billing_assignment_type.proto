@@ -19,7 +19,9 @@ import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
+import "osac/private/v1/billing_account_type.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/tenant_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -31,10 +33,13 @@ enum TenantBillingAssignmentConnectionState {
   // Unset. Never reported by the server.
   TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_UNSPECIFIED = 0;
 
+  // Provider-side matching is incomplete; gated publish and launch require remediation.
   TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING = 1;
 
+  // The selected account was validated as the unique provider-side carrier of the attribution token.
   TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED = 2;
 
+  // Validation could not be completed. Reserved for reporting; the current implementation never persists it.
   TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_FAILED = 3;
 }
 
@@ -42,16 +47,19 @@ enum TenantBillingAssignmentConnectionState {
 message TenantBillingAssignmentSpec {
   // OSAC tenant billed by this interval. Data, not an authorization credential. The caller must be an authorized
   // administrator whose trusted tenant scope includes this tenant. Tenant callers have no self-service read path.
-  string tenant_id = 1 [
+  TenantReference tenant = 1 [
     (google.api.field_behavior) = REQUIRED,
-    (buf.validate.field).string = {min_len: 1}
+    (buf.validate.field).required = true
   ];
 
-  // BillingAccount.id assigned to the tenant for this interval.
-  string billing_account_id = 2 [
+  // Discovered account assigned to the tenant for this interval, resolved to its immutable OSAC id and stable name.
+  BillingAccountReference billing_account = 2 [
     (google.api.field_behavior) = REQUIRED,
-    (buf.validate.field).string = {min_len: 1}
+    (buf.validate.field).required = true
   ];
+
+  // Former scalar fields are not aliases; scalar-to-reference replacement is a breaking amendment.
+  reserved "tenant_id", "billing_account_id";
 }
 
 // Server-observed assignment validation state and interval.
@@ -59,16 +67,20 @@ message TenantBillingAssignmentStatus {
   // Assignment-time provider account-match validation.
   TenantBillingAssignmentConnectionState connection_state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
 
-  // Time this assignment interval became active.
-  google.protobuf.Timestamp effective_from = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // Inclusive start of this interval, sampled by OSAC after provider evidence and authoritative database locks.
+  // Revalidating the same current assignment preserves this timestamp and the interval id.
+  google.protobuf.Timestamp effective_from_timestamp = 2 [(google.api.field_behavior) = OUTPUT_ONLY];
 
   // Time this assignment interval stopped being active. Unset while it is the current assignment. Tenant deletion
-  // closes the current interval and retains it as a read-only tombstone, releasing the account for another tenant.
-  google.protobuf.Timestamp effective_to = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  // closes the current interval and retains immutable history, releasing the account for another tenant.
+  // Intervals are [from, to); a closed zero-length interval is allowed. Absence means current, not unknown history.
+  google.protobuf.Timestamp effective_to_timestamp = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
 
   // Optional detail, such as the PENDING remediation and its stable reason
   // (BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED), or the tenant-deletion tombstone. Empty on connected success.
   string message = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  reserved "effective_from", "effective_to";
 }
 
 // A time-bounded association between an OSAC tenant and a billing account. Reassignment closes the current
@@ -80,7 +92,8 @@ message TenantBillingAssignment {
 
   Metadata metadata = 2;
 
-  // Desired configuration for this interval. Immutable after creation except billing_account_id on Update.
+  // Desired configuration for this interval. Only the atomic billing_account reference is writable on Update;
+  // replacing the account creates a new interval with the same metadata name and a new id, retaining this history.
   TenantBillingAssignmentSpec spec = 3;
 
   // System-provided, read-only current state.

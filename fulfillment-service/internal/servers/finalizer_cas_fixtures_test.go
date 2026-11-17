@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"buf.build/go/protovalidate"
 	"github.com/google/uuid"
@@ -37,11 +38,14 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	osactesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -58,9 +62,8 @@ const (
 	finalizerForeign = "test.osac.io/foreign"
 )
 
-// finalizerBearingServices returns the private services whose Update object has metadata.finalizers and that can be
-// deleted. Finalizers only matter when a Delete consumes them, so a service without Delete never uses them, even when
-// its Update object carries the field.
+// finalizerBearingServices inventories descriptors, not implementations: a declared Delete needs either the full
+// lifecycle matrix or an executable descriptor-only boundary case, even if its server embeds an Unimplemented stub.
 func finalizerBearingServices() []string {
 	var result []string
 	packageName := (privatev1.EventType)(0).Descriptor().FullName().Parent()
@@ -234,6 +237,117 @@ func testHub(name string) *privatev1.Hub {
 
 func finalizerName(prefix string) string {
 	return fmt.Sprintf("%s-%s", prefix, uuid.NewString()[:8])
+}
+
+// Assignment fixtures use the native DAO layout, not a GenericServer lifecycle that would archive immutable history.
+type finalizerAssignmentFixture struct {
+	caller           context.Context
+	private          *PrivateTenantBillingAssignmentsServer
+	public           *TenantBillingAssignmentsServer
+	fake             *billingfake.Fake
+	current, history *privatev1.TenantBillingAssignment
+	changes          int
+}
+
+func newFinalizerAssignmentFixture(deleting bool) finalizerAssignmentFixture {
+	GinkgoHelper()
+	id, token := uuid.NewString(), "finalizer-correlation"
+	name, err := billingAccountName(id)
+	Expect(err).ToNot(HaveOccurred())
+	f := finalizerAssignmentFixture{fake: billingfake.New(billingfake.Scenario{
+		Accounts: []billingfake.AccountSpec{{ID: id, ExternalID: token, State: billing.AccountActive}},
+	})}
+	f.private, err = NewPrivateTenantBillingAssignmentsServer().SetLogger(logger).SetProvider(f.fake.Provider()).Build()
+	Expect(err).ToNot(HaveOccurred())
+	f.public, err = NewTenantBillingAssignmentsServer().SetLogger(logger).SetDelegate(f.private).Build()
+	Expect(err).ToNot(HaveOccurred())
+	_, err = fixtureDAO[*privatev1.BillingAccount]().Create().SetObject(privatev1.BillingAccount_builder{
+		Id: id, Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SystemTenant, Creator: "system"}.Build(),
+		Spec: &privatev1.BillingAccountSpec{}, Status: privatev1.BillingAccountStatus_builder{
+			ProviderKey: billingfake.Key, ProviderAccountReference: id, ExternalBillingAccountId: &token,
+			State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+			StateObservationTimestamp: timestamppb.Now(),
+		}.Build(),
+	}.Build()).Do(ctx)
+	Expect(err).ToNot(HaveOccurred())
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	for _, closed := range []bool{true, false} {
+		metadata := privatev1.Metadata_builder{
+			Name: finalizerName("assignment"), Tenant: testTenant, Creator: "original-actor",
+			Finalizers:  []string{finalizerController, finalizerHold},
+			Labels:      map[string]string{"fixture": "finalizers"},
+			Annotations: map[string]string{"osac.openshift.io/tenant": testTenant},
+		}.Build()
+		observed := privatev1.TenantBillingAssignmentStatus_builder{
+			ConnectionState:        privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
+			EffectiveFromTimestamp: timestamppb.New(now.Add(-time.Hour)),
+		}.Build()
+		if closed {
+			observed.SetEffectiveFromTimestamp(timestamppb.New(now.Add(-3 * time.Hour)))
+			observed.SetEffectiveToTimestamp(timestamppb.New(now.Add(-2 * time.Hour)))
+		}
+		created, createErr := fixtureDAO[*privatev1.TenantBillingAssignment]().Create().SetObject(
+			privatev1.TenantBillingAssignment_builder{
+				Metadata: metadata, Spec: privatev1.TenantBillingAssignmentSpec_builder{
+					Tenant:         privatev1.TenantReference_builder{Id: testTenant, Name: testTenant}.Build(),
+					BillingAccount: privatev1.BillingAccountReference_builder{Id: id, Name: name}.Build(),
+				}.Build(), Status: observed,
+			}.Build()).Do(ctx)
+		Expect(createErr).ToNot(HaveOccurred())
+		if closed {
+			f.history = created.GetObject()
+		} else {
+			// Give stale public requests a real earlier version without making metadata writable in the API.
+			object := created.GetObject()
+			object.GetStatus().SetMessage("earlier observation")
+			updated, updateErr := fixtureDAO[*privatev1.TenantBillingAssignment]().Update().SetObject(object).Do(ctx)
+			Expect(updateErr).ToNot(HaveOccurred())
+			object = updated.GetObject()
+			object.GetStatus().SetMessage("")
+			updated, updateErr = fixtureDAO[*privatev1.TenantBillingAssignment]().Update().SetObject(object).Do(ctx)
+			Expect(updateErr).ToNot(HaveOccurred())
+			f.current = updated.GetObject()
+		}
+	}
+	if deleting {
+		// Seed a retained deletion mark only: the DAO keeps this row because it has finalizers. Neither real
+		// assignment server exposes this lifecycle, and this fixture never removes finalizers or archives history.
+		d := fixtureDAO[*privatev1.TenantBillingAssignment]()
+		_, err = d.Delete().SetId(f.current.GetId()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		stored, getErr := d.Get().SetId(f.current.GetId()).Do(ctx)
+		Expect(getErr).ToNot(HaveOccurred())
+		f.current = stored.GetObject()
+	}
+	Expect(suiteTx.End(ctx)).To(Succeed())
+	suiteTx = nil
+	f.caller = auth.ContextWithSubject(database.TxManagerIntoContext(context.Background(), tm),
+		&auth.Subject{User: "admin", Tenants: auth.AllTenants})
+	f.changes = f.changeCount()
+	return f
+}
+
+func (f finalizerAssignmentFixture) changeCount() int {
+	GinkgoHelper()
+	var count int
+	Expect(testPool.QueryRow(f.caller, `select count(*) from changes where "table" = 'tenant_billing_assignments'`).
+		Scan(&count)).To(Succeed())
+	return count
+}
+
+func (f finalizerAssignmentFixture) expectUnchanged() {
+	GinkgoHelper()
+	for _, before := range []*privatev1.TenantBillingAssignment{f.current, f.history} {
+		got, err := database.WithNewTx(f.caller, func(c context.Context) (*privatev1.TenantBillingAssignmentsGetResponse, error) {
+			return f.private.Get(c, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: before.GetId()}.Build())
+		})
+		Expect(err).ToNot(HaveOccurred(), "current and historical intervals must remain readable, not archived")
+		Expect(proto.Equal(got.GetObject(), before)).To(BeTrue(), "all stored metadata, version, spec and status must remain unchanged")
+	}
+	Expect(f.changeCount()).To(Equal(f.changes), "no assignment mutation may enter the changes outbox")
+	var rows int
+	Expect(testPool.QueryRow(f.caller, `select count(*) from tenant_billing_assignments`).Scan(&rows)).To(Succeed())
+	Expect(rows).To(Equal(2), "same-account revalidation must not create a replacement interval")
 }
 
 // finalizerCases lists the leaf resources, which need no parents, here and the rest by group.

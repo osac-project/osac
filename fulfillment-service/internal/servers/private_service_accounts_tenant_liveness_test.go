@@ -26,7 +26,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
-	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -66,16 +65,7 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 		_, err = suiteTx.Exec(ctx, `delete from projects where tenant = $1`, tenant)
 		Expect(err).NotTo(HaveOccurred())
 		if billed {
-			account, err := database.UpsertBillingAccount(ctx, suiteTx, database.BillingAccountUpsert{
-				ID: uuid.New(), ProviderKey: "m360", ProviderAccountReference: uuid.New(), State: "ACTIVE",
-			})
-			Expect(err).NotTo(HaveOccurred())
-			_, err = database.CloseAndInsertTenantBillingAssignment(ctx, suiteTx, "",
-				database.TenantBillingAssignmentInsert{
-					ID: uuid.New(), Name: uuid.New(), TenantID: tenant,
-					BillingAccountID: account, ConnectionState: "CONNECTED",
-				})
-			Expect(err).NotTo(HaveOccurred())
+			seedTenantBillingInterval(ctx, tenant, seedTenantBillingAccount(ctx), "liveness-assignment", false)
 		}
 		return tenant
 	}

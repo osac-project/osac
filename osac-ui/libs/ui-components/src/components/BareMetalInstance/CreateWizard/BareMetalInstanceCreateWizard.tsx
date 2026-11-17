@@ -41,9 +41,14 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
     includeCatalogStep ? 'catalog' : 'general',
   );
   const [selectedCatalogItem, setSelectedCatalogItem] = useState<BareMetalInstanceCatalogItem>();
-  const steps: BareMetalWizardStepId[] = includeCatalogStep
-    ? ['catalog', 'general', 'configuration', 'networking', 'access', 'review']
-    : ['general', 'configuration', 'networking', 'access', 'review'];
+  const steps: BareMetalWizardStepId[] = [
+    ...(includeCatalogStep ? (['catalog'] as const) : []),
+    'general',
+    'configuration',
+    'networking',
+    'access',
+    'review',
+  ];
   const stepLabels: Record<BareMetalWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),

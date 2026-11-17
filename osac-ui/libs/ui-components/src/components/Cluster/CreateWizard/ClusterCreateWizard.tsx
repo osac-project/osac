@@ -38,9 +38,13 @@ const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
     includeCatalogStep ? 'catalog' : 'general',
   );
   const [validationAlert, setValidationAlert] = useState(false);
-  const steps: ClusterWizardStepId[] = includeCatalogStep
-    ? ['catalog', 'general', 'configuration', 'networking', 'review']
-    : ['general', 'configuration', 'networking', 'review'];
+  const steps: ClusterWizardStepId[] = [
+    ...(includeCatalogStep ? (['catalog'] as const) : []),
+    'general',
+    'configuration',
+    'networking',
+    'review',
+  ];
   const stepLabels: Record<ClusterWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),

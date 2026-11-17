@@ -46,9 +46,15 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   );
   const [validationAlert, setValidationAlert] = useState(false);
   const [selectedCatalogItem, setSelectedCatalogItem] = useState<ComputeInstanceCatalogItem>();
-  const steps: VmWizardStepId[] = includeCatalogStep
-    ? ['catalog', 'general', 'configuration', 'storage', 'networking', 'access', 'review']
-    : ['general', 'configuration', 'storage', 'networking', 'access', 'review'];
+  const steps: VmWizardStepId[] = [
+    ...(includeCatalogStep ? (['catalog'] as const) : []),
+    'general',
+    'configuration',
+    'storage',
+    'networking',
+    'access',
+    'review',
+  ];
   const stepLabels: Record<VmWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),

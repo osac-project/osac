@@ -27,3 +27,10 @@ tests:
       - matchRegex:
           path: stringData["inventory.yaml"]
           pattern: "(?m)^    enableBMCCertificateVerification: false$"
+
+  - it: rejects a NetBox URL that embeds credentials
+    set:
+      bmf.netbox.url: https://user:secret@netbox.example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: "netbox.url must not include credentials"

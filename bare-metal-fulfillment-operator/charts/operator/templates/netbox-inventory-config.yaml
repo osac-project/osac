@@ -11,7 +11,7 @@
 {{- if not .Values.netbox.url }}
 {{- fail "netbox.url is required when netbox.enabled is true" }}
 {{- end }}
-{{- if contains "@" .Values.netbox.url }}
+{{- if regexMatch "^([A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#]*@|^[^/?#]*@" .Values.netbox.url }}
 {{- fail "netbox.url must not include credentials" }}
 {{- end }}
 {{- if not .Values.netbox.tokenSecretKey }}

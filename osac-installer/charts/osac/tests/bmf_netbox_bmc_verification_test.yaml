@@ -34,3 +34,10 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "netbox.url must not include credentials"
+
+  - it: rejects credentials in a scheme-relative NetBox URL
+    set:
+      bmf.netbox.url: //user:secret@netbox.example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: "netbox.url must not include credentials"

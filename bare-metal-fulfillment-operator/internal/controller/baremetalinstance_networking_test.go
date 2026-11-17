@@ -26,6 +26,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -108,8 +109,8 @@ var _ = Describe("BareMetalInstance Networking", func() {
 	}
 
 	removeAttachment := func() {
-		na, err := getAttachment()
-		if err != nil {
+		na := &opv1alpha1.NetworkAttachment{}
+		if err := k8sClient.Get(ctx, attachmentKey(), na); err != nil {
 			return
 		}
 		na.Finalizers = nil
@@ -199,6 +200,11 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			result, err := reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+			Expect(networkAttachmentStatusFor(bmi, "subnet-1").MACAddress).To(Equal("aa:bb:cc:dd:ee:ff"))
+
+			result, err = reconciler.reconcileNetworking(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 			na, err := getAttachment()
 			Expect(err).NotTo(HaveOccurred())
@@ -230,15 +236,25 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 			macs = map[string]string{"data-1": "aa:bb:cc:dd:ee:01"}
+			unassignCalls := 0
+			reconciler.InventoryClient.(*mockInventoryClient).unassignHostFunc = func(
+				_ context.Context, _, _ string, _ []string,
+			) error {
+				unassignCalls++
+				return nil
+			}
 
 			result, err := reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.IsZero()).To(BeTrue())
 
-			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+			cond := bmi.GetStatusCondition(v1alpha1.HostConditionAllocated)
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonTemplateFailed))
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonSelectedPortMACUnavailable))
 			Expect(cond.Message).To(ContainSubstring(`"data-0"`))
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+			Expect(bmi.Spec.ExternalHostID).To(Equal("host-ns/host-123"))
+			Expect(unassignCalls).To(BeZero())
 			_, err = getAttachment()
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
@@ -251,6 +267,8 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 
 			_, err := reconciler.reconcileNetworking(ctx, bmi)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			na, err := getAttachment()
 			Expect(err).NotTo(HaveOccurred())
@@ -306,6 +324,8 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			na := newTestNetworkAttachment(namespace, bmiID, "data-0", BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, na)).To(Succeed())
 			setTestNetworkAttachmentReady(ctx, na)
+			recorder := events.NewFakeRecorder(1)
+			reconciler.EventRecorder = recorder
 
 			result, err := reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
@@ -313,6 +333,7 @@ var _ = Describe("BareMetalInstance Networking", func() {
 
 			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Expect(<-recorder.Events).To(ContainSubstring("Normal NetworkAttached Network attachment is ready"))
 		})
 
 		It("fails when the NetworkAttachment failed", func() {
@@ -326,6 +347,8 @@ var _ = Describe("BareMetalInstance Networking", func() {
 				Reason: opv1alpha1.ReasonFailed, Message: "no free port",
 			})
 			Expect(k8sClient.Status().Update(ctx, na)).To(Succeed())
+			recorder := events.NewFakeRecorder(1)
+			reconciler.EventRecorder = recorder
 
 			result, err := reconciler.reconcileNetworking(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
@@ -333,26 +356,30 @@ var _ = Describe("BareMetalInstance Networking", func() {
 
 			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonTemplateFailed))
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentFailed))
 			Expect(cond.Message).To(Equal("no free port"))
+			Expect(<-recorder.Events).To(ContainSubstring("Warning NetworkAttachmentFailed no free port"))
 		})
+
 	})
 
 	Describe("reconcileNetworkingDeletion", func() {
-		It("deletes the NetworkAttachment and waits for the networking controller", func() {
+		deleteAndWaitForNetworkCleanup := func() {
 			bmi = newBMI(attachments)
 			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
 			na := newTestNetworkAttachment(namespace, bmiID, "data-0",
 				BareMetalInstanceNetworkingFinalizer, "osac.openshift.io/networkattachment")
 			Expect(k8sClient.Create(ctx, na)).To(Succeed())
+			naKey := client.ObjectKeyFromObject(na)
 
 			// The first pass deletes the NetworkAttachment.
 			result, done, err := reconciler.reconcileNetworkingDeletion(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(done).To(BeFalse())
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
-			na, err = getAttachment()
+			na = &opv1alpha1.NetworkAttachment{}
+			err = k8sClient.Get(ctx, naKey, na)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(na.DeletionTimestamp).NotTo(BeNil())
 
@@ -360,7 +387,8 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			_, done, err = reconciler.reconcileNetworkingDeletion(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(done).To(BeFalse())
-			na, err = getAttachment()
+			na = &opv1alpha1.NetworkAttachment{}
+			err = k8sClient.Get(ctx, naKey, na)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(na.Finalizers).To(ContainElement(BareMetalInstanceNetworkingFinalizer))
 
@@ -372,13 +400,18 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			_, done, err = reconciler.reconcileNetworkingDeletion(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(done).To(BeFalse())
-			_, err = getAttachment()
+			na = &opv1alpha1.NetworkAttachment{}
+			err = k8sClient.Get(ctx, naKey, na)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 			_, done, err = reconciler.reconcileNetworkingDeletion(ctx, bmi)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(done).To(BeTrue())
 			Expect(controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)).To(BeFalse())
+		}
+
+		It("deletes the NetworkAttachment and waits for the networking controller", func() {
+			deleteAndWaitForNetworkCleanup()
 		})
 
 		It("completes at once when no NetworkAttachment exists", func() {

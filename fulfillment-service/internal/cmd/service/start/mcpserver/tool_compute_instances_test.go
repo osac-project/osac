@@ -16,12 +16,17 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"net"
+	"strings"
+	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -57,6 +62,107 @@ func createPrerequisiteClients(instances *mockComputeInstancesClient) computeIns
 				}.Build(), nil
 			},
 		},
+	}
+}
+
+type oversizedCreateResponseServer struct {
+	publicv1.UnimplementedComputeInstancesServer
+	mu          sync.Mutex
+	createCalls int
+	getCalls    int
+	createdID   string
+	getID       string
+	getErr      error
+}
+
+type captureCreateErrorClient struct {
+	publicv1.ComputeInstancesClient
+	createErr error
+}
+
+func (c *captureCreateErrorClient) Create(
+	ctx context.Context, request *publicv1.ComputeInstancesCreateRequest, options ...grpc.CallOption,
+) (*publicv1.ComputeInstancesCreateResponse, error) {
+	response, err := c.ComputeInstancesClient.Create(ctx, request, options...)
+	c.createErr = err
+	return response, err
+}
+
+func (s *oversizedCreateResponseServer) Create(
+	_ context.Context, request *publicv1.ComputeInstancesCreateRequest,
+) (*publicv1.ComputeInstancesCreateResponse, error) {
+	s.mu.Lock()
+	s.createCalls++
+	s.createdID = request.GetObject().GetId()
+	createdID := s.createdID
+	s.mu.Unlock()
+	return publicv1.ComputeInstancesCreateResponse_builder{
+		Object: publicv1.ComputeInstance_builder{
+			Id: createdID,
+			// Exceed grpc-go's default 4 MiB client receive limit.
+			Metadata: publicv1.Metadata_builder{Name: strings.Repeat("x", (4<<20)+1)}.Build(),
+		}.Build(),
+	}.Build(), nil
+}
+
+func (s *oversizedCreateResponseServer) Get(
+	_ context.Context, request *publicv1.ComputeInstancesGetRequest,
+) (*publicv1.ComputeInstancesGetResponse, error) {
+	s.mu.Lock()
+	s.getCalls++
+	s.getID = request.GetId()
+	getID := s.getID
+	getErr := s.getErr
+	s.mu.Unlock()
+	if getErr != nil {
+		return nil, getErr
+	}
+	return publicv1.ComputeInstancesGetResponse_builder{
+		Object: publicv1.ComputeInstance_builder{
+			Id:       getID,
+			Metadata: publicv1.Metadata_builder{Version: 11}.Build(),
+			Status: publicv1.ComputeInstanceStatus_builder{
+				State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+			}.Build(),
+		}.Build(),
+	}.Build(), nil
+}
+
+func (s *oversizedCreateResponseServer) snapshot() (createdID, getID string, createCalls, getCalls int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.createdID, s.getID, s.createCalls, s.getCalls
+}
+
+func newOversizedCreateResponseClient(
+	server publicv1.ComputeInstancesServer,
+) (publicv1.ComputeInstancesClient, func()) {
+	GinkgoHelper()
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	publicv1.RegisterComputeInstancesServer(grpcServer, server)
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- grpcServer.Serve(listener)
+	}()
+
+	connection, err := grpc.NewClient(
+		"passthrough:///mcp-write-safety",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return listener.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	Expect(err).ToNot(HaveOccurred())
+	return publicv1.NewComputeInstancesClient(connection), func() {
+		connectionErr := connection.Close()
+		grpcServer.Stop()
+		listenerErr := listener.Close()
+		serverErr := <-serveErr
+		if errors.Is(serverErr, grpc.ErrServerStopped) {
+			serverErr = nil
+		}
+		Expect(errors.Join(connectionErr, listenerErr, serverErr)).To(Succeed())
 	}
 }
 
@@ -274,11 +380,20 @@ var _ = Describe("handleCreateComputeInstance", func() {
 	)
 
 	It("Hides a ComputeInstance Create error description", func() {
+		createCalls := 0
+		getCalls := 0
 		instances := &mockComputeInstancesClient{
 			createFunc: func(
 				ctx context.Context, request *publicv1.ComputeInstancesCreateRequest, options ...grpc.CallOption,
 			) (*publicv1.ComputeInstancesCreateResponse, error) {
+				createCalls++
 				return nil, status.Error(codes.InvalidArgument, "private SQL host and customer data")
+			},
+			getFunc: func(
+				_ context.Context, _ *publicv1.ComputeInstancesGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesGetResponse, error) {
+				getCalls++
+				return nil, errors.New("Get should not be called for a definite failure")
 			},
 		}
 
@@ -290,8 +405,134 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		envelope := decodeToolError(err)
 		Expect(envelope.Category).To(Equal("invalid_request"))
 		Expect(envelope.GRPCCode).To(Equal("InvalidArgument"))
+		Expect(createCalls).To(Equal(1))
+		Expect(getCalls).To(BeZero())
 		Expect(err.Error()).ToNot(ContainSubstring("private SQL host"))
 	})
+
+	It("Recovers a lost Create response with one public Get by the trusted ID", func() {
+		var createdID string
+		var createCalls, getCalls int
+		var verificationToken string
+		instances := &mockComputeInstancesClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.ComputeInstancesCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesCreateResponse, error) {
+				createCalls++
+				createdID = request.GetObject().GetId()
+				return nil, status.Error(codes.Unavailable, "private transport details")
+			},
+			getFunc: func(
+				ctx context.Context, request *publicv1.ComputeInstancesGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesGetResponse, error) {
+				getCalls++
+				verificationToken = forwardedToken(ctx)
+				Expect(request.GetId()).To(Equal(createdID))
+				return publicv1.ComputeInstancesGetResponse_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Id:       createdID,
+						Metadata: publicv1.Metadata_builder{Version: 4}.Build(),
+						Status: publicv1.ComputeInstanceStatus_builder{
+							State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+						}.Build(),
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+
+		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+			Name: "demo-vm", CatalogItem: "catalog-item-1",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(createdID).ToNot(BeEmpty())
+		Expect(output).To(Equal(CreateComputeInstanceOutput{
+			ID: createdID, Version: 4, State: "COMPUTE_INSTANCE_STATE_STARTING",
+		}))
+		Expect(verificationToken).To(Equal("Bearer api-for-raw-bearer-value"))
+		Expect(createCalls).To(Equal(1))
+		Expect(getCalls).To(Equal(1))
+	})
+
+	It("Returns an unknown outcome after an uncertain Create cannot be confirmed", func() {
+		var createdID string
+		var createCalls, getCalls int
+		instances := &mockComputeInstancesClient{
+			createFunc: func(
+				_ context.Context, request *publicv1.ComputeInstancesCreateRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesCreateResponse, error) {
+				createCalls++
+				createdID = request.GetObject().GetId()
+				return nil, status.Error(codes.DeadlineExceeded, "private timeout details")
+			},
+			getFunc: func(
+				_ context.Context, request *publicv1.ComputeInstancesGetRequest, _ ...grpc.CallOption,
+			) (*publicv1.ComputeInstancesGetResponse, error) {
+				getCalls++
+				Expect(request.GetId()).To(Equal(createdID))
+				return nil, status.Error(codes.Unavailable, "private lookup details")
+			},
+		}
+
+		handler := handleCreateComputeInstance(createPrerequisiteClients(instances))
+		_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+			Name: "demo-vm", CatalogItem: "catalog-item-1",
+		})
+		Expect(err).To(HaveOccurred())
+		envelope := decodeToolError(err)
+		Expect(output).To(BeZero())
+		Expect(envelope.Category).To(Equal("unknown_outcome"))
+		Expect(envelope.GRPCCode).To(Equal("Unknown"))
+		Expect(envelope.Retryable).To(BeFalse())
+		Expect(envelope.Details).To(ContainElement(ContainSubstring(createdID)))
+		Expect(envelope.Message).To(ContainSubstring("before retrying"))
+		Expect(err.Error()).ToNot(ContainSubstring("private timeout details"))
+		Expect(err.Error()).ToNot(ContainSubstring("private lookup details"))
+		Expect(createCalls).To(Equal(1))
+		Expect(getCalls).To(Equal(1))
+	})
+
+	DescribeTable("Verifies Create after an accepted write returns an oversized gRPC response (OSAC-5851)",
+		func(getErr error, expectConfirmed bool) {
+			server := &oversizedCreateResponseServer{getErr: getErr}
+			instances, cleanup := newOversizedCreateResponseClient(server)
+			DeferCleanup(cleanup)
+
+			capturedClient := &captureCreateErrorClient{ComputeInstancesClient: instances}
+			clients := createPrerequisiteClients(&mockComputeInstancesClient{})
+			clients.instances = capturedClient
+			handler := handleCreateComputeInstance(clients)
+			_, output, err := handler(context.Background(), requestWithToken("raw-bearer-value"), CreateComputeInstanceInput{
+				Name: "demo-vm", CatalogItem: "catalog-item-1",
+			})
+
+			createdID, getID, createCalls, getCalls := server.snapshot()
+			Expect(status.Code(capturedClient.createErr)).To(Equal(codes.ResourceExhausted))
+			Expect(createdID).ToNot(BeEmpty())
+			Expect(getID).To(Equal(createdID))
+			Expect(createCalls).To(Equal(1))
+			Expect(getCalls).To(Equal(1))
+			if expectConfirmed {
+				Expect(err).ToNot(HaveOccurred())
+				Expect(output).To(Equal(CreateComputeInstanceOutput{
+					ID: createdID, Version: 11,
+					State: "COMPUTE_INSTANCE_STATE_STARTING",
+				}))
+				return
+			}
+
+			Expect(err).To(HaveOccurred())
+			Expect(output).To(BeZero())
+			envelope := decodeToolError(err)
+			Expect(envelope.Category).To(Equal("unknown_outcome"))
+			Expect(envelope.GRPCCode).To(Equal("Unknown"))
+			Expect(envelope.Retryable).To(BeFalse())
+			Expect(envelope.Details).To(ContainElement(ContainSubstring(createdID)))
+		},
+		Entry("returns confirmed success when Get finds the instance", nil, true),
+		Entry("returns a non-retryable unknown outcome when Get fails",
+			status.Error(codes.Unavailable, "private lookup details"), false),
+	)
 
 	It("Returns a safe authorization error when the public API denies creation", func() {
 		instances := &mockComputeInstancesClient{

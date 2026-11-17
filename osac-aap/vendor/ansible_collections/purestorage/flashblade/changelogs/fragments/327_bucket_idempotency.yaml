@@ -1,2 +1,0 @@
-bugfixes:
- - purefb_bucket - Fixed issue with idempotency reported when ``hard_limit`` not provided.

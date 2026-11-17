@@ -8,14 +8,14 @@ title: Windows Server Virtual Machine
 description: A Windows Server virtual machine with customizable resources.
 template:
   id: osac.templates.ocp_virt_vm
-  shared: true
+  tenant: shared
 published: true
 fields:
   instance_type:
     editable:
       default_value:
         name: u1-medium
-        shared: true
+        tenant: shared
   boot_disk:
     size_gib:
       editable:
@@ -24,7 +24,7 @@ fields:
     editable:
       default_value:
         name: windows-server
-        shared: true
+        tenant: shared
   run_strategy:
     editable:
       default_value: COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS

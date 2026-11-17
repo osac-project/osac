@@ -112,6 +112,11 @@ options:
       choices: ['present', 'absent']
       default: present
       type: str
+    tags:
+      description:
+        - A list of tags to set on the network
+      type: list
+      elements: str
 extends_documentation_fragment:
 - openstack.cloud.openstack
 '''
@@ -326,6 +331,7 @@ class RouterModule(OpenStackModule):
         network=dict(),
         project=dict(),
         state=dict(default='present', choices=['absent', 'present']),
+        tags=dict(type='list', elements='str'),
     )
 
     module_kwargs = dict(
@@ -372,6 +378,10 @@ class RouterModule(OpenStackModule):
             for p in external_fixed_ips:
                 if 'ip_address' in p:
                     req_fip_map[p['subnet_id']].add(p['ip_address'])
+                elif p['subnet_id'] in cur_fip_map:
+                    # handle idempotence of updating with no explicit ip
+                    req_fip_map[p['subnet_id']].update(
+                        cur_fip_map[p['subnet_id']])
 
             # Check if external ip addresses need to be added
             for fip in external_fixed_ips:
@@ -464,7 +474,7 @@ class RouterModule(OpenStackModule):
                 subnet = self.conn.network.find_subnet(
                     iface['subnet_id'], ignore_missing=False, **filters)
                 fip = dict(subnet_id=subnet.id)
-                if 'ip_address' in iface:
+                if iface.get('ip_address', None) is not None:
                     fip['ip_address'] = iface['ip_address']
                 external_fixed_ips.append(fip)
 
@@ -599,6 +609,7 @@ class RouterModule(OpenStackModule):
         name = self.params['name']
         network_name_or_id = self._get_external_gateway_network_name()
         project_name_or_id = self.params['project']
+        tags = self.params['tags']
 
         if self.params['external_fixed_ips'] and not network_name_or_id:
             self.fail(
@@ -681,6 +692,12 @@ class RouterModule(OpenStackModule):
                     if to_add or to_remove or missing_internal_ports:
                         self._update_ifaces(router, to_add, to_remove,
                                             missing_internal_ports)
+
+            if tags is not None:
+                old_tags = self.conn.network.get_tags(router)
+                if set(old_tags) != set(tags):
+                    self.conn.network.set_tags(router, tags)
+                    changed = True
 
             self.exit_json(changed=changed,
                            router=router.to_dict(computed=False))

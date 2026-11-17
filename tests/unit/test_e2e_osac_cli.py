@@ -51,7 +51,7 @@ def test_create_baremetal_instance_sets_explicit_instance_type(monkeypatch: pyte
     assert warnings == []
     assert args.count("--set") == 2
     assert "instance_type.name=compute.large" in args
-    assert "instance_type.shared=true" in args
+    assert "instance_type.tenant=shared" in args
 
 
 def test_create_baremetal_instance_can_use_catalog_or_template_type_default(monkeypatch: pytest.MonkeyPatch) -> None:

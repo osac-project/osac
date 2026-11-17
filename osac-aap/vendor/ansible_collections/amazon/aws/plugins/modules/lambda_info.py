@@ -73,18 +73,6 @@ EXAMPLES = r"""
 
 RETURN = r"""
 ---
-function:
-    description:
-        - Lambda function list.
-        - RV(function) has been deprecated in will be removed in the next major release after 2025-01-01.
-    returned: success
-    type: dict
-function.TheName:
-    description:
-        - Lambda function information, including event, mapping, and version information.
-        - RV(function) has been deprecated in will be removed in the next major release after 2025-01-01.
-    returned: success
-    type: dict
 functions:
     description: List of information for each lambda function matching the query.
     returned: always
@@ -387,9 +375,6 @@ def list_functions(client, module):
     query = _get_query(module.params["query"], function_name)
     functions = []
 
-    # keep returning deprecated response (dict of dicts) until removed
-    all_facts = {}
-
     for function_name in function_names:
         function = {}
 
@@ -412,13 +397,9 @@ def list_functions(client, module):
         if query in ["all", "tags"]:
             function.update(tags_details(client, module, function_name))
 
-        all_facts[function["function_name"]] = function
-
-        # add current lambda to list of lambdas
         functions.append(function)
 
-    # return info
-    module.exit_json(function=all_facts, functions=functions, changed=False)
+    module.exit_json(functions=functions, changed=False)
 
 
 def config_details(client, module, function_name):
@@ -591,16 +572,6 @@ def main():
             module.fail_json(msg=f'Function name "{function_name}" exceeds 64 character limit')
 
     client = module.client("lambda", retry_decorator=AWSRetry.jittered_backoff())
-
-    # Deprecate previous return key of `function`, as it was a dict of dicts, as opposed to a list of dicts
-    module.deprecate(
-        (
-            "The returned key 'function', which returned a dictionary of dictionaries, is deprecated and will be"
-            " replaced by 'functions', which returns a list of dictionaries. Both keys are returned for now."
-        ),
-        date="2025-01-01",
-        collection_name="amazon.aws",
-    )
 
     list_functions(client, module)
 

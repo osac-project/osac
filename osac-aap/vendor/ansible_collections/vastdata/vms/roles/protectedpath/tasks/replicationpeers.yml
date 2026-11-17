@@ -1,0 +1,38 @@
+---
+- name: Require replication peer pool reference
+  ansible.builtin.assert:
+    that:
+      - item.pool_id is defined or (_pool_name | length) > 0
+    fail_msg: >-
+      Replication peer "{{ item.name | default('?') }}" must define pool_id or
+      a pool name via pool, pool_name, or vippool. If exactly one VIP pool is
+      defined for the same cluster, that pool is inferred automatically.
+  loop: "{{ replicationpeers }}"
+  loop_control:
+    label: "{{ item.cluster }}:{{ item.name | default('?') }}"
+  vars:
+    _cluster_pool_names: "{{ vippools | selectattr('cluster', 'equalto', item.cluster) | map(attribute='name') | list }}"
+    _inferred_pool_name: "{{ (_cluster_pool_names | first | default('')) if (_cluster_pool_names | length == 1) else '' }}"
+    _pool_name: "{{ item.pool_name | default(item.pool | default(item.vippool | default(_inferred_pool_name))) | string | trim }}"
+
+- name: Ensure native replication peers
+  ansible.builtin.include_tasks: replicationpeer.yml
+  loop: "{{ replicationpeers }}"
+  loop_control:
+    loop_var: replicationpeer
+    label: "{{ replicationpeer.cluster }}:{{ replicationpeer.name | default('?') }}"
+  vars:
+    _cluster_pool_names: "{{ vippools | selectattr('cluster', 'equalto', replicationpeer.cluster) | map(attribute='name') | list }}"
+    _inferred_pool_name: "{{ (_cluster_pool_names | first | default('')) if (_cluster_pool_names | length == 1) else '' }}"
+    _pool_name: >-
+      {{
+        replicationpeer.pool_name
+        | default(replicationpeer.pool | default(replicationpeer.vippool | default(_inferred_pool_name)))
+        | string | trim
+      }}
+    replicationpeer_pool_id: >-
+      {{
+        replicationpeer.pool_id
+        if replicationpeer.pool_id is defined
+        else lookup('vastdata.vms.vast_name_to_id', _pool_name, protectedpath_vms[replicationpeer.cluster], 'vippools')
+      }}

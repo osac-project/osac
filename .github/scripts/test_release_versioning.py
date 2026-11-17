@@ -295,5 +295,87 @@ class ChartVersionResolution(TemporaryRepos):
                 self.assertEqual(version, "")
 
 
+FAKE_OC = r"""#!/usr/bin/env python3
+import json
+import os
+import sys
+
+arguments = sys.argv[1:]
+if arguments[:2] == ["get", "snapshot"]:
+    print(json.dumps({"status": {"conditions": [{"type": "AppStudioTestSucceeded", "status": "True"}]}}))
+elif arguments[:2] == ["get", "release"]:
+    staged = {"osac-release-v0-5-1-attempt1": "cloud-extensions-stage", "osac-charts-release-v0-5-1-attempt1": "osac-charts-stage"}
+    print(json.dumps({"items": [
+        {"spec": {"snapshot": snapshot, "releasePlan": plan}, "status": {"conditions": [{"type": "Released", "status": "True"}]}}
+        for snapshot, plan in staged.items()
+    ]}))
+elif arguments[:2] == ["get", "releaseplan"]:
+    name = arguments[2]
+    errors = {
+        "forbidden": f'Error from server (Forbidden): releaseplans.appstudio.redhat.com "{name}" is forbidden: User "system:serviceaccount:osac-tenant:konflux-bot-0" cannot get resource "releaseplans"',
+        "notfound": f'Error from server (NotFound): releaseplans.appstudio.redhat.com "{name}" not found',
+        "unauthorized": "error: You must be logged in to the server (Unauthorized)",
+    }
+    mode = os.environ["PLAN_LOOKUP"]
+    if mode in errors:
+        print(errors[mode], file=sys.stderr)
+        sys.exit(1)
+    print(name)
+else:
+    raise AssertionError(f"Unexpected oc call: {arguments}")
+"""
+
+
+class ProdReleasePlanCheck(TemporaryRepos):
+    """The promotion workflow's verification step against a fake cluster."""
+
+    def verify(self, lookup: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+        jobs = yaml.safe_load((ROOT / ".github/workflows/osac-promote-to-prod.yaml").read_text())["jobs"]
+        script = next(step["run"] for step in jobs["resolve-and-verify"]["steps"] if step.get("id") == "verify")
+        work = self.directory()
+        (work / "oc").write_text(FAKE_OC)
+        (work / "oc").chmod(0o755)
+        output = work / "github-output"
+        output.write_text("")
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env={
+                **ENV,
+                "PATH": f"{work}:{os.environ['PATH']}",
+                "GITHUB_OUTPUT": str(output),
+                "PLAN_LOOKUP": lookup,
+                "IMAGE_SNAPSHOT": "osac-release-v0-5-1-attempt1",
+                "CHART_SNAPSHOT": "osac-charts-release-v0-5-1-attempt1",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result, dict(line.split("=", 1) for line in output.read_text().splitlines() if "=" in line)
+
+    def test_plans_that_exist_are_ready(self) -> None:
+        result, outputs = self.verify("ok")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((outputs["image-ready"], outputs["chart-ready"]), ("true", "true"))
+        self.assertNotIn("could not be checked", result.stderr)
+
+    def test_a_service_account_that_may_not_read_plans_does_not_block_promotion(self) -> None:
+        # konflux-bot-0 cannot get ReleasePlans; every real run used to stop here.
+        result, outputs = self.verify("forbidden")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((outputs["image-ready"], outputs["chart-ready"]), ("true", "true"))
+        self.assertEqual(result.stderr.count("could not be checked"), 2)
+
+    def test_a_plan_that_is_reported_missing_still_skips_promotion(self) -> None:
+        result, outputs = self.verify("notfound")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual((outputs["image-ready"], outputs["chart-ready"]), ("false", "false"))
+
+    def test_any_other_lookup_failure_still_stops(self) -> None:
+        result, _ = self.verify("unauthorized")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("A lookup failed with a genuine error", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

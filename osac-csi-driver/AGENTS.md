@@ -47,17 +47,25 @@ CSI sanity uses a fake vendor and fulfillment stub; it does not cover a real bac
 
 ## Validation
 
-From `osac-csi-driver/`:
+### Local build and checks
+
+From `osac-csi-driver/`, use Go from `go.mod` and Helm for chart checks:
 
 ```bash
 make fmt
 make vet
 make lint
 make test                  # Unit and CSI sanity tests
+make build
 helm lint charts/csi-driver
 helm lint charts/csi-backends
-make image-build IMG=<registry>/osac-csi-driver:<tag>
 ```
 
-Run image builds with a registry tag only when the container or deployment
-inputs changed; E2E suites live under [`../tests/e2e/`](../tests/e2e/).
+### Container and deployed checks
+
+- For container/deployment inputs, run
+  `make image-build IMG=<registry>/osac-csi-driver:<tag>` from the same directory.
+  The Makefile supplies the monorepo root context.
+- E2E suites live under [`../tests/e2e/`](../tests/e2e/). Select the real storage
+  backend and deployment prerequisites before running them; CSI sanity with
+  stubs does not substitute for attach, detach or mount evidence.

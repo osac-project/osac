@@ -45,7 +45,11 @@ Kind tests require the current operator deployment and simulate provider transit
 
 ## Validation
 
-From `bare-metal-fulfillment-operator/`:
+### Local build and checks
+
+From `bare-metal-fulfillment-operator/`, use Go from `go.mod` and Helm for chart
+checks. `make test` obtains Envtest assets and regenerates manifests/DeepCopy
+code; review any resulting diff.
 
 ```bash
 make fmt && make vet
@@ -53,8 +57,13 @@ make lint
 make test
 make helm-lint
 make check-helm-crds
-make integration-tests       # Requires a pre-existing Kind cluster
+make build
 ```
 
-The integration tests are under `test/integration/`. Installer orchestration,
-when needed, is owned by [`../osac-installer/AGENTS.md`](../osac-installer/AGENTS.md).
+### Deployed checks
+
+Run `make integration-tests` from the same directory after deploying the current
+image and CRDs into a selected Kind cluster. The Ginkgo suite lives under
+`test/integration/`; it does not supply real hardware/provider behavior.
+Installer orchestration is owned by
+[`../osac-installer/AGENTS.md`](../osac-installer/AGENTS.md).

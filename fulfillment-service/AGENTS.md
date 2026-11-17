@@ -38,6 +38,10 @@ Read the applicable references before changing behavior:
 
 ## Generated files
 
+Use the Go version in `go.mod` and the tools listed in [README.md](README.md):
+uv/Python for development tasks, Buf/protoc for protobuf generation, Ginkgo
+for unit suites, and Helm for chart checks.
+
 Run from `fulfillment-service/` when applicable:
 
 ```bash
@@ -62,6 +66,10 @@ go build ./cmd/fulfillment-service ./cmd/osac
 ginkgo run --timeout 10m internal/servers # Focused server unit tests.
 ginkgo run --timeout 20m -r internal # All unit suites. Slow, run only when necessary.
 ```
+
+For container-input changes, run `make image-build IMG=<registry>/fulfillment-service:<tag>`
+from `fulfillment-service/`. The Makefile supplies the monorepo root build
+context so sibling workspace modules are available.
 
 ### Integration tests
 

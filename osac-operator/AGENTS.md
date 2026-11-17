@@ -51,7 +51,9 @@ Read the applicable references before changing behavior:
 
 - After changing `api/v1alpha1/*_types.go`, run `make manifests generate`.
 - Then run `make helm-crds` to synchronize `config/crd/` with `charts/operator-crds/`; use `make check-helm-crds` to verify the result.
-- Fulfillment proto changes are regenerated once in the shared module: `make -C ../proto generate` (see `proto/AGENTS.md`). Do not regenerate anything proto-related from `osac-operator/`.
+- From `osac-operator/`, regenerate Fulfillment protos through
+  `make -C ../proto generate` (see [proto instructions](../proto/AGENTS.md)).
+  Do not run a separate component-local protobuf generator.
 - Never hand-edit `config/crd/`, `zz_generated.deepcopy.go`, or `go.sum`; run `go mod tidy` for module changes.
 
 <a id="integration-testing"></a>
@@ -68,9 +70,30 @@ the `dhcp_lease` result and ClusterOrder ingress reservation. Keep
 `../tests/contract/network-task` synchronized in one PR; run `make test` from
 `osac-operator/`. DHCP validation uses the interface MAC and physical subnet
 range. Overlay delete/detach, other deletes, SecurityGroup, FabricDomain and
-ingress release remain unbound; see [wire boundaries](../docs/testing/osac-operator.md#boundaries-and-gaps).
+ingress release remain unbound; see [wire boundaries](../docs/testing/osac-operator.md#coverage-boundaries).
 
-All commands below run from `osac-operator/`.
+### Local build and checks
+
+Run from `osac-operator/`, using Go from `go.mod` and Helm for chart checks:
+
+```bash
+make fmt
+make vet
+make lint
+make helm-lint
+make check-helm-crds
+make test
+make build
+```
+
+`make test` prepares Envtest and regenerates manifests/DeepCopy code; review
+generated changes. `make build` also runs that unit-test path before building
+the manager and console proxy, so it is not a compile-only shortcut.
+
+### Select coverage by boundary
+
+All commands below also run from `osac-operator/`. Integration targets require
+the current image/manifests deployed into an explicitly selected Kind cluster.
 
 | Touched area | Required tier and command |
 |---|---|
@@ -89,7 +112,16 @@ Worker persistence uses the shared Controller Envtest Suite, labelled
 `*_test.go`, not importable packages. Kubernetes/etcd and OSAC CRDs are real;
 Fulfillment responses, ignition HTTP and Agent/InfraEnv progression are
 controlled. Keep the minimal InfraEnv/ClusterDeployment and Agent/NodePool CRDs
-consumed by the suite. Focused helper checks:
+consumed by the suite.
+
+For focused worker controller coverage, with `KUBEBUILDER_ASSETS` pointing to
+the Envtest binaries prepared by the Makefile:
+
+```bash
+go test ./internal/controller -count=1 -ginkgo.label-filter=baremetalworker
+```
+
+These focused pure-helper checks do not replace controller Envtest:
 
 ```bash
 go test ./internal/controller/baremetalworker -count=1
@@ -99,8 +131,8 @@ go test -race ./internal/controller/baremetalworker -count=1
 Local doubles and Kind worker RBAC checks do not establish real Fulfillment/
 Postgres uniqueness or recovery, Agent-watch delivery, Assisted Service or
 provider deletion. These remain [Contract gaps](../docs/INTEGRATION-TESTING.md#osac-operator);
-deployed lifecycle, CAP-Agent/drain and hardware journeys are QE E2E.
+deployed lifecycle, CAP-Agent/drain and hardware checks are QE E2E.
 LVMS fixture CRDs/status do not prove device provisioning, mounting or CSI I/O.
 
-`make build` also runs the unit-test path. The console proxy integration tests
-are under `test/integration/`; E2E suites are under [`../tests/e2e/`](../tests/e2e/).
+The console proxy integration tests are under `test/integration/`; E2E suites
+are under [`../tests/e2e/`](../tests/e2e/).

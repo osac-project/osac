@@ -33,35 +33,83 @@ Read the applicable references before changing behavior:
 
 - After changing chart dependencies, run `make helm-deps` and review `Chart.lock`/packaged dependency diffs.
 - Do not edit sibling component sources through installer chart paths.
+- `make sync-charts` is an alias for `make helm-deps`, not another generation step.
 
 <a id="integration-testing"></a>
 
 ## Validation
 
-Commands run from `osac-installer/`; use the matching render target in the
-Makefile and the [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer).
+### Tools and working directory
 
-| Touched area | Required tier and command |
+- Run the commands below from `osac-installer/` unless a different cwd is stated.
+- Use Helm and Python/uv for chart contracts and script tests. Helm unit suites
+  require the helm-unittest plugin; CI pins v1.2.1.
+- Chart dependency targets may download archives. Review lock/archive changes
+  and distinguish dependency preparation from tests.
+- Read the [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer)
+  and [README.md](README.md) for profile and runtime prerequisites.
+
+### Local chart checks
+
+For values, schema, chart dependencies or rendered resource changes:
+
+```bash
+make helm-validate
+helm unittest charts/osac
+make helm-infra-deps
+helm unittest charts/osac-infra
+helm unittest ../osac-metering/charts/osac-metering
+```
+
+`helm-validate` combines Helm lint and render contracts; the helm-unittest
+suites above are separate. Use the owning suite for isolated chart changes.
+
+Focused contracts, selected by the changed wiring:
+
+| Wiring | Command |
 |---|---|
-| Values, schema, dependencies or rendered charts | Helm contract: `make helm-validate`; `helm unittest charts/osac`; for infra, `make helm-infra-deps` then `helm unittest charts/osac-infra` |
-| Metering chart wiring | `helm unittest ../osac-metering/charts/osac-metering` |
-| Networking, MCE, LVMS, trust, billing or auth wiring | Matching `helm-networking-test`, `mce-render-test`, `lvms-optional-path-render-test`, `fulfillment-trust-render-test`, `billing-render-test`, `fulfillment-auth-test` or `dev-full-render-test` Make target |
-| Kind runtime, image/dependency loading, lifecycle or test-phase wiring | Stubbed unit: `make kind-runtime-test` |
-| Infra readiness or input validation | Stubbed unit/Helm: `make infra-ready-wait-test input-validation-test` |
-| Preflight rendering/hook policy or harness restoration | `uv run --script scripts/test-preflight-render.py`; `uv run --script scripts/test-preflight-harness.py` |
-| Preflight real API/upgrade/failure logs | Opt-in Kind component integration: `uv run --script scripts/test-preflight-kind.py` |
-| Combined disk handoff | `make kind-runtime-test` and `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage`; real Fulfillment/PostgreSQL/operator, recording AAP double |
-| Deployed hooks/startup or UI Gateway | Applicable installer `make test` suite; `./scripts/test-ui-gateway.sh` requires deployed dev-full |
+| Networking values, manager settings, overlays and admission | `make helm-networking-test` |
+| NetworkClass step against a fake fulfillment API | `make network-class-step-test` |
+| MCE defaults and lifecycle gate | `make mce-render-test` |
+| Optional LVMS worker/device allowlist | `make lvms-optional-path-render-test` |
+| Fulfillment trust and CA mounts | `make fulfillment-trust-render-test` |
+| Service-account IDP credentials and realm roles | `make service-account-idp-render-test` |
+| Fulfillment hook token exchange and dev-full wiring | `make fulfillment-auth-test dev-full-render-test` |
+| Billing provider mounts and tuning bounds | `make billing-render-test` |
+| EVPN host networking | `make evpn-render-test` |
+| OpenBao security context on Kind/OpenShift | `make openbao-security-context-test` |
 
-Render/unit tests do not prove live readiness or provider behavior. Deployed
-checks require an explicitly selected disposable environment and prerequisites.
+For metering reader values, the focused selection is
+`helm unittest -f 'tests/metering_readers*_test.yaml' charts/osac`; the full
+umbrella suite includes it. Kafka exporter/PodMonitor contracts belong to the
+infra suite, not a live-exporter check.
+
+### Local script and harness checks
+
+- Runtime, image/dependency loading, cleanup and test-phase wiring:
+  `make kind-runtime-test` uses command stubs.
+- Infra readiness waits: `make infra-ready-wait-test` uses command stubs.
+- Upfront input gate and schema rejection: `make input-validation-test`.
+- Preflight render/hook policy: `uv run --script scripts/test-preflight-render.py`.
+- Preflight harness restoration: `uv run --script scripts/test-preflight-harness.py`.
+- Disk-handoff AAP recording double:
+  `python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py`.
+
+### Repository checks
 
 From the repository root, run
 `yamllint --strict -c .yamllint.yaml osac-installer/`; the shared config excludes
 the entire `osac-installer/charts/` tree, including chart metadata and values.
 Other commands here run from `osac-installer/`.
 
-Deployment and integration targets require explicit parameters, for example:
+Run `pre-commit run --all-files` from the repository root and follow its
+separate staged/PR-range secret-scan requirements. Do not claim a full secret
+scan from an all-files run with an empty index.
+
+### Deployed integration checks
+
+Select an explicitly authorized disposable environment. Deployment targets
+change cluster state and require explicit platform, profile and namespace:
 
 ```bash
 make install-infra PLATFORM=kind PROFILE=dev NS=osac
@@ -69,5 +117,14 @@ make install-osac PLATFORM=kind PROFILE=dev NS=osac
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```
 
-Supported test suites are `all`, `fulfillment`, `compute-storage`, `operator`, and `bmf`; see the
-Makefile and README for profile-specific prerequisites and cleanup.
+- Supported suites are `all`, `fulfillment`, `compute-storage`, `operator` and
+  `bmf`. Select with `SUITE`; inspect profile-specific prerequisites and cleanup.
+- For combined disk handoff, run
+  `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage`.
+  This uses real Fulfillment/PostgreSQL/operator with a recording AAP double.
+- For preflight real-API, upgrade and failed-hook logs, run
+  `uv run --script scripts/test-preflight-kind.py` against the selected Kind context.
+- For UI Gateway reachability, run `./scripts/test-ui-gateway.sh` against
+  deployed dev-full. Local rendering does not prove hook token acceptance.
+- Render tests and stubs do not establish live readiness, networking traffic
+  or provider provisioning. Report those boundaries separately.

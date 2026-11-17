@@ -12,7 +12,10 @@ Read the applicable references before changing behavior:
 
 - Component setup: [`README.md`](README.md)
 - Event schema: `schema/`
-- Published contract and its generated files: `docs/contract/`, generated from the field registry, the default rule revision in `charts/osac-metering/rules/` and `charts/osac-metering/templates/rules.yaml`, the chart defaults in `charts/osac-metering/values.yaml`, and `schema/versions/`
+- Published contract: `docs/contract/`; source inputs are the field registry,
+  `schema/versions/`, chart defaults in `charts/osac-metering/values.yaml`,
+  and the default rule revision under `charts/osac-metering/rules/` and
+  `charts/osac-metering/templates/rules.yaml`.
 - Fold, rounds, relay, and rules: `metering-service/`
 - Adapter runner and contracts: `adapters/`
 - Deployment values and rule revisions: `charts/osac-metering/`
@@ -57,23 +60,42 @@ fold, round, or relay behavior; they are the determinism gate for billing.
 
 - Fulfillment types are generated in shared `../proto/`; from `osac-metering/`,
   run `make -C ../proto generate` and commit its generated trees. Never hand-edit them.
-- `docs/contract/` is generated from the field registry, the default rule revision, and `schema/versions/`. Change the sources and run `make contract` (from `osac-metering/`); never edit the reference or the schema file by hand.
+- Change contract sources, then run `make contract` from `osac-metering/`.
+  Never hand-edit the generated reference or schema under `docs/contract/`.
 - A published version file is pinned in `schema/published.sha256`. A new version file needs its own entry; CI fails when an existing file's bytes differ from the manifest.
 - Use `go mod tidy` for dependency updates in the affected module.
 
 ## Validation
 
-From `osac-metering/`:
+### Component checks
+
+Run from `osac-metering/`, with Go, Helm and the helm-unittest plugin available.
+Integration suites require real PostgreSQL/Kafka and their test harness
+prerequisites; retain full Git history/tags for released-rule/schema checks.
 
 ```bash
 make test                  # schema, metering-service, and adapters
 make lint
 make helm-lint
 make helm-test             # chart render tests; needs the helm-unittest plugin
+make readers-render-test
+make contract-check schemas-unchanged-test
 ```
 
-For isolated changes, run `make test` and `make lint` in the changed module
-and any directly affected module. Build adapter binaries with
-`make build-echo-adapter` or `make build-m360-adapter` from `adapters/`.
-Kafka-backed integration and E2E
-validation requires the installer deployment and its Kafka prerequisites.
+`make test` includes module tests, rule rendering/immutability, schema
+immutability and reader rendering. `make contract-check` additionally checks
+generated contract freshness and service dependency boundaries.
+
+### Focused module work and builds
+
+- For isolated changes, run `make test` and `make lint` in the changed module
+  and every directly affected module; schema changes require the component gate.
+- Build the service with `make build` from `metering-service/`.
+- Build adapters with `make build-echo-adapter` or `make build-m360-adapter`
+  from `adapters/`.
+- Regenerate contract docs with `make contract` from `osac-metering/`; use
+  `make -C ../proto generate` there for shared protobuf changes, not a
+  module-relative path copied into the wrong cwd.
+- Deployed Kafka/E2E checks require installer infrastructure. Real billing
+  provider contract tests additionally require their explicitly configured
+  tenant and credentials; never substitute mock-provider success.

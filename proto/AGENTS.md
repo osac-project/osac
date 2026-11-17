@@ -18,16 +18,30 @@ monorepo (`github.com/osac-project/osac/proto/gen/osac/<layer>/v1`).
 
 ## Contributing a proto change
 
+Use Go from `go.mod`, uv, Buf and protoc; the fulfillment development toolchain
+owns the cleanapi and lint plugins. Run commands from `proto/`:
+
+```bash
+make generate
+make lint
+go build ./...
+```
+
 1. Edit files under `private/` (or `tests/` for test-only types).
 2. From this directory: `make generate`
    - regenerates `public/` from `private/` (via `fulfillment-service/dev.py`,
      which owns the cleanapi toolchain), then
    - regenerates the Go tree under `gen/` (`buf generate`).
-3. `make lint` runs `buf lint` (uses the `buf-plugin-osac-lint` plugin built
-   from `fulfillment-service/cmd/buf-plugin-osac-lint`).
+3. `make lint` runs the fulfillment dev.py proto lint path, including `buf lint`.
+   Its `buf-plugin-osac-lint` plugin is built from
+   `fulfillment-service/cmd/buf-plugin-osac-lint`.
 4. Commit **all** of: the `private/` (or `tests/`) source, the regenerated
    `public/`, and the regenerated `gen/`. CI (`Check generated code (proto)`)
    fails the PR if `gen/` or `public/` is stale.
+
+Building this module checks generated Go compilation, not compatibility of
+every consumer. Validate affected consumers after API changes. Do not invoke
+`buf generate` alone as a substitute for the ordered private-to-public step.
 
 ## API semantics
 

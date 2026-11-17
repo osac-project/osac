@@ -8,11 +8,20 @@ resource-reference workflows.
 ## Invariants
 
 - Cross-component pytest suites live under `tests/e2e/`, not in the external `osac-test-infra` checkout; that repository owns infrastructure backends, not suites.
-- Put service-owned tests in their service-tier directory. Cross-service networking E2E tests live in `tests/e2e/networking/{vmaas,bmaas,stretched}/`. Test-infra selects them by directory through `TEST_SUITE`; do not add backend-specific pytest markers to the tests. Standard service runs skip them because they select different directories.
+- Put service-owned tests in their service-tier directory. Cross-service
+  networking tests live in `tests/e2e/networking/{vmaas,bmaas,stretched}/`.
+- Test-infra selects networking suites by directory through `TEST_SUITE`;
+  do not add backend-specific pytest markers. Standard service runs select
+  different directories and therefore skip these suites.
 - Avoid fixed sleeps; wait for observable resource conditions with bounded timeouts.
 - Tests clean up resources they create and never assume the caller's shared-cluster namespace or context.
 - Shared fixture changes require collecting all affected suites.
-- A new long wait or traffic check reports a failure kind (`tests/e2e/core/failures.py`: `Kind`, `E2EFailure`, `poll_or_fail(kind=...)` in the VMaaS stack); a suite with guests registers a guest snapshot source (`stack.register_guest_snapshot` for VMaaS, `bmaas/guest_ssh.register_guest_snapshot` for BMaaS) and removes it in teardown.
+- A new long wait or traffic check reports a failure kind from
+  `tests/e2e/core/failures.py`: `Kind`, `E2EFailure`, or `poll_or_fail(kind=...)`
+  in the VMaaS stack.
+- Suites with guests register a snapshot source and remove it in teardown:
+  `stack.register_guest_snapshot` for VMaaS or
+  `bmaas/guest_ssh.register_guest_snapshot` for BMaaS.
 - Failure reporting never changes a test's result and never prints a token: use `run()` (its `CommandFailed` and `CommandTimedOut` carry a sanitized command) and keep polled containers out of messages.
 - Telemetry is optional and never changes outcomes. Preserve worker attribution
   (`osac.ci.xdist_worker`) and fixture-reuse spans; overlapping fixture spans
@@ -44,10 +53,11 @@ status and pool accounting, not provider IPAM visibility; see the canonical
 | Area | Required tier and command |
 |---|---|
 | Shared helpers, cleanup, reference oracles and failure/telemetry plugins | DEV Unit: `uv run pytest -n 0 tests/unit`; collect every affected deployed suite |
-| VMaaS/CaaS/BMaaS/storage/reference journeys | QE deployed E2E: collect and run the affected service/tier under `tests/e2e/` with real dependencies |
+| VMaaS/CaaS/BMaaS/storage/reference lifecycles | QE deployed E2E: collect and run the affected service/tier under `tests/e2e/` with real dependencies |
 | Netris VMaaS networking and billing | Whole ordered lifecycle: `uv run pytest -n 0 -x tests/e2e/networking/vmaas/test_vmaas_networking.py` |
 | Netris BMaaS connectivity/isolation | `uv run pytest -n 0 tests/e2e/networking/bmaas` against its real backend |
-| Natural bare-metal CaaS teardown | `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create`; two-NodeSet journey is in `caas/regression/test_cluster_node_sets.py` |
+| Stretched networking | `uv run pytest -n 0 tests/e2e/networking/stretched` against its real backends |
+| Natural bare-metal CaaS teardown | `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create`; two-NodeSet coverage is in `caas/regression/test_cluster_node_sets.py` |
 
 Ordered Netris VMaaS must run whole, serial (`-n 0`) and fail-fast (`-x`),
 without `-k` or isolated lifecycle phases. It requires enabled provisioning,
@@ -70,12 +80,35 @@ CaaS/CSI checks use tenant-admin HostedControlPlane kubeconfig Secrets through
 `kubectl` stdin only: never write them to disk or expose them. Per-ClusterOrder
 observer credentials are not required. Follow the
 [trust prerequisites and rotation sequence](../../docs/testing/e2e.md#fulfillment-trust-enablement).
-The rotation gate is read-only; it must not mutate CA or leaf resources.
+The rotation gate does not mutate CA or leaf resources. Its operator metrics
+path creates a TokenRequest before port-forwarding; the caller needs `create`
+on `serviceaccounts/token` for that service account/namespace. Follow the linked
+gate input and authorization requirements; do not perform rotation in the test.
 
 ## Validation
 
-- Format and lint changed Python with the repository's configured Ruff checks: `uv run ruff check tests/e2e/` and `uv run ruff format --check tests/e2e/`.
-- Collect the affected suite with `uv run pytest --collect-only tests/e2e/<suite>/` before running it.
+### Local checks
+
+Use the root `pyproject.toml` environment through uv. From the repository root:
+
+```bash
+uv run ruff check tests/e2e/
+uv run ruff format --check tests/e2e/
+uv run pytest -n 0 tests/unit
+uv run pytest --collect-only tests/e2e/<suite>/
+```
+
+Replace `<suite>` with the affected suite; shared fixture changes require
+collecting every affected suite. Units and collection do not prove deployed
+provisioning or cleanup.
+
+### Deployed selection
+
 - Run the narrowest independent affected test when prerequisites are available;
   the ordered Netris VMaaS whole-suite rule above overrides narrow selection.
+- For independent cases, use
+  `uv run pytest tests/e2e/<suite>/<tier>/<test>.py -k '<expression>'`.
+  Do not apply that selection pattern to the ordered Netris VMaaS suite.
+- For two-NodeSet CaaS lifecycle changes, run
+  `uv run pytest -n 0 tests/e2e/caas/regression/test_cluster_node_sets.py::test_cluster_create_with_two_node_sets`.
 - Read a nested suite README, such as [`projects/README.md`](projects/README.md), for service-specific credentials and prerequisites.

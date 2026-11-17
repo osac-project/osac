@@ -34,8 +34,18 @@ Do not disable host security controls to troubleshoot generation.
 
 ## Validation
 
-For prose, review facts, relative links and code examples and run applicable
-root pre-commit hooks. Dashboard/publication changes also follow
+### Prose
+
+- Review facts, relative links, heading anchors and code examples against their
+  actual consumers. Distinguish documented commands from checks executed.
+- From the repository root, run `pre-commit run --all-files`; follow the root
+  staged and PR-range secret-scanning requirements separately.
+- Markdown-only changes do not require live deployments, diagram regeneration
+  or unrelated dashboard tests.
+
+### Dashboard and publication inputs
+
+Dashboard/publication changes follow
 [pr-dashboard-verify.yml](../.github/workflows/pr-dashboard-verify.yml).
 Its repository-root checks include:
 
@@ -46,5 +56,7 @@ node tools/test_pr_dashboard.js
 ```
 
 For presentation or publication-input changes, use the same workflow's render,
-site-index and example-config/manifest validation steps. Markdown-only changes
-do not require live deployments or unrelated dashboard tests.
+site-index and example-config/manifest validation steps. These use Python and
+Node; presentation rendering also requires `npm ci --prefix presentations`
+from the repository root. Do not treat an isolated generator invocation as
+the publication build without checking its workflow inputs.

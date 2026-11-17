@@ -2,6 +2,8 @@
 
 Never edit this file except for minor corrections. Do not append new content.
 
+GitHub workflow orchestration, path selection, release automation and merge gates.
+
 ## CI, E2E and merge rules
 
 Read [CI.md](CI.md) before changing workflows, filters or policy.
@@ -22,7 +24,22 @@ Read [CI.md](CI.md) before changing workflows, filters or policy.
   run regression and reference suites. Never widen an empty tier or append
   references to sanity. Readiness and fork authorization are independent.
 
-| Touched area | Repository-root validation |
+## Validation
+
+Run from the repository root. The reusable `workflows/pre-commit.yaml` runs on
+every change and includes these regression checks:
+
+```bash
+uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s .github/scripts -p test_umbrella_release.py -v
+uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s .github/scripts -p test_release_versioning.py -v
+pre-commit run --all-files
+```
+
+Stage intended changes before `pre-commit run gitleaks`; the all-files run
+does not scan commit history. Preserve the workflow's separate PR-range secret
+scan with base-owned configuration.
+
+| Touched area | Additional repository-root validation |
 |---|---|
 | Workflow/filter/policy | actionlint and applicable pre-commit hooks; inspect required-check reporting |
 | CaaS selection | `OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra uv run pytest -n 0 tests/unit/test_caas_ci_suite_policy.py` (companion checks skip without that checkout) |

@@ -2,6 +2,8 @@
 
 Never edit this file except for minor corrections. Do not append new content.
 
+React/PatternFly browser applications, shared UI packages and a Go API proxy.
+
 ## Critical Rules
 
 - Use PatternFly 6 components, tokens and utilities; avoid routine custom CSS
@@ -24,11 +26,12 @@ Never edit this file except for minor corrections. Do not append new content.
 
 ## Dev Environment
 
-From `osac-ui/`, use the pnpm version in `package.json`'s `packageManager`
-(and its `engines` requirements), then `pnpm install`.
-`FULFILLMENT_API_URL=<endpoint> pnpm dev` starts the Go proxy and Vite.
-For protected reflection, use the cluster/OIDC setup in
-[README.md](README.md#quick-start); there is no local Fulfillment mock server.
+- Run from `osac-ui/`, using the Node/pnpm requirements in `package.json`
+  and its pinned `packageManager` version. Install with `pnpm install`.
+- `FULFILLMENT_API_URL=<endpoint> pnpm dev` starts the Go proxy and Vite.
+  `pnpm dev:proxy` starts only the proxy when frontend tooling is separate.
+- For protected reflection, follow [README.md](README.md#quick-start)'s
+  cluster/OIDC setup. There is no local Fulfillment mock server.
 
 ## Validation
 
@@ -40,41 +43,56 @@ pnpm lint
 pnpm test
 ```
 
-These are separate checks: Vitest and production builds do not replace
-checking test-file types. Lint checks ESLint, Prettier and i18n synchronization.
-Run `pnpm build` for build/config or cross-package import changes. For proxy
-changes also run `make -C proxy test lint`. For container inputs run
-`make image-build IMG=<registry>/osac-ui:<tag>` from `osac-ui/`; the Makefile
-supplies the repository root context, not the component directory.
+- Vitest and production builds do not replace checking test-file types.
+- Lint checks ESLint, Prettier and i18n synchronization. Use `pnpm format` to
+  apply formatting fixes, then review the diff and rerun lint.
+- Run `pnpm build` for build/config or cross-package import changes. For a
+  frontend-only build, use `pnpm --filter @osac/app-frontend run build`.
+- For proxy changes, also run `make -C proxy test lint`.
+- For container inputs, run `make image-build IMG=<registry>/osac-ui:<tag>`
+  from `osac-ui/`; it supplies the repository root context.
 
 ## Architecture
+
+### API access
 
 - Browser Connect JSON at `/api/fulfillment/*` passes through
   `proxy/bridge/connectjson.go` to native gRPC using reflection, not proxy stubs.
 - `ApiProvider` holds the transport; obtain typed clients with `useApiFetch`.
-  Reads use `useApiQuery`/`useApiQueryClient`, not direct TanStack equivalents;
-  mutations may use `useMutation`. Register routes in `ApiRoute` and use
-  `apiQueryKey`; unwrap `.items`/`.object` in hook `select`, not components.
-  Lists use `filter`, `limit`, `offset`, `order`, not cursors. See
-  [API query architecture](docs/api-query-arch.md).
+- Reads use `useApiQuery`/`useApiQueryClient`, not direct TanStack equivalents;
+  mutations may use `useMutation`.
+- Register routes in `ApiRoute` and use `apiQueryKey`. Unwrap `.items`/`.object`
+  in hook `select`, not components.
+- Lists use `filter`, `limit`, `offset`, `order`, not cursors. See
+  [API query architecture](docs/api-query-arch.md) for reference implementations.
+
+### Translations
+
 - Use `@osac/ui-components/hooks/useTranslation`, not `react-i18next` directly.
-  Use literal English keys (`t('Save')`), never dynamic keys; pure utilities
-  receive `t: TFunction`. Run `pnpm i18n` and commit generated
-  `libs/i18n/locales/en/translation.json` with source strings; never hand-edit it.
+- Use literal English keys (`t('Save')`), never dynamic keys. Pure utilities
+  receive `t: TFunction`.
+- Run `pnpm i18n` and commit generated `libs/i18n/locales/en/translation.json`
+  with source strings; never hand-edit it. The package script already passes
+  `--ci` to extraction, so do not add a second `--ci` argument.
+
+### Generated API bindings
+
 - Never hand-edit generated `libs/types/src/**/*_pb.ts` bindings. Export barrels
   `libs/types/src/index.ts` and `index-private.ts` are maintained manually.
-  AI agents may advance the API baseline only
-  on an explicit user request for a UI API-version bump; dedicated API-release
-  automation may also bump it. When authorized, change
-  `libs/types/.buf-api-version`, run `pnpm gen-types` and commit generated files
-  together. Never regenerate merely to make unrelated code compile.
+- AI agents may advance the API baseline only on an explicit user request for
+  a UI API-version bump; dedicated API-release automation may also bump it.
+- When authorized, change `libs/types/.buf-api-version`, run `pnpm gen-types`
+  and commit generated files together. Never regenerate merely to make
+  unrelated code compile.
 
 ## Test Boundaries
 
 - Vitest/React Testing Library use the app-frontend runner for app and shared
   component tests. Pass `createMockConnectTransport` through `ApiProvider`;
   do not mock fetch/REST endpoints. These are not deployed-service evidence.
-- Committed browser journeys live in `apps/e2e-tests/`; inspect its README and
+- For a focused unit run, use `pnpm --filter @osac/app-frontend run test`
+  from `osac-ui/`; it includes shared component tests.
+- Committed browser lifecycle tests live in `apps/e2e-tests/`; inspect its README and
   configuration before selecting the deployed Playwright suite.
 - `apps/playwright/` hosts browser projects and live manual verification. Keep
   throwaway specs in gitignored `apps/playwright/scratch/` and remove them
@@ -82,3 +100,17 @@ supplies the repository root context, not the component directory.
   as persisted regression coverage. See its [README](apps/playwright/README.md).
 - Memoization requires measured production-profiler evidence, not correctness
   workarounds; prefer state locality and stable, narrow props first.
+
+### Live browser harness
+
+From `osac-ui/`, with browser binaries, deployment access and a test identity
+prepared as described in [the harness README](apps/playwright/README.md):
+
+```bash
+pnpm playwright
+```
+
+This runs smoke and Chromium projects with their setup dependencies. For a
+Chromium-only split run, use `pnpm playwright:setup`, then `pnpm playwright:run`;
+the latter omits smoke, skips dependency projects and requires existing auth state.
+These commands target a live environment, not the hermetic unit gate.

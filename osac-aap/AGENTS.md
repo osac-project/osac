@@ -24,8 +24,12 @@ Read the applicable references before changing behavior:
 - Use fully qualified Ansible module names and give every task a `name:`.
 - Role directories use underscores. A network template role must define at least one `fabric_manager` or `k8s_manager`, and manager names must match the corresponding role directory names.
 - A template role's `meta/osac.yaml` must match its actual `template_type`; verify the real template before copying fields from another type.
-- Network roles are not published as ComputeClass-family resources by `playbook_osac_config_as_code.yml`. Cluster, compute-instance, and bare-metal template metadata is published by config-as-code; do not assume that behavior applies to network roles.
-- NetworkClass resources are created by the installer from configured manager names; role capabilities are informational. Only one NetworkClass may exist per deployment, so adding a backend replaces the configured NetworkClass rather than creating another.
+- `playbook_osac_config_as_code.yml` publishes cluster, compute-instance and
+  bare-metal template metadata as ComputeClass-family resources, not network roles.
+- The installer creates NetworkClass resources from configured manager names;
+  role capabilities are informational.
+- Only one NetworkClass may exist per deployment. Adding a backend replaces
+  the configured NetworkClass rather than creating another.
 - Preserve tenant and owner-reference annotations on resources created by playbooks.
 - Remote workflows use `collections/ansible_collections/osac/service/roles/common/tasks/get_remote_cluster_kubeconfig.yaml`.
 - Create `cudn_evpn` VirtualNetwork namespaces with `k8s.ovn.org/primary-user-defined-network: ""`
@@ -51,15 +55,37 @@ reservation. Update both operator Go suites, AAP's
 `uv run --all-groups python -m pytest tests/unit/test_network_task_wire_contract.py`.
 DHCP validation checks the interface MAC and physical subnet range. Overlay
 delete/detach, other deletes, SecurityGroup, FabricDomain and ingress release
-remain unbound; see [wire boundaries](../docs/testing/osac-aap.md#boundaries-and-gaps).
+remain unbound; see [wire boundaries](../docs/testing/osac-aap.md#coverage-gaps).
 
-Commands run from `osac-aap/` unless noted; see target READMEs under
-`tests/integration/targets/` for prerequisites and focused selections.
+### Setup and local checks
+
+Use Python/uv from `pyproject.toml`. Run from `osac-aap/`:
+
+```bash
+uv sync --all-groups
+make lint
+helm lint charts/aap
+uv run --group development pytest tests/unit
+```
+
+Pytest is in the `development` dependency group; select it explicitly. For
+isolated HostedCluster transformations, also run:
+
+```bash
+uv run --group development ansible-playbook collections/ansible_collections/osac/service/roles/hosted_cluster/tests/test.yml
+```
+
+### Component and provider checks
+
+Commands below also run from `osac-aap/`. Read target READMEs under
+`tests/integration/targets/` for fixtures, cluster/runtime prerequisites and
+focused selections. `make test` creates a Kind environment and tears it down;
+it is not a unit-only command.
 
 | Touched area | Required tier and command |
 |---|---|
 | Ansible or Helm inputs | Static: `make lint`; `helm lint charts/aap` |
-| Filters, token/auth wiring, transforms, transport and input validation | Unit: `uv run pytest tests/unit` |
+| Filters, token/auth wiring, transforms, transport and input validation | Unit: `uv run --group development pytest tests/unit` |
 | Roles, workflows, hooks, leases, finalizers or Kubernetes resources | Component integration: `make test` |
 | Networking manager tasks and operator wire contracts | Unit plus component contract: `make test`; keep shared `../tests/contract/network-task` goldens in sync with operator consumers |
 | Netris/cudn_evpn task and Python coverage | Measured gate: `make test` fails on gaps; `make role-coverage` runs the focused unit/Kind targets and report |
@@ -71,14 +97,16 @@ Commands run from `osac-aap/` unless noted; see target READMEs under
 New manager tasks, `when`, `rescue` and fail paths need tests or reasoned entries
 in `tests/coverage/exclusions.yaml`; `netris.controller` roles are reported, not gated.
 
-Kind resources and child Ansible jobs are real, but AAP/provider endpoints,
-Netris, switches and VM controllers may be doubles. `cudn_evpn` uses fixture
-CRDs and test-controlled conditions, not real OVN/EVPN/DHCP behavior.
-AgentlessNet units use real SQLite/allocation state with mocked Linux and
-switch commands; inventory contracts do not establish SSH, DHCP leases or
-traffic isolation. Service readiness is not data-plane proof. Deployed
-AgentlessNet VN retry/delete and packet isolation have no qualifying tracked
-runner. HostedCluster transform checks are isolated, not provisioning tests.
+- Run `make role-coverage-report` only after a coverage-producing run; it reads
+  existing task/Python results rather than executing the suites itself.
+- Kind resources and child Ansible jobs are real, but AAP/provider endpoints,
+  Netris, switches and VM controllers may be doubles.
+- `cudn_evpn` uses fixture CRDs and controlled conditions, not real
+  OVN/EVPN/DHCP behavior. Service readiness is not data-plane proof.
+- AgentlessNet units use real SQLite/allocation state with mocked Linux and
+  switch commands. Inventory contracts do not establish SSH, leases or isolation.
+- Deployed AgentlessNet VN retry/delete and packet isolation have no qualifying
+  tracked runner. HostedCluster transforms do not prove provisioning.
 
 ## Generated and vendored files
 
@@ -92,5 +120,7 @@ runner. HostedCluster transform checks are isolated, not provisioning tests.
 
 `make test` manages Kind setup, integration tests, teardown and coverage.
 For focused playbooks, run from `tests/integration/`, for example
-`ansible-playbook targets/<workflow>/tasks/baseline.yml -e "@common_vars.yml" -v`;
-check the target README for prerequisites.
+`uv run --group development ansible-playbook targets/cudn_evpn/tasks/baseline.yml -e '@common_vars.yml'`.
+Use `targets/netris_fabric/tasks/baseline.yml` for that manager. Prepare the
+fixtures described in the target README first; invoking a playbook directly
+does not perform the Make target's setup or cleanup.

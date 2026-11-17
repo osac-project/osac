@@ -8,7 +8,7 @@ set:
   bmf.netbox.enabled: true
   bmf.netbox.bmhNamespace: host-inventory
   bmf.netbox.url: https://netbox.example.org
-  bmf.netbox.tokenValue: render-test-netbox-token
+  bmf.netbox.tokenValue: unused
   bmf.secretAPI.url: https://fulfillment-internal-api:8001
 release:
   name: osac

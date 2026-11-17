@@ -15,6 +15,13 @@ spec:
     metadata:
       annotations:
         kubectl.kubernetes.io/default-container: manager
+        # The operator reads the inventory config once at startup. Roll the pod
+        # when any inventory Secret content changes so a Helm upgrade that only
+        # adjusts an option (for example a certificate-verification default)
+        # takes effect without a manual restart. The rendered Secrets carry
+        # endpoints, paths, and flags only — never credentials — so hashing
+        # them does not expose secret material.
+        checksum/inventory-config: {{ printf "%s%s%s" (include (print $.Template.BasePath "/netbox-inventory-config.yaml") .) (include (print $.Template.BasePath "/bcm-inventory-config.yaml") .) (include (print $.Template.BasePath "/metal3-inventory-config.yaml") .) | sha256sum }}
       labels:
         {{- include "bare-metal-fulfillment-operator.selectorLabels" . | nindent 8 }}
     spec:

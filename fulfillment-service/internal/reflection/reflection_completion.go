@@ -14,10 +14,9 @@ language governing permissions and limitations under the License.
 package reflection
 
 import (
+	"log/slog"
 	"sort"
-	"strings"
 
-	"github.com/gobuffalo/flect"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -26,16 +25,21 @@ import (
 // singular and plural names that can be used as shell completion candidates. This function does not
 // require a gRPC connection — it reads only from the compiled-in proto registry.
 func ObjectTypeNames(packages ...string) []string {
-	return objectTypeNames(packages, false)
+	return objectTypeNames(packages, false, false)
+}
+
+// GetObjectTypeNames includes identity-free singletons only for get completion.
+func GetObjectTypeNames(packages ...string) []string {
+	return objectTypeNames(packages, false, true)
 }
 
 // UpdatableObjectTypeNames scans the proto registry for object types in the given packages and returns
 // only the types that expose the standard Update method. It is used by commands that mutate objects.
 func UpdatableObjectTypeNames(packages ...string) []string {
-	return objectTypeNames(packages, true)
+	return objectTypeNames(packages, true, false)
 }
 
-func objectTypeNames(packages []string, requireUpdate bool) []string {
+func objectTypeNames(packages []string, requireUpdate, singletonGet bool) []string {
 	pkgSet := make(map[protoreflect.FullName]bool, len(packages))
 	for _, pkg := range packages {
 		pkgSet[protoreflect.FullName(pkg)] = true
@@ -48,7 +52,7 @@ func objectTypeNames(packages []string, requireUpdate bool) []string {
 		}
 		serviceDescs := fileDesc.Services()
 		for i := range serviceDescs.Len() {
-			scanServiceForNames(serviceDescs.Get(i), seen, requireUpdate)
+			scanServiceForNames(serviceDescs.Get(i), seen, requireUpdate, singletonGet)
 		}
 		return true
 	})
@@ -63,25 +67,14 @@ func objectTypeNames(packages []string, requireUpdate bool) []string {
 
 // scanServiceForNames checks whether a service has the standard CRUD methods and, if so, adds
 // the singular and plural forms of the object type to the seen map.
-func scanServiceForNames(serviceDesc protoreflect.ServiceDescriptor, seen map[string]bool, requireUpdate bool) {
-	methodDescs := serviceDesc.Methods()
-	methods := []protoreflect.Name{getMethodName, listMethodName, createMethodName, deleteMethodName}
-	if requireUpdate {
-		methods = append(methods, updateMethodName)
-	}
-	for _, name := range methods {
-		if methodDescs.ByName(name) == nil {
-			return
+func scanServiceForNames(serviceDesc protoreflect.ServiceDescriptor, seen map[string]bool, requireUpdate, singletonGet bool) {
+	// Use the same shape/registration checks as invocation, without a connection.
+	scanner := &helper{logger: slog.Default(), singletonGet: singletonGet}
+	scanner.scanService(serviceDesc)
+	for _, object := range scanner.helpers {
+		if !requireUpdate || object.IsUpdatable() {
+			seen[object.singular] = true
+			seen[object.plural] = true
 		}
 	}
-
-	getDesc := methodDescs.ByName(getMethodName)
-	objectField := getDesc.Output().Fields().ByName(objectFieldName)
-	if objectField == nil || objectField.Kind() != protoreflect.MessageKind {
-		return
-	}
-
-	objectName := string(objectField.Message().Name())
-	seen[strings.ToLower(objectName)] = true
-	seen[strings.ToLower(flect.Pluralize(objectName))] = true
 }

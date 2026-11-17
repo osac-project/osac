@@ -14,15 +14,37 @@ language governing permissions and limitations under the License.
 package get
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/packages"
+	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+// P2 human lock: only the client-stream methods used by Watch are replaced.
+type p2WatchStream struct {
+	grpc.ClientStream
+	send    func(any) error
+	receive func(any) error
+}
+
+func (s *p2WatchStream) SendMsg(message any) error { return s.send(message) }
+func (s *p2WatchStream) CloseSend() error          { return nil }
+func (s *p2WatchStream) RecvMsg(message any) error { return s.receive(message) }
 
 var _ = Describe("Watch command", func() {
 	DescribeTable("extractObjectFromEvent",
@@ -109,15 +131,72 @@ var _ = Describe("Watch command", func() {
 		),
 	)
 
-	DescribeTable("buildEventFilter",
-		func(objectType string, keys []string, expectedFilter string) {
-			// This would require creating a mock helper, which we'll skip for now
-			// but the pattern shows how to test filter building
-			_ = objectType
-			_ = keys
-			_ = expectedFilter
+	DescribeTable("P2 human lock: buildEventFilter",
+		func(object proto.Message, keys []string, expectedFilter string) {
+			ctrl := gomock.NewController(GinkgoT())
+			helper := reflection.NewMockObjectHelper(ctrl)
+			helper.EXPECT().FullName().Return(object.ProtoReflect().Descriptor().FullName()).AnyTimes()
+			helper.EXPECT().Descriptor().Return(object.ProtoReflect().Descriptor()).AnyTimes()
+			runner := &runnerContext{objectHelper: helper}
+			filter, err := runner.buildEventFilter(keys)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(filter).To(Equal(expectedFilter))
 		},
-		Entry("cluster with no keys", "cluster", []string{}, "has(event.cluster)"),
-		Entry("cluster with specific ID", "cluster", []string{"123"}, "has(event.cluster) && (event.cluster.id == \"123\" || event.cluster.metadata.name == \"123\")"),
+		Entry("cluster with no keys", &publicv1.Cluster{}, []string{}, "has(event.cluster)"),
+		Entry("cluster with specific ID", &publicv1.Cluster{}, []string{"123"}, `has(event.cluster) && (event.cluster.id == "123" || event.cluster.metadata.name == "123")`),
+		Entry("private cluster keeps escaped keys", &privatev1.Cluster{}, []string{`one"two`}, `has(event.cluster) && (event.cluster.id == "one\"two" || event.cluster.metadata.name == "one\"two")`),
+	)
+
+	DescribeTable("P2 human lock: ordinary Watch public/private routing and termination",
+		func(pkg, termination string) {
+			ctx, cancel := context.WithCancel(context.Background())
+			DeferCleanup(cancel)
+			calls := 0
+			connection, err := grpc.NewClient("passthrough:///p2-watch.invalid",
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+				grpc.WithStreamInterceptor(func(streamCtx context.Context, _ *grpc.StreamDesc, _ *grpc.ClientConn,
+					method string, _ grpc.Streamer, _ ...grpc.CallOption) (grpc.ClientStream, error) {
+					Expect(method).To(Equal("/" + pkg + ".Events/Watch"))
+					return &p2WatchStream{
+						send: func(request any) error {
+							message := request.(proto.Message).ProtoReflect()
+							Expect(message.Get(message.Descriptor().Fields().ByName("filter")).String()).To(Equal("has(event.cluster)"))
+							return nil
+						},
+						receive: func(any) error {
+							calls++
+							switch termination {
+							case "EOF":
+								return io.EOF
+							case "cancel":
+								cancel()
+								return streamCtx.Err()
+							default:
+								return io.ErrUnexpectedEOF
+							}
+						},
+					}, nil
+				}))
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(connection.Close)
+			helper, err := reflection.NewHelper().SetLogger(logger).SetConnection(connection).AddPackage(pkg, 0).Build()
+			Expect(err).NotTo(HaveOccurred())
+			console, err := terminal.NewConsole().SetLogger(logger).SetStdout(&bytes.Buffer{}).SetStderr(&bytes.Buffer{}).Build()
+			Expect(err).NotTo(HaveOccurred())
+			runner := &runnerContext{conn: connection, logger: logger, console: console, objectHelper: helper.Lookup("cluster")}
+			err = runner.watch(ctx, nil)
+			Expect(calls).To(Equal(1))
+			switch termination {
+			case "EOF":
+				Expect(err).NotTo(HaveOccurred())
+			case "cancel":
+				Expect(errors.Is(err, context.Canceled)).To(BeTrue())
+			default:
+				Expect(errors.Is(err, io.ErrUnexpectedEOF)).To(BeTrue())
+			}
+		},
+		Entry("public EOF", packages.PublicV1, "EOF"), Entry("private EOF", packages.PrivateV1, "EOF"),
+		Entry("public error", packages.PublicV1, "error"), Entry("private error", packages.PrivateV1, "error"),
+		Entry("public cancel", packages.PublicV1, "cancel"), Entry("private cancel", packages.PrivateV1, "cancel"),
 	)
 })

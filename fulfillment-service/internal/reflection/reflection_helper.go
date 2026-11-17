@@ -86,6 +86,7 @@ type ObjectHelper interface {
 	GetProject(object proto.Message) string
 	IsProjectScoped() bool
 	UseGetForStructuredOutput() bool
+	IsSingleton() bool
 }
 
 // HelperBuilder contains the data and logic needed to create a reflection helper.
@@ -98,6 +99,7 @@ type HelperBuilder struct {
 	tenantFunc                  any
 	projectFunc                 any
 	getForStructuredOutputTypes map[protoreflect.Name]bool
+	singletonGet                bool
 }
 
 // helper is the default implementation of the Helper interface.
@@ -110,11 +112,19 @@ type helper struct {
 	tenantFunc                  func(context.Context) (string, error)
 	projectFunc                 func(context.Context) (string, error)
 	getForStructuredOutputTypes map[protoreflect.Name]bool
+	singletonGet                bool
 }
 
 // NewHelper creates a builder that can then be used to configure a reflection helper.
 func NewHelper() *HelperBuilder {
 	return &HelperBuilder{}
+}
+
+// EnableSingletonGet includes unary Get-only services with empty requests. Only
+// read commands should opt in: these objects have no collection or identity.
+func (b *HelperBuilder) EnableSingletonGet() *HelperBuilder {
+	b.singletonGet = true
+	return b
 }
 
 // SetLogger sets the logger. This is mandatory.
@@ -245,6 +255,7 @@ func (b *HelperBuilder) Build() (result Helper, err error) {
 		tenantFunc:                  tenantFunc,
 		projectFunc:                 projectFunc,
 		getForStructuredOutputTypes: b.getForStructuredOutputTypes,
+		singletonGet:                b.singletonGet,
 	}
 	return
 }
@@ -301,21 +312,51 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 		slog.String("service", string(serviceDesc.FullName())),
 	)
 	methodDescs := serviceDesc.Methods()
+	if h.singletonGet && methodDescs.Len() == 1 {
+		h.scanSingletonGet(methodDescs.ByName(getMethodName))
+		return
+	}
+	h.scanCollectionService(serviceDesc)
+}
+
+func (h *helper) scanSingletonGet(getDesc protoreflect.MethodDescriptor) {
+	if !h.supportsMethod(getDesc) || getDesc.Input().Fields().Len() != 0 {
+		return
+	}
+	objectField := h.getObjectField(getDesc.Output())
+	if objectField == nil {
+		return
+	}
+	objectDesc := objectField.Message()
+	objectTemplate := h.makeTemplate(objectDesc)
+	if objectTemplate == nil {
+		return
+	}
+	request, response := h.makeMethodTemplates(getDesc)
+	h.helpers = append(h.helpers, objectHelper{
+		parent: h, descriptor: objectDesc, template: objectTemplate, singleton: true,
+		singular: strings.ToLower(string(objectDesc.Name())),
+		plural:   strings.ToLower(flect.Pluralize(string(objectDesc.Name()))),
+		get: getInfo{
+			methodInfo: methodInfo{path: h.makeMethodPath(getDesc), request: request, response: response},
+			object:     objectField,
+		},
+	})
+}
+
+func (h *helper) scanCollectionService(serviceDesc protoreflect.ServiceDescriptor) {
+	methodDescs := serviceDesc.Methods()
 	listDesc := methodDescs.ByName(listMethodName)
-	if listDesc == nil {
-		return
-	}
 	getDesc := methodDescs.ByName(getMethodName)
-	if getDesc == nil {
-		return
-	}
 	createDesc := methodDescs.ByName(createMethodName)
-	if createDesc == nil {
-		return
-	}
 	updateDesc := methodDescs.ByName(updateMethodName)
 	deleteDesc := methodDescs.ByName(deleteMethodName)
-	if deleteDesc == nil {
+	for _, method := range []protoreflect.MethodDescriptor{getDesc, listDesc, createDesc, deleteDesc} {
+		if !h.supportsMethod(method) {
+			return
+		}
+	}
+	if updateDesc != nil && !h.supportsMethod(updateDesc) {
 		return
 	}
 
@@ -327,6 +368,9 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 
 	// The response of the get method must have an `object` field:
 	getResponseObjectFieldDesc := h.getObjectField(getDesc.Output())
+	if getResponseObjectFieldDesc == nil {
+		return
+	}
 	objectDesc := getResponseObjectFieldDesc.Message()
 
 	// The request of the list method must have a `filter` field:
@@ -337,6 +381,7 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 
 	// The request of the list method may have a `limit` field:
 	listRequestLimitFieldDesc := h.getLimitField(listDesc.Input())
+	listRequestOffsetFieldDesc := h.getInt32Field(listDesc.Input(), offsetFieldName)
 
 	// The response of the list method must have an `items` field:
 	listResponseItemsFieldDesc := h.getItemsField(listDesc.Output())
@@ -393,6 +438,9 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 
 	// Create the object template:
 	objectTemplate := h.makeTemplate(objectDesc)
+	if objectTemplate == nil {
+		return
+	}
 
 	// Create templates for the request and response messages:
 	getRequestTemplate, getResponseTemplate := h.makeMethodTemplates(getDesc)
@@ -456,6 +504,7 @@ func (h *helper) scanService(serviceDesc protoreflect.ServiceDescriptor) {
 			},
 			filter: listRequestFilterFieldDesc,
 			limit:  listRequestLimitFieldDesc,
+			offset: listRequestOffsetFieldDesc,
 			items:  listResponseItemsFieldDesc,
 			total:  listResponseTotalFieldDesc,
 		},
@@ -534,7 +583,11 @@ func (h *helper) getFilterField(messageDesc protoreflect.MessageDescriptor) prot
 }
 
 func (h *helper) getLimitField(messageDesc protoreflect.MessageDescriptor) protoreflect.FieldDescriptor {
-	fieldDesc := messageDesc.Fields().ByName(limitFieldName)
+	return h.getInt32Field(messageDesc, limitFieldName)
+}
+
+func (h *helper) getInt32Field(messageDesc protoreflect.MessageDescriptor, name protoreflect.Name) protoreflect.FieldDescriptor {
+	fieldDesc := messageDesc.Fields().ByName(name)
 	if fieldDesc == nil {
 		return nil
 	}
@@ -636,9 +689,16 @@ func (h *helper) makeMethodTemplates(methodDesc protoreflect.MethodDescriptor) (
 func (h *helper) makeTemplate(messageDesc protoreflect.MessageDescriptor) proto.Message {
 	messageType, err := protoregistry.GlobalTypes.FindMessageByName(messageDesc.FullName())
 	if err != nil {
-		panic(err)
+		return nil
 	}
 	return messageType.New().Interface()
+}
+
+// Reflection invocation requires unary methods and compiled request/response
+// types. Ignore unsupported descriptors instead of panicking during discovery.
+func (h *helper) supportsMethod(method protoreflect.MethodDescriptor) bool {
+	return method != nil && !method.IsStreamingClient() && !method.IsStreamingServer() &&
+		h.makeTemplate(method.Input()) != nil && h.makeTemplate(method.Output()) != nil
 }
 
 // objectHelper is the default implementation of the ObjectHelper interface.
@@ -650,6 +710,7 @@ type objectHelper struct {
 	tenantScoped              bool
 	projectScoped             bool
 	useGetForStructuredOutput bool
+	singleton                 bool
 	template                  proto.Message
 	list                      listInfo
 	get                       getInfo
@@ -676,6 +737,7 @@ type listInfo struct {
 	methodInfo
 	filter protoreflect.FieldDescriptor
 	limit  protoreflect.FieldDescriptor
+	offset protoreflect.FieldDescriptor
 	items  protoreflect.FieldDescriptor
 	total  protoreflect.FieldDescriptor
 }
@@ -724,11 +786,14 @@ func (h *objectHelper) Plural() string {
 type ListOptions struct {
 	Filter string
 	Limit  int32
+	Offset int32
 }
 
 type ListResult struct {
-	Items []proto.Message
-	Total int32
+	Items           []proto.Message
+	Total           int32
+	TotalKnown      bool
+	OffsetSupported bool
 }
 
 type UpdateResult struct {
@@ -737,6 +802,15 @@ type UpdateResult struct {
 }
 
 func (h *objectHelper) List(ctx context.Context, options ListOptions) (result ListResult, err error) {
+	if h.list.path == "" {
+		return result, grpcstatus.Errorf(codes.FailedPrecondition, "object type %q does not support List", h.FullName())
+	}
+	if options.Offset < 0 {
+		return result, grpcstatus.Error(codes.InvalidArgument, "list offset must not be negative")
+	}
+	if options.Offset != 0 && h.list.offset == nil {
+		return result, grpcstatus.Errorf(codes.FailedPrecondition, "object type %q does not support offsets", h.FullName())
+	}
 	filter := options.Filter
 
 	// Inject tenant filter from tenant function if needed:
@@ -780,6 +854,9 @@ func (h *objectHelper) List(ctx context.Context, options ListOptions) (result Li
 	if options.Limit > 0 && h.list.limit != nil {
 		request.ProtoReflect().Set(h.list.limit, protoreflect.ValueOfInt32(options.Limit))
 	}
+	if h.list.offset != nil {
+		request.ProtoReflect().Set(h.list.offset, protoreflect.ValueOfInt32(options.Offset))
+	}
 	response := proto.Clone(h.list.response)
 	err = h.parent.connection.Invoke(ctx, h.list.path, request, response)
 	if err != nil {
@@ -792,19 +869,27 @@ func (h *objectHelper) List(ctx context.Context, options ListOptions) (result Li
 	}
 	if h.list.total != nil {
 		result.Total = int32(response.ProtoReflect().Get(h.list.total).Int()) // #nosec G115 -- proto int32 field
-	} else {
-		result.Total = int32(len(result.Items)) // #nosec G115 -- bounded by MaxLimit
+		result.TotalKnown = true
 	}
+	result.OffsetSupported = h.list.offset != nil
 	return
 }
 
 func (h *objectHelper) Get(ctx context.Context, id string) (result proto.Message, err error) {
+	if h.get.path == "" || h.IsSingleton() && id != "" {
+		return nil, grpcstatus.Errorf(codes.FailedPrecondition, "object type %q does not support keyed Get", h.FullName())
+	}
 	request := proto.Clone(h.get.request)
-	h.setId(request, h.get.id, id)
+	if !h.IsSingleton() {
+		h.setId(request, h.get.id, id)
+	}
 	response := proto.Clone(h.get.response)
 	err = h.parent.connection.Invoke(ctx, h.get.path, request, response)
 	if err != nil {
 		return
+	}
+	if h.IsSingleton() && !response.ProtoReflect().Has(h.get.object) {
+		return nil, grpcstatus.Errorf(codes.FailedPrecondition, "Get for object type %q returned no object", h.FullName())
 	}
 	result = h.getObject(response, h.get.object)
 	return
@@ -823,6 +908,9 @@ func (h *objectHelper) GetMetadata(object proto.Message) Metadata {
 }
 
 func (h *objectHelper) Create(ctx context.Context, object proto.Message) (result proto.Message, err error) {
+	if h.create.path == "" {
+		return nil, grpcstatus.Errorf(codes.FailedPrecondition, "object type %q does not support Create", h.FullName())
+	}
 	request := proto.Clone(h.create.request)
 	h.setObject(request, h.create.in, object)
 	response := proto.Clone(h.create.response)
@@ -894,6 +982,9 @@ func (h *objectHelper) UpdateWithMask(ctx context.Context, original, edited prot
 }
 
 func (h *objectHelper) Delete(ctx context.Context, id string) error {
+	if h.delete.path == "" {
+		return grpcstatus.Errorf(codes.FailedPrecondition, "object type %q does not support Delete", h.FullName())
+	}
 	request := proto.Clone(h.delete.request)
 	h.setId(request, h.delete.id, id)
 	response := proto.Clone(h.delete.response)
@@ -952,6 +1043,11 @@ func (h *objectHelper) UseGetForStructuredOutput() bool {
 	return h.useGetForStructuredOutput
 }
 
+// IsSingleton reports whether this helper supports only an identity-free Get.
+func (h *objectHelper) IsSingleton() bool {
+	return h.singleton
+}
+
 func (h *objectHelper) setId(message proto.Message, field protoreflect.FieldDescriptor, value string) {
 	message.ProtoReflect().Set(field, protoreflect.ValueOfString(value))
 }
@@ -980,6 +1076,7 @@ const (
 	limitFieldName    = protoreflect.Name("limit")
 	metadataFieldName = protoreflect.Name("metadata")
 	objectFieldName   = protoreflect.Name("object")
+	offsetFieldName   = protoreflect.Name("offset")
 	totalFieldName    = protoreflect.Name("total")
 )
 

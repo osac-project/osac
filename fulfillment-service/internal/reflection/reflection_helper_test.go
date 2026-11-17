@@ -15,6 +15,7 @@ package reflection
 
 import (
 	"context"
+	"reflect"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -25,6 +26,11 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
@@ -32,6 +38,123 @@ import (
 )
 
 type testTenantKey struct{}
+
+// P2 human lock: this distinct package deliberately remains unregistered.
+func p2CollectionService(change func(*descriptorpb.FileDescriptorProto)) protoreflect.ServiceDescriptor {
+	field := func(name string, kind descriptorpb.FieldDescriptorProto_Type, typeName string) *descriptorpb.FieldDescriptorProto {
+		result := &descriptorpb.FieldDescriptorProto{
+			Name: proto.String(name), Number: proto.Int32(1),
+			Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: kind.Enum(),
+		}
+		if typeName != "" {
+			result.TypeName = proto.String(typeName)
+		}
+		return result
+	}
+	object := func() *descriptorpb.FieldDescriptorProto {
+		return field("object", descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".osac.public.v1.Cluster")
+	}
+	items := object()
+	items.Name = proto.String("items")
+	items.Label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum()
+	total := field("total", descriptorpb.FieldDescriptorProto_TYPE_INT32, "")
+	total.Number = proto.Int32(2)
+	file := &descriptorpb.FileDescriptorProto{
+		Name: proto.String("p2_collection.proto"), Package: proto.String("p2.collection"), Syntax: proto.String("proto3"),
+		Dependency: []string{(&publicv1.Cluster{}).ProtoReflect().Descriptor().ParentFile().Path()},
+		MessageType: []*descriptorpb.DescriptorProto{
+			{Name: proto.String("GetRequest"), Field: []*descriptorpb.FieldDescriptorProto{field("id", descriptorpb.FieldDescriptorProto_TYPE_STRING, "")}},
+			{Name: proto.String("GetResponse"), Field: []*descriptorpb.FieldDescriptorProto{object()}},
+			{Name: proto.String("ListRequest"), Field: []*descriptorpb.FieldDescriptorProto{field("filter", descriptorpb.FieldDescriptorProto_TYPE_STRING, "")}},
+			{Name: proto.String("ListResponse"), Field: []*descriptorpb.FieldDescriptorProto{items, total}},
+			{Name: proto.String("CreateRequest"), Field: []*descriptorpb.FieldDescriptorProto{object()}},
+			{Name: proto.String("DeleteRequest"), Field: []*descriptorpb.FieldDescriptorProto{field("id", descriptorpb.FieldDescriptorProto_TYPE_STRING, "")}},
+			{Name: proto.String("Empty")},
+		},
+		Service: []*descriptorpb.ServiceDescriptorProto{{Name: proto.String("Collections")}},
+	}
+	for _, method := range []struct{ name, request, response string }{
+		{"Get", "GetRequest", "GetResponse"}, {"List", "ListRequest", "ListResponse"},
+		{"Create", "CreateRequest", "GetResponse"}, {"Delete", "DeleteRequest", "Empty"},
+	} {
+		file.Service[0].Method = append(file.Service[0].Method, &descriptorpb.MethodDescriptorProto{
+			Name: proto.String(method.name), InputType: proto.String(".p2.collection." + method.request),
+			OutputType: proto.String(".p2.collection." + method.response),
+		})
+	}
+	change(file)
+	descriptor, err := protodesc.NewFile(file, protoregistry.GlobalFiles)
+	Expect(err).NotTo(HaveOccurred())
+	return descriptor.Services().Get(0)
+}
+
+// Clone registered names, not the global registries. Both the valid control and
+// malformed variants have real registered request/response counterparts, so an
+// unregistered-type guard alone cannot satisfy the shape-rejection assertions.
+func p2RegisteredService(name protoreflect.FullName, change func(*descriptorpb.FileDescriptorProto)) protoreflect.ServiceDescriptor {
+	original, err := protoregistry.GlobalFiles.FindDescriptorByName(name)
+	Expect(err).NotTo(HaveOccurred())
+	file := protodesc.ToFileDescriptorProto(original.ParentFile())
+	change(file)
+	descriptor, err := protodesc.NewFile(file, protoregistry.GlobalFiles)
+	Expect(err).NotTo(HaveOccurred())
+	service := descriptor.Services().ByName(original.Name())
+	for i := range service.Methods().Len() {
+		method := service.Methods().Get(i)
+		for _, message := range []protoreflect.MessageDescriptor{method.Input(), method.Output()} {
+			_, err := protoregistry.GlobalTypes.FindMessageByName(message.FullName())
+			Expect(err).NotTo(HaveOccurred(), "fixture must have a registered counterpart for %s", message.FullName())
+		}
+	}
+	return service
+}
+
+func p2ObjectShape(file *descriptorpb.FileDescriptorProto, shape string) {
+	var responseName string
+	for _, method := range file.Service[0].Method {
+		if method.GetName() == "Get" {
+			responseName = method.GetOutputType()
+		}
+	}
+	for _, message := range file.MessageType {
+		if "."+file.GetPackage()+"."+message.GetName() != responseName {
+			continue
+		}
+		for i, field := range message.Field {
+			if field.GetName() != "object" {
+				continue
+			}
+			switch shape {
+			case "missing":
+				message.Field = append(message.Field[:i], message.Field[i+1:]...)
+			case "scalar":
+				field.Type, field.TypeName = descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(), nil
+			case "repeated":
+				field.Label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum()
+			case "map":
+				message.NestedType = append(message.NestedType, &descriptorpb.DescriptorProto{
+					Name: proto.String("ObjectEntry"), Options: &descriptorpb.MessageOptions{MapEntry: proto.Bool(true)},
+					Field: []*descriptorpb.FieldDescriptorProto{
+						{Name: proto.String("key"), Number: proto.Int32(1), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+						{Name: proto.String("value"), Number: proto.Int32(2), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+					},
+				})
+				field.Label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum()
+				field.TypeName = proto.String(responseName + ".ObjectEntry")
+			}
+			return
+		}
+	}
+	Fail("fixture response has no object field")
+}
+
+func p2EnableSingleton(builder *HelperBuilder) {
+	method := reflect.ValueOf(builder).MethodByName("EnableSingletonGet")
+	Expect(method.IsValid()).To(BeTrue(), "limited capability RED: EnableSingletonGet is absent; assertions after this gate have NOT executed")
+	Expect(method.Type().NumIn()).To(BeZero())
+	Expect(method.Type().NumOut()).To(Equal(1))
+	Expect(method.Call(nil)[0].Interface()).To(BeIdenticalTo(builder))
+}
 
 func testTenantFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(testTenantKey{}).(string)
@@ -78,6 +201,329 @@ var _ = Describe("Reflection helper", func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(connection.Close)
 	})
+
+	Describe("P2 human lock: discovery safety and singleton opt-in", func() {
+		DescribeTable("rejects streaming methods even when all message types are registered",
+			func(methodName string) {
+				original, err := protoregistry.GlobalFiles.FindDescriptorByName("osac.public.v1.Clusters")
+				Expect(err).NotTo(HaveOccurred())
+				file := protodesc.ToFileDescriptorProto(original.ParentFile())
+				for _, method := range file.Service[0].Method {
+					if method.GetName() == methodName {
+						method.ServerStreaming = proto.Bool(true)
+					}
+				}
+				descriptor, err := protodesc.NewFile(file, protoregistry.GlobalFiles)
+				Expect(err).NotTo(HaveOccurred())
+				scanner := &helper{logger: logger}
+				Expect(func() { scanner.scanService(descriptor.Services().Get(0)) }).NotTo(Panic())
+				Expect(scanner.helpers).To(BeEmpty())
+			},
+			Entry("Get", "Get"), Entry("List", "List"), Entry("Create", "Create"), Entry("Delete", "Delete"),
+		)
+
+		It("accepts the registered collection counterpart before applying malformed-shape changes", func() {
+			scanner := &helper{logger: logger}
+			descriptor := p2RegisteredService("osac.public.v1.Clusters", func(*descriptorpb.FileDescriptorProto) {})
+			Expect(func() { scanner.scanService(descriptor) }).NotTo(Panic())
+			Expect(scanner.helpers).To(HaveLen(1))
+			Expect(scanner.helpers[0].FullName()).To(Equal(protoreflect.FullName("osac.public.v1.Cluster")))
+		})
+
+		DescribeTable("rejects registered malformed collection descriptors without panicking",
+			func(shape string) {
+				scanner := &helper{logger: logger}
+				descriptor := p2RegisteredService("osac.public.v1.Clusters", func(file *descriptorpb.FileDescriptorProto) {
+					p2ObjectShape(file, shape)
+				})
+				Expect(func() { scanner.scanService(descriptor) }).NotTo(Panic())
+				Expect(scanner.helpers).To(BeEmpty())
+			},
+			Entry("missing object", "missing"), Entry("scalar object", "scalar"),
+			Entry("repeated object", "repeated"), Entry("map object", "map"),
+		)
+
+		It("separately rejects an otherwise valid unregistered collection", func() {
+			scanner := &helper{logger: logger}
+			Expect(func() { scanner.scanService(p2CollectionService(func(*descriptorpb.FileDescriptorProto) {})) }).NotTo(Panic())
+			Expect(scanner.helpers).To(BeEmpty())
+		})
+
+		It("keeps get-only services out of the ordinary collection scanner", func() {
+			h, err := NewHelper().SetLogger(logger).SetConnection(connection).
+				AddPackage(packages.PublicV1, 1).AddPackage(packages.PrivateV1, 0).Build()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(h.Lookup("billingproviderstatus")).To(BeNil())
+			Expect(string(h.Lookup("cluster").FullName())).To(Equal(packages.PrivateV1 + ".Cluster"))
+		})
+
+		It("offers an explicit singleton opt-in without requiring future symbols to compile", func() {
+			builder := NewHelper().SetLogger(logger).SetConnection(connection).
+				AddPackage(packages.PublicV1, 1).AddPackage(packages.PrivateV1, 0)
+			p2EnableSingleton(builder)
+			h, err := builder.Build()
+			Expect(err).NotTo(HaveOccurred())
+			object := h.Lookup("billingproviderstatus")
+			Expect(object).NotTo(BeNil())
+			Expect(string(object.FullName())).To(Equal(packages.PrivateV1 + ".BillingProviderStatus"))
+			Expect(object.Descriptor().Fields().ByName("id")).To(BeNil())
+			Expect(object.Descriptor().Fields().ByName("metadata")).To(BeNil())
+		})
+	})
+
+	Describe("P2 human lock: singleton Get invocation and unsupported operations", func() {
+		for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
+			DescribeTable(pkg+" distinguishes absent from present-empty and NOT_CONFIGURED",
+				func(shape string) {
+					calls := 0
+					conn, err := grpc.NewClient("passthrough:///p2-singleton.invalid",
+						grpc.WithTransportCredentials(insecure.NewCredentials()),
+						grpc.WithUnaryInterceptor(func(_ context.Context, method string, request, response any,
+							_ *grpc.ClientConn, _ grpc.UnaryInvoker, _ ...grpc.CallOption) error {
+							calls++
+							Expect(method).To(Equal("/" + pkg + ".BillingProviderStatuses/Get"))
+							req := request.(proto.Message)
+							Expect(req.ProtoReflect().Descriptor().Fields().Len()).To(BeZero())
+							Expect(proto.Size(req)).To(BeZero())
+							if shape != "absent" {
+								res := response.(proto.Message).ProtoReflect()
+								object := res.Mutable(res.Descriptor().Fields().ByName("object")).Message()
+								if shape == "NOT_CONFIGURED" {
+									state := object.Descriptor().Fields().ByName("state")
+									object.Set(state, protoreflect.ValueOfEnum(state.Enum().Values().ByName("BILLING_PROVIDER_STATE_NOT_CONFIGURED").Number()))
+								}
+							}
+							return nil
+						}))
+					Expect(err).NotTo(HaveOccurred())
+					DeferCleanup(conn.Close)
+					builder := NewHelper().SetLogger(logger).SetConnection(conn).AddPackage(pkg, 0)
+					p2EnableSingleton(builder)
+					h, err := builder.Build()
+					Expect(err).NotTo(HaveOccurred())
+					singleton := h.Lookup("billingproviderstatus")
+					Expect(singleton).NotTo(BeNil())
+					Expect(singleton.IsTenantScoped()).To(BeFalse())
+					Expect(singleton.IsProjectScoped()).To(BeFalse())
+					var object proto.Message
+					Expect(func() { object, err = singleton.Get(ctx, "") }).NotTo(Panic())
+					Expect(calls).To(Equal(1), "one empty Get, never List or identity lookup")
+					if shape == "absent" {
+						Expect(err).To(HaveOccurred())
+						Expect(object).To(BeNil())
+					} else {
+						Expect(err).NotTo(HaveOccurred())
+						Expect(object).NotTo(BeNil())
+						Expect(object.ProtoReflect().IsValid()).To(BeTrue())
+						Expect(object.ProtoReflect().Descriptor().Fields().ByName("id")).To(BeNil())
+						Expect(object.ProtoReflect().Descriptor().Fields().ByName("metadata")).To(BeNil())
+						if shape == "empty" {
+							Expect(proto.Size(object)).To(BeZero())
+						} else {
+							Expect(object.ProtoReflect().Get(object.ProtoReflect().Descriptor().Fields().ByName("state")).Enum()).NotTo(BeZero())
+						}
+					}
+				},
+				Entry("absent", "absent"), Entry("present empty", "empty"), Entry("NOT_CONFIGURED", "NOT_CONFIGURED"),
+			)
+		}
+
+		DescribeTable("rejects unsupported operations before any RPC or template/identity access",
+			func(operation string) {
+				calls := 0
+				conn, err := grpc.NewClient("passthrough:///p2-singleton.invalid",
+					grpc.WithTransportCredentials(insecure.NewCredentials()),
+					grpc.WithUnaryInterceptor(func(context.Context, string, any, any, *grpc.ClientConn, grpc.UnaryInvoker, ...grpc.CallOption) error {
+						calls++
+						return nil
+					}))
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(conn.Close)
+				builder := NewHelper().SetLogger(logger).SetConnection(conn).AddPackage(packages.PublicV1, 0)
+				p2EnableSingleton(builder)
+				h, err := builder.Build()
+				Expect(err).NotTo(HaveOccurred())
+				singleton := h.Lookup("billingproviderstatus")
+				Expect(singleton).NotTo(BeNil())
+				Expect(singleton.IsUpdatable()).To(BeFalse())
+				object := &publicv1.BillingProviderStatus{}
+				Expect(func() {
+					switch operation {
+					case "List":
+						_, err = singleton.List(ctx, ListOptions{})
+					case "Create":
+						_, err = singleton.Create(ctx, object)
+					case "Update":
+						_, err = singleton.Update(ctx, object)
+					case "UpdateWithMask":
+						_, err = singleton.UpdateWithMask(ctx, object, object)
+					case "Delete":
+						err = singleton.Delete(ctx, "")
+					case "keyed Get":
+						_, err = singleton.Get(ctx, "invented-id")
+					}
+				}).NotTo(Panic())
+				Expect(err).To(HaveOccurred())
+				Expect(grpcstatus.Code(err)).To(Equal(codes.FailedPrecondition))
+				Expect(calls).To(BeZero())
+			},
+			Entry("List", "List"), Entry("Create", "Create"), Entry("Update", "Update"),
+			Entry("UpdateWithMask", "UpdateWithMask"), Entry("Delete", "Delete"), Entry("keyed Get", "keyed Get"),
+		)
+
+		DescribeTable("only accepts the registered unary empty-request singular-object singleton shape",
+			func(shape string) {
+				descriptor := p2RegisteredService("osac.public.v1.BillingProviderStatuses", func(file *descriptorpb.FileDescriptorProto) {
+					switch shape {
+					case "nonempty request":
+						file.MessageType[0].Field = []*descriptorpb.FieldDescriptorProto{{
+							Name: proto.String("id"), Number: proto.Int32(1), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+						}}
+					case "server streaming":
+						file.Service[0].Method[0].ServerStreaming = proto.Bool(true)
+					case "client streaming":
+						file.Service[0].Method[0].ClientStreaming = proto.Bool(true)
+					case "extra method":
+						extra := proto.Clone(file.Service[0].Method[0]).(*descriptorpb.MethodDescriptorProto)
+						extra.Name = proto.String("Signal")
+						file.Service[0].Method = append(file.Service[0].Method, extra)
+					case "valid":
+					default:
+						p2ObjectShape(file, shape)
+					}
+				})
+				builder := NewHelper().SetLogger(logger).SetConnection(connection).AddPackage(packages.PublicV1, 0)
+				p2EnableSingleton(builder)
+				built, err := builder.Build()
+				Expect(err).NotTo(HaveOccurred())
+				scanner := built.(*helper)
+				Expect(func() { scanner.scanService(descriptor) }).NotTo(Panic())
+				if shape == "valid" {
+					Expect(scanner.helpers).To(HaveLen(1))
+				} else {
+					Expect(scanner.helpers).To(BeEmpty())
+				}
+			},
+			Entry("registered valid counterpart", "valid"), Entry("nonempty request", "nonempty request"),
+			Entry("server streaming", "server streaming"), Entry("client streaming", "client streaming"),
+			Entry("extra method is not Get-only", "extra method"),
+			Entry("missing object", "missing"), Entry("scalar object", "scalar"),
+			Entry("map object", "map"), Entry("repeated object", "repeated"),
+		)
+
+		It("rejects an otherwise valid but unregistered singleton without panicking", func() {
+			descriptor := p2CollectionService(func(file *descriptorpb.FileDescriptorProto) {
+				file.Service[0].Method = file.Service[0].Method[:1]
+				file.MessageType[0].Field = nil
+			})
+			builder := NewHelper().SetLogger(logger).SetConnection(connection).AddPackage(packages.PublicV1, 0)
+			p2EnableSingleton(builder)
+			built, err := builder.Build()
+			Expect(err).NotTo(HaveOccurred())
+			scanner := built.(*helper)
+			Expect(func() { scanner.scanService(descriptor) }).NotTo(Panic())
+			Expect(scanner.helpers).To(BeEmpty())
+		})
+	})
+
+	DescribeTable("P2 human lock: List offset reaches the actual RPC request",
+		func(offset int64) {
+			calls := 0
+			conn, err := grpc.NewClient("passthrough:///p2-offset.invalid",
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+				grpc.WithUnaryInterceptor(func(_ context.Context, _ string, request, response any,
+					_ *grpc.ClientConn, _ grpc.UnaryInvoker, _ ...grpc.CallOption) error {
+					calls++
+					if offset >= 0 {
+						Expect(request.(*publicv1.ClustersListRequest).GetOffset()).To(Equal(int32(offset)))
+					}
+					proto.Merge(response.(proto.Message), &publicv1.ClustersListResponse{})
+					return nil
+				}))
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(conn.Close)
+			h, err := NewHelper().SetLogger(logger).SetConnection(conn).AddPackage(packages.PublicV1, 0).Build()
+			Expect(err).NotTo(HaveOccurred())
+			options := ListOptions{Limit: 100}
+			// The approved future field is optional at compile time. When absent we
+			// still invoke real List; the recorded request exposes the missing behavior.
+			if field := reflect.ValueOf(&options).Elem().FieldByName("Offset"); field.IsValid() {
+				Expect(field.Kind()).To(Equal(reflect.Int32))
+				field.SetInt(offset)
+			}
+			_, err = h.Lookup("cluster").List(ctx, options)
+			if offset < 0 {
+				Expect(err).To(HaveOccurred())
+				Expect(calls).To(BeZero())
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(calls).To(Equal(1))
+			}
+		},
+		Entry("positive offset", int64(7)), Entry("largest representable offset", int64(2147483647)),
+		Entry("negative offset is rejected before RPC", int64(-1)),
+	)
+
+	DescribeTable("P2 human lock: seam List capability flags come from descriptors, never item counts",
+		func(withOffset, withTotal bool) {
+			service := p2RegisteredService("osac.public.v1.Clusters", func(file *descriptorpb.FileDescriptorProto) {
+				for _, message := range file.MessageType {
+					var fields []*descriptorpb.FieldDescriptorProto
+					for _, field := range message.Field {
+						if message.GetName() == "ClustersListRequest" && field.GetName() == "offset" && !withOffset ||
+							message.GetName() == "ClustersListResponse" && field.GetName() == "total" && !withTotal {
+							continue
+						}
+						// Keep this clone self-contained after dropping an optional field.
+						field.OneofIndex, field.Proto3Optional = nil, nil
+						fields = append(fields, field)
+					}
+					message.Field, message.OneofDecl = fields, nil
+				}
+			})
+			calls := 0
+			conn, err := grpc.NewClient("passthrough:///p2-capabilities.invalid",
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+				grpc.WithUnaryInterceptor(func(_ context.Context, method string, request, response any,
+					_ *grpc.ClientConn, _ grpc.UnaryInvoker, _ ...grpc.CallOption) error {
+					calls++
+					Expect(method).To(Equal("/osac.public.v1.Clusters/List"))
+					req := request.(proto.Message).ProtoReflect()
+					Expect(req.Descriptor().Fields().ByName("offset") != nil).To(Equal(withOffset))
+					res := response.(proto.Message).ProtoReflect()
+					items := res.Mutable(res.Descriptor().Fields().ByName("items")).List()
+					item := items.NewElement()
+					item.Message().Set(item.Message().Descriptor().Fields().ByName("id"), protoreflect.ValueOfString("capability-control"))
+					items.Append(item)
+					if withTotal {
+						res.Set(res.Descriptor().Fields().ByName("total"), protoreflect.ValueOfInt32(7))
+					}
+					return nil
+				}))
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(conn.Close)
+			scanner := &helper{logger: logger, connection: conn}
+			scanner.scanService(service)
+			Expect(scanner.helpers).To(HaveLen(1))
+			object := &scanner.helpers[0]
+			// Dynamic templates match only this local clone; no global registration.
+			method := service.Methods().ByName("List")
+			object.list.request, object.list.response = dynamicpb.NewMessage(method.Input()), dynamicpb.NewMessage(method.Output())
+			result, err := object.List(ctx, ListOptions{Limit: 100})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(calls).To(Equal(1))
+			Expect(result.Items).To(HaveLen(1))
+			Expect(result.OffsetSupported).To(Equal(withOffset))
+			Expect(result.TotalKnown).To(Equal(withTotal))
+			if withTotal {
+				Expect(result.Total).To(Equal(int32(7)))
+			} else {
+				Expect(result.Total).To(BeZero(), "unknown Total must not be fabricated from len(Items)")
+			}
+		},
+		Entry("offset and total", true, true), Entry("no offset", false, true),
+		Entry("unknown total with offset", true, false), Entry("neither", false, false),
+	)
 
 	Describe("Creation", func() {
 		It("Can be created with all the mandatory parameters", func() {

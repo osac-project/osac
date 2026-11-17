@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 
@@ -103,17 +104,26 @@ type runnerContext struct {
 		filter string
 		watch  bool
 	}
-	ctx            context.Context
-	logger         *slog.Logger
-	console        *terminal.Console
-	conn           *grpc.ClientConn
-	marshalOptions protojson.MarshalOptions
-	globalHelper   reflection.Helper
-	objectHelper   reflection.ObjectHelper
+	ctx              context.Context
+	logger           *slog.Logger
+	console          *terminal.Console
+	conn             *grpc.ClientConn
+	marshalOptions   protojson.MarshalOptions
+	globalHelper     reflection.Helper
+	objectHelper     reflection.ObjectHelper
+	listRPCBudget    int
+	listObjectBudget int
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	var err error
+	// Reject malformed output before configuration or connection preparation.
+	if c.args.format != outputFormatTable && c.args.format != outputFormatJson && c.args.format != outputFormatYaml {
+		return fmt.Errorf(
+			"unknown output format '%s', should be '%s', '%s' or '%s'",
+			c.args.format, outputFormatTable, outputFormatJson, outputFormatYaml,
+		)
+	}
 
 	// Get the context:
 	ctx := cmd.Context()
@@ -153,6 +163,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		SetTenantFunc(config.TenantFromContext).
 		SetProjectFunc(config.ProjectFromContext).
 		UseGetForStructuredOutput(&publicv1.Secret{}).
+		EnableSingletonGet().
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create reflection tool: %w", err)
@@ -176,12 +187,10 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Check the flags:
-	if c.args.format != outputFormatTable && c.args.format != outputFormatJson && c.args.format != outputFormatYaml {
-		return fmt.Errorf(
-			"unknown output format '%s', should be '%s', '%s' or '%s'",
-			c.args.format, outputFormatTable, outputFormatJson, outputFormatYaml,
-		)
+	// Singleton reads have no collection, key, filter, or watch semantics. Changed
+	// matters here: explicit empty/false flags are still unsupported requests.
+	if c.objectHelper.IsSingleton() && (len(args) > 1 || cmd.Flags().Changed("filter") || cmd.Flags().Changed("watch")) {
+		return fmt.Errorf("singleton object type %q does not support keys, --filter or --watch", args[0])
 	}
 
 	// If watch mode is enabled, watch for events instead of listing
@@ -221,6 +230,16 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 // This can result in partial data for resources like secrets where the data field is redacted
 // when list is called and no names or identifiers are provided.
 func (c *runnerContext) fetchObjects(ctx context.Context, keys []string) ([]proto.Message, error) {
+	if c.objectHelper.IsSingleton() {
+		if len(keys) != 0 || c.args.filter != "" || c.args.watch {
+			return nil, fmt.Errorf("singleton reads do not support keys, filters or watch")
+		}
+		object, err := c.objectHelper.Get(ctx, "")
+		if err != nil {
+			return nil, err
+		}
+		return []proto.Message{object}, nil
+	}
 	if len(keys) > 0 && c.args.format != outputFormatTable && c.objectHelper.UseGetForStructuredOutput() {
 		return c.getByKeys(ctx, keys)
 	}
@@ -244,8 +263,8 @@ func (c *runnerContext) getByKeys(ctx context.Context, keys []string) ([]proto.M
 	return results, nil
 }
 
-func (c *runnerContext) list(ctx context.Context, keys []string) (results []proto.Message, err error) {
-	var options reflection.ListOptions
+func (c *runnerContext) listOptions(keys []string) reflection.ListOptions {
+	options := reflection.ListOptions{Limit: 100}
 
 	// If keys (identifiers or names) were provided, build a CEL filter to match them.
 	if len(keys) > 0 {
@@ -268,13 +287,99 @@ func (c *runnerContext) list(ctx context.Context, keys []string) (results []prot
 			options.Filter = c.args.filter
 		}
 	}
+	return options
+}
 
-	listResult, err := c.objectHelper.List(ctx, options)
-	if err != nil {
-		return
+func (c *runnerContext) list(ctx context.Context, keys []string) ([]proto.Message, error) {
+	options := c.listOptions(keys)
+
+	// These are finite safety limits, not user-facing paging controls. A failed
+	// traversal discards its buffer; the caller renders only after completion.
+	rpcBudget, objectBudget := c.listRPCBudget, c.listObjectBudget
+	if rpcBudget == 0 {
+		rpcBudget = 10000
 	}
-	results = listResult.Items
-	return
+	if objectBudget == 0 {
+		objectBudget = 1000000
+	}
+	if rpcBudget < 0 || objectBudget < 0 {
+		return nil, fmt.Errorf("list budgets must not be negative")
+	}
+	var results []proto.Message
+	seen := make(map[string]struct{})
+	var total int32
+	for calls := 0; ; calls++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if calls >= rpcBudget {
+			return nil, fmt.Errorf("list RPC budget exhausted (%d)", rpcBudget)
+		}
+		page, err := c.objectHelper.List(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if page.OffsetSupported && len(page.Items) > int(options.Limit) {
+			return nil, fmt.Errorf("list returned an oversized page")
+		}
+		if len(page.Items) > objectBudget-len(results) {
+			return nil, fmt.Errorf("list object budget exhausted (%d)", objectBudget)
+		}
+		if page.TotalKnown {
+			if page.Total < 0 {
+				return nil, fmt.Errorf("list returned a negative total")
+			}
+			if calls == 0 {
+				total = page.Total
+			} else if page.Total != total {
+				return nil, fmt.Errorf("list total changed during traversal")
+			}
+			if int64(len(results))+int64(len(page.Items)) > int64(total) {
+				return nil, fmt.Errorf("list returned more objects than its total")
+			}
+		}
+		for _, item := range page.Items {
+			id, ok := reflection.ResolveFieldPath[string](item, "id")
+			if !ok || id == "" {
+				return nil, fmt.Errorf("list returned an object without an identifier")
+			}
+			if _, exists := seen[id]; exists {
+				return nil, fmt.Errorf("list repeated object identifier %q", id)
+			}
+			seen[id] = struct{}{}
+		}
+		results = append(results, page.Items...)
+		if !page.TotalKnown {
+			if c.console != nil {
+				c.console.Errorf(ctx, "List completeness unknown: the service does not report a total.\n")
+			}
+			return results, nil
+		}
+		if int64(len(results)) == int64(total) {
+			return results, nil
+		}
+		if !page.OffsetSupported {
+			return nil, fmt.Errorf("list is incomplete and the service does not support offsets")
+		}
+		if len(page.Items) == 0 {
+			return nil, fmt.Errorf("list made no progress before reaching its total")
+		}
+		options.Offset, err = nextListOffset(options.Offset, len(page.Items))
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+// nextListOffset checks in a widened domain before converting to the wire type.
+func nextListOffset(current int32, count int) (int32, error) {
+	if current < 0 || count < 0 || int64(count) > math.MaxInt32-int64(current) {
+		return 0, fmt.Errorf("list offset overflow or negative input")
+	}
+	return current + int32(count), nil // #nosec G115 -- checked above
 }
 
 func (c *runnerContext) renderTable(ctx context.Context, objects []proto.Message) error {
@@ -358,7 +463,7 @@ func completeObjectTypes(cmd *cobra.Command, args []string, toComplete string) (
 	if cmd != nil {
 		ctx = cmd.Context()
 	}
-	return reflection.ObjectTypeNames(config.PackageNamesFromContext(ctx)...), cobra.ShellCompDirectiveNoFileComp
+	return reflection.GetObjectTypeNames(config.PackageNamesFromContext(ctx)...), cobra.ShellCompDirectiveNoFileComp
 }
 
 const shortHelp = `Get objects`

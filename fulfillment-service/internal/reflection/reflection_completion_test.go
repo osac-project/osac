@@ -15,12 +15,47 @@ package reflection
 
 import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 var _ = Describe("ObjectTypeNames", func() {
+	Describe("P2 human lock: mutation completion stays collection-only", func() {
+		It("excludes get-only singleton names from public and private mutation completion", func() {
+			for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
+				mutationNames := ObjectTypeNames(pkg)
+				updateNames := UpdatableObjectTypeNames(pkg)
+				for _, name := range []string{"billingproviderstatus", "billingproviderstatuses"} {
+					Expect(mutationNames).NotTo(ContainElement(name))
+					Expect(updateNames).NotTo(ContainElement(name))
+				}
+			}
+		})
+
+		DescribeTable("validates registered collection response shapes before advertising names",
+			func(shape string) {
+				names := map[string]bool{}
+				descriptor := p2RegisteredService(protoreflect.FullName("osac.public.v1.Clusters"), func(file *descriptorpb.FileDescriptorProto) {
+					if shape != "valid" {
+						p2ObjectShape(file, shape)
+					}
+				})
+				Expect(func() { scanServiceForNames(descriptor, names, false, false) }).NotTo(Panic())
+				if shape == "valid" {
+					Expect(names).To(Equal(map[string]bool{"cluster": true, "clusters": true}))
+				} else {
+					Expect(names).To(BeEmpty())
+				}
+			},
+			Entry("registered valid counterpart", "valid"),
+			Entry("missing object", "missing"), Entry("repeated object", "repeated"),
+		)
+	})
+
 	It("returns names for public packages", func() {
 		names := ObjectTypeNames(packages.Public...)
 		Expect(names).ToNot(BeEmpty())

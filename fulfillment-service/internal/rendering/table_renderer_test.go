@@ -21,11 +21,15 @@ import (
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
@@ -56,7 +60,9 @@ var _ = Describe("Table renderer", func() {
 			Return(string(fullName)).
 			AnyTimes()
 		helper.EXPECT().IsTenantScoped().
-			Return(true).
+			// Metadata-free provider status is platform-scoped. Ordinary resource
+			// fixtures still exercise automatic tenant-column injection.
+			Return(descriptor.Fields().ByName("metadata") != nil).
 			AnyTimes()
 		return helper
 	}
@@ -194,6 +200,65 @@ var _ = Describe("Table renderer", func() {
 			Expect(output).To(MatchRegexp(`Yes\s+.*subnet-2\s`))
 		})
 	})
+
+	DescribeTable("P2 human lock: DELETING requires a singular Timestamp descriptor",
+		func(shape string) {
+			metadataFields := []*descriptorpb.FieldDescriptorProto{{
+				Name: proto.String("name"), Number: proto.Int32(1), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+			}}
+			if shape != "absent" {
+				deletion := &descriptorpb.FieldDescriptorProto{
+					Name: proto.String("deletion_timestamp"), Number: proto.Int32(2),
+					Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: proto.String(".google.protobuf.Timestamp"),
+				}
+				switch shape {
+				case "scalar":
+					deletion.Type, deletion.TypeName = descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(), nil
+				case "repeated":
+					deletion.Label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum()
+				case "other message":
+					deletion.TypeName = proto.String(".p2.render.Empty")
+				}
+				metadataFields = append(metadataFields, deletion)
+			}
+			file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
+				Name: proto.String("p2_renderer.proto"), Package: proto.String("p2.render"), Syntax: proto.String("proto3"),
+				Dependency: []string{"google/protobuf/timestamp.proto"},
+				MessageType: []*descriptorpb.DescriptorProto{
+					{Name: proto.String("Resource"), Field: []*descriptorpb.FieldDescriptorProto{
+						{Name: proto.String("id"), Number: proto.Int32(1), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+						{Name: proto.String("metadata"), Number: proto.Int32(2), Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: proto.String(".p2.render.Metadata")},
+					}},
+					{Name: proto.String("Metadata"), Field: metadataFields},
+					{Name: proto.String("Empty")},
+				},
+			}, protoregistry.GlobalFiles)
+			Expect(err).NotTo(HaveOccurred())
+			object := dynamicpb.NewMessage(file.Messages().ByName("Resource"))
+			object.Set(object.Descriptor().Fields().ByName("id"), protoreflect.ValueOfString("synthetic-resource"))
+			objectHelper := reflection.NewMockObjectHelper(ctrl)
+			objectHelper.EXPECT().FullName().Return(object.Descriptor().FullName()).AnyTimes()
+			objectHelper.EXPECT().String().Return(string(object.Descriptor().FullName())).AnyTimes()
+			objectHelper.EXPECT().Descriptor().Return(object.Descriptor()).AnyTimes()
+			objectHelper.EXPECT().IsTenantScoped().Return(false).AnyTimes()
+			helper := reflection.NewMockHelper(ctrl)
+			helper.EXPECT().Lookup(string(object.Descriptor().FullName())).Return(objectHelper).AnyTimes()
+			var output bytes.Buffer
+			renderer, err := NewTableRenderer().SetLogger(logger).SetHelper(helper).SetWriter(&output).Build()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(renderer.Render(context.Background(), []proto.Message{object})).To(Succeed())
+			Expect(output.String()).To(ContainSubstring("synthetic-resource"))
+			if shape == "timestamp" {
+				Expect(output.String()).To(ContainSubstring("DELETING"))
+			} else {
+				Expect(output.String()).NotTo(ContainSubstring("DELETING"))
+			}
+		},
+		Entry("no deletion field", "absent"), Entry("scalar is not a lifecycle timestamp", "scalar"),
+		Entry("repeated Timestamp is not a lifecycle timestamp", "repeated"),
+		Entry("arbitrary message is not a lifecycle timestamp", "other message"),
+		Entry("ordinary singular Timestamp remains supported", "timestamp"),
+	)
 
 	renderInstanceTypes := func(ctx context.Context, items []*publicv1.InstanceType) string {
 		objectHelper := makeObjectHelper(&publicv1.InstanceType{})

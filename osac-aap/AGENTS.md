@@ -37,7 +37,9 @@ Read the applicable references before changing behavior:
 - Manager credentials and networking CA mounts must stay out of unrelated
   cluster-fulfillment workers.
 
-## Integration Testing
+<a id="integration-testing"></a>
+
+## Validation
 
 See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-aap).
 
@@ -56,6 +58,7 @@ Commands run from `osac-aap/` unless noted; see target READMEs under
 
 | Touched area | Required tier and command |
 |---|---|
+| Ansible or Helm inputs | Static: `make lint`; `helm lint charts/aap` |
 | Filters, token/auth wiring, transforms, transport and input validation | Unit: `uv run pytest tests/unit` |
 | Roles, workflows, hooks, leases, finalizers or Kubernetes resources | Component integration: `make test` |
 | Networking manager tasks and operator wire contracts | Unit plus component contract: `make test`; keep shared `../tests/contract/network-task` goldens in sync with operator consumers |
@@ -80,26 +83,14 @@ runner. HostedCluster transform checks are isolated, not provisioning tests.
 ## Generated and vendored files
 
 - There is no source-code generator for roles. Do not hand-edit third-party content under `vendor/`.
-- Reinstall vendored collections after dependency changes. Confirm Automation Hub credentials and required environment variables first, then run:
+- After dependency changes, check Automation Hub credentials and required
+  environment variables, then reinstall collections as described in
+  [the README](README.md#re-vendor-ansible-collections):
   `rm -rf vendor && ansible-galaxy collection install -r collections/requirements.yml`.
-- Review the vendor diff and commit it with the requirements change when vendoring is required.
+- Review the complete vendor diff and commit it with the requirements change
+  when vendoring is required.
 
-## Validation
-
-From `osac-aap/`:
-
-```bash
-uv sync --all-groups
-uv run pytest tests/unit      # Unit tests
-make lint                     # uv run ansible-lint
-make test                     # Kind setup, integration tests, teardown
-helm lint charts/aap
-```
-
-`make test` creates and removes a Kind test environment; run it for
-integration-affecting changes.
-
-For a focused workflow, run the relevant playbook from `tests/integration/`,
-for example `ansible-playbook targets/<workflow>/tasks/baseline.yml -e "@common_vars.yml" -v`.
-Build the execution environment with `make execution-environment-build` when
-its definition or dependency inputs change.
+`make test` manages Kind setup, integration tests, teardown and coverage.
+For focused playbooks, run from `tests/integration/`, for example
+`ansible-playbook targets/<workflow>/tasks/baseline.yml -e "@common_vars.yml" -v`;
+check the target README for prerequisites.

@@ -61,7 +61,9 @@ supplies the repository root context, not the component directory.
   Use literal English keys (`t('Save')`), never dynamic keys; pure utilities
   receive `t: TFunction`. Run `pnpm i18n` and commit generated
   `libs/i18n/locales/en/translation.json` with source strings; never hand-edit it.
-- `libs/types/src/` is generated. AI agents may advance the API baseline only
+- Never hand-edit generated `libs/types/src/**/*_pb.ts` bindings. Export barrels
+  `libs/types/src/index.ts` and `index-private.ts` are maintained manually.
+  AI agents may advance the API baseline only
   on an explicit user request for a UI API-version bump; dedicated API-release
   automation may also bump it. When authorized, change
   `libs/types/.buf-api-version`, run `pnpm gen-types` and commit generated files

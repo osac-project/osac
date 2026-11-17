@@ -13,8 +13,8 @@ feedback; ordinary GitHub CI remains authoritative.
 | Dependency discard paths | [DEV] Production component integration | Follow the [profiling and restoration requirements](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox) |
 | Regression workflow or path filter | [DEV] Unit and workflow validation | Run the regression suite above, `bash tools/test/component-hooks-smoke.sh`, and actionlint; retain [PR and merge-group reporting](../.github/AGENTS.md#component-hooks-and-sandbox-regression-smoke-tests) |
 
-From the repository root, source `.agentic-ci/changed.sh` before changing
-directory. Preserve missing-base fallback,
-pathspecs, and ignored-file behavior; consume the complete tracked/untracked stream.
+Source `.agentic-ci/changed.sh` and call `changed` from the repository root;
+change directory only after selection or in a subshell. Preserve missing-base
+fallback, pathspecs and ignored-file behavior; consume the full tracked/untracked stream.
 See [testing boundaries and production evidence](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox).
 Declare precise sandbox exceptions in `config.yml`.

@@ -54,7 +54,9 @@ Read the applicable references before changing behavior:
 - Fulfillment proto changes are regenerated once in the shared module: `make -C ../proto generate` (see `proto/AGENTS.md`). Do not regenerate anything proto-related from `osac-operator/`.
 - Never hand-edit `config/crd/`, `zz_generated.deepcopy.go`, or `go.sum`; run `go mod tidy` for module changes.
 
-## Integration Testing
+<a id="integration-testing"></a>
+
+## Validation
 
 See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-operator).
 
@@ -72,6 +74,7 @@ All commands below run from `osac-operator/`.
 
 | Touched area | Required tier and command |
 |---|---|
+| Go/Helm changes | Static: `make fmt lint helm-lint check-helm-crds` |
 | Helpers, reconciliation, finalizers, status, CRDs, worker recovery or LVMS | Unit/Envtest/Contract: `make test` |
 | Networking task input/result contracts | `make test`; synchronize shared `../tests/contract/network-task` goldens with AAP in the same PR; see `internal/networktask/doc.go` for the bound task surface |
 | Deployment, watches, RBAC, console proxy, networking or Helm wiring | Deploy current image/manifests, then `make integration-tests` against Kind |
@@ -98,19 +101,6 @@ Postgres uniqueness or recovery, Agent-watch delivery, Assisted Service or
 provider deletion. These remain [Contract gaps](../docs/INTEGRATION-TESTING.md#osac-operator);
 deployed lifecycle, CAP-Agent/drain and hardware journeys are QE E2E.
 LVMS fixture CRDs/status do not prove device provisioning, mounting or CSI I/O.
-
-## Validation
-
-From `osac-operator/`:
-
-```bash
-make fmt
-make lint
-make test
-make helm-lint
-make check-helm-crds
-make integration-tests       # Requires a pre-existing Kind cluster
-```
 
 `make build` also runs the unit-test path. The console proxy integration tests
 are under `test/integration/`; E2E suites are under [`../tests/e2e/`](../tests/e2e/).

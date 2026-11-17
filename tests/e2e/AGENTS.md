@@ -64,30 +64,13 @@ Local mocks do not establish hardware, provider or storage behavior; report gaps
 
 ## Fulfillment trust enablement
 
-Set `OSAC_FULFILLMENT_TRUST_E2E=true` to add trust assertions to the CaaS,
-CSI storage, VMaaS, and BMaaS journeys. The CaaS and CSI checks read the
-HostedControlPlane kubeconfig Secret and pass it to `kubectl` through stdin
-without writing it to disk. This kubeconfig provides tenant-admin access to
-verify the tenant ConfigMap and CSI Deployment hashes against the management
-bundle; per-ClusterOrder observer credentials are not required. Run the
-installer hook check in `enablement/test_installer_trust.py` against a full
-OSAC Helm release. Dev and CI profile values disable trust by default; enable
-trust explicitly when deploying the release E2E environment.
-
-From the repository root, run `osac-installer/scripts/test-ui-gateway.sh`
-against a deployed dev-full
-environment to verify the OSAC UI is reachable through its shared Gateway
-route. Set `OSAC_UI_URL` when the listener uses a non-default host or port.
-
-Run `enablement/test_ca_rotation_gate.py` with
-`OSAC_TRUST_ROTATION_PHASE=overlap` and the candidate
-`OSAC_TRUST_ROTATION_EXPECTED_HASH` before selecting the new leaf certificate.
-Run it with `OSAC_TRUST_ROTATION_PHASE=post-switch` before removing the retired
-root, and with `OSAC_TRUST_ROTATION_PHASE=final` after removal. All runs require
-deployed operator and metering metrics and separate old/new root PEM files for
-leaf verification.
-The rotation test reads resources and metrics; it does not mutate CA or leaf
-certificate resources.
+Trust checks require `OSAC_FULFILLMENT_TRUST_E2E=true` and an explicitly
+trust-enabled release environment; dev/CI profiles disable trust by default.
+CaaS/CSI checks use tenant-admin HostedControlPlane kubeconfig Secrets through
+`kubectl` stdin only: never write them to disk or expose them. Per-ClusterOrder
+observer credentials are not required. Follow the
+[trust prerequisites and rotation sequence](../../docs/testing/e2e.md#fulfillment-trust-enablement).
+The rotation gate is read-only; it must not mutate CA or leaf resources.
 
 ## Validation
 

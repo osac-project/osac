@@ -34,7 +34,9 @@ Read the applicable references before changing behavior:
 - After changing chart dependencies, run `make helm-deps` and review `Chart.lock`/packaged dependency diffs.
 - Do not edit sibling component sources through installer chart paths.
 
-## Integration Testing
+<a id="integration-testing"></a>
+
+## Validation
 
 Commands run from `osac-installer/`; use the matching render target in the
 Makefile and the [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer).
@@ -42,6 +44,7 @@ Makefile and the [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installe
 | Touched area | Required tier and command |
 |---|---|
 | Values, schema, dependencies or rendered charts | Helm contract: `make helm-validate`; `helm unittest charts/osac`; for infra, `make helm-infra-deps` then `helm unittest charts/osac-infra` |
+| Metering chart wiring | `helm unittest ../osac-metering/charts/osac-metering` |
 | Networking, MCE, LVMS, trust, billing or auth wiring | Matching `helm-networking-test`, `mce-render-test`, `lvms-optional-path-render-test`, `fulfillment-trust-render-test`, `billing-render-test`, `fulfillment-auth-test` or `dev-full-render-test` Make target |
 | Kind runtime, image/dependency loading, lifecycle or test-phase wiring | Stubbed unit: `make kind-runtime-test` |
 | Infra readiness or input validation | Stubbed unit/Helm: `make infra-ready-wait-test input-validation-test` |
@@ -53,33 +56,9 @@ Makefile and the [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installe
 Render/unit tests do not prove live readiness or provider behavior. Deployed
 checks require an explicitly selected disposable environment and prerequisites.
 
-## Validation
-
-From the repository root, load the shared yamllint config so Helm templates
-are excluded and regular YAML is checked with the repository rules:
-
-```bash
-yamllint --strict -c .yamllint.yaml osac-installer/
-```
-
-From `osac-installer/`:
-
-```bash
-make helm-validate
-pre-commit run --all-files
-make mce-render-test
-make fulfillment-trust-render-test
-helm unittest charts/osac
-make helm-infra-deps   # the infra chart suites need its vendored dependencies
-helm unittest charts/osac-infra
-helm unittest ../osac-metering/charts/osac-metering
-make input-validation-test
-uv run --script scripts/test-preflight-render.py
-```
-
-`pre-commit run --all-files` does not constitute a full repository secret scan;
-the gitleaks hook examines staged changes. Do not claim a full secret scan from
-that command alone.
+From the repository root, run
+`yamllint --strict -c .yamllint.yaml osac-installer/`; the shared config excludes
+Helm templates. Other commands here run from `osac-installer/`.
 
 Deployment and integration targets require explicit parameters, for example:
 

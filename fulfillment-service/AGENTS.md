@@ -3,6 +3,13 @@
 gRPC and REST APIs, persistence, authorization, resource lifecycle, and the
 `osac` CLI.
 
+## Code style
+
+- Write clear, idiomatic Go consistent with the project's architecture, conventions, and surrounding code.
+- Look for opportunities to reuse existing code and patterns rather than duplicating logic.
+- Keep related code together, favoring existing packages and files where they fit naturally.
+- Favor simplicity, readability, and maintainability over unnecessary abstractions.
+
 ## Required context
 
 Read the applicable references before changing behavior:

@@ -18,8 +18,8 @@ Read the applicable references before changing behavior:
 - Preserve the pool-to-instance ownership, finalizer, provisioning, and status lifecycle.
 - Keep inventory allocation and power-management abstractions separate.
 - Preserve tenant isolation metadata on tenant-scoped resources and avoid credentials in logs or samples.
-- BareMetalInstance host teardown waits for OSAC networking cleanup and leaves
-  ExternalIP and ExternalIPAttachment resources untouched.
+- BareMetalInstance host teardown waits while the OSAC networking cleanup
+  finalizer is present. Leave ExternalIP and ExternalIPAttachment untouched.
 
 ## Generated files
 

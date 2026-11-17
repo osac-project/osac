@@ -85,3 +85,28 @@ OSAC/operator/installer/AAP revisions and image digests; AAP must resolve the
 tested revision, not mutable `main`/`latest`. Guest LVMS disk prerequisites
 are an unresolved infrastructure follow-up (no revision, owner or Jira URL).
 Do not wipe/reuse the guest OS disk.
+
+## Fulfillment trust enablement
+
+Use the [release trust prerequisites](osac-installer.md#osac-5343-deployed-enablement-coverage)
+and enable `OSAC_FULFILLMENT_TRUST_E2E=true` only in that trust-enabled
+environment. Trust assertions extend CaaS, CSI storage, VMaaS and BMaaS journeys.
+CaaS/CSI checks pass the HostedControlPlane kubeconfig Secret to `kubectl` via
+stdin, never disk. It grants tenant-admin access to compare tenant ConfigMap
+and CSI Deployment hashes with the management bundle; per-ClusterOrder
+observer credentials are not required.
+
+- Run `tests/e2e/enablement/test_installer_trust.py` against a full OSAC Helm
+  release, not an isolated component.
+- From the repository root, run `osac-installer/scripts/test-ui-gateway.sh`
+  against deployed dev-full. Set `OSAC_UI_URL` for a non-default listener host/port.
+- Run `tests/e2e/enablement/test_ca_rotation_gate.py` with
+  `OSAC_TRUST_ROTATION_PHASE=overlap` and candidate
+  `OSAC_TRUST_ROTATION_EXPECTED_HASH` before switching the leaf certificate.
+  Run `OSAC_TRUST_ROTATION_PHASE=post-switch` before removing the retired root,
+  then `OSAC_TRUST_ROTATION_PHASE=final` after removal. Each run requires deployed
+  operator/metering metrics and separate old/new root PEM files for leaf checks.
+
+The rotation gate only reads resources and metrics; it never mutates CA or
+leaf certificates. An operator or administrator performs rotation between
+passing gates, following the linked release prerequisites.

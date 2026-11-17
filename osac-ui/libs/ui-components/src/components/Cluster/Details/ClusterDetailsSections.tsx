@@ -30,31 +30,27 @@ const ClusterDetailsSections = ({ cluster }: ClusterDetailsSectionsProps) => {
               <ClusterDetailsSummary cluster={cluster} />
               <ClusterLifecycleSection cluster={cluster} />
             </div>
-            <Stack hasGutter className="cluster-details__secondary-column">
-              <StackItem>
-                <ClusterConfigurationCard cluster={cluster} />
-              </StackItem>
-              <StackItem>
-                <ClusterNetworkingSection cluster={cluster} />
-              </StackItem>
-            </Stack>
+            <ClusterConfigurationCard cluster={cluster} />
           </div>
         </StackItem>
         <StackItem>
           <Divider />
         </StackItem>
         <StackItem>
-          <Stack hasGutter>
-            <StackItem>
-              <Title headingLevel="h2" size="lg" className="cluster-details__section-title">
-                <NetworkWiredIcon aria-hidden />
-                {t('Networking')}
-              </Title>
-            </StackItem>
-            <StackItem>
-              <ClusterNetworkingCard cluster={cluster} />
-            </StackItem>
-          </Stack>
+          <div className="cluster-details__networking-region">
+            <Stack hasGutter>
+              <StackItem>
+                <Title headingLevel="h2" size="lg" className="cluster-details__section-title">
+                  <NetworkWiredIcon aria-hidden />
+                  {t('Networking')}
+                </Title>
+              </StackItem>
+              <StackItem>
+                <ClusterNetworkingCard cluster={cluster} />
+              </StackItem>
+            </Stack>
+            <ClusterNetworkingSection cluster={cluster} />
+          </div>
         </StackItem>
         <StackItem>
           <Divider />

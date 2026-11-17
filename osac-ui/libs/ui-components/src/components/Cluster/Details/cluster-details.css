@@ -1,6 +1,8 @@
-.cluster-details__top-region {
+.cluster-details__top-region,
+.cluster-details__networking-region {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  align-items: start;
   gap: var(--pf-t--global--spacer--xl);
 }
 
@@ -12,8 +14,8 @@
 }
 
 .cluster-details__top-region > *,
-.cluster-details__overview-grid > *,
-.cluster-details__secondary-column > * {
+.cluster-details__networking-region > *,
+.cluster-details__overview-grid > * {
   min-width: 0;
 }
 
@@ -58,7 +60,8 @@
 }
 
 @media (max-width: 992px) {
-  .cluster-details__top-region {
+  .cluster-details__top-region,
+  .cluster-details__networking-region {
     grid-template-columns: minmax(0, 1fr);
   }
 }

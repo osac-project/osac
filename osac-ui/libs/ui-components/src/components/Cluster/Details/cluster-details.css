@@ -54,14 +54,24 @@
   padding-block-start: var(--pf-t--global--spacer--md);
 }
 
-.cluster-details .cluster-details__node-set-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  gap: var(--pf-t--global--spacer--md);
+.cluster-details__node-set-name,
+.cluster-details__node-set-summary {
+  display: block;
+  overflow-wrap: anywhere;
 }
 
-.cluster-details__node-set-row > * {
+.cluster-details__node-set-summary {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.cluster-details__card-header .pf-v6-c-card__header-main {
   min-width: 0;
+}
+
+.cluster-details .cluster-details__card-header .pf-v6-c-card__actions {
+  max-width: 100%;
+  margin-inline-start: auto;
 }
 
 .cluster-details .cluster-details__ssh-key {
@@ -92,9 +102,5 @@
 @media (max-width: 576px) {
   .cluster-details__overview-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .cluster-details .cluster-details__node-set-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

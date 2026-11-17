@@ -116,6 +116,10 @@ describe('ClusterDetailsPageContent', () => {
     expect(cards).toHaveLength(2);
     for (const card of cards) {
       expect(card).toHaveClass('cluster-details__secondary-card', 'pf-m-secondary');
+      const header = card.querySelector('.pf-v6-c-card__header');
+      expect(header).not.toBeNull();
+      expect(header?.nextElementSibling?.tagName).toBe('HR');
+      expect(header?.nextElementSibling?.nextElementSibling).toHaveClass('pf-v6-c-card__body');
     }
     expect(cards[0]).toContainElement(screen.getByRole('heading', { name: 'Cluster version' }));
     expect(cards[0]).toContainElement(screen.getByRole('heading', { name: 'Node sets' }));
@@ -174,15 +178,8 @@ describe('ClusterDetailsPageContent', () => {
     expect(
       within(nodeSets)
         .getAllByRole('listitem')
-        .map((row) =>
-          within(row)
-            .getAllByRole('definition')
-            .map((value) => value.textContent),
-        ),
-    ).toEqual([
-      ['compute', 'standard-host', '3'],
-      ['gpu', 'accelerated-host', '2'],
-    ]);
+        .map((row) => row.textContent),
+    ).toEqual(['computestandard-host-3 Nodes-—', 'gpuaccelerated-host-2 Nodes-—']);
     expect(nodeSets.closest('.pf-v6-l-grid__item')).toBeNull();
     expect(cards[0]).toContainElement(nodeSets);
     const conditions = screen.getByRole('grid', { name: 'Cluster conditions' });

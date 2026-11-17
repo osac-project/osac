@@ -1,13 +1,4 @@
-import {
-  Content,
-  DescriptionList,
-  DescriptionListDescription,
-  DescriptionListGroup,
-  DescriptionListTerm,
-  Stack,
-  StackItem,
-  Title,
-} from '@patternfly/react-core';
+import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
 
 import type { Cluster } from '@osac/types';
 
@@ -39,22 +30,16 @@ const ClusterNodeSetsSection = ({ cluster }: ClusterNodeSetsSectionProps) => {
           >
             {nodeSetEntries.map(([name, nodeSet]) => (
               <li key={name}>
-                <DescriptionList isCompact className="cluster-details__node-set-row">
-                  <DescriptionListGroup>
-                    <DescriptionListTerm>{t('Name')}</DescriptionListTerm>
-                    <DescriptionListDescription>{name}</DescriptionListDescription>
-                  </DescriptionListGroup>
-                  <DescriptionListGroup>
-                    <DescriptionListTerm>{t('Host type')}</DescriptionListTerm>
-                    <DescriptionListDescription>
-                      {displayValue(nodeSet.baremetalInstanceType?.name)}
-                    </DescriptionListDescription>
-                  </DescriptionListGroup>
-                  <DescriptionListGroup>
-                    <DescriptionListTerm>{t('Size')}</DescriptionListTerm>
-                    <DescriptionListDescription>{nodeSet.size}</DescriptionListDescription>
-                  </DescriptionListGroup>
-                </DescriptionList>
+                <strong className="cluster-details__node-set-name">{name}</strong>
+                <Content component="p" className="cluster-details__node-set-summary">
+                  {t('{{hostType}}-{{count}} Nodes-{{version}}', {
+                    replace: {
+                      hostType: displayValue(nodeSet.baremetalInstanceType?.name),
+                      count: nodeSet.size ?? '—',
+                      version: displayValue(cluster.status?.nodeSets[name]?.observedVersion),
+                    },
+                  })}
+                </Content>
               </li>
             ))}
           </ul>

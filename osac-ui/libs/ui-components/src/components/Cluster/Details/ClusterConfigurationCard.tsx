@@ -3,16 +3,15 @@ import {
   Button,
   Card,
   CardBody,
+  CardHeader,
+  CardTitle,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
   Divider,
-  Flex,
-  FlexItem,
   Stack,
   StackItem,
-  Title,
 } from '@patternfly/react-core';
 
 import type { Cluster } from '@osac/types';
@@ -39,28 +38,27 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
       className="cluster-details__secondary-card"
       aria-label={t('Cluster version')}
     >
+      <CardHeader
+        className="cluster-details__card-header"
+        hasWrap
+        actions={{
+          actions: (
+            <Button variant="link" isInline onClick={() => setClusterHistoryOpen(true)}>
+              {t('Upgrade history')}
+            </Button>
+          ),
+          hasNoOffset: true,
+        }}
+      >
+        <CardTitle component="h2">{t('Cluster version')}</CardTitle>
+      </CardHeader>
+      <Divider />
       <CardBody>
         <Stack hasGutter>
           <StackItem>
-            <Flex
-              alignItems={{ default: 'alignItemsCenter' }}
-              flexWrap={{ default: 'wrap' }}
-              spaceItems={{ default: 'spaceItemsSm' }}
-            >
-              <Title headingLevel="h2" size="lg">
-                {t('Cluster version')}
-              </Title>
-              <FlexItem>
-                <Button variant="link" isInline onClick={() => setClusterHistoryOpen(true)}>
-                  {t('Upgrade history')}
-                </Button>
-              </FlexItem>
-            </Flex>
-          </StackItem>
-          <StackItem>
             <DescriptionList isCompact aria-label={t('Cluster version')}>
               <DescriptionListGroup>
-                <DescriptionListTerm>{t('Current version')}</DescriptionListTerm>
+                <DescriptionListTerm>{t('Current')}</DescriptionListTerm>
                 <DescriptionListDescription>
                   <ClusterVersionControls cluster={cluster} />
                 </DescriptionListDescription>

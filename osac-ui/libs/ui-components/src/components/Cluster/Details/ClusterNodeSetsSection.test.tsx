@@ -8,7 +8,49 @@ import ClusterNodeSetsSection from './ClusterNodeSetsSection';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 describe('ClusterNodeSetsSection', () => {
-  it('preserves labeled host name fallbacks and zero sizes in accessible list rows', () => {
+  it('shows bold names and subtle summaries using only the matching observed node set version', () => {
+    renderWithProviders(
+      <ClusterNodeSetsSection
+        cluster={create(ClusterSchema, {
+          spec: {
+            nodeSets: {
+              workers: {
+                size: 3,
+                baremetalInstanceType: { name: 'standard-host' },
+                version: { name: 'desired-version', id: 'desired-id' },
+              },
+              gpu: { size: 2, baremetalInstanceType: { name: 'accelerated-host' } },
+            },
+          },
+          status: {
+            observedVersion: 'global-version',
+            nodeSets: {
+              gpu: { observedVersion: '4.18.1' },
+              workers: { observedVersion: '4.17.2' },
+            },
+          },
+        })}
+      />,
+    );
+
+    const rows = within(screen.getByRole('list', { name: 'Cluster node sets' })).getAllByRole(
+      'listitem',
+    );
+    expect(within(rows[0]).getByText('workers').tagName).toBe('STRONG');
+    expect(within(rows[1]).getByText('gpu').tagName).toBe('STRONG');
+    expect(within(rows[0]).getByText('standard-host-3 Nodes-4.17.2')).toHaveClass(
+      'cluster-details__node-set-summary',
+    );
+    expect(within(rows[1]).getByText('accelerated-host-2 Nodes-4.18.1')).toBeInTheDocument();
+    expect(screen.queryByText(/global-version|desired-version|desired-id/)).not.toBeInTheDocument();
+    for (const label of ['Name', 'Host type', 'Size']) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+    expect(screen.queryByRole('term')).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader')).not.toBeInTheDocument();
+  });
+
+  it('preserves host/count fallbacks and zero without borrowing a different node set version', () => {
     renderWithProviders(
       <ClusterNodeSetsSection
         cluster={create(ClusterSchema, {
@@ -16,24 +58,19 @@ describe('ClusterNodeSetsSection', () => {
           spec: {
             nodeSets: {
               workers: { size: 0, baremetalInstanceType: { id: 'host-id', name: ' ' } },
+              empty: {},
             },
           },
+          status: { nodeSets: { other: { observedVersion: '4.18.0' } } },
         })}
       />,
     );
 
     const list = screen.getByRole('list', { name: 'Cluster node sets' });
-    const row = within(list).getByRole('listitem');
-    expect(
-      within(row)
-        .getAllByRole('term')
-        .map((term) => term.textContent),
-    ).toEqual(['Name', 'Host type', 'Size']);
-    expect(
-      within(row)
-        .getAllByRole('definition')
-        .map((value) => value.textContent),
-    ).toEqual(['workers', '—', '0']);
+    const rows = within(list).getAllByRole('listitem');
+    expect(within(rows[0]).getByText('—-0 Nodes-—')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('—-— Nodes-—')).toBeInTheDocument();
+    expect(screen.queryByText(/4.18.0/)).not.toBeInTheDocument();
     expect(screen.queryByRole('grid')).not.toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
     expect(screen.queryByText('host-id')).not.toBeInTheDocument();

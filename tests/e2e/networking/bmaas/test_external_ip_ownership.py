@@ -16,6 +16,7 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_allocated,
     wait_for_external_ip_cr,
     wait_for_external_ip_deletion,
+    wait_for_external_ip_grpc_removal,
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import run
@@ -387,6 +388,8 @@ def _cleanup_owned_external_ip(
         except subprocess.CalledProcessError as exc:
             if not _is_not_found(exc):
                 raise
+
+    wait_for_external_ip_grpc_removal(private_grpc=private_grpc, external_ip_id=external_ip_id)
 
     if cr_exists and external_ip_cr_name:
         wait_for_external_ip_deletion(k8s=k8s, name=external_ip_cr_name)

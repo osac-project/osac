@@ -578,6 +578,33 @@ def wait_for_external_ip_deletion(*, k8s: K8sClient, name: str) -> None:
     )
 
 
+def wait_for_external_ip_grpc_removal(*, private_grpc: GRPCClient, external_ip_id: str) -> None:
+    """Wait until the saved ExternalIP ID returns the exact gRPC NotFound code."""
+
+    def _is_removed() -> bool:
+        try:
+            response = private_grpc.get_private_external_ip(external_ip_id=external_ip_id)
+        except subprocess.CalledProcessError as exc:
+            output = f"{exc.stdout or ''}\n{exc.stderr or ''}"
+            if re.search(r"(?m)^\s*Code:\s*NotFound\s*$", output):
+                return True
+            raise
+
+        actual_id = response.get("object", {}).get("id", "")
+        assert actual_id == external_ip_id, f"Private ExternalIP Get for {external_ip_id!r} returned ID {actual_id!r}"
+        return False
+
+    poll_until(
+        fn=_is_removed,
+        until=lambda v: v is True,
+        retries=120,
+        delay=5,
+        description=f"ExternalIP {external_ip_id} gRPC removal",
+        resource_kind=WaitResourceKind.EXTERNAL_IP,
+        resource_id=external_ip_id,
+    )
+
+
 def wait_for_external_ip_attachment_cr(*, k8s: K8sClient, uuid: str) -> str:
     return poll_until(
         fn=lambda: k8s.get_external_ip_attachment_name(uuid=uuid, checked=False),

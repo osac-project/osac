@@ -58,7 +58,9 @@ def suite_image_digest(socket_path: Path, *, container_id: str | None = None) ->
         name = data.get("ImageName")
         if isinstance(name, str) and "@" in name:
             return name.rsplit("@", 1)[1]
-        image = data.get("Image")
-        if isinstance(image, str) and image:
-            return image
+        # ``Image`` is the image ID, not a digest, so it is only a last resort.
+        for key in ("ImageDigest", "Image"):
+            value = data.get(key)
+            if isinstance(value, str) and value:
+                return value
     return env_digest

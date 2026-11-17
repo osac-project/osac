@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from tests.conformance import yamlio
 from tests.conformance.errors import ConfigError
@@ -60,6 +61,22 @@ def _path(value: object, name: str, checks: list[str]) -> Path | None:
     return Path(os.path.normpath(text))
 
 
+def _url(value: object, name: str, checks: list[str]) -> str | None:
+    text = _string(value, name, checks)
+    if text is None:
+        return None
+    try:
+        hostname = urlparse(text).hostname
+    except ValueError:
+        hostname = None
+    if not hostname:
+        # A malformed URL would otherwise escape as a ValueError from every
+        # later reader, including the redactor on the error path.
+        checks.append(f"{name} must be an absolute URL with a host")
+        return None
+    return text
+
+
 def _profiles(value: object, checks: list[str]) -> tuple[str, ...]:
     if value is None:
         return ("generic",)
@@ -104,7 +121,7 @@ def load_config(path: Path) -> Config:
             if parsed_namespace is not None:
                 namespace = parsed_namespace
         kubeconfig = _path(target.get("kubeconfig"), "target.kubeconfig", checks)
-        api_url = _string(target.get("apiURL"), "target.apiURL", checks)
+        api_url = _url(target.get("apiURL"), "target.apiURL", checks)
         token_file = _path(target.get("tokenFile"), "target.tokenFile", checks)
         ca_file = _path(target.get("caFile"), "target.caFile", checks)
         aap: AapConfig | None = None
@@ -114,7 +131,7 @@ def load_config(path: Path) -> Config:
                 for key in aap_doc:
                     if key not in _AAP_KEYS:
                         checks.append(f"target.aap.{key} is not defined by this release")
-                aap_url = _string(aap_doc.get("url"), "target.aap.url", checks)
+                aap_url = _url(aap_doc.get("url"), "target.aap.url", checks)
                 aap_token = _path(aap_doc.get("tokenFile"), "target.aap.tokenFile", checks)
                 if aap_url is not None and aap_token is not None:
                     aap = AapConfig(url=aap_url, token_file=aap_token)

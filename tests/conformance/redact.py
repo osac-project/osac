@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable
 
@@ -89,5 +90,24 @@ class Redactor:
         if isinstance(value, list):
             return [self._structure(item) for item in value]
         if isinstance(value, str):
-            return self.text(value)
+            return self._serialized(value)
         return value
+
+    def _serialized(self, value: str) -> str:
+        """Redact a value that may embed a serialized JSON document.
+
+        A ``kubectl.kubernetes.io/last-applied-configuration`` annotation holds
+        JSON in which a credential's name and value are separate fields, so the
+        text rules cannot pair them.
+        """
+        stripped = value.strip()
+        if stripped[:1] in {"{", "["}:
+            try:
+                parsed = json.loads(stripped)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                cleaned = self._structure(parsed)
+                if cleaned != parsed:
+                    return json.dumps(cleaned)
+        return self.text(value)

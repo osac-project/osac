@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tests.conformance.redact import Redactor
@@ -106,3 +108,25 @@ def test_registry_auth_config_entries_are_redacted(name: str) -> None:
     cleaned = redactor.obj({"env": [{"name": name, "value": payload}]})
 
     assert cleaned == {"env": [{"name": name, "value": "<redacted>"}]}
+
+
+def test_quoted_json_api_keys_are_redacted() -> None:
+    redactor = Redactor()
+
+    text = redactor.text(f'{{"api_key":"{_REDACTION_MARKER_C}"}}')
+
+    assert _REDACTION_MARKER_C not in text
+    assert text == '{"api_key":"<redacted>"}'
+
+
+def test_serialized_annotations_are_redacted_structurally() -> None:
+    redactor = Redactor()
+    annotation = f'{{"env":[{{"name":"PASSWORD","value":"{_REDACTION_MARKER_C}"}}]}}'
+
+    cleaned = redactor.obj(
+        {"metadata": {"annotations": {"kubectl.kubernetes.io/last-applied-configuration": annotation}}}
+    )
+
+    serialized = cleaned["metadata"]["annotations"]["kubectl.kubernetes.io/last-applied-configuration"]
+    assert _REDACTION_MARKER_C not in serialized
+    assert json.loads(serialized) == {"env": [{"name": "PASSWORD", "value": "<redacted>"}]}

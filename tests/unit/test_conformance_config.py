@@ -212,3 +212,24 @@ def test_unhashable_mapping_keys_are_a_config_error(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="unhashable key"):
         load_config(path)
+
+
+@pytest.mark.parametrize("url", ["https://[", "not-a-url"])
+def test_target_api_url_must_parse(tmp_path: Path, url: str) -> None:
+    data = _valid_data()
+    data["target"]["apiURL"] = url  # type: ignore[index]
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(_write(tmp_path / "conformance.yaml", data))
+
+    assert "target.apiURL must be an absolute URL with a host" in "\n".join(exc.value.checks)
+
+
+def test_aap_url_must_parse(tmp_path: Path) -> None:
+    data = _valid_data()
+    data["target"]["aap"] = {"url": "https://[", "tokenFile": "/config/aap-token"}  # type: ignore[index]
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(_write(tmp_path / "conformance.yaml", data))
+
+    assert "target.aap.url must be an absolute URL with a host" in "\n".join(exc.value.checks)

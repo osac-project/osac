@@ -259,6 +259,15 @@ jobs:
             if [[ "${get_output}" == *"NotFound"* ]]; then
               echo "::warning::${label} prod ReleasePlan '${name}' not found -- OSAC-1090 has not landed yet (or landed under a different name than expected). ${label} promotion will be skipped." >&2
               echo "false"
+            elif [[ "${get_output}" == *"is forbidden"* ]]; then
+              # This job's service account (konflux-bot-0, role
+              # konflux-releaser-bot-actions) may create and read Releases and
+              # Snapshots but not ReleasePlans, so the read is refused whether
+              # or not the plan exists, and every real run stopped here. The
+              # plans are live; the Release created later fails with a clear
+              # error if one is ever missing.
+              echo "::warning::${label} prod ReleasePlan '${name}' could not be checked: the service account may not read ReleasePlans. Continuing; creating the Release fails if the plan is missing." >&2
+              echo "true"
             else
               echo "${label} ReleasePlan lookup for '${name}' failed: ${get_output}" >&2
               echo "::error::${label} ReleasePlan lookup for '${name}' failed with an error other than NotFound (auth/network issue?) -- see the plain-text line just above in this step's raw log for details, deliberately not repeated in this annotation." >&2

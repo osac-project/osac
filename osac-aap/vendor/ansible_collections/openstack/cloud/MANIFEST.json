@@ -2,7 +2,7 @@
  "collection_info": {
   "namespace": "openstack",
   "name": "cloud",
-  "version": "2.4.1",
+  "version": "2.6.0",
   "authors": [
    "Openstack"
   ],
@@ -20,13 +20,13 @@
   "repository": "https://opendev.org/openstack/ansible-collections-openstack",
   "documentation": "https://docs.ansible.com/ansible/latest/collections/openstack/cloud/index.html",
   "homepage": "https://opendev.org/openstack/ansible-collections-openstack",
-  "issues": "https://storyboard.openstack.org/#!/project/openstack/ansible-collections-openstack"
+  "issues": "https://bugs.launchpad.net/ansible-collections-openstack"
  },
  "file_manifest_file": {
   "name": "FILES.json",
   "ftype": "file",
   "chksum_type": "sha256",
-  "chksum_sha256": "3a00ac63d6af4638a7aa2f32cb0bbd9ac3c5626a591911589bdb04e2a36dfef0",
+  "chksum_sha256": "eea1a53fd1a703b21eeb7825acd5c17e2e037a0e8abc72c910e9f085d575f460",
   "format": 1
  },
  "format": 1

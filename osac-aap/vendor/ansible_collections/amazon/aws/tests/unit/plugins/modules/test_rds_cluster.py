@@ -5,10 +5,15 @@
 
 import copy
 from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import pytest
 
+from ansible.module_utils.common.arg_spec import ArgumentSpecValidator
+
 from ansible_collections.amazon.aws.plugins.modules import rds_cluster
+
+mod_rds_cluster = "ansible_collections.amazon.aws.plugins.modules.rds_cluster"
 
 
 @pytest.fixture(name="ansible_module")
@@ -38,25 +43,26 @@ class TestChangingClusterOptions:
         }
 
         # 'present' or 'absent'
-        rds_cluster.module = ansible_module
         for state in ("present", "absent"):
-            rds_cluster.module.params.update({"state": state})
-            assert modify_params == rds_cluster.changing_cluster_options(copy.deepcopy(modify_params), current_cluster)
+            ansible_module.params.update({"state": state})
+            assert modify_params == rds_cluster.changing_cluster_options(
+                ansible_module, copy.deepcopy(modify_params), current_cluster
+            )
 
         # 'stopped'/'started'
         for state in ("started", "stopped"):
-            rds_cluster.module.params.update({"state": state})
+            ansible_module.params.update({"state": state})
             # 'mysql' or 'postgres' engine
             for engine in ("mysql", "postgres"):
                 current_cluster.update({"Engine": engine})
                 with pytest.raises(SystemExit):
-                    rds_cluster.changing_cluster_options(copy.deepcopy(modify_params), current_cluster)
-                rds_cluster.module.fail_json.assert_called_once_with(f"Only aurora clusters can use the state {state}")
-                rds_cluster.module.fail_json.reset_mock()
+                    rds_cluster.changing_cluster_options(ansible_module, copy.deepcopy(modify_params), current_cluster)
+                ansible_module.fail_json.assert_called_once_with(f"Only aurora clusters can use the state {state}")
+                ansible_module.fail_json.reset_mock()
             # 'aurora' engine
             current_cluster.update({"Engine": "aurora"})
             assert {"DBClusterIdentifier": db_cluster_id} == rds_cluster.changing_cluster_options(
-                copy.deepcopy(modify_params), current_cluster
+                ansible_module, copy.deepcopy(modify_params), current_cluster
             )
 
     @pytest.mark.parametrize(
@@ -105,8 +111,7 @@ class TestChangingClusterOptions:
 
         # state is set to 'present'
         ansible_module.params.update({"state": "present"})
-        rds_cluster.module = ansible_module
-        assert expected == rds_cluster.changing_cluster_options(modify_params, current_cluster)
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
 
     @pytest.mark.parametrize(
         "modify_vpc_security_group_ids, current_vpc_security_group_ids, expected_vpc_security_group_ids",
@@ -138,8 +143,7 @@ class TestChangingClusterOptions:
 
         # state is set to 'present'
         ansible_module.params.update({"state": "present", "purge_security_groups": True})
-        rds_cluster.module = ansible_module
-        assert expected == rds_cluster.changing_cluster_options(modify_params, current_cluster)
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
 
     @pytest.mark.parametrize(
         "modify_vpc_security_group_ids, current_vpc_security_group_ids, expected_vpc_security_group_ids",
@@ -173,8 +177,7 @@ class TestChangingClusterOptions:
 
         # state is set to 'present'
         ansible_module.params.update({"state": "present", "purge_security_groups": False})
-        rds_cluster.module = ansible_module
-        assert expected == rds_cluster.changing_cluster_options(modify_params, current_cluster)
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
 
     @pytest.mark.parametrize(
         "purge_cloudwatch_logs_exports, modify_enable_cloudwatch_logs_exports, current_enabled_cloudwatch_logs_exports, enable_log_types, disable_log_types",
@@ -211,8 +214,7 @@ class TestChangingClusterOptions:
         ansible_module.params.update(
             {"state": "present", "purge_cloudwatch_logs_exports": purge_cloudwatch_logs_exports}
         )
-        rds_cluster.module = ansible_module
-        assert expected == rds_cluster.changing_cluster_options(modify_params, current_cluster).get(
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster).get(
             "CloudwatchLogsExportConfiguration"
         )
 
@@ -241,8 +243,7 @@ class TestChangingClusterOptions:
 
         # state is set to 'present'
         ansible_module.params.update({"state": "present"})
-        rds_cluster.module = ansible_module
-        assert expected == rds_cluster.changing_cluster_options(modify_params, current_cluster)
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
 
     @pytest.mark.parametrize(
         "new_option_group_name, cluster_option_group_memberships, expected_change",
@@ -275,8 +276,7 @@ class TestChangingClusterOptions:
 
         # state is set to 'present'
         ansible_module.params.update({"state": "present"})
-        rds_cluster.module = ansible_module
-        assert expected == rds_cluster.changing_cluster_options(modify_params, current_cluster)
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
 
     @pytest.mark.parametrize(
         "new_db_cluster_parameter_group_name, current_db_cluster_parameter_group_name, expected_change",
@@ -309,5 +309,42 @@ class TestChangingClusterOptions:
 
         # state is set to 'present'
         ansible_module.params.update({"state": "present"})
-        rds_cluster.module = ansible_module
-        assert expected == rds_cluster.changing_cluster_options(modify_params, current_cluster)
+        assert expected == rds_cluster.changing_cluster_options(ansible_module, modify_params, current_cluster)
+
+
+@pytest.mark.parametrize("option_name", ["final_db_snapshot_identifier", "final_snapshot_identifier"])
+@patch(mod_rds_cluster + ".get_tags", return_value={})
+@patch(mod_rds_cluster + ".call_method")
+@patch(mod_rds_cluster + ".get_cluster")
+@patch(mod_rds_cluster + ".AnsibleAWSModule")
+def test_main_delete_cluster_with_final_snapshot(
+    m_AnsibleAWSModule, m_get_cluster, m_call_method, m_get_tags, ansible_module, option_name
+):
+    boto3 = pytest.importorskip("boto3")
+    module_args = {"db_cluster_identifier": "my-cluster", "state": "absent", option_name: "my-cluster-final"}
+
+    def build_module(**kwargs):
+        # Validate the module arguments against the real argument spec, as AnsibleModule would
+        result = ArgumentSpecValidator(kwargs["argument_spec"]).validate(module_args)
+        assert not result.error_messages
+        ansible_module.params = result.validated_parameters
+        return ansible_module
+
+    m_AnsibleAWSModule.side_effect = build_module
+    ansible_module.client.return_value = boto3.client(
+        "rds", region_name="us-east-1", aws_access_key_id="fake", aws_secret_access_key="fake"
+    )
+    m_get_cluster.return_value = {
+        "DBClusterIdentifier": "my-cluster",
+        "DBClusterArn": "arn:aws:rds:us-east-1:123456789012:cluster:my-cluster",
+        "Status": "available",
+        "Engine": "aurora-postgresql",
+    }
+
+    rds_cluster.main()
+
+    m_call_method.assert_called_once()
+    _client, _module, method_name, delete_params = m_call_method.call_args[0]
+    assert method_name == "delete_db_cluster"
+    assert delete_params["SkipFinalSnapshot"] is False
+    assert delete_params["FinalDBSnapshotIdentifier"] == "my-cluster-final"

@@ -69,6 +69,11 @@ options:
     description:
       - Snapshot ID on which to base the volume.
     type: str
+  volume_initialization_rate:
+    description:
+      - Rate at which to initiliaze the volume from a snapshot.
+    type: int
+    version_added: 11.2.0
   state:
     description:
       - Whether to ensure the volume is present or absent.
@@ -88,7 +93,7 @@ options:
     description:
       - Volume throughput in MB/s.
       - This parameter is only valid for gp3 volumes.
-      - Valid range is from 125 to 1000.
+      - Valid range is from 125 to 2000.
     type: int
     version_added: 1.4.0
   multi_attach:
@@ -423,7 +428,7 @@ def update_volume(module: AnsibleAWSModule, ec2_conn, volume: Dict[str, Any]) ->
             # the existing value is retained, unless a volume type is modified that supports different values,
             # otherwise, the default iops value is applied.
             if type_changed and target_type == "gp3":
-                if (original_iops and (int(original_iops) < 3000 or int(original_iops) > 16000)) or not original_iops:
+                if (original_iops and (int(original_iops) < 3000 or int(original_iops) > 80000)) or not original_iops:
                     req_obj["Iops"] = 3000
                     iops_changed = True
 
@@ -492,6 +497,7 @@ def create_volume(module: AnsibleAWSModule, ec2_conn, zone: str) -> Tuple[Dict[s
     outpost_arn = module.params.get("outpost_arn")
     tags = module.params.get("tags") or {}
     name = module.params.get("name")
+    volume_initialization_rate = module.params.get("volume_initialization_rate")
 
     volume = get_volume(module, ec2_conn)
 
@@ -510,6 +516,9 @@ def create_volume(module: AnsibleAWSModule, ec2_conn, zone: str) -> Tuple[Dict[s
 
         if snapshot:
             additional_params["SnapshotId"] = snapshot
+
+        if volume_initialization_rate:
+            additional_params["VolumeInitializationRate"] = int(volume_initialization_rate)
 
         if iops:
             additional_params["Iops"] = int(iops)
@@ -857,6 +866,7 @@ def main():
         outpost_arn=dict(type="str"),
         purge_tags=dict(type="bool", default=True),
         multi_attach=dict(type="bool"),
+        volume_initialization_rate=dict(type="int"),
     )
 
     module = AnsibleAWSModule(
@@ -877,13 +887,14 @@ def main():
     volume_type = module.params.get("volume_type")
     throughput = module.params.get("throughput")
     multi_attach = module.params.get("multi_attach")
+    volume_initialization_rate = module.params.get("volume_initialization_rate")
 
     if iops:
         if volume_type in ("gp2", "st1", "sc1", "standard"):
             module.fail_json(msg="IOPS is not supported for gp2, st1, sc1, or standard volumes.")
 
-        if volume_type == "gp3" and (int(iops) < 3000 or int(iops) > 16000):
-            module.fail_json(msg="For a gp3 volume type, IOPS values must be between 3000 and 16000.")
+        if volume_type == "gp3" and (int(iops) < 3000 or int(iops) > 80000):
+            module.fail_json(msg="For a gp3 volume type, IOPS values must be between 3000 and 80000.")
 
         if volume_type in ("io1", "io2") and (int(iops) < 100 or int(iops) > 64000):
             module.fail_json(msg="For io1 and io2 volume types, IOPS values must be between 100 and 64000.")
@@ -891,11 +902,17 @@ def main():
     if throughput:
         if volume_type != "gp3":
             module.fail_json(msg="Throughput is only supported for gp3 volume.")
-        if throughput < 125 or throughput > 1000:
-            module.fail_json(msg="Throughput values must be between 125 and 1000.")
+        if throughput < 125 or throughput > 2000:
+            module.fail_json(msg="Throughput values must be between 125 and 2000.")
 
     if multi_attach is True and volume_type not in ("io1", "io2"):
         module.fail_json(msg="multi_attach is only supported for io1 and io2 volumes.")
+
+    if volume_initialization_rate:
+        if not snapshot:
+            module.fail_json(msg="Volume initialization rate is only supported when creating a volume from snapshot.")
+        if int(volume_initialization_rate) < 100 or int(volume_initialization_rate) > 300:
+            module.fail_json(msg="Volume initialization rate must be between 100 and 300 MiB/s.")
 
     ec2_conn = module.client("ec2")
 

@@ -21,6 +21,10 @@ author:
 description:
   - Render chart templates to an output directory or as text of concatenated yaml documents.
 
+requirements:
+  - "helm >= 3.0.0 (https://github.com/helm/helm/releases)"
+  - "yaml (https://pypi.org/project/PyYAML/)"
+
 options:
   binary_path:
     description:
@@ -147,6 +151,13 @@ options:
           - json
           - file
     version_added: 2.4.0
+  plain_http:
+    description:
+      - Use HTTP instead of HTTPS when working with OCI registries
+      - Requires Helm >= 3.13.0
+    type: bool
+    default: False
+    version_added: 6.1.0
 """
 
 EXAMPLES = r"""
@@ -217,6 +228,10 @@ except ImportError:
 from ansible.module_utils.basic import missing_required_lib
 from ansible_collections.kubernetes.core.plugins.module_utils.helm import (
     AnsibleHelmModule,
+    strip_registry_progress,
+)
+from ansible_collections.kubernetes.core.plugins.module_utils.version import (
+    LooseVersion,
 )
 
 
@@ -236,6 +251,7 @@ def template(
     values_files=None,
     include_crds=False,
     set_values=None,
+    plain_http=False,
 ):
     cmd += " template "
 
@@ -261,6 +277,9 @@ def template(
 
     if insecure_registry:
         cmd += " --insecure-skip-tls-verify"
+
+    if plain_http:
+        cmd += " --plain-http"
 
     if show_only:
         for template in show_only:
@@ -307,6 +326,7 @@ def main():
             values_files=dict(type="list", default=[], elements="str"),
             update_repo_cache=dict(type="bool", default=False),
             set_values=dict(type="list", elements="dict"),
+            plain_http=dict(type="bool", default=False),
         ),
         supports_check_mode=True,
     )
@@ -327,14 +347,24 @@ def main():
     values_files = module.params.get("values_files")
     update_repo_cache = module.params.get("update_repo_cache")
     set_values = module.params.get("set_values")
+    plain_http = module.params.get("plain_http")
 
     if not IMP_YAML:
         module.fail_json(msg=missing_required_lib("yaml"), exception=IMP_YAML_ERR)
 
-    # Validate Helm version >=3.0.0,<4.0.0
+    # Validate Helm version >=3.0.0
     module.validate_helm_version()
 
     helm_cmd = module.get_helm_binary()
+
+    if plain_http:
+        helm_version = module.get_helm_version()
+        if LooseVersion(helm_version) < LooseVersion("3.13.0"):
+            module.fail_json(
+                msg="plain_http requires helm >= 3.13.0, current version is {0}".format(
+                    helm_version
+                )
+            )
 
     if update_repo_cache:
         update_cmd = helm_cmd + " repo update"
@@ -360,10 +390,14 @@ def main():
         values_files=values_files,
         include_crds=include_crds,
         set_values=set_values_args,
+        plain_http=plain_http,
     )
 
     if not check_mode:
         rc, out, err = module.run_helm_command(tmpl_cmd)
+        # 'stdout' is documented to hold the rendered templates, so keep helm's
+        # OCI registry progress messages out of it.
+        out = strip_registry_progress(out)
     else:
         out = err = ""
         rc = 0

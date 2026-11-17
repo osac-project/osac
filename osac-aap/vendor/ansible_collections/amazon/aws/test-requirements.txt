@@ -1,10 +1,10 @@
 botocore
 boto3
 
-coverage==4.5.4
 placebo
 mock
 pytest
+pytest-cov
 pytest-forked
 pytest-mock
 pytest-xdist
@@ -16,3 +16,6 @@ netaddr
 awscli
 # Used for comparing SSH Public keys to the Amazon fingerprints
 cryptography
+# For testing event source plugins
+asyncmock
+pytest-asyncio

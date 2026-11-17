@@ -1,2 +1,0 @@
-minor_changes:
- - purefb_info - Added snapshot creation date-time and time_remaining, if snapshot is not deleted, to the ``snapshots`` response.

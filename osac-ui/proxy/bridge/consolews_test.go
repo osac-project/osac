@@ -14,6 +14,15 @@ func TestNewConsoleWebSocketProxy_rewritesToConsoleConnectPath(t *testing.T) {
 		if r.URL.Path != consoleConnectPath {
 			t.Fatalf("expected path %q, got %q", consoleConnectPath, r.URL.Path)
 		}
+		if r.Header.Get("X-Forwarded-For") != "198.51.100.7, 192.0.2.1" {
+			t.Fatalf("expected forwarded client chain, got %q", r.Header.Get("X-Forwarded-For"))
+		}
+		if r.Header.Get("X-Forwarded-Host") != "example.com" {
+			t.Fatalf("expected forwarded host, got %q", r.Header.Get("X-Forwarded-Host"))
+		}
+		if r.Header.Get("X-Forwarded-Proto") != "http" {
+			t.Fatalf("expected forwarded protocol, got %q", r.Header.Get("X-Forwarded-Proto"))
+		}
 		if r.Header.Get("Cookie") != "console-ticket=ticket-value" {
 			t.Fatalf("expected console-ticket cookie to be forwarded, got %q", r.Header.Get("Cookie"))
 		}
@@ -28,6 +37,7 @@ func TestNewConsoleWebSocketProxy_rewritesToConsoleConnectPath(t *testing.T) {
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/fulfillment/v1/console_sessions/connect", nil)
 	req.AddCookie(&http.Cookie{Name: "console-ticket", Value: "ticket-value"})
+	req.Header.Set("X-Forwarded-For", "198.51.100.7")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

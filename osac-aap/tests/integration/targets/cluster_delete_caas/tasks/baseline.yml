@@ -59,10 +59,10 @@
           - delete_step_cluster_infra_default is not defined
           - delete_step_cluster_network_default is not defined
           - delete_step_external_access_default is defined
-          - delete_step_external_access_default.name == "osac.service.external_access"
-          - delete_step_external_access_default.tasks_from == "caas_delete.yaml"
+          - delete_step_external_access_default.name == "ci.steps.external_access"
+          - delete_step_external_access_default.tasks_from == "delete.yaml"
           - delete_step_pre_delete_hook_default.tasks_from == "noop.yaml"
         fail_msg: >-
           ocp_ci_small must leave Agent deletion to the operator and use
-          service-owned CaaS external access tasks, without the old
+          CI-owned external access orchestration, without the old
           delete_step_cluster_network_default (OSAC-5697).

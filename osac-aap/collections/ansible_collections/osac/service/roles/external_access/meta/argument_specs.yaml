@@ -11,7 +11,8 @@ argument_specs:
       external_access_name:
         type: str
         required: true
-      external_access_agent_namespace:
+      external_access_metallb_ingress_ip:
+        description: Reserved IPv4 address supplied by the caller for guest ingress.
         type: str
         required: false
       external_access_resource_wait_retries:

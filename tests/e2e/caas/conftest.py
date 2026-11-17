@@ -7,9 +7,21 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e.core import failure_snapshot
 from tests.e2e.core.helpers import registered_ssh_key_secret
+from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
+
+
+@pytest.fixture(scope="module", autouse=True)
+def caas_failure_snapshot_sources(k8s_hub_client: K8sClient, namespace: str) -> Iterator[None]:
+    """Keep CaaS management and guest reads scoped to CaaS runs."""
+    failure_snapshot.SOURCES.register("caas", failure_snapshot.caas_source(k8s_hub_client, namespace))
+    failure_snapshot.SOURCES.register("caas-guest", failure_snapshot.caas_guest_source(k8s_hub_client, namespace))
+    yield
+    failure_snapshot.SOURCES.unregister("caas")
+    failure_snapshot.SOURCES.unregister("caas-guest")
 
 
 # Default to the tenant-admin JWT so Clusters and their workers are tenant-owned.

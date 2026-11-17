@@ -133,6 +133,23 @@ type mockProvisioningProvider struct {
 	nameFunc                 func() string
 }
 
+type oneShotGetErrorReader struct {
+	client.Reader
+	key           client.ObjectKey
+	err           error
+	returnedError bool
+}
+
+func (r *oneShotGetErrorReader) Get(
+	ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption,
+) error {
+	if !r.returnedError && key == r.key {
+		r.returnedError = true
+		return r.err
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
 func (m *mockProvisioningProvider) TriggerProvision(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
 	if m.triggerProvisionFunc != nil {
 		return m.triggerProvisionFunc(ctx, resource)
@@ -2248,6 +2265,74 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 				},
 			},
 		}
+	})
+
+	It("recovers network handoff and DHCP discovery after a transient attachment read error", func() {
+		const bmiID = "stale-failed-phase-recovery"
+		bareMetalInstance.Name = "stale-failed-phase-recovery-bmi"
+		bareMetalInstance.Labels = map[string]string{bareMetalInstanceIDLabel: bmiID}
+		bareMetalInstance.Spec.TemplateID = "noop"
+		bareMetalInstance.Spec.NetworkAttachments[0].SubnetRef = "subnet-1"
+		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceManagementFinalizer)
+		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)
+		reconciler.NetworkingEnabled = true
+		reconciler.InventoryClient = &mockInventoryClient{}
+
+		attachmentKey := client.ObjectKey{
+			Namespace: bareMetalInstance.Namespace,
+			Name:      opv1alpha1.NetworkAttachmentName(opv1alpha1.NetworkAttachmentTargetBareMetalInstance, bmiID, "eth0"),
+		}
+		attachment := newTestNetworkAttachment(bareMetalInstance.Namespace, bmiID, "eth0")
+		Expect(k8sClient.Create(ctx, attachment)).To(Succeed())
+		DeferCleanup(func() {
+			Expect(k8sClient.Delete(ctx, attachment)).To(Succeed())
+		})
+		attachment.Status.DHCPLease = &opv1alpha1.NetworkAttachmentDHCPLease{
+			IPAddress:  "192.0.2.42",
+			MACAddress: "aa:bb:cc:dd:ee:ff",
+		}
+		setTestNetworkAttachmentReady(ctx, attachment)
+
+		transientErr := errors.New("temporary API read failure")
+		reconciler.APIReader = &oneShotGetErrorReader{
+			Reader: k8sClient,
+			key:    attachmentKey,
+			err:    transientErr,
+		}
+		result, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance)
+		Expect(errors.Is(err, transientErr)).To(BeTrue())
+		Expect(result).To(Equal(ctrl.Result{}))
+		Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing),
+			"a retryable NetworkAttachment read error must remain in progress")
+
+		// Reproduce a Failed phase already persisted by the prior behavior.
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		powerState := management.PowerOff
+		mockMgmtClient.setPowerStateFunc = func(_ context.Context, _ string, target management.PowerState) error {
+			powerState = target
+			return nil
+		}
+		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
+			return &management.PowerStatus{State: powerState}, nil
+		}
+
+		for step := 0; step < 3; step++ {
+			result, err = reconciler.reconcileManagement(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			if step < 2 {
+				Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+			}
+		}
+
+		Expect(result).To(Equal(ctrl.Result{}))
+		Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
+		Expect(bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionNetworkHandoffComplete)).To(BeTrue())
+		Expect(bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionIPDiscoveryComplete)).To(BeTrue())
+		Expect(bareMetalInstance.Status.NetworkAttachmentStatuses).To(HaveLen(1))
+		Expect(bareMetalInstance.Status.NetworkAttachmentStatuses[0].SubnetRef).To(Equal("subnet-1"))
+		Expect(bareMetalInstance.Status.NetworkAttachmentStatuses[0].MACAddress).To(Equal("aa:bb:cc:dd:ee:ff"))
+		Expect(bareMetalInstance.Status.NetworkAttachmentStatuses[0].IPAddress).To(Equal("192.0.2.42"))
 	})
 
 	Describe("reconcileNetworkHandoffPowerCycle", func() {

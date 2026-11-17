@@ -303,14 +303,9 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		kubeClient := tool.KubeClient()
 		bmiList := &bmfov1alpha1.BareMetalInstanceList{}
 		var kubeObject *bmfov1alpha1.BareMetalInstance
-		Eventually(func(g Gomega) {
-			g.Expect(kubeClient.List(ctx, bmiList, crclient.InNamespace(hubNamespace),
-				crclient.MatchingLabels{labels.BareMetalInstanceUuid: bmiID})).To(Succeed())
-			g.Expect(bmiList.Items).To(HaveLen(1))
-			kubeObject = &bmiList.Items[0]
-		}, time.Minute, time.Second).Should(Succeed())
-
 		deletionRequested := false
+		// Register cleanup before waiting for the hub CR so a failed wait still
+		// deletes the API instance.
 		DeferCleanup(func(cleanupCtx context.Context) {
 			if !deletionRequested {
 				_, deleteErr := privateBareMetalInstancesClient.Delete(cleanupCtx,
@@ -320,12 +315,14 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				}
 			}
 
-			fresh := &bmfov1alpha1.BareMetalInstance{}
-			if getErr := kubeClient.Get(cleanupCtx, crclient.ObjectKeyFromObject(kubeObject), fresh); getErr == nil {
-				fresh.Finalizers = removeString(fresh.Finalizers, bmiNetworkStatusTestFinalizer)
-				Expect(kubeClient.Update(cleanupCtx, fresh)).To(Succeed())
-			} else {
-				Expect(apierrors.IsNotFound(getErr)).To(BeTrue())
+			if kubeObject != nil {
+				fresh := &bmfov1alpha1.BareMetalInstance{}
+				if getErr := kubeClient.Get(cleanupCtx, crclient.ObjectKeyFromObject(kubeObject), fresh); getErr == nil {
+					fresh.Finalizers = removeString(fresh.Finalizers, bmiNetworkStatusTestFinalizer)
+					Expect(kubeClient.Update(cleanupCtx, fresh)).To(Succeed())
+				} else {
+					Expect(apierrors.IsNotFound(getErr)).To(BeTrue())
+				}
 			}
 			_, signalErr := privateBareMetalInstancesClient.Signal(cleanupCtx,
 				privatev1.BareMetalInstancesSignalRequest_builder{Id: bmiID}.Build())
@@ -338,6 +335,13 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
 			}, 2*time.Minute, time.Second).Should(Succeed())
 		})
+
+		Eventually(func(g Gomega) {
+			g.Expect(kubeClient.List(ctx, bmiList, crclient.InNamespace(hubNamespace),
+				crclient.MatchingLabels{labels.BareMetalInstanceUuid: bmiID})).To(Succeed())
+			g.Expect(bmiList.Items).To(HaveLen(1))
+			kubeObject = &bmiList.Items[0]
+		}, time.Minute, time.Second).Should(Succeed())
 
 		By("projecting fixed tenant-safe network failure status")
 		diagnostic := "fabric-manager detail; AAP job id 7391; secret sentinel"

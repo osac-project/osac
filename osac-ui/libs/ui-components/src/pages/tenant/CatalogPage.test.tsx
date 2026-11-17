@@ -359,11 +359,11 @@ const renderCatalogPageWithDetailRoutes = (
   renderWithProviders(
     <Routes>
       <Route path="/catalog" element={<CatalogPage />} />
-      <Route path="/catalog/vm/:id" element={<VMCatalogItemDetailPage />} />
-      <Route path="/catalog/cluster/:id" element={<ClusterCatalogItemDetailPage />} />
-      <Route path="/catalog/bm/:id" element={<BareMetalInstanceCatalogItemDetailPage />} />
-      <Route path="/clusters/create/:catalogItemId" element={<div>Create cluster page</div>} />
-      <Route path="/vms/create/:catalogItemId" element={<div>Create virtual machine page</div>} />
+      <Route path="/catalog/vms/:id" element={<VMCatalogItemDetailPage />} />
+      <Route path="/catalog/clusters/:id" element={<ClusterCatalogItemDetailPage />} />
+      <Route path="/catalog/bare-metal/:id" element={<BareMetalInstanceCatalogItemDetailPage />} />
+      <Route path="/catalog/clusters/:id/launch" element={<div>Create cluster page</div>} />
+      <Route path="/catalog/vms/:id/launch" element={<div>Create virtual machine page</div>} />
     </Routes>,
     {
       transport,
@@ -382,6 +382,9 @@ const renderCatalogPageWithCreateRoute = (
   renderWithProviders(
     <Routes>
       <Route path="/catalog" element={<CatalogPage />} />
+      <Route path="/catalog/vms" element={<CatalogPage routeKind="vm" />} />
+      <Route path="/catalog/clusters" element={<CatalogPage routeKind="cluster" />} />
+      <Route path="/catalog/bare-metal" element={<CatalogPage routeKind="bm" />} />
       <Route path="/catalog/:kind/create" element={<div>Create catalog item page</div>} />
     </Routes>,
     { transport, routerEntries, apiFixtures: { enabledServices }, session: { role } },
@@ -1011,14 +1014,14 @@ describe('CatalogPage', () => {
 
     expect(
       screen.getByRole('link', { name: vmCatalogItemWithReferences.metadata?.name }),
-    ).toHaveAttribute('href', `/catalog/vm/${vmCatalogItemWithReferences.id}`);
+    ).toHaveAttribute('href', `/catalog/vms/${vmCatalogItemWithReferences.id}`);
 
     await user.click(screen.getByRole('button', { name: /Clusters/ }));
 
     await waitFor(() => {
       expect(screen.getByRole('link', { name: clusterCatalogItem.metadata?.name })).toHaveAttribute(
         'href',
-        `/catalog/cluster/${clusterCatalogItem.id}`,
+        `/catalog/clusters/${clusterCatalogItem.id}`,
       );
     });
   });

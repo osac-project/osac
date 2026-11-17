@@ -3,9 +3,11 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Page, SkipToContent } from '@patternfly/react-core';
 
 import { ServiceTier } from '@osac/types';
+import BareMetalCatalogLaunchPage from '@osac/ui-components/components/BareMetalInstance/CreateWizard/BareMetalCatalogLaunchPage';
 import BareMetalInstanceCatalogItemDetailPage from '@osac/ui-components/components/BareMetalInstanceCatalogItem/Details/BareMetalInstanceCatalogItemDetailPage';
 import { CatalogItemCreatePage } from '@osac/ui-components/components/CatalogItem/CatalogItemCreatePage';
 import CatalogItemEditPage from '@osac/ui-components/components/CatalogItem/CatalogItemEditPage';
+import ClusterCatalogLaunchPage from '@osac/ui-components/components/Cluster/CreateWizard/ClusterCatalogLaunchPage';
 import ClusterCatalogItemDetailPage from '@osac/ui-components/components/ClusterCatalogItem/Details/ClusterCatalogItemDetailPage';
 import ErrorBoundary from '@osac/ui-components/components/ErrorBoundary/ErrorBoundary';
 import ExternalIpRoutes from '@osac/ui-components/components/ExternalIp/ExternalIpRoutes';
@@ -15,6 +17,7 @@ import ProjectRoutes from '@osac/ui-components/components/Project/ProjectRoutes'
 import ProjectMembershipRoutes from '@osac/ui-components/components/ProjectMembership/ProjectMembershipRoutes';
 import RoleBindingRoutes from '@osac/ui-components/components/RoleBinding/RoleBindingRoutes';
 import SecretRoutes from '@osac/ui-components/components/Secret/SecretRoutes';
+import VmCatalogLaunchPage from '@osac/ui-components/components/vm/CreateWizard/VmCatalogLaunchPage';
 import VMCatalogItemDetailPage from '@osac/ui-components/components/VMCatalogItem/Details/VMCatalogItemDetailPage';
 import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
@@ -72,6 +75,54 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
             </ShellRoute>
           }
         />
+        <Route
+          path="/catalog/vms"
+          element={
+            <ShellRoute>
+              <CatalogPage routeKind="vm" />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/catalog/clusters"
+          element={
+            <ShellRoute>
+              <CatalogPage routeKind="cluster" />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/catalog/bare-metal"
+          element={
+            <ShellRoute>
+              <CatalogPage routeKind="bm" />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/catalog/vm"
+          element={
+            <ShellRoute>
+              <CatalogPage routeKind="vm" />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/catalog/cluster"
+          element={
+            <ShellRoute>
+              <CatalogPage routeKind="cluster" />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/catalog/bm"
+          element={
+            <ShellRoute>
+              <CatalogPage routeKind="bm" />
+            </ShellRoute>
+          }
+        />
         {(role === 'admin' || role === 'tenant-admin') && (
           <>
             <Route
@@ -92,6 +143,58 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
             />
           </>
         )}
+        {(role === 'tenant-admin' || role === 'tenant-user') && (
+          <>
+            <Route
+              path="/catalog/vms/:id/launch"
+              element={
+                <ShellRoute>
+                  <VmCatalogLaunchPage />
+                </ShellRoute>
+              }
+            />
+            <Route
+              path="/catalog/clusters/:id/launch"
+              element={
+                <ShellRoute>
+                  <ClusterCatalogLaunchPage />
+                </ShellRoute>
+              }
+            />
+            <Route
+              path="/catalog/bare-metal/:id/launch"
+              element={
+                <ShellRoute>
+                  <BareMetalCatalogLaunchPage />
+                </ShellRoute>
+              }
+            />
+          </>
+        )}
+        <Route
+          path="/catalog/vms/:id"
+          element={
+            <ShellRoute>
+              <VMCatalogItemDetailPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/catalog/clusters/:id"
+          element={
+            <ShellRoute>
+              <ClusterCatalogItemDetailPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/catalog/bare-metal/:id"
+          element={
+            <ShellRoute>
+              <BareMetalInstanceCatalogItemDetailPage />
+            </ShellRoute>
+          }
+        />
         <Route
           path="/catalog/vm/:id"
           element={

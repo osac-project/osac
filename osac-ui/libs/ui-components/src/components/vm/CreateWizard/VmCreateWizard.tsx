@@ -40,18 +40,15 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
     { id: initialCatalogItemId ?? '' },
     { enabled: Boolean(initialCatalogItemId) },
   );
-  const [activeStep, setActiveStep] = useState<VmWizardStepId>('catalog');
+  const includeCatalogStep = !initialCatalogItemId;
+  const [activeStep, setActiveStep] = useState<VmWizardStepId>(
+    includeCatalogStep ? 'catalog' : 'general',
+  );
   const [validationAlert, setValidationAlert] = useState(false);
   const [selectedCatalogItem, setSelectedCatalogItem] = useState<ComputeInstanceCatalogItem>();
-  const steps = [
-    'catalog',
-    'general',
-    'configuration',
-    'storage',
-    'networking',
-    'access',
-    'review',
-  ] as const;
+  const steps: VmWizardStepId[] = includeCatalogStep
+    ? ['catalog', 'general', 'configuration', 'storage', 'networking', 'access', 'review']
+    : ['general', 'configuration', 'storage', 'networking', 'access', 'review'];
   const stepLabels: Record<VmWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),
@@ -122,10 +119,9 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
           >
             {steps.map((step) => (
               <WizardStep key={step} id={step} name={stepLabels[step]}>
-                {step === 'catalog' && (
+                {includeCatalogStep && step === 'catalog' && (
                   <CatalogStep<ComputeInstanceCatalogItem, ComputeInstanceWizardValues>
                     catalogService={ComputeInstanceCatalogItems}
-                    isInitializing={Boolean(initialCatalogItemId) && catalogItemQuery.isPending}
                     getInitialFormValues={getComputeInstanceInitialValues}
                     onCatalogItemSelected={setSelectedCatalogItem}
                   />

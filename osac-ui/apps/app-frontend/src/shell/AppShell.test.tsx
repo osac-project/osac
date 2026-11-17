@@ -117,6 +117,27 @@ describe('AppShell', () => {
   });
 
   it.each([
+    '/catalog/vms/item-1/launch',
+    '/catalog/clusters/item-1/launch',
+    '/catalog/bare-metal/item-1/launch',
+  ])('does not register catalog launch route for admin: %s', async (path) => {
+    renderAppShell(path, 'admin');
+
+    expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
+  });
+
+  it.each(['tenant-admin', 'tenant-user'] as const)(
+    'registers the VM catalog launch route for %s',
+    async (role) => {
+      renderAppShell('/catalog/vms/item-1/launch', role);
+
+      expect(
+        await screen.findByRole('heading', { name: 'VM catalog item not found' }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it.each([
     { path: '/catalog/vm/item-1', title: 'VM catalog item not found' },
     { path: '/catalog/cluster/item-1', title: 'Cluster catalog item not found' },
     { path: '/catalog/bm/item-1', title: 'Bare metal catalog item not found' },

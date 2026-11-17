@@ -36,9 +36,14 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
     { id: initialCatalogItemId ?? '' },
     { enabled: Boolean(initialCatalogItemId) },
   );
-  const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>('catalog');
+  const includeCatalogStep = !initialCatalogItemId;
+  const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>(
+    includeCatalogStep ? 'catalog' : 'general',
+  );
   const [selectedCatalogItem, setSelectedCatalogItem] = useState<BareMetalInstanceCatalogItem>();
-  const steps = ['catalog', 'general', 'configuration', 'networking', 'access', 'review'] as const;
+  const steps: BareMetalWizardStepId[] = includeCatalogStep
+    ? ['catalog', 'general', 'configuration', 'networking', 'access', 'review']
+    : ['general', 'configuration', 'networking', 'access', 'review'];
   const stepLabels: Record<BareMetalWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),
@@ -107,10 +112,9 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
                 name={stepLabels[step]}
                 isDisabled={index > steps.indexOf(activeStep)}
               >
-                {activeStep === 'catalog' && (
+                {includeCatalogStep && activeStep === 'catalog' && (
                   <CatalogStep<BareMetalInstanceCatalogItem, BareMetalInstanceWizardValues>
                     catalogService={BareMetalInstanceCatalogItems}
-                    isInitializing={Boolean(initialCatalogItemId) && catalogItemQuery.isPending}
                     getInitialFormValues={getBareMetalInstanceInitialValues}
                     onCatalogItemSelected={setSelectedCatalogItem}
                   />

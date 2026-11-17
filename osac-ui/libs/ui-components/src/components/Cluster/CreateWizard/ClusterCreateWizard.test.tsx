@@ -111,6 +111,19 @@ describe('ClusterCreateWizard', () => {
     mockNavigate.mockReset();
   });
 
+  it('starts on General without a catalog step for catalog launches', async () => {
+    renderWithProviders(
+      <ClusterCreateWizard initialCatalogItemId={clusterCatalogItem.id} onClosed={vi.fn()} />,
+      {
+        apiFixtures: { clusterCatalogItems: [clusterCatalogItem] },
+        session: { role: 'tenant-user' },
+      },
+    );
+
+    expect(await screen.findByRole('textbox', { name: 'Name' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Catalog item' })).not.toBeInTheDocument();
+  });
+
   it('submits the catalog-governed payload and navigates to the new cluster on success', async () => {
     const onClusterCreate = vi.fn((req: { object?: { metadata?: unknown; spec?: unknown } }) => ({
       object: { id: 'cluster-new-1', metadata: req.object?.metadata, spec: req.object?.spec },

@@ -104,6 +104,19 @@ describe('VmCreateWizard', () => {
     mockNavigate.mockReset();
   });
 
+  it('starts on General without a catalog step for catalog launches', async () => {
+    renderWithProviders(
+      <VmCreateWizard initialCatalogItemId={vmCatalogItem.id} onClosed={vi.fn()} />,
+      {
+        apiFixtures: { catalogItems: [vmCatalogItem] },
+        session: { role: 'tenant-user' },
+      },
+    );
+
+    expect(await screen.findByRole('textbox', { name: 'Name' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Catalog item' })).not.toBeInTheDocument();
+  });
+
   it('submits the catalog-governed payload and navigates to the new VM on success', async () => {
     const onComputeInstanceCreate = vi.fn(
       (req: { object?: { metadata?: unknown; spec?: unknown } }) => ({

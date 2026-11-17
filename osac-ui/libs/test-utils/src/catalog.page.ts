@@ -89,7 +89,7 @@ export const deleteCatalogItem = async (page: Page, name: string): Promise<void>
     dialog.getByRole(...CatalogDeletePage.delete),
     name,
   );
-  await expect(page).toHaveURL((url) => url.pathname === '/catalog');
+  await expect(page).toHaveURL((url) => url.pathname === '/catalog/vms');
   await expect(page.getByRole(...CatalogMainPage.pageTitle)).toBeVisible();
 };
 
@@ -100,7 +100,7 @@ export const launchCatalogItem = async (page: Page): Promise<void> => {
   await expect(launchButton).toBeVisible();
   await expect(launchButton).toBeEnabled();
   await launchButton.click();
-  await expect(page).toHaveURL((url) => url.pathname.startsWith('/vms/create/'));
+  await expect(page).toHaveURL((url) => /^\/catalog\/vms\/[^/]+\/launch$/.test(url.pathname));
   await expect(
     page.getByRole('heading', { name: 'Create a virtual machine', exact: true }),
   ).toBeVisible();

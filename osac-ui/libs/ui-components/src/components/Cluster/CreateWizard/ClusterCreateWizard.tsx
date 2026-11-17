@@ -33,9 +33,14 @@ const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
     { id: initialCatalogItemId ?? '' },
     { enabled: Boolean(initialCatalogItemId) },
   );
-  const [activeStep, setActiveStep] = useState<ClusterWizardStepId>('catalog');
+  const includeCatalogStep = !initialCatalogItemId;
+  const [activeStep, setActiveStep] = useState<ClusterWizardStepId>(
+    includeCatalogStep ? 'catalog' : 'general',
+  );
   const [validationAlert, setValidationAlert] = useState(false);
-  const steps = ['catalog', 'general', 'configuration', 'networking', 'review'] as const;
+  const steps: ClusterWizardStepId[] = includeCatalogStep
+    ? ['catalog', 'general', 'configuration', 'networking', 'review']
+    : ['general', 'configuration', 'networking', 'review'];
   const stepLabels: Record<ClusterWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),
@@ -97,10 +102,9 @@ const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
           >
             {steps.map((step) => (
               <WizardStep key={step} id={step} name={stepLabels[step]}>
-                {step === 'catalog' && (
+                {includeCatalogStep && step === 'catalog' && (
                   <CatalogStep<ClusterCatalogItem, ClusterWizardValues>
                     catalogService={ClusterCatalogItems}
-                    isInitializing={Boolean(initialCatalogItemId) && catalogItemQuery.isPending}
                     getInitialFormValues={getInitialFormValues}
                   />
                 )}

@@ -16,20 +16,15 @@ from tests.e2e.core.helpers import (
     wait_for_bmi_running,
     wait_for_external_ip_allocated,
     wait_for_external_ip_attachment_cr,
-    wait_for_external_ip_attachment_deletion,
     wait_for_external_ip_attachment_ready,
     wait_for_external_ip_cr,
-    wait_for_external_ip_deletion,
     wait_for_external_ip_pool_deletion,
     wait_for_grpc_subnet_ready,
     wait_for_security_group_cr,
-    wait_for_security_group_deletion,
     wait_for_security_group_ready,
     wait_for_subnet_cr,
-    wait_for_subnet_deletion,
     wait_for_subnet_ready,
     wait_for_virtual_network_cr,
-    wait_for_virtual_network_deletion,
     wait_for_virtual_network_ready,
 )
 from tests.e2e.core.k8s_client import K8sClient
@@ -37,6 +32,14 @@ from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import CommandFailed, poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.bmaas import bmi_ssh, guest_ssh
+from tests.e2e.networking.teardown import (
+    teardown_external_ip,
+    teardown_external_ip_attachment,
+    teardown_sg,
+    teardown_subnets,
+    teardown_vnet,
+)
+from tests.e2e.networking.vmaas import stack
 from tests.e2e.networking.vmaas.stack import resolve_external_ip_pool
 
 pytestmark = pytest.mark.regression
@@ -70,12 +73,13 @@ def _describe_external_ip(item: dict[str, Any]) -> str:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _guest_snapshot_source() -> Iterator[None]:
-    """Let a failure snapshot read the network state of the BMIs this class has recorded so far."""
+def _guest_snapshot_source(k8s_hub_client: K8sClient, bmh_namespace: str) -> Iterator[None]:
+    """Let a failure snapshot read the network state of the BMIs this class has recorded so far, and the hosts."""
     guest_ssh.register_guest_snapshot(
         "guests-bmaas",
         lambda: [TestBmaasNetworking.state[k] for k in ("bmi1", "bmi2", "bmi3") if k in TestBmaasNetworking.state],
     )
+    guest_ssh.register_host_snapshot("guests-bmaas", k8s_hub_client.base_args(), bmh_namespace)
     yield
     guest_ssh.unregister_guest_snapshot("guests-bmaas")
 
@@ -163,10 +167,12 @@ class TestBmaasNetworking:
         nat_eip_id = grpc.create_external_ip(name=nat_eip_name, pool=self.state["pool_id"])
         nat_eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=nat_eip_id)
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=nat_eip_cr)
+        # The server accepts the NATGateway only once the API, not only the CR, says ALLOCATED.
+        stack.wait_for_grpc_external_ip_allocated(grpc, nat_eip_id)
 
         nat_name = f"nat-{net_test_run_id}"
         nat_id = grpc.create_nat_gateway(
-            name=nat_name, virtual_network_name=self.state["vnet_name"], external_ip_name=nat_eip_name
+            name=nat_name, virtual_network_id=self.state["vnet_id"], external_ip_id=nat_eip_id
         )
         poll_until(
             fn=lambda: (
@@ -274,6 +280,8 @@ class TestBmaasNetworking:
         self.__class__.state["bmi1"] = bmis[0]
         self.__class__.state["bmi2"] = bmis[1]
         self.__class__.state["bmi3"] = bmis[2]
+        # RUNNING comes about a minute after the host is powered back on, before sshd listens.
+        bmi_ssh.wait_for_ssh_ready(bmis)
         for bmi in bmis:
             spec = grpc.get_baremetal_instance(bmi_id=bmi["id"]).get("object", {}).get("spec", {})
             instance_type = spec.get("instance_type", spec.get("instanceType", {}))
@@ -425,6 +433,8 @@ class TestBmaasNetworking:
         eip_id = grpc.create_external_ip(name=eip_name, pool=self.state["pool_id"])
         eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr)
+        # The server accepts the attachment only once the API, not only the CR, says ALLOCATED.
+        stack.wait_for_grpc_external_ip_allocated(grpc, eip_id)
 
         attach_name = f"ingress-attach-{net_test_run_id}"
         attach_id = grpc.create_external_ip_attachment_bmi(
@@ -453,13 +463,14 @@ class TestBmaasNetworking:
             try:
                 return bmi_ssh.ssh_via_external_ip(ext_addr, timeout=10)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                # bmi_ssh logs the command, exit status and output of every attempt.
                 return ""
 
         poll_until(
             fn=_try_ssh_eip,
             until=lambda h: bool(h),
-            retries=5,
-            delay=15,
+            retries=12,
+            delay=20,
             description=f"SSH via external IP {ext_addr}",
             resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
             resource_id=bmi1["id"],
@@ -479,11 +490,8 @@ class TestBmaasNetworking:
         if "ingress_attach_id" not in self.state:
             pytest.skip("No ExternalIPAttachment to delete")
 
-        grpc.delete_external_ip_attachment(attachment_id=self.state["ingress_attach_id"])
-        wait_for_external_ip_attachment_deletion(k8s=k8s_hub_client, name=self.state["ingress_attach_cr"])
-
-        grpc.delete_external_ip(external_ip_id=self.state["ingress_eip_id"])
-        wait_for_external_ip_deletion(k8s=k8s_hub_client, name=self.state["ingress_eip_cr"])
+        teardown_external_ip_attachment(grpc, k8s_hub_client, self.state["ingress_attach_id"], "ingress")
+        teardown_external_ip(grpc, k8s_hub_client, self.state["ingress_eip_id"], "ingress")
 
     def test_14_delete_bmis(
         self, cli: OsacCLI, grpc: GRPCClient, k8s_hub_client: K8sClient, bmh_namespace: str
@@ -547,32 +555,33 @@ class TestBmaasNetworking:
             resource_id=self.state["nat_id"],
         )
 
-        grpc.delete_external_ip(external_ip_id=self.state["nat_eip_id"])
-        wait_for_external_ip_deletion(k8s=k8s_hub_client, name=self.state["nat_eip_cr"])
+        teardown_external_ip(grpc, k8s_hub_client, self.state["nat_eip_id"], "NAT")
 
     def test_16_delete_security_group(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
         if "sg_id" not in self.state:
             pytest.skip("No SecurityGroup to delete")
 
-        grpc.delete_security_group(sg_id=self.state["sg_id"])
-        wait_for_security_group_deletion(k8s=k8s_hub_client, name=self.state["sg_cr"])
+        teardown_sg(grpc, k8s_hub_client, {"sg_id": self.state["sg_id"], "vnet_name": self.state.get("vnet_name")})
 
     def test_17_delete_subnets(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
-        for key, cr_key in [("subnet_a_id", "subnet_a_cr"), ("subnet_b_id", "subnet_b_cr")]:
-            if key not in self.state:
-                continue
-            grpc.delete_subnet(subnet_id=self.state[key])
-            wait_for_subnet_deletion(k8s=k8s_hub_client, name=self.state[cr_key])
+        teardown_subnets(
+            grpc,
+            k8s_hub_client,
+            {
+                "sub_a_id": self.state.get("subnet_a_id"),
+                "sub_b_id": self.state.get("subnet_b_id"),
+                "vnet_name": self.state.get("vnet_name"),
+            },
+        )
 
     def test_18_delete_virtual_network(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
         if "vnet_id" not in self.state:
             pytest.skip("No VirtualNetwork to delete")
 
-        grpc.delete_virtual_network(vn_id=self.state["vnet_id"])
-        wait_for_virtual_network_deletion(k8s=k8s_hub_client, name=self.state["vnet_cr"])
-
-        remaining = grpc.list_virtual_network_ids()
-        assert self.state["vnet_id"] not in remaining, "VirtualNetwork still in API after deletion"
+        # Waits until the API record is gone too, so no single read right after the CR disappears decides it.
+        teardown_vnet(
+            grpc, k8s_hub_client, {"vnet_id": self.state["vnet_id"], "vnet_name": self.state.get("vnet_name")}
+        )
 
     def test_19_delete_external_ip_pool(self, private_grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
         if "pool_id" not in self.state:

@@ -53,7 +53,9 @@ _JSON_SECRET = re.compile(r'(?i)("[\w-]*(?:password|token|secret)[\w-]*"\s*:\s*)
 _VALUE_FLAGS = frozenset({"-H", "--header", "-d", "--data", "--token", "--token-script", "--password"})
 
 # Compared without case, underscores and hyphens: user_data, userData and UserData are one key.
-_DROPPED_KEYS = frozenset({"userdata", "cloudinituserdata", "templateparameters", "sshkey", "password", "token"})
+_DROPPED_KEYS = frozenset(
+    {"userdata", "userdatabase64", "cloudinituserdata", "templateparameters", "sshkey", "password", "token"}
+)
 
 
 def sanitize_text(text: str | bytes) -> str:

@@ -15,6 +15,7 @@ lvms:
       - /dev/vdb
 metallb:
   enabled: true
+  derivePoolFromNodeIP: true
 cnv:
   enabled: true
 mce:

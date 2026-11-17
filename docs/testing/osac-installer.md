@@ -25,6 +25,30 @@ Deployments, so infra dependencies can still be starting when
 `make install-osac` begins; the `infra-ready-wait-test` suite guards that
 gap.
 
+## Input validation gate (OSAC-7050)
+
+Every installation target (`install`, `install-infra`, `install-osac`,
+`install-devstack`, `install-multicluster`) runs `make validate-inputs` first
+(with `DRY_RUN=1`, `install` renders offline via `install-dry-run` instead):
+an offline `helm template` of every applicable chart with the exact merged
+values the installation would use — profile files, `EXTRA_HELM_ARGS`, and
+read-only OpenShift lookups for the cluster domain and version. Invalid inputs
+abort the install before any cluster mutation or readiness wait. The gate
+validates static values only: prerequisites that must already exist are the
+render-time preflight's concern, and resources the installer creates are
+allowed to become ready. With `REMOTE_KUBECONFIG` set the gate also checks the
+static `REMOTE_KUBECONFIG_SECRET_NAME`/`REMOTE_KUBECONFIG_SECRET_KEY`
+identifiers before any cluster mutation, and the osac-chart render carries the
+same remote kubeconfig `--set-string` arguments the installation applies, in
+the same precedence order (after `EXTRA_HELM_ARGS`). It is covered by
+`make input-validation-test`, which runs in `make helm-validate` and as a
+step of the Helm lint CI job.
+
+| Tier | Real | Faked or not covered |
+|---|---|---|
+| Unit with command stubs ([DEV] OSAC-7050) | The target graph and recipe expansion of every installation entry point, serial plus `make -j4` for `install`, against a throwaway copy of the installer; `INFRA_HELM_ARGS` parity across the OpenShift install's renders and upgrades; invalid remote-cluster identifiers aborting before any mutation; the shared remote kubeconfig argument construction and its precedence in the gate render and the upgrade; the gate running `netbox_seed_check` before the bridged render | Helm, `oc`, `kubectl` and `kind` are stubs: schema evaluation, chart rendering and the deployed install are not covered here |
+| Helm contract ([DEV] OSAC-7050) | Offline `helm template` of the umbrella and infra charts with CI values; the exact schema-rejection messages (field and constraint) for the non-negative bounds and closed objects; valid boundary and default renders; the `bmaas-netbox-ci` profile's raw lookup failure and its bridged gate render with the offline token placeholder — taken when either `netbox_seed_check` sees the install's infra values deploy the `netbox-token-seed` hook or a read-only lookup finds the Secret the osac chart reads and its key, and refused when neither holds — and caller-supplied NetBox tokens (`--set` and values file) reaching the gate's render unmasked | No cluster; the gate's OpenShift values assembly (domain/version lookups) runs only in the stubbed section |
+
 ## Install preflight (OSAC-6561)
 
 Preflight runs while Helm renders the chart. The unit/render/Kind tiers are

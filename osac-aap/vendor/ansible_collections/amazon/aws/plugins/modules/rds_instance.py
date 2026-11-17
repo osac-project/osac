@@ -173,10 +173,36 @@ options:
         description:
           - The Active Directory Domain to restore the instance in.
         type: str
+    domain_auth_secret_arn:
+        description:
+          - The ARN of the Secrets Manager secret containing credentials for the user account to be used for domain join.
+          - Required when joining a self-managed Active Directory domain.
+        type: str
+        version_added: 11.4.0
+    domain_dns_ips:
+        description:
+          - The IPv4 DNS IP addresses of the primary and secondary Active Directory domain controllers.
+          - Two IP addresses must be provided. For single-DC configurations, the same IP address may be specified twice.
+          - Required when joining a self-managed Active Directory domain.
+        type: list
+        elements: str
+        version_added: 11.4.0
+    domain_fqdn:
+        description:
+          - The fully qualified domain name (FQDN) of a self-managed Active Directory domain.
+          - Maximum 64 characters.
+        type: str
+        version_added: 11.4.0
     domain_iam_role_name:
         description:
           - The name of the IAM role to be used when making API calls to the Directory Service.
         type: str
+    domain_ou:
+        description:
+          - The Active Directory organizational unit for the DB instance to join, in distinguished name format.
+          - Maximum 64 characters.
+        type: str
+        version_added: 11.4.0
     enable_cloudwatch_logs_exports:
         description:
           - A list of log types that need to be enabled for exporting to CloudWatch Logs.
@@ -234,7 +260,7 @@ options:
         version_added_collection: community.aws
     iops:
         description:
-          - The Provisioned IOPS (I/O operations per second) value. Is only set when using O(storage_type) is set to io1.
+          - The Provisioned IOPS (I/O operations per second) value. Is only set when using O(storage_type) is set to V(io1) or V(io2).
         type: int
     kms_key_id:
         description:
@@ -416,6 +442,7 @@ options:
           - gp2
           - gp3
           - io1
+          - io2
         type: str
     storage_throughput:
       description:
@@ -881,17 +908,14 @@ vpc_security_groups:
       sample: sg-12345678
 """
 
-from time import sleep
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
 
-from ansible.module_utils._text import to_text
 from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict
-from ansible.module_utils.six import string_types
+from ansible.module_utils.common.text.converters import to_text
 
-from ansible_collections.amazon.aws.plugins.module_utils.botocore import is_boto3_error_message
 from ansible_collections.amazon.aws.plugins.module_utils.modules import AnsibleAWSModule
 from ansible_collections.amazon.aws.plugins.module_utils.rds import AnsibleRDSError
 from ansible_collections.amazon.aws.plugins.module_utils.rds import arg_spec_to_rds_params
@@ -1116,7 +1140,7 @@ def get_options_with_changing_values(client, module: AnsibleAWSModule, parameter
             )
 
     # Validate changes to storage type options
-    if instance.get("StorageType") == "io1":
+    if instance.get("StorageType") in ("io1", "io2"):
         # Bundle Iops and AllocatedStorage while updating io1 RDS Instance
         current_iops = instance.get("PendingModifiedValues", {}).get("Iops", instance["Iops"])
         current_allocated_storage = instance.get("PendingModifiedValues", {}).get(
@@ -1306,7 +1330,7 @@ def get_changing_options_with_inconsistent_keys(
                 elif set(desired_option) <= set(current_option):
                     # Desired option set is entirely contained within current option set and purge is False, nothing to change
                     continue
-            elif isinstance(desired_option, string_types):
+            elif isinstance(desired_option, str):
                 # Current option is a list and desired option is a string
                 if desired_option in current_option:
                     # Desired option is in current options, nothing to change
@@ -1482,15 +1506,12 @@ def promote_replication_instance(
         # 'StatusInfos' only exists when the instance is a read replica
         # See https://awscli.amazonaws.com/v2/documentation/api/latest/reference/rds/describe-db-instances.html
         if bool(instance.get("StatusInfos")):
-            try:
-                _result, changed = call_method(
-                    client,
-                    module,
-                    method_name="promote_read_replica",
-                    parameters={"DBInstanceIdentifier": instance["DBInstanceIdentifier"]},
-                )
-            except is_boto3_error_message("DB Instance is not a read replica"):
-                pass
+            _result, changed = call_method(
+                client,
+                module,
+                method_name="promote_read_replica",
+                parameters={"DBInstanceIdentifier": instance["DBInstanceIdentifier"]},
+            )
     return changed
 
 
@@ -1638,7 +1659,11 @@ def main():
         db_subnet_group_name=dict(aliases=["subnet_group"]),
         deletion_protection=dict(type="bool"),
         domain=dict(),
+        domain_auth_secret_arn=dict(no_log=False),
+        domain_dns_ips=dict(type="list", elements="str"),
+        domain_fqdn=dict(),
         domain_iam_role_name=dict(),
+        domain_ou=dict(),
         enable_cloudwatch_logs_exports=dict(type="list", aliases=["cloudwatch_log_exports"], elements="str"),
         enable_iam_database_authentication=dict(type="bool"),
         enable_performance_insights=dict(type="bool"),
@@ -1677,7 +1702,7 @@ def main():
         source_engine_version=dict(),
         source_region=dict(),
         storage_encrypted=dict(type="bool"),
-        storage_type=dict(choices=["standard", "gp2", "gp3", "io1"]),
+        storage_type=dict(choices=["standard", "gp2", "gp3", "io1", "io2"]),
         storage_throughput=dict(type="int"),
         tags=dict(type="dict", aliases=["resource_tags"]),
         tde_credential_arn=dict(aliases=["transparent_data_encryption_arn"]),
@@ -1703,6 +1728,7 @@ def main():
         ["engine", "aurora-mysql", ["db_cluster_identifier"]],
         ["engine", "aurora-postresql", ["db_cluster_identifier"]],
         ["storage_type", "io1", ["iops", "allocated_storage"]],
+        ["storage_type", "io2", ["iops", "allocated_storage"]],
         ["creation_source", "snapshot", ["db_snapshot_identifier", "engine"]],
         ["creation_source", "s3", required_if_s3_creation_source],
     ]
@@ -1787,12 +1813,6 @@ def main():
 
         if changed:
             instance = get_instance(client, module, instance_id)
-            if state != "absent" and (instance or not module.check_mode):
-                for _wait_attempt in range(0, 10):
-                    instance = get_instance(client, module, instance_id)
-                    if instance:
-                        break
-                    sleep(5)
 
         if state == "absent" and changed and not module.params["skip_final_snapshot"]:
             snapshot_id = module.params["final_db_snapshot_identifier"]

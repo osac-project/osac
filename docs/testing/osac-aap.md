@@ -22,8 +22,9 @@ in `osac-aap/Makefile`.
 
 - `compute_instance_create` (see its
   [README](../../osac-aap/tests/integration/targets/compute_instance_create/README.md)):
-  real Kind StorageClasses, Secrets, DataVolume task execution. VM
-  readiness/creation may be overridden; synthetic Volume IDs prove no Volume
+  real Kind StorageClasses, Secrets, VM and DataVolume task execution. The VM
+  tenant annotation and VMI template metadata are checked, but VMI creation
+  is not exercised. VM readiness may be overridden; synthetic Volume IDs prove no Volume
   API recovery, CDI/KubeVirt, PVC binding or guest I/O; minimal CRDs prove no
   provider admission.
 - Storage target-routing scenarios: separate management/workload Kind APIs;
@@ -47,9 +48,18 @@ in `osac-aap/Makefile`.
   Netris is a stateful in-process fake; CUDN/VTEP CRDs are minimal schemas
   with fixture-supplied readiness — no OVN, real CRD validation, data plane or
   AAP server. The CUDN target refuses pre-existing CUDN/VTEP CRDs.
+  The Netris fake covers EVPN physical-range DHCP creation and repair; live
+  DHCP leases and port behavior remain [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 - `config_as_code_job_templates`, `config_as_code_pod_specs`: rendered AAP
   template/pod configuration only; no controller, Kubernetes objects or live
   provider.
+- `cluster_upgrade_workflow`
+  ([OSAC-7232](https://redhat.atlassian.net/browse/OSAC-7232)): runs the
+  existing cluster workflow through its same-type Lease against real Kind and
+  minimal HyperShift CRDs, covering the control-plane and NodePool image batch,
+  shared attempt annotations, later image preservation, and malformed
+  NodePool-hook rejection. No deployed AAP, HyperShift controller, operator
+  dispatch loop, or provider/data-plane upgrade runs.
 - Netris transport unit tests: real HTTP transport and module subprocesses
   against a synthetic loopback provider; no live Netris login, so cookie
   refresh and live-provider compatibility remain unverified.
@@ -63,9 +73,16 @@ AgentlessNet Fabric and switch-VLAN targets ([OSAC-7156](https://redhat.atlassia
 run generic-playbook child jobs with real SQLite against one stateful fake SSH
 switch endpoint: physical NetworkAttachment apply, partial-retry, delete-wins
 guards, port restoration, VLAN discovery and creation on declared trunks, and
-shared ExternalIPPool lifecycle. DHCP leases, Linux and provider commands,
-Kind, an AAP server, a live switch, BGP convergence and packet delivery are
-not run.
+shared ExternalIPPool and ExternalIP lifecycle. ExternalIP cases distinguish
+the stable `resource.id` from Kubernetes `metadata.uid`, inspect reservation
+ownership by API ID, and verify release tombstoning. DHCP leases, Linux and
+provider commands, Kind, an AAP server, a live switch, BGP convergence and
+packet delivery are not run.
+
+The `netris_fabric` target runs all 19 current contract Fabric tasks plus two
+legacy CaaS ingress task names. Those ingress tests exercise Netris allocation
+and release only; they do not cover the desired Fulfillment-owned allocator,
+which remains design-only.
 
 ## Network role coverage gate
 

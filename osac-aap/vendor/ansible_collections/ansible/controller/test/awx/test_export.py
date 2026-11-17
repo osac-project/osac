@@ -7,7 +7,7 @@ import pytest
 from awx.main.models.execution_environments import ExecutionEnvironment
 from awx.main.models.jobs import JobTemplate
 
-from awx.main.tests.functional.conftest import user, system_auditor  # noqa: F401; pylint: disable=unused-import
+from awx.main.tests.functional.conftest import user, system_auditor  # noqa: F401  # pylint: disable=unused-import
 
 
 ASSETS = set([
@@ -23,7 +23,6 @@ ASSETS = set([
     "job_templates",
     "workflow_job_templates",
     "execution_environments",
-    "applications",
     "schedules",
 ])
 
@@ -66,7 +65,7 @@ def test_export(run_module, admin_user):
     all_assets_except_users = {k: v for k, v in assets.items() if k != 'users'}
 
     for k, v in all_assets_except_users.items():
-        assert v == [], f"Expected resource {k} to be empty. Instead it is {v}"
+        assert v == [] or v is None, f"Expected resource {k} to be empty. Instead it is {v}"
 
 
 @pytest.mark.django_db

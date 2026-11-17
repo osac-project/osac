@@ -9,7 +9,10 @@
         namespace: "{{ hosted_cluster_namespace }}"
         labels: "{{ hosted_cluster_default_cluster_order_label }}"
       data:
-        .dockerconfigjson: "{{ hosted_cluster_settings.pull_secret | b64encode }}"
+        .dockerconfigjson: >-
+          {{ ((hosted_cluster_settings.pull_secret | to_json)
+             if hosted_cluster_settings.pull_secret is mapping
+             else hosted_cluster_settings.pull_secret) | b64encode }}
       type: kubernetes.io/dockerconfigjson
   no_log: true
 
@@ -27,6 +30,7 @@
         id_rsa.pub: "{{ hosted_cluster_settings.ssh_public_key | b64encode }}"
 
 - name: Build HostedCluster definition
+  no_log: true
   ansible.builtin.set_fact:
     hosted_cluster_definition:
       apiVersion: hypershift.openshift.io/v1beta1
@@ -77,6 +81,7 @@
         olmCatalogPlacement: management
 
 - name: Configure HostedCluster definition
+  no_log: true
   ansible.builtin.set_fact:
     hosted_cluster_definition: >-
       {{ hosted_cluster_definition | combine({
@@ -98,15 +103,17 @@
     tasks_from: "{{ hosted_cluster_modify_definition_hook.tasks_from }}"
   when: hosted_cluster_modify_definition_hook is defined
 
-- name: Stamp control-plane upgrade attempt on HostedCluster
+- name: Stamp shared cluster upgrade attempt on HostedCluster
+  no_log: true
   ansible.builtin.set_fact:
     hosted_cluster_definition: >-
       {{ hosted_cluster_definition | combine({
-        'metadata': {'annotations': {'osac.openshift.io/upgrade-attempt-id': hosted_cluster_control_plane_attempt_id}}
+        'metadata': {'annotations': {'osac.openshift.io/upgrade-attempt-id': hosted_cluster_upgrade_attempt_id}}
       }, recursive=true) }}
-  when: hosted_cluster_control_plane_attempt_id | length > 0
+  when: hosted_cluster_upgrade_attempt_id | length > 0
 
 - name: Create HostedCluster resource
+  no_log: true
   kubernetes.core.k8s:
     state: present
     definition: "{{ hosted_cluster_definition }}"
@@ -152,6 +159,7 @@
   when: nodepool_modify_definitions_hook is defined
 
 - name: Create NodePool resources
+  no_log: true
   kubernetes.core.k8s:
     state: present
     definition: "{{ item }}"
@@ -166,6 +174,7 @@
         hosted_cluster_requested_nodepools: "{{ nodepool_definitions | map(attribute='metadata.name') | list }}"
 
     - name: Retrieve NodePools owned by this cluster
+      no_log: true
       kubernetes.core.k8s_info:
         api_version: hypershift.openshift.io/v1beta1
         kind: NodePool

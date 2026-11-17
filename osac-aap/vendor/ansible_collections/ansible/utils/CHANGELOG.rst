@@ -4,6 +4,73 @@ Ansible Utils Collection Release Notes
 
 .. contents:: Topics
 
+v6.1.1
+======
+
+Bugfixes
+--------
+
+- AnsibleArgSpecValidator - Add a `_to_plain` function to handle ansible-core 2.21+ deep copy warnings by lazy containers.
+
+Documentation Changes
+---------------------
+
+- Update docs.ansible.com documentation URLs with the right references
+
+v6.1.0
+======
+
+Minor Changes
+-------------
+
+- remove warning message about potential instability of ipaddr (it has been stable for years)
+
+v6.0.3
+======
+
+Bugfixes
+--------
+
+- Fix update_fact to update a fact where a key in the referenced path contains a bracket.
+
+v6.0.2
+======
+
+Bugfixes
+--------
+
+- cidr_merge - Fix filter failing when used inside a Jinja2 macro called with ``with context`` by unwrapping Ansible lazy template lists before validation.
+- cli_parse - Honor ttp_results.results flat_list in TTP parser so output is a single-level list instead of double-wrapped (https://github.com/ansible-collections/ansible.utils/issues/402).
+- ipaddress_utils - Support Python 3.14+ by using the public ``version`` attribute instead of the removed private ``_version`` on ``ipaddress`` network objects (bpo-118710).
+- update_fact - Use task_vars at top-level instead of the deprecated ``vars`` key for compatibility with ansible-core 2.24 (ansible/ansible issue
+
+v6.0.1
+======
+
+Bugfixes
+--------
+
+- Add a cleanup step that removes empty {} and [] values from lists in keep_keys_from_dict_n_list()
+
+Documentation Changes
+---------------------
+
+- Fix the description of the reduce_on_network filter.
+- Fix the module name in ipmath filter.
+
+v6.0.0
+======
+
+Release Summary
+---------------
+
+With this release, the minimum required version of `ansible-core` for this collection is `2.16.0`. The last version known to be compatible with `ansible-core` versions below `2.16` is v5.1.2.
+
+Major Changes
+-------------
+
+- Bumping `requires_ansible` to `>=2.16.0`, since previous ansible-core versions are EoL now.
+
 v5.1.2
 ======
 

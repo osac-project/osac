@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.e2e.core.failure_report import capture_failure, capture_snapshot
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.metering
 def test_cluster_delete_reports_deleting_state_without_provisioning(
+    request: pytest.FixtureRequest,
     cli: OsacCLI,
     grpc: GRPCClient,
     private_grpc: GRPCClient,
@@ -87,6 +89,7 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
         )
         logger.info("CaaS: %d worker BMI(s) allocated before the delete: %s", len(worker_bmi_ids), worker_bmi_ids)
 
+        capture_snapshot(request.config, request.node.nodeid)
         cli.delete_cluster(uuid=uuid)
 
         wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
@@ -103,6 +106,9 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
         metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=started_at, within=120)
         for bmi_id in worker_bmi_ids:
             metering.assert_no_events(HEARTBEAT_TYPE, resource_id=bmi_id, since=started_at, within=120)
+    except (Exception, pytest.fail.Exception) as exc:
+        capture_failure(request.config, exc, request.node.nodeid)
+        raise
     finally:
         with contextlib.suppress(subprocess.CalledProcessError):
             cli.delete_cluster(uuid=uuid)

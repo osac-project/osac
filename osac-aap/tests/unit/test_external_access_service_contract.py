@@ -1,5 +1,9 @@
 """Verify the CI and legacy-template external-access entry-point contracts."""
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -10,6 +14,8 @@ EXTERNAL_ACCESS = COLLECTIONS / "osac" / "service" / "roles" / "external_access"
 OCP_CI_SMALL = COLLECTIONS / "osac" / "templates" / "roles" / "ocp_ci_small"
 OCP_SMALL = COLLECTIONS / "osac" / "templates" / "roles" / "ocp_small"
 CI_EXTERNAL_ACCESS = COLLECTIONS / "ci" / "steps" / "roles" / "external_access"
+NICO_EXTERNAL_ACCESS = COLLECTIONS / "nico" / "steps" / "roles" / "external_access"
+ANSIBLE_PLAYBOOK = Path(sys.executable).parent / "ansible-playbook"
 
 
 def load_tasks(path: Path) -> list[dict[str, object]]:
@@ -39,51 +45,52 @@ def test_publish_and_clear_are_annotation_only_entry_points() -> None:
     assert "include_role" not in clear[0]
 
 
-def test_caas_entry_points_own_dns_lifecycle_without_network_dispatch() -> None:
-    create_path = EXTERNAL_ACCESS / "tasks" / "caas_create.yaml"
-    delete_path = EXTERNAL_ACCESS / "tasks" / "caas_delete.yaml"
-    dns_create = load_tasks(EXTERNAL_ACCESS / "tasks" / "caas_dns_create.yaml")
+def test_ci_entry_points_own_claim_and_dns_lifecycle_without_network_dispatch() -> None:
+    create_path = CI_EXTERNAL_ACCESS / "tasks" / "create.yaml"
+    delete_path = CI_EXTERNAL_ACCESS / "tasks" / "delete.yaml"
+    dns_create = load_tasks(EXTERNAL_ACCESS / "tasks" / "caas_dns_publish.yaml")
     dns_delete = load_tasks(EXTERNAL_ACCESS / "tasks" / "caas_dns_delete.yaml")
     create = load_tasks(create_path)
     delete = load_tasks(delete_path)
 
-    assert create[0]["ansible.builtin.include_tasks"] == "caas_dns_create.yaml"
-    assert delete[0]["ansible.builtin.include_tasks"] == "caas_dns_delete.yaml"
+    for task in (create[2], create[4], create[5], delete[0], delete[1]):
+        assert task["ansible.builtin.include_role"]["name"] == "osac.service.external_access"
+    assert create[4]["vars"]["external_access_metallb_ingress_ip"] == "{{ external_access_vip_claim.address }}"
+
+    assert "ansible.builtin.assert" in create[0]
+    assert "ansible.builtin.set_fact" in create[1]
+    assert create[2]["ansible.builtin.include_role"]["tasks_from"] == "caas_api_dns_create.yaml"
+    assert create[3]["ansible.builtin.include_tasks"] == "caas_vip_reserve.yaml"
+    assert create[4]["ansible.builtin.include_role"]["tasks_from"] == "caas_ingress_create.yaml"
+    assert delete[0]["ansible.builtin.include_role"]["tasks_from"] == "caas_dns_delete.yaml"
     assert any("Create DNS records" in task.get("name", "") for task in dns_create)
     assert any("Resolve authoritative nameserver" in task.get("name", "") for task in dns_create)
     assert any("Wait for DNS records" in task.get("name", "") for task in dns_create)
     assert any("Delete DNS records" in task.get("name", "") for task in dns_delete)
     assert "network_steps_collection" not in create_path.read_text()
     assert "network_steps_collection" not in delete_path.read_text()
-    assert create[1]["ansible.builtin.include_tasks"] == "publish.yaml"
-    assert delete[1]["ansible.builtin.include_tasks"] == "clear.yaml"
+    assert create[5]["ansible.builtin.include_role"]["tasks_from"] == "publish.yaml"
+    assert delete[1]["ansible.builtin.include_role"]["tasks_from"] == "clear.yaml"
     assert not any("retrieve_kubeconfig" in str(task) for task in create)
-    assert not any("wait_for_network_cluster_operator" in str(task) for task in create)
 
-    agent_lookup = next(task for task in dns_create if task.get("name") == "Get agents assigned to this cluster")
-    assert agent_lookup["kubernetes.core.k8s_info"]["label_selectors"] == [
-        "{{ cluster_order_label }}={{ external_access_name }}"
-    ]
-
-
-def test_legacy_ci_external_access_reuses_caas_dns_tasks() -> None:
-    create = load_tasks(CI_EXTERNAL_ACCESS / "tasks" / "create.yaml")
-    delete = load_tasks(CI_EXTERNAL_ACCESS / "tasks" / "delete.yaml")
-
-    assert create[0]["ansible.builtin.include_role"]["name"] == "osac.service.external_access"
-    assert create[0]["ansible.builtin.include_role"]["tasks_from"] == "caas_dns_create.yaml"
-    assert delete[0]["ansible.builtin.include_role"]["name"] == "osac.service.external_access"
-    assert delete[0]["ansible.builtin.include_role"]["tasks_from"] == "caas_dns_delete.yaml"
+    assert delete[2]["ansible.builtin.include_tasks"] == "caas_vip_release.yaml"
+    network_wait = create[-1]
+    assert network_wait["ansible.builtin.include_role"] == {
+        "name": "osac.service.wait_for",
+        "tasks_from": "wait_for_network_cluster_operator",
+    }
+    assert network_wait["when"] == "not (external_access_skip_network_operator_wait | default(false))"
+    assert not (EXTERNAL_ACCESS / "tasks" / "caas_dns_create.yaml").exists()
 
 
-def test_caas_template_uses_service_entry_points() -> None:
+def test_caas_template_uses_ci_entry_points() -> None:
     install = load_tasks(OCP_CI_SMALL / "tasks" / "install.yaml")
     delete = load_tasks(OCP_CI_SMALL / "tasks" / "delete.yaml")
     install_default = install[0]["ansible.builtin.set_fact"]["install_step_external_access_default"]
     delete_default = delete[0]["ansible.builtin.set_fact"]["delete_step_external_access_default"]
 
-    assert install_default == {"name": "osac.service.external_access", "tasks_from": "caas_create.yaml"}
-    assert delete_default == {"name": "osac.service.external_access", "tasks_from": "caas_delete.yaml"}
+    assert install_default == {"name": "ci.steps.external_access", "tasks_from": "create.yaml"}
+    assert delete_default == {"name": "ci.steps.external_access", "tasks_from": "delete.yaml"}
 
     install_defaults = install[0]["ansible.builtin.set_fact"]
     assert install_defaults["skip_cluster_operators_wait"] is True
@@ -91,6 +98,7 @@ def test_caas_template_uses_service_entry_points() -> None:
     assert hosted_cluster["vars"]["hosted_cluster_settings"]["ovn_kubernetes_mtu"] == 1400
     external_access = next(task for task in install if task.get("name") == "Step - Configure external access")
     assert "external_access_ingress_internal_network" not in external_access["vars"]
+    assert external_access["vars"]["external_access_skip_network_operator_wait"] is True
     assert "install_step_cluster_infra_default" not in install_defaults
     assert "install_step_wait_for_agents_default" not in install_defaults
     assert "delete_step_cluster_infra_default" not in delete[0]["ansible.builtin.set_fact"]
@@ -115,7 +123,14 @@ def test_external_access_argument_spec_covers_caas_inputs() -> None:
     assert "cluster_working_namespace" not in options
 
     for name in (
-        "external_access_agent_namespace",
+        "external_access_metallb_ingress_range",
+        "external_access_vip_registry_namespace",
+        "external_access_vip_registry_name",
+    ):
+        assert name not in options
+
+    for name in (
+        "external_access_metallb_ingress_ip",
         "external_access_resource_wait_retries",
         "external_access_resource_wait_delay",
         "external_access_dns_ttl",
@@ -188,8 +203,146 @@ def test_ocp_small_leaves_external_access_to_clusterorder_and_nico_override_is_p
     assert nico_remove[1]["ansible.builtin.include_role"]["tasks_from"] == "clear.yaml"
 
 
+def test_nico_external_access_fails_without_retry_when_range_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    """Run the production allocator with fake Kubernetes modules and a full pool."""
+    fake_collection_root = tmp_path / "fake_collections"
+    fake_modules = (
+        fake_collection_root
+        / "ansible_collections/kubernetes/core/plugins/modules"
+    )
+    fake_modules.mkdir(parents=True)
+    state_path = tmp_path / "registry.json"
+    initial_state = {
+        "registry": {"192.0.2.1": "existing-1", "192.0.2.2": "existing-2"},
+        "operations": [],
+    }
+    state_path.write_text(json.dumps(initial_state), encoding="utf-8")
+
+    (fake_modules / "k8s_info.py").write_text(
+        """
+from ansible.module_utils.basic import AnsibleModule
+import json
+import os
+from pathlib import Path
+
+module = AnsibleModule(argument_spec={
+    "api_version": {"type": "str"},
+    "kind": {"type": "str", "required": True},
+    "namespace": {"type": "str"},
+    "name": {"type": "str"},
+    "kubeconfig": {"type": "raw"},
+})
+state_path = Path(os.environ["NICO_TEST_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8"))
+state["operations"].append({"module": "k8s_info", "name": module.params["name"]})
+state_path.write_text(json.dumps(state), encoding="utf-8")
+module.exit_json(changed=False, resources=[{"data": state["registry"]}])
+""",
+        encoding="utf-8",
+    )
+    (fake_modules / "k8s.py").write_text(
+        """
+from ansible.module_utils.basic import AnsibleModule
+import json
+import os
+from pathlib import Path
+
+module = AnsibleModule(argument_spec={
+    "state": {"type": "str"},
+    "definition": {"type": "dict", "required": True},
+    "kubeconfig": {"type": "raw"},
+})
+state_path = Path(os.environ["NICO_TEST_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8"))
+state["operations"].append({"module": "k8s", "name": module.params["definition"]["metadata"]["name"]})
+state_path.write_text(json.dumps(state), encoding="utf-8")
+module.exit_json(changed=True)
+""",
+        encoding="utf-8",
+    )
+
+    playbook = tmp_path / "allocate_exhausted.yml"
+    playbook.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "name": "Exhausted NICO ingress allocation",
+                    "hosts": "localhost",
+                    "connection": "local",
+                    "gather_facts": False,
+                    "vars": {
+                        "cluster_name": "new-cluster",
+                        "ingress_cidr_range": "192.0.2.0/30",
+                        "nico_ip_registry_namespace": "test",
+                        "nico_ip_allocation_retries": 1,
+                        "nico_ip_allocation_delay": 0,
+                    },
+                    "tasks": [
+                        {
+                            "name": "Run the production allocation task",
+                            "ansible.builtin.include_tasks": str(
+                                NICO_EXTERNAL_ACCESS / "tasks" / "allocate_ip.yml"
+                            ),
+                        }
+                    ],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "ANSIBLE_CONFIG": str(AAP_ROOT / "ansible.cfg"),
+            "ANSIBLE_COLLECTIONS_PATH": os.pathsep.join(
+                [
+                    str(fake_collection_root),
+                    str(AAP_ROOT / "collections"),
+                    str(AAP_ROOT / "vendor"),
+                    "/usr/share/ansible/collections",
+                ]
+            ),
+            "ANSIBLE_PYTHON_INTERPRETER": sys.executable,
+            "ANSIBLE_LOCALHOST_WARNING": "False",
+            "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
+            "NICO_TEST_STATE_FILE": str(state_path),
+        }
+    )
+    result = subprocess.run(
+        [str(ANSIBLE_PLAYBOOK), "-i", "localhost,", str(playbook)],
+        cwd=AAP_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    output = " ".join(result.stdout.split())
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "no free host addresses remain" in output, output
+
+    final_state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert final_state["registry"] == initial_state["registry"]
+    assert final_state["operations"] == [
+        {"module": "k8s_info", "name": "nico-ip-registry"}
+    ]
+
+
 def test_caas_does_not_publish_a_provider_specific_external_access_task_pair() -> None:
-    for task_name in ("main.yaml", "create.yaml", "delete.yaml", "resolve_fabric_manager.yaml"):
+    for task_name in (
+        "main.yaml",
+        "create.yaml",
+        "delete.yaml",
+        "resolve_fabric_manager.yaml",
+        "caas_create.yaml",
+        "caas_delete.yaml",
+        "caas_vip_reserve.yaml",
+        "caas_vip_release.yaml",
+    ):
         assert not (EXTERNAL_ACCESS / "tasks" / task_name).exists()
 
     for manager_name in ("netris", "agentless_net"):

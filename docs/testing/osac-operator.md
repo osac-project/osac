@@ -37,6 +37,12 @@ shapes at Unit/Envtest tier, not the deployed AAP boundary. Delete/detach,
 SecurityGroup, DHCP-lease, FabricDomain, cluster-ingress and physical-interface
 shapes remain unbound with no owning ticket.
 
+ExternalIP Envtest specs verify that allocation sends the stable Fulfillment API
+ID separately from Kubernetes `metadata.uid`, and that a failed release retains
+the address and finalizer until a retry succeeds. They use the in-memory AAP;
+real provider behavior remains E2E coverage under
+[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
+
 Local TLS/OIDC endpoints prove client handling, not deployed cross-cluster trust
 or credentials
 ([OSAC-5939](https://redhat.atlassian.net/browse/OSAC-5939)); LVMS Envtest uses
@@ -44,6 +50,12 @@ a minimal TopoLVM CRD and fixture status, so real device provisioning and CSI
 mounting remain E2E
 ([OSAC-3711](https://redhat.atlassian.net/browse/OSAC-3711)). Remote StorageClass
 coverage needs dual Envtest plus a second Kind cluster.
+
+ClusterOrder upgrade dispatch, observation, and deadline coverage
+([DEV] OSAC-6265, OSAC-7232) uses Envtest for dispatch and feedback against the
+real API, etcd, and CRDs with controlled AAP/HyperShift inputs; the deployed
+Kind suite covers installed CRD/status handling and manager timeout variables.
+Fulfillment persistence and the AAP workflow are not exercised.
 
 Subnet compute eligibility is covered at Unit and Envtest tier, in the
 Fulfillment servers suite (see the

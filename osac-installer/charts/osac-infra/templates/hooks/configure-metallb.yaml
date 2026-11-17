@@ -1,4 +1,7 @@
 {{- if .Values.metallb.enabled }}
+{{- if ge (int .Values.metallb.poolRangeStart) (int .Values.metallb.poolRangeEnd) }}
+{{- fail "metallb.poolRangeStart must be less than metallb.poolRangeEnd" }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -92,6 +95,12 @@ spec:
           env:
             - name: HOME
               value: /tmp
+            - name: METALLB_DERIVE_POOL_FROM_NODE_IP
+              value: {{ .Values.metallb.derivePoolFromNodeIP | quote }}
+            - name: METALLB_POOL_RANGE_START
+              value: {{ .Values.metallb.poolRangeStart | quote }}
+            - name: METALLB_POOL_RANGE_END
+              value: {{ .Values.metallb.poolRangeEnd | quote }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp

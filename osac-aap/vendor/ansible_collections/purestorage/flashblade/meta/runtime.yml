@@ -1,61 +1,410 @@
 ---
-requires_ansible: '>=2.16.0'
+requires_ansible: ">=2.16.0"
+
 action_groups:
-  purestorage.flashblade:
-   - purefb_ad
-   - purefb_admin
-   - purefb_alert
-   - purefb_apiclient
-   - purefb_banner
-   - purefb_bladename
-   - purefb_bucket
-   - purefb_bucket_access
-   - purefb_bucket_replica
-   - purefb_certgrp
-   - purefb_certs
-   - purefb_connect
-   - purefb_dns
-   - purefb_ds
-   - purefb_dsrole
-   - purefb_eula
-   - purefb_export
-   - purefb_fleet
-   - purefb_fs
-   - purefb_fs_replica
-   - purefb_groupquota
-   - purefb_hardware
-   - purefb_info
-   - purefb_inventory
-   - purefb_keytabs
-   - purefb_kmip
-   - purefb_lag
-   - purefb_lifecycle
-   - purefb_messages
-   - purefb_network
-   - purefb_ntp
-   - purefb_phonehome
-   - purefb_pingtrace
-   - purefb_policy
-   - purefb_proxy
-   - purefb_ra
-   - purefb_realm
-   - purefb_remote_cred
-   - purefb_s3_export_policy
-   - purefb_s3acc
-   - purefb_s3acc_export
-   - purefb_s3user
-   - purefb_saml
-   - purefb_server
-   - purefb_smtp
-   - purefb_snap
-   - purefb_snmp_agent
-   - purefb_snmp_mgr
-   - purefb_subnet
-   - purefb_syslog
-   - purefb_target
-   - purefb_timeout
-   - purefb_tz
-   - purefb_user
-   - purefb_userpolicy
-   - purefb_userquota
-   - purefb_virtualhost
+  everpure.flashblade:
+    - metadata:
+        extend_group:
+          - everpure.flashblade.everpure.flashblade
+
+plugin_routing:
+  modules:
+    purefb_ad:
+      redirect: everpure.flashblade.purefb_ad
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_ad has moved to everpure.flashblade.purefb_ad. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_admin:
+      redirect: everpure.flashblade.purefb_admin
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_admin has moved to everpure.flashblade.purefb_admin. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_alert:
+      redirect: everpure.flashblade.purefb_alert
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_alert has moved to everpure.flashblade.purefb_alert. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_apiclient:
+      redirect: everpure.flashblade.purefb_apiclient
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_apiclient has moved to everpure.flashblade.purefb_apiclient. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_banner:
+      redirect: everpure.flashblade.purefb_banner
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_banner has moved to everpure.flashblade.purefb_banner. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_bladename:
+      redirect: everpure.flashblade.purefb_bladename
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_bladename has moved to everpure.flashblade.purefb_bladename. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_bucket:
+      redirect: everpure.flashblade.purefb_bucket
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_bucket has moved to everpure.flashblade.purefb_bucket. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_bucket_access:
+      redirect: everpure.flashblade.purefb_bucket_access
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_bucket_access has moved to everpure.flashblade.purefb_bucket_access. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_bucket_replica:
+      redirect: everpure.flashblade.purefb_bucket_replica
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_bucket_replica has moved to everpure.flashblade.purefb_bucket_replica. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_certgrp:
+      redirect: everpure.flashblade.purefb_certgrp
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_certgrp has moved to everpure.flashblade.purefb_certgrp. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_certs:
+      redirect: everpure.flashblade.purefb_certs
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_certs has moved to everpure.flashblade.purefb_certs. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_connect:
+      redirect: everpure.flashblade.purefb_connect
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_connect has moved to everpure.flashblade.purefb_connect. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_dns:
+      redirect: everpure.flashblade.purefb_dns
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_dns has moved to everpure.flashblade.purefb_dns. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_ds:
+      redirect: everpure.flashblade.purefb_ds
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_ds has moved to everpure.flashblade.purefb_ds. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_dsrole:
+      redirect: everpure.flashblade.purefb_dsrole
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_dsrole has moved to everpure.flashblade.purefb_dsrole. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_eula:
+      redirect: everpure.flashblade.purefb_eula
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_eula has moved to everpure.flashblade.purefb_eula. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_export:
+      redirect: everpure.flashblade.purefb_export
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_export has moved to everpure.flashblade.purefb_export. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_fleet:
+      redirect: everpure.flashblade.purefb_fleet
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_fleet has moved to everpure.flashblade.purefb_fleet. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_fs:
+      redirect: everpure.flashblade.purefb_fs
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_fs has moved to everpure.flashblade.purefb_fs. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_fs_replica:
+      redirect: everpure.flashblade.purefb_fs_replica
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_fs_replica has moved to everpure.flashblade.purefb_fs_replica. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_groupquota:
+      redirect: everpure.flashblade.purefb_groupquota
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_groupquota has moved to everpure.flashblade.purefb_groupquota. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_hardware:
+      redirect: everpure.flashblade.purefb_hardware
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_hardware has moved to everpure.flashblade.purefb_hardware. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_info:
+      redirect: everpure.flashblade.purefb_info
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_info has moved to everpure.flashblade.purefb_info. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_inventory:
+      redirect: everpure.flashblade.purefb_inventory
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_inventory has moved to everpure.flashblade.purefb_inventory. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_keytabs:
+      redirect: everpure.flashblade.purefb_keytabs
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_keytabs has moved to everpure.flashblade.purefb_keytabs. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_kmip:
+      redirect: everpure.flashblade.purefb_kmip
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_kmip has moved to everpure.flashblade.purefb_kmip. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_lag:
+      redirect: everpure.flashblade.purefb_lag
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_lag has moved to everpure.flashblade.purefb_lag. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_lifecycle:
+      redirect: everpure.flashblade.purefb_lifecycle
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_lifecycle has moved to everpure.flashblade.purefb_lifecycle. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_messages:
+      redirect: everpure.flashblade.purefb_messages
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_messages has moved to everpure.flashblade.purefb_messages. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_network:
+      redirect: everpure.flashblade.purefb_network
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_network has moved to everpure.flashblade.purefb_network. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_ntp:
+      redirect: everpure.flashblade.purefb_ntp
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_ntp has moved to everpure.flashblade.purefb_ntp. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_phonehome:
+      redirect: everpure.flashblade.purefb_phonehome
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_phonehome has moved to everpure.flashblade.purefb_phonehome. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_pingtrace:
+      redirect: everpure.flashblade.purefb_pingtrace
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_pingtrace has moved to everpure.flashblade.purefb_pingtrace. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_policy:
+      redirect: everpure.flashblade.purefb_policy
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_policy has moved to everpure.flashblade.purefb_policy. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_proxy:
+      redirect: everpure.flashblade.purefb_proxy
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_proxy has moved to everpure.flashblade.purefb_proxy. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_ra:
+      redirect: everpure.flashblade.purefb_ra
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_ra has moved to everpure.flashblade.purefb_ra. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_realm:
+      redirect: everpure.flashblade.purefb_realm
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_realm has moved to everpure.flashblade.purefb_realm. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_remote_cred:
+      redirect: everpure.flashblade.purefb_remote_cred
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_remote_cred has moved to everpure.flashblade.purefb_remote_cred. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_s3_export_policy:
+      redirect: everpure.flashblade.purefb_s3_export_policy
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_s3_export_policy has moved to everpure.flashblade.purefb_s3_export_policy. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_s3acc:
+      redirect: everpure.flashblade.purefb_s3acc
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_s3acc has moved to everpure.flashblade.purefb_s3acc. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_s3acc_export:
+      redirect: everpure.flashblade.purefb_s3acc_export
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_s3acc_export has moved to everpure.flashblade.purefb_s3acc_export. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_s3user:
+      redirect: everpure.flashblade.purefb_s3user
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_s3user has moved to everpure.flashblade.purefb_s3user. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_saml:
+      redirect: everpure.flashblade.purefb_saml
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_saml has moved to everpure.flashblade.purefb_saml. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_server:
+      redirect: everpure.flashblade.purefb_server
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_server has moved to everpure.flashblade.purefb_server. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_smtp:
+      redirect: everpure.flashblade.purefb_smtp
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_smtp has moved to everpure.flashblade.purefb_smtp. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_snap:
+      redirect: everpure.flashblade.purefb_snap
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_snap has moved to everpure.flashblade.purefb_snap. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_snmp_agent:
+      redirect: everpure.flashblade.purefb_snmp_agent
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_snmp_agent has moved to everpure.flashblade.purefb_snmp_agent. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_snmp_mgr:
+      redirect: everpure.flashblade.purefb_snmp_mgr
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_snmp_mgr has moved to everpure.flashblade.purefb_snmp_mgr. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_subnet:
+      redirect: everpure.flashblade.purefb_subnet
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_subnet has moved to everpure.flashblade.purefb_subnet. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_syslog:
+      redirect: everpure.flashblade.purefb_syslog
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_syslog has moved to everpure.flashblade.purefb_syslog. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_target:
+      redirect: everpure.flashblade.purefb_target
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_target has moved to everpure.flashblade.purefb_target. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_timeout:
+      redirect: everpure.flashblade.purefb_timeout
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_timeout has moved to everpure.flashblade.purefb_timeout. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_tz:
+      redirect: everpure.flashblade.purefb_tz
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_tz has moved to everpure.flashblade.purefb_tz. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_user:
+      redirect: everpure.flashblade.purefb_user
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_user has moved to everpure.flashblade.purefb_user. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_userpolicy:
+      redirect: everpure.flashblade.purefb_userpolicy
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_userpolicy has moved to everpure.flashblade.purefb_userpolicy. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_userquota:
+      redirect: everpure.flashblade.purefb_userquota
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_userquota has moved to everpure.flashblade.purefb_userquota. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.
+    purefb_virtualhost:
+      redirect: everpure.flashblade.purefb_virtualhost
+      deprecation:
+        removal_version: "2.0.0"
+        warning_text: >-
+          purestorage.flashblade.purefb_virtualhost has moved to everpure.flashblade.purefb_virtualhost. Update your playbooks to the
+          everpure.flashblade namespace; this redirect will be removed in 2.0.0.

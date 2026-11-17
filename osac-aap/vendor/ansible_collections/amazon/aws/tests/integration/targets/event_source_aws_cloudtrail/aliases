@@ -1,0 +1,5 @@
+# Disabled until GHA is configured to trigger event source tests
+
+disabled
+
+cloud/aws

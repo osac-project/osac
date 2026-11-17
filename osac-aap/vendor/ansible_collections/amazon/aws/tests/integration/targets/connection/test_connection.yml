@@ -1,0 +1,169 @@
+---
+- name: Test connection and unicode file handling
+  hosts: all
+  gather_facts: false
+  # Remove or suppress below if strategy: free is intentional for test
+  # strategy: free
+
+  vars:
+    local_dir: "{{ local_tmp }}-{{ inventory_hostname }}-汉语"
+    local_file: "{{ local_dir }}/汉语.txt"
+    remote_dir: "{{ remote_tmp }}-汉语"
+    remote_file: "{{ remote_dir }}/汉语.txt"
+    remote_empty_file: "{{ remote_dir }}/empty.txt"
+
+  tasks:
+    - name: Wait for connection
+      ansible.builtin.wait_for_connection:
+        timeout: "{{ wait_for_timeout | default(100) }}"
+        sleep: 10
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Raw with unicode arg and output # noqa no-changed-when
+      ansible.builtin.raw: echo 汉语
+      register: command
+
+    - name: Check output of raw with unicode arg and output
+      ansible.builtin.assert:
+        that:
+          - "'汉语' in command.stdout"
+          - command is changed  # as of 2.2, raw should default to changed: true for consistency w/ shell/command/script modules
+
+    - name: Create local file with unicode filename and content
+      ansible.builtin.lineinfile:
+        path: "{{ local_file }}"
+        create: true
+        line: 汉语
+        mode: '0644'
+      delegate_to: localhost
+
+    - name: Remove remote file with unicode filename and content (Linux)
+      ansible.builtin.file:
+        path: "{{ remote_file }}"
+        state: absent
+      when: ansible_os_family != 'Windows'
+
+    - name: Remove remote file with unicode filename and content (Windows)
+      ansible.windows.win_file:
+        path: "{{ remote_file }}"
+        state: absent
+      when: ansible_os_family == 'Windows'
+
+    - name: Create remote directory with unicode name (Linux)
+      ansible.builtin.file:
+        path: "{{ remote_dir }}"
+        state: directory
+        mode: '0755'
+      when: ansible_os_family != 'Windows'
+
+    - name: Create remote directory with unicode name (Windows)
+      ansible.windows.win_file:
+        path: "{{ remote_dir }}"
+        state: directory
+      when: ansible_os_family == 'Windows'
+
+    - name: Copy local file with unicode filename and content
+      ansible.builtin.copy:
+        src: "{{ local_file }}"
+        dest: "{{ remote_file }}"
+        mode: '0644'
+
+    - name: Remove local file with unicode filename and content
+      ansible.builtin.file:
+        path: "{{ local_file }}"
+        state: absent
+        mode: '0644'
+      delegate_to: localhost
+
+    - name: Fetch remote file with unicode filename and content
+      ansible.builtin.fetch:
+        src: "{{ remote_file }}"
+        dest: "{{ local_file }}"
+        fail_on_missing: true
+        validate_checksum: true
+        flat: true
+
+    - name: Remove local temp file
+      ansible.builtin.file:
+        path: "{{ local_file }}"
+        state: absent
+        mode: '0644'
+      delegate_to: localhost
+
+    - name: Remove remote temp file (Linux)
+      ansible.builtin.file:
+        path: "{{ remote_file }}"
+        state: absent
+      when: ansible_os_family != 'Windows'
+
+    - name: Remove remote temp file (Windows)
+      ansible.windows.win_file:
+        path: "{{ remote_file }}"
+        state: absent
+      when: ansible_os_family == 'Windows'
+
+    - name: Test user manipulation
+      when: ansible_os_family != 'Windows'
+      block:
+        - name: Find ID when become=false # noqa no-changed-when
+          ansible.builtin.command: id -u -n
+          become: false
+          register: id_cmd
+
+        - name: Assert expected user
+          ansible.builtin.assert:
+            that:
+              - id_cmd.stdout == 'ssm-user'
+
+        - name: Include assume-user tests
+          ansible.builtin.include_tasks: test_assume.yml
+          loop:
+            - ssm-agent
+            - zuul
+            - root
+          loop_control:
+            loop_var: user_name
+
+    - name: Copy an empty file
+      ansible.builtin.copy:
+        content: ""
+        dest: "{{ remote_empty_file }}"
+        mode: '0644'
+
+    # Can be used to manually test for a regression of
+    # https://github.com/ansible-collections/amazon.aws/issues/2753
+    # but you need to increase the verbosity and inspect the logs...
+    - name: Copy an empty file (Looping)
+      ansible.builtin.copy:
+        content: ""
+        dest: "{{ remote_empty_file }}-{{ item }}"
+        mode: '0644'
+      loop: ["one", "two", "three"]
+
+    - name: Stat empty file (Linux)
+      ansible.builtin.stat:
+        path: "{{ remote_empty_file }}"
+      register: stat_empty_file_cmd
+      when: ansible_os_family != 'Windows'
+
+    - name: Check that empty file exists (Linux)
+      ansible.builtin.assert:
+        that:
+          - stat_empty_file_cmd.stat.isreg # it is a regular file
+          - stat_empty_file_cmd.stat.size == 0
+      when: ansible_os_family != 'Windows'
+
+    - name: Stat empty file (Windows)
+      ansible.windows.win_stat:
+        path: "{{ remote_empty_file }}"
+      register: stat_empty_file_cmd
+      when: ansible_os_family == 'Windows'
+
+    - name: Check that empty file exists (Windows)
+      ansible.builtin.assert:
+        that:
+          - stat_empty_file_cmd.stat.isreg # it is a regular file
+          - stat_empty_file_cmd.stat.size == 0
+      when: ansible_os_family == 'Windows'

@@ -1,4 +1,0 @@
-minor_changes:
- - purefb_policy - Snapshot policies can now have specific filesystems and/or replica links added or deletred from the policy
-bugfixes:
- - purefb_policy - Fixed creation of snapshot policies with assigned filesystems and/or replica links

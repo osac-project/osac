@@ -17,6 +17,7 @@ from tests.e2e.caas.sanity.test_cluster_create import (
     _assert_cluster_deleted,
     assert_cluster_with_two_node_sets_available,
 )
+from tests.e2e.core.failure_report import capture_failure, capture_snapshot
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import unique_name
@@ -29,6 +30,7 @@ pytestmark = pytest.mark.regression
 
 @pytest.mark.metering
 def test_cluster_create_with_two_node_sets(
+    request: pytest.FixtureRequest,
     cli: OsacCLI,
     private_cli: OsacCLI,
     grpc: GRPCClient,
@@ -74,7 +76,6 @@ def test_cluster_create_with_two_node_sets(
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)
             assert_cluster_trust(k8s_hub_client, cluster.co_name)
-
         resolved_operator_names = set(
             k8s_hub_client.get_json(resource="clusterorder", name=cluster.co_name)
             .get("spec", {})
@@ -92,8 +93,12 @@ def test_cluster_create_with_two_node_sets(
             identity="CaaS two-node-set cluster",
             hosted_cluster_reference=(cluster.hosted_cluster_name, cluster.hosted_cluster_namespace),
         )
+        capture_snapshot(request.config, request.node.nodeid)
         cli.delete_cluster(uuid=uuid)
         _assert_cluster_deleted(grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, cluster=cluster)
+    except (Exception, pytest.fail.Exception) as exc:
+        capture_failure(request.config, exc, request.node.nodeid)
+        raise
     finally:
         with contextlib.suppress(subprocess.SubprocessError):
             if uuid:

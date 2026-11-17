@@ -21,7 +21,7 @@ author:
   - Matthieu Diehr (@d-matt)
 
 requirements:
-  - "helm (https://github.com/helm/helm/releases)"
+  - "helm >= 3.0.0 (https://github.com/helm/helm/releases)"
   - "yaml (https://pypi.org/project/PyYAML/)"
 
 description:
@@ -132,15 +132,19 @@ options:
     version_added: 2.4.0
   reuse_values:
     description:
-      - When upgrading package, specifies wether to reuse the last release's values and merge in any overrides from parameters I(release_values),
-        I(values_files) or I(set_values).
-      - If I(reset_values) is set to C(True), this is ignored.
+      - When upgrading package, specifies whether to reuse the last release's values and merge in any overrides from parameters O(release_values),
+        O(values_files) or O(set_values).
+      - Helm ignores this when C(--reset-values) is passed. Since O(reset_values) defaults to V(true), it has to be set to V(false)
+        for this option to take any effect.
+      - C(helm install) does not accept C(--reuse-values), so this option is ignored when O(replace) is set.
+      - The module warns whenever one of those combinations makes this option a no-op.
     type: bool
     required: false
     version_added: 3.0.0
   reset_values:
     description:
       - When upgrading package, reset the values to the ones built into the chart.
+      - Defaults to V(true), which makes helm ignore O(reuse_values) and O(reset_then_reuse_values). Set it to V(false) to use either of them.
     type: bool
     required: false
     default: True
@@ -149,7 +153,10 @@ options:
     description:
       - When upgrading package, reset the values to the ones built into the chart, apply the last release's values and merge in any overrides from
         parameters O(release_values), O(values_files) or O(set_values).
-      - If O(reset_values) or O(reuse_values) is set to V(True), this is ignored.
+      - Helm ignores this when C(--reset-values) or C(--reuse-values) is passed. Since O(reset_values) defaults to V(true), it has to be
+        set to V(false), and O(reuse_values) left unset or V(false), for this option to take any effect.
+      - C(helm install) does not accept C(--reset-then-reuse-values), so this option is ignored when O(replace) is set.
+      - The module warns whenever one of those combinations makes this option a no-op.
       - This feature requires helm diff >= 3.9.12.
     type: bool
     required: false
@@ -165,6 +172,13 @@ options:
   force:
     description:
       - Helm option to force reinstall, ignore on new install.
+      - With Helm v4 this performs a client-side replacement. Helm v4 deprecated
+        C(--force) (split into C(--force-replace) and C(--force-conflicts)) and
+        enables server-side apply by default, so for Helm v4 the module emits
+        C(--server-side=false --force-replace) to preserve the Helm v3 behaviour.
+        With Helm v3 the C(--force) flag is used. The O(force) option works the
+        same way regardless of the installed Helm version.
+      - Mutually exclusive with O(server_side) and O(force_conflicts).
     default: False
     type: bool
   purge:
@@ -178,6 +192,15 @@ options:
         and minimum number of Pods of a Deployment are in a ready state before marking the release as successful.
       - When I(release_state) is set to C(absent), will wait until all the resources are deleted before returning.
         It will wait for as long as I(wait_timeout). This feature requires helm>=3.7.0. Added in version 2.3.0.
+    default: False
+    type: bool
+  wait_for_jobs:
+    description:
+      - When I(release_state) is set to C(present), and I(wait) is set to C(True), wait until all jobs are in a
+        completed state before marking the release as successful.
+      - Ignored when used without O(wait).
+      - Requires Helm >= 3.5.0
+    version_added: 6.6.0
     default: False
     type: bool
   wait_timeout:
@@ -195,8 +218,44 @@ options:
   atomic:
     description:
       - If set, the installation process deletes the installation on failure.
+      - With Helm v4 this is translated to the C(--rollback-on-failure) flag, since
+        C(--atomic) was renamed; with Helm v3 the C(--atomic) flag is used. The
+        O(atomic) option works the same way regardless of the installed Helm version.
     type: bool
     default: False
+  cleanup_on_fail:
+    description:
+      - Allow deletion of new resources created during a failed upgrade.
+      - Maps to the C(--cleanup-on-fail) flag, which is available since helm 3.0.0 and
+        was not renamed in Helm v4.
+      - Complements O(atomic) rather than replacing it, and the two can be combined so
+        that a rollback also drops resources orphaned by the failed upgrade.
+      - Helm only accepts this flag on C(helm upgrade), so it cannot be used together
+        with O(replace), which deploys through C(helm install).
+    type: bool
+    default: False
+    version_added: 6.6.0
+  server_side:
+    description:
+      - Control Helm v4 server-side apply when installing or upgrading a release.
+      - Maps to the C(--server-side) flag, which accepts C(true), C(false) or C(auto).
+      - This option requires Helm v4 and is mutually exclusive with O(force).
+    type: str
+    choices:
+      - "auto"
+      - "true"
+      - "false"
+    version_added: 6.5.0
+  force_conflicts:
+    description:
+      - When server-side apply is enabled (the Helm v4 default), force changes
+        against conflicts instead of failing.
+      - Maps to the C(--force-conflicts) flag.
+      - This option requires Helm v4, cannot be combined with O(server_side=false),
+        and is mutually exclusive with O(force).
+    type: bool
+    default: False
+    version_added: 6.5.0
   create_namespace:
     description:
       - Create the release namespace if not present.
@@ -237,6 +296,27 @@ options:
     default: False
     aliases: [ skip_tls_certs_check ]
     version_added: 5.3.0
+  plain_http:
+    description:
+      - Use HTTP instead of HTTPS when working with OCI registries
+      - Requires Helm >= 3.13.0
+    type: bool
+    default: False
+    version_added: 6.1.0
+  take_ownership:
+    description:
+      - Helm will ignore the check for helm annotations and take ownership of the existing resources
+      - This feature requires helm >= 3.17.0
+    type: bool
+    default: False
+    version_added: 6.1.0
+  skip_schema_validation:
+    description:
+      - Disables JSON schema validation for Chart and values.
+      - This feature requires helm >= 3.16.0
+    type: bool
+    default: False
+    version_added: 6.2.0
 extends_documentation_fragment:
   - kubernetes.core.helm_common_options
 """
@@ -319,6 +399,12 @@ EXAMPLES = r"""
     chart_ref: "https://github.com/grafana/helm-charts/releases/download/grafana-5.6.0/grafana-5.6.0.tgz"
     release_namespace: monitoring
 
+- name: Deploy Bitnami's MongoDB latest chart from OCI registry
+  kubernetes.core.helm:
+    name: test
+    chart_ref: "oci://registry-1.docker.io/bitnamicharts/mongodb"
+    release_namespace: database
+
 # Using complex Values
 - name: Deploy new-relic client chart
   kubernetes.core.helm:
@@ -327,6 +413,7 @@ EXAMPLES = r"""
     release_namespace: default
     force: True
     wait: True
+    wait_for_jobs: True
     replace: True
     update_repo_cache: True
     disable_hook: True
@@ -346,15 +433,30 @@ EXAMPLES = r"""
         enabled: True
 
 # Deploy latest version
+# 'reset_values' defaults to true and helm ignores '--reuse-values' when it is set,
+# so it has to be turned off explicitly.
 - name: Deploy latest version of Grafana chart using reuse_values
   kubernetes.core.helm:
     name: test
     chart_ref: stable/grafana
     release_namespace: monitoring
     reuse_values: true
+    reset_values: false
     values:
       replicas: 2
       version: 3e8ec0b2dffa40fb97d5342e4af887de95faa8c61a62480dd7f8aa03dffcf533
+
+# Same for 'reset_then_reuse_values', which helm ignores when either
+# '--reset-values' or '--reuse-values' is set.
+- name: Deploy latest version of Grafana chart using reset_then_reuse_values
+  kubernetes.core.helm:
+    name: test
+    chart_ref: stable/grafana
+    release_namespace: monitoring
+    reset_then_reuse_values: true
+    reset_values: false
+    values:
+      replicas: 2
 """
 
 RETURN = r"""
@@ -443,6 +545,7 @@ from ansible.module_utils.basic import missing_required_lib
 from ansible_collections.kubernetes.core.plugins.module_utils.helm import (
     AnsibleHelmModule,
     parse_helm_plugin_list,
+    strip_registry_progress,
 )
 from ansible_collections.kubernetes.core.plugins.module_utils.helm_args_common import (
     HELM_AUTH_ARG_SPEC,
@@ -473,9 +576,13 @@ def get_release_status(module, release_name, all_status=False):
         "--filter",
         release_name,
     ]
-    if all_status:
+    if all_status and not module.is_helm_v4():
+        # --all has been removed from `helm list` command on helm v4
         list_command.append("--all")
-
+    elif not all_status:
+        # The default behavior to display only deployed releases has been removed from
+        # Helm v4
+        list_command.append("--deployed")
     rc, out, err = module.run_helm_command(list_command)
 
     release = get_release(yaml.safe_load(out), release_name)
@@ -512,7 +619,9 @@ def run_dep_update(module, chart_ref):
     rc, out, err = module.run_helm_command(dep_update)
 
 
-def fetch_chart_info(module, command, chart_ref, insecure_skip_tls_verify=False):
+def fetch_chart_info(
+    module, command, chart_ref, insecure_skip_tls_verify=False, plain_http=False
+):
     """
     Get chart info
     """
@@ -521,9 +630,65 @@ def fetch_chart_info(module, command, chart_ref, insecure_skip_tls_verify=False)
     if insecure_skip_tls_verify:
         inspect_command += " --insecure-skip-tls-verify"
 
+    if plain_http:
+        helm_version = module.get_helm_version()
+        if LooseVersion(helm_version) < LooseVersion("3.13.0"):
+            module.fail_json(
+                msg="plain_http requires helm >= 3.13.0, current version is {0}".format(
+                    helm_version
+                )
+            )
+        else:
+            inspect_command += " --plain-http"
+
     rc, out, err = module.run_helm_command(inspect_command)
 
-    return yaml.safe_load(out)
+    return yaml.safe_load(strip_registry_progress(out))
+
+
+def validate_value_options(
+    module, replace, reuse_values, reset_values, reset_then_reuse_values
+):
+    """
+    Check the value-reuse options against each other and against 'replace'.
+
+    'helm install' accepts none of these flags, so 'replace' drops all three. The rest
+    are precedence rules helm applies silently: '--reset-values' wins over
+    '--reuse-values', and both win over '--reset-then-reuse-values'. Since 'reset_values'
+    defaults to true, requesting either of the other two on its own is a no-op.
+
+    Warn rather than fail throughout. Every one of these combinations is accepted by
+    playbooks today: 'reuse_values' has existed since 3.0.0, and a release that is
+    already converged never reaches deploy(), so the invalid command was never built.
+    Failing here would turn tasks that pass today into tasks that fail.
+    """
+    if replace:
+        for name, requested in (
+            ("reuse_values", reuse_values is not None),
+            ("reset_then_reuse_values", reset_then_reuse_values),
+        ):
+            if requested:
+                module.warn(
+                    "{0} is ignored because replace=true deploys through 'helm install',"
+                    " which does not accept the flag.".format(name)
+                )
+        return
+
+    if reset_values:
+        for name, requested in (
+            ("reuse_values", reuse_values),
+            ("reset_then_reuse_values", reset_then_reuse_values),
+        ):
+            if requested:
+                module.warn(
+                    "{0} is ignored because reset_values is true. "
+                    "Set reset_values=false to make it take effect.".format(name)
+                )
+    elif reuse_values and reset_then_reuse_values:
+        module.warn(
+            "reset_then_reuse_values is ignored because reuse_values is true. "
+            "Set reuse_values=false to make it take effect."
+        )
 
 
 def deploy(
@@ -533,12 +698,14 @@ def deploy(
     release_values,
     chart_name,
     wait,
+    wait_for_jobs,
     wait_timeout,
     disable_hook,
     force,
     values_files,
     history_max,
     atomic=False,
+    cleanup_on_fail=False,
     create_namespace=False,
     replace=False,
     post_renderer=None,
@@ -550,6 +717,11 @@ def deploy(
     reset_values=True,
     reset_then_reuse_values=False,
     insecure_skip_tls_verify=False,
+    plain_http=False,
+    take_ownership=False,
+    skip_schema_validation=False,
+    server_side=None,
+    force_conflicts=False,
 ):
     """
     Install/upgrade/rollback release chart
@@ -561,36 +733,99 @@ def deploy(
             deploy_command += " --dependency-update"
     else:
         deploy_command = command + " upgrade -i"  # install/upgrade
+        if take_ownership:
+            deploy_command += " --take-ownership"
+
+        # '--reset-values', '--reuse-values' and '--reset-then-reuse-values' are all
+        # upgrade-only flags, so they must not leak into the 'replace' branch above.
+        # validate_value_options() has already warned about that combination.
         if reset_values:
             deploy_command += " --reset-values"
 
-    if reuse_values is not None:
-        deploy_command += " --reuse-values=" + str(reuse_values)
+        if reuse_values is not None:
+            deploy_command += " --reuse-values=" + str(reuse_values)
 
-    if reset_then_reuse_values:
-        helm_version = module.get_helm_version()
-        if LooseVersion(helm_version) < LooseVersion("3.14.0"):
-            module.fail_json(
-                msg="reset_then_reuse_values requires helm >= 3.14.0, current version is {0}".format(
-                    helm_version
+        if reset_then_reuse_values:
+            helm_version = module.get_helm_version()
+            if LooseVersion(helm_version) < LooseVersion("3.14.0"):
+                module.fail_json(
+                    msg="reset_then_reuse_values requires helm >= 3.14.0, current version is {0}".format(
+                        helm_version
+                    )
                 )
-            )
-        else:
-            deploy_command += " --reset-then-reuse-values"
+            else:
+                deploy_command += " --reset-then-reuse-values"
 
     if wait:
         deploy_command += " --wait"
+        if wait_for_jobs:
+            helm_version = module.get_helm_version()
+            if LooseVersion(helm_version) < LooseVersion("3.5.0"):
+                module.fail_json(
+                    msg="wait_for_jobs requires helm >= 3.5.0, current version is {0}".format(
+                        helm_version
+                    )
+                )
+            else:
+                deploy_command += " --wait-for-jobs"
         if wait_timeout is not None:
             deploy_command += " --timeout " + wait_timeout
 
     if atomic:
-        deploy_command += " --atomic"
+        # Helm v4 renamed '--atomic' to '--rollback-on-failure'. The old flag is
+        # deprecated on 'helm upgrade' and removed from 'helm install', so always
+        # emit the version-appropriate flag.
+        if module.is_helm_v4():
+            deploy_command += " --rollback-on-failure"
+        else:
+            deploy_command += " --atomic"
+
+    if cleanup_on_fail:
+        # '--cleanup-on-fail' is only accepted by 'helm upgrade', so it cannot be
+        # combined with 'replace', which deploys through 'helm install'. The flag
+        # exists since helm 3.0.0 and kept its name in v4, so no version gate is
+        # needed on top of the module-wide helm >= 3.0.0 requirement.
+        if replace:
+            module.fail_json(
+                msg="cleanup_on_fail is only supported by 'helm upgrade' and cannot be used with replace=true"
+            )
+        deploy_command += " --cleanup-on-fail"
 
     if timeout:
         deploy_command += " --timeout " + timeout
 
+    if server_side is not None:
+        if not module.is_helm_v4():
+            module.fail_json(
+                msg="server_side requires helm >= 4.0.0, current version is {0}".format(
+                    module.get_helm_version()
+                )
+            )
+        deploy_command += " --server-side=" + server_side
+
+    if force_conflicts:
+        if not module.is_helm_v4():
+            module.fail_json(
+                msg="force_conflicts requires helm >= 4.0.0, current version is {0}".format(
+                    module.get_helm_version()
+                )
+            )
+        if server_side == "false":
+            module.fail_json(
+                msg="force_conflicts requires server-side apply to be enabled and cannot be used with server_side=false"
+            )
+        deploy_command += " --force-conflicts"
+
     if force:
-        deploy_command += " --force"
+        # Helm v4 deprecated '--force' (split into '--force-replace' and
+        # '--force-conflicts') and enables server-side apply by default, which is
+        # incompatible with '--force-replace'. Emit the version-appropriate flags,
+        # disabling server-side apply on v4 to preserve the v3 client-side
+        # replacement behaviour. 'force' is mutually exclusive with 'server_side'.
+        if module.is_helm_v4():
+            deploy_command += " --server-side=false --force-replace"
+        else:
+            deploy_command += " --force"
 
     if replace:
         deploy_command += " --replace"
@@ -611,6 +846,9 @@ def deploy(
             )
         else:
             deploy_command += " --insecure-skip-tls-verify"
+
+    if plain_http:
+        deploy_command += " --plain-http"
 
     if values_files:
         for value_file in values_files:
@@ -634,6 +872,17 @@ def deploy(
 
     if set_value_args:
         deploy_command += " " + set_value_args
+
+    if skip_schema_validation:
+        helm_version = module.get_helm_version()
+        if LooseVersion(helm_version) < LooseVersion("3.16.0"):
+            module.fail_json(
+                msg="skip_schema_validation requires helm >= 3.16.0, current version is {0}".format(
+                    helm_version
+                )
+            )
+        else:
+            deploy_command += " --skip-schema-validation"
 
     deploy_command += " " + release_name + f" '{chart_name}'"
     return deploy_command
@@ -687,8 +936,8 @@ def get_plugin_version(plugin):
         return None
 
     for line in out:
-        if line[0] == plugin:
-            return line[1]
+        if line["name"] == plugin:
+            return line["version"]
     return None
 
 
@@ -707,6 +956,8 @@ def helmdiff_check(
     reset_values=True,
     reset_then_reuse_values=False,
     insecure_skip_tls_verify=False,
+    plain_http=False,
+    skip_schema_validation=False,
 ):
     """
     Use helm diff to determine if a release would change by upgrading a chart.
@@ -738,10 +989,10 @@ def helmdiff_check(
     if set_value_args:
         cmd += " " + set_value_args
 
-    if reuse_values:
+    if not replace and reuse_values:
         cmd += " --reuse-values"
 
-    if reset_then_reuse_values:
+    if not replace and reset_then_reuse_values:
         helm_diff_version = get_plugin_version("diff")
         helm_version = module.get_helm_version()
         fail_msg = ""
@@ -761,6 +1012,28 @@ def helmdiff_check(
 
     if insecure_skip_tls_verify:
         cmd += " --insecure-skip-tls-verify"
+
+    if skip_schema_validation:
+        helm_version = module.get_helm_version()
+        if LooseVersion(helm_version) < LooseVersion("3.16.0"):
+            module.fail_json(
+                msg="skip_schema_validation requires helm >= 3.16.0, current version is {0}".format(
+                    helm_version
+                )
+            )
+        else:
+            cmd += " --skip-schema-validation"
+
+    if plain_http:
+        helm_version = module.get_helm_version()
+        if LooseVersion(helm_version) < LooseVersion("3.13.0"):
+            module.fail_json(
+                msg="plain_http requires helm >= 3.13.0, current version is {0}".format(
+                    helm_version
+                )
+            )
+        else:
+            cmd += " --plain-http"
 
     rc, out, err = module.run_helm_command(cmd)
     return (len(out.strip()) > 0, out.strip())
@@ -793,39 +1066,58 @@ def default_check(release_status, chart_info, values=None, values_files=None):
 def argument_spec():
     arg_spec = copy.deepcopy(HELM_AUTH_ARG_SPEC)
     arg_spec.update(
-        dict(
-            chart_ref=dict(type="path"),
-            chart_repo_url=dict(type="str"),
-            chart_version=dict(type="str"),
-            dependency_update=dict(type="bool", default=False, aliases=["dep_up"]),
-            release_name=dict(type="str", required=True, aliases=["name"]),
-            release_namespace=dict(type="str", required=True, aliases=["namespace"]),
-            release_state=dict(
-                default="present", choices=["present", "absent"], aliases=["state"]
-            ),
-            release_values=dict(type="dict", default={}, aliases=["values"]),
-            values_files=dict(type="list", default=[], elements="str"),
-            update_repo_cache=dict(type="bool", default=False),
-            disable_hook=dict(type="bool", default=False),
-            force=dict(type="bool", default=False),
-            purge=dict(type="bool", default=True),
-            wait=dict(type="bool", default=False),
-            wait_timeout=dict(type="str"),
-            timeout=dict(type="str"),
-            atomic=dict(type="bool", default=False),
-            create_namespace=dict(type="bool", default=False),
-            post_renderer=dict(type="str"),
-            replace=dict(type="bool", default=False),
-            skip_crds=dict(type="bool", default=False),
-            history_max=dict(type="int"),
-            set_values=dict(type="list", elements="dict"),
-            reuse_values=dict(type="bool"),
-            reset_values=dict(type="bool", default=True),
-            reset_then_reuse_values=dict(type="bool", default=False),
-            insecure_skip_tls_verify=dict(
-                type="bool", default=False, aliases=["skip_tls_certs_check"]
-            ),
-        )
+        {
+            "chart_ref": {"type": "path"},
+            "chart_repo_url": {"type": "str"},
+            "chart_version": {"type": "str"},
+            "dependency_update": {
+                "type": "bool",
+                "default": False,
+                "aliases": ["dep_up"],
+            },
+            "release_name": {"type": "str", "required": True, "aliases": ["name"]},
+            "release_namespace": {
+                "type": "str",
+                "required": True,
+                "aliases": ["namespace"],
+            },
+            "release_state": {
+                "default": "present",
+                "choices": ["present", "absent"],
+                "aliases": ["state"],
+            },
+            "release_values": {"type": "dict", "default": {}, "aliases": ["values"]},
+            "values_files": {"type": "list", "default": [], "elements": "str"},
+            "update_repo_cache": {"type": "bool", "default": False},
+            "disable_hook": {"type": "bool", "default": False},
+            "force": {"type": "bool", "default": False},
+            "purge": {"type": "bool", "default": True},
+            "wait": {"type": "bool", "default": False},
+            "wait_for_jobs": {"type": "bool", "default": False},
+            "wait_timeout": {"type": "str"},
+            "timeout": {"type": "str"},
+            "atomic": {"type": "bool", "default": False},
+            "server_side": {"type": "str", "choices": ["auto", "true", "false"]},
+            "force_conflicts": {"type": "bool", "default": False},
+            "create_namespace": {"type": "bool", "default": False},
+            "post_renderer": {"type": "str"},
+            "replace": {"type": "bool", "default": False},
+            "skip_crds": {"type": "bool", "default": False},
+            "history_max": {"type": "int"},
+            "set_values": {"type": "list", "elements": "dict"},
+            "reuse_values": {"type": "bool"},
+            "reset_values": {"type": "bool", "default": True},
+            "reset_then_reuse_values": {"type": "bool", "default": False},
+            "insecure_skip_tls_verify": {
+                "type": "bool",
+                "default": False,
+                "aliases": ["skip_tls_certs_check"],
+            },
+            "plain_http": {"type": "bool", "default": False},
+            "take_ownership": {"type": "bool", "default": False},
+            "skip_schema_validation": {"type": "bool", "default": False},
+            "cleanup_on_fail": {"type": "bool", "default": False},
+        }
     )
     return arg_spec
 
@@ -842,6 +1134,8 @@ def main():
             ("context", "ca_cert"),
             ("replace", "history_max"),
             ("wait_timeout", "timeout"),
+            ("force", "server_side"),
+            ("force", "force_conflicts"),
         ],
         supports_check_mode=True,
     )
@@ -857,7 +1151,7 @@ def main():
     if not IMP_YAML:
         module.fail_json(msg=missing_required_lib("yaml"), exception=IMP_YAML_ERR)
 
-    # Validate Helm version >=3.0.0,<4.0.0
+    # Validate Helm version >=3.0.0
     module.validate_helm_version()
 
     changed = False
@@ -877,8 +1171,12 @@ def main():
     force = module.params.get("force")
     purge = module.params.get("purge")
     wait = module.params.get("wait")
+    wait_for_jobs = module.params.get("wait_for_jobs")
     wait_timeout = module.params.get("wait_timeout")
     atomic = module.params.get("atomic")
+    cleanup_on_fail = module.params.get("cleanup_on_fail")
+    server_side = module.params.get("server_side")
+    force_conflicts = module.params.get("force_conflicts")
     create_namespace = module.params.get("create_namespace")
     post_renderer = module.params.get("post_renderer")
     replace = module.params.get("replace")
@@ -890,6 +1188,9 @@ def main():
     reset_values = module.params.get("reset_values")
     reset_then_reuse_values = module.params.get("reset_then_reuse_values")
     insecure_skip_tls_verify = module.params.get("insecure_skip_tls_verify")
+    plain_http = module.params.get("plain_http")
+    take_ownership = module.params.get("take_ownership")
+    skip_schema_validation = module.params.get("skip_schema_validation")
 
     if update_repo_cache:
         run_repo_update(module)
@@ -899,6 +1200,33 @@ def main():
     release_status = get_release_status(module, release_name, all_status=all_status)
 
     helm_cmd = module.get_helm_binary()
+
+    if plain_http:
+        helm_version = module.get_helm_version()
+        if LooseVersion(helm_version) < LooseVersion("3.13.0"):
+            module.fail_json(
+                msg="plain_http requires helm >= 3.13.0, current version is {0}".format(
+                    helm_version
+                )
+            )
+    if take_ownership:
+        helm_version = module.get_helm_version()
+        if LooseVersion(helm_version) < LooseVersion("3.17.0"):
+            module.fail_json(
+                msg="take_ownership requires helm >= 3.17.0, current version is {0}".format(
+                    helm_version
+                )
+            )
+
+    if skip_schema_validation:
+        helm_version = module.get_helm_version()
+        if LooseVersion(helm_version) < LooseVersion("3.16.0"):
+            module.fail_json(
+                msg="skip_schema_validation requires helm >= 3.16.0, current version is {0}".format(
+                    helm_version
+                )
+            )
+
     opt_result = {}
     if release_state == "absent" and release_status is not None:
         # skip release statuses 'uninstalled' and 'uninstalling'
@@ -909,8 +1237,7 @@ def main():
             if wait:
                 helm_version = module.get_helm_version()
                 if LooseVersion(helm_version) < LooseVersion("3.7.0"):
-                    opt_result["warnings"] = []
-                    opt_result["warnings"].append(
+                    module.warn(
                         "helm uninstall support option --wait for helm release >= 3.7.0"
                     )
                     wait = False
@@ -920,6 +1247,10 @@ def main():
             )
             changed = True
     elif release_state == "present":
+        validate_value_options(
+            module, replace, reuse_values, reset_values, reset_then_reuse_values
+        )
+
         if chart_version is not None:
             helm_cmd += " --version=" + chart_version
 
@@ -928,7 +1259,7 @@ def main():
 
         # Fetch chart info to have real version and real name for chart_ref from archive, folder or url
         chart_info = fetch_chart_info(
-            module, helm_cmd, chart_ref, insecure_skip_tls_verify
+            module, helm_cmd, chart_ref, insecure_skip_tls_verify, plain_http
         )
 
         if dependency_update:
@@ -973,11 +1304,15 @@ def main():
                 release_values,
                 chart_ref,
                 wait,
+                wait_for_jobs,
                 wait_timeout,
                 disable_hook,
                 False,
                 values_files=values_files,
                 atomic=atomic,
+                cleanup_on_fail=cleanup_on_fail,
+                server_side=server_side,
+                force_conflicts=force_conflicts,
                 create_namespace=create_namespace,
                 post_renderer=post_renderer,
                 replace=replace,
@@ -990,19 +1325,29 @@ def main():
                 reset_values=reset_values,
                 reset_then_reuse_values=reset_then_reuse_values,
                 insecure_skip_tls_verify=insecure_skip_tls_verify,
+                plain_http=plain_http,
+                take_ownership=take_ownership,
+                skip_schema_validation=skip_schema_validation,
             )
             changed = True
 
         else:
             helm_diff_version = get_plugin_version("diff")
-            if helm_diff_version and (
-                not chart_repo_url
-                or (
-                    chart_repo_url
-                    and LooseVersion(helm_diff_version) >= LooseVersion("3.4.1")
+            helm_version_compatible = module.is_helm_version_compatible_with_helm_diff(
+                helm_diff_version
+            )
+            if (
+                helm_diff_version
+                and helm_version_compatible
+                and (
+                    not chart_repo_url
+                    or (
+                        chart_repo_url
+                        and LooseVersion(helm_diff_version) >= LooseVersion("3.4.1")
+                    )
                 )
             ):
-                (would_change, prepared) = helmdiff_check(
+                would_change, prepared = helmdiff_check(
                     module,
                     release_name,
                     chart_ref,
@@ -1017,14 +1362,24 @@ def main():
                     reset_values=reset_values,
                     reset_then_reuse_values=reset_then_reuse_values,
                     insecure_skip_tls_verify=insecure_skip_tls_verify,
+                    plain_http=plain_http,
+                    skip_schema_validation=skip_schema_validation,
                 )
                 if would_change and module._diff:
                     opt_result["diff"] = {"prepared": prepared}
             else:
-                module.warn(
-                    "The default idempotency check can fail to report changes in certain cases. "
-                    "Install helm diff >= 3.4.1 for better results."
-                )
+                if helm_diff_version and not helm_version_compatible:
+                    module.warn(
+                        "Idempotency checks are currently disabled due to a version mismatch."
+                        f" Helm version {module.get_helm_version()} requires helm-diff >= 3.14.0,"
+                        f" but the environment is currently running {helm_diff_version}."
+                        " Please align the plugin versions to restore standard behavior."
+                    )
+                else:
+                    module.warn(
+                        "The default idempotency check can fail to report changes in certain cases. "
+                        "Install helm diff >= 3.4.1 for better results."
+                    )
                 would_change = default_check(
                     release_status, chart_info, release_values, values_files
                 )
@@ -1037,11 +1392,15 @@ def main():
                     release_values,
                     chart_ref,
                     wait,
+                    wait_for_jobs,
                     wait_timeout,
                     disable_hook,
                     force,
                     values_files=values_files,
                     atomic=atomic,
+                    cleanup_on_fail=cleanup_on_fail,
+                    server_side=server_side,
+                    force_conflicts=force_conflicts,
                     create_namespace=create_namespace,
                     post_renderer=post_renderer,
                     replace=replace,
@@ -1054,6 +1413,9 @@ def main():
                     reset_values=reset_values,
                     reset_then_reuse_values=reset_then_reuse_values,
                     insecure_skip_tls_verify=insecure_skip_tls_verify,
+                    plain_http=plain_http,
+                    take_ownership=take_ownership,
+                    skip_schema_validation=skip_schema_validation,
                 )
                 changed = True
 

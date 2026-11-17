@@ -1,0 +1,19 @@
+---
+- name: Normalize protectedpath inputs
+  ansible.builtin.import_tasks: normalize.yml
+
+- name: Manage replication VIP pools
+  ansible.builtin.import_tasks: vippools.yml
+  when: protectedpath_manage_vippools | bool
+
+- name: Manage native replication peers
+  ansible.builtin.import_tasks: replicationpeers.yml
+  when: protectedpath_manage_replicationpeers | bool
+
+- name: Manage protection policies
+  ansible.builtin.import_tasks: protectionpolicies.yml
+  when: protectedpath_manage_protectionpolicies | bool
+
+- name: Manage protected paths
+  ansible.builtin.import_tasks: protectedpaths.yml
+  when: protectedpath_manage_protectedpaths | bool

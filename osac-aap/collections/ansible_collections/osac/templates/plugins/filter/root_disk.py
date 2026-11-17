@@ -1,6 +1,27 @@
 """Choose a root disk from Metal3 inspection data."""
 
+import enum
 from collections.abc import Callable
+
+
+# Root-device hint keys in preference order, read from the inspection
+# fields of the same names (HardwareData status.hardware.storage): a stable
+# hardware identity (serialNumber, wwn) survives virtio probe-order changes
+# that reshuffle device names, so it is preferred whenever the disk reports
+# one. deviceName is the fallback, not part of this list.
+HINT_KEYS = ("serialNumber", "wwn")
+
+
+class RootDiskPolicy(enum.Enum):
+    """How the root disk is selected from the inspected storage."""
+
+    # The smallest eligible disk; configured with min_size (GiB).
+    SMALLEST = "smallest"
+
+
+# Default minimum root disk size (GiB) for the smallest-disk policy.
+# TODO(OSAC-4576): Replace this minimum when the required image size is agreed.
+DEFAULT_MIN_SIZE_GIB = 4
 
 
 def _disks(hardware_data: list[dict], bmh: dict) -> list[dict]:
@@ -9,22 +30,52 @@ def _disks(hardware_data: list[dict], bmh: dict) -> list[dict]:
     return (inspected or {}).get("storage") or status.get("storage") or []
 
 
-def _eligible_disks(hardware_data: list[dict], bmh: dict, minimum_gib: int) -> list[dict]:
-    minimum_bytes = int(minimum_gib) * (1 << 30)
-    return [
-        disk
-        for disk in _disks(hardware_data, bmh)
-        if disk.get("name") and disk.get("sizeBytes") and int(disk["sizeBytes"]) >= minimum_bytes
-    ]
+def _select_disk(policy: RootDiskPolicy, disks: list[dict], options: dict) -> dict | None:
+    if policy is RootDiskPolicy.SMALLEST:
+        minimum_bytes = int(options.get("min_size", DEFAULT_MIN_SIZE_GIB)) * (1 << 30)
+        eligible = [
+            disk
+            for disk in disks
+            if disk.get("name") and disk.get("sizeBytes") and int(disk["sizeBytes"]) >= minimum_bytes
+        ]
+        if not eligible:
+            return None
+        return min(eligible, key=lambda disk: (int(disk["sizeBytes"]), disk["name"]))
+    raise ValueError(f"unsupported root disk policy: {policy}")
 
 
-def smallest_root_disk(hardware_data: list[dict], bmh: dict, minimum_gib: int) -> str:
-    eligible = _eligible_disks(hardware_data, bmh, minimum_gib)
-    if not eligible:
-        return ""
-    return min(eligible, key=lambda disk: (int(disk["sizeBytes"]), disk["name"]))["name"]
+def root_device_hints(
+    hardware_data: list[dict], bmh: dict, policy: str = RootDiskPolicy.SMALLEST.value, **options
+) -> dict:
+    """Build rootDeviceHints for the disk chosen by the policy.
+
+    The policy selects the disk and defaults to RootDiskPolicy.SMALLEST,
+    the smallest eligible disk; it is configured with min_size, the minimum
+    size in GiB, which defaults to DEFAULT_MIN_SIZE_GIB. The hint then uses
+    the first non-empty identity the inspected disk reports, in order:
+    serialNumber, wwn, and the inspection's device name as the fallback.
+    An empty dict means no eligible disk was found and Metal3 keeps its
+    default behavior.
+
+    No device name is stable on virtio: the probe-order letters reshuffle
+    and libvirt reassigns the PCI slots behind by-path links, so disks
+    without a serial or wwn cannot be hinted reliably — set a libvirt disk
+    serial on such guests.
+    """
+    try:
+        selected_policy = RootDiskPolicy(policy)
+    except ValueError:
+        raise ValueError(f"unsupported root disk policy: {policy}") from None
+    disk = _select_disk(selected_policy, _disks(hardware_data, bmh), options)
+    if not disk:
+        return {}
+    for key in HINT_KEYS:
+        value = disk.get(key)
+        if isinstance(value, str) and value.strip():
+            return {key: value.strip()}
+    return {"deviceName": disk["name"]}
 
 
 class FilterModule:
-    def filters(self) -> dict[str, Callable[..., str]]:
-        return {"smallest_root_disk": smallest_root_disk}
+    def filters(self) -> dict[str, Callable[..., dict]]:
+        return {"root_device_hints": root_device_hints}

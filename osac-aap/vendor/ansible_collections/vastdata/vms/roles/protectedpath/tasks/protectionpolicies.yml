@@ -1,0 +1,69 @@
+---
+- name: Require native replication policy target
+  ansible.builtin.assert:
+    that:
+      - _clone_type != 'NATIVE_REPLICATION' or item.target_cluster is defined
+      - _clone_type != 'NATIVE_REPLICATION' or (item.target_cluster | default('')) in protectedpath_vms
+    fail_msg: >-
+      Protection policy "{{ item.name | default('?') }}" is NATIVE_REPLICATION
+      and must define target_cluster. The role translates target_cluster to the
+      protectionpolicies module target_object_id by matching a replication peer
+      from "{{ item.cluster }}" to the target cluster's replication VIP range.
+  loop: "{{ protectionpolicies }}"
+  loop_control:
+    label: "{{ item.cluster }}:{{ item.name | default('?') }}"
+  vars:
+    _clone_type: "{{ item.clone_type | default('NATIVE_REPLICATION') }}"
+
+- name: Ensure protection policies
+  vastdata.vms.protectionpolicies:
+    vms: "{{ protectedpath_vms[item.cluster] }}"
+    id: "{{ item.id | default(omit) }}"
+    big_catalog: "{{ item.big_catalog | default(omit) }}"
+    clone_type: "{{ item.clone_type | default('NATIVE_REPLICATION') }}"
+    frames: "{{ item.frames | default(omit) }}"
+    indestructible: "{{ item.indestructible | default(omit) }}"
+    name: "{{ item.name | default(omit) }}"
+    prefix: "{{ item.prefix | default(omit) }}"
+    remote_tenant_guid: "{{ item.remote_tenant_guid | default(omit) }}"
+    target_object_id: >-
+      {{
+        (_target_object_id | int)
+        if _clone_type == 'NATIVE_REPLICATION'
+        else omit
+      }}
+    tenant_id: >-
+      {{
+        (_tenant_id | int)
+        if (item.tenant_id is defined or item.tenant is defined)
+        else omit
+      }}
+    state: "{{ item.state | default('present') }}"
+    wait: "{{ item.wait | default(omit) }}"
+    wait_timeout: "{{ item.wait_timeout | default(omit) }}"
+  loop: "{{ protectionpolicies }}"
+  loop_control:
+    label: "{{ item.cluster }}:{{ item.name | default('?') }}"
+  vars:
+    _clone_type: "{{ item.clone_type | default('NATIVE_REPLICATION') }}"
+    _tenant_id: >-
+      {{
+        item.tenant_id
+        if item.tenant_id is defined
+        else (
+          lookup('vastdata.vms.vast_name_to_id', item.tenant, protectedpath_vms[item.cluster], 'tenants')
+          if item.tenant is defined
+          else none
+        )
+      }}
+    _target_object_id: >-
+      {{
+        lookup('vastdata.vms.vast_target_cluster_to_remote_target_id',
+               item.cluster,
+               item.target_cluster,
+               protectedpath_vms[item.cluster],
+               replicationpeers,
+               vippools)
+        if _clone_type == 'NATIVE_REPLICATION'
+        else none
+      }}

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
 from collections.abc import Callable
+from pathlib import Path
 
 from tests.e2e.core import failure_snapshot
-from tests.e2e.core.runner import env
+from tests.e2e.core.runner import env, run
 
 log = logging.getLogger(__name__)
 
@@ -17,14 +19,7 @@ def ssh_user() -> str:
 
 
 def _ssh_argv(host: str, command: str, timeout: int) -> list[str]:
-    opts = [
-        "-o",
-        f"ConnectTimeout={timeout}",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
-    ]
+    opts = ["-o", f"ConnectTimeout={timeout}", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
     target = f"{ssh_user()}@{host}"
     password = os.environ.get("OSAC_BMI_SSH_PASSWORD", "")
     if password:
@@ -52,9 +47,10 @@ def ssh_unchecked(host: str, command: str, timeout: int = 30) -> tuple[str, int]
             env=_env(),
         )
     except subprocess.TimeoutExpired:
+        log.info("guest ssh host=%s timed out after %ss cmd=%s", host, timeout, command)
         return f"ssh timed out after {timeout}s", 255
     out = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
-    log.info("guest ssh rc=%s cmd=%s", result.returncode, command)
+    log.info("guest ssh host=%s rc=%s cmd=%s", host, result.returncode, command)
     return out, result.returncode
 
 
@@ -70,9 +66,7 @@ def arping(host: str, target_ip: str, count: int = 3) -> bool:
 
 def curl_status(host: str, url: str, timeout: int = 15) -> int:
     output, _ = ssh_unchecked(
-        host,
-        f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout {timeout} {url}",
-        timeout=timeout + 30,
+        host, f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout {timeout} {url}", timeout=timeout + 30
     )
     for line in output.strip().splitlines():
         line = line.strip()
@@ -102,3 +96,40 @@ def register_guest_snapshot(name: str, bmis: Callable[[], list[dict[str, str]]])
 
 def unregister_guest_snapshot(name: str) -> None:
     failure_snapshot.SOURCES.unregister(name)
+    failure_snapshot.SOURCES.unregister(f"{name}-hosts")
+
+
+def register_host_snapshot(name: str, kubectl: list[str], bmh_namespace: str) -> None:
+    """Add the BareMetalHosts' provisioning, power and operation history to the failure snapshot.
+
+    The job collects them after the suite's teardown, when the hosts are deprovisioned; only a failure-time read
+    shows what a host was doing when a test failed (for example, still rebooting onto the tenant network).
+    """
+
+    def source(directory: Path, window: failure_snapshot.Window) -> None:
+        try:
+            hosts = json.loads(run(*kubectl, "get", "bmh", "-n", bmh_namespace, "-o", "json", timeout=window.timeout()))
+        except Exception as exc:
+            failure_snapshot.record_error(directory, "bmh", f"{type(exc).__name__}: {exc}")
+            return
+        summary = [
+            {
+                "name": host.get("metadata", {}).get("name"),
+                "consumer": (host.get("spec", {}).get("consumerRef") or {}).get("name"),
+                "online": host.get("spec", {}).get("online"),
+                "state": host.get("status", {}).get("provisioning", {}).get("state"),
+                "poweredOn": host.get("status", {}).get("poweredOn"),
+                "operationalStatus": host.get("status", {}).get("operationalStatus"),
+                "errorMessage": host.get("status", {}).get("errorMessage"),
+                "lastUpdated": host.get("status", {}).get("lastUpdated"),
+                "operationHistory": host.get("status", {}).get("operationHistory"),
+                "nics": [
+                    {"name": nic.get("name"), "mac": nic.get("mac"), "ip": nic.get("ip")}
+                    for nic in (host.get("status", {}).get("hardware") or {}).get("nics", [])
+                ],
+            }
+            for host in hosts.get("items", [])
+        ]
+        failure_snapshot.write_json(directory, "bmh-status.json", summary)
+
+    failure_snapshot.SOURCES.register(f"{name}-hosts", source)

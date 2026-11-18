@@ -16,10 +16,12 @@ Two layers are kept apart:
   identically on both backends, through the ``wait_for_host_*`` /
   ``host_*`` helpers below.
 
-NetBox credentials and URL are read from the deployed bare-metal-fulfillment
-configuration (the Secrets rendered by the BMF chart in netbox mode); env
-vars are debug overrides only. Backend selection itself is env-var-only —
-the cluster's inventory ``type`` is deliberately not consulted for routing.
+Connection settings on netbox:
+- URL/token/CA: the BMF chart's Secrets, read from the deployed
+  bare-metal-fulfillment configuration.
+- ``OSAC_NETBOX_*`` env vars: debug overrides only — they win when set.
+- Backend selection is env-var-only; the cluster's inventory ``type`` is
+  deliberately not consulted for routing.
 """
 
 from __future__ import annotations
@@ -175,12 +177,12 @@ class Metal3Inventory:
 class NetBoxInventory:
     """netbox backend: OSAC-managed dcim.device records are the inventory.
 
-    Device claim state (status ``active`` + ``osac_instance_id``) is
-    netbox-specific; provisioning hands over to the BMH the operator derives
-    from the device id (``netbox-<id>``, recorded in the BMI's
-    externalHostID), so all provisioning assertions use the shared BMH
-    helpers. On release the operator deletes that BMH and restores the device
-    to ``staged``.
+    Claim: status ``active`` + ``osac_instance_id`` set (netbox-specific).
+    Handover: the operator derives ``netbox-<device-id>`` from the device id,
+    records it in the BMI's externalHostID and creates that BMH — so all
+    provisioning assertions use the shared BMH helpers.
+    Release: the operator deletes that BMH and restores the device to
+    ``staged``.
     """
 
     def __init__(self, *, k8s: K8sClient, netbox: NetBoxClient, bmh_namespace: str = "") -> None:
@@ -341,14 +343,18 @@ def _required_yaml_secret(k8s: K8sClient, *, namespace: str, name: str, key: str
 def netbox_settings_from_bmf(*, k8s: K8sClient, namespace: str) -> NetBoxSettings:
     """Resolve NetBox settings from env overrides and the deployed BMF config.
 
-    The OSAC_NETBOX_* env vars are local-debugging / external-NetBox overrides
-    that win when set. The URL and token Secrets are read only when their
-    overrides are unset, and the CA Secret applies only when the URL comes
-    from the deployed config — an override URL uses system roots unless
-    OSAC_NETBOX_CA_FILE is set, so the deployed NetBox's private CA never
-    leaks into an external connection. The osac-management-config cross-check
-    is cluster-scoped and read best-effort in every mode. The token is never
-    logged.
+    Precedence and pairing rules:
+    - ``OSAC_NETBOX_*`` env vars are local-debugging / external-NetBox
+      overrides; each wins when set.
+    - The URL and token Secrets are read only when their overrides are unset.
+    - The CA Secret applies only when the URL comes from the deployed config;
+      an override URL uses system roots unless ``OSAC_NETBOX_CA_FILE`` is set,
+      so the deployed NetBox's private CA never leaks into an external
+      connection.
+    - The osac-management-config cross-check is cluster-scoped and read
+      best-effort in every mode.
+
+    The token is never logged.
     """
     url: str = env("OSAC_NETBOX_URL", "").strip()
     url_from_secret = not url

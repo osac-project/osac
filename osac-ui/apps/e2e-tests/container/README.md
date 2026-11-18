@@ -15,14 +15,15 @@ The image is based on UBI 9 with Node.js
 (`registry.access.redhat.com/ubi9/nodejs-22-minimal`) and adds pnpm, Chromium and its
 system libraries, `oc`, and the `osac` CLI. UBI 9 repositories have no Xvfb,
 so the image runs headless only; `--headed` stops with `Xvfb is missing`. The
-host needs only podman,
+host needs podman, git, tar, and oc for the examples below,
 a kubeconfig that can read the `osac` namespace, and network access to the
 OSAC UI and Fulfillment API routes.
 
 ## Build
 
-Build from the repository root. The flows are copied into the image, so build
-from the commit you want to test.
+Build from the repository root at the commit you want to test. The build
+context below contains only files tracked in that commit; it does not include
+uncommitted changes or local credentials from the working checkout.
 
 The `osac` CLI is copied from a fulfillment-service image. Use the image the
 cluster runs; the flows create and delete resources with the CLI, so it must
@@ -41,11 +42,17 @@ runtime returns only a digest, prepend the deployed image's repository name.
 Then build the image:
 
 ```bash
-podman build \
-  -f osac-ui/apps/e2e-tests/container/Containerfile \
-  --build-arg FULFILLMENT_SERVICE_IMAGE="${FULFILLMENT_SERVICE_IMAGE}" \
-  -t osac-ui-e2e \
-  .
+(
+  set -euo pipefail
+  build_context=$(mktemp -d /tmp/osac-ui-e2e-build.XXXXXXXX)
+  trap 'rm -rf -- "$build_context"' EXIT
+  git archive HEAD osac-ui | tar -x -C "$build_context"
+  podman build \
+    -f "$build_context/osac-ui/apps/e2e-tests/container/Containerfile" \
+    --build-arg FULFILLMENT_SERVICE_IMAGE="${FULFILLMENT_SERVICE_IMAGE}" \
+    -t osac-ui-e2e \
+    "$build_context"
+)
 ```
 
 | Build argument              | Default                                           | Purpose                                                                   |
@@ -56,9 +63,8 @@ podman build \
 
 The build installs RPMs from the UBI 9 repositories, npm packages, the
 Playwright Chromium build, and the `oc` client, so it needs internet access. It
-does not need a Red Hat subscription. The local `node_modules`, Playwright
-login state, results, and `scratch/` specs are excluded from the build context
-by the repository `.containerignore`.
+does not need a Red Hat subscription. Do not use the working checkout directly
+as the build context: it can contain untracked secrets and other local files.
 
 ## Run
 
@@ -67,25 +73,30 @@ repository. Do not pass it on the command line.
 
 ```bash
 umask 077
-read -rs -p 'OSAC admin password: ' p && printf %s "$p" > ./admin-password; echo
+secret_dir=$(mktemp -d /tmp/osac-ui-e2e-secrets.XXXXXXXX)
+password_file="$secret_dir/admin-password"
+read -rs -p 'OSAC admin password: ' p && printf %s "$p" > "$password_file"; echo
+unset p
 mkdir -p test-output
-touch ./kubeconfig
-chmod 600 ./kubeconfig
-KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}" \
-  oc config view --raw --flatten > ./kubeconfig
-
-podman run --rm \
-  --network=host \
-  --userns=keep-id \
-  --user "$(id -u):0" \
-  -v ./kubeconfig:/work/kubeconfig:ro,Z \
-  -v ./admin-password:/work/admin-password:ro,Z \
-  -v ./test-output:/tmp/test-output:Z \
-  -e KUBECONFIG=/work/kubeconfig \
-  osac-ui-e2e \
-  --tag=vmaas_full_happy_basic \
-  --ignore-tls \
-  --admin-password-file=/work/admin-password
+container_kubeconfig=$(mktemp "$secret_dir/kubeconfig.XXXXXXXX")
+if ! KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}" \
+  oc config view --raw --flatten > "$container_kubeconfig"; then
+  rm -f -- "$container_kubeconfig"
+  echo 'Could not flatten the kubeconfig.' >&2
+else
+  podman run --rm \
+    --network=host \
+    --userns=keep-id \
+    --user "$(id -u):0" \
+    -v "$container_kubeconfig":/work/kubeconfig:ro,Z \
+    -v "$password_file":/work/admin-password:ro,Z \
+    -v ./test-output:/tmp/test-output:Z \
+    -e KUBECONFIG=/work/kubeconfig \
+    osac-ui-e2e \
+    --tag=vmaas_full_happy_basic \
+    --ignore-tls \
+    --admin-password-file=/work/admin-password
+fi
 ```
 
 - `--network=host` uses the host's DNS and `/etc/hosts`, so the routes resolve
@@ -100,6 +111,7 @@ podman run --rm \
   credentials; keep it private and remove it when no longer needed. External
   authentication helpers or token files, if used, must still be available inside
   the container.
+- Remove the private files after the last run with `rm -rf -- "$secret_dir"`.
 - `run-ui-e2e.sh` reads the `osac-ui` and `fulfillment-api` routes with the
   kubeconfig. To run without one, see
   [Without a kubeconfig](#without-a-kubeconfig).
@@ -125,7 +137,7 @@ podman run --rm \
   --network=host \
   --userns=keep-id \
   --user "$(id -u):0" \
-  -v ./admin-password:/work/admin-password:ro,Z \
+  -v "$password_file":/work/admin-password:ro,Z \
   -v ./test-output:/tmp/test-output:Z \
   -e OSAC_UI_BASE_URL=https://osac-ui-osac.apps.<cluster-domain> \
   -e OSAC_API_BASE_URL=https://fulfillment-api-osac.apps.<cluster-domain> \
@@ -193,7 +205,7 @@ inside a hosted CI service; the workflow below is a starting template.
 
 ### Runner prerequisites
 
-- **Rootless podman.** Docker is not tested. The runner user needs
+- **Rootless podman, git, and tar.** Docker is not tested. The runner user needs
   subordinate UIDs and GIDs (`/etc/subuid`, `/etc/subgid`) for
   `--userns=keep-id`.
 - **Network access to the deployment:** the `osac-ui` and `fulfillment-api`
@@ -283,22 +295,29 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build the UI E2E image
         run: |
+          set -o pipefail
+          build_context=$(mktemp -d /tmp/osac-ui-e2e-build.XXXXXXXX)
+          trap 'rm -rf -- "$build_context"' EXIT
+          git archive HEAD osac-ui | tar -x -C "$build_context"
           podman build \
-            -f osac-ui/apps/e2e-tests/container/Containerfile \
+            -f "$build_context/osac-ui/apps/e2e-tests/container/Containerfile" \
             --build-arg FULFILLMENT_SERVICE_IMAGE="${{ vars.FULFILLMENT_SERVICE_IMAGE }}" \
-            -t osac-ui-e2e:${{ github.sha }} .
+            -t osac-ui-e2e:${{ github.sha }} \
+            "$build_context"
       - name: Run the happy flow
         env:
           OSAC_ADMIN_PASSWORD: ${{ secrets.OSAC_ADMIN_PASSWORD }}
         run: |
           umask 077
-          printf %s "$OSAC_ADMIN_PASSWORD" > admin-password
+          password_file=$(mktemp "${RUNNER_TEMP}/osac-ui-e2e-password.XXXXXXXX")
+          trap 'rm -f -- "$password_file"' EXIT
+          printf %s "$OSAC_ADMIN_PASSWORD" > "$password_file"
           mkdir -p test-output
           podman run --rm \
             --network=host \
             --userns=keep-id \
             --user "$(id -u):0" \
-            -v ./admin-password:/work/admin-password:ro,Z \
+            -v "$password_file":/work/admin-password:ro,Z \
             -v ./test-output:/tmp/test-output:Z \
             -e OSAC_UI_BASE_URL="${{ vars.OSAC_UI_BASE_URL }}" \
             -e OSAC_API_BASE_URL="${{ vars.OSAC_API_BASE_URL }}" \
@@ -306,9 +325,6 @@ jobs:
             --tag=vmaas_full_happy_basic \
             --ignore-tls \
             --admin-password-file=/work/admin-password
-      - name: Remove the password file
-        if: always()
-        run: rm -f admin-password
       - name: Keep the Playwright report
         if: always()
         uses: actions/upload-artifact@v4

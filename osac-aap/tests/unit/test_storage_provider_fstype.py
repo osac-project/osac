@@ -34,11 +34,12 @@ module = AnsibleModule(argument_spec={
     "definition": {"type": "dict"},
 })
 params = module.params
+with open(os.environ["OSAC_FSTYPE_STATE"]) as state_file:
+    storage_classes = json.load(state_file)
 resources = []
 if params["kind"] == "StorageClass":
-    resources = [entry if isinstance(entry, dict) else
-                 {"metadata": {"name": entry}, "parameters": {"legacy-option": "retained"}} for entry in
-                 json.loads(os.environ["OSAC_FSTYPE_EXISTING"])]
+    resources = [entry for name, entry in storage_classes.items()
+                 if params["name"] is None or name == params["name"]]
 elif params["kind"] == "CSIDriver":
     resources = [{"metadata": {"name": params["name"]}}]
 elif params["kind"] == "Secret" and params["state"] is None:
@@ -47,10 +48,22 @@ elif params["kind"] == "Secret" and params["state"] is None:
         "tenant_manager_password": "fixture-only", "vip_pool_name": "fixture-pool",
         "vast_endpoint": "fixture.invalid", "tenant_uid_hash": "12345678",
     }
-    resources = [{"data": {key: base64.b64encode(value.encode()).decode()
+    resources = [{"metadata": {"name": params["name"] or "fixture-secret",
+                               "labels": {"osac.openshift.io/storage-backend-id": "fixture"}},
+                  "data": {key: base64.b64encode(value.encode()).decode()
                            for key, value in values.items()}}]
+definition = params["definition"] or {}
+if definition.get("kind") == "StorageClass" and params["state"] == "present":
+    name = definition["metadata"]["name"]
+    storage_classes[name] = definition
+    deleted_name = json.loads(os.environ["OSAC_FSTYPE_DELETE_ON_CREATE"]).get(name)
+    if deleted_name is not None:
+        storage_classes.pop(deleted_name, None)
+    with open(os.environ["OSAC_FSTYPE_STATE"], "w") as state_file:
+        json.dump(storage_classes, state_file)
 with open(os.environ["OSAC_FSTYPE_CAPTURE"], "a") as capture:
-    capture.write(json.dumps({"module": "__MODULE_NAME__", "resources": resources, **params}) + "\\n")
+    capture.write(json.dumps({"module": "__MODULE_NAME__", "resources": resources,
+                             "storage_classes": storage_classes, **params}) + "\\n")
 module.exit_json(changed=False, resources=resources)
 """
 VMS_MODULE = """
@@ -79,6 +92,7 @@ def run_provider(
     endpoint="fixture.invalid",
     explicit_fstype=None,
     expected_classes=None,
+    delete_on_create=None,
 ):
     for collection, names, source in (
         ("kubernetes/core", ("k8s", "k8s_info"), KUBERNETES_MODULE),
@@ -141,6 +155,17 @@ def run_provider(
         )
     )
     capture = tmp_path / "calls.jsonl"
+    state = tmp_path / "storage-classes.json"
+    state.write_text(
+        json.dumps(
+            {
+                entry["metadata"]["name"] if isinstance(entry, dict) else entry: entry
+                if isinstance(entry, dict)
+                else {"metadata": {"name": entry}, "parameters": {"legacy-option": "retained"}}
+                for entry in existing
+            }
+        )
+    )
     environment = {
         **os.environ,
         "ANSIBLE_CONFIG": str(OSAC_AAP / "ansible.cfg"),
@@ -150,7 +175,8 @@ def run_provider(
         "NO_PROXY": "127.0.0.1,localhost",
         "no_proxy": "127.0.0.1,localhost",
         "OSAC_FSTYPE_CAPTURE": str(capture),
-        "OSAC_FSTYPE_EXISTING": json.dumps(existing),
+        "OSAC_FSTYPE_STATE": str(state),
+        "OSAC_FSTYPE_DELETE_ON_CREATE": json.dumps(delete_on_create or {}),
     }
     environment.pop("OSAC_STORAGE_BLOCK_FSTYPE", None)
     if fstype is not None:
@@ -203,7 +229,7 @@ def existing_block_class(provider, name, fstype):
 
 def assert_existing_classes_untouched(calls, existing):
     lookups = [call for call in calls if call["module"] == "k8s_info" and call["kind"] == "StorageClass"]
-    assert len(lookups) == 1
+    assert lookups
     assert lookups[0]["resources"] == existing
     existing_names = {resource["metadata"]["name"] for resource in existing}
     for call in calls:
@@ -280,6 +306,15 @@ def test_empty_fstype_rejected_at_block_consumer(tmp_path, provider):
 
 
 @pytest.mark.parametrize("provider", ["vast", "lvms"])
+@pytest.mark.parametrize("explicit_fstype", [["xfs"], {"filesystem": "xfs"}, 123, True, 1.5])
+def test_nonstring_fstype_rejected_before_writes(tmp_path, provider, explicit_fstype):
+    result, calls = run_provider(tmp_path, provider, explicit_fstype=explicit_fstype)
+    assert result.returncode != 0
+    assert "must be defined and nonempty" in result.stdout
+    assert not any(call["state"] in ("present", "absent") for call in calls)
+
+
+@pytest.mark.parametrize("provider", ["vast", "lvms"])
 @pytest.mark.parametrize("explicit_fstype", ["xfs", OPAQUE, "   ", "", *LITERAL_STRINGS])
 def test_ansible_override_precedes_environment(tmp_path, provider, explicit_fstype):
     result, calls = run_provider(tmp_path, provider, "environment-value", explicit_fstype=explicit_fstype)
@@ -296,8 +331,9 @@ def test_ansible_override_precedes_environment(tmp_path, provider, explicit_fsty
 
 
 @pytest.mark.parametrize("fstype", [None, OPAQUE, ""])
-def test_nfs_unchanged(tmp_path, fstype):
-    result, calls = run_provider(tmp_path, "vast", fstype, protocols=("nfs",))
+@pytest.mark.parametrize("explicit_fstype", [None, ["xfs"]])
+def test_nfs_unchanged(tmp_path, fstype, explicit_fstype):
+    result, calls = run_provider(tmp_path, "vast", fstype, protocols=("nfs",), explicit_fstype=explicit_fstype)
     assert result.returncode == 0, result.stdout + result.stderr
     classes = created_classes(calls)
     assert len(classes) == 1
@@ -311,9 +347,12 @@ def test_nfs_unchanged(tmp_path, fstype):
 
 @pytest.mark.parametrize("provider", ["vast", "lvms"])
 @pytest.mark.parametrize("action", ["teardown_cluster_storage", "teardown_backend"])
-def test_teardown_ignores_empty_block_setting(tmp_path, vms_server, provider, action):
+@pytest.mark.parametrize("explicit_fstype", [None, ["xfs"]])
+def test_teardown_ignores_empty_block_setting(tmp_path, vms_server, provider, action, explicit_fstype):
     endpoint, requests = vms_server
-    result, calls = run_provider(tmp_path, provider, "", action=action, endpoint=endpoint)
+    result, calls = run_provider(
+        tmp_path, provider, "", action=action, endpoint=endpoint, explicit_fstype=explicit_fstype
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     assert created_classes(calls) == []
     if action == "teardown_backend":
@@ -326,9 +365,10 @@ def test_teardown_ignores_empty_block_setting(tmp_path, vms_server, provider, ac
 
 @pytest.mark.parametrize("provider", ["vast", "lvms"])
 @pytest.mark.parametrize("fstype", [OPAQUE, ""])
-def test_existing_class_short_circuit(tmp_path, provider, fstype):
+@pytest.mark.parametrize("explicit_fstype", [None, ["xfs"]])
+def test_existing_class_short_circuit(tmp_path, provider, fstype, explicit_fstype):
     name = "vast-block-fstype-test-block" if provider == "vast" else "osac-fstype-test-block"
-    result, calls = run_provider(tmp_path, provider, fstype, existing=[name])
+    result, calls = run_provider(tmp_path, provider, fstype, existing=[name], explicit_fstype=explicit_fstype)
     assert result.returncode == 0, result.stdout + result.stderr
     assert created_classes(calls) == []
     assert len(calls) == 1
@@ -366,7 +406,29 @@ def test_vast_creates_only_missing_block_class(tmp_path, fstype):
     assert classes[0]["parameters"][FSTYPE] == ("ext4" if fstype is None else fstype)
 
 
-@pytest.mark.parametrize("explicit_fstype", [None, ""])
+def test_vast_detects_existing_block_deleted_during_creation(tmp_path):
+    gold = "vast-block-fstype-test-gold"
+    silver = "vast-block-fstype-test-silver"
+    result, calls = run_provider(
+        tmp_path,
+        "vast",
+        protocols=("block", "block"),
+        tier_names=("gold", "silver"),
+        existing=[existing_block_class("vast", gold, None)],
+        delete_on_create={silver: gold},
+        expected_classes=[{"name": gold, "tier": "gold"}, {"name": silver, "tier": "silver"}],
+    )
+    classes = created_classes(calls)
+    assert [entry["metadata"]["name"] for entry in classes] == [silver]
+    silver_write = next(call for call in calls if call["definition"] in classes)
+    assert gold not in silver_write["storage_classes"]
+    assert silver in silver_write["storage_classes"]
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "VAST block StorageClasses missing at completion" in result.stdout
+    assert gold in result.stdout
+
+
+@pytest.mark.parametrize("explicit_fstype", [None, "", ["xfs"], {"filesystem": "xfs"}, 123, True])
 def test_vast_existing_block_creates_nfs_with_empty_fstype(tmp_path, explicit_fstype):
     block_name = "vast-block-fstype-test-block"
     nfs_name = "vast-nfs-fstype-test-nfs"

@@ -214,8 +214,9 @@
   ansible.builtin.assert:
     that:
       - storage_provider_block_fstype is defined
+      - storage_provider_block_fstype is string
       - storage_provider_block_fstype | length > 0
-    fail_msg: storage_provider_block_fstype must be defined and nonempty for block StorageClasses.
+    fail_msg: storage_provider_block_fstype must be defined and nonempty for block StorageClasses (string required).
   when: _lvms_missing_sc_names | length > 0
 
 - name: Create missing per-tenant StorageClasses

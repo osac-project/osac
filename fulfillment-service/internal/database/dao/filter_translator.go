@@ -697,8 +697,25 @@ func (t *FilterTranslator) translateLiteral(value ref.Val) (result filterTransla
 func (t *FilterTranslator) translateString(value, special string) (text string, escaped bool) {
 	var buffer bytes.Buffer
 	buffer.Grow(len(value))
+	if special != "" {
+		// LIKE pattern escapes are separate from SQL string escapes. Decide the SQL syntax before writing
+		// pattern escapes, since an E string must also escape their backslashes even before a later quote.
+		escaped = strings.ContainsFunc(value, func(r rune) bool {
+			return r == '\\' || r == '\'' || !unicode.IsPrint(r) || r > unicode.MaxASCII
+		})
+	}
 	for _, r := range value {
-		if r == '\\' || strings.ContainsRune(special, r) {
+		if r == '\\' {
+			buffer.WriteString(`\\`)
+			if special != "" {
+				// SQL decodes four backslashes to the two that LIKE needs for one literal backslash.
+				buffer.WriteString(`\\`)
+			}
+			escaped = true
+		} else if strings.ContainsRune(special, r) {
+			if escaped {
+				buffer.WriteRune('\\')
+			}
 			buffer.WriteRune('\\')
 			buffer.WriteRune(r)
 		} else if r == '\'' {

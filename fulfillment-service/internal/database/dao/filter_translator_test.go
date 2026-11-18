@@ -614,7 +614,17 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Double-quoted string with backslash from %q",
 				`this.id == "path\\to\\thing"`,
-				`id = 'path\\to\\thing'`,
+				`id = e'path\\to\\thing'`,
+			),
+			Entry(
+				"LIKE backslash and wildcards retain both escape layers",
+				`this.my_string.startsWith("path\\%_tail")`,
+				`data->>'my_string' like e'path\\\\\\%\\_tail%'`,
+			),
+			Entry(
+				"LIKE wildcards stay literal when a quote requires SQL escapes",
+				`this.my_string.contains("it's%_tail")`,
+				`data->>'my_string' like e'%it\'s\\%\\_tail%'`,
 			),
 			Entry(
 				"Double-quoted string with CEL injection attempt from %q",

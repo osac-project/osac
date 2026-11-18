@@ -358,6 +358,95 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		)
 	})
 
+	DescribeTable("compares raw local duplicate tokens during assignment", func(method string, equal bool) {
+		const providerValue = `path\to`
+		retainedValue := `path\\to`
+		if equal {
+			retainedValue = providerValue
+		}
+		var conforming string
+		Expect(testPool.QueryRow(ctx, `show standard_conforming_strings`).Scan(&conforming)).To(Succeed())
+		Expect(conforming).To(Equal("on"))
+		var accounts []billingfake.AccountSpec
+		selected := newAccount(&accounts, providerValue, "", "ACTIVE")
+		// The other account retains a local token but is not a provider-side carrier of the selected token.
+		other := newAccount(&accounts, "other-provider-value", retainedValue, "ACTIVE")
+		initial := ""
+		if method == "Update" {
+			initial = newAccount(&accounts, "initial-token", "initial-token", "ACTIVE")
+		}
+		fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+		adapter := &writePoisonAdapter{Fake: fake}
+		server := build(billing.NewProvider(billingfake.Key, adapter, nil))
+		var prior *privatev1.TenantBillingAssignment
+		if method == "Update" {
+			created, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, initial, "initial"))
+			Expect(err).NotTo(HaveOccurred())
+			prior = created.GetObject()
+		}
+		carrierScans := fake.Count("ListAccounts")
+		var object *privatev1.TenantBillingAssignment
+		var err error
+		if method == "Create" {
+			var response *privatev1.TenantBillingAssignmentsCreateResponse
+			response, err = billingRPC(adminCtx(), server.Create, createRequest(testTenant, selected, "raw-duplicate"))
+			object = response.GetObject()
+		} else {
+			var response *privatev1.TenantBillingAssignmentsUpdateResponse
+			response, err = billingRPC(adminCtx(), server.Update, updateRequest(prior.GetId(), testTenant, selected))
+			object = response.GetObject()
+		}
+		if equal {
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(reason(err)).To(Equal(billing.ReasonAccountCorrelationConflict))
+			Expect(fake.Count("ListAccounts")).To(Equal(carrierScans), "the local duplicate must fail before the provider carrier walk or SQL uniqueness")
+		} else {
+			Expect(err).NotTo(HaveOccurred(), "one and two backslashes are different retained tokens")
+			Expect(fake.Count("ListAccounts")).To(Equal(carrierScans + 1))
+			Expect(object.GetStatus().GetConnectionState()).To(Equal(
+				privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
+			Expect(object.GetSpec().GetBillingAccount().GetId()).To(Equal(selected))
+		}
+		for _, id := range []string{selected, other} {
+			stored, readErr := database.WithNewTx(adminCtx(), func(c context.Context) (*dao.GetResponse[*privatev1.BillingAccount], error) {
+				return server.accounts.Get().SetId(id).Do(c)
+			})
+			Expect(readErr).NotTo(HaveOccurred())
+			if id == other {
+				Expect(stored.GetObject().GetStatus().GetExternalBillingAccountId()).To(Equal(retainedValue))
+			} else if equal {
+				Expect(stored.GetObject().GetStatus().HasExternalBillingAccountId()).To(BeFalse())
+			} else {
+				Expect(stored.GetObject().GetStatus().GetExternalBillingAccountId()).To(Equal(providerValue))
+			}
+		}
+		current, readErr := billingRPC(adminCtx(), server.List, &privatev1.TenantBillingAssignmentsListRequest{})
+		Expect(readErr).NotTo(HaveOccurred())
+		if equal && method == "Create" {
+			Expect(current.GetItems()).To(BeEmpty())
+		} else if equal {
+			Expect(current.GetItems()).To(HaveLen(1))
+			Expect(proto.Equal(current.GetItems()[0], prior)).To(BeTrue(), "rejected Update preserves the current interval")
+		} else {
+			var ids []string
+			for _, item := range current.GetItems() {
+				ids = append(ids, item.GetId())
+			}
+			Expect(ids).To(ContainElement(object.GetId()))
+		}
+		Expect(adapter.writes).To(BeZero())
+		Expect(fake.Count("SetCorrelationValue")).To(BeZero())
+		value, present, readErr := fake.CorrelationValue(ctx, billing.NewAccountRef(selected))
+		Expect(readErr).NotTo(HaveOccurred())
+		Expect(present).To(BeTrue())
+		Expect(value).To(Equal(providerValue))
+	},
+		Entry("Create accepts a distinct two-backslash retained token", "Create", false),
+		Entry("Update accepts a distinct two-backslash retained token", "Update", false),
+		Entry("Create rejects an actually equal one-backslash retained token", "Create", true),
+		Entry("Update rejects an actually equal one-backslash retained token", "Update", true),
+	)
+
 	Describe("Create", func() {
 		It("shares one provider child deadline across state, value and the exact-carrier walk", func() {
 			var accounts []billingfake.AccountSpec

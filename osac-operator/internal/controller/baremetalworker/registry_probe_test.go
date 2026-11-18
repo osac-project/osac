@@ -218,7 +218,7 @@ var _ = Describe("CaaS worker registry probe", func() {
 		Expect(ok).To(BeTrue())
 		files, ok := storage["files"].([]any)
 		Expect(ok).To(BeTrue())
-		Expect(files).To(HaveLen(9))
+		Expect(files).To(HaveLen(10))
 		fileContents := map[string][]byte{}
 		for _, raw := range files {
 			file := raw.(map[string]any)
@@ -234,15 +234,20 @@ var _ = Describe("CaaS worker registry probe", func() {
 		Expect(string(fileContents["/etc/osac/registry-probe/url"])).To(ContainSubstring(names.configMap))
 		Expect(string(fileContents["/etc/osac/registry-probe/success.json"])).To(ContainSubstring(image))
 		Expect(string(fileContents["/usr/local/bin/osac-worker-registry-probe"])).To(ContainSubstring("podman pull"))
+		Expect(string(fileContents["/usr/local/bin/osac-worker-network-config"])).To(ContainSubstring("ipv4.route-metric 10"))
+		Expect(string(fileContents["/usr/local/bin/osac-worker-network-config"])).To(ContainSubstring("net.ipv4.ip_forward=1"))
 
 		systemd, ok := ignition["systemd"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		units, ok := systemd["units"].([]any)
 		Expect(ok).To(BeTrue())
-		Expect(units).To(HaveLen(1))
-		unit := units[0].(map[string]any)
+		Expect(units).To(HaveLen(2))
+		networkUnit := units[0].(map[string]any)
+		Expect(networkUnit[jsonNameField]).To(Equal("osac-worker-network-config.service"))
+		Expect(networkUnit["contents"]).To(ContainSubstring("WantedBy=multi-user.target"))
+		unit := units[1].(map[string]any)
 		Expect(unit[jsonNameField]).To(Equal("osac-registry-probe.service"))
-		Expect(unit["contents"]).To(ContainSubstring("After=network-online.target"))
+		Expect(unit["contents"]).To(ContainSubstring("After=network-online.target osac-worker-network-config.service"))
 	})
 
 	It("triggers only after network evidence and reports the worker pull result", func() {

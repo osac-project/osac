@@ -462,6 +462,11 @@ func injectWorkerRegistryProbeIgnition(ignitionRaw string, credentials workerReg
 		}
 	}
 	units = append(units, map[string]any{
+		jsonNameField: "osac-worker-network-config.service",
+		"enabled":     true,
+		"contents":    workerNetworkConfigSystemdUnit,
+	})
+	units = append(units, map[string]any{
 		jsonNameField: "osac-registry-probe.service",
 		"enabled":     true,
 		"contents":    registryProbeSystemdUnit,
@@ -480,6 +485,7 @@ func registryProbeIgnitionFiles(credentials workerRegistryProbeCredentials, pull
 		mode int
 		data []byte
 	}{
+		{path: "/usr/local/bin/osac-worker-network-config", mode: 0755, data: []byte(workerNetworkConfigScript)},
 		{path: "/usr/local/bin/osac-worker-registry-probe", mode: 0755, data: []byte(registryProbeScript)},
 		{path: "/etc/osac/registry-probe/token", mode: 0600, data: []byte(credentials.token)},
 		{path: "/etc/osac/registry-probe/ca.crt", mode: 0644, data: credentials.caData},
@@ -516,7 +522,8 @@ func registryProbeResultPatch(image, status, reason, message string) []byte {
 const registryProbeSystemdUnit = `[Unit]
 Description=OSAC CaaS worker registry access probe
 Wants=network-online.target
-After=network-online.target
+After=network-online.target osac-worker-network-config.service
+Requires=osac-worker-network-config.service
 
 [Service]
 Type=oneshot
@@ -527,6 +534,65 @@ RestartSec=10s
 
 [Install]
 WantedBy=multi-user.target
+`
+
+const workerNetworkConfigSystemdUnit = `[Unit]
+Description=OSAC CaaS worker tenant network configuration
+Wants=network-online.target
+After=network-online.target
+Before=osac-registry-probe.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/osac-worker-network-config
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=30min
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+`
+
+const workerNetworkConfigScript = `#!/usr/bin/bash
+set -u
+
+tenant_device=""
+tenant_metric=-1
+while read -r _ via _gateway dev _device metric _metric; do
+  [ "${dev:-}" = "dev" ] || continue
+  [ -n "${_device:-}" ] || continue
+  case "$_device" in
+    br-*|ovs-*|ovn-*|cni*|lo) continue ;;
+  esac
+  metric_value="${_metric:-0}"
+  case "$metric_value" in
+    ''|*[!0-9]*) metric_value=0 ;;
+  esac
+  if [ "$metric_value" -gt "$tenant_metric" ]; then
+    tenant_device="$_device"
+    tenant_metric="$metric_value"
+  fi
+done < <(ip -4 route show default)
+
+if [ -z "$tenant_device" ]; then
+  echo "No tenant default route is available yet"
+  exit 1
+fi
+
+connection="$(nmcli -t -f NAME,DEVICE connection show --active | awk -F: -v device="$tenant_device" '$2 == device {print $1; exit}')"
+if [ -z "$connection" ]; then
+  echo "No active NetworkManager connection for tenant device $tenant_device"
+  exit 1
+fi
+
+nmcli connection modify "$connection" ipv4.route-metric 10 802-3-ethernet.mtu 1400
+nmcli connection up "$connection"
+printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-osac-caas-ip-forward.conf
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
+if ! iptables -t mangle -C PREROUTING -i "$tenant_device" -p tcp --dport 443 --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1360 2>/dev/null; then
+  iptables -t mangle -I PREROUTING 1 -i "$tenant_device" -p tcp --dport 443 --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1360
+fi
 `
 
 const registryProbeScript = `#!/usr/bin/bash

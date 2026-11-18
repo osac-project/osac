@@ -42,7 +42,7 @@
 
     # ------------------------------------------------------------------------------------------
 
-    - name: Add tags to key
+    - name: Tag encryption key
       amazon.aws.kms_key:
         alias: "{{ kms_key_alias }}"
         state: present
@@ -51,7 +51,7 @@
           tag_two: tag_two
         purge_tags: false
       register: key
-    - name: Assert that tags were added
+    - name: Assert tags added
       ansible.builtin.assert:
         that:
           - key.changed
@@ -75,19 +75,9 @@
           - "'tag_one' in key.tags"
           - "'tag_two' in key.tags"
 
-    - name: Wait for tag changes to propagate
-      ansible.builtin.include_tasks: double_check_key_state.yml
-      loop: "{{ range(0, 10) | list }}"
-      loop_control:
-        pause: 10
-        label: "Attempt {{ item + 1 }}/10"
-        break_when:
-          - state_check_a is defined
-          - state_check_b is defined
-          - "'tag_one' in state_check_a.kms_keys[0].tags"
-          - "'tag_two' in state_check_a.kms_keys[0].tags"
-          - "'tag_one' in state_check_b.kms_keys[0].tags"
-          - "'tag_two' in state_check_b.kms_keys[0].tags"
+    - name: Sleep to wait for updates to propagate
+      ansible.builtin.wait_for:
+        timeout: 45
     - name: Modify tags - check mode
       amazon.aws.kms_key:
         alias: "{{ kms_key_alias }}"
@@ -112,7 +102,7 @@
           tag_two: tag_two_updated
           Tag Three: "{{ resource_prefix }}"
       register: key
-    - name: Assert that tags were changed
+    - name: Assert tags correctly changed
       ansible.builtin.assert:
         that:
           - key.changed
@@ -138,23 +128,9 @@
           - "'Tag Three' in key.tags"
           - key.tags['Tag Three'] == resource_prefix
 
-    - name: Wait for tag changes to propagate
-      ansible.builtin.include_tasks: double_check_key_state.yml
-      loop: "{{ range(0, 10) | list }}"
-      loop_control:
-        pause: 10
-        label: "Attempt {{ item + 1 }}/10"
-        break_when:
-          - state_check_a is defined
-          - state_check_b is defined
-          - "'tag_two' in state_check_a.kms_keys[0].tags"
-          - state_check_a.kms_keys[0].tags.tag_two == 'tag_two_updated'
-          - "'Tag Three' in state_check_a.kms_keys[0].tags"
-          - state_check_a.kms_keys[0].tags['Tag Three'] == resource_prefix
-          - "'tag_two' in state_check_b.kms_keys[0].tags"
-          - state_check_b.kms_keys[0].tags.tag_two == 'tag_two_updated'
-          - "'Tag Three' in state_check_b.kms_keys[0].tags"
-          - state_check_b.kms_keys[0].tags['Tag Three'] == resource_prefix
+    - name: Sleep to wait for updates to propagate
+      ansible.builtin.wait_for:
+        timeout: 45
     - name: Modify tags (idempotence) - check mode
       amazon.aws.kms_key:
         alias: "{{ kms_key_alias }}"
@@ -208,7 +184,7 @@
   always:
     # ============================================================
     #   CLEAN-UP
-    - name: Schedule key deletion for cleanup
+    - name: Finish off by deleting keys
       amazon.aws.kms_key:
         state: absent
         alias: "{{ kms_key_alias }}"

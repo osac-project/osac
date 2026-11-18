@@ -1,0 +1,538 @@
+---
+# Integration tests for snapshots module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+- name: Generate unique snapshot names for this test run
+  ansible.builtin.set_fact:
+    test_snapshot_name_unique: "{{ test_snapshot_name }}-{{ ansible_date_time.epoch }}"
+    test_snapshot_name_updated_unique: "{{ test_snapshot_name_updated }}-{{ ansible_date_time.epoch }}"
+  when: can_run_tests | bool
+
+# ====================
+# Setup - Create Prerequisites
+# ====================
+
+- name: Get default tenant for testing
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    state: present
+  register: tenant_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Set default tenant ID from result
+  ansible.builtin.set_fact:
+    test_tenant_id: "{{ tenant_result.tenants.id }}"
+  when: can_run_tests | bool and tenant_result.tenants is defined
+
+- name: Create test view for snapshot source
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    policy_id: "{{ test_view_policy_id }}"
+    protocols: ["NFS"]
+    create_dir: true
+    state: present
+  register: test_view
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Get view ID for snapshot creation
+  ansible.builtin.set_fact:
+    test_view_id: "{{ test_view.views.id }}"
+  when: test_view is not skipped and test_view.views is defined
+
+# ====================
+# Cleanup - Remove existing test snapshots if present
+# ====================
+
+- name: Clean up - ensure test snapshot doesn't exist before starting
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure updated test snapshot doesn't exist
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_updated_unique }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure delcheck test snapshot doesn't exist
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}-delcheck"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Wait for cleanup to complete (async delete)
+  ansible.builtin.pause:
+    seconds: 3
+  when: can_run_tests | bool and cleanup_result is changed
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a snapshot
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    path: "{{ test_view_path }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_view_id is defined
+
+- name: Verify snapshot was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.snapshots is defined
+      - result.snapshots.name == test_snapshot_name_unique
+      - result.snapshots.id is defined
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Save snapshot ID for later tests
+  ansible.builtin.set_fact:
+    test_snapshot_id: "{{ result.snapshots.id }}"
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same snapshot again
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    path: "{{ test_view_path }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Update Tests - Expiration Time
+# ====================
+
+- name: Test updating snapshot - set expiration time
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    expiration_time: "{{ test_expiration_time }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Verify snapshot expiration time was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.snapshots is defined
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Test update idempotency - expiration time
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    expiration_time: "{{ test_expiration_time }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Update Tests - Name Update
+# ====================
+
+- name: Test updating snapshot - change name
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_updated_unique }}"
+    path: "{{ test_view_path }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_view_id is defined
+
+- name: Verify snapshot name update (creates new snapshot)
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.snapshots is defined
+      - result.snapshots.name == test_snapshot_name_updated_unique
+  when: result is not skipped
+
+- name: Test update idempotency - name
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_updated_unique }}"
+    path: "{{ test_view_path }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_view_id is defined
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+- name: Clean up updated snapshot
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_updated_unique }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Lookup by ID Tests
+# ====================
+
+- name: Test lookup by ID
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    id: "{{ test_snapshot_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Verify lookup by ID works
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.snapshots is defined
+      - result.snapshots.id == test_snapshot_id
+      - result.snapshots.name == test_snapshot_name_unique
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Create
+# ====================
+
+- name: Test check mode - create new snapshot
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}-checkmode"
+    path: "{{ test_view_path }}"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool and test_view_id is defined
+
+- name: Verify check mode create reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually create the snapshot
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}-checkmode"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify snapshot was never created
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Update
+# ====================
+
+- name: Test check mode - update existing snapshot expiration
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    expiration_time: "2027-12-31T23:59:59Z"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Verify check mode update reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually update
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Verify snapshot expiration was not updated by check mode
+  ansible.builtin.assert:
+    that:
+      - result.snapshots.expiration_time == test_expiration_time
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Lookup
+# ====================
+
+- name: Test check mode - lookup existing resource
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Verify check mode lookup works
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.snapshots is defined
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting snapshot
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Verify snapshot was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Delete
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Delete Test
+# ====================
+
+- name: Create snapshot for check mode delete test
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}-delcheck"
+    path: "{{ test_view_path }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_view_id is defined
+
+- name: Test check mode - delete
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}-delcheck"
+    state: absent
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}-delcheck"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that snapshot still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.snapshots is defined
+  when: result is not skipped
+
+- name: Clean up check mode delete test snapshot
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - missing name and ID
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+  when: result is not skipped
+
+- name: Test error handling - invalid state
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    state: invalid
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+  when: result is not skipped
+
+- name: Test error handling - missing path on create
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}-nopath"
+    state: present
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught for missing path
+  ansible.builtin.assert:
+    that:
+      - result is failed
+  when: result is not skipped
+
+# ====================
+# Cleanup Prerequisites
+# ====================
+
+- name: Clean up test view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Final Cleanup
+# ====================
+
+- name: Final cleanup - remove test snapshot if it exists
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove updated test snapshot if it exists
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_updated_unique }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove delcheck test snapshot if it exists
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove checkmode test snapshot if it exists
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name_unique }}-checkmode"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping snapshots integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration snapshots -v
+  when: not (can_run_tests | bool)

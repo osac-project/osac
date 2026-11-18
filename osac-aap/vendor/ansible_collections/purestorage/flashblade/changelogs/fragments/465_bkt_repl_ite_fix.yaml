@@ -1,0 +1,2 @@
+bugfixes:
+ - purefb_bucket_replica - Fixed issue with ItemIterator error

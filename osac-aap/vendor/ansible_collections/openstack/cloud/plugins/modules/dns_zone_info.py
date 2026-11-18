@@ -41,11 +41,11 @@ extends_documentation_fragment:
 
 EXAMPLES = r'''
 - name: Fetch all DNS zones
-  openstack.cloud.dns_zone_info:
+  openstack.cloud.dns_zones:
     cloud: devstack
 
 - name: Fetch DNS zones by name
-  openstack.cloud.dns_zone_info:
+  openstack.cloud.dns_zones:
     cloud: devstack
     name: ansible.test.zone.
 '''

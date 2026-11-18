@@ -76,7 +76,7 @@ options:
       elements: str
     notification_templates_approvals:
       description:
-        - list of notifications to send on approval
+        - list of notifications to send on start
       type: list
       elements: str
     galaxy_credentials:

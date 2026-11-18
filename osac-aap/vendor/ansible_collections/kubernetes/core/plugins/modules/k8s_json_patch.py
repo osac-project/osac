@@ -33,14 +33,6 @@ options:
     aliases:
       - api
       - version
-  hidden_fields:
-    description:
-      - List of fields to hide from the diff output.
-      - This is useful for fields that are not relevant to the patch operation, such as `metadata.managedFields`.
-    type: list
-    elements: str
-    default: []
-    version_added: 6.1.0
   kind:
     description:
       - Use to specify an object model.
@@ -135,8 +127,8 @@ error:
 import copy
 import traceback
 
+from ansible.module_utils._text import to_native
 from ansible.module_utils.basic import missing_required_lib
-from ansible.module_utils.common.text.converters import to_native
 from ansible_collections.kubernetes.core.plugins.module_utils.ansiblemodule import (
     AnsibleModule,
 )
@@ -155,7 +147,6 @@ from ansible_collections.kubernetes.core.plugins.module_utils.k8s.exceptions imp
 )
 from ansible_collections.kubernetes.core.plugins.module_utils.k8s.service import (
     diff_objects,
-    hide_fields,
 )
 from ansible_collections.kubernetes.core.plugins.module_utils.k8s.waiter import (
     get_waiter,
@@ -183,7 +174,6 @@ JSON_PATCH_ARGS = {
     "namespace": {"type": "str"},
     "name": {"type": "str", "required": True},
     "patch": {"type": "list", "required": True, "elements": "dict"},
-    "hidden_fields": {"type": "list", "elements": "str", "default": []},
 }
 
 
@@ -213,7 +203,6 @@ def execute_module(module, client):
     namespace = module.params.get("namespace")
     patch = module.params.get("patch")
 
-    hidden_fields = module.params.get("hidden_fields")
     wait = module.params.get("wait")
     wait_sleep = module.params.get("wait_sleep")
     wait_timeout = module.params.get("wait_timeout")
@@ -271,13 +260,13 @@ def execute_module(module, client):
             module.fail_json(msg=msg, error=to_native(exc), status="", reason="")
 
     success = True
-    result = {"result": hide_fields(obj, hidden_fields)}
+    result = {"result": obj}
     if wait and not module.check_mode:
         waiter = get_waiter(client, resource, condition=wait_condition)
         success, result["result"], result["duration"] = waiter.wait(
             wait_timeout, wait_sleep, name, namespace
         )
-    match, diffs = diff_objects(existing.to_dict(), obj, hidden_fields)
+    match, diffs = diff_objects(existing.to_dict(), obj)
     result["changed"] = not match
     if module._diff:
         result["diff"] = diffs

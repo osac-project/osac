@@ -243,10 +243,6 @@ node:
     retired_reason:
       description: TODO
       type: str
-    shard:
-      description: The shard key for a node.
-      returned: success
-      type: str
     states:
       description: |
         Links to the collection of states. Note that this resource is also

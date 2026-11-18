@@ -83,11 +83,6 @@ options:
           Network will use Openstack defaults if this option is
           not provided.
      type: str
-   tags:
-     description:
-       - A list of tags to set on the network
-     type: list
-     elements: str
 extends_documentation_fragment:
 - openstack.cloud.openstack
 '''
@@ -213,8 +208,7 @@ class NetworkModule(OpenStackModule):
         project=dict(),
         port_security_enabled=dict(type='bool'),
         mtu=dict(type='int', aliases=['mtu_size']),
-        dns_domain=dict(),
-        tags=dict(type='list', elements='str'),
+        dns_domain=dict()
     )
 
     def run(self):
@@ -230,7 +224,6 @@ class NetworkModule(OpenStackModule):
         provider_network_type = self.params['provider_network_type']
         provider_segmentation_id = self.params['provider_segmentation_id']
         project = self.params['project']
-        tags = self.params['tags']
 
         kwargs = {}
         for arg in ('port_security_enabled', 'mtu', 'dns_domain'):
@@ -309,12 +302,6 @@ class NetworkModule(OpenStackModule):
                     net = self.conn.network.update_network(
                         net.id, **update_kwargs
                     )
-                    changed = True
-
-            if tags is not None:
-                old_tags = self.conn.network.get_tags(net)
-                if set(old_tags) != set(tags):
-                    self.conn.network.set_tags(net, tags)
                     changed = True
 
             net = net.to_dict(computed=False)

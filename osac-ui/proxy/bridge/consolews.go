@@ -26,20 +26,19 @@ func NewConsoleWebSocketProxy(upstreamBaseURL string, tlsConfig *tls.Config) (ht
 		return nil, fmt.Errorf("upstream URL must include a host")
 	}
 
-	proxy := &httputil.ReverseProxy{
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(target)
-			pr.Out.URL.Path = consoleConnectPath
-			pr.Out.URL.RawPath = ""
-			pr.Out.Host = target.Host
-			pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
-			pr.SetXForwarded()
-		},
-	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
 	if target.Scheme == "https" {
 		proxy.Transport = &http.Transport{
 			TLSClientConfig: tlsConfig,
 		}
+	}
+
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.URL.Path = consoleConnectPath
+		req.URL.RawPath = ""
+		req.Host = target.Host
 	}
 
 	return proxy, nil

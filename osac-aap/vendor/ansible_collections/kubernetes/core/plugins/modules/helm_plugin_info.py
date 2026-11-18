@@ -16,7 +16,7 @@ version_added: 1.0.0
 author:
   - Abhijeet Kasurde (@Akasurde)
 requirements:
-  - "helm >= 3.0.0 (https://github.com/helm/helm/releases)"
+  - "helm (https://github.com/helm/helm/releases)"
 description:
   -  Gather information about Helm plugins installed in namespace.
 options:
@@ -98,16 +98,29 @@ def main():
         supports_check_mode=True,
     )
 
-    # Validate helm version >= 3.0.0
+    # Validate Helm version >=3.0.0,<4.0.0
     module.validate_helm_version()
 
     plugin_name = module.params.get("plugin_name")
 
+    plugin_list = []
+
     rc, output, err, command = module.get_helm_plugin_list()
 
-    plugins = parse_helm_plugin_list(output=output.splitlines())
-    if plugin_name is not None:
-        plugins = [plugin for plugin in plugins if plugin.get("name") == plugin_name]
+    out = parse_helm_plugin_list(output=output.splitlines())
+
+    for line in out:
+        if plugin_name is None:
+            plugin_list.append(
+                {"name": line[0], "version": line[1], "description": line[2]}
+            )
+            continue
+
+        if plugin_name == line[0]:
+            plugin_list.append(
+                {"name": line[0], "version": line[1], "description": line[2]}
+            )
+            break
 
     module.exit_json(
         changed=True,
@@ -115,7 +128,7 @@ def main():
         stdout=output,
         stderr=err,
         rc=rc,
-        plugin_list=plugins,
+        plugin_list=plugin_list,
     )
 
 

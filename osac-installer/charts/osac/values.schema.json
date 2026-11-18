@@ -2274,7 +2274,7 @@
               "description": "Optional PEM CA certificate for the NetBox endpoint, stored in a separate Kubernetes Secret.",
               "default": ""
             },
-            "allowInsecureHTTP": {
+            "clientAllowInsecureHTTP": {
               "type": "boolean",
               "description": "Allow NetBox endpoint URLs using HTTP.",
               "default": false

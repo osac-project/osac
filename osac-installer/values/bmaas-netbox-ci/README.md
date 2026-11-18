@@ -77,7 +77,7 @@ options:
   netbox:
     url: "http://osac-infra-netbox.osac-infra.svc.cluster.local"
     tokenFile: "<path where netbox-api-token is mounted>"
-    allowInsecureHTTP: true
+    clientAllowInsecureHTTP: true
 hostClass: metal3
 ```
 

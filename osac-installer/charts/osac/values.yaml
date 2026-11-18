@@ -496,7 +496,7 @@ bmf:
     tokenSecretKey: "token"
     tokenValue: ""
     caCert: ""
-    allowInsecureHTTP: false
+    clientAllowInsecureHTTP: false
   metal3:
     enabled: false
     # Namespace where Metal3 inventory reads BareMetalHost resources.

@@ -15,11 +15,18 @@ package migrations
 
 import (
 	"context"
+	"errors"
+	"net/url"
 	"time"
 
+	migratedb "github.com/golang-migrate/migrate/v4/database"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 var _ = DescribeMigration("Retain deleted tenant identities", func() {
@@ -141,6 +148,57 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		Expect(count).To(Equal(2))
 		_, err = conn.Exec(ctx, `delete from billing_accounts where id = 'account'`)
 		Expect(err).To(HaveOccurred(), "retained history still references its original billing account")
+	})
+	It("times out behind an assignment reader without changing the predecessor schema or rows", func(ctx context.Context) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		before, fks := snapshot(ctx), foreignKeys(ctx)
+
+		// Tool.Migrate opens its own connection and the driver doesn't use the caller's context.
+		// Bound it independently so a regression fails while the reader still holds its lock.
+		migrationURL, err := url.Parse(tool.URL())
+		Expect(err).NotTo(HaveOccurred())
+		params := migrationURL.Query()
+		params.Set("connect_timeout", "5")
+		params.Set("statement_timeout", "15000")
+		params.Set("x-statement-timeout", "20000")
+		migrationURL.RawQuery = params.Encode()
+		boundedTool, err := database.NewTool().SetLogger(logger).SetURL(migrationURL.String()).Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		reader, err := conn.Begin(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := reader.Rollback(ctx); !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+		// Block the last lock in the list. ACCESS SHARE is enough to block ACCESS EXCLUSIVE.
+		_, err = reader.Exec(ctx, `lock table tenant_billing_assignments in access share mode`)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = boundedTool.Migrate(ctx, 158)
+		var migrationErr migratedb.Error
+		Expect(errors.As(err, &migrationErr)).To(BeTrue(), "expected a PostgreSQL migration error, got %v", err)
+		var pgErr *pgconn.PgError
+		Expect(errors.As(migrationErr.OrigErr, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("55P03"))
+		Expect(pgErr.Message).To(ContainSubstring("Drain readers and writers"))
+		Expect(pgErr.Detail).To(ContainSubstring("After confirming rollback"))
+		Expect(pgErr.Detail).To(ContainSubstring("reset the dirty migration version to 157"))
+		Expect(reader.Rollback(ctx)).To(Succeed())
+
+		var version int
+		var dirty, absent bool
+		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
+		Expect(version).To(Equal(158))
+		Expect(dirty).To(BeTrue())
+		Expect(conn.QueryRow(ctx, `select to_regclass('deleted_tenant_identities') is null`).Scan(&absent)).To(Succeed())
+		Expect(absent).To(BeTrue())
+		Expect(foreignKeys(ctx)).To(Equal(fks))
+		Expect(snapshot(ctx)).To(Equal(before))
 	})
 	DescribeTable("rejects unprovable predecessor evidence atomically", func(ctx context.Context, corrupt string) {
 		_, err := conn.Exec(ctx, corrupt)

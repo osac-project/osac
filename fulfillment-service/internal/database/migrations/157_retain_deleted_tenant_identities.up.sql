@@ -11,10 +11,22 @@
 -- specific language governing permissions and limitations under the License.
 --
 
--- Deploy with all identity/capture/liveness writers together, under writer quiescence. These locks also exclude
--- concurrent database writes throughout validation, backfill and FK removal, not just at a late capture trigger.
+-- Deploy all identity/capture/liveness writers together while writes are quiesced. Drain readers too: these
+-- locks exclude both reads and writes throughout validation, backfill and FK removal.
 begin;
-lock table tenants, archived_tenants, tenant_billing_assignments in access exclusive mode;
+set local lock_timeout = '5s';
+do $$
+begin
+  lock table tenants, archived_tenants, tenant_billing_assignments in access exclusive mode;
+exception when lock_not_available then
+  raise exception using
+    errcode = '55P03',
+    message = 'Migration 158 timed out waiting for an ACCESS EXCLUSIVE lock. Drain readers and writers of'
+      ' tenants, archived_tenants and tenant_billing_assignments before retrying the upgrade.',
+    detail = 'Roll back the failed transaction if the migration session is still open. After confirming rollback,'
+      ' reset the dirty migration version to 157 before retrying.';
+end;
+$$;
 
 create table deleted_tenant_identities (
   tenant_name text primary key check (tenant_name <> ''),

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import base64
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
+from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     HostRef,
     host_consumer_ref,
@@ -14,7 +16,13 @@ from tests.e2e.core.helpers import (
     wait_for_host_allocated,
     wait_for_host_powered,
 )
-from tests.e2e.core.inventory import Metal3Inventory, NetBoxInventory, make_inventory_backend, netbox_settings_from_bmf
+from tests.e2e.core.inventory import (
+    Metal3Inventory,
+    NetBoxInventory,
+    assert_bmi_lifecycle_on_running,
+    make_inventory_backend,
+    netbox_settings_from_bmf,
+)
 from tests.e2e.core.k8s_client import K8sClient
 
 _NETBOX_ENV_VARS = (
@@ -84,6 +92,9 @@ class FakeMetal3K8s:
 
     def get_bmh_hardware_nics(self, *, name: str, bmh_namespace: str) -> list[str]:
         return self.nics
+
+    def get_baremetal_instance_name(self, *, uuid: str, checked: bool = True) -> str:
+        return "bmi-cr-1"
 
 
 def _metal3(k8s: FakeMetal3K8s) -> Metal3Inventory:
@@ -210,8 +221,6 @@ class FakeNetBox:
 
     def __init__(self, devices: list[dict[str, Any]] | None = None) -> None:
         self.devices: list[dict[str, Any]] = [dict(device) for device in devices or []]
-        self.created: list[dict[str, Any]] = []
-        self.deleted: list[str] = []
         self.list_calls: list[dict[str, Any]] = []
         self.closed = False
 
@@ -225,22 +234,6 @@ class FakeNetBox:
         if status is not None:
             devices = [device for device in devices if device.get("status") == status]
         return [dict(device) for device in devices]
-
-    def create_device(
-        self, *, name: str, role: str, site: str, device_type: str, custom_fields: dict[str, Any] | None = None
-    ) -> str:
-        self.created.append(
-            {"name": name, "role": role, "site": site, "device_type": device_type, "custom_fields": custom_fields}
-        )
-        device_id = str(100 + len(self.created))
-        self.devices.append(
-            {"id": device_id, "name": name, "status": "staged", "custom_fields": dict(custom_fields or {})}
-        )
-        return device_id
-
-    def delete_device(self, device_id: str) -> None:
-        self.deleted.append(device_id)
-        self.devices = [device for device in self.devices if device["id"] != device_id]
 
     def get_device(self, device_id: str) -> dict[str, Any]:
         return next(device for device in self.devices if device["id"] == device_id)
@@ -259,6 +252,9 @@ class FakeDeviceK8s:
 
     def get_baremetal_instance_external_host_id(self, *, name: str) -> str:
         return self.external_host_id
+
+    def get_baremetal_instance_name(self, *, uuid: str, checked: bool = True) -> str:
+        return "bmi-cr-1"
 
     def is_bmh_present(self, *, name: str, bmh_namespace: str) -> bool:
         return self.bmh_present
@@ -372,6 +368,95 @@ def test_netbox_close_closes_the_client() -> None:
     backend.close()
 
     assert netbox.closed
+
+
+# Composite lifecycle helper -------------------------------------------------------
+
+
+class FakeLifecycleGRPC:
+    """GRPCClient stand-in for assert_bmi_lifecycle_on_running's API calls."""
+
+    def __init__(self, ids: list[str] | None = None, on_strategy: Callable[[str], None] | None = None) -> None:
+        self.ids = ids if ids is not None else ["bmi-uid-1"]
+        self.on_strategy = on_strategy
+        self.run_strategy_updates: list[tuple[str, str]] = []
+
+    def list_baremetal_instance_ids(self) -> list[str]:
+        return list(self.ids)
+
+    def update_baremetal_instance_run_strategy(self, *, bmi_id: str, run_strategy: str) -> None:
+        self.run_strategy_updates.append((bmi_id, run_strategy))
+        if self.on_strategy is not None:
+            self.on_strategy(run_strategy)
+
+
+def test_lifecycle_helper_runs_one_full_power_cycle() -> None:
+    k8s = FakeMetal3K8s()
+
+    def _apply_strategy(run_strategy: str) -> None:
+        k8s.powered_on = "false" if run_strategy.endswith("HALTED") else "true"
+
+    grpc = FakeLifecycleGRPC(on_strategy=_apply_strategy)
+
+    bmi_cr_name, host = assert_bmi_lifecycle_on_running(
+        grpc=cast(GRPCClient, grpc),
+        k8s=cast(K8sClient, k8s),
+        inventory=_metal3(k8s),
+        bmi_id="bmi-uid-1",
+        expected_image_url=k8s.image_url,
+    )
+
+    assert bmi_cr_name == "bmi-cr-1"
+    assert host == HostRef(namespace="host-inventory", name="bmh-1")
+    assert grpc.run_strategy_updates == [
+        ("bmi-uid-1", "BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED"),
+        ("bmi-uid-1", "BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS"),
+    ]
+
+
+def test_lifecycle_helper_skips_the_power_cycle_on_request() -> None:
+    grpc = FakeLifecycleGRPC()
+
+    assert_bmi_lifecycle_on_running(
+        grpc=cast(GRPCClient, grpc),
+        k8s=cast(K8sClient, FakeMetal3K8s()),
+        inventory=_metal3(FakeMetal3K8s()),
+        bmi_id="bmi-uid-1",
+        power_cycle=False,
+    )
+
+    assert grpc.run_strategy_updates == []
+
+
+def test_lifecycle_helper_rejects_an_unknown_bmi() -> None:
+    grpc = FakeLifecycleGRPC(ids=[])
+
+    with pytest.raises(AssertionError):
+        assert_bmi_lifecycle_on_running(
+            grpc=cast(GRPCClient, grpc),
+            k8s=cast(K8sClient, FakeMetal3K8s()),
+            inventory=_metal3(FakeMetal3K8s()),
+            bmi_id="bmi-uid-1",
+        )
+
+
+def test_lifecycle_helper_resolves_the_host_through_the_netbox_backend() -> None:
+    k8s = FakeMetal3K8s(external_host_id="host-inventory/netbox-42")
+    netbox = FakeNetBox([_claimed_device()])
+    grpc = FakeLifecycleGRPC()
+
+    bmi_cr_name, host = assert_bmi_lifecycle_on_running(
+        grpc=cast(GRPCClient, grpc),
+        k8s=cast(K8sClient, k8s),
+        inventory=_netbox(netbox, k8s=k8s),
+        bmi_id="bmi-uid-1",
+        # The power cycle is covered by the metal3 test above; this one is
+        # about resolving the host through the netbox backend.
+        power_cycle=False,
+    )
+
+    assert bmi_cr_name == "bmi-cr-1"
+    assert host == HostRef(namespace="host-inventory", name="netbox-42")
 
 
 # BMF settings discovery -----------------------------------------------------------

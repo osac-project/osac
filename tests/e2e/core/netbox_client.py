@@ -1,7 +1,7 @@
 """NetBox device client for E2E inventory fixtures.
 
 Thin fixture-facing wrapper around the official Python client (pynetbox).
-All device CRUD goes through pynetbox; the tests never hand-roll NetBox
+All device access goes through pynetbox; the tests never hand-roll NetBox
 REST calls. Value resolution (deployed BMF configuration versus debug env
 overrides) lives in the inventory fixture layer (`inventory.py`), not here.
 """
@@ -16,7 +16,6 @@ from typing import Any
 import pynetbox
 import requests
 from pynetbox.core.api import Api
-from pynetbox.core.endpoint import Endpoint
 
 
 def _status_value(status: object) -> str:
@@ -35,7 +34,7 @@ def _status_value(status: object) -> str:
 
 
 class NetBoxClient:
-    """NetBox device CRUD on top of pynetbox.
+    """NetBox device reads on top of pynetbox.
 
     Construction performs no network calls. TLS is configured through a
     dedicated ``requests.Session``: a temporary CA bundle file when
@@ -84,49 +83,6 @@ class NetBoxClient:
         url = getattr(req, "url", None) or getattr(exc, "base", "<unknown endpoint>")
         method = getattr(getattr(req, "request", None), "method", "?")
         return RuntimeError(f"NetBox {operation} failed: {method} {url} -> HTTP {status}")
-
-    def _resolve_id(self, endpoint: Endpoint, *, slug: str, kind: str) -> int:
-        """Resolve a site/role slug to its numeric id; numeric ids pass through."""
-        if slug.isdigit():
-            return int(slug)
-        record = endpoint.get(slug=slug)
-        if record is None:
-            raise RuntimeError(f"NetBox {kind} {slug!r} was not found")
-        return int(record.id)
-
-    def create_device(
-        self, *, name: str, role: str, site: str, device_type: str, custom_fields: dict[str, Any] | None = None
-    ) -> str:
-        """Create a device in the OSAC pool free state (``staged``); return its id."""
-        site_id = self._resolve_id(self._api.dcim.sites, slug=site, kind="site")
-        role_id = self._resolve_id(self._api.dcim.device_roles, slug=role, kind="device role")
-        type_id = self._resolve_id(self._api.dcim.device_types, slug=device_type, kind="device type")
-        try:
-            device = self._api.dcim.devices.create(
-                name=name,
-                role=role_id,
-                site=site_id,
-                device_type=type_id,
-                status="staged",
-                custom_fields=custom_fields or {},
-            )
-        except pynetbox.RequestError as exc:
-            raise self._error("create_device", exc) from exc
-        # create() returns a list only for bulk payloads; this client always
-        # creates single devices.
-        if isinstance(device, list):
-            raise RuntimeError(f"NetBox create_device returned a bulk result for {name!r}")
-        return str(device.id)
-
-    def delete_device(self, device_id: str) -> None:
-        """Delete a device; a missing device is not an error (idempotent)."""
-        try:
-            device = self._api.dcim.devices.get(device_id)
-            if device is None:
-                return
-            self._api.dcim.devices.delete([device])
-        except pynetbox.RequestError as exc:
-            raise self._error("delete_device", exc) from exc
 
     def get_device_status(self, device_id: str) -> str:
         """Return the device status value, or "" when the device is gone."""

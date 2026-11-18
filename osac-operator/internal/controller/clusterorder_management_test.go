@@ -465,6 +465,13 @@ var _ = Describe("ClusterOrder management publication", func() {
 		}
 	})
 
+	It("uses the HostedControlPlane Konnectivity signer CA", func() {
+		secretName, caKey, ok := managementRouteServingCA(hypershiftv1beta1.Konnectivity)
+		Expect(ok).To(BeTrue())
+		Expect(secretName).To(Equal("konnectivity-signer"))
+		Expect(caKey).To(Equal("ca.crt"))
+	})
+
 	It("waits for the HostedControlPlane serving CA before probing a passthrough Route", func() {
 		scheme := runtime.NewScheme()
 		Expect(corev1.AddToScheme(scheme)).To(Succeed())

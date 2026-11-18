@@ -1436,6 +1436,32 @@ render_infra_failure_matching() {
   fi
 }
 
+# Render the osac chart with the ServiceMonitor CRD present and require every
+# rendered scrape interval to be the given YAML scalar, quoting included. The
+# CRD types interval as a string, so a bare 0 is rejected at apply time while
+# `helm template` is perfectly happy -- an exit-status check cannot see it.
+rendered_interval() {
+  local name=$1 want=$2
+  shift 2
+  local out="${TMP_DIR}/${name}.yaml"
+  echo "checking ${name} (rendered interval is ${want})"
+  "${HELM_BIN}" "${COMMON_ARGS[@]}" \
+    --api-versions monitoring.coreos.com/v1/ServiceMonitor "$@" >"${out}"
+  local found
+  found=$(grep -c "^ *interval: ${want}\$" "${out}" || true)
+  if [ "${found}" -eq 0 ]; then
+    echo "ERROR: ${name}: no rendered interval equal to ${want}" >&2
+    grep -n "interval:" "${out}" >&2 || echo "  (no interval rendered at all)" >&2
+    exit 1
+  fi
+  # Nothing may render the unquoted form alongside it.
+  if grep -Eq "^ *interval: [^\"]" "${out}"; then
+    echo "ERROR: ${name}: an unquoted interval rendered; YAML will type it" >&2
+    grep -nE "^ *interval: [^\"]" "${out}" >&2
+    exit 1
+  fi
+}
+
 # A valid configuration still renders end to end (AC: supported valid
 # configurations are unaffected by the gate).
 render_success valid-defaults
@@ -1523,9 +1549,21 @@ for sm_chart in service operator bmf; do
   render_success \
     "scrape-interval-days-${sm_chart}" \
     --set-string "${sm_chart}.serviceMonitor.interval=1d"
-  render_success \
+  # 0 means "use the global interval". Schema acceptance is not enough here:
+  # the CRD types interval as a string, and an unquoted 0 renders as a YAML
+  # integer that the API server rejects with
+  #   spec.endpoints[0].interval: Invalid value: "integer"
+  # Rendering has to be asserted, not just the exit status: render_success
+  # discards the manifest, and without --api-versions the monitor's
+  # capability guard renders nothing at all to inspect.
+  rendered_interval \
     "scrape-interval-global-${sm_chart}" \
+    '"0"' \
     --set-string "${sm_chart}.serviceMonitor.interval=0"
+  rendered_interval \
+    "scrape-interval-days-rendered-${sm_chart}" \
+    '"1d"' \
+    --set-string "${sm_chart}.serviceMonitor.interval=1d"
 done
 
 # bmaas-netbox-ci is a valid profile the gate must not block: it relies on

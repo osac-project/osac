@@ -45,7 +45,10 @@ spec:
   - port: https
     scheme: https
     path: /metrics
-    interval: {{ .Values.serviceMonitor.interval }}
+    {{- /* Quoted: the CRD types interval as a string, and an unquoted 0 --
+    a valid Prometheus duration meaning "use the global interval" -- is a YAML
+    integer, which the API server rejects. */}}
+    interval: {{ .Values.serviceMonitor.interval | quote }}
     authorization:
       type: Bearer
       credentials:

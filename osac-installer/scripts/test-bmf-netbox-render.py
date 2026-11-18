@@ -7,9 +7,12 @@ import argparse
 import base64
 import json
 import pathlib
+import secrets
 import subprocess
 import tempfile
+import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import yaml
@@ -20,6 +23,119 @@ REPO_ROOT = INSTALLER_DIR.parent
 BMF_CHART = REPO_ROOT / "bare-metal-fulfillment-operator/charts/operator"
 OSAC_CHART = INSTALLER_DIR / "charts/osac"
 INFRA_CHART = INSTALLER_DIR / "charts/osac-infra"
+
+MOCK_NETBOX = '''\
+import json
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+with open("/tokens/first", encoding="utf-8") as source:
+    first_token = source.read().strip()
+with open("/tokens/second", encoding="utf-8") as source:
+    second_token = source.read().strip()
+with open("/app/device-id", encoding="utf-8") as source:
+    device_id = int(source.read().strip())
+
+state = {"status": "staged", "owner": None, "version": 1, "requests": [0, 0]}
+
+def device():
+    return {
+        "id": device_id, "url": f"/api/dcim/devices/{device_id}/",
+        "display": "NetBox test device", "name": "NetBox test device",
+        "device_type": {
+            "id": 1, "url": "/api/dcim/device-types/1/", "display": "Test device type",
+            "manufacturer": {"id": 1, "url": "/api/dcim/manufacturers/1/",
+                             "display": "Test manufacturer", "name": "Test manufacturer",
+                             "slug": "test-manufacturer"},
+            "model": "Test model", "slug": "test-device-type",
+        },
+        "role": {"id": 1, "url": "/api/dcim/device-roles/1/", "display": "Server",
+                 "name": "Server", "slug": "server", "_depth": 0},
+        "site": {"id": 1, "url": "/api/dcim/sites/1/", "display": "Test site",
+                 "name": "Test site", "slug": "test-site"},
+        "status": {"value": state["status"], "label": state["status"].title()},
+        "custom_fields": {
+            "osac_managed": True, "osac_instance_id": state["owner"],
+            "osac_bmc_address": "redfish-virtualmedia+https://192.0.2.42/redfish/v1/Systems/1",
+            "osac_boot_mac": "aa:bb:cc:dd:ee:42", "contract_case": "deployed",
+        },
+        "tags": [], "console_port_count": 0, "console_server_port_count": 0,
+        "power_port_count": 0, "power_outlet_count": 0, "front_port_count": 0,
+        "rear_port_count": 0, "device_bay_count": 0, "module_bay_count": 0,
+        "inventory_item_count": 0,
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        pass
+
+    def reply(self, code, body, etag=False):
+        content = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(content)))
+        if etag:
+            self.send_header("ETag", f'"v{state["version"]}"')
+        self.end_headers()
+        self.wfile.write(content)
+
+    def authorized(self):
+        authorization = self.headers.get("Authorization", "")
+        for index, token in enumerate((first_token, second_token)):
+            if authorization == "Token " + token:
+                state["requests"][index] += 1
+                return True
+        self.reply(401, {"detail": "Unauthorized"})
+        return False
+
+    def do_GET(self):
+        url = urlparse(self.path)
+        if url.path == "/admin/state" and self.client_address[0] == "127.0.0.1":
+            self.reply(200, state)
+            return
+        if not self.authorized():
+            return
+        if url.path == "/api/":
+            self.reply(200, {"dcim": "/api/dcim/"})
+            return
+        if url.path == "/api/dcim/devices/":
+            query = parse_qs(url.query)
+            match = (state["status"] == "staged" and state["owner"] is None
+                     and query.get("status") == ["staged"]
+                     and query.get("cf_osac_managed") == ["true"]
+                     and query.get("cf_osac_instance_id__empty") == ["true"]
+                     and query.get("cf_contract_case") == ["deployed"])
+            results = [device()] if match else []
+            self.reply(200, {"count": len(results), "next": None,
+                             "previous": None, "results": results})
+            return
+        if url.path == f"/api/dcim/devices/{device_id}/":
+            self.reply(200, device(), etag=True)
+            return
+        if url.path == "/api/dcim/interfaces/":
+            self.reply(200, {"count": 0, "next": None, "previous": None, "results": []})
+            return
+        self.reply(404, {"detail": "Not found"})
+
+    def do_PATCH(self):
+        if not self.authorized():
+            return
+        if urlparse(self.path).path != f"/api/dcim/devices/{device_id}/":
+            self.reply(404, {"detail": "Not found"})
+            return
+        if self.headers.get("If-Match") != f'"v{state["version"]}"':
+            self.reply(412, {"detail": "Precondition failed"})
+            return
+        patch = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        state["status"] = patch.get("status", state["status"])
+        state["owner"] = patch.get("custom_fields", {}).get("osac_instance_id", state["owner"])
+        state["version"] += 1
+        self.reply(200, device(), etag=True)
+
+ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+'''
 
 BMF_NETBOX_VALUES = """\
 secrets:
@@ -650,15 +766,289 @@ def check_infra_metal3_rbac() -> None:
     assert set(provisioning_rules[0]["verbs"]) == {"get", "list", "create", "patch"}
 
 
+def live_command(command: list[str], *, input_text: str | None = None) -> str:
+    result = subprocess.run(command, input=input_text, text=True, capture_output=True, check=False)
+    if result.returncode:
+        raise RuntimeError(
+            f"{command[0]} {command[1]} failed with exit code {result.returncode}: {result.stderr.strip()}"
+        )
+    return result.stdout
+
+
+def live_kubectl(*args: str, input_text: str | None = None) -> str:
+    return live_command(["kubectl", *args], input_text=input_text)
+
+
+def live_get(kind: str, name: str, namespace: str) -> dict[str, Any]:
+    return json.loads(live_kubectl("get", kind, name, "-n", namespace, "-o", "json"))
+
+
+def live_apply(documents: list[dict[str, Any]]) -> None:
+    live_kubectl("apply", "-f", "-", input_text=yaml.safe_dump_all(documents))
+
+
+def wait_for(description: str, check: Callable[[], bool], timeout: int = 120) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if check():
+            return
+        time.sleep(2)
+    raise AssertionError(f"timed out waiting for {description}")
+
+
+def live_mock_state(namespace: str) -> dict[str, Any]:
+    output = live_kubectl(
+        "exec", "-n", namespace, "deployment/netbox-mock", "--", "python3", "-c",
+        "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/admin/state').read().decode())",
+    )
+    return json.loads(output)
+
+
+def live_annotated_metadata(name: str, namespace: str) -> dict[str, Any]:
+    return {
+        "name": name, "namespace": namespace,
+        "annotations": {
+            "osac.openshift.io/tenant": "system",
+            "osac.openshift.io/owner-reference": "netbox-install-test",
+        },
+    }
+
+
+def live_copy_dependency(kind: str, name: str, source: str, target: str) -> None:
+    original = live_get(kind, name, source)
+    copied = {
+        "apiVersion": "v1", "kind": kind,
+        "metadata": live_annotated_metadata(name, target),
+        "data": original["data"],
+    }
+    live_apply([copied])
+
+
+def live_mock_resources(namespace: str, device_id: int, first: str, second: str) -> list[dict[str, Any]]:
+    def metadata(name: str) -> dict[str, Any]:
+        return live_annotated_metadata(name, namespace)
+
+    return [
+        {
+            "apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata("netbox-mock"),
+            "data": {"server.py": MOCK_NETBOX, "device-id": str(device_id)},
+        },
+        {
+            "apiVersion": "v1", "kind": "Secret", "metadata": metadata("netbox-mock-tokens"),
+            "type": "Opaque",
+            "data": {
+                "first": base64.b64encode(first.encode()).decode(),
+                "second": base64.b64encode(second.encode()).decode(),
+            },
+        },
+        {
+            "apiVersion": "apps/v1", "kind": "Deployment", "metadata": metadata("netbox-mock"),
+            "spec": {
+                "replicas": 1, "selector": {"matchLabels": {"app": "netbox-mock"}},
+                "template": {
+                    "metadata": {"labels": {"app": "netbox-mock"},
+                                 "annotations": metadata("netbox-mock")["annotations"]},
+                    "spec": {
+                        "containers": [{
+                            "name": "server", "image": "python:3.12-alpine",
+                            "command": ["python3", "/app/server.py"],
+                            "ports": [{"containerPort": 8080}],
+                            "volumeMounts": [
+                                {"name": "code", "mountPath": "/app", "readOnly": True},
+                                {"name": "tokens", "mountPath": "/tokens", "readOnly": True},
+                            ],
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"]},
+                                "runAsNonRoot": True, "runAsUser": 1000,
+                                "readOnlyRootFilesystem": True,
+                            },
+                        }],
+                        "volumes": [
+                            {"name": "code", "configMap": {"name": "netbox-mock"}},
+                            {"name": "tokens", "secret": {"secretName": "netbox-mock-tokens"}},
+                        ],
+                    },
+                },
+            },
+        },
+        {
+            "apiVersion": "v1", "kind": "Service", "metadata": metadata("netbox-mock"),
+            "spec": {"selector": {"app": "netbox-mock"}, "ports": [{"port": 8080, "targetPort": 8080}]},
+        },
+    ]
+
+
+def live_values(namespace: str, token: str, token_secret: str) -> dict[str, Any]:
+    return {
+        "fullnameOverride": "bmf-netbox-it",
+        "global": {"networking": {"provisioningEnabled": False}},
+        "image": {"repository": "localhost/bmf-operator", "tag": "it", "pullPolicy": "Never"},
+        "secrets": {"netboxToken": token_secret},
+        "netbox": {
+            "enabled": True, "bmhNamespace": namespace,
+            "url": f"http://netbox-mock.{namespace}.svc.cluster.local:8080",
+            "allowInsecureHTTP": True, "tokenValue": token,
+        },
+        "secretAPI": {
+            "url": "https://fulfillment-internal-api.osac.svc.cluster.local:8001",
+            "issuerUrl": "https://keycloak.keycloak.svc.cluster.local:8443/realms/osac",
+            "caBundle": {"configMap": "ca-bundle", "key": "bundle.pem"},
+        },
+    }
+
+
+def live_write_values(path: pathlib.Path, values: dict[str, Any]) -> None:
+    path.touch(mode=0o600)
+    path.write_text(yaml.safe_dump(values), encoding="utf-8")
+
+
+def live_helm_install(namespace: str, values_path: pathlib.Path) -> None:
+    live_command([
+        "helm", "upgrade", "--install", "bmf-netbox-it", str(BMF_CHART),
+        "--namespace", namespace, "--values", str(values_path), "--wait", "--timeout", "5m",
+    ])
+
+
+def live_check_rbac(namespace: str) -> None:
+    role = live_get("role", "bmf-netbox-it-bmc-secrets", namespace)
+    binding = live_get("rolebinding", "bmf-netbox-it-bmc-secrets", namespace)
+    assert binding["subjects"] == [{
+        "kind": "ServiceAccount", "name": "bmf-netbox-it", "namespace": namespace,
+    }]
+    assert binding["roleRef"]["name"] == role["metadata"]["name"]
+    for rule in role["rules"]:
+        if "secrets" in rule.get("resources", []):
+            assert not {"list", "watch"}.intersection(rule["verbs"])
+    cluster_role = live_get("clusterrole", "bmf-netbox-it-manager-role", namespace)
+    for rule in cluster_role["rules"]:
+        if "secrets" in rule.get("resources", []):
+            assert not {"list", "watch"}.intersection(rule["verbs"])
+
+
+def live_exists(kind: str, name: str, namespace: str) -> bool:
+    result = subprocess.run(
+        ["kubectl", "get", kind, name, "-n", namespace, "-o", "name"],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode not in (0, 1):
+        raise RuntimeError(f"kubectl get {kind} failed with exit code {result.returncode}")
+    return result.returncode == 0
+
+
+def live_cycle(namespace: str, device_id: int, name: str, token_secret: str) -> None:
+    bmi = {
+        "apiVersion": "osac.openshift.io/v1alpha1", "kind": "BareMetalInstance",
+        "metadata": live_annotated_metadata(name, namespace),
+        "spec": {
+            "selector": {"hostSelector": {"contract_case": "deployed"}},
+            "externalHostID": "", "templateID": "noop", "runStrategy": "Always",
+        },
+    }
+    live_apply([bmi])
+    host_name = f"netbox-{device_id}"
+    runtime_secret = host_name + "-bmc-secret"
+
+    def allocated() -> bool:
+        current = live_get("baremetalinstance", name, namespace)
+        state = live_mock_state(namespace)
+        return (
+            current["spec"].get("externalHostID") == f"{namespace}/{host_name}"
+            and state["status"] == "active"
+            and state["owner"] == current["metadata"]["uid"]
+            and live_exists("baremetalhost", host_name, namespace)
+            and live_exists("secret", runtime_secret, namespace)
+        )
+
+    wait_for(f"allocation of {name}", allocated)
+    live_kubectl("delete", "baremetalinstance", name, "-n", namespace, "--wait=false")
+
+    def released() -> bool:
+        state = live_mock_state(namespace)
+        return (
+            not live_exists("baremetalinstance", name, namespace)
+            and not live_exists("baremetalhost", host_name, namespace)
+            and not live_exists("secret", runtime_secret, namespace)
+            and state["status"] == "staged" and state["owner"] is None
+        )
+
+    wait_for(f"release of {name}", released)
+    assert live_exists("secret", token_secret, namespace)
+    assert live_exists("secret", "fulfillment-controller-credentials", namespace)
+
+
+def check_bmf_live_install(device_id: int) -> None:
+    """TC-INT-027: install BMF in Kind with a private mock NetBox API."""
+    namespace = f"osac-netbox-it-{uuid.uuid4().hex[:6]}"
+    first, second = secrets.token_hex(20), secrets.token_hex(20)
+    with tempfile.TemporaryDirectory(prefix="bmf-netbox-install-") as temp:
+        values_path = pathlib.Path(temp) / "values.yaml"
+        live_write_values(values_path, live_values(namespace, first, "osac-netbox-token"))
+
+        # The mock Service does not exist yet; rendering must still succeed.
+        assert helm_result("bmf-netbox-it", BMF_CHART, "--namespace", namespace,
+                           "--values", str(values_path)).returncode == 0
+
+        try:
+            live_kubectl("create", "namespace", namespace)
+            live_kubectl("annotate", "namespace", namespace,
+                         "osac.openshift.io/tenant=system",
+                         "osac.openshift.io/owner-reference=netbox-install-test")
+            live_copy_dependency("Secret", "fulfillment-controller-credentials", "osac", namespace)
+            live_copy_dependency("ConfigMap", "ca-bundle", "osac", namespace)
+            live_apply(live_mock_resources(namespace, device_id, first, second))
+            live_kubectl("rollout", "status", "deployment/netbox-mock", "-n", namespace, "--timeout=3m")
+
+            live_helm_install(namespace, values_path)
+            live_check_rbac(namespace)
+            inventory = yaml.safe_load(base64.b64decode(
+                live_get("secret", "osac-inventory-config", namespace)["data"]["inventory.yaml"]
+            ))
+            management = yaml.safe_load(base64.b64decode(
+                live_get("secret", "osac-management-config", namespace)["data"]["management.yaml"]
+            ))
+            assert inventory["type"] == "netbox" and inventory["hostClass"] == "metal3"
+            assert management["type"] == "metal3"
+            live_cycle(namespace, device_id, "netbox-it-first", "osac-netbox-token")
+
+            # A Helm-owned token Secret keeps its current data on upgrade.
+            # Point the release at a new Secret to rotate through Helm.
+            live_write_values(values_path, live_values(namespace, second, "osac-netbox-token-rotated"))
+            live_helm_install(namespace, values_path)
+            live_kubectl("rollout", "restart", "deployment/bmf-netbox-it-controller-manager", "-n", namespace)
+            live_kubectl("rollout", "status", "deployment/bmf-netbox-it-controller-manager",
+                         "-n", namespace, "--timeout=3m")
+            live_cycle(namespace, device_id, "netbox-it-after-rotation", "osac-netbox-token-rotated")
+            assert live_mock_state(namespace)["requests"][1] > 0, "operator did not use the rotated token"
+        finally:
+            subprocess.run(["helm", "uninstall", "bmf-netbox-it", "-n", namespace],
+                           capture_output=True, text=True, check=False)
+            subprocess.run(["kubectl", "delete", "namespace", namespace,
+                            "--ignore-not-found=true", "--wait=false"],
+                           capture_output=True, text=True, check=False)
+
+
 def main() -> None:
-    """Run BMF render contracts or the explicitly selected live Secret lookup check."""
+    """Run render checks or a selected Kind check."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--live-lookup-only",
         action="store_true",
         help="exercise NetBox Secret lookup against the current Kubernetes cluster",
     )
+    parser.add_argument(
+        "--live-install-only", action="store_true",
+        help="run TC-INT-027 against a Kind cluster with a mock NetBox API",
+    )
+    parser.add_argument("--device-id", type=int, help="numeric NetBox device ID for the live install fixture")
     args = parser.parse_args()
+
+    if args.live_install_only:
+        if args.device_id is None or args.device_id <= 0:
+            parser.error("--live-install-only requires a positive --device-id")
+        check_bmf_live_install(args.device_id)
+        print("TC-INT-027 BMF NetBox Kind install checks passed.")
+        return
 
     with tempfile.TemporaryDirectory(prefix="bmf-netbox-render-") as temp:
         temp_dir = pathlib.Path(temp)

@@ -69,6 +69,10 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 integration-tests: manifests generate ## Run integration tests against a Kind cluster.
 	ginkgo run --timeout 30m -v test/integration
 
+.PHONY: netbox-contract-test
+netbox-contract-test: ## Run the NetBox inventory adapter against the mock HTTPS API.
+	go test ./test/netboxcontract -count=1
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	$(GOLANGCI_LINT) run

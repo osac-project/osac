@@ -17,7 +17,8 @@ suite (repository-root `make -C osac-installer help`, `.github/workflows/`).
 | Envtest | `internal/controller/` | Kubernetes API, etcd, OSAC and static Metal3 CRDs | Metal3 controller, Ironic/BMC, hardware and some provider clients faked. |
 | Component integration | Deployed `test/integration/` | Deployed operator, CRDs, API, pool/instance flows, status | Static `BareMetalHost` state and simulated transitions; no real Metal3 operator, Ironic, BMC or hardware. |
 | Component integration (CI) | Installer Kind target, BMF suite | Thin Kind install, installation API endpoint unset | Same static Metal3/provider boundary; installation settings need separate deployed coverage. |
-| Contract | None dedicated | No real provider boundary | Static Metal3 CRDs, patched status and simulated transitions do not exercise a real contract; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying coverage. |
+| Contract | `test/netboxcontract/` | Production NetBox HTTP client and inventory adapter | NetBox API is a stateful HTTPS mock; no real NetBox compatibility claim. See [OSAC-7518](https://redhat.atlassian.net/browse/OSAC-7518). |
+| Component integration (Kind) | Installer BMF NetBox test target | Deployed BMF controller, Kubernetes API, Metal3 CRDs, Fulfillment Secret API | NetBox HTTP API is mocked in-cluster; Metal3/Ironic/BMC hardware remains absent. See [OSAC-7519](https://redhat.atlassian.net/browse/OSAC-7519). |
 | E2E | Cross-component suites | Fulfillment-to-operator journeys where available | Real hardware and providers remain environment-dependent. |
 
 ## Coverage notes
@@ -57,3 +58,5 @@ The Kind suite stops at static Metal3 resources and simulated provider status.
 Changes to the real Metal3/Ironic/BMC/provider boundary must add qualifying
 coverage under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) or its
 contract-test follow-up; extending the static-fixture suite alone is insufficient.
+The NetBox mock suites assert the operator's requests and lifecycle against the
+mocked API; they do not establish compatibility with a real NetBox release.

@@ -13,7 +13,7 @@
 #   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|compute-storage|operator|bmf
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|compute-storage|operator|bmf|bmf-netbox
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
@@ -246,10 +246,10 @@ endif
 SUITE_TARGETS := test
 ifneq ($(filter $(SUITE_TARGETS),$(MAKECMDGOALS)),)
 ifndef SUITE
-$(error SUITE is required (all|fulfillment|compute-storage|operator|bmf))
+$(error SUITE is required (all|fulfillment|compute-storage|operator|bmf|bmf-netbox))
 endif
-ifeq ($(filter $(SUITE),all fulfillment compute-storage operator bmf),)
-$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, compute-storage, operator, or bmf)
+ifeq ($(filter $(SUITE),all fulfillment compute-storage operator bmf bmf-netbox),)
+$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, compute-storage, operator, bmf, or bmf-netbox)
 endif
 ifeq ($(MCP_TEST_ENABLED),true)
 ifneq ($(PLATFORM),kind)
@@ -1226,7 +1226,7 @@ METERING_IT_IMAGE := localhost/metering-service:it
 METERING_IT_IMAGE_ARGS := --set metering.image.repository=localhost/metering-service --set metering.image.tag=it --set metering.image.pullPolicy=Never
 
 .PHONY: test
-test: validate-ns ## Run integration tests (SUITE= required: all|fulfillment|compute-storage|operator|bmf)
+test: validate-ns ## Run integration tests (SUITE= required: all|fulfillment|compute-storage|operator|bmf|bmf-netbox)
 ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=fulfillment
 	$(MAKE) test SUITE=operator
@@ -1295,6 +1295,18 @@ ifeq ($(SUITE),bmf)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set bmf.secretAPI.url= --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.provisioningEnabled=true $(METERING_IT_IMAGE_ARGS)"
 	cd ../bare-metal-fulfillment-operator && ginkgo run --timeout 30m -v test/integration
+endif
+ifeq ($(SUITE),bmf-netbox)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
+	$(call kind-load-image,localhost/fulfillment-service:it)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
+	$(call kind-load-image,localhost/bmf-operator:it)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
+	$(call kind-load-image,$(METERING_IT_IMAGE))
+	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set bmf.replicaCount=0 --set operator.enabled=false --set global.services.bmaas.enabled=true --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmf-netbox ginkgo run --timeout 30m -v --label-filter 'bmf-netbox' it
 endif
 
 ##@ Charts

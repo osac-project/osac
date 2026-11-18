@@ -276,6 +276,10 @@ jobs:
           CONTAINER_TOOL: docker
         run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 
+      - name: Test NetBox mock API contract
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        run: make -C bare-metal-fulfillment-operator netbox-contract-test
+
       - name: Test BMF NetBox Secret lookup
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         run: |
@@ -287,6 +291,16 @@ jobs:
         env:
           CONTAINER_TOOL: docker
         run: make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf
+
+      - name: Test NetBox Kind install with mock API
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator'
+        env:
+          CONTAINER_TOOL: docker
+        run: |
+          echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
+          echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
+          echo '127.0.0.1 keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
+          make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf-netbox
 
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()

@@ -39,6 +39,9 @@ linters:
           - lll
           - goconst
         path: internal/*
+      - linters:
+          - goconst
+        path: test/netboxcontract/
     paths:
       - third_party$
       - builtin$

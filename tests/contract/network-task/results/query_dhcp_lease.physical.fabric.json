@@ -1,0 +1,8 @@
+{
+  "osac_result": {
+    "dhcp_lease": {
+      "ip_address": "10.20.1.130",
+      "mac_address": "aa:bb:cc:dd:ee:ff"
+    }
+  }
+}

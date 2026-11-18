@@ -8,7 +8,11 @@ import {
   ComputeInstanceCatalogItems,
   ComputeInstances,
 } from '@osac/types';
-import { useCreateResource, useGetResource } from '@osac/ui-components/api/use-resource';
+import {
+  useCreateResource,
+  useGetResource,
+  wizardPreloadQueryOptions,
+} from '@osac/ui-components/api/use-resource';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
@@ -38,7 +42,7 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   const catalogItemQuery = useGetResource(
     ComputeInstanceCatalogItems,
     { id: initialCatalogItemId ?? '' },
-    { enabled: Boolean(initialCatalogItemId) },
+    { enabled: Boolean(initialCatalogItemId), ...wizardPreloadQueryOptions },
   );
   const includeCatalogStep = !initialCatalogItemId;
   const [activeStep, setActiveStep] = useState<VmWizardStepId>(

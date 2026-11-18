@@ -11,7 +11,7 @@ import {
 import { ClusterCatalogItems } from '@osac/types';
 
 import ClusterCreateWizard from './ClusterCreateWizard';
-import { useGetResource } from '../../../api/use-resource';
+import { useGetResource, wizardPreloadQueryOptions } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
 import ResourceDetailsPage from '../../Resource/ResourceDetailsPage';
 
@@ -19,17 +19,7 @@ const ClusterCatalogLaunchPage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { id = '' } = useParams<{ id: string }>();
-  const query = useGetResource(
-    ClusterCatalogItems,
-    { id },
-    {
-      // The wizard preloads a catalog item the user just picked; background
-      // refreshes would only risk discarding in-progress form state.
-      refetchInterval: false,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-    },
-  );
+  const query = useGetResource(ClusterCatalogItems, { id }, wizardPreloadQueryOptions);
   const catalogItemName = query.data?.object?.metadata?.name || id;
 
   return (

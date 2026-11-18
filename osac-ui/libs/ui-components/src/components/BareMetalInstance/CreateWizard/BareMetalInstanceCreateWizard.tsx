@@ -4,7 +4,7 @@ import { PageSection, PageSectionTypes, Wizard, WizardStep } from '@patternfly/r
 import { Formik } from 'formik';
 
 import { BareMetalInstanceCatalogItem, BareMetalInstanceCatalogItems } from '@osac/types';
-import { useGetResource } from '@osac/ui-components/api/use-resource';
+import { useGetResource, wizardPreloadQueryOptions } from '@osac/ui-components/api/use-resource';
 import { useCreateBareMetalInstance } from '@osac/ui-components/api/v1/baremetal-instance';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
@@ -34,7 +34,7 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
   const catalogItemQuery = useGetResource(
     BareMetalInstanceCatalogItems,
     { id: initialCatalogItemId ?? '' },
-    { enabled: Boolean(initialCatalogItemId) },
+    { enabled: Boolean(initialCatalogItemId), ...wizardPreloadQueryOptions },
   );
   const includeCatalogStep = !initialCatalogItemId;
   const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>(

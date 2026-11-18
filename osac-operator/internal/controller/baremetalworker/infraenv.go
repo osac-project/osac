@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -347,7 +348,7 @@ func (r *Reconciler) resolveClusterSSHAuthorizedKey(
 	if err != nil {
 		return "", err
 	}
-	key := string(response.GetObject().GetData()["public_key"])
+	key := strings.TrimSpace(string(response.GetObject().GetData()["public_key"]))
 	if key == "" {
 		return "", fmt.Errorf("SSH key Secret %q has no public_key data", id)
 	}

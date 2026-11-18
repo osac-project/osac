@@ -100,6 +100,18 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 			Expect(secrets.requests).To(ConsistOf("key-id"))
 		})
 
+		It("trims whitespace from the registered public key", func() {
+			r, _, co, cluster := sshFlowHarness(
+				privatev1.SecretReference_builder{Id: "key-id"}.Build(),
+				&v1alpha1.FulfillmentSecretReference{ID: "key-id"})
+			secrets := &stubWorkerSecretsClient{key: "\n  " + sshFlowKeyMaterial + " \r\n"}
+			r.SetSecretsClient(secrets)
+
+			key, err := r.resolveClusterSSHAuthorizedKey(context.Background(), co, cluster)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(key).To(Equal(sshFlowKeyMaterial))
+		})
+
 		It("returns an empty key when the Cluster has no reference", func() {
 			r, _, co, cluster := sshFlowHarness(nil, nil)
 			r.SetSecretsClient(&stubWorkerSecretsClient{})
@@ -124,7 +136,7 @@ var _ = Describe("Cluster SSH key reference flow", func() {
 			r, _, co, cluster := sshFlowHarness(
 				privatev1.SecretReference_builder{Id: "empty-key"}.Build(),
 				&v1alpha1.FulfillmentSecretReference{ID: "empty-key"})
-			r.SetSecretsClient(&stubWorkerSecretsClient{})
+			r.SetSecretsClient(&stubWorkerSecretsClient{key: " \r\n\t"})
 
 			_, err := r.resolveClusterSSHAuthorizedKey(context.Background(), co, cluster)
 			Expect(err).To(MatchError(ContainSubstring("empty-key")))

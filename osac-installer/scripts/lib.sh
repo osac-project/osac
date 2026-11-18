@@ -416,13 +416,17 @@ render_osac_chart_offline() {
     local placeholder_token="$1"
     shift
     local err bridged bridged_err_file differing
-    if err=$(helm template "$@" 2>&1 >/dev/null); then
+    # The preflight reads cluster state at install time. Offline validation
+    # checks values and templates only, so unknown live checks must be
+    # reported without blocking this render.
+    if err=$(helm template "$@" --set preflight.mode=report 2>&1 >/dev/null); then
         return 0
     fi
     case "${err}" in
         *"netbox.tokenValue is required when Secret"*)
             bridged_err_file=$(mktemp)
             if ! bridged=$(helm template "$@" \
+                --set preflight.mode=report \
                 --set-string "bmf.netbox.tokenValue=${placeholder_token}" \
                 2>"${bridged_err_file}"); then
                 offline_render_error "$(cat "${bridged_err_file}")"

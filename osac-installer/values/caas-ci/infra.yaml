@@ -11,10 +11,12 @@ aapOperator:
   enabled: true
 lvms:
   enabled: true
-  # CaaS CI boots the same sno-4-22 cluster flavor as vmaas-ci.
+  # CaaS CI boots the same SNO cluster as vmaas-ci; the spare disk can
+  # appear as either device name depending on the virtualization host.
   deviceSelector:
     optionalPaths:
       - /dev/sdb
+      - /dev/vdb
 metallb:
   enabled: true
   derivePoolFromNodeIP: true

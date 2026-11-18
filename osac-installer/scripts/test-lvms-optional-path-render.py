@@ -24,7 +24,10 @@ PROFILE_VALUES = {
         INSTALLER / "values/bmaas-ci/infra.yaml",
         ["/dev/sdb", "/dev/vdb"],
     ),
-    "caas-ci": (INSTALLER / "values/caas-ci/infra.yaml", ["/dev/sdb"]),
+    "caas-ci": (
+        INSTALLER / "values/caas-ci/infra.yaml",
+        ["/dev/sdb", "/dev/vdb"],
+    ),
     "full-ci": (INSTALLER / "values/full-ci/infra.yaml", ["/dev/vdb"]),
 }
 WORKER_LABEL = "node-role.kubernetes.io/worker"

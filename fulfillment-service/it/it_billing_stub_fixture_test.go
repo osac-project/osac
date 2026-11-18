@@ -121,6 +121,20 @@ func configureBillingStub(ctx context.Context, stub *billingstub.Stub, listen, s
 	}
 	Expect(kube.Update(ctx, current)).To(Succeed())
 	rolloutBillingDeployment(ctx)
+	waitBillingPublicAPIReady(ctx)
+}
+
+// waitBillingPublicAPIReady waits for the public proxy path after rollout without warming billing discovery or
+// touching the provider request trace. Capabilities.Get is also the integration tool's gRPC readiness probe.
+func waitBillingPublicAPIReady(ctx context.Context) {
+	GinkgoHelper()
+	readyCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	client := publicv1.NewCapabilitiesClient(tool.ExternalView().AdminConn())
+	Eventually(readyCtx, func() error {
+		_, err := client.Get(readyCtx, publicv1.CapabilitiesGetRequest_builder{}.Build())
+		return err
+	}, time.Minute, time.Second).Should(Succeed())
 }
 
 // rolloutBillingDeployment waits until the grpc-server deployment's current generation is fully rolled out.

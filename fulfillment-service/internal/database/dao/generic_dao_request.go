@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
@@ -559,30 +558,28 @@ func (r *request[O]) unmarshalMap(data []byte) (result map[string]string, err er
 	return
 }
 
-// queryRow executes a SQL query expected to return a single row. It logs the SQL statement before delegating to the
-// underlying transaction.
+// queryRow executes a SQL query expected to return a single row. It logs operation metadata, never SQL or values.
 func (r *request[O]) queryRow(ctx context.Context, op opType, sql string, args ...any) pgx.Row {
 	if r.dao.logger.Enabled(ctx, slog.LevelDebug) {
 		r.dao.logger.DebugContext(
 			ctx,
 			"Running SQL operation",
 			slog.String("type", string(op)),
-			slog.String("sql", r.cleanSQL(sql)),
+			slog.String("table", r.dao.table),
 			slog.Int("parameter_count", len(args)),
 		)
 	}
 	return r.tx.QueryRow(ctx, sql, args...)
 }
 
-// query executes a SQL query expected to return multiple rows. It logs the SQL statement before delegating to the
-// underlying transaction.
+// query executes a SQL query expected to return multiple rows. It logs operation metadata, never SQL or values.
 func (r *request[O]) query(ctx context.Context, op opType, sql string, args ...any) (rows pgx.Rows, err error) {
 	if r.dao.logger.Enabled(ctx, slog.LevelDebug) {
 		r.dao.logger.DebugContext(
 			ctx,
 			"Running SQL operation",
 			slog.String("type", string(op)),
-			slog.String("sql", r.cleanSQL(sql)),
+			slog.String("table", r.dao.table),
 			slog.Int("parameter_count", len(args)),
 		)
 	}
@@ -590,15 +587,14 @@ func (r *request[O]) query(ctx context.Context, op opType, sql string, args ...a
 	return
 }
 
-// exec executes a SQL statement that doesn't return rows. It logs the SQL statement before delegating to the
-// underlying transaction.
+// exec executes a SQL statement that doesn't return rows. It logs operation metadata, never SQL or values.
 func (r *request[O]) exec(ctx context.Context, op opType, sql string, args ...any) (pgconn.CommandTag, error) {
 	if r.dao.logger.Enabled(ctx, slog.LevelDebug) {
 		r.dao.logger.DebugContext(
 			ctx,
 			"Running SQL operation",
 			slog.String("type", string(op)),
-			slog.String("sql", r.cleanSQL(sql)),
+			slog.String("table", r.dao.table),
 			slog.Int("parameter_count", len(args)),
 		)
 	}
@@ -626,28 +622,4 @@ func (r *request[O]) recordOpDuration(op opType, start time.Time, err error) {
 			typeMetricLabel:  string(op),
 		}).Observe(time.Since(start).Seconds())
 	}
-}
-
-// cleanSQL collapses all sequences of whitespace in the given SQL string into a single space, producing a
-// compact single-line representation suitable for logging.
-func (r *request[O]) cleanSQL(sql string) string {
-	var buf strings.Builder
-	buf.Grow(len(sql))
-	space := true
-	for _, c := range sql {
-		if unicode.IsSpace(c) {
-			if !space {
-				buf.WriteRune(' ')
-				space = true
-			}
-		} else {
-			buf.WriteRune(c)
-			space = false
-		}
-	}
-	result := buf.String()
-	if space && len(result) > 0 {
-		result = result[:len(result)-1]
-	}
-	return result
 }

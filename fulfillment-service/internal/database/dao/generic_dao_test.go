@@ -14,10 +14,12 @@ language governing permissions and limitations under the License.
 package dao
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +33,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -239,6 +242,155 @@ var _ = Describe("Generic DAO", func() {
 				SetMaxLimit(maxLimit).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		Describe("Operation logging", func() {
+			var buffer bytes.Buffer
+
+			expectOperations := func(types []string, counts []int) {
+				decoder := json.NewDecoder(&buffer)
+				for i, op := range types {
+					var record map[string]any
+					Expect(decoder.Decode(&record)).To(Succeed())
+					Expect(record["msg"]).To(Equal("Running SQL operation"))
+					Expect(record["level"]).To(Equal("DEBUG"))
+					Expect(record["type"]).To(Equal(op))
+					Expect(record["parameter_count"]).To(Equal(float64(counts[i])))
+					Expect(record).ToNot(HaveKey("sql"))
+					Expect(record).To(HaveKeyWithValue("table", "objects"))
+					Expect(record).To(HaveLen(6))
+					Expect(record).To(HaveKey("time"))
+				}
+				Expect(decoder.More()).To(BeFalse())
+				buffer.Reset()
+			}
+
+			BeforeEach(func() {
+				buffer.Reset()
+			})
+
+			DescribeTable("Omits inline literals and bound values without changing PostgreSQL results",
+				func(value string, redact bool) {
+					captured, err := logging.NewLogger().SetWriter(&buffer).
+						SetLevel(slog.LevelDebug.String()).SetRedact(redact).Build()
+					Expect(err).ToNot(HaveOccurred())
+					generic.logger = captured
+					for _, id := range []string{"native-id-alpha", "native-id-beta", "native-id-decoy"} {
+						payload := value
+						if id == "native-id-decoy" {
+							payload = "nonmatching-payload"
+						}
+						_, err = generic.Create().SetObject(testsv1.Object_builder{
+							Id: id, MyString: payload,
+							Metadata: testsv1.Metadata_builder{Tenant: "my-tenant", Name: id}.Build(),
+						}.Build()).Do(ctx)
+						Expect(err).ToNot(HaveOccurred())
+					}
+
+					visibility, err := auth.NewVisibility().AddVisibleTenant("my-tenant").Build()
+					Expect(err).ToNot(HaveOccurred())
+					filter := fmt.Sprintf("this.my_string == %q", value)
+					count := generic.List().SetFilter(filter).SetLimit(0)
+					count.visibility = visibility
+					countResponse, err := count.Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(countResponse.GetTotal()).To(Equal(int32(2)))
+					Expect(countResponse.GetItems()).To(BeEmpty())
+
+					page := generic.List().SetFilter(filter).SetOrder("id desc").SetOffset(1).SetLimit(1)
+					page.visibility = visibility
+					pageResponse, err := page.Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(pageResponse.GetTotal()).To(Equal(int32(2)))
+					Expect(pageResponse.GetItems()).To(HaveLen(1))
+					Expect(pageResponse.GetItems()[0].GetId()).To(Equal("native-id-alpha"))
+					Expect(pageResponse.GetItems()[0].GetMyString()).To(Equal(value))
+					Expect(buffer.String()).ToNot(ContainSubstring(value[:8]))
+					Expect(buffer.String()).ToNot(ContainSubstring("native-id-"))
+					Expect(buffer.String()).ToNot(ContainSubstring("my-tenant"))
+					expectOperations(
+						[]string{"get", "create", "get", "create", "get", "create", "count", "count", "list"},
+						[]int{1, 9, 1, 9, 1, 9, 1, 1, 3},
+					)
+
+					getResponse, err := generic.Get().SetId("native-id-alpha").Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(getResponse.GetObject().GetMyString()).To(Equal(value))
+					expectOperations([]string{"get"}, []int{1})
+					getResponse.GetObject().SetMyString(value + "-updated")
+					updateResponse, err := generic.Update().SetObject(getResponse.GetObject()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(updateResponse.GetObject().GetMyString()).To(Equal(value + "-updated"))
+					expectOperations([]string{"update"}, []int{8})
+					stored, err := generic.Get().SetId("native-id-alpha").Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(stored.GetObject().GetMyString()).To(Equal(value + "-updated"))
+					expectOperations([]string{"get"}, []int{1})
+
+					_, err = generic.Delete().SetId("native-id-alpha").Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+					expectOperations([]string{"update", "archive", "delete"}, []int{1, 11, 1})
+					var archived []byte
+					Expect(tx.QueryRow(ctx, `select data from archived_objects where id = $1`,
+						"native-id-alpha").Scan(&archived)).To(Succeed())
+					var data map[string]any
+					Expect(json.Unmarshal(archived, &data)).To(Succeed())
+					Expect(data["my_string"]).To(Equal(value + "-updated"))
+				},
+				Entry("raw native value with redaction disabled", "fixture-native-sensitive-prefix-not-a-uuid", false),
+				Entry("UUID with redaction disabled", "f85c7d3a-0374-4b9e-9e2d-92c615bbec13", false),
+				Entry("quoted SQL-shaped value with redaction disabled", "fixture-quoted-' OR true; -- \" \\ tail", false),
+				Entry("control characters with redaction disabled", "fixture-control-\n\t\rvalue", false),
+				Entry("UTF-8 with redaction disabled", "fixture-utf8-café-秘密-🔒", false),
+				Entry("default redaction enabled", "fixture-default-sensitive-prefix", true),
+			)
+
+			It("Keeps safe operation metadata on errors and rejects malformed filters before SQL", func() {
+				captured, err := logging.NewLogger().SetWriter(&buffer).
+					SetLevel(slog.LevelDebug.String()).SetRedact(false).Build()
+				Expect(err).ToNot(HaveOccurred())
+				generic.logger = captured
+				_, err = generic.Get().SetId("fixture-missing-native-value").Do(ctx)
+				var missing *ErrNotFound
+				Expect(errors.As(err, &missing)).To(BeTrue())
+				size := buffer.Len()
+				_, err = generic.List().SetFilter(`this.my_string == "fixture-malformed-sensitive" &&`).Do(ctx)
+				var invalid *ErrInvalidFilter
+				Expect(errors.As(err, &invalid)).To(BeTrue())
+				Expect(buffer.Len()).To(Equal(size))
+				expectOperations([]string{"get"}, []int{1})
+			})
+
+			It("Does not log bound payloads when PostgreSQL rejects an update", func() {
+				for _, id := range []string{"first", "second"} {
+					_, err := generic.Create().SetObject(testsv1.Object_builder{
+						Id: id, MyString: "fixture-unique-sensitive-" + id,
+						Metadata: testsv1.Metadata_builder{Tenant: "my-tenant", Name: id}.Build(),
+					}.Build()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+				_, err := tx.Exec(ctx, `create unique index objects_logging_payload on objects ((data->>'my_string'))`)
+				Expect(err).ToNot(HaveOccurred())
+				current, err := generic.Get().SetId("second").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				captured, err := logging.NewLogger().SetWriter(&buffer).
+					SetLevel(slog.LevelDebug.String()).SetRedact(false).Build()
+				Expect(err).ToNot(HaveOccurred())
+				generic.logger = captured
+				current.GetObject().SetMyString("fixture-unique-sensitive-first")
+				err = tx.Savepoint(ctx, func(spCtx context.Context) error {
+					_, err := generic.Update().SetObject(current.GetObject()).Do(spCtx)
+					return err
+				})
+				var exists *ErrAlreadyExists
+				Expect(errors.As(err, &exists)).To(BeTrue())
+				Expect(exists.ConstraintName).To(Equal("objects_logging_payload"))
+				stored, err := generic.Get().SetId("second").Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMyString()).To(Equal("fixture-unique-sensitive-second"))
+				Expect(buffer.String()).ToNot(ContainSubstring("fixture-unique-sensitive-"))
+				expectOperations([]string{"update", "get"}, []int{8, 1})
+			})
 		})
 
 		Describe("Shared query contract", func() {

@@ -18,7 +18,6 @@ package osac.public.v1;
 import "buf/validate/validate.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/any.proto";
-import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/public/v1/add_on_operator_type.proto";
 import "osac/public/v1/baremetal_instance_type_type.proto";
@@ -341,7 +340,7 @@ message ClusterStatus {
   reserved 14;
   reserved "upgrade";
 
-  // Per-component upgrade history, newest first. Earlier entries retain their place as their state changes.
+  // Whole-cluster upgrade history, newest first. Earlier entries retain their place as their state changes.
   repeated ClusterUpgradeHistoryEntry upgrade_history = 15 [(google.api.field_behavior) = OUTPUT_ONLY];
 
   // Records when fulfillment accepted a change to spec.version. This is the authoritative
@@ -353,66 +352,52 @@ message ClusterStatus {
   optional google.protobuf.Timestamp version_transition_time = 16 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
-// State of one component in a cluster upgrade attempt, independent of the cluster's readiness state.
+// State of a whole-cluster upgrade attempt, independent of the cluster's readiness state.
 enum ClusterUpgradeState {
   // No upgrade state has been reported. Accepted attempts start in PENDING.
   CLUSTER_UPGRADE_STATE_UNSPECIFIED = 0;
 
-  // OSAC accepted the attempt, but HyperShift has not reported that the selected component started upgrading.
+  // OSAC accepted the whole-cluster attempt, but HyperShift has not reported that the control plane started upgrading.
   CLUSTER_UPGRADE_STATE_PENDING = 1;
 
-  // HyperShift is working toward the requested version of the selected component.
+  // HyperShift is working toward the requested version of the control plane or one or more participating node pools.
   CLUSTER_UPGRADE_STATE_PROGRESSING = 2;
 
-  // The attempt did not reach a definitive result within the timeout. This may be recorded as a terminal history
-  // outcome, but observation continues and a later HyperShift result can update this attempt to SUCCEEDED or FAILED.
+  // The whole-cluster attempt did not reach a definitive result within the timeout. Observation continues and a later
+  // HyperShift result can update this attempt to SUCCEEDED or FAILED.
   CLUSTER_UPGRADE_STATE_TIMED_OUT = 3;
 
-  // HyperShift completed the upgrade and the selected component reached the requested version.
+  // HyperShift completed the upgrade and every participating component reached the requested version.
   CLUSTER_UPGRADE_STATE_SUCCEEDED = 4;
 
   // HyperShift reported a terminal error and stopped working toward the requested version.
   CLUSTER_UPGRADE_STATE_FAILED = 5;
 
-  // The node set was removed and its NodePool deleted while this component was Pending or Progressing.
-  // A component already marked TimedOut retains that outcome after removal.
-  CLUSTER_UPGRADE_STATE_NODE_SET_REMOVED = 6;
+  reserved 6;
+  reserved "NODE_SET_REMOVED";
 }
 
-// Identifies the control plane or a node set within the Cluster being upgraded.
-message ClusterUpgradeComponent {
-  oneof target {
-    option (buf.validate.oneof).required = true;
-
-    // Selects the Cluster's control plane.
-    google.protobuf.Empty control_plane = 1;
-
-    // ID of the selected node set, as keyed in the Cluster's spec.node_sets.
-    string node_set_id = 2 [(buf.validate.field).string.min_len = 1];
-  }
-}
-
-// State and progress of one component in a cluster upgrade attempt.
+// State and progress of one whole-cluster upgrade attempt.
 message ClusterUpgradeHistoryEntry {
-  // Control plane or node set selected for this component.
-  ClusterUpgradeComponent component = 1 [(buf.validate.field).required = true];
+  reserved 1;
+  reserved "component";
 
-  // OpenShift version observed on the selected component when it was accepted into the shared cluster attempt, as a semver string.
+  // OpenShift version observed on the control plane when the attempt was accepted.
   string source_version = 2;
 
-  // OpenShift version requested for the selected component, as a semver string.
+  // OpenShift version requested for the whole cluster.
   string target_version = 3;
 
-  // Time OSAC accepted this component into the shared cluster attempt.
+  // Time OSAC accepted the whole-cluster attempt.
   google.protobuf.Timestamp accepted_time = 4;
 
-  // Time this component entered its current state, including a later update after TIMED_OUT.
+  // Time the whole-cluster attempt entered its current state, including a later update after TIMED_OUT.
   google.protobuf.Timestamp state_transition_time = 5;
 
-  // Current outcome or progress state of this component.
+  // Current outcome or progress state of the whole-cluster attempt.
   ClusterUpgradeState state = 6;
 
-  // Human-readable explanation of the state, including any failure or timeout reason.
+  // Human-readable explanation of the whole-cluster state, including component reasons for timeout or failure.
   string message = 7;
 
 }

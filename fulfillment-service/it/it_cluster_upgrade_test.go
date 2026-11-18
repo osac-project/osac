@@ -22,7 +22,6 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
@@ -227,6 +226,13 @@ var _ = Describe("Cluster upgrade", func() {
 		}
 		return ""
 	}
+	nodeSetIDs := func(status *privatev1.ClusterStatus) []string {
+		names := make([]string, 0, len(status.GetActiveUpgradeAttempt().GetParticipatingNodeSets()))
+		for _, participating := range status.GetActiveUpgradeAttempt().GetParticipatingNodeSets() {
+			names = append(names, participating.GetNodeSetId())
+		}
+		return names
+	}
 
 	waitForOrderReleaseImage := func(order *osacv1alpha1.ClusterOrder, image string) {
 		kubeClient := tool.KubeClient()
@@ -269,19 +275,11 @@ var _ = Describe("Cluster upgrade", func() {
 		privateCluster, err := privateClusters.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		stored := privateCluster.GetObject()
-		var controlPlane *privatev1.ClusterUpgradeHistoryEntry
-		for _, entry := range stored.GetStatus().GetUpgradeHistory() {
-			if entry.GetComponent().GetControlPlane() != nil {
-				controlPlane = entry
-				break
-			}
-		}
-		Expect(controlPlane).NotTo(BeNil())
-		controlPlane.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
-		controlPlane.SetStateTransitionTime(timestamppb.New(time.Now()))
+		Expect(stored.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+		stored.GetStatus().SetObservedVersion(targetSemver)
 		_, err = privateClusters.Update(ctx, privatev1.ClustersUpdateRequest_builder{
 			Object:     stored,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.upgrade_history"}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.observed_version"}},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		_, err = privateClusters.Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: cluster.GetId()}.Build())
@@ -303,20 +301,10 @@ var _ = Describe("Cluster upgrade", func() {
 		stored := privateCluster.GetObject()
 		Expect(stored.GetStatus().GetUpgradeAttemptId()).NotTo(BeEmpty())
 		Expect(stored.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
-		controlPlane := stored.GetStatus().GetUpgradeHistory()[0]
-		Expect(controlPlane.GetComponent().GetControlPlane()).NotTo(BeNil())
-		Expect(controlPlane.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+		Expect(stored.GetStatus().GetUpgradeHistory()[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
 		Expect(stored.GetStatus().GetNodeSets()["my-node-set"].GetVersion().GetName()).To(Equal(defaultVersionName))
 
-		controlPlane.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
-		controlPlane.SetStateTransitionTime(timestamppb.New(time.Now()))
-		_, err = privateClusters.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-			Object:     stored,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.upgrade_history"}},
-		}.Build())
-		Expect(err).NotTo(HaveOccurred())
-		_, err = privateClusters.Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: cluster.GetId()}.Build())
-		Expect(err).NotTo(HaveOccurred())
+		markControlPlaneSucceeded(cluster)
 
 		Eventually(func(g Gomega) {
 			pollCtx, cancel := context.WithTimeout(ctx, pollRequestTimeout)
@@ -325,9 +313,12 @@ var _ = Describe("Cluster upgrade", func() {
 			g.Expect(err).NotTo(HaveOccurred())
 			object := reconciled.GetObject()
 			g.Expect(object.GetStatus().GetNodeSets()["my-node-set"].GetVersion().GetName()).To(Equal(targetVersionName))
-			g.Expect(object.GetStatus().GetUpgradeHistory()).To(HaveLen(2))
-			g.Expect(object.GetStatus().GetUpgradeHistory()[0].GetComponent().GetNodeSetId()).To(Equal("my-node-set"))
-			g.Expect(object.GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal(object.GetStatus().GetUpgradeAttemptId()))
+			g.Expect(object.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+			attempt := object.GetStatus().GetUpgradeHistory()[0]
+			g.Expect(nodeSetIDs(object.GetStatus())).To(ConsistOf("my-node-set"))
+			g.Expect(attempt.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
+			g.Expect(attempt.GetPhase()).To(Equal(privatev1.ClusterUpgradePhase_CLUSTER_UPGRADE_PHASE_NODE_SETS))
+			g.Expect(attempt.GetAttemptId()).To(Equal(object.GetStatus().GetUpgradeAttemptId()))
 
 		}, time.Minute, time.Second).Should(Succeed())
 
@@ -387,12 +378,10 @@ var _ = Describe("Cluster upgrade", func() {
 				g.Expect(object.GetStatus().GetNodeSets()[name].GetVersion().GetName()).To(Equal(targetVersionName), name)
 			}
 			history := object.GetStatus().GetUpgradeHistory()
-			g.Expect(history).To(HaveLen(4))
-			g.Expect(history[0].GetComponent().GetNodeSetId()).To(Equal("compute"))
-			g.Expect(history[1].GetComponent().GetNodeSetId()).To(Equal("gpu"))
-			g.Expect(history[2].GetComponent().GetNodeSetId()).To(Equal("storage"))
-			g.Expect(history[2].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
-			g.Expect(history[3].GetComponent().GetControlPlane()).NotTo(BeNil())
+			g.Expect(history).To(HaveLen(1))
+			g.Expect(nodeSetIDs(object.GetStatus())).To(ConsistOf("compute", "gpu"))
+			g.Expect(history[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
+			g.Expect(history[0].GetPhase()).To(Equal(privatev1.ClusterUpgradePhase_CLUSTER_UPGRADE_PHASE_NODE_SETS))
 
 		}, time.Minute, time.Second).Should(Succeed())
 
@@ -438,10 +427,10 @@ var _ = Describe("Cluster upgrade", func() {
 			object := reconciled.GetObject()
 			g.Expect(object.GetStatus().GetNodeSets()["compute"].GetVersion().GetName()).To(Equal(targetVersionName))
 			history := object.GetStatus().GetUpgradeHistory()
-			g.Expect(history).To(HaveLen(2))
-			g.Expect(history[0].GetComponent().GetNodeSetId()).To(Equal("compute"))
-			g.Expect(history[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
-			g.Expect(history[1].GetComponent().GetControlPlane()).NotTo(BeNil())
+			g.Expect(history).To(HaveLen(1))
+			g.Expect(nodeSetIDs(object.GetStatus())).To(ConsistOf("compute"))
+			g.Expect(history[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
+			g.Expect(history[0].GetPhase()).To(Equal(privatev1.ClusterUpgradePhase_CLUSTER_UPGRADE_PHASE_NODE_SETS))
 
 		}, time.Minute, time.Second).Should(Succeed())
 

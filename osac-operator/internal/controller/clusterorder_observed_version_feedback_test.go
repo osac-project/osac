@@ -20,7 +20,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -283,12 +282,10 @@ var _ = Describe("ClusterOrder live version feedback", func() {
 		newPool("workers-pool", orderName, "workers", "4.22.1")
 		remote := mockClient.getResponse.GetObject()
 		remote.GetStatus().SetUpgradeAttemptId("attempt-id")
-		component := &privatev1.ClusterUpgradeComponent{}
-		component.SetControlPlane(&emptypb.Empty{})
 		entry := privatev1.ClusterUpgradeHistoryEntry_builder{
-			AttemptId: "attempt-id", Component: component, TargetVersion: "4.22.2",
+			AttemptId: "attempt-id", TargetVersion: "4.22.2",
 			State:        privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
-			AcceptedTime: timestamppb.New(time.Now()),
+			AcceptedTime: timestamppb.New(time.Now()), StateTransitionTime: timestamppb.New(time.Now()),
 		}.Build()
 		remote.GetStatus().SetUpgradeHistory([]*privatev1.ClusterUpgradeHistoryEntry{entry})
 

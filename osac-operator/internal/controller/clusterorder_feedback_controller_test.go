@@ -24,7 +24,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
@@ -855,27 +854,25 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(updated.Finalizers).To(ContainElement(osacClusterOrderFeedbackFinalizer))
 		})
 
-		It("requeues pending upgrades without an annotation but stops after timeout", func() {
-			entry := &privatev1.ClusterUpgradeHistoryEntry{}
-			entry.SetAttemptId("cp-id")
-			entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
-			entry.SetAcceptedTime(timestamppb.Now())
-			component := &privatev1.ClusterUpgradeComponent{}
-			component.SetControlPlane(&emptypb.Empty{})
-			entry.SetComponent(component)
-			remote := mockClient.getResponse.GetObject()
-			remote.GetStatus().SetUpgradeAttemptId("cp-id")
-			remote.GetStatus().SetUpgradeHistory([]*privatev1.ClusterUpgradeHistoryEntry{entry})
+		It("requeues pending and timed-out upgrades until a terminal result", func() {
+			now := time.Now()
+			entry := privatev1.ClusterUpgradeHistoryEntry_builder{
+				AttemptId: "cp-id", TargetVersion: "4.18.0",
+				State:        privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
+				AcceptedTime: timestamppb.New(now), StateTransitionTime: timestamppb.New(now),
+			}.Build()
+			remote := privatev1.Cluster_builder{
+				Status: privatev1.ClusterStatus_builder{
+					UpgradeAttemptId: "cp-id",
+					UpgradeHistory:   []*privatev1.ClusterUpgradeHistoryEntry{entry},
+				}.Build(),
+			}.Build()
 
-			result, err := reconciler.Reconcile(testCtx, reconcile.Request{NamespacedName: typeNamespacedName})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(time.Minute))
-			Expect(mockClient.getCount).To(Equal(1))
+			Expect(hasUpgradeAwaitingTimeout(remote)).To(BeTrue())
 			entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT)
-			result, err = reconciler.Reconcile(testCtx, reconcile.Request{NamespacedName: typeNamespacedName})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(BeZero())
-			Expect(mockClient.getCount).To(Equal(2))
+			Expect(hasUpgradeAwaitingTimeout(remote)).To(BeTrue())
+			entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+			Expect(hasUpgradeAwaitingTimeout(remote)).To(BeFalse())
 		})
 
 		It("should sync Progressing phase", func() {

@@ -150,6 +150,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 		SetFlags(c.flags, network.GrpcClientName).
 		SetCaPool(caPool).
 		SetUserAgent(userAgent).
+		AddUnaryInterceptor(normalizeBillingAssignmentPatchMask).
 		SetMetricsSubsystem("outbound").
 		SetMetricsRegisterer(metricsRegisterer).
 		Build()
@@ -159,22 +160,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 
 	// Create the gateway multiplexer:
 	c.logger.InfoContext(ctx, "Creating REST gateway server")
-	gatewayMarshaller := &runtime.JSONPb{
-		MarshalOptions: protojson.MarshalOptions{
-			UseProtoNames: true,
-		},
-	}
-	gatewayMux := runtime.NewServeMux(
-		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.HTTPBodyMarshaler{
-			Marshaler: gatewayMarshaller,
-		}),
-		runtime.WithIncomingHeaderMatcher(func(key string) (string, bool) {
-			if strings.EqualFold(key, servers.DryRunHTTPHeader) {
-				return servers.DryRunMetadataKey, true
-			}
-			return runtime.DefaultHeaderMatcher(key)
-		}),
-	)
+	gatewayMux := newGatewayMux()
 
 	// Register the public and private API service handlers:
 	err = c.registerHandlers(ctx, gatewayMux)
@@ -266,6 +252,23 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	// Keep running till the shutdown sequence cancels the context:
 	c.logger.InfoContext(ctx, "Waiting for shutdown to sequence to complete")
 	return shutdown.Wait()
+}
+
+func newGatewayMux() *runtime.ServeMux {
+	return runtime.NewServeMux(
+		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.HTTPBodyMarshaler{
+			Marshaler: &runtime.JSONPb{
+				MarshalOptions: protojson.MarshalOptions{UseProtoNames: true},
+			},
+		}),
+		runtime.WithIncomingHeaderMatcher(func(key string) (string, bool) {
+			if strings.EqualFold(key, servers.DryRunHTTPHeader) {
+				return servers.DryRunMetadataKey, true
+			}
+			return runtime.DefaultHeaderMatcher(key)
+		}),
+		runtime.WithMiddlewares(withPatchURL),
+	)
 }
 
 func (c *runnerContext) handleHealth(

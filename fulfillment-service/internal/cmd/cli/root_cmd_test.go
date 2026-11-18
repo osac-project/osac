@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -184,13 +185,13 @@ var _ = Describe("actual Root billing acceptance", func() {
 
 	DescribeTable("routes canonical keyed collection reads through the actual generic Root",
 		func(resource, service string, private bool) {
-			calls := 0
+			var calls atomic.Int32
 			pkg := "public"
 			if private {
 				pkg = "private"
 			}
 			_, err := executeRootWithRPC(private, func(path string, request, response proto.Message) error {
-				calls++
+				calls.Add(1)
 				Expect(path).To(Equal("/osac." + pkg + ".v1." + service + "/List"))
 				filter := request.ProtoReflect().Get(request.ProtoReflect().Descriptor().Fields().ByName("filter")).String()
 				Expect(filter).To(ContainSubstring(`this.id in ["one", "two\"quoted"] || this.metadata.name in ["one", "two\"quoted"]`))
@@ -205,7 +206,7 @@ var _ = Describe("actual Root billing acceptance", func() {
 				return nil
 			}, "get", resource, "one", `two"quoted`, "--filter", `this.metadata.labels["environment"] == "test"`, "-o", "json")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(calls).To(Equal(1), "keyed JSON must use List, never scaffold Get")
+			Expect(calls.Load()).To(Equal(int32(1)), "keyed JSON must use List, never scaffold Get")
 		},
 		Entry("public account", "billingaccount", "BillingAccounts", false),
 		Entry("private account", "billingaccount", "BillingAccounts", true),
@@ -225,15 +226,15 @@ var _ = Describe("actual Root billing acceptance", func() {
 			}
 			for _, format := range []string{"table", "json", "yaml"} {
 				DescribeTable(pkg+" "+kind+" "+format+" actual Root cardinality and nested descriptor output", func(count int) {
-					calls := 0
+					var calls atomic.Int32
 					stdout, err := executeRootWithRPC(private, func(path string, _, response proto.Message) error {
-						calls++
+						calls.Add(1)
 						Expect(path).To(Equal("/" + pkg + "." + service + "/List"))
 						populateRootBillingInventory(response, private, kind, 0, count, count)
 						return nil
 					}, "get", kind, "billing-0000", "--output="+format)
 					Expect(err).NotTo(HaveOccurred())
-					Expect(calls).To(Equal(1))
+					Expect(calls.Load()).To(Equal(int32(1)))
 					if format == "table" {
 						if count == 0 {
 							Expect(stdout).To(ContainSubstring("There are no objects matching the given criteria."))
@@ -259,22 +260,21 @@ var _ = Describe("actual Root billing acceptance", func() {
 					if kind == "tenantbillingassignment" {
 						expected = `this.metadata.tenant == "customer" && (` + expected + `)`
 					}
-					calls := 0
+					var calls atomic.Int32
 					stdout, err := executeRootWithRPC(private, func(path string, request, response proto.Message) error {
 						Expect(path).To(Equal("/" + pkg + "." + service + "/List"))
 						message := request.ProtoReflect()
 						fields := message.Descriptor().Fields()
 						Expect(message.Get(fields.ByName("filter")).String()).To(Equal(expected))
 						Expect(message.Get(fields.ByName("limit")).Int()).To(Equal(int64(100)))
-						start := calls * 37
+						start := (int(calls.Add(1)) - 1) * 37
 						Expect(message.Get(fields.ByName("offset")).Int()).To(Equal(int64(start)))
-						calls++
 						Expect(start).To(BeNumerically("<", total), "pagination circuit breaker")
 						populateRootBillingInventory(response, private, kind, start, min(37, total-start), total)
 						return nil
 					}, "get", kind, "one", `two"quoted`, "--filter="+user, "--output="+format)
 					Expect(err).NotTo(HaveOccurred())
-					Expect(calls).To(Equal((total + 36) / 37))
+					Expect(int(calls.Load())).To(Equal((total + 36) / 37))
 					if format == "table" {
 						lines := strings.Split(strings.TrimSpace(stdout), "\n")
 						Expect(lines).To(HaveLen(total + 1))
@@ -290,14 +290,14 @@ var _ = Describe("actual Root billing acceptance", func() {
 				}, Entry("over 100", 101), Entry("over 1000", 1001))
 
 				DescribeTable(pkg+" "+kind+" "+format+" actual Root never emits a partial inventory", func(fail bool) {
-					calls := 0
+					var calls atomic.Int32
 					stdout, err := executeRootWithRPC(private, func(path string, request, response proto.Message) error {
 						Expect(path).To(Equal("/" + pkg + "." + service + "/List"))
 						message := request.ProtoReflect()
-						Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(Equal(int64(calls)))
-						calls++
-						Expect(calls).To(BeNumerically("<=", 2))
-						if calls == 2 {
+						call := calls.Add(1)
+						Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(Equal(int64(call - 1)))
+						Expect(call).To(BeNumerically("<=", 2))
+						if call == 2 {
 							if fail {
 								return status.Error(codes.Unavailable, "acceptance later-page failure")
 							}
@@ -307,7 +307,7 @@ var _ = Describe("actual Root billing acceptance", func() {
 						}
 						return nil
 					}, "get", kind, "--output="+format)
-					Expect(calls).To(Equal(2))
+					Expect(calls.Load()).To(Equal(int32(2)))
 					Expect(stdout).To(BeEmpty())
 					message := "no progress"
 					if fail {
@@ -320,9 +320,9 @@ var _ = Describe("actual Root billing acceptance", func() {
 
 		for _, format := range []string{"table", "json", "yaml"} {
 			DescribeTable(pkg+" "+format+" actual Root singleton presence", func(mode string) {
-				calls := 0
+				var calls atomic.Int32
 				stdout, err := executeRootWithRPC(private, func(path string, request, response proto.Message) error {
-					calls++
+					calls.Add(1)
 					Expect(path).To(Equal("/" + pkg + ".BillingProviderStatuses/Get"))
 					Expect(proto.Size(request)).To(BeZero())
 					if mode == "absent" {
@@ -334,7 +334,7 @@ var _ = Describe("actual Root billing acceptance", func() {
 					}
 					return protojson.Unmarshal([]byte(body), response)
 				}, "get", "billingproviderstatus", "--output="+format)
-				Expect(calls).To(Equal(1))
+				Expect(calls.Load()).To(Equal(int32(1)))
 				if mode == "absent" {
 					Expect(err).To(HaveOccurred())
 					Expect(stdout).To(BeEmpty())
@@ -356,9 +356,9 @@ var _ = Describe("actual Root billing acceptance", func() {
 	}
 
 	DescribeTable("actual Root canonical singular plural and qualified package priority", func(private bool, resource, pkg, service string, singleton bool) {
-		calls := 0
+		var calls atomic.Int32
 		_, err := executeRootWithRPC(private, func(path string, request, response proto.Message) error {
-			calls++
+			calls.Add(1)
 			method := "List"
 			if singleton {
 				method = "Get"
@@ -371,7 +371,7 @@ var _ = Describe("actual Root billing acceptance", func() {
 			return nil
 		}, "get", resource, "-o", "json")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(calls).To(Equal(1))
+		Expect(calls.Load()).To(Equal(int32(1)))
 	},
 		Entry("public accounts plural", false, "billingaccounts", "public", "BillingAccounts", false),
 		Entry("private accounts plural", true, "billingaccounts", "private", "BillingAccounts", false),
@@ -388,19 +388,19 @@ var _ = Describe("actual Root billing acceptance", func() {
 	)
 
 	DescribeTable("actual Root retired aliases are wrong-object guidance without RPC", func(name string) {
-		calls := 0
-		stdout, err := executeRootWithRPC(false, func(string, proto.Message, proto.Message) error { calls++; return nil }, "get", name)
+		var calls atomic.Int32
+		stdout, err := executeRootWithRPC(false, func(string, proto.Message, proto.Message) error { calls.Add(1); return nil }, "get", name)
 		Expect(err).NotTo(HaveOccurred(), "preserve the existing wrong-object exit policy")
 		Expect(stdout).To(ContainSubstring(name))
-		Expect(calls).To(BeZero())
+		Expect(calls.Load()).To(BeZero())
 	}, Entry("accounts", "billing-accounts"), Entry("assignments", "tenant-billing-assignments"),
 		Entry("status", "billing-provider-status"), Entry("shorthand", "tba"))
 
 	DescribeTable("actual Root retired pagination flags fail parsing without RPC", func(flag string) {
-		calls := 0
-		_, err := executeRootWithRPC(false, func(string, proto.Message, proto.Message) error { calls++; return nil }, "get", "billingaccount", flag+"=1")
+		var calls atomic.Int32
+		_, err := executeRootWithRPC(false, func(string, proto.Message, proto.Message) error { calls.Add(1); return nil }, "get", "billingaccount", flag+"=1")
 		Expect(err).To(MatchError(ContainSubstring("unknown flag: " + flag)))
-		Expect(calls).To(BeZero())
+		Expect(calls.Load()).To(BeZero())
 	}, Entry("limit", "--limit"), Entry("offset", "--offset"))
 
 	It("uses the actual get delete label and edit completion callbacks without server effects", func() {

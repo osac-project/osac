@@ -348,11 +348,15 @@ func (c *runnerContext) list(ctx context.Context, keys []string) ([]proto.Messag
 		results = append(results, page.Items...)
 		if !page.TotalKnown {
 			if c.console != nil {
-				c.console.Errorf(ctx, "List completeness unknown: the service does not report a total.\n")
+				c.console.Errorf(ctx, "List completeness unknown: the service does not report a total; showing only the pages read.\n")
 			}
 			return results, nil
 		}
 		if int64(len(results)) == int64(total) {
+			if calls > 0 && c.console != nil {
+				c.console.Errorf(ctx, "List completeness unknown: multiple pages do not form a point-in-time snapshot; "+
+					"concurrent changes may cause objects to be missed.\n")
+			}
 			return results, nil
 		}
 		if !page.OffsetSupported {
@@ -465,12 +469,14 @@ const shortHelp = `Get objects`
 const longHelp = `
 List or retrieve objects from the server.
 
-When called with just an object type it lists all objects of that type. When called with one or more identifiers or
-names it retrieves only the matching objects. Collections are read to completion within finite safety limits before
-any inventory is printed. A failed traversal prints no partial inventory. This is not a point-in-time snapshot;
-concurrent changes may cause the read to fail. Services without a total report unknown completeness on standard error.
+When called with just an object type it lists objects of that type. When called with one or more identifiers or names
+it retrieves only the matching objects. The CLI buffers list results and reads pages up to the service's reported total
+within finite safety limits. A failed traversal prints no partial results. Even with an unchanged total and distinct
+identifiers, results from multiple pages are not a point-in-time snapshot: concurrent changes can cause omissions or
+make the read fail. The CLI warns on standard error when results span multiple pages or when the service does not
+report a total. Without a total, it prints only the pages read so far.
 
-To list all clusters:
+To list clusters:
 
 {{ bt 3 }}shell
 {{ binary }} get clusters

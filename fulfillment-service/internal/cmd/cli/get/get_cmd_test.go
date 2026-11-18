@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -205,16 +206,16 @@ var _ = Describe("Get command", func() {
 				for _, format := range []string{outputFormatJson, outputFormatYaml} {
 					DescribeTable(pkg+" "+kind+" "+format+" uses List-only Any item cardinality and descriptor visibility",
 						func(count int) {
-							calls := 0
+							var calls atomic.Int32
 							stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
-								calls++
+								calls.Add(1)
 								Expect(method).To(Equal("/"+pkg+"."+service+"/List"), "keyed billing must not invoke the account Get scaffold")
 								message := request.ProtoReflect()
 								Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(BeZero())
 								return populateGenericBillingResponse(response, private, kind, 0, count, count)
 							}, kind, "billing-id-0", `second"key`, "--output="+format)
 							Expect(err).NotTo(HaveOccurred())
-							Expect(calls).To(Equal(1))
+							Expect(calls.Load()).To(Equal(int32(1)))
 							var value any
 							if format == outputFormatJson {
 								Expect(json.Unmarshal([]byte(stdout), &value)).To(Succeed())
@@ -242,14 +243,14 @@ var _ = Describe("Get command", func() {
 
 				DescribeTable(pkg+" "+kind+" reaches domain tables and the generic empty message",
 					func(count int) {
-						calls := 0
+						var calls atomic.Int32
 						stdout, err := executeGenericGet(private, func(method string, _, response proto.Message) error {
-							calls++
+							calls.Add(1)
 							Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
 							return populateGenericBillingResponse(response, private, kind, 0, count, count)
 						}, kind)
 						Expect(err).NotTo(HaveOccurred())
-						Expect(calls).To(Equal(1))
+						Expect(calls.Load()).To(Equal(int32(1)))
 						if count == 0 {
 							Expect(stdout).To(ContainSubstring("There are no objects matching the given criteria."))
 							return
@@ -286,20 +287,20 @@ var _ = Describe("Get command", func() {
 						if kind == "tenantbillingassignment" {
 							expected = `this.metadata.tenant == "p2-tenant" && (` + expected + `)`
 						}
-						calls := 0
+						var calls atomic.Int32
 						stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
-							calls++
-							Expect(calls).To(BeNumerically("<=", 2))
+							call := int(calls.Add(1))
+							Expect(call).To(BeNumerically("<=", 2))
 							Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
 							message := request.ProtoReflect()
 							fields := message.Descriptor().Fields()
 							Expect(message.Get(fields.ByName("filter")).String()).To(Equal(expected))
 							Expect(message.Get(fields.ByName("limit")).Int()).To(Equal(int64(100)))
-							Expect(message.Get(fields.ByName("offset")).Int()).To(Equal(int64(calls - 1)))
-							return populateGenericBillingResponse(response, private, kind, calls-1, 1, 2)
+							Expect(message.Get(fields.ByName("offset")).Int()).To(Equal(int64(call - 1)))
+							return populateGenericBillingResponse(response, private, kind, call-1, 1, 2)
 						}, kind, "first", `two"quoted`, "--output=json", "--filter="+filter)
 						Expect(err).NotTo(HaveOccurred())
-						Expect(calls).To(Equal(2))
+						Expect(calls.Load()).To(Equal(int32(2)))
 						var values []any
 						Expect(json.Unmarshal([]byte(stdout), &values)).To(Succeed())
 						Expect(values).To(HaveLen(2))
@@ -310,14 +311,14 @@ var _ = Describe("Get command", func() {
 				for _, format := range []string{outputFormatTable, outputFormatJson, outputFormatYaml} {
 					DescribeTable(pkg+" "+kind+" "+format+" buffers actual command stdout on later-page errors",
 						func(rpcFailure bool) {
-							calls := 0
+							var calls atomic.Int32
 							stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
-								calls++
-								Expect(calls).To(BeNumerically("<=", 2))
+								call := calls.Add(1)
+								Expect(call).To(BeNumerically("<=", 2))
 								Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
 								message := request.ProtoReflect()
-								Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(Equal(int64(calls - 1)))
-								if calls == 2 {
+								Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(Equal(int64(call - 1)))
+								if call == 2 {
 									if rpcFailure {
 										return grpcstatus.Error(codes.Internal, "p6 billing second page failed")
 									}
@@ -325,7 +326,7 @@ var _ = Describe("Get command", func() {
 								}
 								return populateGenericBillingResponse(response, private, kind, 0, 1, 2)
 							}, kind, "--output="+format)
-							Expect(calls).To(Equal(2), "the later failure must actually be reached")
+							Expect(calls.Load()).To(Equal(int32(2)), "the later failure must actually be reached")
 							Expect(stdout).To(BeEmpty(), "no buffered billing inventory may escape the real console path")
 							if rpcFailure {
 								Expect(err).To(MatchError(ContainSubstring("p6 billing second page failed")))
@@ -367,8 +368,8 @@ var _ = Describe("Get command", func() {
 		Expect(names).To(ConsistOf("externalippool", "storagetier", "token"))
 	})
 
-	Describe("complete bounded collection reads", func() {
-		DescribeTable("returns every item with checked offsets, including short pages",
+	Describe("bounded collection reads", func() {
+		DescribeTable("returns every item from a static collection with checked offsets, including short pages",
 			func(total, pageSize int) {
 				var requests []*publicv1.ClustersListRequest
 				runner := newInterceptedGetRunner(func(_ context.Context, method string, request, response proto.Message) error {
@@ -390,7 +391,7 @@ var _ = Describe("Get command", func() {
 				runner.args.format = outputFormatTable
 				items, err := runner.fetchObjects(ctx, nil)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(items).To(HaveLen(total), "a successful read must not silently truncate the inventory")
+				Expect(items).To(HaveLen(total))
 				for i, item := range items {
 					Expect(item.(*publicv1.Cluster).GetId()).To(Equal(fmt.Sprintf("p2-cluster-%04d", i)))
 				}
@@ -404,6 +405,52 @@ var _ = Describe("Get command", func() {
 			Entry("101", 101, 100), Entry("1000", 1000, 100), Entry("1001", 1001, 100),
 			Entry("1205", 1205, 100), Entry("short nonterminal pages", 101, 37),
 		)
+
+		It("warns on stderr when offset pages can omit objects despite an unchanged total and unique IDs", func() {
+			var stdout, stderr bytes.Buffer
+			console, err := terminal.NewConsole().SetLogger(logger).SetStdout(&stdout).SetStderr(&stderr).Build()
+			Expect(err).NotTo(HaveOccurred())
+			runner := newInterceptedGetRunner(func(_ context.Context, _ string, request, response proto.Message) error {
+				// The inventory changes from [0000, 0001] to [0001, 0002].
+				// The second offset skips 0001 even though it was present both times.
+				var items []*publicv1.Cluster
+				switch request.(*publicv1.ClustersListRequest).GetOffset() {
+				case 0:
+					items = clusterPageItems(0, 2)[:1]
+				case 1:
+					items = clusterPageItems(1, 2)[1:]
+				default:
+					return errors.New("unexpected list offset")
+				}
+				proto.Merge(response, &publicv1.ClustersListResponse{Items: items, Total: 2})
+				return nil
+			})
+			runner.console = console
+			runner.args.format = outputFormatJson
+			objects, err := runner.fetchObjects(ctx, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(runner.renderJson(ctx, objects)).To(Succeed())
+			var values []map[string]any
+			Expect(json.Unmarshal(stdout.Bytes(), &values)).To(Succeed())
+			Expect(values).To(HaveLen(2))
+			Expect(values[0]["id"]).To(Equal("p2-cluster-0000"))
+			Expect(values[1]["id"]).To(Equal("p2-cluster-0002"))
+			Expect(strings.Count(stderr.String(), "List completeness unknown:")).To(Equal(1))
+			Expect(stderr.String()).To(ContainSubstring("do not form a point-in-time snapshot"))
+			Expect(stderr.String()).To(ContainSubstring("concurrent changes may cause objects to be missed"))
+			Expect(stdout.String()).NotTo(ContainSubstring("List completeness unknown"))
+		})
+
+		It("explains in help that concurrent changes can cause omissions even with matching counts", func() {
+			var stdout bytes.Buffer
+			command := Cmd()
+			command.SetOut(&stdout)
+			command.SetArgs([]string{"--help"})
+			Expect(command.ExecuteContext(ctx)).To(Succeed())
+			help := strings.Join(strings.Fields(stdout.String()), " ")
+			Expect(help).To(ContainSubstring("Even with an unchanged total and distinct identifiers, results from multiple pages are not a point-in-time snapshot: concurrent changes can cause omissions"))
+			Expect(help).To(ContainSubstring("warns on standard error"))
+		})
 
 		It("preserves keys, explicit filter, tenant and project on every page", func() {
 			var filters []string
@@ -597,12 +644,12 @@ var _ = Describe("Get command", func() {
 					if known {
 						Expect(stderr.String()).To(BeEmpty())
 					} else {
-						Expect(stderr.String()).To(ContainSubstring("completeness unknown"))
+						Expect(stderr.String()).To(ContainSubstring("the service does not report a total; showing only the pages read"))
 						Expect(stdout.String()).NotTo(ContainSubstring("completeness unknown"))
 					}
 				},
-				Entry("known complete without offset", true, false, int32(1), 1, false),
-				Entry("known incomplete without offset", true, false, int32(2), 1, true),
+				Entry("reported total reached without offset", true, false, int32(1), 1, false),
+				Entry("reported total not reached without offset", true, false, int32(2), 1, true),
 				Entry("unknown total with offset", false, true, int32(0), 1, false),
 				Entry("unknown total without offset", false, false, int32(0), 1, false),
 				Entry("authoritative empty", true, true, int32(0), 0, false),
@@ -709,30 +756,30 @@ var _ = Describe("Get command", func() {
 	Describe("generic command buffers stdout until traversal succeeds", func() {
 		for _, format := range []string{outputFormatTable, outputFormatJson, outputFormatYaml} {
 			It(format+" success control reaches the local RPC and the real output writer", func() {
-				calls := 0
+				var calls atomic.Int32
 				stdout, err := executeGenericGet(false, func(method string, _, response proto.Message) error {
-					calls++
+					calls.Add(1)
 					Expect(method).To(Equal("/osac.public.v1.Clusters/List"))
 					data, err := proto.Marshal(&publicv1.ClustersListResponse{Items: clusterPageItems(0, 1), Total: 1})
 					Expect(err).NotTo(HaveOccurred())
 					return proto.Unmarshal(data, response)
 				}, "clusters", "--output="+format)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(calls).To(Equal(1))
+				Expect(calls.Load()).To(Equal(int32(1)))
 				Expect(stdout).To(ContainSubstring("p2-cluster-0000"))
 			})
 
 			DescribeTable(format+" emits zero inventory bytes on a second-page failure",
 				func(scenario string) {
-					calls := 0
+					var calls atomic.Int32
 					stdout, err := executeGenericGet(false, func(method string, request, response proto.Message) error {
-						calls++
+						call := calls.Add(1)
 						Expect(method).To(Equal("/osac.public.v1.Clusters/List"))
-						if calls > 2 {
+						if call > 2 {
 							return grpcstatus.Error(codes.Internal, "test circuit breaker, not the error oracle")
 						}
 						items := clusterPageItems(0, 1)
-						if calls == 2 {
+						if call == 2 {
 							req := request.ProtoReflect()
 							Expect(req.Get(req.Descriptor().Fields().ByName("offset")).Int()).To(Equal(int64(1)))
 							if scenario == "RPC failure" {
@@ -744,8 +791,9 @@ var _ = Describe("Get command", func() {
 						Expect(err).NotTo(HaveOccurred())
 						return proto.Unmarshal(data, response)
 					}, "clusters", "--output="+format)
-					Expect(stdout).To(BeEmpty(), "actual Cobra/console stdout must stay empty; observed RPC calls=%d, error=%v", calls, err)
-					Expect(calls).To(Equal(2), "the later failure must actually be reached")
+					callCount := calls.Load()
+					Expect(stdout).To(BeEmpty(), "actual Cobra/console stdout must stay empty; observed RPC calls=%d, error=%v", callCount, err)
+					Expect(callCount).To(Equal(int32(2)), "the later failure must actually be reached")
 					Expect(err).To(HaveOccurred())
 					if scenario == "RPC failure" {
 						Expect(err.Error()).To(ContainSubstring("p2 second page failed"))
@@ -765,9 +813,9 @@ var _ = Describe("Get command", func() {
 			for _, format := range []string{outputFormatTable, outputFormatJson, outputFormatYaml} {
 				DescribeTable(pkg+" "+format+" preserves singleton payload presence without identity/metadata",
 					func(shape string) {
-						calls := 0
+						var calls atomic.Int32
 						stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
-							calls++
+							calls.Add(1)
 							Expect(method).To(Equal("/"+pkg+".BillingProviderStatuses/Get"), "never List, Watch, or a keyed fallback")
 							Expect(request.ProtoReflect().Descriptor().Fields().Len()).To(BeZero())
 							Expect(proto.Size(request)).To(BeZero())
@@ -785,7 +833,7 @@ var _ = Describe("Get command", func() {
 							}
 							return nil
 						}, "billingproviderstatus", "--output="+format)
-						Expect(calls).To(Equal(1), "actual generic command must invoke Get, not merely offer a discovery capability")
+						Expect(calls.Load()).To(Equal(int32(1)), "actual generic command must invoke Get, not merely offer a discovery capability")
 						if shape == "absent" {
 							Expect(err).To(HaveOccurred())
 							Expect(stdout).To(BeEmpty())
@@ -822,14 +870,14 @@ var _ = Describe("Get command", func() {
 
 			DescribeTable(pkg+" rejects singleton keys and explicitly supplied flags before RPC",
 				func(extra []string) {
-					calls := 0
+					var calls atomic.Int32
 					args := append([]string{"billingproviderstatus"}, extra...)
 					stdout, err := executeGenericGet(private, func(string, proto.Message, proto.Message) error {
-						calls++
+						calls.Add(1)
 						return grpcstatus.Error(codes.Internal, "singleton validation reached RPC")
 					}, args...)
 					Expect(err).To(HaveOccurred())
-					Expect(calls).To(BeZero())
+					Expect(calls.Load()).To(BeZero())
 					Expect(stdout).To(BeEmpty())
 				},
 				Entry("key", []string{"invented-id"}), Entry("explicit empty filter", []string{"--filter="}),

@@ -154,6 +154,16 @@ func (r *ClusterOrderReconciler) cleanupManagementRegistryProbe(
 	if err := r.deleteManagementRegistryPullSecret(ctx, order); err != nil {
 		return false, ctrl.Result{}, err
 	}
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{
+		Namespace: order.Namespace,
+		Name:      managementRegistryProbePullSecretName(order),
+	}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, ctrl.Result{}, nil
+		}
+		return false, ctrl.Result{}, fmt.Errorf("confirm management registry pull Secret deletion: %w", err)
+	}
 	return false, ctrl.Result{RequeueAfter: time.Second}, nil
 }
 

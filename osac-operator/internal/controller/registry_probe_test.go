@@ -64,6 +64,16 @@ var _ = Describe("CaaS management registry probe", func() {
 		}, c
 	}
 
+	It("completes deletion cleanup when the probe pod and pull secret are absent", func() {
+		order := newOrder()
+		reconciler, _ := newReconciler(order)
+
+		done, result, err := reconciler.cleanupManagementRegistryProbe(ctx, order)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(done).To(BeTrue())
+		Expect(result).To(BeZero())
+	})
+
 	It("waits for the management kubelet pull, records its image, and removes probe credentials", func() {
 		order := newOrder()
 		reconciler, c := newReconciler(order)

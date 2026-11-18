@@ -27,7 +27,7 @@ storage_provider_csi_backends_namespace: "osac-csi-backends"
 # dispatching hub-Secret operations rather than targeting a wrong namespace.
 storage_provider_config_namespace: >-
   {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
-     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}
+     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore') | default('', true), true) }}
 
 # Global API timeout (seconds) for storage provider REST/management calls,
 # overridable via OSAC_STORAGE_API_TIMEOUT or per-provider variables.

@@ -42,7 +42,7 @@
     # Look up manager to get its ID
     - name: Look up tenant manager in VMS
       ansible.builtin.uri:
-        url: "https://{{ vast_endpoint }}/api/managers/?username=osac-{{ tenant_name }}"
+        url: "https://{{ vast_endpoint }}/api/managers/?username=osac-{{ tenant_name }}-{{ _vast_backend_id }}"
         method: GET
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
@@ -73,7 +73,7 @@
     # Delete the CSI role
     - name: Look up tenant CSI role
       ansible.builtin.uri:
-        url: "https://{{ vast_endpoint }}/api/roles/?name=osac-csi-{{ tenant_name }}"
+        url: "https://{{ vast_endpoint }}/api/roles/?name=osac-csi-{{ tenant_name }}-{{ _vast_backend_id }}"
         method: GET
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
@@ -116,5 +116,5 @@
 - name: Log tenant manager deletion outcome
   ansible.builtin.debug:
     msg: >-
-      VMS manager 'osac-{{ tenant_name }}' deletion result:
+      VMS manager 'osac-{{ tenant_name }}-{{ _vast_backend_id }}' deletion result:
       {{ 'succeeded' if not (_vast_manager_delete_failed | default(false) | bool) else 'failed (ignored)' }}

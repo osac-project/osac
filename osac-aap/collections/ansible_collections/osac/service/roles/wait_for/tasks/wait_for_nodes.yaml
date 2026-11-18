@@ -1,17 +1,30 @@
 ---
 - name: Wait for Nodes to be Ready
-  kubernetes.core.k8s_info:
-    api_version: v1
-    kind: Node
-    kubeconfig: "{{ wait_for_kubeconfig }}"
-    wait_timeout: "{{ wait_for_request_timeout | default(30) }}"
-  register: _wait_nodes_results
-  until: >-
-    (_wait_nodes_results.resources | default([])
-        | json_query("[?status.conditions[?type=='Ready' && status=='True']]")
-        | length >= (wait_for_nodes_expected_count | int))
-  retries: "{{ wait_for_nodes_retries }}"
-  delay: "{{ wait_for_nodes_delay }}"
+  block:
+    - name: Query Nodes until enough are Ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        kubeconfig: "{{ wait_for_kubeconfig }}"
+        wait_timeout: "{{ wait_for_request_timeout | default(30) }}"
+      register: _wait_nodes_results
+      until: >-
+        (_wait_nodes_results.resources | default([])
+            | json_query("[?status.conditions[?type=='Ready' && status=='True']]")
+            | length >= (wait_for_nodes_expected_count | int))
+      retries: "{{ wait_for_nodes_retries }}"
+      delay: "{{ wait_for_nodes_delay }}"
+  rescue:
+    - name: Fail with the final Node readiness observation
+      ansible.builtin.fail:
+        msg: >-
+          Could not observe {{ wait_for_nodes_expected_count }} Ready Nodes after
+          {{ wait_for_nodes_retries }} checks ({{ wait_for_nodes_delay }}s apart).
+          The last query returned
+          {{ _wait_nodes_results.resources | default([])
+             | json_query("[?status.conditions[?type=='Ready' && status=='True']]")
+             | length }} Ready Nodes out of
+          {{ _wait_nodes_results.resources | default([]) | length }} Nodes.
 
 - name: Report Nodes status
   ansible.builtin.debug:

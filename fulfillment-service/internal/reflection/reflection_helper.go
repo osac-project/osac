@@ -1111,8 +1111,16 @@ func collectChangedPaths(original, edited protoreflect.Message, pathPrefix []str
 				*paths = append(*paths, strings.Join(fieldPath, "."))
 			}
 		} else if fd.Kind() == protoreflect.MessageKind {
-			// Recursively compare nested messages
-			collectChangedPaths(originalVal.Message(), editedVal.Message(), fieldPath, paths)
+			switch fd.FullName() {
+			case "osac.public.v1.TenantBillingAssignmentSpec.billing_account",
+				"osac.private.v1.TenantBillingAssignmentSpec.billing_account":
+				// Assignment Update replaces the complete reference, not its individual selectors.
+				if !proto.Equal(originalVal.Message().Interface(), editedVal.Message().Interface()) {
+					*paths = append(*paths, strings.Join(fieldPath, "."))
+				}
+			default:
+				collectChangedPaths(originalVal.Message(), editedVal.Message(), fieldPath, paths)
+			}
 		} else {
 			// Scalar field - compare values
 			if !originalVal.Equal(editedVal) {

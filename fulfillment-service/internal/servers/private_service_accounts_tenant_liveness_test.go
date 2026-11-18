@@ -15,8 +15,10 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -76,12 +78,52 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 		suiteTx = nil
 		ctx = database.TxManagerIntoContext(context.Background(), tm)
 	}
-	begin := func() (context.Context, database.Tx) {
+	begin := func() (context.Context, database.Tx, func() error) {
 		GinkgoHelper()
-		tx, err := tm.Begin(ctx)
+		txCtx, cancelTx := context.WithTimeout(ctx, 20*time.Second)
+		DeferCleanup(cancelTx)
+		tx, err := tm.Begin(txCtx)
+		ended := false
+		end := func() error {
+			ended = true
+			endCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return tx.End(endCtx)
+		}
+		if err == nil {
+			DeferCleanup(func() {
+				if !ended {
+					rollbackErr := context.Canceled
+					tx.ReportError(&rollbackErr)
+					// A canceled wait can already have closed the connection. End still returns it to the pool.
+					if err := end(); !errors.Is(err, pgconn.ErrConnClosed) {
+						Expect(err).NotTo(HaveOccurred())
+					}
+				}
+			})
+		}
 		Expect(err).NotTo(HaveOccurred())
-		txCtx := database.TxIntoContext(ctx, tx)
-		return txCtx, tx
+		return database.TxIntoContext(txCtx, tx), tx, end
+	}
+	startWaiter := func(waitCtx context.Context, run func(context.Context) error) func() error {
+		waitCtx, cancel := context.WithCancel(waitCtx)
+		done := make(chan struct{})
+		var result error
+		// This runs before the transaction cleanup registered by begin.
+		DeferCleanup(func() {
+			cancel()
+			<-done
+		})
+		go func() {
+			defer close(done)
+			defer GinkgoRecover()
+			result = run(waitCtx)
+		}()
+		return func() error {
+			GinkgoHelper()
+			Eventually(done, 10*time.Second).Should(BeClosed())
+			return result
+		}
 	}
 	completeFinalizer := func(ctx context.Context, tenant string) error {
 		read, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant}.Build())
@@ -97,9 +139,11 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 	}
 	waitForBlock := func(waitCtx context.Context, waiter, blocker int32) {
 		GinkgoHelper()
+		probeCtx, cancel := context.WithTimeout(waitCtx, 5*time.Second)
+		defer cancel()
 		Eventually(func() (bool, error) {
 			var blocked bool
-			err := testPool.QueryRow(waitCtx, `select $1 = any(pg_blocking_pids($2))`, blocker, waiter).
+			err := testPool.QueryRow(probeCtx, `select $1 = any(pg_blocking_pids($2))`, blocker, waiter).
 				Scan(&blocked)
 			return blocked, err
 		}, 5*time.Second, 10*time.Millisecond).Should(BeTrue(), "observe the exact writer waiting on the tenant lock")
@@ -116,13 +160,7 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 				Expect(err).NotTo(HaveOccurred())
 			}
 			commitSetup()
-			deleteCtx, deleting := begin()
-			deleteEnded := false
-			DeferCleanup(func() {
-				if !deleteEnded {
-					Expect(deleting.End(deleteCtx)).To(Succeed())
-				}
-			})
+			deleteCtx, deleting, endDelete := begin()
 			var deletePID int32
 			Expect(deleting.QueryRow(deleteCtx, `select pg_backend_pid()`).Scan(&deletePID)).To(Succeed())
 			if complete {
@@ -132,27 +170,17 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 				Expect(err).NotTo(HaveOccurred())
 			}
 
-			createCtx, creator := begin()
-			waitCtx, cancel := context.WithTimeout(createCtx, 15*time.Second)
-			DeferCleanup(cancel)
+			createCtx, creator, endCreate := begin()
 			var createPID int32
-			Expect(creator.QueryRow(waitCtx, `select pg_backend_pid()`).Scan(&createPID)).To(Succeed())
-			result := make(chan error, 1)
-			go func() {
-				defer GinkgoRecover()
-				_, createErr := createAccount(waitCtx, tenant)
-				endErr := creator.End(waitCtx)
-				if endErr != nil {
-					result <- endErr
-					return
-				}
-				result <- createErr
-			}()
-			waitForBlock(waitCtx, createPID, deletePID)
-			Expect(deleting.End(deleteCtx)).To(Succeed())
-			deleteEnded = true
-			var createErr error
-			Eventually(result, 10*time.Second).Should(Receive(&createErr))
+			Expect(creator.QueryRow(createCtx, `select pg_backend_pid()`).Scan(&createPID)).To(Succeed())
+			wait := startWaiter(createCtx, func(c context.Context) error {
+				_, err := createAccount(c, tenant)
+				return err
+			})
+			waitForBlock(createCtx, createPID, deletePID)
+			Expect(endDelete()).To(Succeed())
+			createErr := wait()
+			Expect(endCreate()).To(Succeed())
 			Expect(status.Code(createErr)).To(Equal(codes.InvalidArgument))
 			var count int
 			Expect(testPool.QueryRow(ctx, `select count(*) from service_accounts where tenant = $1`, tenant).
@@ -252,38 +280,22 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 		)::text`
 		var before string
 		Expect(testPool.QueryRow(ctx, snapshotSQL, tenant).Scan(&before)).To(Succeed())
-		createCtx, creator := begin()
-		creatorEnded := false
-		DeferCleanup(func() {
-			if !creatorEnded {
-				Expect(creator.End(createCtx)).To(Succeed())
-			}
-		})
+		createCtx, creator, endCreate := begin()
 		var createPID int32
 		Expect(creator.QueryRow(createCtx, `select pg_backend_pid()`).Scan(&createPID)).To(Succeed())
 		_, err := createAccount(createCtx, tenant)
 		Expect(err).NotTo(HaveOccurred())
-		deleteCtx, deleting := begin()
-		waitCtx, cancel := context.WithTimeout(deleteCtx, 15*time.Second)
-		DeferCleanup(cancel)
+		deleteCtx, deleting, endDelete := begin()
 		var deletePID int32
-		Expect(deleting.QueryRow(waitCtx, `select pg_backend_pid()`).Scan(&deletePID)).To(Succeed())
-		result := make(chan error, 1)
-		go func() {
-			defer GinkgoRecover()
-			_, deleteErr := tenants.Delete(waitCtx, privatev1.TenantsDeleteRequest_builder{Id: tenant}.Build())
-			endErr := deleting.End(waitCtx)
-			if endErr != nil {
-				result <- endErr
-				return
-			}
-			result <- deleteErr
-		}()
-		waitForBlock(waitCtx, deletePID, createPID)
-		Expect(creator.End(createCtx)).To(Succeed())
-		creatorEnded = true
-		var deleteErr error
-		Eventually(result, 10*time.Second).Should(Receive(&deleteErr))
+		Expect(deleting.QueryRow(deleteCtx, `select pg_backend_pid()`).Scan(&deletePID)).To(Succeed())
+		wait := startWaiter(deleteCtx, func(c context.Context) error {
+			_, err := tenants.Delete(c, privatev1.TenantsDeleteRequest_builder{Id: tenant}.Build())
+			return err
+		})
+		waitForBlock(deleteCtx, deletePID, createPID)
+		Expect(endCreate()).To(Succeed())
+		deleteErr := wait()
+		Expect(endDelete()).To(Succeed())
 		Expect(status.Code(deleteErr)).To(Equal(codes.FailedPrecondition))
 		var live bool
 		Expect(testPool.QueryRow(ctx, `select deletion_timestamp = 'epoch' from tenants where name = $1`, tenant).

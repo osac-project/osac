@@ -262,19 +262,25 @@ func (s *EventsServer) newSubscription(
 	ctx, cancel := context.WithCancel(stream.Context())
 	logger := s.logger.With(slog.String("subscription", uuid.New()))
 
-	tenant, err := s.tenancyLogic.DetermineDefaultTenant(ctx)
-	if err != nil || tenant == "" {
-		cancel()
-		logger.ErrorContext(ctx, "Failed to determine tenant", slog.Any("error", err))
-		err = grpcstatus.Error(grpccodes.Internal, "failed to determine tenant")
-		return
-	}
-	_, err = s.tenancyLogic.DetermineVisibility(ctx)
+	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
 	if err != nil {
 		cancel()
 		logger.ErrorContext(ctx, "Failed to determine visibility", slog.Any("error", err))
 		err = grpcstatus.Error(grpccodes.Internal, "failed to determine visibility")
 		return
+	}
+	// Watch needs read visibility, not an assignable tenant. After the last
+	// membership is removed, shared visibility still permits a shared-only stream.
+	visibleTenants := visibility.VisibleTenants()
+	tenant := auth.SharedTenant
+	if len(visibleTenants) != 1 || visibleTenants[0] != auth.SharedTenant {
+		tenant, err = s.tenancyLogic.DetermineDefaultTenant(ctx)
+		if err != nil || tenant == "" || !visibility.IsTenantVisible(tenant) {
+			cancel()
+			logger.ErrorContext(ctx, "Failed to determine visible tenant", slog.Any("error", err))
+			err = grpcstatus.Error(grpccodes.Internal, "failed to determine tenant")
+			return
+		}
 	}
 
 	var filterSrc string
@@ -304,7 +310,7 @@ func (s *EventsServer) newSubscription(
 		return
 	}
 	topics := []string{s.kafkaTopicPrefix + tenant}
-	if tenant != auth.SharedTenant {
+	if tenant != auth.SharedTenant && visibility.IsTenantVisible(auth.SharedTenant) {
 		topics = append(topics, s.kafkaTopicPrefix+auth.SharedTenant)
 	}
 	allowedTopics := make(map[string]struct{}, len(topics))

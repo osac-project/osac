@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -35,8 +36,28 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+var _ = Describe("Billing assignment edit masks", func() {
+	DescribeTable("selects the whole billing account but keeps unrelated changed paths", func(object proto.Message) {
+		original := proto.Clone(object)
+		Expect(protojson.Unmarshal([]byte(`{"spec":{"tenant":{"id":"t"},"billing_account":{"id":"a","name":"a"}}}`), original)).To(Succeed())
+		edited := proto.Clone(object)
+		Expect(protojson.Unmarshal([]byte(`{"spec":{"tenant":{"id":"new-t"},"billing_account":{"name":"new-a"}}}`), edited)).To(Succeed())
+		mask, err := computeUpdateMask(original, edited)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mask.GetPaths()).To(ConsistOf("spec.billing_account", "spec.tenant.id"))
+		mask, err = computeUpdateMask(edited, proto.Clone(edited))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mask).NotTo(BeNil())
+		Expect(mask.GetPaths()).To(BeEmpty())
+	},
+		Entry("public", &publicv1.TenantBillingAssignment{}),
+		Entry("private", &privatev1.TenantBillingAssignment{}),
+	)
+})
 
 type testTenantKey struct{}
 

@@ -14,8 +14,14 @@ specific language governing permissions and limitations under the License.
 package it
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/url"
+	"slices"
+	"strconv"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,7 +31,11 @@ import (
 	"google.golang.org/grpc/status"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingstub"
@@ -42,10 +52,11 @@ const (
 	billingStubContainer      = "grpc-server"
 	billingStubCredentialFile = "/etc/fulfillment-grpc-server/billing/credential"
 	billingStubToken          = "stub-token"
+	billingStubOwner          = "osac.openshift.io/it-billing-stub"
+	billingStubRequestTimeout = 10 * time.Second
 )
 
 // configureBillingStub starts the TLS stub and points the deployed grpc-server at it through the real M360 settings.
-// Cleanup restores the complete original pod spec and waits for NOT_CONFIGURED before removing its fixture Secrets.
 func configureBillingStub(ctx context.Context, stub *billingstub.Stub, listen, stubURL string) {
 	GinkgoHelper()
 	parsed, err := url.Parse(stubURL)
@@ -56,72 +67,228 @@ func configureBillingStub(ctx context.Context, stub *billingstub.Stub, listen, s
 
 	kube := tool.KubeClient()
 	suffix := uuid.New()
-	createSecret := func(name string, data map[string][]byte) {
-		GinkgoHelper()
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Namespace: billingStubNamespace, Name: name},
-			Data:       data,
-		}
-		Expect(kube.Create(ctx, secret)).To(Succeed())
-		DeferCleanup(func(ctx context.Context) {
-			Expect(crclient.IgnoreNotFound(kube.Delete(ctx, secret))).To(Succeed())
-		})
-	}
 	secretName, caSecretName := "billing-stub-credential-"+suffix, "billing-stub-ca-"+suffix
-	createSecret(secretName, map[string][]byte{"token": []byte(billingStubToken)})
-	createSecret(caSecretName, map[string][]byte{"ca.crt": ca})
-
-	key := crclient.ObjectKey{Namespace: billingStubNamespace, Name: billingStubDeployment}
-	current := &appsv1.Deployment{}
-	Expect(kube.Get(ctx, key, current)).To(Succeed())
-	original := current.Spec.Template.Spec.DeepCopy()
-	// Restore the original pod spec so later specs see a deployment without a billing provider.
-	DeferCleanup(func(ctx context.Context) {
-		latest := &appsv1.Deployment{}
-		Expect(kube.Get(ctx, key, latest)).To(Succeed())
-		latest.Spec.Template.Spec = *original
-		Expect(kube.Update(ctx, latest)).To(Succeed())
-		rolloutBillingDeployment(ctx)
-		// Deployment availability doesn't mean the ingress has refreshed its headless-service DNS endpoints.
-		Eventually(ctx, func(g Gomega) {
-			object, err := billingStubStatus(ctx)
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(object.GetState()).To(Equal(publicv1.BillingProviderState_BILLING_PROVIDER_STATE_NOT_CONFIGURED))
-		}, time.Minute, time.Second).Should(Succeed())
-	})
-
-	podSpec := &current.Spec.Template.Spec
-	podSpec.Volumes = append(podSpec.Volumes,
-		corev1.Volume{Name: "billing-credential", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-			SecretName: secretName, Items: []corev1.KeyToPath{{Key: "token", Path: "credential"}}}}},
-		corev1.Volume{Name: "billing-ca", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-			SecretName: caSecretName}}})
-	for i := range podSpec.Containers {
-		container := &podSpec.Containers[i]
-		if container.Name != billingStubContainer {
-			continue
-		}
-		container.VolumeMounts = append(container.VolumeMounts,
-			corev1.VolumeMount{Name: "billing-credential", MountPath: "/etc/fulfillment-grpc-server/billing",
-				ReadOnly: true},
-			corev1.VolumeMount{Name: "billing-ca", MountPath: "/etc/fulfillment-grpc-server/billing-ca",
-				ReadOnly: true})
-		container.Env = append(container.Env,
-			corev1.EnvVar{Name: "OSAC_BILLING_PROVIDER", Value: "m360"},
+	defaultMode := int32(corev1.SecretVolumeSourceDefaultMode)
+	patch := billingStubPatch{
+		owner: suffix,
+		volumes: []corev1.Volume{
+			{Name: "billing-credential", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: secretName, DefaultMode: &defaultMode,
+				Items: []corev1.KeyToPath{{Key: "token", Path: "credential"}}}}},
+			{Name: "billing-ca", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: caSecretName, DefaultMode: &defaultMode}}},
+		},
+		mounts: []corev1.VolumeMount{
+			{Name: "billing-credential", MountPath: "/etc/fulfillment-grpc-server/billing", ReadOnly: true},
+			{Name: "billing-ca", MountPath: "/etc/fulfillment-grpc-server/billing-ca", ReadOnly: true},
+		},
+		env: []corev1.EnvVar{
+			{Name: "OSAC_BILLING_PROVIDER", Value: "m360"},
 			// The base URL carries the whole path to the provider API; the stub speaks the M360 one.
-			corev1.EnvVar{Name: "OSAC_BILLING_BASE_URL", Value: stubURL + "/api/v1/external"},
-			corev1.EnvVar{Name: "OSAC_BILLING_CREDENTIAL_FILE", Value: billingStubCredentialFile},
-			corev1.EnvVar{Name: "OSAC_BILLING_CA_FILE", Value: "/etc/fulfillment-grpc-server/billing-ca/ca.crt"},
+			{Name: "OSAC_BILLING_BASE_URL", Value: stubURL + "/api/v1/external"},
+			{Name: "OSAC_BILLING_CREDENTIAL_FILE", Value: billingStubCredentialFile},
+			{Name: "OSAC_BILLING_CA_FILE", Value: "/etc/fulfillment-grpc-server/billing-ca/ca.crt"},
 			// The chart's tuning defaults, which it always renders with a provider.
-			corev1.EnvVar{Name: "OSAC_BILLING_RETRY_COUNT", Value: "3"},
-			corev1.EnvVar{Name: "OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD", Value: "5"},
-			corev1.EnvVar{Name: "OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS", Value: "30"},
-			corev1.EnvVar{Name: "OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS", Value: "30"},
-		)
+			{Name: "OSAC_BILLING_RETRY_COUNT", Value: "3"},
+			{Name: "OSAC_BILLING_PRICING_BREAKER_FAILURE_THRESHOLD", Value: "5"},
+			{Name: "OSAC_BILLING_PRICING_BREAKER_FAILURE_WINDOW_SECONDS", Value: "30"},
+			{Name: "OSAC_BILLING_PRICING_BREAKER_OPEN_SECONDS", Value: "30"},
+		},
 	}
-	Expect(kube.Update(ctx, current)).To(Succeed())
-	rolloutBillingDeployment(ctx)
+	// Register before the first write: a failed request may have been accepted by the API server.
+	var attemptedSecrets []*corev1.Secret
+	DeferCleanup(func(ctx context.Context) error {
+		if err := patch.cleanup(ctx, kube, attemptedSecrets); err != nil {
+			return err
+		}
+		if patch.deploymentUID == "" {
+			return nil
+		}
+		// Deployment availability doesn't guarantee the ingress has refreshed the headless-service endpoints.
+		return wait.PollUntilContextTimeout(ctx, time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
+			ctx, cancel := context.WithTimeout(ctx, billingStubRequestTimeout)
+			defer cancel()
+			object, err := billingStubStatus(ctx)
+			return err == nil && object.GetState() == publicv1.BillingProviderState_BILLING_PROVIDER_STATE_NOT_CONFIGURED, nil
+		})
+	}, NodeTimeout(6*time.Minute))
+
+	current := &appsv1.Deployment{}
+	Expect(kube.Get(ctx, billingDeploymentKey(), current)).To(Succeed())
+	Expect(patch.apply(current)).To(Succeed())
+	for _, secret := range []*corev1.Secret{
+		{ObjectMeta: metav1.ObjectMeta{Name: secretName}, Data: map[string][]byte{"token": []byte(billingStubToken)}},
+		{ObjectMeta: metav1.ObjectMeta{Name: caSecretName}, Data: map[string][]byte{"ca.crt": ca}},
+	} {
+		secret.Namespace = billingStubNamespace
+		secret.Annotations = map[string]string{billingStubOwner: suffix}
+		attemptedSecrets = append(attemptedSecrets, secret)
+		Expect(kube.Create(ctx, secret)).To(Succeed())
+	}
+	Expect(patch.updateDeployment(ctx, kube, current)).To(Succeed())
+	Expect(rolloutBillingDeployment(ctx, kube)).To(Succeed())
 	waitBillingPublicAPIReady(ctx)
+}
+
+type billingStubPatch struct {
+	owner                        string
+	deploymentUID                types.UID
+	deploymentUpdateAcknowledged bool
+	volumes                      []corev1.Volume
+	mounts                       []corev1.VolumeMount
+	env                          []corev1.EnvVar
+}
+
+func billingDeploymentKey() crclient.ObjectKey {
+	return crclient.ObjectKey{Namespace: billingStubNamespace, Name: billingStubDeployment}
+}
+
+func (p *billingStubPatch) updateDeployment(ctx context.Context, kube crclient.Client, deployment *appsv1.Deployment) error {
+	p.deploymentUID = deployment.UID
+	err := kube.Update(ctx, deployment)
+	p.deploymentUpdateAcknowledged = err == nil
+	return err
+}
+
+func (p billingStubPatch) apply(deployment *appsv1.Deployment) error {
+	template := &deployment.Spec.Template
+	if template.Annotations[billingStubOwner] != "" {
+		return errors.New("billing stub fixture already owns the Deployment template")
+	}
+	return p.edit(template, true)
+}
+
+func (p billingStubPatch) edit(template *corev1.PodTemplateSpec, add bool) error {
+	pod := &template.Spec
+	if err := editBillingStubEntries(&pod.Volumes, p.volumes, func(v corev1.Volume) string { return v.Name }, add); err != nil {
+		return fmt.Errorf("billing stub volumes: %w", err)
+	}
+	index := slices.IndexFunc(pod.Containers, func(c corev1.Container) bool { return c.Name == billingStubContainer })
+	if index < 0 && add {
+		return fmt.Errorf("Deployment is missing container %q", billingStubContainer)
+	}
+	if index >= 0 {
+		container := &pod.Containers[index]
+		if err := editBillingStubEntries(&container.VolumeMounts, p.mounts, func(m corev1.VolumeMount) string { return m.MountPath }, add); err != nil {
+			return fmt.Errorf("billing stub volume mounts: %w", err)
+		}
+		if err := editBillingStubEntries(&container.Env, p.env, func(e corev1.EnvVar) string { return e.Name }, add); err != nil {
+			return fmt.Errorf("billing stub environment: %w", err)
+		}
+	}
+	if add {
+		if template.Annotations == nil {
+			template.Annotations = make(map[string]string)
+		}
+		template.Annotations[billingStubOwner] = p.owner
+	} else {
+		delete(template.Annotations, billingStubOwner)
+	}
+	return nil
+}
+
+// Add only absent entries, and remove only exact fixture entries. A concurrent edit to a fixture entry
+// is ambiguous: report it instead of undoing it. The caller discards the read on any error.
+func editBillingStubEntries[T any](entries *[]T, fixture []T, key func(T) string, add bool) error {
+	for _, entry := range fixture {
+		matches := func(other T) bool { return key(other) == key(entry) }
+		i := slices.IndexFunc(*entries, matches)
+		if add {
+			if i >= 0 {
+				return fmt.Errorf("entry %q already exists", key(entry))
+			}
+			*entries = append(*entries, entry)
+		} else if i >= 0 {
+			if !equality.Semantic.DeepEqual((*entries)[i], entry) || slices.ContainsFunc((*entries)[i+1:], matches) {
+				return fmt.Errorf("entry %q changed concurrently", key(entry))
+			}
+			*entries = slices.Delete(*entries, i, i+1)
+		}
+	}
+	return nil
+}
+
+func (p billingStubPatch) cleanup(ctx context.Context, kube crclient.Client, secrets []*corev1.Secret) error {
+	if p.deploymentUID != "" {
+		if err := p.restore(ctx, kube); err != nil {
+			return fmt.Errorf("restore billing stub Deployment (retaining fixture Secrets): %w", err)
+		}
+		if err := rolloutBillingDeployment(ctx, kube); err != nil {
+			return fmt.Errorf("wait for restored billing stub Deployment (retaining fixture Secrets): %w", err)
+		}
+	}
+	var errs []error
+	for _, attempted := range secrets {
+		if err := p.deleteSecret(ctx, kube, attempted); err != nil {
+			errs = append(errs, fmt.Errorf("clean up billing stub Secret %q: %w", attempted.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (p billingStubPatch) restore(ctx context.Context, kube crclient.Client) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		deployment, err := readBillingDeployment(ctx, kube)
+		if err != nil {
+			return err
+		}
+		if deployment.UID != p.deploymentUID || deployment.Spec.Template.Annotations[billingStubOwner] != p.owner {
+			if !p.deploymentUpdateAcknowledged {
+				// Reading a template without our marker does not prove that an unacknowledged
+				// setup update won't commit later and start referencing the Secrets.
+				return errors.New("setup Deployment update was not acknowledged and fixture changes could not be removed")
+			}
+			return nil
+		}
+		if err := p.edit(&deployment.Spec.Template, false); err != nil {
+			return err
+		}
+		// Update uses the fresh resourceVersion. On conflict strip our changes from a new read, not from the old snapshot.
+		ctx, cancel := context.WithTimeout(ctx, billingStubRequestTimeout)
+		defer cancel()
+		return kube.Update(ctx, deployment)
+	})
+}
+
+func (p billingStubPatch) deleteSecret(ctx context.Context, kube crclient.Client, attempted *corev1.Secret) error {
+	secret := &corev1.Secret{}
+	readCtx, cancel := context.WithTimeout(ctx, billingStubRequestTimeout)
+	err := kube.Get(readCtx, crclient.ObjectKeyFromObject(attempted), secret)
+	cancel()
+	if err != nil {
+		return crclient.IgnoreNotFound(err)
+	}
+	// An ambiguous create response may not return a UID; the unique marker still identifies our create.
+	if secret.Annotations[billingStubOwner] != p.owner || (attempted.UID != "" && attempted.UID != secret.UID) {
+		return errors.New("Secret is no longer owned by this fixture run")
+	}
+
+	// Recheck the live template right before each delete; Kubernetes provides no atomic cross-object precondition.
+	deployment, err := readBillingDeployment(ctx, kube)
+	if err != nil {
+		return fmt.Errorf("cannot verify that the Deployment no longer references the Secret: %w", err)
+	}
+	// Kubernetes Secret references use the exact name as a string. Look throughout the pod template so
+	// alternate reference paths (projected volumes, envFrom, init containers, etc.) also fail closed.
+	template, err := json.Marshal(&deployment.Spec.Template)
+	if err != nil {
+		return err
+	}
+	if bytes.Contains(template, []byte(strconv.Quote(secret.Name))) {
+		return errors.New("Deployment template still references the Secret")
+	}
+	deleteCtx, cancel := context.WithTimeout(ctx, billingStubRequestTimeout)
+	defer cancel()
+	return crclient.IgnoreNotFound(kube.Delete(deleteCtx, secret, crclient.Preconditions{
+		UID: &secret.UID, ResourceVersion: &secret.ResourceVersion,
+	}))
+}
+
+func readBillingDeployment(ctx context.Context, kube crclient.Client) (*appsv1.Deployment, error) {
+	ctx, cancel := context.WithTimeout(ctx, billingStubRequestTimeout)
+	defer cancel()
+	current := &appsv1.Deployment{}
+	return current, kube.Get(ctx, billingDeploymentKey(), current)
 }
 
 // waitBillingPublicAPIReady waits for the public proxy path after rollout without warming billing discovery or
@@ -138,18 +305,19 @@ func waitBillingPublicAPIReady(ctx context.Context) {
 }
 
 // rolloutBillingDeployment waits until the grpc-server deployment's current generation is fully rolled out.
-func rolloutBillingDeployment(ctx context.Context) {
-	GinkgoHelper()
-	Eventually(ctx, func(g Gomega) {
-		current := &appsv1.Deployment{}
-		g.Expect(tool.KubeClient().Get(ctx, crclient.ObjectKey{
-			Namespace: billingStubNamespace, Name: billingStubDeployment}, current)).To(Succeed())
-		g.Expect(current.Spec.Replicas).ToNot(BeNil())
-		g.Expect(current.Status.ObservedGeneration).To(BeNumerically(">=", current.Generation))
-		g.Expect(current.Status.UpdatedReplicas).To(Equal(*current.Spec.Replicas))
-		g.Expect(current.Status.Replicas).To(Equal(*current.Spec.Replicas))
-		g.Expect(current.Status.AvailableReplicas).To(Equal(*current.Spec.Replicas))
-	}, 3*time.Minute, time.Second).Should(Succeed())
+func rolloutBillingDeployment(ctx context.Context, kube crclient.Client) error {
+	return wait.PollUntilContextTimeout(ctx, time.Second, 3*time.Minute, true, func(ctx context.Context) (bool, error) {
+		current, err := readBillingDeployment(ctx, kube)
+		if err != nil {
+			return false, err
+		}
+		replicas := current.Spec.Replicas
+		return replicas != nil &&
+			current.Status.ObservedGeneration >= current.Generation &&
+			current.Status.UpdatedReplicas == *replicas &&
+			current.Status.Replicas == *replicas &&
+			current.Status.AvailableReplicas == *replicas, nil
+	})
 }
 
 // billingStubStatus reads the deployed billing provider status through the public API.

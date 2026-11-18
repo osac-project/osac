@@ -411,6 +411,76 @@ var _ = Describe("Events server visibility", Ordered, func() {
 		Expect(collector.Events()[0].GetCluster().GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
 	})
 
+	It("opens a shared-only Watch after the user's last tenant is deleted", func(specCtx SpecContext) {
+		const tenant = "tenant-a"
+		setupCtx, cancelSetup := context.WithTimeout(database.TxIntoContext(specCtx, suiteTx), 15*time.Second)
+		defer cancelSetup()
+		seedAuthorizationTenant(setupCtx, tenant)
+		tenants, err := NewPrivateTenantsServer().SetLogger(logger).SetTenancyLogic(tenancy).
+			SetAttributionLogic(attribution).Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tenants.Delete(setupCtx, privatev1.TenantsDeleteRequest_builder{Id: tenant}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(suiteTx.End(setupCtx)).To(Succeed())
+		suiteTx = nil
+
+		logic, err := auth.NewDefaultTenancyLogic().SetLogger(logger).
+			SetTenantResolver(database.ResolveLiveTenantNames).Build()
+		Expect(err).ToNot(HaveOccurred())
+		evaluator, err := auth.NewEvaluator().SetTenantResolver(database.ResolveLiveTenantNames).Build()
+		Expect(err).ToNot(HaveOccurred())
+		authz, err := auth.NewGrpcAuthzInterceptor().SetLogger(logger).SetEvaluator(evaluator).Build()
+		Expect(err).ToNot(HaveOccurred())
+		txInterceptor, err := database.NewTxInterceptor().SetLogger(logger).SetManager(tm).Build()
+		Expect(err).ToNot(HaveOccurred())
+		// Simulate a validated, unexpired token whose only membership is now stale.
+		token := &jwt.Token{Claims: jwt.MapClaims{
+			"preferred_username": "alice", "organization": []any{tenant},
+			"exp": time.Now().Add(time.Hour).Unix(),
+		}}
+		injectToken := func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+			return handler(srv, &tenantAuthorizationStream{ServerStream: stream,
+				ctx: auth.ContextWithToken(stream.Context(), token)})
+		}
+		events, client := startServer(logic, grpc.ChainStreamInterceptor(txInterceptor.StreamServer, injectToken, authz.StreamServer))
+		watchCtx, cancelWatch := context.WithTimeout(specCtx, 20*time.Second)
+		defer cancelWatch()
+		watch, err := client.Watch(watchCtx, &publicv1.EventsWatchRequest{})
+		Expect(err).ToNot(HaveOccurred())
+		// Wait for the Kafka offsets to be set before publishing the event.
+		Eventually(watchCtx, events.Subscriptions, 10*time.Second).Should(Equal(1))
+		events.subscriptionsMutex.Lock()
+		var topics []string
+		for subscription := range events.subscriptions {
+			topics = append(topics, subscription.topics...)
+		}
+		events.subscriptionsMutex.Unlock()
+		Expect(topics).To(Equal([]string{DefaultEventTopicPrefix + auth.SharedTenant}))
+
+		sharedEvent := privatev1.Event_builder{
+			Id: uuid.New(), Type: privatev1.EventType_EVENT_TYPE_OBJECT_UPDATED,
+			Cluster: privatev1.Cluster_builder{Id: uuid.New(),
+				Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build()}.Build(),
+		}.Build()
+		sendEvent(sharedEvent)
+		response, err := watch.Recv()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetEvent().GetId()).To(Equal(sharedEvent.GetId()))
+	})
+
+	It("does not open a Watch when visibility cannot be determined", func(specCtx SpecContext) {
+		logic := auth.NewMockTenancyLogic(ctrl)
+		logic.EXPECT().DetermineVisibility(gomock.Any()).Return(nil, errors.New("visibility unavailable"))
+		server, client := startServer(logic)
+		watchCtx, cancel := context.WithTimeout(specCtx, 10*time.Second)
+		defer cancel()
+		watch, err := client.Watch(watchCtx, publicv1.EventsWatchRequest_builder{}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = watch.Recv()
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Internal))
+		Expect(server.Subscriptions()).To(BeZero())
+	})
+
 	It("Consumes only the user and shared tenant topics", func() {
 		server, client := startServer(makeTenancy("tenant-a"))
 		_, cancel := startWatch(server, client)

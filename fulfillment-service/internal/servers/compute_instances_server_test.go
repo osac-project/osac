@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -2237,6 +2238,298 @@ var _ = Describe("Compute instances server", func() {
 			Entry("private registration JSON field", "status.volumeRegistration"),
 			Entry("private registration JSON subfield", "status.volumeRegistration.state"),
 		)
+
+		// AC5 is a public-API promise: instances created before Windows user data
+		// had its own Secret type must keep working through the update forms that
+		// leave the stored reference alone. The fixtures are seeded through the DAO
+		// layer on purpose, because the pre-feature shape can no longer be
+		// produced through the public Create call.
+		Context("legacy Windows user-data Secret through the public API", func() {
+			var (
+				secretsDao   *dao.GenericDAO[*privatev1.Secret]
+				instancesDao *dao.GenericDAO[*privatev1.ComputeInstance]
+			)
+
+			BeforeEach(func() {
+				var err error
+
+				secretsDao, err = dao.NewGenericDAO[*privatev1.Secret]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				instancesDao, err = dao.NewGenericDAO[*privatev1.ComputeInstance]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+
+				// The public suite only fixtures a Linux image, so add the Windows
+				// image, instance type and template the seeded instances refer to.
+				diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = diskImagesDao.Create().SetObject(privatev1.DiskImage_builder{
+					Id: "test-windows-disk-image",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "test-windows-disk-image",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						Lifecycle:     privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+						GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				instanceTypesDao, err := dao.NewGenericDAO[*privatev1.InstanceType]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = instanceTypesDao.Create().SetObject(privatev1.InstanceType_builder{
+					Id: "test-windows-instance-type",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "test-windows-instance-type",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.InstanceTypeSpec_builder{
+						Vcpus:     4,
+						MemoryGib: 16,
+						State:     privatev1.InstanceTypeState_INSTANCE_TYPE_STATE_ACTIVE,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				templatesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstanceTemplate]().
+					SetLogger(logger).
+					SetTenancyLogic(tenancy).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				_, err = templatesDao.Create().SetObject(privatev1.ComputeInstanceTemplate_builder{
+					Id:          "test-windows-template",
+					Title:       "Windows Template",
+					Description: "Template for Windows legacy user-data tests",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "test-windows-template",
+						Tenant: testTenant,
+					}.Build(),
+					SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+						InstanceType: privatev1.InstanceTypeReference_builder{Id: "test-windows-instance-type"}.Build(),
+						DiskImage:    privatev1.DiskImageReference_builder{Id: "test-windows-disk-image"}.Build(),
+						BootDisk: privatev1.ComputeInstanceDisk_builder{
+							SizeGib:     proto.Int32(50),
+							StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
+						}.Build(),
+						RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			createSecret := func(secretType privatev1.SecretType, tenant string,
+				data map[string][]byte) *privatev1.Secret {
+				result, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   fmt.Sprintf("legacy-userdata-%s", uuid.NewString()[:8]),
+						Tenant: tenant,
+					}.Build(),
+					Type: secretType,
+					Data: data,
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return result.GetObject()
+			}
+			canonicalRef := func(secret *privatev1.Secret) *privatev1.SecretLocalReference {
+				return privatev1.SecretLocalReference_builder{
+					Id:   secret.GetId(),
+					Name: secret.GetMetadata().GetName(),
+				}.Build()
+			}
+			seedInstance := func(userDataSource *privatev1.UserDataSource) *privatev1.ComputeInstance {
+				result, err := instancesDao.Create().SetObject(privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   fmt.Sprintf("win-legacy-%s", uuid.NewString()[:8]),
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template:       privatev1.ComputeInstanceTemplateReference_builder{Id: "test-windows-template"}.Build(),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "test-windows-disk-image"}.Build(),
+						InstanceType:   privatev1.InstanceTypeReference_builder{Id: "test-windows-instance-type"}.Build(),
+						UserDataSource: userDataSource,
+						BootDisk: privatev1.ComputeInstanceDisk_builder{
+							SizeGib:     proto.Int32(50),
+							StorageTier: privatev1.StorageTierReference_builder{Name: "standard"}.Build(),
+						}.Build(),
+						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+							privatev1.ComputeNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return result.GetObject()
+			}
+			// seedLegacyInstance writes the pre-feature state directly: a Windows
+			// instance whose source is a SECRET_TYPE_USER_DATA Secret. The payload
+			// is deliberately not XML, proving typed references skip XML parsing.
+			seedLegacyInstance := func() (*privatev1.Secret, *privatev1.ComputeInstance) {
+				secret := createSecret(privatev1.SecretType_SECRET_TYPE_USER_DATA, testTenant,
+					map[string][]byte{userDataSecretDataKey: []byte("#cloud-config" + "\n" + "write_files: []" + "\n")})
+				instance := seedInstance(privatev1.UserDataSource_builder{
+					Secret: canonicalRef(secret),
+				}.Build())
+				return secret, instance
+			}
+			storedInstance := func(id string) *privatev1.ComputeInstance {
+				result, err := instancesDao.Get().SetId(id).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return result.GetObject()
+			}
+			// specSnapshot captures the persisted spec so tests can prove that an
+			// update left every stored field untouched.
+			specSnapshot := func(id string) *privatev1.ComputeInstanceSpec {
+				return proto.Clone(storedInstance(id).GetSpec()).(*privatev1.ComputeInstanceSpec)
+			}
+			updateSource := func(id string, ref *publicv1.SecretLocalReference,
+				maskPaths ...string) (*publicv1.ComputeInstancesUpdateResponse, error) {
+				spec := publicv1.ComputeInstanceSpec_builder{}
+				if ref != nil {
+					spec.UserDataSource = publicv1.UserDataSource_builder{Secret: ref}.Build()
+				} else {
+					spec.UserDataSource = publicv1.UserDataSource_builder{}.Build()
+				}
+				return server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Id:   id,
+						Spec: spec.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: maskPaths},
+				}.Build())
+			}
+			expectSpecUnchanged := func(id string, before *privatev1.ComputeInstanceSpec) {
+				Expect(proto.Equal(storedInstance(id).GetSpec(), before)).To(BeTrue(),
+					"the persisted spec must be unchanged")
+			}
+
+			// The public adapter infers a mask from the populated fields, so a
+			// request that only sets labels selects metadata.labels alone.
+			It("keeps the legacy source through a maskless metadata update", func() {
+				secret, instance := seedLegacyInstance()
+				before := specSnapshot(instance.GetId())
+
+				response, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Id: instance.GetId(),
+						Metadata: publicv1.Metadata_builder{
+							Labels: map[string]string{"stage": "legacy"},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetMetadata().GetLabels()).
+					To(HaveKeyWithValue("stage", "legacy"))
+				Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).
+					To(Equal(secret.GetId()))
+				expectSpecUnchanged(instance.GetId(), before)
+			})
+
+			It("canonicalizes an unchanged legacy source selected by name", func() {
+				secret, instance := seedLegacyInstance()
+				before := specSnapshot(instance.GetId())
+
+				response, err := updateSource(instance.GetId(),
+					publicv1.SecretLocalReference_builder{
+						Name: secret.GetMetadata().GetName(),
+					}.Build(),
+					"spec.user_data_source.secret")
+				Expect(err).ToNot(HaveOccurred())
+				ref := response.GetObject().GetSpec().GetUserDataSource().GetSecret()
+				Expect(ref.GetId()).To(Equal(secret.GetId()))
+				Expect(ref.GetName()).To(Equal(secret.GetMetadata().GetName()))
+				expectSpecUnchanged(instance.GetId(), before)
+			})
+
+			It("accepts an empty-mask replacement that resubmits the legacy source", func() {
+				secret, instance := seedLegacyInstance()
+
+				current, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
+					Id: instance.GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+					Object:     current.GetObject(),
+					UpdateMask: &fieldmaskpb.FieldMask{},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				// A full replacement re-materializes template defaults, so only the
+				// stored Secret identity is asserted here.
+				ref := storedInstance(instance.GetId()).GetSpec().GetUserDataSource().GetSecret()
+				Expect(ref.GetId()).To(Equal(secret.GetId()))
+				Expect(ref.GetName()).To(Equal(secret.GetMetadata().GetName()))
+			})
+
+			It("rejects a changed reference as immutable without mutating the instance", func() {
+				_, instance := seedLegacyInstance()
+				before := specSnapshot(instance.GetId())
+
+				_, err := updateSource(instance.GetId(),
+					publicv1.SecretLocalReference_builder{Id: uuid.NewString()}.Build(),
+					"spec.user_data_source")
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("user_data_source.secret is immutable"))
+				Expect(err.Error()).ToNot(ContainSubstring("there is no secret"))
+				expectSpecUnchanged(instance.GetId(), before)
+			})
+
+			It("rejects removing the reference without mutating the instance", func() {
+				_, instance := seedLegacyInstance()
+				before := specSnapshot(instance.GetId())
+
+				// An empty source fails the oneof rule during the generic mask
+				// merge, before the immutability check sees it.
+				_, err := updateSource(instance.GetId(), nil, "spec.user_data_source")
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				expectSpecUnchanged(instance.GetId(), before)
+			})
+
+			It("rejects a new Windows USER_DATA reference created through the public API", func() {
+				secret := createSecret(privatev1.SecretType_SECRET_TYPE_USER_DATA, testTenant,
+					map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")})
+				name := fmt.Sprintf("win-new-%s", uuid.NewString()[:8])
+
+				_, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+						Spec: publicv1.ComputeInstanceSpec_builder{
+							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "test-windows-template"}.Build(),
+							UserDataSource: publicv1.UserDataSource_builder{
+								Secret: publicv1.SecretLocalReference_builder{Id: secret.GetId()}.Build(),
+							}.Build(),
+							NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
+								publicv1.ComputeNetworkAttachment_builder{
+									Subnet: publicv1.SubnetLocalReference_builder{Id: "test-subnet"}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("SECRET_TYPE_WINDOWS_USER_DATA"))
+
+				stored, err := instancesDao.List().
+					SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).
+					Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetItems()).To(BeEmpty())
+			})
+		})
 	})
 })
 

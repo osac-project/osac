@@ -5605,7 +5605,10 @@ var _ = Describe("Catalog materialized defaults", func() {
 				return result.GetObject()
 			}
 			createSecretRef := func(secret *privatev1.Secret) *privatev1.SecretLocalReference {
-				return privatev1.SecretLocalReference_builder{Id: secret.GetId()}.Build()
+				return privatev1.SecretLocalReference_builder{
+					Id:   secret.GetId(),
+					Name: secret.GetMetadata().GetName(),
+				}.Build()
 			}
 			createInstance := func(secret *privatev1.Secret, templateID,
 				diskImageID string) *privatev1.ComputeInstance {
@@ -5668,6 +5671,65 @@ var _ = Describe("Catalog materialized defaults", func() {
 					To(Equal(secret.GetId()))
 			})
 
+			It("accepts an unchanged legacy reference submitted by name", func() {
+				secret := newLegacySecret()
+				instance := createLegacyWindowsInstance(secret)
+
+				response, err := updateSecret(instance.GetId(),
+					privatev1.SecretLocalReference_builder{
+						Name: secret.GetMetadata().GetName(),
+					}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).
+					To(Equal(secret.GetId()))
+			})
+
+			It("accepts an unchanged WINDOWS_USER_DATA Secret on Windows", func() {
+				secret := createSecret(privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, testTenant,
+					map[string][]byte{userDataSecretDataKey: []byte("windows-user-data")})
+				instance := createLegacyWindowsInstance(secret)
+
+				response, err := updateSecret(instance.GetId(), createSecretRef(secret))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).
+					To(Equal(secret.GetId()))
+			})
+
+			It("accepts userdata of exactly the maximum size on a legacy reference", func() {
+				secret := createSecret(privatev1.SecretType_SECRET_TYPE_USER_DATA, testTenant,
+					map[string][]byte{
+						userDataSecretDataKey: []byte(strings.Repeat("x", bareMetalInstanceUserDataMaxBytes)),
+					})
+				instance := createLegacyWindowsInstance(secret)
+
+				response, err := updateSecret(instance.GetId(), createSecretRef(secret))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).
+					To(Equal(secret.GetId()))
+			})
+
+			It("rejects removing the Secret reference without mutating the instance", func() {
+				secret := newLegacySecret()
+				instance := createLegacyWindowsInstance(secret)
+
+				_, err := updateSecret(instance.GetId(), nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(fetchInstance(instance.GetId()).GetSpec().GetUserDataSource().
+					GetSecret().GetId()).To(Equal(secret.GetId()))
+			})
+
+			It("rejects changing the reference to a missing Secret without mutating the instance",
+				func() {
+					secret := newLegacySecret()
+					instance := createLegacyWindowsInstance(secret)
+
+					_, err := updateSecret(instance.GetId(),
+						privatev1.SecretLocalReference_builder{Id: uuid.NewString()}.Build())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(fetchInstance(instance.GetId()).GetSpec().GetUserDataSource().
+						GetSecret().GetId()).To(Equal(secret.GetId()))
+				})
+
 			It("allows updating an unrelated field", func() {
 				secret := newLegacySecret()
 				instance := createLegacyWindowsInstance(secret)
@@ -5703,6 +5765,9 @@ var _ = Describe("Catalog materialized defaults", func() {
 				},
 				Entry("nil mask", nil),
 				Entry("empty mask", &fieldmaskpb.FieldMask{}),
+				Entry("spec.user_data_source.secret mask", &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.user_data_source.secret"},
+				}),
 			)
 
 			DescribeTable("rejects an invalid unchanged legacy Secret on full replacement",

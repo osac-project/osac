@@ -1,0 +1,3 @@
+worker_network_poll_retries: 90
+worker_network_poll_delay: 10
+worker_network_label: osac.openshift.io/clusterorder

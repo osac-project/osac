@@ -1,0 +1,125 @@
+---
+- name: Validate worker network inputs
+  ansible.builtin.assert:
+    that:
+      - worker_network_cluster_order.metadata.name | default('') | length > 0
+      - worker_network_cluster_order.metadata.namespace | default('') | length > 0
+      - worker_network_infraenv_name | length > 0
+      - worker_network_namespace | length > 0
+      - worker_network_expected_workers | int > 0
+    fail_msg: CaaS worker network inputs are incomplete
+
+- name: Enable worker NMStateConfig selection on the InfraEnv
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: agent-install.openshift.io/v1beta1
+      kind: InfraEnv
+      metadata:
+        name: "{{ worker_network_infraenv_name }}"
+        namespace: "{{ worker_network_namespace }}"
+      spec:
+        nmStateConfigLabelSelector:
+          matchLabels:
+            "{{ worker_network_label }}": "{{ worker_network_cluster_order.metadata.name }}"
+
+- name: Wait for worker BMIs to report accepted tenant interfaces
+  kubernetes.core.k8s_info:
+    api_version: osac.openshift.io/v1alpha1
+    kind: BareMetalInstance
+    namespace: "{{ worker_network_cluster_order.metadata.namespace }}"
+  register: _worker_network_bmis
+  until:
+    - >-
+      (_worker_network_bmis.resources
+       | osac.service.baremetal_instances_for_cluster(worker_network_cluster_id)
+       | length) >= worker_network_expected_workers | int
+    - >-
+      (_worker_network_bmis.resources
+       | osac.service.baremetal_instances_for_cluster(worker_network_cluster_id)
+       | selectattr('status.phase', 'equalto', 'Ready') | list | length)
+      >= worker_network_expected_workers | int
+    - >-
+      (_worker_network_bmis.resources
+       | osac.service.baremetal_instances_for_cluster(worker_network_cluster_id)
+       | selectattr('status.networkAttachmentStatuses', 'defined') | list | length)
+      >= worker_network_expected_workers | int
+  retries: "{{ worker_network_poll_retries }}"
+  delay: "{{ worker_network_poll_delay }}"
+
+- name: Select BMIs for this ClusterOrder
+  ansible.builtin.set_fact:
+    _worker_network_bmis: >-
+      {{ _worker_network_bmis.resources
+         | osac.service.baremetal_instances_for_cluster(worker_network_cluster_id) }}
+
+- name: Collect selected tenant MACs from BMI status
+  ansible.builtin.set_fact:
+    _worker_network_selected_macs: "{{ (_worker_network_selected_macs | default([])) + [item.1.macAddress] }}"
+  loop: "{{ _worker_network_bmis.resources | subelements('status.networkAttachmentStatuses', skip_missing=True) }}"
+  when:
+    - item.1.macAddress is defined
+    - item.1.macAddress | length > 0
+
+- name: Require one selected tenant MAC per worker
+  ansible.builtin.assert:
+    that:
+      - (_worker_network_selected_macs | default([]) | unique | length) >= worker_network_expected_workers | int
+    fail_msg: >-
+      Worker BMIs did not report one selected tenant interface MAC each;
+      refusing to install with ambiguous network identity.
+
+- name: Wait for Agents with complete interface inventory
+  kubernetes.core.k8s_info:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: Agent
+    namespace: "{{ worker_network_namespace }}"
+    label_selectors:
+      - "infraenvs.agent-install.openshift.io={{ worker_network_infraenv_name }}"
+  register: _worker_network_agents
+  until:
+    - _worker_network_agents.resources | length >= worker_network_expected_workers | int
+    - >-
+      (_worker_network_agents.resources
+       | selectattr('status.inventory.interfaces', 'defined') | list | length)
+      >= worker_network_expected_workers | int
+  retries: "{{ worker_network_poll_retries }}"
+  delay: "{{ worker_network_poll_delay }}"
+
+- name: Build MAC-driven Agent network mappings
+  ansible.builtin.set_fact:
+    _worker_network_mappings: >-
+      {{ (_worker_network_mappings | default([])) + [{
+        'agent': item,
+        'interfaces': item | osac.service.agent_network_interfaces(_worker_network_selected_macs)
+      }] }}
+  loop: "{{ _worker_network_agents.resources }}"
+
+- name: Validate every Agent has exactly one selected fabric interface
+  ansible.builtin.assert:
+    that:
+      - item.interfaces | selectattr('selected', 'equalto', true) | list | length == 1
+      - item.interfaces | length > 0
+    fail_msg: >-
+      Agent {{ item.agent.metadata.name }} does not have exactly one
+      inventory interface matching the selected tenant MACs.
+  loop: "{{ _worker_network_mappings }}"
+
+- name: Create MAC-driven NMStateConfig for each worker Agent
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: agent-install.openshift.io/v1beta1
+      kind: NMStateConfig
+      metadata:
+        name: "{{ worker_network_cluster_order.metadata.name }}-{{ item.agent.metadata.name }}-network"
+        namespace: "{{ worker_network_namespace }}"
+        labels:
+          "{{ worker_network_label }}": "{{ worker_network_cluster_order.metadata.name }}"
+          infraenvs.agent-install.openshift.io: "{{ worker_network_infraenv_name }}"
+      spec:
+        interfaces: "{{ item.agent | osac.service.agent_nmstate_interfaces(_worker_network_selected_macs) }}"
+        config: "{{ lookup('ansible.builtin.template', 'nmstate.yaml.j2') | from_yaml }}"
+  vars:
+    nmstate_interfaces: "{{ item.interfaces }}"
+  loop: "{{ _worker_network_mappings }}"

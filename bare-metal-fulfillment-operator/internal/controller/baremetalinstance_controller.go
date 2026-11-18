@@ -1089,10 +1089,17 @@ func (r *BareMetalInstanceReconciler) reconcileRestartTrigger(ctx context.Contex
 		"status", bareMetalInstance.Status.RestartTrigger,
 		"hostID", bareMetalInstance.Spec.ExternalHostID)
 
-	// If run strategy is halted, just update the status without triggering restart
-	if bareMetalInstance.Spec.RunStrategy == v1alpha1.RunStrategyHalted {
+	// If run strategy is halted, just update the status without triggering restart.
+	// status.runStrategy echoes the host's actual power state, so this also covers
+	// starting a halted instance and bumping the restart trigger in the same update:
+	// spec.runStrategy is already Always while the host is still off. A restart
+	// cannot complete before the host is powered on, so acknowledge the trigger and
+	// let reconcilePower power the host on.
+	if bareMetalInstance.Spec.RunStrategy == v1alpha1.RunStrategyHalted ||
+		bareMetalInstance.Status.RunStrategy == v1alpha1.RunStrategyHalted {
 		log.Info("RunStrategy is halted, updating restart trigger without restart",
-			"trigger", bareMetalInstance.Spec.RestartTrigger)
+			"trigger", bareMetalInstance.Spec.RestartTrigger,
+			"statusRunStrategy", bareMetalInstance.Status.RunStrategy)
 		bareMetalInstance.Status.RestartTrigger = bareMetalInstance.Spec.RestartTrigger
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionPowerSynced,

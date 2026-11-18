@@ -1,0 +1,22 @@
+---
+lvms_storage:
+  provisioner: topolvm.io
+  modes: [default]
+vast_storage:
+  provisioner: csi.vastdata.com
+  block_provisioner: block.csi.vastdata.com
+  modes: [default]
+  nfs_parameters:
+    root_export: /osac-fstype-test-12345678/nfs
+    view_policy: osac-fstype-test-nfs
+netapp_storage:
+  provisioner: csi.trident.netapp.io
+  modes: [shared, dedicated]
+osac_csi_storage:
+  provisioner: csi.osac.openshift.io
+  modes: [default]
+  nfs_parameters:
+    tier: nfs
+    tenant: fstype-test
+    osac.openshift.io/tenant: fstype-test
+    osac.openshift.io/storage-tier: nfs

@@ -1,0 +1,12 @@
+---
+- name: Validate filesystem type for new block StorageClasses
+  ansible.builtin.assert:
+    that:
+      - storage_provider_block_fstype is string
+      - storage_provider_block_fstype | length > 0
+    fail_msg: storage_provider_block_fstype must be a nonempty string for new block StorageClasses.
+
+- name: Resolve filesystem parameters for new block StorageClasses
+  ansible.builtin.set_fact:
+    _storage_provider_block_parameters:
+      csi.storage.k8s.io/fstype: "{{ storage_provider_block_fstype | string }}"

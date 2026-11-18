@@ -1,23 +1,22 @@
 # AAP Configuration
 
+AAP workers read runtime configuration from their instance-group environment.
+The storage provider also accepts explicit Ansible variables when invoked directly.
+
 ## Block StorageClass filesystem type
 
-The storage provider uses `ext4` for `csi.storage.k8s.io/fstype` on new VAST
-block and LVMS StorageClasses. Set `OSAC_STORAGE_BLOCK_FSTYPE` in the
-storage-operations worker environment to override it, or pass
-`storage_provider_block_fstype` when invoking `osac.service.storage_provider`.
-An explicit Ansible variable takes precedence over the worker environment.
-An explicit override must be a nonempty string when creating block classes and is
-passed unchanged, without a filesystem allowlist or normalization. Choose a
-value appropriate for your CSI driver. NFS classes and teardown operations do
-not consume this setting.
+New block StorageClasses use `ext4` by default across all storage providers,
+including the OSAC CSI and optional local LVMS CSI paths. Set
+`OSAC_STORAGE_BLOCK_FSTYPE` in the storage worker environment, or pass
+`storage_provider_block_fstype` to Ansible. The explicit variable takes precedence.
+The value must be a nonempty string; it is passed unchanged, without trimming or
+an allowlist. Select a filesystem supported by the target CSI driver.
 
-This setting does not migrate existing StorageClasses or volumes. LVMS skips
-existing class names; VAST skips provisioning when all requested classes
-already exist and creates only missing block classes on partial requests.
-If only NFS classes are missing, VAST does not validate the block filesystem
-setting or resubmit existing block classes. Changing the setting does not
-update an existing class's immutable filesystem parameters.
+The setting is consumed only when creating a new block class. NFS, teardown,
+and requests that need no new block class do not validate it. Existing classes
+retain their filesystem parameters, including an absent parameter; changing the
+setting does not migrate classes, PVCs, PVs, or data. Use a separately named class
+for future claims and plan workload/data migration separately.
 
 After creating missing VAST block classes, the provider checks that all requested
 block class names exist before returning them. If a class disappeared, it fails
@@ -25,21 +24,8 @@ with the missing names; it does not recreate existing classes or retry. This is
 a point-in-time completion check, not a guarantee against deletion after the
 check. All-existing and NFS-only creation paths do not perform this extra check.
 
-For example, if a class was created with `ext4`, changing the override to
-`xfs` leaves that class using `ext4`. New PVCs that name the same existing
-class still provision using its `ext4` parameter, not the current worker
-environment or Ansible override. Only newly created class objects receive
-the new setting. On a partial request, existing block classes retain their
-parameters and only missing block classes receive `xfs`. An existing class
-without an `fstype` parameter remains without it; no parameter is backfilled.
-Existing bound PVCs, PVs, and their data are not modified or migrated.
-
-To use a different filesystem for future claims, plan a separately named or
-versioned StorageClass and explicitly select it in those claims. Moving
-existing workloads requires a separate workload and data migration plan;
-changing this setting does not perform that migration. Do not assume that
-deleting and recreating a class under the same name is safe for all volume
-lifecycle operations.
+For deployment configuration, see the
+[installer Helm example](../../osac-installer/docs/aap-configuration.md#block-storageclass-filesystem-type).
 
 ## Hosted cluster DNS
 

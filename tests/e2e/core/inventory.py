@@ -122,6 +122,13 @@ class InventoryBackend(Protocol):
         ...
 
 
+def _split_external_host_id(external_host_id: str) -> tuple[str, str]:
+    """Split the BMI's externalHostID into its (namespace, name) parts."""
+    assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
+    namespace, name = external_host_id.split("/", 1)
+    return namespace, name
+
+
 class Metal3Inventory:
     """metal3 backend: the BareMetalHosts themselves are the inventory."""
 
@@ -131,8 +138,7 @@ class Metal3Inventory:
 
     def host_for_bmi(self, *, bmi_cr_name: str) -> HostRef:
         external_host_id: str = self.k8s.get_baremetal_instance_external_host_id(name=bmi_cr_name)
-        assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
-        bmh_ns, bmh_name = external_host_id.split("/", 1)
+        bmh_ns, bmh_name = _split_external_host_id(external_host_id)
         assert bmh_ns == self.bmh_namespace, f"BMH landed in {bmh_ns}, expected {self.bmh_namespace}"
         return HostRef(namespace=bmh_ns, name=bmh_name)
 
@@ -184,8 +190,7 @@ class NetBoxInventory:
 
     def host_for_bmi(self, *, bmi_cr_name: str) -> HostRef:
         external_host_id: str = self.k8s.get_baremetal_instance_external_host_id(name=bmi_cr_name)
-        assert "/" in external_host_id, f"Expected namespace/name format, got: {external_host_id}"
-        bmh_ns, bmh_name = external_host_id.split("/", 1)
+        bmh_ns, bmh_name = _split_external_host_id(external_host_id)
         assert bmh_name.startswith("netbox-"), (
             f"Expected a NetBox-derived BMH name (netbox-<device-id>), got: {bmh_name}"
         )

@@ -8,6 +8,18 @@ const getCatalogItemCard = (page: Page, name: string): Locator =>
     has: page.getByRole('link', { name, exact: true }),
   });
 
+/**
+ * The Catalog page groups items by resource type and defaults to the first
+ * enabled tier, so VM items and the VM create action are only shown after
+ * selecting the Virtual Machines type filter.
+ */
+const selectVmCatalogTab = async (page: Page): Promise<void> => {
+  const tab = page.locator(...CatalogMainPage.vmTypeFilterTab);
+  if ((await tab.getAttribute('aria-pressed')) !== 'true') {
+    await tab.click();
+  }
+};
+
 export interface ExpectedCatalogItemResources {
   instanceType: string;
   diskImage: string;
@@ -15,6 +27,7 @@ export interface ExpectedCatalogItemResources {
 
 /** Open the VM catalog item creation wizard. */
 export const openCreateCatalogItemPage = async (page: Page): Promise<void> => {
+  await selectVmCatalogTab(page);
   await page.getByRole(...CatalogMainPage.createVmCatalogItem).click();
   await expect(page).toHaveURL((url) => url.pathname === '/catalog/vm/create');
   await expect(page.getByRole(...CatalogCreatePage.pageTitle)).toBeVisible();
@@ -28,6 +41,7 @@ export const expectCatalogItemListed = async (
   expectedUsage: string,
   expectedResources: ExpectedCatalogItemResources,
 ): Promise<void> => {
+  await selectVmCatalogTab(page);
   const catalogItemCard = getCatalogItemCard(page, name);
 
   await expect(catalogItemCard).toHaveCount(1);
@@ -62,12 +76,14 @@ export const expectCatalogItemListed = async (
 
 /** Verify that a catalog item is absent from the Catalog page. */
 export const expectCatalogItemNotListed = async (page: Page, name: string): Promise<void> => {
+  await selectVmCatalogTab(page);
   await expect(page.getByRole(...CatalogMainPage.catalogLoadingIndicator)).toHaveCount(0);
   await expect(getCatalogItemCard(page, name)).toHaveCount(0);
 };
 
 /** Open a published catalog item from the tenant Catalog page. */
 export const openCatalogItemDetails = async (page: Page, name: string): Promise<void> => {
+  await selectVmCatalogTab(page);
   const catalogItemCard = getCatalogItemCard(page, name);
 
   await expect(catalogItemCard).toHaveCount(1);

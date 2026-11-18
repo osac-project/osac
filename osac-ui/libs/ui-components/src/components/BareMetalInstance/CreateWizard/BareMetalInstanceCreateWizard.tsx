@@ -31,10 +31,6 @@ const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateBareMetalInstance();
-  // The item the form is built from: the launch page's snapshot in the
-  // catalog-origin flow, or the item picked in the Catalog step in the
-  // list-origin flow. Frozen at mount so a later cache update cannot reset
-  // an in-progress form through enableReinitialize.
   const [selectedCatalogItem, setSelectedCatalogItem] = useState(catalogItem);
   const includeCatalogStep = !catalogItem;
   const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>(

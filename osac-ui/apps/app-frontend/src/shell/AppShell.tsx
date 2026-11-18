@@ -105,36 +105,6 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
             </ShellRoute>
           }
         />
-        <Route
-          path="/catalog/vm"
-          element={
-            <ShellRoute>
-              <ServiceRoute service={ServiceTier.VMAAS}>
-                <CatalogPage routeKind="vm" />
-              </ServiceRoute>
-            </ShellRoute>
-          }
-        />
-        <Route
-          path="/catalog/cluster"
-          element={
-            <ShellRoute>
-              <ServiceRoute service={ServiceTier.CAAS}>
-                <CatalogPage routeKind="cluster" />
-              </ServiceRoute>
-            </ShellRoute>
-          }
-        />
-        <Route
-          path="/catalog/bm"
-          element={
-            <ShellRoute>
-              <ServiceRoute service={ServiceTier.BMAAS}>
-                <CatalogPage routeKind="bm" />
-              </ServiceRoute>
-            </ShellRoute>
-          }
-        />
         {(role === 'admin' || role === 'tenant-admin') && (
           <>
             <Route
@@ -211,36 +181,6 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
         />
         <Route
           path="/catalog/bare-metal/:id"
-          element={
-            <ShellRoute>
-              <ServiceRoute service={ServiceTier.BMAAS}>
-                <BareMetalInstanceCatalogItemDetailPage />
-              </ServiceRoute>
-            </ShellRoute>
-          }
-        />
-        <Route
-          path="/catalog/vm/:id"
-          element={
-            <ShellRoute>
-              <ServiceRoute service={ServiceTier.VMAAS}>
-                <VMCatalogItemDetailPage />
-              </ServiceRoute>
-            </ShellRoute>
-          }
-        />
-        <Route
-          path="/catalog/cluster/:id"
-          element={
-            <ShellRoute>
-              <ServiceRoute service={ServiceTier.CAAS}>
-                <ClusterCatalogItemDetailPage />
-              </ServiceRoute>
-            </ShellRoute>
-          }
-        />
-        <Route
-          path="/catalog/bm/:id"
           element={
             <ShellRoute>
               <ServiceRoute service={ServiceTier.BMAAS}>

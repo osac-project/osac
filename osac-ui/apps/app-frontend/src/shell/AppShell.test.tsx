@@ -138,9 +138,9 @@ describe('AppShell', () => {
   );
 
   it.each([
-    { path: '/catalog/vm/item-1', title: 'VM catalog item not found' },
-    { path: '/catalog/cluster/item-1', title: 'Cluster catalog item not found' },
-    { path: '/catalog/bm/item-1', title: 'Bare metal catalog item not found' },
+    { path: '/catalog/vms/item-1', title: 'VM catalog item not found' },
+    { path: '/catalog/clusters/item-1', title: 'Cluster catalog item not found' },
+    { path: '/catalog/bare-metal/item-1', title: 'Bare metal catalog item not found' },
   ])('routes $path to its resource-specific catalog detail page', async ({ path, title }) => {
     renderAppShell(path);
 

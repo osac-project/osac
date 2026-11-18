@@ -5,6 +5,7 @@ import type { Cluster } from '@osac/types';
 import ClusterDetailsActionButtons from './ClusterDetailsActionButtons';
 import ClusterDetailsSections from './ClusterDetailsSections';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { CatalogItemIcon } from '../../../icons';
 import { ResourceDetailHeader } from '../../Resource/ResourceDetailHeader';
 
 interface ClusterDetailViewProps {
@@ -29,6 +30,7 @@ const ClusterDetailsPageContent = ({ cluster }: ClusterDetailViewProps) => {
                 <ResourceDetailHeader
                   parents={[{ to: '/clusters', label: t('Clusters') }]}
                   resourceName={cluster.metadata?.name ?? cluster.id}
+                  titlePrefix={<CatalogItemIcon kind="cluster" isActive />}
                 />
               </FlexItem>
               <FlexItem>

@@ -46,6 +46,17 @@ const RefreshVersion = () => {
 };
 
 describe('ClusterConfigurationCard', () => {
+  it('separates only the card header while preserving the body groups', () => {
+    const { container } = renderWithProviders(<ClusterConfigurationCard cluster={cluster} />);
+    const header = container.querySelector('.pf-v6-c-card__header');
+    expect(header?.nextElementSibling?.tagName).toBe('HR');
+    expect(container.querySelectorAll('hr')).toHaveLength(1);
+    const body = container.querySelector('.pf-v6-c-card__body');
+    expect(body?.querySelector('hr')).toBeNull();
+    for (const name of ['Node sets', 'Settings']) {
+      expect(body).toContainElement(screen.getByRole('heading', { name }));
+    }
+  });
   it.each([false, true])(
     'opens meaningful empty control-plane history (node-only: %s)',
     async (nodeOnly) => {

@@ -91,22 +91,31 @@ const endpoints = [
 ] as const;
 
 describe('ClusterDetailsPageContent', () => {
-  it('groups version beside overview and lifecycle, with endpoints beside networking', async () => {
+  it('keeps compact details in the main column and both cards in the rail', async () => {
     const { container } = renderWithProviders(<ClusterDetailsPageContent cluster={cluster} />);
 
     expect(screen.getByRole('heading', { level: 1, name: 'production-cluster' })).toHaveClass(
       'pf-m-2xl',
     );
     expect(screen.getByRole('link', { name: 'Clusters' })).toHaveAttribute('href', '/clusters');
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    const titleRow = screen.getByRole('heading', { level: 1 }).parentElement?.parentElement;
+    const prefix = titleRow?.querySelector('.catalog-item-icon.m-is-active');
+    expect(prefix).toHaveAttribute('aria-hidden', 'true');
+    expect(prefix?.querySelector('svg')).not.toBeNull();
+    expect(
+      (prefix?.compareDocumentPosition(screen.getByRole('heading', { level: 1 })) ?? 0) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
     expect(
       screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent),
     ).toEqual([
       'Overview',
       'Lifecycle',
-      'Cluster version',
       'Networking',
-      'External IP endpoints',
       'Conditions',
+      'Cluster version',
+      'External IP endpoints',
     ]);
     for (const heading of screen.getAllByRole('heading', { level: 2 })) {
       expect(heading.querySelector('svg')).toBeNull();
@@ -120,6 +129,7 @@ describe('ClusterDetailsPageContent', () => {
       expect(header).not.toBeNull();
       expect(header?.nextElementSibling?.tagName).toBe('HR');
       expect(header?.nextElementSibling?.nextElementSibling).toHaveClass('pf-v6-c-card__body');
+      expect(card.querySelectorAll('hr')).toHaveLength(1);
     }
     expect(cards[0]).toContainElement(screen.getByRole('heading', { name: 'Cluster version' }));
     expect(cards[0]).toContainElement(screen.getByRole('heading', { name: 'Node sets' }));
@@ -127,25 +137,30 @@ describe('ClusterDetailsPageContent', () => {
     expect(cards[1]).toContainElement(
       screen.getByRole('heading', { name: 'External IP endpoints' }),
     );
-    const topRegion = container.querySelector('.cluster-details__top-region');
-    expect(topRegion).toContainElement(screen.getByRole('heading', { name: 'Overview' }));
-    expect(topRegion).toContainElement(screen.getByRole('heading', { name: 'Lifecycle' }));
-    expect(topRegion).toContainElement(cards[0]);
-    expect(topRegion).not.toContainElement(cards[1]);
-    expect(topRegion).not.toContainElement(screen.getByRole('heading', { name: 'Networking' }));
-    expect(topRegion).not.toContainElement(screen.getByRole('heading', { name: 'Conditions' }));
-    const networkingRegion = container.querySelector('.cluster-details__networking-region');
+    const grid = container.querySelector('.cluster-details__grid');
+    const mainColumn = container.querySelector('.cluster-details__main');
+    const rail = container.querySelector('.cluster-details__rail');
+    expect(grid?.children).toHaveLength(2);
+    expect(grid?.firstElementChild).toBe(mainColumn);
+    expect(grid?.lastElementChild).toBe(rail);
+    for (const name of ['Overview', 'Lifecycle', 'Networking', 'Conditions']) {
+      expect(mainColumn).toContainElement(screen.getByRole('heading', { name }));
+      expect(rail).not.toContainElement(screen.getByRole('heading', { name }));
+    }
+    expect(mainColumn?.querySelectorAll('hr')).toHaveLength(2);
+    expect(rail?.querySelectorAll('hr')).toHaveLength(2);
+    for (const card of cards) {
+      expect(rail).toContainElement(card);
+      expect(mainColumn).not.toContainElement(card);
+    }
     const networkTable = screen.getByRole('grid', { name: 'Cluster network attachment' });
     const conditionsHeading = screen.getByRole('heading', { name: 'Conditions' });
-    expect(networkingRegion).toContainElement(screen.getByRole('heading', { name: 'Networking' }));
-    expect(networkingRegion).toContainElement(networkTable);
-    expect(networkingRegion).toContainElement(cards[1]);
-    expect(networkingRegion).not.toContainElement(conditionsHeading);
+    expect(mainColumn).toContainElement(networkTable);
     expect(
-      networkTable.compareDocumentPosition(cards[1]) & Node.DOCUMENT_POSITION_FOLLOWING,
+      networkTable.compareDocumentPosition(conditionsHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
     expect(
-      cards[1].compareDocumentPosition(conditionsHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+      conditionsHeading.compareDocumentPosition(cards[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).not.toBe(0);
     const overview = screen.getByLabelText('Cluster overview');
     expect(overview.querySelector('dt')?.textContent).toBe('Status');

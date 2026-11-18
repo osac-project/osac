@@ -1,5 +1,4 @@
-.cluster-details__top-region,
-.cluster-details__networking-region {
+.cluster-details__grid {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   align-items: start;
@@ -13,8 +12,7 @@
   gap: var(--pf-t--global--spacer--xl);
 }
 
-.cluster-details__top-region > *,
-.cluster-details__networking-region > *,
+.cluster-details__grid > *,
 .cluster-details__overview-grid > * {
   min-width: 0;
 }
@@ -80,12 +78,9 @@
   font-size: var(--pf-t--global--font--size--body--sm);
 }
 
-.cluster-details__sections.pf-m-gutter {
-  row-gap: var(--pf-t--global--spacer--2xl);
-}
-
-.cluster-details__section-divider {
-  margin-block: var(--pf-t--global--spacer--md);
+.cluster-details__main.pf-m-gutter,
+.cluster-details__rail.pf-m-gutter {
+  row-gap: var(--pf-t--global--spacer--md);
 }
 
 .cluster-details__conditions td[data-label='Message'] {
@@ -93,8 +88,7 @@
 }
 
 @media (max-width: 992px) {
-  .cluster-details__top-region,
-  .cluster-details__networking-region {
+  .cluster-details__grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }

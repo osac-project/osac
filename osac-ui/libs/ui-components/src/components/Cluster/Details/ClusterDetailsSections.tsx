@@ -21,21 +21,18 @@ const ClusterDetailsSections = ({ cluster }: ClusterDetailsSectionsProps) => {
 
   return (
     <PageSection hasBodyWrapper={false} className="cluster-details">
-      <Stack hasGutter className="cluster-details__sections">
-        <StackItem>
-          <div className="cluster-details__top-region">
+      <div className="cluster-details__grid">
+        <Stack hasGutter className="cluster-details__main">
+          <StackItem>
             <div className="cluster-details__overview-grid">
               <ClusterDetailsSummary cluster={cluster} />
               <ClusterLifecycleSection cluster={cluster} />
             </div>
-            <ClusterConfigurationCard cluster={cluster} />
-          </div>
-        </StackItem>
-        <StackItem>
-          <Divider className="cluster-details__section-divider" />
-        </StackItem>
-        <StackItem>
-          <div className="cluster-details__networking-region">
+          </StackItem>
+          <StackItem>
+            <Divider />
+          </StackItem>
+          <StackItem>
             <Stack hasGutter>
               <StackItem>
                 <Title headingLevel="h2" size="lg">
@@ -46,29 +43,36 @@ const ClusterDetailsSections = ({ cluster }: ClusterDetailsSectionsProps) => {
                 <ClusterNetworkingCard cluster={cluster} />
               </StackItem>
             </Stack>
+          </StackItem>
+          <StackItem>
+            <Divider />
+          </StackItem>
+          <StackItem>
+            <Stack hasGutter className="cluster-details__conditions">
+              <StackItem>
+                <Title headingLevel="h2" size="lg">
+                  {t('Conditions')}
+                </Title>
+              </StackItem>
+              <StackItem>
+                <ResourceConditionsTable
+                  ariaLabel={t('Cluster conditions')}
+                  conditions={cluster.status?.conditions ?? []}
+                  conditionResourceKind="cluster"
+                />
+              </StackItem>
+            </Stack>
+          </StackItem>
+        </Stack>
+        <Stack hasGutter className="cluster-details__rail">
+          <StackItem>
+            <ClusterConfigurationCard cluster={cluster} />
+          </StackItem>
+          <StackItem>
             <ClusterNetworkingSection cluster={cluster} />
-          </div>
-        </StackItem>
-        <StackItem>
-          <Divider className="cluster-details__section-divider" />
-        </StackItem>
-        <StackItem>
-          <Stack hasGutter className="cluster-details__conditions">
-            <StackItem>
-              <Title headingLevel="h2" size="lg">
-                {t('Conditions')}
-              </Title>
-            </StackItem>
-            <StackItem>
-              <ResourceConditionsTable
-                ariaLabel={t('Cluster conditions')}
-                conditions={cluster.status?.conditions ?? []}
-                conditionResourceKind="cluster"
-              />
-            </StackItem>
-          </Stack>
-        </StackItem>
-      </Stack>
+          </StackItem>
+        </Stack>
+      </div>
     </PageSection>
   );
 };

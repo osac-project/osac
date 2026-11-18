@@ -66,13 +66,7 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
             </DescriptionList>
           </StackItem>
           <StackItem>
-            <Divider />
-          </StackItem>
-          <StackItem>
             <ClusterNodeSetsSection cluster={cluster} />
-          </StackItem>
-          <StackItem>
-            <Divider />
           </StackItem>
           <StackItem>
             <ClusterSettingsSection cluster={cluster} />

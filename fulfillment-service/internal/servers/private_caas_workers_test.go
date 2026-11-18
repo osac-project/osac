@@ -135,6 +135,58 @@ var _ = Describe("CaaS worker Create authorization", func() {
 		})
 		Expect(grpcstatus.Code(server.validateCaaSWorkerCreate(controllerContext(), wrongGroups))).
 			To(Equal(grpccodes.InvalidArgument))
+
+		// CI templates without automatic endpoint support do not create the
+		// server-owned Cluster SecurityGroup, so their worker must carry only
+		// the groups from the Cluster's explicit network attachment.
+		plainClusterID := uuid.NewString()
+		_, err = server.clustersDao.Create().SetObject(privatev1.Cluster_builder{
+			Id:       plainClusterID,
+			Metadata: privatev1.Metadata_builder{Name: "worker-cluster-without-auto-sg", Tenant: testTenant}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				NetworkAttachment: privatev1.ClusterNetworkAttachment_builder{
+					Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+					SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+						privatev1.SecurityGroupLocalReference_builder{Id: userSecurityGroupID}.Build(),
+					},
+				}.Build(),
+				NodeSets: map[string]*privatev1.ClusterNodeSet{
+					"workers": privatev1.ClusterNodeSet_builder{
+						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type"}.Build(),
+						FabricInterface:       "data-0",
+					}.Build(),
+				},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{State: privatev1.ClusterState_CLUSTER_STATE_PROGRESSING}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		workerWithoutAutoSecurityGroup := privatev1.BareMetalInstance_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "worker-bmi-without-auto-sg",
+				Tenant: testTenant,
+				Annotations: map[string]string{
+					clusterAPIIDAnnotation: plainClusterID,
+				},
+			}.Build(),
+			Spec: privatev1.BareMetalInstanceSpec_builder{
+				InstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "default-type"}.Build(),
+				NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+					privatev1.BareMetalNetworkAttachment_builder{
+						Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+						Interface: new("data-0"),
+						SecurityGroups: []*privatev1.SecurityGroupLocalReference{
+							privatev1.SecurityGroupLocalReference_builder{Id: userSecurityGroupID}.Build(),
+						},
+					}.Build(),
+				},
+			}.Build(),
+			Status: privatev1.BareMetalInstanceStatus_builder{
+				Cluster: privatev1.ClusterLocalReference_builder{Id: plainClusterID}.Build(),
+				NodeSet: new("workers"),
+			}.Build(),
+		}.Build()
+		Expect(server.validateCaaSWorkerCreate(controllerContext(), workerWithoutAutoSecurityGroup)).To(Succeed())
 	})
 })
 

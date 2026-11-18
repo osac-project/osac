@@ -149,11 +149,13 @@ func (s *PrivateBareMetalInstancesServer) validateCaaSWorkerNetworkAttachments(
 	for _, group := range clusterAttachment.GetSecurityGroups() {
 		expectedGroups = append(expectedGroups, refKey(group))
 	}
-	autoGroup, err := s.lookupAutomaticClusterSecurityGroup(ctx, cluster)
-	if err != nil {
-		return err
+	if cluster.GetSpec().GetSupportsAutomaticCaasEndpoints() {
+		autoGroup, err := s.lookupAutomaticClusterSecurityGroup(ctx, cluster)
+		if err != nil {
+			return err
+		}
+		expectedGroups = append(expectedGroups, autoGroup.GetId())
 	}
-	expectedGroups = append(expectedGroups, autoGroup.GetId())
 	actualGroups := make([]string, 0, len(attachments[0].GetSecurityGroups()))
 	for _, group := range attachments[0].GetSecurityGroups() {
 		actualGroups = append(actualGroups, refKey(group))

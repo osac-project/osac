@@ -169,11 +169,19 @@ func networkAttachmentMayExist(bmi *v1alpha1.BareMetalInstance) bool {
 		(ipDiscovery != nil && ipDiscovery.Status == metav1.ConditionTrue && ipDiscovery.Reason == "Succeeded")
 }
 
-func networkAttachmentCreatePending(bmi *v1alpha1.BareMetalInstance) bool {
+func networkAttachmentCreateMayStillCommit(bmi *v1alpha1.BareMetalInstance) bool {
 	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-	return ready != nil && ready.Status == metav1.ConditionFalse &&
-		(ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent ||
-			ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateUncertain)
+	if ready == nil {
+		return false
+	}
+	switch ready.Reason {
+	case v1alpha1.HostConditionReasonNetworkAttachmentCreateIntent,
+		v1alpha1.HostConditionReasonNetworkAttachmentCreateUncertain,
+		v1alpha1.HostConditionReasonNetworkAttachmentCreateRejectedUncertain:
+		return true
+	default:
+		return false
+	}
 }
 
 func setNetworkingProvisioningDisabled(bmi *v1alpha1.BareMetalInstance) {
@@ -343,6 +351,11 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 ) (ctrl.Result, error) {
 	tenant := bmi.Annotations[tenantAnnotation]
 	if tenant == "" {
+		if networkAttachmentMayExist(bmi) {
+			// Keep the prior create state intact. A missing tenant annotation must
+			// not erase evidence that an earlier Create could still commit.
+			return ctrl.Result{RequeueAfter: networkAttachmentDeleteRetryInterval}, nil
+		}
 		setNetworkAttachmentsReady(bmi, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed,
 			fmt.Sprintf("the BareMetalInstance has no %s annotation", tenantAnnotation))
 		return ctrl.Result{}, nil
@@ -448,7 +461,9 @@ func (r *BareMetalInstanceReconciler) failSelectedPortMAC(
 // and waits until it is gone. The networking controller moves the host's port
 // back to the provisioning network before it removes its own finalizer; BMF
 // then removes its finalizer from the NetworkAttachment and from the
-// BareMetalInstance. It returns true once network cleanup is complete.
+// BareMetalInstance. It never issues a Create after deletion starts. An absent
+// lookup cannot settle an intent or ambiguous Create; BMF retains ownership
+// until the attachment appears and is cleaned up.
 //
 // observedAttachment is the result of getNetworkAttachmentForDeletion from the
 // same pass, which also gated offboard shutdown. This function never looks up
@@ -492,30 +507,12 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 				v1alpha1.HostConditionReasonNetworkDetaching, networkAttachmentCleanupMessage)
 			return ctrl.Result{RequeueAfter: networkAttachmentDeleteRetryInterval}, false, nil
 		}
-		if ready := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady); ready != nil &&
-			ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentCreateRejectedUncertain {
-			// This pass observed that the attachment is absent after a rejected
-			// retry. The earlier uncertain request has therefore been resolved.
-			setNetworkAttachmentCreateRejected(bareMetalInstance,
-				v1alpha1.HostConditionReasonNetworkAttachmentCreateRejected)
-		}
-		if networkAttachmentCreatePending(bareMetalInstance) {
-			key, ok := networkAttachmentKey(bareMetalInstance, attachment)
-			if !ok {
-				return ctrl.Result{}, false, fmt.Errorf("cannot resolve NetworkAttachment key for BMI %s", bareMetalInstance.Name)
-			}
-			result, err := r.reconcileNetworkAttachmentCreation(ctx, bareMetalInstance, attachment, key)
-			if err != nil {
-				return result, false, err
-			}
-			if networkAttachmentMayExist(bareMetalInstance) {
-				return result, false, nil
-			}
-		}
 		if networkAttachmentMayExist(bareMetalInstance) {
-			setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonNetworkAttachmentAwaitingVisibility,
-				networkAttachmentAwaitingVisibilityMessage)
+			if !networkAttachmentCreateMayStillCommit(bareMetalInstance) {
+				setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonNetworkAttachmentAwaitingVisibility,
+					networkAttachmentAwaitingVisibilityMessage)
+			}
 			return ctrl.Result{RequeueAfter: networkAttachmentDeleteRetryInterval}, false, nil
 		}
 	}

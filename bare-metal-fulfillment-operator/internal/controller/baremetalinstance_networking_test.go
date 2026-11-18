@@ -689,22 +689,43 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			Expect(networkAttachmentMayExist(bmi)).To(BeTrue(), "conditions: %+v", bmi.Status.Conditions)
 			Expect(networkAttachmentKeys(bmi)).NotTo(BeEmpty())
 
-			reconciler.Client = networkAttachmentCreateErrorClient{Client: k8sClient, err: errors.New("create request timed out")}
-			result, done, err := deletionPass()
+			createCalls := 0
+			reconciler.Client = networkAttachmentCreateErrorClient{
+				Client: k8sClient, err: errors.New("create request timed out"), calls: &createCalls,
+			}
+			_, err := reconciler.reconcileNetworkAttachmentCreation(ctx, bmi, &attachments[0], attachmentKey())
 			Expect(err).To(HaveOccurred())
-			Expect(done).To(BeFalse())
-			Expect(result.IsZero()).To(BeTrue())
+			Expect(createCalls).To(Equal(1))
+			Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady).Reason).
+				To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentCreateUncertain))
 			Expect(controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
 
 			reconciler.Client = k8sClient
+			result, done, err := deletionPass()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(done).To(BeFalse(), "an absent lookup does not settle an uncertain Create")
+			Expect(result.RequeueAfter).To(Equal(networkAttachmentDeleteRetryInterval))
+			Expect(createCalls).To(Equal(1), "deletion must not retry Create")
+			_, err = getAttachment()
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			Expect(controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
 			result, done, err = deletionPass()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(done).To(BeFalse(), "deletion retries a possibly unsent Create")
-			Expect(result.RequeueAfter).To(Equal(DefaultProvisionPollIntervalDuration))
-			na, err := getAttachment()
+			Expect(done).To(BeFalse(), "repeated absence does not settle an uncertain Create")
+			Expect(result.RequeueAfter).To(Equal(networkAttachmentDeleteRetryInterval))
+			Expect(createCalls).To(Equal(1), "repeated deletion passes must not issue Create")
+
+			// The original request can become visible after the first absent read.
+			lateAttachment := newTestNetworkAttachment(namespace, bmiID, "data-0", BareMetalInstanceNetworkingFinalizer)
+			Expect(k8sClient.Create(ctx, lateAttachment)).To(Succeed())
+			result, done, err = deletionPass()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(na.DeletionTimestamp).To(BeNil())
-			Expect(controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
+			Expect(done).To(BeFalse())
+			Expect(result.RequeueAfter).To(Equal(networkAttachmentDeleteRetryInterval))
+			Expect(createCalls).To(Equal(1), "deletion observes and cleans up the late object without creating it")
+			stored := &opv1alpha1.NetworkAttachment{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(lateAttachment), stored)).To(Succeed())
+			Expect(stored.DeletionTimestamp).NotTo(BeNil())
 		})
 
 		It("releases ownership after a definitive create rejection", func() {
@@ -748,23 +769,63 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
 				v1alpha1.HostConditionReasonNetworkAttachmentCreateUncertain, networkAttachmentCreateUncertainMessage)
 
+			createCalls := 0
 			reconciler.Client = networkAttachmentCreateErrorClient{
 				Client: k8sClient,
 				err: apierrors.NewForbidden(
 					schema.GroupResource{Resource: "networkattachments"}, "test", errors.New("denied")),
+				calls: &createCalls,
 			}
 			_, err := reconciler.reconcileNetworkAttachmentCreation(ctx, bmi, &attachments[0], attachmentKey())
 			Expect(err).NotTo(HaveOccurred())
+			Expect(createCalls).To(Equal(1))
 
 			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentCreateRejectedUncertain))
 			Expect(networkAttachmentMayExist(bmi)).To(BeTrue())
 
 			reconciler.Client = k8sClient
+			result, done, err := deletionPass()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(done).To(BeFalse(), "one absent read does not settle an earlier uncertain Create")
+			Expect(result.RequeueAfter).To(Equal(networkAttachmentDeleteRetryInterval))
+			Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady).Reason).
+				To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentCreateRejectedUncertain))
+			Expect(controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
+			Expect(createCalls).To(Equal(1), "deletion must not issue another Create")
+
+			lateAttachment := newTestNetworkAttachment(namespace, bmiID, "data-0", BareMetalInstanceNetworkingFinalizer)
+			Expect(k8sClient.Create(ctx, lateAttachment)).To(Succeed())
+			_, done, err = deletionPass()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(done).To(BeFalse())
+			stored := &opv1alpha1.NetworkAttachment{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(lateAttachment), stored)).To(Succeed())
+			Expect(stored.DeletionTimestamp).NotTo(BeNil())
+		})
+
+		It("preserves an uncertain create when the tenant annotation is missing", func() {
+			bmi = newBMI(attachments)
+			delete(bmi.Annotations, tenantAnnotation)
+			controllerutil.AddFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+			bmi.Status.NetworkAttachmentStatuses = []v1alpha1.BareMetalNetworkAttachmentStatus{{
+				SubnetRef: "subnet-1", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff",
+			}}
+			setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonNetworkAttachmentCreateUncertain, networkAttachmentCreateUncertainMessage)
+
+			result, err := reconciler.reconcileNetworkAttachmentCreation(ctx, bmi, &attachments[0], attachmentKey())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(networkAttachmentDeleteRetryInterval))
+			Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady).Reason).
+				To(Equal(v1alpha1.HostConditionReasonNetworkAttachmentCreateUncertain))
+			Expect(networkAttachmentMayExist(bmi)).To(BeTrue())
+
 			_, done, err := deletionPass()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(done).To(BeTrue(), "the fresh API lookup confirmed that no attachment exists")
-			Expect(controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)).To(BeFalse())
+			Expect(done).To(BeFalse())
+			Expect(controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
 		})
 
 		It("does not delete an attachment that appears after deletion observed absence", func() {

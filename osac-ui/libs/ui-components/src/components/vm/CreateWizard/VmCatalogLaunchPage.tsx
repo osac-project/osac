@@ -1,8 +1,7 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Breadcrumb,
   BreadcrumbItem,
-  Button,
   Content,
   PageSection,
   Stack,
@@ -25,7 +24,7 @@ const VmCatalogLaunchPage = () => {
 
   return (
     <ResourceDetailsPage
-      error={query.error}
+      error={query.error && !query.data ? query.error : undefined}
       found={!!query.data?.object}
       isLoading={query.isLoading}
       parentTo="/catalog/vms"
@@ -38,14 +37,10 @@ const VmCatalogLaunchPage = () => {
           <Stack hasGutter>
             <Breadcrumb>
               <BreadcrumbItem>
-                <Button variant="link" isInline onClick={() => navigate('/catalog/vms')}>
-                  {t('Catalog')}
-                </Button>
+                <Link to="/catalog/vms">{t('Catalog')}</Link>
               </BreadcrumbItem>
               <BreadcrumbItem>
-                <Button variant="link" isInline onClick={() => navigate(`/catalog/vms/${id}`)}>
-                  {catalogItemName}
-                </Button>
+                <Link to={`/catalog/vms/${id}`}>{catalogItemName}</Link>
               </BreadcrumbItem>
               <BreadcrumbItem isActive>{t('Launch instance')}</BreadcrumbItem>
             </Breadcrumb>

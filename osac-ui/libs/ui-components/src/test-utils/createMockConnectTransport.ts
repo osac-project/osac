@@ -497,6 +497,15 @@ export type MockTransportOverrides = {
   ) =>
     | MessageInitShape<typeof SelfSubjectAccessReviewsCreateResponseSchema>
     | Promise<MessageInitShape<typeof SelfSubjectAccessReviewsCreateResponseSchema>>;
+  onComputeInstanceCatalogItemGet?: () =>
+    | { object?: ComputeInstanceCatalogItem | undefined }
+    | Promise<{ object?: ComputeInstanceCatalogItem | undefined }>;
+  onClusterCatalogItemGet?: () =>
+    | { object?: ClusterCatalogItem | undefined }
+    | Promise<{ object?: ClusterCatalogItem | undefined }>;
+  onBareMetalInstanceCatalogItemGet?: () =>
+    | { object?: BareMetalInstanceCatalogItem | undefined }
+    | Promise<{ object?: BareMetalInstanceCatalogItem | undefined }>;
   onComputeInstanceCatalogItemCreate?: (
     req: ComputeInstanceCatalogItemsCreateRequest,
   ) =>
@@ -744,9 +753,10 @@ export const createMockConnectTransport = (
         list: (req) => ({
           items: catalogItems.filter((item) => catalogItemMatchesListFilter(item, req.filter)),
         }),
-        get: (req) => ({
-          object: catalogItems.find((i) => i.id === req.id),
-        }),
+        get: (req) =>
+          overrides.onComputeInstanceCatalogItemGet?.() ?? {
+            object: catalogItems.find((i) => i.id === req.id),
+          },
         create: (req) => {
           if (overrides.onComputeInstanceCatalogItemCreate) {
             return overrides.onComputeInstanceCatalogItemCreate(req);
@@ -806,9 +816,10 @@ export const createMockConnectTransport = (
             catalogItemMatchesListFilter(item, req.filter),
           ),
         }),
-        get: (req) => ({
-          object: clusterCatalogItems.find((i) => i.id === req.id),
-        }),
+        get: (req) =>
+          overrides.onClusterCatalogItemGet?.() ?? {
+            object: clusterCatalogItems.find((i) => i.id === req.id),
+          },
         create: (req) => {
           if (overrides.onClusterCatalogItemCreate) {
             return overrides.onClusterCatalogItemCreate(req);
@@ -835,9 +846,10 @@ export const createMockConnectTransport = (
             catalogItemMatchesListFilter(item, req.filter),
           ),
         }),
-        get: (req) => ({
-          object: bareMetalCatalogItems.find((i) => i.id === req.id),
-        }),
+        get: (req) =>
+          overrides.onBareMetalInstanceCatalogItemGet?.() ?? {
+            object: bareMetalCatalogItems.find((i) => i.id === req.id),
+          },
         create: (req) => {
           if (overrides.onBareMetalInstanceCatalogItemCreate) {
             return overrides.onBareMetalInstanceCatalogItemCreate(req);

@@ -79,7 +79,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/vms"
           element={
             <ShellRoute>
-              <CatalogPage routeKind="vm" />
+              <ServiceRoute service={ServiceTier.VMAAS}>
+                <CatalogPage routeKind="vm" />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -87,7 +89,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/clusters"
           element={
             <ShellRoute>
-              <CatalogPage routeKind="cluster" />
+              <ServiceRoute service={ServiceTier.CAAS}>
+                <CatalogPage routeKind="cluster" />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -95,7 +99,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/bare-metal"
           element={
             <ShellRoute>
-              <CatalogPage routeKind="bm" />
+              <ServiceRoute service={ServiceTier.BMAAS}>
+                <CatalogPage routeKind="bm" />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -103,7 +109,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/vm"
           element={
             <ShellRoute>
-              <CatalogPage routeKind="vm" />
+              <ServiceRoute service={ServiceTier.VMAAS}>
+                <CatalogPage routeKind="vm" />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -111,7 +119,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/cluster"
           element={
             <ShellRoute>
-              <CatalogPage routeKind="cluster" />
+              <ServiceRoute service={ServiceTier.CAAS}>
+                <CatalogPage routeKind="cluster" />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -119,7 +129,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/bm"
           element={
             <ShellRoute>
-              <CatalogPage routeKind="bm" />
+              <ServiceRoute service={ServiceTier.BMAAS}>
+                <CatalogPage routeKind="bm" />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -149,7 +161,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
               path="/catalog/vms/:id/launch"
               element={
                 <ShellRoute>
-                  <VmCatalogLaunchPage />
+                  <ServiceRoute service={ServiceTier.VMAAS}>
+                    <VmCatalogLaunchPage />
+                  </ServiceRoute>
                 </ShellRoute>
               }
             />
@@ -157,7 +171,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
               path="/catalog/clusters/:id/launch"
               element={
                 <ShellRoute>
-                  <ClusterCatalogLaunchPage />
+                  <ServiceRoute service={ServiceTier.CAAS}>
+                    <ClusterCatalogLaunchPage />
+                  </ServiceRoute>
                 </ShellRoute>
               }
             />
@@ -165,7 +181,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
               path="/catalog/bare-metal/:id/launch"
               element={
                 <ShellRoute>
-                  <BareMetalCatalogLaunchPage />
+                  <ServiceRoute service={ServiceTier.BMAAS}>
+                    <BareMetalCatalogLaunchPage />
+                  </ServiceRoute>
                 </ShellRoute>
               }
             />
@@ -175,7 +193,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/vms/:id"
           element={
             <ShellRoute>
-              <VMCatalogItemDetailPage />
+              <ServiceRoute service={ServiceTier.VMAAS}>
+                <VMCatalogItemDetailPage />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -183,7 +203,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/clusters/:id"
           element={
             <ShellRoute>
-              <ClusterCatalogItemDetailPage />
+              <ServiceRoute service={ServiceTier.CAAS}>
+                <ClusterCatalogItemDetailPage />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -191,7 +213,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/bare-metal/:id"
           element={
             <ShellRoute>
-              <BareMetalInstanceCatalogItemDetailPage />
+              <ServiceRoute service={ServiceTier.BMAAS}>
+                <BareMetalInstanceCatalogItemDetailPage />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -199,7 +223,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/vm/:id"
           element={
             <ShellRoute>
-              <VMCatalogItemDetailPage />
+              <ServiceRoute service={ServiceTier.VMAAS}>
+                <VMCatalogItemDetailPage />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -207,7 +233,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/cluster/:id"
           element={
             <ShellRoute>
-              <ClusterCatalogItemDetailPage />
+              <ServiceRoute service={ServiceTier.CAAS}>
+                <ClusterCatalogItemDetailPage />
+              </ServiceRoute>
             </ShellRoute>
           }
         />
@@ -215,7 +243,9 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           path="/catalog/bm/:id"
           element={
             <ShellRoute>
-              <BareMetalInstanceCatalogItemDetailPage />
+              <ServiceRoute service={ServiceTier.BMAAS}>
+                <BareMetalInstanceCatalogItemDetailPage />
+              </ServiceRoute>
             </ShellRoute>
           }
         />

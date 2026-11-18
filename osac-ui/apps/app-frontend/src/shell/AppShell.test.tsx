@@ -163,6 +163,26 @@ describe('AppShell', () => {
       service: ServiceTier.BMAAS,
       label: 'Bare Metal',
     },
+    {
+      path: '/catalog/vms',
+      service: ServiceTier.VMAAS,
+      label: 'Virtual Machine',
+    },
+    {
+      path: '/catalog/vms/item-1',
+      service: ServiceTier.VMAAS,
+      label: 'Virtual Machine',
+    },
+    {
+      path: '/catalog/clusters/item-1/launch',
+      service: ServiceTier.CAAS,
+      label: 'Cluster',
+    },
+    {
+      path: '/catalog/bare-metal',
+      service: ServiceTier.BMAAS,
+      label: 'Bare Metal',
+    },
   ])(
     'shows a service-unavailable page for a disabled $label route',
     async ({ path, service, label }) => {

@@ -1,8 +1,7 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Breadcrumb,
   BreadcrumbItem,
-  Button,
   Content,
   PageSection,
   Stack,
@@ -25,7 +24,7 @@ const BareMetalCatalogLaunchPage = () => {
 
   return (
     <ResourceDetailsPage
-      error={query.error}
+      error={query.error && !query.data ? query.error : undefined}
       found={!!query.data?.object}
       isLoading={query.isLoading}
       parentTo="/catalog/bare-metal"
@@ -38,18 +37,10 @@ const BareMetalCatalogLaunchPage = () => {
           <Stack hasGutter>
             <Breadcrumb>
               <BreadcrumbItem>
-                <Button variant="link" isInline onClick={() => navigate('/catalog/bare-metal')}>
-                  {t('Catalog')}
-                </Button>
+                <Link to="/catalog/bare-metal">{t('Catalog')}</Link>
               </BreadcrumbItem>
               <BreadcrumbItem>
-                <Button
-                  variant="link"
-                  isInline
-                  onClick={() => navigate(`/catalog/bare-metal/${id}`)}
-                >
-                  {catalogItemName}
-                </Button>
+                <Link to={`/catalog/bare-metal/${id}`}>{catalogItemName}</Link>
               </BreadcrumbItem>
               <BreadcrumbItem isActive>{t('Launch instance')}</BreadcrumbItem>
             </Breadcrumb>

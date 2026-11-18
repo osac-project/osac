@@ -1,8 +1,7 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Breadcrumb,
   BreadcrumbItem,
-  Button,
   Content,
   PageSection,
   Stack,
@@ -25,7 +24,7 @@ const ClusterCatalogLaunchPage = () => {
 
   return (
     <ResourceDetailsPage
-      error={query.error}
+      error={query.error && !query.data ? query.error : undefined}
       found={!!query.data?.object}
       isLoading={query.isLoading}
       parentTo="/catalog/clusters"
@@ -38,14 +37,10 @@ const ClusterCatalogLaunchPage = () => {
           <Stack hasGutter>
             <Breadcrumb>
               <BreadcrumbItem>
-                <Button variant="link" isInline onClick={() => navigate('/catalog/clusters')}>
-                  {t('Catalog')}
-                </Button>
+                <Link to="/catalog/clusters">{t('Catalog')}</Link>
               </BreadcrumbItem>
               <BreadcrumbItem>
-                <Button variant="link" isInline onClick={() => navigate(`/catalog/clusters/${id}`)}>
-                  {catalogItemName}
-                </Button>
+                <Link to={`/catalog/clusters/${id}`}>{catalogItemName}</Link>
               </BreadcrumbItem>
               <BreadcrumbItem isActive>{t('Launch instance')}</BreadcrumbItem>
             </Breadcrumb>

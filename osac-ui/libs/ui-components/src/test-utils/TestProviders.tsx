@@ -46,6 +46,7 @@ export type TestProvidersProps = {
   transportOverrides?: MockTransportOverrides;
   routerEntries?: string[];
   session?: TestSession;
+  onQueryClient?: (queryClient: QueryClient) => void;
 };
 
 export const TestProviders = ({
@@ -55,6 +56,7 @@ export const TestProviders = ({
   transportOverrides,
   routerEntries,
   session = {},
+  onQueryClient,
 }: TestProvidersProps) => {
   const i18nInstance = createTestI18n();
   const transport =
@@ -72,6 +74,7 @@ export const TestProviders = ({
       ServiceTier.BMAAS,
     ],
   });
+  onQueryClient?.(queryClient);
   // A data router (rather than a plain <MemoryRouter>) is required so that
   // data-router-only hooks like useBlocker (used by LeaveFormConfirmation) work in tests.
   const router = createMemoryRouter(
@@ -115,6 +118,7 @@ export type RenderWithProvidersOptions = Omit<RenderOptions, 'wrapper'> & {
 
 export type RenderWithProvidersResult = RenderResult & {
   user: UserEvent;
+  queryClient: QueryClient;
 };
 
 export const renderWithProviders = (
@@ -124,6 +128,8 @@ export const renderWithProviders = (
   const { apiFixtures, transport, transportOverrides, routerEntries, session, ...renderOptions } =
     options;
 
+  // Created before render so the returned client is the one the tree uses.
+  let queryClient!: QueryClient;
   const view = render(ui, {
     wrapper: ({ children }) => (
       <TestProviders
@@ -132,6 +138,9 @@ export const renderWithProviders = (
         transportOverrides={transportOverrides}
         routerEntries={routerEntries}
         session={session}
+        onQueryClient={(client) => {
+          queryClient = client;
+        }}
       >
         {children}
       </TestProviders>
@@ -139,5 +148,5 @@ export const renderWithProviders = (
     ...renderOptions,
   });
 
-  return { ...view, user: userEvent.setup() };
+  return { ...view, user: userEvent.setup(), queryClient };
 };

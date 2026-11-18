@@ -246,8 +246,8 @@ to untrusted pull request code.
   does not guarantee connectivity to a particular lab deployment.
 - **Internet access to build the image** (UBI 9 repositories, npm, the
   Playwright Chromium build, `mirror.openshift.com`), about 5 GB of disk for
-  the image, and several minutes for the build. Build once per commit under
-  test and reuse the image for every flow.
+  the image, and several minutes for the build. Where possible, build once per
+  commit under test and reuse the image for every flow.
 - **Running as a non-root user.** `run-ui-e2e.sh` refuses credentialed runs
   as root.
 
@@ -331,6 +331,15 @@ yet run in GitHub Actions). Replace `YOUR_RUNNER_LABEL` with a real label for
 a runner that can reach the deployment, and configure the variables, secrets,
 pre-run checks, and cleanup for your environment. This fragment does not
 implement OSAC CI's pull-request authorization or integration requirements.
+
+The example builds the image in every job. A runner may reuse local cached
+layers, but different runners do not share a build automatically. The tagged
+image and build cache remain in the runner's Podman storage after the job, so
+manage their retention to prevent disk exhaustion. For a CI integration, build
+the E2E image once for the commit under test, publish it to a registry, and
+have authorized test jobs pull it by digest. Define registry permissions and
+retention, and manage runner storage even when pulling images. This image
+publication and digest handoff are not implemented by the example.
 
 For a shared deployment, replace `YOUR_DEPLOYMENT_ID` with the same identifier
 in every job in this repository that uses it. The concurrency group coordinates

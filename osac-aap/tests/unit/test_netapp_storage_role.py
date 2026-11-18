@@ -1,6 +1,7 @@
 """Unit and contract tests for the netapp_storage provider role."""
 
 import base64
+import importlib.util
 import json
 import os
 import re
@@ -12,10 +13,12 @@ from pathlib import Path
 import yaml  # type: ignore[import-untyped]
 from ansible.parsing.dataloader import DataLoader  # type: ignore[import-not-found]
 from ansible.template import Templar  # type: ignore[import-not-found]
-from ansible.plugins.loader import init_plugin_loader
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-init_plugin_loader([str(REPO_ROOT / "collections")])
+FILTER_PATH = REPO_ROOT / "collections/ansible_collections/osac/service/plugins/filter/storage_class_parameters.py"
+FILTER_SPEC = importlib.util.spec_from_file_location("storage_class_parameters", FILTER_PATH)
+STORAGE_CLASS_FILTER = importlib.util.module_from_spec(FILTER_SPEC)
+FILTER_SPEC.loader.exec_module(STORAGE_CLASS_FILTER)
 
 
 class _Redacted(str):
@@ -62,6 +65,7 @@ def _find_task(tasks: list[dict], name: str) -> dict:
 def _render(expression, variables: dict):
     """Render a Jinja expression or data structure using Ansible's Templar."""
     templar = Templar(loader=DataLoader(), variables=variables)
+    templar.environment.filters["osac.service.storage_class_parameters"] = STORAGE_CLASS_FILTER.storage_class_parameters
     return templar.template(expression)
 
 

@@ -28,7 +28,8 @@ def test_every_discovered_dispatch_emits_declared_protocols(tmp_path, case):
     assert len(classes) == len(case.protocols)
     contract = CONTRACTS[case.role]
     for protocol in case.protocols:
-        emitted = next(entry for entry in classes if entry["metadata"]["name"].endswith(f"-{protocol}"))
+        emitted = next(entry for entry in classes
+                       if entry["metadata"]["labels"]["osac.openshift.io/storage-tier"] == protocol)
         assert emitted["provisioner"] == contract.get(f"{protocol}_provisioner", contract["provisioner"])
         if protocol == "block":
             assert emitted["parameters"][FSTYPE] == "ext4"
@@ -235,9 +236,24 @@ def vms_server(tmp_path):
     certificate = tmp_path / "fixture.crt"
     key = tmp_path / "fixture.key"
     subprocess.run(
-        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-         "-subj", "/CN=localhost", "-keyout", str(key), "-out", str(certificate)],
-        check=True, capture_output=True,
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-keyout",
+            str(key),
+            "-out",
+            str(certificate),
+        ],
+        check=True,
+        capture_output=True,
     )
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2

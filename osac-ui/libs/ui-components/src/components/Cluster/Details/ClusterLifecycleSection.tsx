@@ -17,7 +17,7 @@ const ClusterLifecycleSection = ({ cluster }: { cluster: Cluster }) => {
   const { t } = useTranslation();
 
   return (
-    <Stack hasGutter>
+    <Stack hasGutter className="pf-v6-u-min-width">
       <StackItem>
         <Title headingLevel="h2" size="lg">
           {t('Lifecycle')}
@@ -26,7 +26,9 @@ const ClusterLifecycleSection = ({ cluster }: { cluster: Cluster }) => {
       <StackItem>
         <DescriptionList isCompact aria-label={t('Cluster lifecycle')}>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
+            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
+              {t('Created')}
+            </DescriptionListTerm>
             <DescriptionListDescription>
               <Timestamp value={cluster.metadata?.creationTimestamp} />
             </DescriptionListDescription>

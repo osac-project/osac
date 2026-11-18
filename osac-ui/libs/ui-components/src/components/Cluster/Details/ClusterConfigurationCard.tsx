@@ -33,13 +33,8 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
   const upgradeHistory = getControlPlaneUpgradeHistory(cluster);
 
   return (
-    <Card
-      variant="secondary"
-      className="cluster-details__secondary-card"
-      aria-label={t('Cluster version')}
-    >
+    <Card variant="secondary" aria-label={t('Cluster version')}>
       <CardHeader
-        className="cluster-details__card-header"
         hasWrap
         actions={{
           actions: (
@@ -48,9 +43,12 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
             </Button>
           ),
           hasNoOffset: true,
+          className: 'pf-v6-u-ml-auto',
         }}
       >
-        <CardTitle component="h2">{t('Cluster version')}</CardTitle>
+        <CardTitle component="h2" className="pf-v6-u-min-width pf-v6-u-text-break-word">
+          {t('Cluster version')}
+        </CardTitle>
       </CardHeader>
       <Divider />
       <CardBody>
@@ -58,7 +56,9 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
           <StackItem>
             <DescriptionList isCompact aria-label={t('Cluster version')}>
               <DescriptionListGroup>
-                <DescriptionListTerm>{t('Current')}</DescriptionListTerm>
+                <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
+                  {t('Current')}
+                </DescriptionListTerm>
                 <DescriptionListDescription>
                   <ClusterVersionControls cluster={cluster} />
                 </DescriptionListDescription>

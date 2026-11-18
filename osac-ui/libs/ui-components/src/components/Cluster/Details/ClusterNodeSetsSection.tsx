@@ -1,4 +1,4 @@
-import { Content, Divider, Stack, StackItem, Title } from '@patternfly/react-core';
+import { Content, Divider, List, ListItem, Stack, StackItem, Title } from '@patternfly/react-core';
 
 import type { Cluster } from '@osac/types';
 
@@ -24,15 +24,16 @@ const ClusterNodeSetsSection = ({ cluster }: ClusterNodeSetsSectionProps) => {
       </StackItem>
       <StackItem>
         {nodeSetEntries.length > 0 ? (
-          <ul
+          <List
+            isPlain
             aria-label={t('Cluster node sets')}
-            className="cluster-details__node-sets"
             role="list"
+            className="pf-v6-u-text-break-word"
           >
             {nodeSetEntries.map(([name, nodeSet]) => (
-              <li key={name}>
-                <strong className="cluster-details__node-set-name">{name}</strong>
-                <Content component="p" className="cluster-details__node-set-summary">
+              <ListItem key={name}>
+                <strong className="pf-v6-u-display-block">{name}</strong>
+                <Content component="p" className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm">
                   {t('{{hostType}}-{{count}} Nodes-{{version}}', {
                     replace: {
                       hostType: displayValue(nodeSet.baremetalInstanceType?.name),
@@ -41,9 +42,9 @@ const ClusterNodeSetsSection = ({ cluster }: ClusterNodeSetsSectionProps) => {
                     },
                   })}
                 </Content>
-              </li>
+              </ListItem>
             ))}
-          </ul>
+          </List>
         ) : (
           <Content component="p">{t('No node sets configured.')}</Content>
         )}

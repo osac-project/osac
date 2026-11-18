@@ -22,7 +22,7 @@ const ClusterDetailsSections = ({ cluster }: ClusterDetailsSectionsProps) => {
   return (
     <PageSection hasBodyWrapper={false} className="cluster-details">
       <div className="cluster-details__grid">
-        <Stack hasGutter className="cluster-details__main">
+        <Stack hasGutter className="cluster-details__main pf-v6-u-min-width">
           <StackItem>
             <div className="cluster-details__overview-grid">
               <ClusterDetailsSummary cluster={cluster} />
@@ -64,7 +64,7 @@ const ClusterDetailsSections = ({ cluster }: ClusterDetailsSectionsProps) => {
             </Stack>
           </StackItem>
         </Stack>
-        <Stack hasGutter className="cluster-details__rail">
+        <Stack hasGutter className="cluster-details__rail pf-v6-u-min-width">
           <StackItem>
             <ClusterConfigurationCard cluster={cluster} />
           </StackItem>

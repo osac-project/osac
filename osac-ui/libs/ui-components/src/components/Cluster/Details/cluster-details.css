@@ -12,79 +12,13 @@
   gap: var(--pf-t--global--spacer--xl);
 }
 
-.cluster-details__grid > *,
-.cluster-details__overview-grid > * {
-  min-width: 0;
-}
-
-.cluster-details .cluster-details__secondary-card {
-  border: 0;
-  border-radius: var(--pf-t--global--border--radius--medium);
-  background-color: var(--pf-t--global--background--color--secondary--default);
-}
-
-.cluster-details .pf-v6-c-description-list__term {
-  color: var(--pf-t--global--text--color--subtle);
-  font-weight: var(--pf-t--global--font--weight--body--default);
-}
-
-.cluster-details .pf-v6-c-description-list__description,
-.cluster-details__networking-table td,
-.cluster-details .pf-v6-l-flex > * {
-  overflow-wrap: anywhere;
-  min-width: 0;
-}
-
-.cluster-details__networking-table .pf-v6-c-table {
-  --pf-v6-c-table--BackgroundColor: transparent;
-}
-
 .cluster-details__networking-table .pf-v6-c-table > tbody:last-child > tr:last-child {
   border-block-end: 0;
-}
-
-.cluster-details__node-sets {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-
-.cluster-details__node-sets > li + li {
-  border-block-start: var(--pf-t--global--border--width--regular) solid
-    var(--pf-t--global--border--color--default);
-  margin-block-start: var(--pf-t--global--spacer--md);
-  padding-block-start: var(--pf-t--global--spacer--md);
-}
-
-.cluster-details__node-set-name,
-.cluster-details__node-set-summary {
-  display: block;
-  overflow-wrap: anywhere;
-}
-
-.cluster-details__node-set-summary {
-  --pf-v6-c-content--Color: var(--pf-t--global--text--color--subtle);
-  --pf-v6-c-content--FontSize: var(--pf-t--global--font--size--body--sm);
-}
-
-.cluster-details__card-header .pf-v6-c-card__header-main {
-  min-width: 0;
-}
-
-.cluster-details .cluster-details__card-header .pf-v6-c-card__actions {
-  max-width: 100%;
-  margin-inline-start: auto;
 }
 
 .cluster-details .cluster-details__ssh-key {
   max-height: 6lh;
   overflow: auto;
-  font-size: var(--pf-t--global--font--size--body--sm);
-}
-
-.cluster-details__main.pf-m-gutter,
-.cluster-details__rail.pf-m-gutter {
-  row-gap: var(--pf-t--global--spacer--md);
 }
 
 .cluster-details__conditions td[data-label='Message'] {

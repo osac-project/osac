@@ -23,22 +23,28 @@ const cluster = create(ClusterSchema, {
 });
 
 describe('ClusterNetworkingCard', () => {
-  it('resolves the real subnet parent and preserves multiple security groups in user column order', async () => {
-    const transport = createMockConnectTransport({
-      subnets: [
-        create(SubnetSchema, {
-          id: 'subnet-1',
-          spec: { virtualNetwork: { id: 'vnet/1', name: 'Tenant network' } },
-        }),
-      ],
-    });
+  it('gets one subnet parent and uses direct reference links without preflight SSAR', async () => {
+    const transport = createMockConnectTransport(
+      {
+        subnets: [
+          create(SubnetSchema, {
+            id: 'subnet-1',
+            metadata: { name: 'Do not substitute fetched name' },
+            spec: { virtualNetwork: { id: 'vnet/1', name: 'Tenant network' } },
+          }),
+        ],
+      },
+      {
+        onSelfSubjectAccessReview: () => ({ object: { status: { allowed: false } } }),
+      },
+    );
     const unary = vi.spyOn(transport, 'unary');
     renderWithProviders(<ClusterNetworkingCard cluster={cluster} />, { transport });
     expect(await screen.findByRole('link', { name: 'Tenant network' })).toHaveAttribute(
       'href',
       '/networking/virtual-networks/vnet%2F1',
     );
-    expect(await screen.findByRole('link', { name: 'Alpha' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Alpha' })).toHaveAttribute(
       'href',
       '/networking/security-groups/sg%2F1',
     );
@@ -48,18 +54,20 @@ describe('ClusterNetworkingCard', () => {
     );
     expect(screen.getByText(/Name only/).closest('a')).toBeNull();
     expect(screen.getByText('tenant-subnet').closest('a')).toBeNull();
+    expect(screen.queryByText('Do not substitute fetched name')).not.toBeInTheDocument();
     const table = screen.getByRole('grid', { name: 'Cluster network attachment' });
     expect(
       within(table)
         .getAllByRole('columnheader')
         .map((header) => header.textContent),
     ).toEqual(['Virtual network', 'Security groups', 'Subnet']);
-    expect(table).toHaveClass('pf-m-compact');
-    expect(unary.mock.calls.filter(([method]) => method === Subnets.method.get)).toHaveLength(1);
+    expect(table).toHaveClass('pf-m-compact', 'pf-m-plain');
+    expect(unary.mock.calls.map(([method]) => method)).toEqual([Subnets.method.get]);
+    expect(unary.mock.calls[0][4]).toEqual({ id: 'subnet-1' });
   });
 
-  it.each(['missing', 'failure', 'denied', 'no-parent', 'wrong-id'])(
-    'retains subnet and group fields when subnet lookup is %s',
+  it.each(['missing', 'failure', 'no-parent', 'name-only-parent'])(
+    'keeps attachment references when subnet lookup has %s',
     async (scenario) => {
       const transport = createMockConnectTransport(
         {},
@@ -68,45 +76,67 @@ describe('ClusterNetworkingCard', () => {
             if (scenario === 'failure') {
               throw new Error('Subnet unavailable');
             }
-            if (scenario === 'wrong-id') {
-              return {
-                object: create(SubnetSchema, {
-                  id: 'another-subnet',
-                  spec: { virtualNetwork: { id: 'wrong-network', name: 'Wrong network' } },
-                }),
-              };
+            if (scenario === 'missing') {
+              return {};
             }
-            return scenario === 'no-parent'
-              ? { object: create(SubnetSchema, { id: 'subnet-1' }) }
-              : {};
+            return {
+              object: create(SubnetSchema, {
+                id: 'subnet-1',
+                spec:
+                  scenario === 'name-only-parent'
+                    ? { virtualNetwork: { name: 'Name only network' } }
+                    : {},
+              }),
+            };
           },
-          onSelfSubjectAccessReview: () => ({
-            object: { status: { allowed: scenario !== 'denied' } },
-          }),
         },
       );
       const unary = vi.spyOn(transport, 'unary');
       renderWithProviders(<ClusterNetworkingCard cluster={cluster} />, { transport });
-      await waitFor(() => expect(unary).toHaveBeenCalled());
-      if (scenario !== 'denied') {
-        await waitFor(() =>
-          expect(unary.mock.calls.some(([method]) => method === Subnets.method.get)).toBe(true),
-        );
-      }
+      await waitFor(() => expect(unary).toHaveBeenCalledTimes(1));
       expect(screen.getByText('tenant-subnet')).toBeInTheDocument();
-      expect(screen.getByText('Alpha')).toBeInTheDocument();
-      expect(screen.getByText(/Beta/)).toBeInTheDocument();
-      expect(screen.getByRole('cell', { name: '—' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Alpha' })).toBeInTheDocument();
       expect(screen.queryByRole('link', { name: 'tenant-subnet' })).not.toBeInTheDocument();
+      if (scenario === 'name-only-parent') {
+        expect((await screen.findByText('Name only network')).closest('a')).toBeNull();
+      } else {
+        expect(screen.getByRole('cell', { name: '—' })).toBeInTheDocument();
+      }
     },
   );
 
-  it('does not fetch a missing subnet reference and shows empty fallbacks', async () => {
+  it('does not reuse the previous subnet parent after the reference changes', async () => {
+    const transport = createMockConnectTransport({
+      subnets: [
+        create(SubnetSchema, {
+          id: 'subnet-1',
+          spec: { virtualNetwork: { id: 'old-network', name: 'Old network' } },
+        }),
+      ],
+    });
+    const unary = vi.spyOn(transport, 'unary');
+    const { rerender } = renderWithProviders(<ClusterNetworkingCard cluster={cluster} />, {
+      transport,
+    });
+    await screen.findByRole('link', { name: 'Old network' });
+    rerender(
+      <ClusterNetworkingCard
+        cluster={create(ClusterSchema, {
+          spec: { networkAttachment: { subnet: { id: 'subnet-2', name: 'New subnet' } } },
+        })}
+      />,
+    );
+    expect(screen.queryByRole('link', { name: 'Old network' })).not.toBeInTheDocument();
+    expect(screen.getByText('New subnet')).toBeInTheDocument();
+    await waitFor(() => expect(unary).toHaveBeenCalledTimes(2));
+  });
+
+  it('does not fetch a missing reference and shows placeholders without fabricated links', () => {
     const transport = createMockConnectTransport();
     const unary = vi.spyOn(transport, 'unary');
     renderWithProviders(<ClusterNetworkingCard cluster={create(ClusterSchema)} />, { transport });
-    await waitFor(() => expect(unary).toHaveBeenCalled());
     expect(screen.getAllByText('—')).toHaveLength(3);
-    expect(unary.mock.calls.some(([method]) => method === Subnets.method.get)).toBe(false);
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(unary).not.toHaveBeenCalled();
   });
 });

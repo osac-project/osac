@@ -8,12 +8,11 @@ import {
   Title,
 } from '@patternfly/react-core';
 
-import { type Cluster, ClusterCatalogItems } from '@osac/types';
+import type { Cluster } from '@osac/types';
 
-import ClusterProjectLink from './ClusterProjectLink';
-import ClusterResourceLink from './ClusterResourceLink';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
+import ResourceLink from '../../Resource/ResourceLink';
 import { ClusterStatusLabel } from '../ListPage/ClusterStatusLabel';
 
 interface ClusterDetailsSummaryProps {
@@ -23,47 +22,65 @@ interface ClusterDetailsSummaryProps {
 const ClusterDetailsSummary = ({ cluster }: ClusterDetailsSummaryProps) => {
   const { t } = useTranslation();
   const catalogItem = cluster.spec?.catalogItem;
+  const project = cluster.metadata?.project;
 
   return (
-    <Stack hasGutter>
+    <Stack hasGutter className="pf-v6-u-min-width">
       <StackItem>
         <Title headingLevel="h2" size="lg">
           {t('Overview')}
         </Title>
       </StackItem>
       <StackItem>
-        <DescriptionList isCompact aria-label={t('Cluster overview')}>
+        <DescriptionList
+          isCompact
+          aria-label={t('Cluster overview')}
+          className="pf-v6-u-text-break-word"
+        >
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Status')}</DescriptionListTerm>
+            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
+              {t('Status')}
+            </DescriptionListTerm>
             <DescriptionListDescription>
               <ClusterStatusLabel state={cluster.status?.state} />
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Catalog item')}</DescriptionListTerm>
+            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
+              {t('Catalog item')}
+            </DescriptionListTerm>
             <DescriptionListDescription>
-              <ClusterResourceLink
-                service={ClusterCatalogItems}
-                basePath="/catalog/cluster"
-                id={catalogItem?.id}
-                name={catalogItem?.name}
-              />
+              {catalogItem?.id?.trim() ? (
+                <ResourceLink
+                  basePath="/catalog/cluster"
+                  id={catalogItem.id}
+                  name={displayValue(catalogItem.name)}
+                />
+              ) : (
+                displayValue(catalogItem?.name)
+              )}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
+            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
+              {t('Project')}
+            </DescriptionListTerm>
             <DescriptionListDescription>
-              <ClusterProjectLink cluster={cluster} />
+              {project === '' ? t('Root') : displayValue(project)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('API URL')}</DescriptionListTerm>
+            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
+              {t('API URL')}
+            </DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(cluster.status?.apiUrl)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>{t('Console URL')}</DescriptionListTerm>
+            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
+              {t('Console URL')}
+            </DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(cluster.status?.consoleUrl)}
             </DescriptionListDescription>

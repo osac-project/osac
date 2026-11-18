@@ -115,10 +115,7 @@ describe('ClusterExternalIpCard', () => {
     expect(
       screen.getByRole('heading', { level: 2, name: 'External IP endpoints' }),
     ).toBeInTheDocument();
-    expect(container.querySelector('.pf-v6-c-card')).toHaveClass(
-      'cluster-details__secondary-card',
-      'pf-m-secondary',
-    );
+    expect(container.querySelector('.pf-v6-c-card')).toHaveClass('pf-m-secondary');
     expect(screen.getByText('api.example.com')).toBeInTheDocument();
     expect(screen.getByText('apps.example.com')).toBeInTheDocument();
     expect(screen.queryByText('Not attached')).not.toBeInTheDocument();

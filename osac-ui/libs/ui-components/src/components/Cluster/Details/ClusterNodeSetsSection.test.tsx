@@ -33,13 +33,15 @@ describe('ClusterNodeSetsSection', () => {
       />,
     );
 
-    const rows = within(screen.getByRole('list', { name: 'Cluster node sets' })).getAllByRole(
-      'listitem',
-    );
+    const list = screen.getByRole('list', { name: 'Cluster node sets' });
+    expect(list).toHaveClass('pf-v6-c-list', 'pf-m-plain');
+    expect(list).not.toHaveClass('pf-m-bordered');
+    const rows = within(list).getAllByRole('listitem');
     expect(within(rows[0]).getByText('workers').tagName).toBe('STRONG');
     expect(within(rows[1]).getByText('gpu').tagName).toBe('STRONG');
     expect(within(rows[0]).getByText('standard-host-3 Nodes-4.17.2')).toHaveClass(
-      'cluster-details__node-set-summary',
+      'pf-v6-u-text-color-subtle',
+      'pf-v6-u-font-size-sm',
     );
     expect(within(rows[1]).getByText('accelerated-host-2 Nodes-4.18.1')).toBeInTheDocument();
     expect(screen.queryByText(/global-version|desired-version|desired-id/)).not.toBeInTheDocument();

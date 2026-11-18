@@ -124,7 +124,7 @@ describe('ClusterDetailsPageContent', () => {
     const cards = container.querySelectorAll<HTMLElement>('.pf-v6-c-card');
     expect(cards).toHaveLength(2);
     for (const card of cards) {
-      expect(card).toHaveClass('cluster-details__secondary-card', 'pf-m-secondary');
+      expect(card).toHaveClass('pf-m-secondary');
       const header = card.querySelector('.pf-v6-c-card__header');
       expect(header).not.toBeNull();
       expect(header?.nextElementSibling?.tagName).toBe('HR');

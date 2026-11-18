@@ -187,12 +187,8 @@ const ClusterExternalIpCard = ({ cluster, onAttach, onDetach }: ClusterExternalI
   ];
 
   return (
-    <Card
-      variant="secondary"
-      className="cluster-details__secondary-card"
-      aria-label={t('External IP endpoints')}
-    >
-      <CardHeader className="cluster-details__card-header">
+    <Card variant="secondary" aria-label={t('External IP endpoints')}>
+      <CardHeader>
         <CardTitle component="h2">{t('External IP endpoints')}</CardTitle>
       </CardHeader>
       <Divider />

@@ -99,7 +99,7 @@
 
             - name: This should not be reached when tenant_name is invalid
               ansible.builtin.fail:
-                msg: "storage_provider should have failed when tenant_name is not a valid DNS label"
+                msg: "Dispatcher unexpectedly accepted tenant_name"
 
           rescue:
             - name: Verify tenant_name DNS label validation failure

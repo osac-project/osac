@@ -143,10 +143,10 @@
 - name: Validate tenant_name is a valid DNS label
   ansible.builtin.fail:
     msg: >-
-      tenant_name '{{ tenant_name }}' is not a valid DNS label.
-      Must be 1-63 lowercase alphanumeric characters or hyphens,
-      cannot start or end with a hyphen.
+      tenant_name is not a valid DNS label. Must be 1-63 lowercase
+      alphanumeric characters or hyphens, cannot start or end with a hyphen.
   when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+  no_log: true
 
 - name: Validate tenant_namespace is set
   ansible.builtin.fail:
@@ -218,6 +218,26 @@
       {% endif -%}
       {% endfor -%}
       {{ _pairs | sort(attribute='provider,backend_id') }}
+
+# Hub-cluster lifecycle/credential Secrets live in storage_provider_config_namespace
+# for VAST (setup, ensure_storage_class, teardown_backend) and LVMS (setup,
+# teardown_backend). Fail fast before dispatch when neither OSAC_STORAGE_CONFIG_NAMESPACE
+# nor the pod ServiceAccount namespace resolved to a non-empty string.
+- name: Validate storage_provider_config_namespace is set when hub Secrets are used
+  ansible.builtin.fail:
+    msg: >-
+      storage_provider_config_namespace must be a non-empty string. Set
+      OSAC_STORAGE_CONFIG_NAMESPACE or run the pod with a mounted
+      ServiceAccount namespace.
+  when:
+    - >-
+      (storage_provider_action in ['setup', 'teardown_backend']
+       and (_unique_providers | intersect(['vast', 'lvms']) | length > 0))
+      or (storage_provider_action == 'ensure_storage_class'
+          and ('vast' in _unique_providers))
+    - >-
+      storage_provider_config_namespace is not defined
+      or (storage_provider_config_namespace | string | trim | length == 0)
 
 - name: Set dispatch action
   ansible.builtin.set_fact:

@@ -66,7 +66,7 @@
             | selectattr('name', 'equalto', 'ca-bundle')
             | map(attribute='configMap')
             | selectattr('name', 'equalto', 'ca-bundle')
-            | selectattr('optional', 'equalto', true)
+            | selectattr('optional', 'equalto', false)
             | list | length == 1
           - >-
             (_pod.spec.volumes | selectattr('name', 'equalto', 'ca-bundle')
@@ -84,7 +84,7 @@
             | list | length == 1
         fail_msg: >-
           Compute-instance operations run the VM just-in-time storage dispatch,
-          so the pod must mount the optional trust-manager ca-bundle ConfigMap
+          so the pod must mount the required trust-manager ca-bundle ConfigMap
           read-only at /etc/ca-bundle (bundle.pem) and export SSL_CERT_FILE and
           REQUESTS_CA_BUNDLE for storage management endpoints.
 
@@ -161,7 +161,7 @@
             | selectattr('name', 'equalto', 'ca-bundle')
             | map(attribute='configMap')
             | selectattr('name', 'equalto', 'ca-bundle')
-            | selectattr('optional', 'equalto', true)
+            | selectattr('optional', 'equalto', false)
             | list | length == 1
           - >-
             (_storage_pod.spec.volumes | selectattr('name', 'equalto', 'ca-bundle')
@@ -178,7 +178,7 @@
             | selectattr('value', 'equalto', '/etc/ca-bundle/bundle.pem')
             | list | length == 1
         fail_msg: >-
-          Storage operations must mount the optional trust-manager ca-bundle
+          Storage operations must mount the required trust-manager ca-bundle
           ConfigMap read-only at /etc/ca-bundle (bundle.pem) and export
           SSL_CERT_FILE and REQUESTS_CA_BUNDLE for storage management endpoints.
 

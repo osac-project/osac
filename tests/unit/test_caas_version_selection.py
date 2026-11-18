@@ -45,6 +45,7 @@ def test_light_deletion_create_supplies_backed_version(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(deletion, "wait_for_cluster_order_cr", Mock(side_effect=StopAfterCreate))
     params = dict(
+        request=Mock(),
         cli=cli,
         grpc=Mock(),
         private_grpc=private,

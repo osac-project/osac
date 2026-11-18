@@ -39,6 +39,7 @@ from tests.e2e.core.helpers import (
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import CommandFailed, env, poll_until, run, run_unchecked
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = [
     pytest.mark.regression,
@@ -79,11 +80,7 @@ def _current_ca_configmap(namespace: str) -> str:
 
 def _expected_osac_service_account(namespace: str) -> str:
     values = json.loads(run("helm", "get", "values", _helm_release(), "-n", namespace, "-o", "json"))
-    return (
-        values.get("aap", {})
-        .get("serviceAccounts", {})
-        .get("osacSa", "osac-sa")
-    )
+    return values.get("aap", {}).get("serviceAccounts", {}).get("osacSa", "osac-sa")
 
 
 def _cluster_fulfillment_enabled(namespace: str) -> bool:
@@ -166,21 +163,13 @@ def _configmap_manifest(name: str, namespace: str, bundle: str) -> str:
 
 def _apply(k8s: K8sClient, manifest: str) -> None:
     subprocess.run(
-        [*k8s._base(), "apply", "-f", "-"],
-        input=manifest,
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=300,
+        [*k8s._base(), "apply", "-f", "-"], input=manifest, capture_output=True, text=True, check=True, timeout=300
     )
 
 
 def _latest_cluster_order_job_id(k8s: K8sClient, name: str) -> str:
     status = k8s.get_json(resource="clusterorder", name=name).get("status", {})
-    jobs = [
-        job for job in status.get("provisioningJobs", [])
-        if job.get("type") == "provision"
-    ]
+    jobs = [job for job in status.get("provisioningJobs", []) if job.get("type") == "provision"]
     if not jobs:
         return ""
     return sorted(jobs, key=lambda job: job.get("timestamp", ""), reverse=True)[0].get("jobID", "")
@@ -193,6 +182,8 @@ def _wait_for_cluster_order_job_id(k8s: K8sClient, name: str) -> str:
         retries=120,
         delay=2,
         description=f"AAP provisioning job for ClusterOrder {name}",
+        resource_kind=WaitResourceKind.CLUSTER_ORDER,
+        resource_id=name,
     )
 
 
@@ -205,6 +196,8 @@ def _wait_for_job_pod(k8s: K8sClient, configmap: str, job_id: str) -> dict:
         retries=300,
         delay=2,
         description=f"AAP job {job_id} pod mounting CA ConfigMap {configmap}",
+        resource_kind=WaitResourceKind.AAP_JOB,
+        resource_id=job_id,
     )
     assert pod is not None
     return pod
@@ -223,36 +216,26 @@ def _assert_job_pod_contract(pod: dict, configmap: str, service_account: str) ->
     assert spec["serviceAccountName"] == service_account, (
         f"{name} uses ServiceAccount {spec['serviceAccountName']}, expected {service_account}"
     )
-    assert environment["NETRIS_CONTROLLER_URL"].startswith("https://"), (
-        f"{name} must target Netris over HTTPS"
-    )
-    assert environment["NETRIS_VALIDATE_CERTS"] == "true", (
-        f"{name} must validate the Netris TLS certificate"
-    )
+    assert environment["NETRIS_CONTROLLER_URL"].startswith("https://"), f"{name} must target Netris over HTTPS"
+    assert environment["NETRIS_VALIDATE_CERTS"] == "true", f"{name} must validate the Netris TLS certificate"
     assert environment["NETRIS_CA_PATH"] == NETRIS_CA_PATH
 
     mounts = [
-        mount for mount in spec["containers"][0].get("volumeMounts", [])
-        if mount.get("name") == "netris-ca-bundle"
+        mount for mount in spec["containers"][0].get("volumeMounts", []) if mount.get("name") == "netris-ca-bundle"
     ]
     assert len(mounts) == 1, f"{name} must mount one Netris CA bundle"
     assert mounts[0]["mountPath"] == NETRIS_CA_PATH
     assert mounts[0]["subPath"] == "bundle.pem"
     assert mounts[0]["readOnly"] is True
 
-    volumes = [
-        volume for volume in spec.get("volumes", [])
-        if volume.get("name") == "netris-ca-bundle"
-    ]
+    volumes = [volume for volume in spec.get("volumes", []) if volume.get("name") == "netris-ca-bundle"]
     assert len(volumes) == 1, f"{name} must reference one Netris CA ConfigMap volume"
     assert volumes[0]["configMap"]["name"] == configmap
 
 
 def _read_job_bundle(k8s: K8sClient, pod_name: str) -> tuple[str, str]:
     script = 'printf "%s\\n" "$NETRIS_VALIDATE_CERTS"; sha256sum "$NETRIS_CA_PATH" | cut -d " " -f 1'
-    output, returncode = run_unchecked(
-        *k8s._base(), "exec", pod_name, "-n", k8s.namespace, "--", "sh", "-c", script
-    )
+    output, returncode = run_unchecked(*k8s._base(), "exec", pod_name, "-n", k8s.namespace, "--", "sh", "-c", script)
     if returncode != 0:
         return "", ""
     lines = output.splitlines()
@@ -274,6 +257,8 @@ def _wait_for_bundle_in_job_pod(k8s: K8sClient, pod_name: str, expected_bundle: 
         delay=2,
         retry_on_error=True,
         description=f"AAP job pod {pod_name} reading the expected Netris CA bundle",
+        resource_kind=WaitResourceKind.POD,
+        resource_id=pod_name,
     )
     assert validation == "true", f"{pod_name} did not enable Netris certificate validation"
     assert actual_hash == expected_hash, f"{pod_name} mounted the wrong Netris CA bundle"
@@ -295,9 +280,7 @@ def _cluster_id_by_name(grpc: GRPCClient, name: str) -> str:
     return ""
 
 
-def _cleanup_cluster(
-    cli: OsacCLI, grpc: GRPCClient, k8s: K8sClient, uuid: str, name: str, requested_name: str
-) -> None:
+def _cleanup_cluster(cli: OsacCLI, grpc: GRPCClient, k8s: K8sClient, uuid: str, name: str, requested_name: str) -> None:
     if not uuid:
         uuid = _cluster_id_by_name(grpc, requested_name)
     if not uuid:
@@ -362,10 +345,7 @@ def _exercise_cluster_fulfillment_ca(
 
 
 def test_netris_ca_lifecycle(
-    request: pytest.FixtureRequest,
-    grpc: GRPCClient,
-    k8s_hub_client: K8sClient,
-    namespace: str,
+    request: pytest.FixtureRequest, grpc: GRPCClient, k8s_hub_client: K8sClient, namespace: str
 ) -> None:
     chart = _helm_chart()
     if not Path(chart).exists():
@@ -439,29 +419,9 @@ def test_netris_ca_lifecycle(
                 "-n",
                 namespace,
             )
-            assert returncode == 0, (
-                f"Non-active ConfigMap must stay writable, got: {output}"
-            )
-            _expect_denied(
-                k8s_hub_client,
-                probe_sa,
-                "label",
-                "configmap",
-                active,
-                f"probe={probe_sa}",
-                "-n",
-                namespace,
-            )
-            _expect_denied(
-                k8s_hub_client,
-                probe_sa,
-                "delete",
-                "configmap",
-                active,
-                "-n",
-                namespace,
-                "--wait=false",
-            )
+            assert returncode == 0, f"Non-active ConfigMap must stay writable, got: {output}"
+            _expect_denied(k8s_hub_client, probe_sa, "label", "configmap", active, f"probe={probe_sa}", "-n", namespace)
+            _expect_denied(k8s_hub_client, probe_sa, "delete", "configmap", active, "-n", namespace, "--wait=false")
             _expect_denied(
                 k8s_hub_client,
                 probe_sa,
@@ -474,15 +434,7 @@ def test_netris_ca_lifecycle(
                 namespace,
             )
         finally:
-            run(
-                *k8s_hub_client._base(),
-                "delete",
-                "configmap",
-                allowed,
-                "-n",
-                namespace,
-                "--ignore-not-found",
-            )
+            run(*k8s_hub_client._base(), "delete", "configmap", allowed, "-n", namespace, "--ignore-not-found")
 
         # Register the name first: an apply that times out can still persist the object.
         created_next = True
@@ -491,16 +443,7 @@ def test_netris_ca_lifecycle(
         rotated = True
         _upgrade_ca(namespace, next_name)
 
-        _expect_denied(
-            k8s_hub_client,
-            probe_sa,
-            "label",
-            "configmap",
-            next_name,
-            f"probe={probe_sa}",
-            "-n",
-            namespace,
-        )
+        _expect_denied(k8s_hub_client, probe_sa, "label", "configmap", next_name, f"probe={probe_sa}", "-n", namespace)
         _expect_denied(
             k8s_hub_client,
             probe_sa,
@@ -526,40 +469,8 @@ def test_netris_ca_lifecycle(
             if rotated:
                 _upgrade_ca(namespace, active)
             if created_next:
-                run(
-                    *k8s_hub_client._base(),
-                    "delete",
-                    "configmap",
-                    next_name,
-                    "-n",
-                    namespace,
-                    "--ignore-not-found",
-                )
+                run(*k8s_hub_client._base(), "delete", "configmap", next_name, "-n", namespace, "--ignore-not-found")
         finally:
-            run(
-                *k8s_hub_client._base(),
-                "delete",
-                "rolebinding",
-                probe_sa,
-                "-n",
-                namespace,
-                "--ignore-not-found",
-            )
-            run(
-                *k8s_hub_client._base(),
-                "delete",
-                "role",
-                probe_sa,
-                "-n",
-                namespace,
-                "--ignore-not-found",
-            )
-            run(
-                *k8s_hub_client._base(),
-                "delete",
-                "serviceaccount",
-                probe_sa,
-                "-n",
-                namespace,
-                "--ignore-not-found",
-            )
+            run(*k8s_hub_client._base(), "delete", "rolebinding", probe_sa, "-n", namespace, "--ignore-not-found")
+            run(*k8s_hub_client._base(), "delete", "role", probe_sa, "-n", namespace, "--ignore-not-found")
+            run(*k8s_hub_client._base(), "delete", "serviceaccount", probe_sa, "-n", namespace, "--ignore-not-found")

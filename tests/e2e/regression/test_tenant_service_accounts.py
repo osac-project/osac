@@ -21,6 +21,7 @@ from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import unique_name
 from tests.e2e.core.keycloak import get_jwt
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = [pytest.mark.regression, pytest.mark.iam]
 
@@ -359,6 +360,8 @@ def _wait_for_project_absent(client: GRPCClient, project_id: str) -> None:
         retries=_LONG_POLL_RETRIES,
         delay=_POLL_DELAY_SECONDS,
         description="project cleanup",
+        resource_kind=WaitResourceKind.PROJECT,
+        resource_id=project_id,
     )
 
 
@@ -412,6 +415,8 @@ def _wait_for_role_binding_absent(client: GRPCClient, role_binding_id: str) -> N
         retries=_LONG_POLL_RETRIES,
         delay=_POLL_DELAY_SECONDS,
         description="RoleBinding cleanup",
+        resource_kind=WaitResourceKind.ROLE_BINDING,
+        resource_id=role_binding_id,
     )
 
 
@@ -451,6 +456,8 @@ def _wait_for_secret_absent(client: GRPCClient, secret_id: str) -> None:
         retries=_LONG_POLL_RETRIES,
         delay=_POLL_DELAY_SECONDS,
         description="Secret cleanup",
+        resource_kind=WaitResourceKind.SECRET,
+        resource_id=secret_id,
     )
 
 
@@ -491,6 +498,8 @@ def _wait_for_account_absent(client: GRPCClient, account_id: str) -> None:
         retries=_LONG_POLL_RETRIES,
         delay=_POLL_DELAY_SECONDS,
         description="service account archival",
+        resource_kind=WaitResourceKind.SERVICE_ACCOUNT,
+        resource_id=account_id,
     )
 
 
@@ -506,6 +515,8 @@ def _wait_for_account_deletion_started(client: GRPCClient, account_id: str) -> N
         retries=_LONG_POLL_RETRIES,
         delay=_POLL_DELAY_SECONDS,
         description="service-account deletion timestamp",
+        resource_kind=WaitResourceKind.SERVICE_ACCOUNT,
+        resource_id=account_id,
     )
 
 
@@ -520,6 +531,8 @@ def _wait_for_keycloak_client_absent(*, keycloak_url: str, keycloak_admin_passwo
         retries=_LONG_POLL_RETRIES,
         delay=_POLL_DELAY_SECONDS,
         description="Keycloak service-account client cleanup",
+        resource_kind=WaitResourceKind.KEYCLOAK_CLIENT,
+        resource_id=client_id,
     )
 
 
@@ -553,6 +566,8 @@ def service_account_lifecycle_resources(
             retries=_LONG_POLL_RETRIES,
             delay=_POLL_DELAY_SECONDS,
             description="service-account provisioning",
+            resource_kind=WaitResourceKind.SERVICE_ACCOUNT,
+            resource_id=account_id,
         )
         if _field(ready.get("status", {}), "state") != _READY:
             raise RuntimeError("Service-account provisioning failed")
@@ -639,6 +654,8 @@ def tenant2_service_account_resources(
             retries=_LONG_POLL_RETRIES,
             delay=_POLL_DELAY_SECONDS,
             description="Tenant 2 service-account provisioning",
+            resource_kind=WaitResourceKind.SERVICE_ACCOUNT,
+            resource_id=account_id,
         )
         if _field(ready.get("status", {}), "state") != _READY:
             raise RuntimeError("Tenant 2 service-account provisioning failed")
@@ -821,6 +838,8 @@ def test_tenant_automation_role_grants_and_revokes_tenant_access(
         retries=_SHORT_POLL_RETRIES,
         delay=_POLL_DELAY_SECONDS,
         description="tenant-automation project access",
+        resource_kind=WaitResourceKind.ROLE_BINDING,
+        resource_id=role_binding_id,
     )
     visible_project_ids = {project.get("id") for project in projects_response.get("items", [])}
     assert expected_project_ids.issubset(visible_project_ids), "Tenant Admin's projects were not visible"
@@ -933,6 +952,8 @@ def test_service_account_idp_manager_and_tenant_admin_role_boundaries(
             retries=_SHORT_POLL_RETRIES,
             delay=_POLL_DELAY_SECONDS,
             description="tenant-idp-manager IdentityProviders/List access",
+            resource_kind=WaitResourceKind.ROLE_BINDING,
+            resource_id=role_binding_id,
         )
         assert isinstance(idp_list.get("items", []), list)
         _assert_grpc_rejected(
@@ -959,6 +980,8 @@ def test_service_account_idp_manager_and_tenant_admin_role_boundaries(
             retries=_SHORT_POLL_RETRIES,
             delay=_POLL_DELAY_SECONDS,
             description="tenant-admin ServiceAccounts/List access",
+            resource_kind=WaitResourceKind.ROLE_BINDING,
+            resource_id=role_binding_id,
         )
         assert not _contains_credential_bytes(service_accounts), "ServiceAccounts/List exposed credential bytes"
         assert any(item.get("id") == account_id for item in service_accounts.get("items", []))
@@ -1102,6 +1125,8 @@ def test_deleting_service_account_revokes_its_unexpired_token(
             retries=_SHORT_POLL_RETRIES,
             delay=_POLL_DELAY_SECONDS,
             description="service-account access before deletion",
+            resource_kind=WaitResourceKind.SERVICE_ACCOUNT,
+            resource_id=account_id,
         )
         assert isinstance(projects.get("items", []), list)
 
@@ -1158,6 +1183,8 @@ def test_service_account_secret_rotation_preserves_tokens_and_rejects_old_secret
             retries=_SHORT_POLL_RETRIES,
             delay=_POLL_DELAY_SECONDS,
             description="service-account access before rotation",
+            resource_kind=WaitResourceKind.SERVICE_ACCOUNT,
+            resource_id=account_id,
         )
         assert isinstance(projects.get("items", []), list)
 
@@ -1171,6 +1198,8 @@ def test_service_account_secret_rotation_preserves_tokens_and_rejects_old_secret
             retries=_LONG_POLL_RETRIES,
             delay=_POLL_DELAY_SECONDS,
             description="service-account credential rotation",
+            resource_kind=WaitResourceKind.SERVICE_ACCOUNT,
+            resource_id=account_id,
         )
         rotated_status = rotated_account.get("status", {})
         if _field(rotated_status, "secret_rotation_state") != _ROTATION_COMPLETED:

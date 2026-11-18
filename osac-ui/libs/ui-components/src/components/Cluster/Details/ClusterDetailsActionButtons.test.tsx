@@ -116,6 +116,46 @@ describe('ClusterDetailsActionButtons', () => {
     expect(screen.getByRole('button', { name: /View password/i })).toBeDisabled();
   });
 
+  it('keeps delete disabled while the cluster is deleting', async () => {
+    const user = userEvent.setup();
+    renderButtons(ClusterState.DELETING);
+
+    const deleteButton = screen.getByRole('button', { name: 'Delete' });
+    expect(deleteButton).toHaveAttribute('aria-disabled', 'true');
+    await user.click(deleteButton);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('disables secret actions when a ready cluster has no secret references', () => {
+    const cluster = mockCluster(ClusterState.READY);
+    if (!cluster.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    cluster.status.kubeconfigSecret = undefined;
+    cluster.status.passwordSecret = undefined;
+    render(
+      <MemoryRouter>
+        <ClusterDetailsActionButtons cluster={cluster} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Download kubeconfig' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'View password' })).toBeDisabled();
+  });
+
+  it('disables the kubeconfig action while its download is pending', () => {
+    vi.mocked(clusterApi.useDownloadKubeconfig).mockReturnValue({
+      download,
+      isPending: true,
+      error: undefined,
+      setError,
+    });
+    renderButtons();
+
+    expect(screen.getByRole('button', { name: /Download kubeconfig/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'View password' })).toBeEnabled();
+  });
+
   it('enables download kubeconfig when cluster is ready', () => {
     renderButtons(ClusterState.READY);
 

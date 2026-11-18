@@ -1,0 +1,51 @@
+.cluster-details__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--pf-t--global--spacer--xl);
+}
+
+.cluster-details__overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: var(--pf-t--global--spacer--xl);
+}
+
+.cluster-details__networking-table .pf-v6-c-table > tbody:last-child > tr:last-child {
+  border-block-end: 0;
+}
+
+.cluster-details .cluster-details__ssh-key {
+  max-height: 6lh;
+  overflow: auto;
+}
+
+.cluster-details__conditions td[data-label='Message'] {
+  overflow-wrap: anywhere;
+}
+
+.cluster-details__conditions .pf-v6-c-table__thead {
+  --pf-v6-c-table--cell--MaxWidth: none;
+  --pf-v6-c-table--cell--TextOverflow: clip;
+  --pf-v6-c-table--cell--WhiteSpace: normal;
+}
+
+.cluster-details__conditions td[data-label='Reason'] {
+  --pf-v6-c-table--cell--MaxWidth: 20ch;
+  --pf-v6-c-table--cell--MinWidth: 12ch;
+
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 992px) {
+  .cluster-details__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 576px) {
+  .cluster-details__overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

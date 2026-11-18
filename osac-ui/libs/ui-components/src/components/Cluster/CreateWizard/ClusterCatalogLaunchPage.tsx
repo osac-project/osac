@@ -19,12 +19,22 @@ const ClusterCatalogLaunchPage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { id = '' } = useParams<{ id: string }>();
-  const query = useGetResource(ClusterCatalogItems, { id });
+  const query = useGetResource(
+    ClusterCatalogItems,
+    { id },
+    {
+      // The wizard preloads a catalog item the user just picked; background
+      // refreshes would only risk discarding in-progress form state.
+      refetchInterval: false,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+    },
+  );
   const catalogItemName = query.data?.object?.metadata?.name || id;
 
   return (
     <ResourceDetailsPage
-      error={query.error && !query.data ? query.error : undefined}
+      error={query.error}
       found={!!query.data?.object}
       isLoading={query.isLoading}
       parentTo="/catalog/clusters"

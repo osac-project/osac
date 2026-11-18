@@ -1,4 +1,4 @@
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes, useLocation } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
 import { screen, waitFor, within } from '@testing-library/react';
@@ -858,16 +858,28 @@ describe('CatalogPage', () => {
     expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
   });
 
-  it('clears type, publish, and search filters together without dropping other params', async () => {
+  it('clears publish and search filters without dropping unrelated params or the selected kind', async () => {
+    const LocationSearchProbe = () => {
+      const { search } = useLocation();
+      return <div data-testid="location-search">{search}</div>;
+    };
     localStorage.setItem(catalogItemsViewPrefKey, 'list');
 
     const { user } = renderWithProviders(
       <Routes>
-        <Route path="/catalog/clusters" element={<CatalogPage routeKind="cluster" />} />
+        <Route
+          path="/catalog/clusters"
+          element={
+            <>
+              <CatalogPage routeKind="cluster" />
+              <LocationSearchProbe />
+            </>
+          }
+        />
       </Routes>,
       {
         transport: createCatalogPageTransport({ bmItems: [bareMetalCatalogItem] }),
-        routerEntries: ['/catalog/clusters?published=unpublished&search=no-such-item'],
+        routerEntries: ['/catalog/clusters?published=unpublished&search=no-such-item&keep=1'],
       },
     );
 
@@ -904,6 +916,8 @@ describe('CatalogPage', () => {
       screen.getByRole('button', { name: 'Filter catalog by publication status' }),
     ).toHaveTextContent('All publish states');
     expect(screen.getByRole('textbox', { name: 'Filter catalog by keyword' })).toHaveValue('');
+    // Only the filter params are removed; unrelated params must survive.
+    expect(screen.getByTestId('location-search')).toHaveTextContent('?keep=1');
     // View preference is stored separately from URL filters, so list view must survive the clear.
     expect(screen.getByRole('grid', { name: 'Catalog items' })).toBeInTheDocument();
   });

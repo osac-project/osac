@@ -103,6 +103,14 @@ def test_guest_ingress_uses_the_hosted_control_plane_service_network_kubeconfig(
     assert configure["ansible.builtin.include_role"]["name"] == (
         "osac.service.metallb_ingress"
     )
+    assert configure["vars"]["metallb_ingress_admin_kubeconfig"] == (
+        "{{ _cluster_endpoint_admin_kubeconfig }}"
+    )
+    metallb_arguments = load(METALLB_TASKS.parent / "meta/argument_specs.yaml")
+    kubeconfig_argument = metallb_arguments["argument_specs"][
+        "configure_metallb_ingress"
+    ]["options"]["metallb_ingress_admin_kubeconfig"]
+    assert kubeconfig_argument["type"] == "raw"
     assert "ingress_allocated_address" in str(configure["vars"])
     wait = by_name["Wait for the guest ingress Service to report the allocated address"]
     assert wait["until"]

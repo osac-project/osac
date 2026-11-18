@@ -2266,7 +2266,7 @@
             },
             "tokenValue": {
               "type": "string",
-              "description": "NetBox API token stored under tokenSecretKey when the named Secret does not already exist.",
+              "description": "NetBox v2 API token (nbt_<key>.<token>) stored under tokenSecretKey when the named Secret does not already exist.",
               "default": ""
             },
             "caCert": {

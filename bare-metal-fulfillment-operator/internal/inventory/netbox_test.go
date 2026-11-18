@@ -44,7 +44,10 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
-const testNetBoxHostClass = "metal3"
+const (
+	testNetBoxHostClass = "metal3"
+	testNetBoxV2Token   = "nbt_aaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
 
 func testNetBoxCredentials() *credentials.BMC {
 	return &credentials.BMC{
@@ -110,7 +113,7 @@ var _ = Describe("NetBox inventory client", func() {
 	Describe("NewNetBoxClient", func() {
 		It("retains the injected API, manager, and host class", func() {
 			tokenFile := filepath.Join(GinkgoT().TempDir(), "token")
-			Expect(os.WriteFile(tokenFile, []byte("test-token\n"), 0o600)).To(Succeed())
+			Expect(os.WriteFile(tokenFile, []byte(testNetBoxV2Token+"\n"), 0o600)).To(Succeed())
 
 			api, err := NewNetBoxAPI(&Config{Options: map[string]any{"netbox": map[string]any{
 				"url":       "https://netbox.example.test/",

@@ -16,12 +16,14 @@ package servers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -32,6 +34,18 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+// poolSelectorRecordingTx observes queries in memory without putting SQL or arguments in logs.
+// All operations still use the suite's real database transaction.
+type poolSelectorRecordingTx struct {
+	database.Tx
+	queries []string
+}
+
+func (t *poolSelectorRecordingTx) Query(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
+	t.queries = append(t.queries, query)
+	return t.Tx.Query(ctx, query, args...)
+}
 
 var _ = Describe("ExternalIP pool selector", func() {
 	var poolDao *dao.GenericDAO[*privatev1.ExternalIPPool]
@@ -206,14 +220,51 @@ var _ = Describe("ExternalIP pool selector", func() {
 
 		var output bytes.Buffer
 		loggingDAO, err := dao.NewGenericDAO[*privatev1.ExternalIPPool]().
-			SetLogger(slog.New(slog.NewTextHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))).
+			SetLogger(slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		pool, err := SelectExternalIPPool(ctx, logger, loggingDAO, 1)
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		recordingTx := &poolSelectorRecordingTx{Tx: tx}
+		selectCtx := database.TxIntoContext(ctx, recordingTx)
+		pool, err := SelectExternalIPPool(selectCtx, logger, loggingDAO, 1)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(pool.GetMetadata().GetName()).To(Equal("pool-b"))
-		Expect(strings.Count(output.String(), " for update")).To(Equal(1), output.String())
+
+		// Check the executed statement independently of the deliberately SQL-free logger.
+		lockingQueries := 0
+		for _, query := range recordingTx.queries {
+			normalized := strings.Join(strings.Fields(strings.ToLower(query)), " ")
+			if strings.Contains(" "+normalized+" ", " for update ") {
+				lockingQueries++
+				Expect(strings.Contains(normalized, " from external_ip_pools ")).To(BeTrue(),
+					"the locking query must target the pool table")
+				Expect(strings.HasSuffix(normalized, " order by id for update")).To(BeTrue(),
+					"the locking query must acquire rows in ID order")
+			}
+		}
+		Expect(lockingQueries).To(Equal(1))
+
+		// The exact metadata-only shape excludes SQL, arguments, and additional value fields.
+		lockingOperations := 0
+		decoder := json.NewDecoder(&output)
+		for decoder.More() {
+			var record map[string]any
+			Expect(decoder.Decode(&record)).To(Succeed())
+			Expect(record).To(HaveLen(6))
+			Expect(record).To(HaveKey("time"))
+			Expect(record).To(HaveKeyWithValue("level", "DEBUG"))
+			Expect(record).To(HaveKeyWithValue("msg", "Running SQL operation"))
+			Expect(record).To(HaveKeyWithValue("table", "external_ip_pools"))
+			Expect(record).To(HaveKey("type"))
+			Expect(record).To(HaveKey("parameter_count"))
+			if record["type"] == "lock" {
+				lockingOperations++
+				Expect(record["parameter_count"]).To(Equal(float64(1)))
+			}
+		}
+		Expect(lockingOperations).To(Equal(1))
 	})
 })

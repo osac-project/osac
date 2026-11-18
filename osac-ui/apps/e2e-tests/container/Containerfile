@@ -3,9 +3,8 @@
 # runs run_scripts/run-ui-e2e.sh at run time, so the host needs only podman
 # and network access to the cluster routes.
 #
-# Build context: mono-repo root.
-#   podman build -f osac-ui/apps/e2e-tests/container/Containerfile \
-#     --build-arg FULFILLMENT_SERVICE_IMAGE=<image@sha256:digest> -t osac-ui-e2e .
+# Build from a committed source archive, not the working checkout. See the
+# README for the build command and its private temporary build context.
 #
 # Use the osac CLI of the build under test: the flows create and delete
 # resources with it, so it must match the deployed fulfillment service. Pass

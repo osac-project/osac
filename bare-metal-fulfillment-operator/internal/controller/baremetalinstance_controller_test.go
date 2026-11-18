@@ -1856,13 +1856,13 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 		})
 
-		Context("when restart trigger differs from status and RunStrategy is Halted", func() {
-			BeforeEach(func() {
-				bareMetalInstance.Spec.RunStrategy = v1alpha1.RunStrategyHalted
-				// Restart trigger differs: spec=1, status=0
-			})
-
-			It("should sync status without triggering restart", func() {
+		// A halted instance cannot be restarted: either the spec says so, or the
+		// host is still off while the spec already says Always (start-from-halted).
+		// Acknowledge the trigger and leave power reconciliation to start the host.
+		DescribeTable("when restart trigger differs from status and the instance is halted",
+			func(specRunStrategy, statusRunStrategy v1alpha1.BareMetalInstanceRunStrategy) {
+				bareMetalInstance.Spec.RunStrategy = specRunStrategy
+				bareMetalInstance.Status.RunStrategy = statusRunStrategy
 				triggerRestartCalled := false
 				mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
 					triggerRestartCalled = true
@@ -1882,8 +1882,10 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(condition).NotTo(BeNil())
 				Expect(condition.Status).To(Equal(metav1.ConditionTrue))
 				Expect(condition.Reason).To(Equal("Completed"))
-			})
-		})
+			},
+			Entry("spec run strategy is halted", v1alpha1.RunStrategyHalted, v1alpha1.BareMetalInstanceRunStrategy("")),
+			Entry("started from halted (spec Always, status Halted)", v1alpha1.RunStrategyAlways, v1alpha1.RunStrategyHalted),
+		)
 
 		Context("when restart trigger differs from status", func() {
 			Context("and no restart is in progress", func() {

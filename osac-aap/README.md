@@ -297,6 +297,12 @@ Single-node VMaaS development/CI deployments can opt in with
 `false`, preserving direct TopoLVM classes; ClusterOrder/CaaS stays on its
 legacy storage path.
 
+This flag creates StorageClasses; it does not install the driver.
+`csi_driver_install_enabled` separately controls the AAP Helm installation and
+also defaults to `false`. Standard OSAC installations deploy the driver through
+the installer. The infrastructure LVMS settings are described in the
+[Helm deployment guide](../docs/guides/installation/helm-deployment-guide.md#storage-class).
+
 The selector does not migrate existing classes or volumes. If a same-name
 class already exists with incompatible provisioner, parameters, reclaim policy
 or binding mode, the role fails before modifying any local classes and explains

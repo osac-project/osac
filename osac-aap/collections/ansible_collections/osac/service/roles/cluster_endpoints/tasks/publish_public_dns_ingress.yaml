@@ -11,7 +11,7 @@
   ansible.builtin.assert:
     that:
       - external_ip.address is defined
-      - external_ip.address | ansible.utils.ipaddr('ipv4')
+      - external_ip.address is ansible.utils.ipv4
 
 - name: Publish ingress wildcard DNS record
   when: _cluster_endpoint_dns_domain in _cluster_endpoint_dns_supported_domains

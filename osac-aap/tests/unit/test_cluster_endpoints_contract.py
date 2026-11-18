@@ -155,6 +155,28 @@ def test_dns_tasks_enforce_supported_domain_and_record_conventions() -> None:
     assert api_wait["no_log"] is True
 
 
+def test_endpoint_ipv4_assertions_return_booleans() -> None:
+    cases = (
+        (TASKS / "configure_guest_ingress.yaml", "ingress_allocated_address"),
+        (TASKS / "publish_public_dns_api.yaml", "external_ip.address"),
+        (TASKS / "publish_public_dns_ingress.yaml", "external_ip.address"),
+    )
+
+    for path, address in cases:
+        task = next(
+            task
+            for task in load(path)
+            if "ansible.builtin.assert" in task
+            and address in str(task["ansible.builtin.assert"].get("that", []))
+        )
+        conditions = task["ansible.builtin.assert"]["that"]
+        assert any(
+            f"{address} is ansible.utils.ipv4" in str(condition)
+            for condition in conditions
+        )
+        assert all("ansible.utils.ipaddr('ipv4')" not in str(condition) for condition in conditions)
+
+
 def test_dns_publication_waits_for_records_using_the_configured_authoritative_server() -> None:
     expectations = {
         "publish_public_dns_api": [

@@ -3,7 +3,7 @@
   ansible.builtin.assert:
     that:
       - ingress_allocated_address is defined
-      - ingress_allocated_address | ansible.utils.ipaddr('ipv4')
+      - ingress_allocated_address is ansible.utils.ipv4
       - hosted_control_plane_namespace is defined
       - hosted_control_plane_namespace | length > 0
 

@@ -164,6 +164,11 @@ const (
 	// Set condition status to False and reason to IronicAPIFailure when the operation fails.
 	HostConditionPowerSynced BareMetalInstanceConditionType = "PowerSynced"
 
+	// HostConditionRestartInProgress tracks a restart initiated by the controller.
+	// Set True once the restart is triggered and False once it completes, so the
+	// completion poll is not confused with a power transition.
+	HostConditionRestartInProgress BareMetalInstanceConditionType = "RestartInProgress"
+
 	// HostConditionProvisionTemplateComplete tracks provision template completion.
 	// Set condition status True on success.
 	// Set condition status False with reason Progressing or TemplateFailed while not complete.

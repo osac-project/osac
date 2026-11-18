@@ -181,6 +181,7 @@ var AllHostConditionTypes = []BareMetalInstanceConditionType{
 	HostConditionIPDiscoveryComplete,
 	HostConditionNetworkHandoffComplete,
 	HostConditionNetworkOffboardComplete,
+	HostConditionRestartInProgress,
 }
 
 // IsProvisionRetrying reports whether cond marks a BareMetalInstance whose

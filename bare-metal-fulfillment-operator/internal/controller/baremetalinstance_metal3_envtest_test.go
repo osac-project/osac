@@ -657,11 +657,7 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
 			Expect(getBMH(bmhName).Spec.Online).To(BeFalse(), "precondition: halted host is off")
 
-			// Start the instance and bump the restart trigger in one update. The
-			// restart can't complete before the host is powered on, so the trigger
-			// must be acknowledged and left to power reconciliation instead of
-			// gating it behind IsRestartComplete (which requires PoweredOn and
-			// would deadlock).
+			// Start it and bump the trigger together; the operator must power it on.
 			bmi.Spec.RunStrategy = v1alpha1.RunStrategyAlways
 			bmi.Spec.RestartTrigger = 1
 			Expect(k8sClient.Update(ctx, bmi)).To(Succeed())

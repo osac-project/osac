@@ -63,6 +63,7 @@ var hostConditionsNotSurfaced = map[BareMetalInstanceConditionType]struct{}{
 	HostConditionAvailable:                   {},
 	HostConditionDeprovisionTemplateComplete: {},
 	HostConditionNetworkOffboardComplete:     {},
+	HostConditionRestartInProgress:           {},
 }
 
 var _ = Describe("DeriveProvisioningProgress", func() {
@@ -421,6 +422,6 @@ var _ = Describe("HostCondition classification exhaustiveness", func() {
 	// classify the new constant. A pure compile-time enumeration of consts is not
 	// possible in Go, so this length gate plus review is the guard for AC-5.
 	It("enumerates every HostCondition* constant defined in the package", func() {
-		Expect(AllHostConditionTypes).To(HaveLen(9))
+		Expect(AllHostConditionTypes).To(HaveLen(10))
 	})
 })

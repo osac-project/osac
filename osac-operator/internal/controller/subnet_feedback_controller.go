@@ -68,7 +68,7 @@ func NewSubnetFeedbackReconciler(hubClient clnt.Client, grpcConn grpc.ClientConn
 		Save: func(ctx context.Context, remote *privatev1.Subnet) error {
 			_, err := subnetsClient.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
 				Object:     remote,
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{feedbackStatusStatePath, feedbackStatusMessagePath, "status.compute_instance_supported", "status.compute_instance_unsupported_reason"}},
+				UpdateMask: subnetFeedbackUpdateMask(),
 			}.Build())
 			if err != nil {
 				return err
@@ -111,6 +111,16 @@ func syncSubnetUpdate(_ context.Context, obj *v1alpha1.Subnet, remote *privatev1
 	status := remote.GetStatus()
 	status.ComputeInstanceSupported = obj.Status.ComputeInstanceSupported
 	status.SetComputeInstanceUnsupportedReason(obj.Status.ComputeInstanceUnsupportedReason)
+	if ipam := obj.Status.IPAM; ipam != nil {
+		status.SetIpam(privatev1.SubnetIPAM_builder{
+			GatewayIpv4:       ipam.GatewayIPv4,
+			OverlayIpv4Cidrs:  append([]string(nil), ipam.OverlayIPv4CIDRs...),
+			PhysicalIpv4Cidrs: append([]string(nil), ipam.PhysicalIPv4CIDRs...),
+			LbVipIpv4Cidrs:    append([]string(nil), ipam.LBVIPIPv4CIDRs...),
+		}.Build())
+	} else {
+		status.ClearIpam()
+	}
 	state, message := networkFeedback(obj, obj.Status.Conditions)
 	switch state {
 	case networkFeedbackReady:
@@ -124,6 +134,16 @@ func syncSubnetUpdate(_ context.Context, obj *v1alpha1.Subnet, remote *privatev1
 	}
 	feedbackMessage(message, status.SetMessage, status.ClearMessage)
 	return nil
+}
+
+func subnetFeedbackUpdateMask() *fieldmaskpb.FieldMask {
+	return &fieldmaskpb.FieldMask{Paths: []string{
+		feedbackStatusStatePath,
+		feedbackStatusMessagePath,
+		"status.compute_instance_supported",
+		"status.compute_instance_unsupported_reason",
+		"status.ipam",
+	}}
 }
 
 func syncSubnetDelete(ctx context.Context, obj *v1alpha1.Subnet, remote *privatev1.Subnet) error {

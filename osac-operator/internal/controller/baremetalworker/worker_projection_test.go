@@ -94,7 +94,7 @@ var _ = Describe("worker phase mapping", func() {
 		name, label, condition string
 		installed              bool
 		want                   string
-	}{{"nil", "", "", false, workerPhaseWaitingForAgent}, {"bound debug installed", "worker", "", true, workerPhaseReady}, {"bound condition installed", "worker", "True", false, workerPhaseReady}, {"bound installing", "worker", "", false, workerPhaseBinding}, {"False overrides debug", "worker", "False", true, workerPhaseBinding}, {"Unknown overrides debug", "worker", "Unknown", true, workerPhaseBinding}, {"unbound installed", "", "True", true, workerPhaseWaitingForAgent}} {
+	}{{"nil", "", "", false, workerPhaseWaitingForAgent}, {"bound debug installed", "worker", "", true, workerPhaseReady}, {"bound condition installed", "worker", conditionStatusTrue, false, workerPhaseReady}, {"bound installing", "worker", "", false, workerPhaseBinding}, {"False overrides debug", "worker", "False", true, workerPhaseBinding}, {"Unknown overrides debug", "worker", "Unknown", true, workerPhaseBinding}, {"unbound installed", "", conditionStatusTrue, true, workerPhaseWaitingForAgent}} {
 		It(tt.name, func() {
 			var a *unstructured.Unstructured
 			if tt.name != "nil" {
@@ -117,19 +117,22 @@ var _ = Describe("Worker phase and history preservation", func() {
 	}{
 		{"Ready without Agent", workerPhaseReady, "", true, false, false, workerPhaseWaitingForAgent},
 		{"interrupted Ready status", workerPhaseWaitingForAgent, "", true, true, true, workerPhaseReady},
-		{"Installed True", workerPhaseWaitingForAgent, "True", true, true, false, workerPhaseReady},
+		{"Installed True", workerPhaseWaitingForAgent, conditionStatusTrue, true, true, false, workerPhaseReady},
 		{"bound not installed", workerPhaseWaitingForAgent, "", true, true, false, workerPhaseBinding},
 		{"Installed False", workerPhaseWaitingForAgent, "False", true, true, true, workerPhaseBinding},
 		{"Installed Unknown", workerPhaseWaitingForAgent, "Unknown", true, true, true, workerPhaseBinding},
 		{"active confirmed missing", workerPhaseReady, "", false, false, false, ""},
-		{"Unbinding protected", workerPhaseUnbinding, "True", true, true, true, workerPhaseUnbinding},
-		{"Deleting protected", workerPhaseDeleting, "True", true, true, true, workerPhaseDeleting},
-		{"Failed protected", workerPhaseFailed, "True", true, true, true, workerPhaseFailed},
-		{"Ready clock preserved", workerPhaseReady, "True", true, true, true, workerPhaseReady},
+		{"Unbinding protected", workerPhaseUnbinding, conditionStatusTrue, true, true, true, workerPhaseUnbinding},
+		{"Deleting protected", workerPhaseDeleting, conditionStatusTrue, true, true, true, workerPhaseDeleting},
+		{"Failed protected", workerPhaseFailed, conditionStatusTrue, true, true, true, workerPhaseFailed},
+		{"Ready clock preserved", workerPhaseReady, conditionStatusTrue, true, true, true, workerPhaseReady},
 	} {
 		It(tt.name, func() {
 			stamp := metav1.NewTime(time.Unix(100, 0))
 			w := newWorkerStatus("standard", "standard", "worker", "id", tt.phase)
+			if tt.agent {
+				w.Agent = &v1alpha1.WorkerAgentReference{Name: "agent", UID: "agent-uid"}
+			}
 			w.AttemptCount = 3
 			w.LastFailureReason = "previous"
 			w.LastFailureMessage = "history"
@@ -178,6 +181,8 @@ var _ = Describe("Worker phase and history preservation", func() {
 var _ = It("starts a new continuous healthy interval after a Ready demotion", func() {
 	stale := metav1.NewTime(time.Now().Add(-2 * time.Hour).Truncate(time.Second))
 	ready := newWorkerStatus("standard", "standard", "worker", "id", workerPhaseReady)
+	ready.Agent = &v1alpha1.WorkerAgentReference{Name: "agent", UID: "agent-uid"}
+	ready.Agent = &v1alpha1.WorkerAgentReference{Name: "agent", UID: "agent-uid"}
 	ready.ReadySince = &stale
 	got, _ := observeWorkerFixture([]v1alpha1.WorkerStatus{ready}, &unstructured.UnstructuredList{}, func(string) bool { return true })
 	Expect(got).To(HaveLen(1), "expected a Ready demotion: %+v", got)
@@ -236,6 +241,8 @@ var _ = It("backfills a legacy attempt clock once without extending its deadline
 
 var _ = It("observes mixed worker kinds and leaves empty input unchanged", func() {
 	workers := []v1alpha1.WorkerStatus{newWorkerStatus("standard", "standard", "waiting", "id-0", workerPhaseProvisioning), newWorkerStatus("standard", "standard", "installed", "id-1", workerPhaseProvisioning), newWorkerStatus("standard", "standard", "missing", "id-2", workerPhaseReady), {Name: "vm", Kind: "VirtualMachine", Phase: "Running"}}
+	workers[1].Agent = &v1alpha1.WorkerAgentReference{Name: "agent", UID: "agent-uid"}
+	workers[1].Agent = &v1alpha1.WorkerAgentReference{Name: "agent", UID: "agent-uid"}
 	agents := &unstructured.UnstructuredList{Items: []unstructured.Unstructured{*agentPhaseFixture("installed", true)}}
 	got, removed := observeWorkerFixture(workers, agents, func(id string) bool { return id != "id-2" })
 	Expect(got).To(HaveLen(3), "mixed workers=%v removed=%v", got, removed)

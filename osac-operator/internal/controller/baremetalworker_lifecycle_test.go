@@ -137,8 +137,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 					BareMetal:       &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}
@@ -218,7 +218,7 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 			Expect(bmi.GetMetadata().GetTenant()).To(Equal("tenant1"))
 			na := bmi.GetSpec().GetNetworkAttachments()
 			Expect(na).To(HaveLen(1))
-			Expect(na[0].GetSubnet().GetName()).To(Equal("my-subnet"))
+			Expect(na[0].GetSubnet().GetId()).To(Equal("subnet-id"))
 		}
 
 		// --- Phase B: an agent registers and binds ---
@@ -331,8 +331,8 @@ var _ = Describe("Bare-metal worker provisioning", Label("baremetalworker"), fun
 					},
 				}},
 				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{
-					SubnetRef:         "my-subnet",
-					SecurityGroupRefs: []string{"sg-default"},
+					SubnetRef:         "subnet-id",
+					SecurityGroupRefs: []string{"sg-id"},
 				},
 			},
 		}

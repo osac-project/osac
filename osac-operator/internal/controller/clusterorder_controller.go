@@ -179,6 +179,7 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=pods;secrets,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -582,9 +583,16 @@ func (r *ClusterOrderReconciler) mapSubnetToCluster(ctx context.Context, obj cli
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, 1)
+	subnetID := subnet.Labels[osacSubnetIDLabel]
 	for i := range orders.Items {
 		order := &orders.Items[i]
-		if order.Spec.NetworkAttachment != nil && order.Spec.NetworkAttachment.SubnetRef == subnet.Name {
+		if order.Spec.NetworkAttachment == nil {
+			continue
+		}
+		ref := order.Spec.NetworkAttachment.SubnetRef
+		// New ClusterOrders carry the immutable Fulfillment Subnet ID. Keep the
+		// name comparison for older orders that predate that API contract.
+		if ref == subnetID || ref == subnet.Name {
 			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(order)})
 		}
 	}
@@ -1289,10 +1297,22 @@ func (r *ClusterOrderReconciler) findNamespace(ctx context.Context, instance *v1
 func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.Request, instance *v1alpha1.ClusterOrder) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 	log.Info("deleting clusterorder")
+	usesCaaSEndpointLifecycle := clusterOrderUsesEndpointLifecycle(instance)
 
 	setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseDeleting)
 	instance.SetStatusCondition(v1alpha1.ConditionDeleting, metav1.ConditionTrue,
 		"ClusterOrder is being deleted", v1alpha1.ReasonDeleting)
+	if usesCaaSEndpointLifecycle && apimeta.FindStatusCondition(instance.Status.Conditions,
+		string(v1alpha1.ClusterOrderConditionClusterTeardownReady)) == nil {
+		instance.SetStatusCondition(string(v1alpha1.ClusterOrderConditionClusterTeardownReady),
+			metav1.ConditionFalse, "Waiting for endpoint cleanup", "CleanupPending")
+	}
+	if usesCaaSEndpointLifecycle && r.NetworkingProvisioningEnabled {
+		done, result, err := r.cleanupManagementRegistryProbe(ctx, instance)
+		if err != nil || !done {
+			return result, err
+		}
+	}
 
 	// The add-on controller gets one deletion pass through its finalizer to
 	// cancel active jobs. Job state itself must not block ClusterOrder teardown.
@@ -1325,6 +1345,15 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	if err != nil || !done {
 		return cleanupResult, err
 	}
+	// Persist the endpoint teardown gate before either the core delete job or
+	// worker cleanup can proceed. Returning here lets Reconcile write the status
+	// condition before the next pass starts either cleanup path.
+	if usesCaaSEndpointLifecycle && !apimeta.IsStatusConditionTrue(instance.Status.Conditions,
+		string(v1alpha1.ClusterOrderConditionClusterTeardownReady)) {
+		instance.SetStatusCondition(string(v1alpha1.ClusterOrderConditionClusterTeardownReady),
+			metav1.ConditionTrue, "Endpoint resources and cancelled endpoint jobs are cleaned up", "CleanupComplete")
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 
 	// Handle deprovisioning via provider
 	// Waits for provision job termination and polls deprovision job if needed
@@ -1355,15 +1384,10 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 		}
 	}
 
-	// Worker resources can outlive the HostedCluster. Keep a recorded ingress
-	// reservation until the worker controller has removed its references.
-	if r.clusterIngressReservationRecorded(instance) && len(instance.Status.Workers) > 0 {
+	// The worker controller starts cleanup only after ClusterTeardownReady and
+	// retains its finalizer until every Agent and BMI is authoritatively gone.
+	if len(instance.Status.Workers) > 0 {
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
-	}
-
-	reservationReleased, releaseResult, err := r.releaseClusterIngressReservation(ctx, instance)
-	if err != nil || !reservationReleased {
-		return releaseResult, err
 	}
 
 	if ns != nil {
@@ -1478,6 +1502,14 @@ func (r *ClusterOrderReconciler) handleProvisioning(ctx context.Context, instanc
 	if exists && val == ManagementStateManual {
 		log.Info("skipping provisioning due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
+	}
+	registryProbeCondition := apimeta.FindStatusCondition(instance.Status.Conditions, registryAccessReadyCondition)
+	if clusterOrderUsesEndpointLifecycle(instance) && r.NetworkingProvisioningEnabled &&
+		(instance.Status.Phase != v1alpha1.ClusterOrderPhaseReady || registryProbeCondition != nil) {
+		ready, result, err := r.reconcileManagementRegistryProbe(ctx, instance)
+		if err != nil || !ready {
+			return result, err
+		}
 	}
 
 	return provisioning.RunProvisioningLifecycleWithPrepareTrigger(ctx, r.ProvisioningProvider, instance,

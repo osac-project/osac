@@ -60,3 +60,7 @@ var (
 // bareMetalInstanceOSACNetworkingFinalizer is owned and removed by osac-operator.
 // BMF observes it only to keep host teardown behind external network detachment.
 const bareMetalInstanceOSACNetworkingFinalizer = "osac.openshift.io/baremetalinstance-cleanup"
+
+// bareMetalInstanceCaaSAgentCleanupFinalizer is owned by osac-operator. CaaS
+// workers keep it until their associated Assisted Agent is authoritatively gone.
+const bareMetalInstanceCaaSAgentCleanupFinalizer = "osac.openshift.io/caas-agent-cleanup"

@@ -112,28 +112,6 @@ argument_specs:
           Network manager task input (resource, virtual_network, network_type);
           its content is checked by tasks/_input.yaml.
 
-  reserve_cluster_ingress_ip:
-    short_description: Reserve an address from the Subnet LB VIP range
-    options:
-      osac_job_vars:
-        type: dict
-        required: true
-        description: >-
-          Network manager task input (resource, virtual_network, subnet, ipam,
-          cluster_id);
-          its content is checked by tasks/_input.yaml.
-
-  release_cluster_ingress_ip:
-    short_description: Release the ClusterOrder ingress address reservation
-    options:
-      osac_job_vars:
-        type: dict
-        required: true
-        description: >-
-          Network manager task input (resource, virtual_network, subnet, ipam,
-          cluster_id);
-          its content is checked by tasks/_input.yaml.
-
   create_external_ip_pool:
     short_description: Create the IPAM allocation and common subnet of an ExternalIPPool
     options:

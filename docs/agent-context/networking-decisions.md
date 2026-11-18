@@ -287,11 +287,10 @@ as follows:
   guest ingress allocation to Fulfillment: it reserves one durable address per
   Cluster from the attached Subnet's LB VIP ranges, then passes the immutable
   address to the ClusterOrder for validation and guest MetalLB configuration.
-  This is a desired design without an allocator implementation yet. The current
-  code still contains the legacy `reserve_cluster_ingress_ip` and
-  `release_cluster_ingress_ip` Fabric tasks; they are outside the 19-task
-  contract and do not implement the accepted allocator design. The Fabric only
-  carries the guest MetalLB L2 announcement and traffic. The selected
+  Fulfillment records the Subnet's address layout and serializes allocation on
+  the Subnet before creating the Cluster. The Fabric Manager carries the guest
+  MetalLB L2 announcement and traffic; it has no ingress reserve/release task.
+  The ClusterOrder consumes the server-assigned address. The selected
   ClusterTemplate declares the `supports_automatic_caas_endpoints` capability;
   Fulfillment stores that resolved capability on the Cluster and projects it to
   the ClusterOrder, whose controller uses it to select this lifecycle instead

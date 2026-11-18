@@ -140,6 +140,21 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 		Expect(err).To(MatchError(ContainSubstring("spec presence is immutable after creation")))
 	})
 
+	It("rejects changing the Fulfillment-assigned ingress address", func() {
+		const name = "cluster-order-immutable-ingress-address"
+		instance := newTestClusterOrder(name)
+		instance.Spec.IngressAllocatedAddress = "10.0.0.192"
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+
+		instance = getClusterOrder(name)
+		instance.Spec.IngressAllocatedAddress = "10.0.0.193"
+		err := k8sClient.Update(ctx, instance)
+		Expect(err).To(HaveOccurred())
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("ingressAllocatedAddress is immutable after creation"))
+	})
+
 	It("allows unrelated worker and status updates with an unchanged network attachment", func() {
 		const name = "cluster-order-network-attachment-lifecycle-update"
 		instance := newTestClusterOrder(name)

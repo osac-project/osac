@@ -215,6 +215,7 @@ message ClusterSpec {
     (google.api.field_behavior) = IMMUTABLE,
     (buf.validate.field).repeated.max_items = 32
   ];
+
 }
 
 // The per-operator status contains the installation state of one add-on operator.

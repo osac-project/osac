@@ -66,9 +66,13 @@ in `osac-aap/Makefile`.
 - Wire-contract unit tests: shared operator/AAP goldens against doubles and
   the CUDN planner; no deployed AAP, Kubernetes objects or provider execution.
 
-The shared goldens do not bind delete/detach, SecurityGroup, DHCP-lease,
-FabricDomain, cluster-ingress or physical-interface shapes; those gaps have no
-owning ticket. Read both sides' suites before extending a task contract.
+The shared goldens bind physical NetworkAttachment apply, delete and
+query_dhcp_lease inputs plus the DHCP lease result; both the operator producer
+and this AAP consumer read the same files. The AAP contract runs the generic
+playbook against a fake Netris endpoint, with no deployed AAP or provider.
+NetworkAttachment overlay delete/detach, other unbound delete/detach tasks,
+SecurityGroup and FabricDomain shapes remain unbound. Cluster ingress is
+already bound by shared input and result goldens.
 AgentlessNet Fabric and switch-VLAN targets ([OSAC-7156](https://redhat.atlassian.net/browse/OSAC-7156))
 run generic-playbook child jobs with real SQLite against one stateful fake SSH
 switch endpoint: physical NetworkAttachment apply, partial-retry, delete-wins
@@ -79,10 +83,9 @@ ownership by API ID, and verify release tombstoning. DHCP leases, Linux and
 provider commands, Kind, an AAP server, a live switch, BGP convergence and
 packet delivery are not run.
 
-The `netris_fabric` target runs all 19 current contract Fabric tasks plus two
-legacy CaaS ingress task names. Those ingress tests exercise Netris allocation
-and release only; they do not cover the desired Fulfillment-owned allocator,
-which remains design-only.
+The `netris_fabric` target runs the 19 contract Fabric tasks. CaaS guest
+ingress allocation is Fulfillment-owned, so no Fabric task allocates or
+releases the guest address.
 
 ## Network role coverage gate
 

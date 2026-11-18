@@ -30,6 +30,12 @@ out of band.
 | `DNS_CLASS` | `dns.route53.dns` | Fully-qualified Ansible role name of the DNS driver |
 | `DNS_ZONE` | Value of `EXTERNAL_ACCESS_BASE_DOMAIN` | DNS zone to operate in (e.g., `box.massopen.cloud`) |
 
+For CaaS, `EXTERNAL_ACCESS_BASE_DOMAIN` must match
+`HOSTED_CLUSTER_BASE_DOMAIN` so public names match the HostedCluster
+certificate domain. The installer rejects a base-domain mismatch and prevents
+changing `EXTERNAL_ACCESS_BASE_DOMAIN`, `DNS_ZONE`, or `DNS_CLASS` while any
+Cluster exists.
+
 ## Route 53 Configuration
 
 The default Route 53 backend requires AWS credentials to manage DNS records.

@@ -167,7 +167,6 @@ def test_config_as_code_secret_accepts_a_boolean_netris_validate_certs(value):
 @pytest.mark.parametrize(
     "url",
     [
-        "http://netris.example.com",
         "https://netris.example.com/api path",
         "https:// netris.example.com",
         "https://",
@@ -175,18 +174,23 @@ def test_config_as_code_secret_accepts_a_boolean_netris_validate_certs(value):
         "https://user:pass@netris.example.com",
     ],
 )
-def test_config_as_code_secret_rejects_a_non_https_netris_controller_url(url):
+def test_config_as_code_secret_rejects_a_malformed_netris_controller_url(url):
     result = _render_aap_chart(f"instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL={url}")
 
     assert result.returncode != 0
-    assert "NETRIS_CONTROLLER_URL must be an https:// URL" in result.stderr
+    assert "NETRIS_CONTROLLER_URL must be an http(s):// URL" in result.stderr
 
 
 @pytest.mark.parametrize(
     "url",
-    ["https://netris.example.com", "https://netris.example.com:8443", "https://10.0.0.1/netris/"],
+    [
+        "http://netris.example.com",
+        "https://netris.example.com",
+        "https://netris.example.com:8443",
+        "https://10.0.0.1/netris/",
+    ],
 )
-def test_config_as_code_secret_accepts_an_https_netris_controller_url(url):
+def test_config_as_code_secret_accepts_an_http_or_https_netris_controller_url(url):
     result = _render_config_as_code_secret(f"instanceGroups.networkFulfillment.config.NETRIS_CONTROLLER_URL={url}")
 
     assert result.returncode == 0, result.stderr

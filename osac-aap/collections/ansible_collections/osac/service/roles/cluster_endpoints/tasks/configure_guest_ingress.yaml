@@ -1,5 +1,5 @@
 ---
-- name: Require the reserved ingress address and HostedControlPlane namespace
+- name: Require the Fulfillment-allocated ingress address and HostedControlPlane namespace
   ansible.builtin.assert:
     that:
       - ingress_allocated_address is defined
@@ -30,7 +30,7 @@
          | b64decode | from_yaml }}
   no_log: true
 
-- name: Configure guest ingress with the reserved address
+- name: Configure guest ingress with the allocated address
   ansible.builtin.include_role:
     name: osac.service.metallb_ingress
     tasks_from: configure_metallb_ingress.yml
@@ -38,7 +38,7 @@
     metallb_ingress_admin_kubeconfig: "{{ _cluster_endpoint_admin_kubeconfig }}"
     metallb_ingress_ip: "{{ ingress_allocated_address }}"
 
-- name: Wait for the guest ingress Service to report the reserved address
+- name: Wait for the guest ingress Service to report the allocated address
   kubernetes.core.k8s_info:
     kubeconfig: "{{ _cluster_endpoint_admin_kubeconfig }}"
     api_version: v1

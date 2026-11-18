@@ -136,6 +136,11 @@ func (r *Reconciler) resolveWorkerCreationInputs(
 func (r *Reconciler) reconcileWorkerCreation(
 	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster, observed *workerObservation, infra infraEnvEvidence,
 ) (bool, ctrl.Result, error) {
+	if co.Spec.SupportsAutomaticCaaSEndpoints &&
+		(co.Status.ClusterReference == nil || !apimeta.IsStatusConditionTrue(co.Status.Conditions,
+			string(v1alpha1.ClusterOrderConditionManagementPublicationReady))) {
+		return false, ctrl.Result{RequeueAfter: agentRequeueInterval}, nil
+	}
 	if _, prev := selectDueSlot(co, time.Now()); prev == nil && !workerCreationDue(co) {
 		res, err := r.refreshWorkerReadiness(ctx, co, infra)
 		if err != nil || !res.IsZero() {
@@ -280,6 +285,7 @@ func (r *Reconciler) createSelectedWorker(
 	if err := r.checkCurrentCapacityPlan(ctx, co); err != nil {
 		return ctrl.Result{}, err
 	}
+	ignitionRaw := string(inputs.ignition)
 	// Persist the durable attempt origin before the first external Create for this
 	// attempt. A lost acknowledgement or lost identity write then recovers the same
 	// clock instead of restarting it, and no provider call happens inside this
@@ -292,6 +298,27 @@ func (r *Reconciler) createSelectedWorker(
 		}
 		return workerBoundaryRequeue(), nil
 	}
+	if co.Spec.SupportsAutomaticCaaSEndpoints && r.NetworkingProvisioningEnabled {
+		image := workerRegistryProbeImage(co, prev)
+		if image == "" {
+			return ctrl.Result{}, fmt.Errorf("ClusterOrder has no ClusterVersion release image for worker registry probe")
+		}
+		credentials, result, err := r.prepareWorkerRegistryProbe(ctx, co, prev, image)
+		if err != nil || !result.IsZero() {
+			return result, err
+		}
+		ignitionRaw, err = injectWorkerRegistryProbeIgnition(ignitionRaw, credentials, workerRegistryPullSecret(co))
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !prev.RegistryProbePrepared {
+			prev.RegistryProbePrepared = true
+			if err := r.writeSelectedWorker(ctx, co, prev); err != nil {
+				return ctrl.Result{}, err
+			}
+			return workerBoundaryRequeue(), nil
+		}
+	}
 	// Only this invocation's Reserved -> Attempted transition can be undone
 	// by its rejected RPC. A later rejection says nothing about an earlier
 	// unknown outcome (including a legacy slot without an explicit journal).
@@ -300,11 +327,11 @@ func (r *Reconciler) createSelectedWorker(
 		return ctrl.Result{}, err
 	}
 	if prev.Phase == workerPhaseFailed {
-		res, err = r.retryFailedWorker(ctx, co, cluster, nr, prev, inputs.image, string(inputs.ignition), filter)
+		res, err = r.retryFailedWorker(ctx, co, cluster, nr, prev, inputs.image, ignitionRaw, filter)
 	} else {
 		var ws v1alpha1.WorkerStatus
 		ws, res, err = r.ensureWorkerBMI(ctx, co, cluster, nr, prev.BareMetalInstance.Name, observed,
-			inputs.image, string(inputs.ignition), filter)
+			inputs.image, ignitionRaw, filter)
 		if err == nil && res.IsZero() {
 			workerCreated(prev, ws.BareMetalInstance.Name, ws.BareMetalInstance.ID)
 		}
@@ -518,14 +545,14 @@ func (r *Reconciler) ensureWorkerBMI(
 		if err := checkBMIRecoveryCandidate(bmi); err != nil {
 			return v1alpha1.WorkerStatus{}, ctrl.Result{}, err
 		}
-		log.Info("worker BMI already exists, skipping create", "name", workerName)
+		log.Info("worker BMI already exists, skipping create", jsonNameField, workerName)
 		return newWorkerStatus(nr.NodeSet, nr.BareMetal.InstanceType, workerName, bmi.GetId(), workerPhaseWaitingForAgent), ctrl.Result{}, nil
 	}
 	bmi, res, err := r.ensureBMI(ctx, co, cluster, *nr, workerName, image, ignitionRaw, filter)
 	if err != nil || !res.IsZero() {
 		return v1alpha1.WorkerStatus{}, res, err
 	}
-	log.Info("created BMI", "name", workerName, "id", bmi.GetId())
+	log.Info("created BMI", jsonNameField, workerName, "id", bmi.GetId())
 	r.recorder.Eventf(co, nil, corev1.EventTypeNormal, eventReasonWorkerCreated, "CreateWorker",
 		"worker %s: BMI %s created", workerName, bmi.GetId())
 	return newWorkerStatus(nr.NodeSet, nr.BareMetal.InstanceType, workerName, bmi.GetId(), workerPhaseWaitingForAgent), ctrl.Result{}, nil

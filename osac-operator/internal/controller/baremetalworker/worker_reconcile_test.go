@@ -514,6 +514,7 @@ var _ = It("makes independent progress across mixed worker states", func() {
 		agent := agentPhaseFixture(name, true)
 		agent.SetName(name + "-agent")
 		agent.SetNamespace(co.Namespace)
+		agent.SetUID(types.UID(name + "-agent-uid"))
 		agent.SetLabels(map[string]string{workerNameLabel: name, clusterOrderLabel: co.Name})
 		mac := "aa:bb:cc:dd:ee:0" + string(rune('2'+i))
 		Expect(unstructured.SetNestedSlice(agent.Object, []interface{}{map[string]interface{}{"macAddress": mac}}, "status", "inventory", "interfaces")).To(Succeed())

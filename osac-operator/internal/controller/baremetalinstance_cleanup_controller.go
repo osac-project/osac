@@ -118,7 +118,8 @@ func (r *BareMetalInstanceCleanupReconciler) reconcileAutomaticExternalIPAttachm
 	bmi *bmfov1alpha1.BareMetalInstance,
 	bmiID string,
 ) (ctrl.Result, error) {
-	if !r.NetworkingProvisioningEnabled || bmi.Status.Phase != bmfov1alpha1.BareMetalInstancePhaseReady || !hasPrimaryBareMetalInstanceAddress(bmi) ||
+	if !r.NetworkingProvisioningEnabled || bmi.Status.Phase != bmfov1alpha1.BareMetalInstancePhaseReady ||
+		bmi.Status.RunStrategy != bmfov1alpha1.RunStrategyAlways || !hasPrimaryBareMetalInstanceAddress(bmi) ||
 		r.BareMetalInstancesClient == nil || r.ExternalIPAttachmentsClient == nil {
 		return ctrl.Result{}, nil
 	}
@@ -146,7 +147,7 @@ func (r *BareMetalInstanceCleanupReconciler) reconcileAutomaticExternalIPAttachm
 		},
 	}
 	return reconcileAutomaticExternalIPAttachments(ctx, r.Client, r.networkingNamespace,
-		r.ExternalIPAttachmentsClient, r.pollInterval, target)
+		r.ExternalIPAttachmentsClient, automaticExternalAccessRecheck, target)
 }
 
 func hasPrimaryBareMetalInstanceAddress(bmi *bmfov1alpha1.BareMetalInstance) bool {

@@ -92,12 +92,12 @@ def test_guest_ingress_uses_the_hosted_control_plane_service_network_kubeconfig(
     fail_msg = require_secret["ansible.builtin.assert"]["fail_msg"]
     assert "was not found" in fail_msg
     assert "hosted_control_plane_namespace" not in fail_msg
-    configure = by_name["Configure guest ingress with the reserved address"]
+    configure = by_name["Configure guest ingress with the allocated address"]
     assert configure["ansible.builtin.include_role"]["name"] == (
         "osac.service.metallb_ingress"
     )
     assert "ingress_allocated_address" in str(configure["vars"])
-    wait = by_name["Wait for the guest ingress Service to report the reserved address"]
+    wait = by_name["Wait for the guest ingress Service to report the allocated address"]
     assert wait["until"]
     assert "ingress_allocated_address" in str(wait["until"])
     assert wait["no_log"] is True

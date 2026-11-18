@@ -223,6 +223,13 @@ message ClusterSpec {
   // Resolved from the selected ClusterTemplate so the operator can select the
   // matching ClusterOrder endpoint lifecycle without depending on template IDs.
   bool supports_automatic_caas_endpoints = 16 [(cleanapi.field).private = true];
+
+  // Fulfillment-owned guest ingress address, allocated from the attached
+  // Subnet's recorded load-balancer VIP ranges. Server-assigned and immutable.
+  string ingress_allocated_address = 17 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (cleanapi.field).private = true
+  ];
 }
 
 // The per-operator status contains the installation state of one add-on operator.

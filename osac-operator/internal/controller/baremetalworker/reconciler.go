@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -35,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -46,6 +48,7 @@ const (
 	managementStateAnnotation = "osac.openshift.io/management-state"
 	managementStateUnmanaged  = "unmanaged"
 	bmWorkerFinalizer         = "osac.openshift.io/baremetalworker-finalizer"
+	caasAgentCleanupFinalizer = "osac.openshift.io/caas-agent-cleanup"
 )
 
 // Reconciler is the bare-metal worker reconciler (BareMetalWorkerReconciler). It watches
@@ -53,14 +56,18 @@ const (
 // creates BMIs, correlates registered Agents by MAC, and converges NodePool replicas.
 type Reconciler struct {
 	client.Client
-	apiReader             client.Reader
-	scheme                *runtime.Scheme
-	fulfillment           FulfillmentClient
-	ignition              IgnitionFetcher
-	recorder              events.EventRecorder
-	clusterOrderNamespace string
-	macResolver           MACResolver
-	secrets               SecretsClient
+	apiReader                  client.Reader
+	scheme                     *runtime.Scheme
+	fulfillment                FulfillmentClient
+	ignition                   IgnitionFetcher
+	recorder                   events.EventRecorder
+	clusterOrderNamespace      string
+	networkingNamespace        string
+	macResolver                MACResolver
+	secrets                    SecretsClient
+	registryProbeGuestResolver registryProbeGuestResolver
+	// NetworkingProvisioningEnabled reflects global.networking.provisioningEnabled.
+	NetworkingProvisioningEnabled bool
 }
 
 // SecretsClient is the Secrets.Get subset used to materialize a registered
@@ -80,20 +87,31 @@ func NewReconciler(
 	clusterOrderNamespace string,
 ) *Reconciler {
 	r := &Reconciler{
-		Client:                c,
-		apiReader:             apiReader,
-		scheme:                scheme,
-		fulfillment:           fulfillment,
-		ignition:              ignition,
-		recorder:              recorder,
-		clusterOrderNamespace: clusterOrderNamespace,
+		Client:                        c,
+		apiReader:                     apiReader,
+		scheme:                        scheme,
+		fulfillment:                   fulfillment,
+		ignition:                      ignition,
+		recorder:                      recorder,
+		clusterOrderNamespace:         clusterOrderNamespace,
+		networkingNamespace:           clusterOrderNamespace,
+		NetworkingProvisioningEnabled: true,
 	}
 	return r
 }
 
-// SetMACResolver overrides the function used to resolve a BMI's host NIC MACs for agent
-// correlation. The default reads status.hardware.nics (OSAC-4203) from the
-// reconcile-local BMI observation; tests can inject a stub resolver before use.
+// SetNetworkingNamespace sets the namespace that holds BMF and NetworkAttachment hub CRs.
+// It defaults to the ClusterOrder namespace for older deployments.
+func (r *Reconciler) SetNetworkingNamespace(namespace string) {
+	if namespace != "" {
+		r.networkingNamespace = namespace
+	}
+}
+
+// SetMACResolver overrides the function used to resolve a BMI's host NIC MACs for Agent
+// correlation. CaaS uses the selected NetworkAttachment MAC when observed; the fallback
+// reads status.hardware.nics from the reconcile-local BMI observation. Tests can inject a
+// stub resolver before use.
 func (r *Reconciler) SetMACResolver(resolver MACResolver) {
 	r.macResolver = resolver
 }
@@ -112,6 +130,7 @@ func (r *Reconciler) SetSecretsClient(client SecretsClient) {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;create
 // +kubebuilder:rbac:groups=agent-install.openshift.io,resources=infraenvs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents,verbs=get;list;watch;patch;delete
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalinstances;networkattachments,verbs=get;list;watch
 // +kubebuilder:rbac:groups=hypershift.openshift.io,resources=nodepools,verbs=get;list;watch;patch;update
 
 // Reconcile ensures the InfraEnv for a bare-metal ClusterOrder exists, creates BMIs, correlates
@@ -179,11 +198,24 @@ func workerClusterOrderChangedPredicate() predicate.Predicate {
 			current := e.ObjectNew.(*v1alpha1.ClusterOrder)
 			if !old.DeletionTimestamp.Equal(current.DeletionTimestamp) ||
 				!reflect.DeepEqual(old.Finalizers, current.Finalizers) ||
-				old.Labels[clusterOrderIDLabel] != current.Labels[clusterOrderIDLabel] {
+				old.Labels[clusterOrderIDLabel] != current.Labels[clusterOrderIDLabel] ||
+				!reflect.DeepEqual(old.Status.APIDNSRecordsPublishedTime, current.Status.APIDNSRecordsPublishedTime) ||
+				!reflect.DeepEqual(old.Status.Jobs, current.Status.Jobs) {
 				return true
 			}
 			for _, key := range []string{tenantAnnotationKey, managementStateAnnotation, infraEnvUIDAnnotation} {
 				if old.Annotations[key] != current.Annotations[key] {
+					return true
+				}
+			}
+			for _, conditionType := range []string{
+				string(v1alpha1.ClusterOrderConditionManagementPublicationReady),
+				string(v1alpha1.ClusterOrderConditionClusterTeardownReady),
+			} {
+				if !reflect.DeepEqual(
+					apimeta.FindStatusCondition(old.Status.Conditions, conditionType),
+					apimeta.FindStatusCondition(current.Status.Conditions, conditionType),
+				) {
 					return true
 				}
 			}
@@ -217,6 +249,20 @@ func (r *Reconciler) SetupWithManager(mgr mcmanager.Manager) error {
 		log.Info("Agent CRD not found, skipping Agent watch")
 	}
 
+	bmiGVK := bmfov1alpha1.GroupVersion.WithKind("BareMetalInstance")
+	if crdExists(mgr, bmiGVK) {
+		bld = bld.Watches(&bmfov1alpha1.BareMetalInstance{}, handler.EnqueueRequestsFromMapFunc(
+			r.bareMetalInstanceToClusterOrderMapper()))
+		log.Info("watching BareMetalInstance CRs for worker network readiness and cleanup")
+	}
+
+	networkAttachmentGVK := v1alpha1.GroupVersion.WithKind("NetworkAttachment")
+	if crdExists(mgr, networkAttachmentGVK) {
+		bld = bld.Watches(&v1alpha1.NetworkAttachment{}, handler.EnqueueRequestsFromMapFunc(
+			r.networkAttachmentToClusterOrderMapper()))
+		log.Info("watching NetworkAttachment CRs for worker network readiness")
+	}
+
 	npGVK := schema.GroupVersionKind{Group: "hypershift.openshift.io", Version: "v1beta1", Kind: "NodePool"}
 	if crdExists(mgr, npGVK) {
 		npObj := &unstructured.Unstructured{}
@@ -228,6 +274,38 @@ func (r *Reconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	}
 
 	return bld.Complete(r)
+}
+
+func (r *Reconciler) bareMetalInstanceToClusterOrderMapper() handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []ctrl.Request {
+		id := obj.GetLabels()["osac.openshift.io/baremetalinstance-uuid"]
+		return r.mapBMIIDToClusterOrder(ctx, id)
+	}
+}
+
+func (r *Reconciler) networkAttachmentToClusterOrderMapper() handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []ctrl.Request {
+		attachment, ok := obj.(*v1alpha1.NetworkAttachment)
+		if !ok || attachment.Spec.Target.Kind != v1alpha1.NetworkAttachmentTargetBareMetalInstance {
+			return nil
+		}
+		return r.mapBMIIDToClusterOrder(ctx, attachment.Spec.Target.ID)
+	}
+}
+
+func (r *Reconciler) mapBMIIDToClusterOrder(ctx context.Context, bmiID string) []ctrl.Request {
+	if bmiID == "" || r.fulfillment == nil {
+		return nil
+	}
+	bmi, err := r.fulfillment.GetBareMetalInstance(ctx, bmiID)
+	if err != nil || bmi == nil {
+		return nil
+	}
+	name := bmi.GetMetadata().GetLabels()[clusterOrderLabel]
+	if name == "" {
+		return nil
+	}
+	return []ctrl.Request{{NamespacedName: client.ObjectKey{Name: name, Namespace: r.clusterOrderNamespace}}}
 }
 
 // crdExists checks whether a CRD for the given GVK is registered in the API server.

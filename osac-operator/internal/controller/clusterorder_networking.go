@@ -57,7 +57,7 @@ const (
 	endpointReasonAsExpected           = "AsExpected"
 	endpointReasonProgressing          = "EndpointsProgressing"
 	endpointReasonExternalAccessFailed = "ExternalAccessFailed"
-	endpointReasonIngressReservation   = "IngressReservationFailed"
+	endpointReasonIngressAllocation    = "IngressAllocationFailed"
 	endpointReasonGuestIngressFailed   = "GuestIngressFailed"
 	endpointReasonGuestIngressProgress = "GuestIngressProgressing"
 	endpointReasonDNSPublishFailed     = "DNSPublishFailed"
@@ -314,7 +314,7 @@ func (r *ClusterOrderReconciler) reconcileClusterGuestIngress(
 	guestClient kubernetes.Interface,
 	guestReadyNode bool,
 ) (bool, error) {
-	subnet, virtualNetwork, err := r.clusterEndpointSubnet(ctx, instance)
+	subnet, _, err := r.clusterEndpointSubnet(ctx, instance)
 	if err != nil {
 		if isClusterEndpointTenantMismatch(err) {
 			setClusterEndpointCondition(instance, metav1.ConditionFalse,
@@ -323,30 +323,15 @@ func (r *ClusterOrderReconciler) reconcileClusterGuestIngress(
 		}
 		return false, err
 	}
-	input, err := networktask.LoadInput(instance)
-	if err != nil {
-		return false, err
-	}
-	managerUnavailable := subnet == nil || subnet.Status.NetworkManagers == nil || subnet.Status.NetworkManagers.Fabric == nil
-	if subnet == nil || virtualNetwork == nil || !isReady(subnet) || subnet.Status.IPAM == nil ||
-		(managerUnavailable && input == nil) {
+	if subnet == nil || !isReady(subnet) || subnet.Status.IPAM == nil {
 		setClusterEndpointCondition(instance, metav1.ConditionFalse,
-			endpointReasonProgressing, "Waiting for the cluster Subnet Fabric Manager and IPAM")
+			endpointReasonGuestIngressProgress, "Waiting for the cluster Subnet IPAM layout")
 		return false, nil
 	}
-
-	reserveOutcome, err := r.runReserveClusterIngress(ctx, instance, subnet, virtualNetwork)
-	if err != nil {
-		return false, err
-	}
-	switch {
-	case reserveOutcome.Failed():
+	allocatedAddress := instance.Spec.IngressAllocatedAddress
+	if err := validateCommittedClusterIngressAddress(allocatedAddress, subnet); err != nil {
 		setClusterEndpointCondition(instance, metav1.ConditionFalse,
-			endpointReasonIngressReservation, reserveOutcome.Entry.Message)
-		return false, nil
-	case !reserveOutcome.Succeeded() || instance.Status.IngressAllocatedAddress == "":
-		setClusterEndpointCondition(instance, metav1.ConditionFalse,
-			endpointReasonProgressing, endpointJobMessage(reserveOutcome, "Reserving guest ingress address"))
+			endpointReasonIngressAllocation, err.Error())
 		return false, nil
 	}
 
@@ -359,7 +344,7 @@ func (r *ClusterOrderReconciler) reconcileClusterGuestIngress(
 	configureOutcome, err := r.runClusterEndpointJob(ctx, instance, "configure_guest_ingress", map[string]any{
 		fieldClusterOrder:                clusterEndpointOrderVars(instance),
 		"hosted_control_plane_namespace": hostedControlPlaneNamespace(hc),
-		"ingress_allocated_address":      instance.Status.IngressAllocatedAddress,
+		"ingress_allocated_address":      allocatedAddress,
 	}, false)
 	if err != nil {
 		return false, err
@@ -379,7 +364,7 @@ func (r *ClusterOrderReconciler) reconcileClusterGuestIngress(
 	if err != nil {
 		return false, err
 	}
-	if ingressAddress == "" || ingressAddress != instance.Status.IngressAllocatedAddress {
+	if ingressAddress == "" || ingressAddress != allocatedAddress {
 		instance.Status.IngressEndpoint = ""
 		setClusterEndpointCondition(instance, metav1.ConditionFalse,
 			endpointReasonGuestIngressProgress, "Waiting for the ingress Service to use its reserved address")
@@ -387,6 +372,26 @@ func (r *ClusterOrderReconciler) reconcileClusterGuestIngress(
 	}
 	instance.Status.IngressEndpoint = ingressAddress
 	return true, nil
+}
+
+func validateCommittedClusterIngressAddress(address string, subnet *v1alpha1.Subnet) error {
+	parsed, err := netip.ParseAddr(address)
+	if err != nil || !parsed.Is4() || parsed.String() != address {
+		return fmt.Errorf("fulfillment-assigned guest ingress address is missing or not canonical IPv4")
+	}
+	if subnet == nil || subnet.Status.IPAM == nil || len(subnet.Status.IPAM.LBVIPIPv4CIDRs) == 0 {
+		return fmt.Errorf("subnet has no recorded load-balancer VIP range")
+	}
+	for _, value := range subnet.Status.IPAM.LBVIPIPv4CIDRs {
+		prefix, parseErr := netip.ParsePrefix(value)
+		if parseErr != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() {
+			return fmt.Errorf("subnet has an invalid recorded load-balancer VIP range")
+		}
+		if prefix.Contains(parsed) {
+			return nil
+		}
+	}
+	return fmt.Errorf("fulfillment-assigned guest ingress address is outside the subnet load-balancer VIP ranges")
 }
 
 func (r *ClusterOrderReconciler) publishClusterAPIEndpointDNS(
@@ -606,12 +611,28 @@ func (r *ClusterOrderReconciler) clusterEndpointSubnet(
 	if instance.Spec.NetworkAttachment == nil || instance.Spec.NetworkAttachment.SubnetRef == "" || r.NetworkingNamespace == "" {
 		return nil, nil, nil
 	}
-	subnet := &v1alpha1.Subnet{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: r.NetworkingNamespace, Name: instance.Spec.NetworkAttachment.SubnetRef}, subnet); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil, nil
+	subnetRef := instance.Spec.NetworkAttachment.SubnetRef
+	subnets := &v1alpha1.SubnetList{}
+	if err := r.List(ctx, subnets, client.InNamespace(r.NetworkingNamespace),
+		client.MatchingLabels{osacSubnetIDLabel: subnetRef}); err != nil {
+		return nil, nil, fmt.Errorf("list cluster endpoint Subnet %q: %w", subnetRef, err)
+	}
+	if len(subnets.Items) > 1 {
+		return nil, nil, fmt.Errorf("multiple Subnets have API ID %q", subnetRef)
+	}
+	var subnet *v1alpha1.Subnet
+	if len(subnets.Items) == 1 {
+		subnet = &subnets.Items[0]
+	} else {
+		// Accept the earlier name-form ClusterOrder shape during rollout; new
+		// Fulfillment orders carry the immutable Subnet API ID.
+		subnet = &v1alpha1.Subnet{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: r.NetworkingNamespace, Name: subnetRef}, subnet); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, nil, nil
+			}
+			return nil, nil, fmt.Errorf("get cluster endpoint Subnet %q: %w", subnetRef, err)
 		}
-		return nil, nil, fmt.Errorf("get cluster endpoint Subnet %q: %w", instance.Spec.NetworkAttachment.SubnetRef, err)
 	}
 	virtualNetwork, err := findVirtualNetwork(ctx, r.Client, r.NetworkingNamespace, subnet.Spec.VirtualNetwork)
 	if err != nil {
@@ -631,80 +652,6 @@ func (r *ClusterOrderReconciler) clusterEndpointSubnet(
 
 func isClusterEndpointTenantMismatch(err error) bool {
 	return errors.Is(err, errClusterEndpointTenantMismatch)
-}
-
-func (r *ClusterOrderReconciler) runReserveClusterIngress(
-	ctx context.Context,
-	instance *v1alpha1.ClusterOrder,
-	subnet *v1alpha1.Subnet,
-	virtualNetwork *v1alpha1.VirtualNetwork,
-) (networktask.Outcome, error) {
-	input, err := networktask.LoadInput(instance)
-	if err != nil {
-		return networktask.Outcome{}, err
-	}
-	var managerRef *v1alpha1.NetworkManagerRef
-	var beforeLaunch func() error
-	if input == nil {
-		if subnet.Status.NetworkManagers == nil || subnet.Status.NetworkManagers.Fabric == nil {
-			return networktask.Outcome{}, fmt.Errorf("subnet %q has no recorded Fabric Manager", subnet.Name)
-		}
-		managerRef = subnet.Status.NetworkManagers.Fabric.DeepCopy()
-		resource, err := networktask.Snapshot(instance, kindClusterOrder, instance.Spec, "networkAttachment")
-		if err != nil {
-			return networktask.Outcome{}, err
-		}
-		vnSnapshot, err := networktask.Snapshot(virtualNetwork, kindVirtualNetwork, virtualNetwork.Spec, "ipv4Cidr")
-		if err != nil {
-			return networktask.Outcome{}, err
-		}
-		subnetSnapshot, err := networktask.Snapshot(subnet, kindSubnet, subnet.Spec, "ipv4Cidr", "addressPlan")
-		if err != nil {
-			return networktask.Outcome{}, err
-		}
-		input = networktask.NewInput(instance, kindClusterOrder, resource)
-		input["virtual_network"] = vnSnapshot
-		input["subnet"] = subnetSnapshot
-		input["ipam"] = networktask.IPAMVars(subnet.Status.IPAM)
-		clusterID := instance.Labels[osacClusterOrderIDLabel]
-		if clusterID == "" {
-			return networktask.Outcome{}, fmt.Errorf("ClusterOrder %q has no Cluster API ID", instance.Name)
-		}
-		input["cluster_id"] = clusterID
-		input["fabric_manager"] = map[string]any{fieldName: managerRef.Name, "ansible_role": managerRef.AnsibleRole}
-		beforeLaunch = func() error { return networktask.StoreInput(instance, input) }
-	} else {
-		// Retry the same manager selected for the first reservation attempt even
-		// if NetworkClass resolution later changes the Subnet's live status.
-		storedManager, ok := input["fabric_manager"].(map[string]any)
-		if !ok {
-			return networktask.Outcome{}, fmt.Errorf("ClusterOrder %q ingress reservation input has no recorded Fabric Manager", instance.Name)
-		}
-		name, nameOK := storedManager[fieldName].(string)
-		role, roleOK := storedManager["ansible_role"].(string)
-		if !nameOK || name == "" || !roleOK || role == "" {
-			return networktask.Outcome{}, fmt.Errorf("ClusterOrder %q ingress reservation input has an invalid Fabric Manager", instance.Name)
-		}
-		managerRef = &v1alpha1.NetworkManagerRef{Name: name, AnsibleRole: role}
-	}
-	out, err := r.Engine.Run(ctx, instance, networktask.Request{
-		Task:         networktask.ReserveClusterIngressIP,
-		Manager:      v1alpha1.NetworkJobManagerFabric,
-		ManagerRef:   managerRef,
-		Kind:         kindClusterOrder,
-		Vars:         clusterIngressManagerVars(input),
-		BeforeLaunch: beforeLaunch,
-		Accept: func(_ context.Context, result networktask.Result) error {
-			address, err := networktask.ParseClusterIngress(result, subnet.Spec.IPv4CIDR,
-				subnet.Status.IPAM, instance.Status.IngressAllocatedAddress)
-			if err != nil {
-				return err
-			}
-			instance.Status.IngressAllocatedAddress = address
-			return nil
-		},
-	})
-	return out, err
 }
 
 func (r *ClusterOrderReconciler) runClusterEndpointJob(
@@ -1255,57 +1202,6 @@ func clusterEndpointDNSBaseDomainFromStatus(instance *v1alpha1.ClusterOrder) str
 		}
 	}
 	return ""
-}
-
-func (r *ClusterOrderReconciler) releaseClusterIngressReservation(
-	ctx context.Context, instance *v1alpha1.ClusterOrder,
-) (bool, ctrl.Result, error) {
-	if !r.clusterIngressReservationRecorded(instance) {
-		return true, ctrl.Result{}, nil
-	}
-	input, err := networktask.LoadInput(instance)
-	if err != nil {
-		return false, ctrl.Result{}, err
-	}
-	manager, ok := input["fabric_manager"].(map[string]any)
-	if !ok {
-		return false, ctrl.Result{}, fmt.Errorf("ClusterOrder %q ingress reservation input has no recorded Fabric Manager", instance.Name)
-	}
-	managerName, nameOK := manager[fieldName].(string)
-	ansibleRole, roleOK := manager["ansible_role"].(string)
-	if !nameOK || managerName == "" || !roleOK || ansibleRole == "" {
-		return false, ctrl.Result{}, fmt.Errorf("ClusterOrder %q ingress reservation input has an invalid Fabric Manager", instance.Name)
-	}
-	out, err := r.Engine.Run(ctx, instance, networktask.Request{
-		Task: networktask.ReleaseClusterIngressIP, Manager: v1alpha1.NetworkJobManagerFabric,
-		ManagerRef: &v1alpha1.NetworkManagerRef{Name: managerName, AnsibleRole: ansibleRole},
-		Kind:       kindClusterOrder, Vars: clusterIngressManagerVars(input),
-	})
-	if err != nil {
-		return false, ctrl.Result{}, err
-	}
-	if !out.Succeeded() {
-		return false, ctrl.Result{RequeueAfter: requeueAfterOutcome(out, r.StatusPollInterval)}, nil
-	}
-	return true, ctrl.Result{}, nil
-}
-
-func (r *ClusterOrderReconciler) clusterIngressReservationRecorded(instance *v1alpha1.ClusterOrder) bool {
-	return r.Engine != nil && r.Engine.ProvisioningEnabled() &&
-		networktask.Started(instance, networktask.ReserveClusterIngressIP, v1alpha1.NetworkJobManagerFabric)
-}
-
-// clusterIngressManagerVars removes operator-owned routing metadata from the
-// manager task input. The selected manager is already in the Engine's manager
-// envelope; the stored metadata exists only so deletion can recover that ref.
-func clusterIngressManagerVars(input map[string]any) map[string]any {
-	vars := make(map[string]any, len(input))
-	for key, value := range input {
-		if key != "fabric_manager" {
-			vars[key] = value
-		}
-	}
-	return vars
 }
 
 func requeueAfterOutcome(out networktask.Outcome, fallback time.Duration) time.Duration {

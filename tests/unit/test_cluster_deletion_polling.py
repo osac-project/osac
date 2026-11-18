@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-from typing import Any
 from unittest.mock import Mock, call
 
 import pytest
@@ -22,9 +21,7 @@ def test_cluster_order_not_found_is_distinct_from_an_empty_phase() -> None:
     k8s = K8sClient(namespace="tenant-a")
 
     _mock_get(
-        k8s,
-        output='Error from server (NotFound): clusterorders.osac.openshift.io "cluster-a" not found',
-        returncode=1,
+        k8s, output='Error from server (NotFound): clusterorders.osac.openshift.io "cluster-a" not found', returncode=1
     )
     assert k8s.get_cluster_order_phase(name="cluster-a", checked=False) is None
 
@@ -57,9 +54,9 @@ def test_cluster_order_phase_propagates_non_resource_not_found_errors(kubectl_ou
 
 def test_wait_for_cluster_deleting_accepts_only_not_found_as_already_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     k8s = Mock(spec=K8sClient)
-    captured: dict[str, Any] = {}
+    captured: dict[str, object] = {}
 
-    def capture_poll(**kwargs: Any) -> None:
+    def capture_poll(**kwargs: object) -> None:
         captured.update(kwargs)
 
     monkeypatch.setattr(helpers, "poll_until", capture_poll)
@@ -87,7 +84,7 @@ def test_wait_for_cluster_deletion_uses_not_found_as_the_deletion_signal(
 ) -> None:
     k8s = Mock(spec=K8sClient)
     k8s.get_cluster_order_phase.return_value = phase
-    captured: dict[str, Any] = {}
+    captured: dict[str, object] = {}
 
     for cleanup in (
         "_force_cleanup_agentcluster_finalizers",
@@ -96,7 +93,7 @@ def test_wait_for_cluster_deletion_uses_not_found_as_the_deletion_signal(
     ):
         monkeypatch.setattr(helpers, cleanup, lambda **kwargs: None)
 
-    def capture_poll(**kwargs: Any) -> None:
+    def capture_poll(**kwargs: object) -> None:
         captured.update(kwargs)
 
     monkeypatch.setattr(helpers, "poll_until", capture_poll)
@@ -174,6 +171,19 @@ def test_natural_deletion_uses_separate_parent_polling_budget(monkeypatch: pytes
     assert captured["delay"] == 10
     assert captured["description"] == "ClusterOrder natural deletion"
     assert captured["retry_on_error"] is True
+
+
+def test_natural_deletion_accepts_a_budget_matching_the_aap_delete_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    k8s = Mock(spec=K8sClient)
+    k8s.is_absent.return_value = True
+    poll = Mock()
+    monkeypatch.setattr(helpers, "poll_until", poll)
+
+    helpers.wait_for_cluster_deletion_without_cleanup(k8s=k8s, name="cluster-a", retries=751, delay=10)
+
+    captured = poll.call_args.kwargs
+    assert captured["retries"] == 751
+    assert captured["delay"] == 10
 
 
 @pytest.mark.parametrize(

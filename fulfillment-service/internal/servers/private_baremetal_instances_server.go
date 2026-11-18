@@ -30,6 +30,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -40,6 +42,11 @@ import (
 )
 
 const bareMetalInstanceUserDataMaxBytes = 64 * 1024
+
+const (
+	clusterAPIIDAnnotation    = "osac.openshift.io/cluster-api-id"
+	caasAgentCleanupFinalizer = "osac.openshift.io/caas-agent-cleanup"
+)
 
 func validateBareMetalUserData(userData []byte) error {
 	if len(userData) > bareMetalInstanceUserDataMaxBytes {
@@ -72,6 +79,7 @@ type PrivateBareMetalInstancesServer struct {
 	virtualNetworksDao      *dao.GenericDAO[*privatev1.VirtualNetwork]
 	networkClassesDao       *dao.GenericDAO[*privatev1.NetworkClass]
 	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
+	clustersDao             *dao.GenericDAO[*privatev1.Cluster]
 	diskImagesDao           *dao.GenericDAO[*privatev1.DiskImage]
 	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
@@ -198,6 +206,11 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		return
 	}
 
+	clustersDao, err := newGuardDAO[*privatev1.Cluster](b.logger)
+	if err != nil {
+		return
+	}
+
 	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -266,6 +279,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		virtualNetworksDao:      virtualNetworksDao,
 		networkClassesDao:       networkClassesDao,
 		securityGroupsDao:       securityGroupsDao,
+		clustersDao:             clustersDao,
 		diskImagesDao:           diskImagesDao,
 		externalIPPoolDao:       externalIPPoolDao,
 		externalIPDao:           externalIPDao,
@@ -309,7 +323,9 @@ func (s *PrivateBareMetalInstancesServer) Create(ctx context.Context, request *p
 		return
 	}
 	if !isDryRun(ctx) && response.GetObject().GetSpec().GetAutoExternalIpAttachment() {
-		err = s.autoProvisionExternalIP(ctx, response.GetObject())
+		created := response.GetObject()
+		err = createAutomaticExternalIPs(ctx, s.logger, s.settings, s.externalIPPoolDao, s.externalIPDao,
+			created.GetMetadata(), created.GetId(), "bare_metal_instance")
 		if err != nil {
 			if tx, txErr := database.TxFromContext(ctx); txErr == nil {
 				tx.ReportError(&err)
@@ -351,7 +367,7 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 		return
 	}
 	instanceType, err := resolveAndCanonicalizeLockedReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref,
-		"bare metal instance type", grpccodes.NotFound)
+		"bare metal instance type", grpccodes.InvalidArgument)
 	if err != nil {
 		return
 	}
@@ -400,6 +416,9 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 		if err = validateNetworkingHubReferences(canonicalHubID, hubReferences...); err != nil {
 			return
 		}
+	}
+	if err = s.validateCaaSWorkerCreate(ctx, candidate); err != nil {
+		return nil, err
 	}
 
 	if ref := candidate.GetSpec().GetDiskImage(); ref != nil {
@@ -792,7 +811,7 @@ func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(instanceType *
 			return port.GetName(), nil
 		}
 	}
-	return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
+	return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
 		"bare metal instance type '%s' has no fabric-role network port for default network attachment", instanceType.GetId())
 }
 
@@ -1074,21 +1093,25 @@ func validateBareMetalAttachmentsForInstanceType(
 
 	instanceTypeID := instanceType.GetId()
 	interfaceRoles := make(map[string]string)
-	validInterfaces := make(map[string]bool)
+	fabricInterfaces := make(map[string]bool)
 	for _, port := range instanceType.GetSpec().GetHardware().GetNetworkPorts() {
 		if port == nil {
 			continue
 		}
 		interfaceRoles[port.GetName()] = port.GetRole()
-		if !strings.EqualFold(port.GetRole(), "lifecycle") {
-			validInterfaces[port.GetName()] = true
+		if strings.EqualFold(port.GetRole(), "fabric") {
+			fabricInterfaces[port.GetName()] = true
 		}
 	}
+	if len(fabricInterfaces) == 0 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%sinstance type '%s' has no fabric-role network port for tenant network attachment", prefix, instanceTypeID)
+	}
 
-	if len(attachments) > len(validInterfaces) {
+	if len(attachments) > len(fabricInterfaces) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"%snumber of network attachments (%d) exceeds available interfaces (%d) on instance type '%s'",
-			prefix, len(attachments), len(validInterfaces), instanceTypeID)
+			prefix, len(attachments), len(fabricInterfaces), instanceTypeID)
 	}
 
 	for i, attachment := range attachments {
@@ -1098,69 +1121,19 @@ func validateBareMetalAttachmentsForInstanceType(
 		}
 		role, found := interfaceRoles[iface]
 		switch {
-		case found && strings.EqualFold(role, "lifecycle"):
+		case found && !strings.EqualFold(role, "fabric"):
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: interface '%s' has role 'lifecycle' and cannot be used for tenant networking", prefix, i, iface)
-		case !validInterfaces[iface]:
+				"%snetwork_attachments[%d]: interface '%s' has role '%s' and cannot be used for tenant networking; interface must have role 'fabric'",
+				prefix, i, iface, role)
+		case !fabricInterfaces[iface]:
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"%snetwork_attachments[%d]: interface '%s' not found in instance type '%s'", prefix, i, iface, instanceTypeID)
 		}
-	}
-
-	return nil
-}
-
-func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
-	ctx context.Context, bmi *privatev1.BareMetalInstance,
-) error {
-	if !s.settings.ProvisioningEnabled {
-		return nil
-	}
-
-	pool, err := SelectExternalIPPool(ctx, s.logger, s.externalIPPoolDao, 1)
-	if err != nil {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
-	}
-
-	tenant := bmi.GetMetadata().GetTenant()
-	bmiID := bmi.GetId()
-	shortID := bmiID
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
-
-	eipLabels := map[string]string{
-		autoCreatedLabel:     "true",
-		autoCreatedForLabel:  bmiID,
-		autoCreatedKindLabel: "bare_metal_instance",
-	}
-	eip := privatev1.ExternalIP_builder{
-		Metadata: privatev1.Metadata_builder{
-			Name:   fmt.Sprintf("auto-eip-%s", shortID),
-			Tenant: tenant,
-			Labels: eipLabels,
-			Annotations: map[string]string{
-				tenantAnnotation:         tenant,
-				ownerReferenceAnnotation: bmiID,
-			},
-			Creator: systemCreator,
-		}.Build(),
-		Spec: privatev1.ExternalIPSpec_builder{
-			Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
-		}.Build(),
-		Status: privatev1.ExternalIPStatus_builder{
-			State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,
-		}.Build(),
-	}.Build()
-
-	_, err = s.externalIPDao.Create().SetObject(eip).Do(ctx)
-	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIP: %w", err)
-	}
-
-	err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, pool.GetId(), 1)
-	if err != nil {
-		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
+		if errs := k8svalidation.IsDNS1123Label(iface); len(errs) > 0 {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"%snetwork_attachments[%d]: interface '%s' is not a valid DNS label: %s",
+				prefix, i, iface, strings.Join(errs, ", "))
+		}
 	}
 
 	return nil

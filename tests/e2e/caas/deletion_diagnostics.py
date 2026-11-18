@@ -1,7 +1,8 @@
 """Temporary read-only snapshots for diagnosing CaaS deletion.
 
-Only emit allowlisted metadata, never kubectl output, conditions, annotations or
-exception text: CI logs are uploaded as artifacts.
+Only emit allowlisted metadata, job states, and condition tokens, never raw
+kubectl output, condition messages, annotations or exception text: CI logs are
+uploaded as artifacts.
 """
 
 from __future__ import annotations
@@ -19,6 +20,9 @@ _HYPERSHIFT_FINALIZER = "hypershift.openshift.io/finalizer"
 _AGENTCLUSTER_FINALIZER = "agentclustercapi-provider.agent-install.openshift.io/deprovision"
 _MACHINE_HOOK = "pre-terminate.delete.hook.machine.cluster.x-k8s.io/agentmachine"
 _SAFE_CONDITION_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")
+_SAFE_METADATA_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\Z")
+_JOB_TYPES = frozenset({"provision", "deprovision"})
+_JOB_STATES = frozenset({"Pending", "Running", "Succeeded", "Failed", "Canceled"})
 _AGENT_STATES = frozenset(
     {
         "installed",
@@ -33,15 +37,6 @@ _AGENT_STATES = frozenset(
         "error",
     }
 )
-_MACHINE_DELETE_REASONS = frozenset(
-    {
-        "WaitingForPreTerminateHook",
-        "WaitingForPreDrainHook",
-        "WaitingForNodeDrain",
-        "WaitingForVolumeDetach",
-        "Deleting",
-    }
-)
 
 
 def _safe_condition_token(value: object) -> str:
@@ -50,6 +45,10 @@ def _safe_condition_token(value: object) -> str:
 
 def _safe_generation(value: object) -> str:
     return str(value) if type(value) is int and value >= 0 else "unknown"
+
+
+def _safe_metadata_token(value: object) -> str:
+    return value if isinstance(value, str) and _SAFE_METADATA_TOKEN.fullmatch(value) else "omitted"
 
 
 def _read(k8s: K8sClient, resource: str, namespace: str, name: str | None = None) -> dict[str, Any] | None:
@@ -108,6 +107,29 @@ def snapshot_cluster_deletion(k8s: K8sClient, name: str) -> list[str]:
             has_finalizer = known_finalizer in (metadata.get("finalizers") or [])
             line += f" {finalizer_label}={has_finalizer}"
         lines.append(line)
+        if label == "clusterorder":
+            status = item.get("status", {})
+            if not isinstance(status, dict):
+                status = {}
+            for field, job_label in (("provisioningJobs", "provisioning"), ("clusterStorageJobs", "cluster-storage")):
+                jobs = status.get(field, [])
+                for job in jobs[:8] if isinstance(jobs, list) else []:
+                    if not isinstance(job, dict):
+                        continue
+                    raw_job_type = job.get("type")
+                    job_type = (
+                        raw_job_type if isinstance(raw_job_type, str) and raw_job_type in _JOB_TYPES else "omitted"
+                    )
+                    job_state = job.get("state")
+                    job_state = job_state if isinstance(job_state, str) and job_state in _JOB_STATES else "omitted"
+                    raw_job_id = job.get("jobID")
+                    job_id = str(raw_job_id) if str(raw_job_id).isdigit() else "omitted"
+                    blocks_deletion = job.get("blockDeletionOnFailure")
+                    blocks_deletion = blocks_deletion if isinstance(blocks_deletion, bool) else "omitted"
+                    lines.append(
+                        f"{job_label} job type={job_type} state={job_state} "
+                        f"job_id={job_id} blocks_deletion={blocks_deletion}"
+                    )
 
     pools = _items(k8s, "nodepools.hypershift.openshift.io", hc_ns)
     if pools is None:
@@ -157,17 +179,49 @@ def snapshot_cluster_deletion(k8s: K8sClient, name: str) -> list[str]:
             f"preterminate_hook={sum(_MACHINE_HOOK in m.get('metadata', {}).get('annotations', {}) for m in machines)}"
         )
         for machine in machines[:8]:
-            conditions = machine.get("status", {}).get("conditions", [])
-            for condition_type in ("Deleting", "PreTerminateDeleteHookSucceeded"):
+            metadata = machine.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            finalizers = metadata.get("finalizers") or []
+            safe_finalizers = sorted(
+                {
+                    token
+                    for raw in finalizers
+                    if (token := _safe_metadata_token(raw)) != "omitted" and ("." in token or "/" in token)
+                }
+            )
+            finalizer_summary = ",".join(safe_finalizers) or ("omitted" if finalizers else "none")
+            spec = machine.get("spec", {})
+            if not isinstance(spec, dict):
+                spec = {}
+            infrastructure_ref = spec.get("infrastructureRef") or {}
+            if not isinstance(infrastructure_ref, dict):
+                infrastructure_ref = {}
+            infrastructure_kind = _safe_condition_token(infrastructure_ref.get("kind"))
+            infrastructure_name = _safe_metadata_token(infrastructure_ref.get("name"))
+            if infrastructure_kind == "omitted" or infrastructure_name == "omitted":
+                infrastructure_summary = "omitted"
+            else:
+                infrastructure_summary = f"{infrastructure_kind}/{infrastructure_name}"
+            lines.append(
+                f"machine name={_safe_metadata_token(metadata.get('name'))} "
+                f"finalizers={finalizer_summary} infrastructure_ref={infrastructure_summary}"
+            )
+            status = machine.get("status", {})
+            if not isinstance(status, dict):
+                status = {}
+            conditions = status.get("conditions", [])
+            if not isinstance(conditions, list):
+                conditions = []
+            for condition_type in ("Deleting", "PreTerminateDeleteHookSucceeded", "InfrastructureReady", "Ready"):
                 condition = next(
                     (c for c in conditions if isinstance(c, dict) and c.get("type") == condition_type), None
                 )
                 if condition is not None:
                     state = condition.get("status")
                     state = state if state in ("True", "False", "Unknown") else "omitted"
-                    reason = condition.get("reason")
-                    reason = reason if isinstance(reason, str) and reason in _MACHINE_DELETE_REASONS else "omitted"
-                    lines.append(f"machine deletion condition={condition_type} status={state} reason={reason}")
+                    reason = _safe_condition_token(condition.get("reason"))
+                    lines.append(f"machine condition={condition_type} status={state} reason={reason}")
 
     worker_agents = _items(k8s, "agents.agent-install.openshift.io", ns)
     if worker_agents is None:

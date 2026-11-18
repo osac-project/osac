@@ -34,6 +34,8 @@ const (
 
 	eventReasonAgentCorrelated          = "AgentCorrelated"
 	eventReasonAgentRegistrationTimeout = "AgentRegistrationTimeout"
+	eventReasonRegistryAccessFailed     = "RegistryAccessFailed"
+	eventReasonRegistryAccessTimeout    = "RegistryAccessTimeout"
 	eventReasonWorkerReady              = "WorkerReady"
 )
 
@@ -51,9 +53,45 @@ func (r *Reconciler) reconcileObservedAgents(
 	ctx context.Context, co *v1alpha1.ClusterOrder, workers []v1alpha1.WorkerStatus, o *workerObservation,
 ) ([]v1alpha1.WorkerStatus, ctrl.Result, error) {
 	workers = append([]v1alpha1.WorkerStatus(nil), workers...)
+	if co.Spec.SupportsAutomaticCaaSEndpoints {
+		changed := false
+		managementReady, managementOK := workerManagementPublicationReady(co)
+		var apiRecordsTime *time.Time
+		if r.NetworkingProvisioningEnabled && workerAPIRecordsPublished(co) {
+			published := co.Status.APIDNSRecordsPublishedTime.Time
+			apiRecordsTime = &published
+		}
+		for i := range workers {
+			w := &workers[i]
+			if !eligibleForAgentObservation(*w) || w.Phase != workerPhaseWaitingForAgent ||
+				w.BareMetalInstance.ID == "" || !managementOK {
+				continue
+			}
+			proof, ready, err := r.workerNetworkProof(ctx, co, *w, o)
+			if err != nil {
+				return nil, ctrl.Result{}, err
+			}
+			if !ready {
+				continue
+			}
+			deadline := registrationDeadline(*w, proof, managementReady, apiRecordsTime,
+				r.NetworkingProvisioningEnabled)
+			if deadline != nil && (w.RegistrationDeadline == nil || deadline.After(w.RegistrationDeadline.Time)) {
+				w.RegistrationDeadline = deadline
+				changed = true
+			}
+		}
+		if changed {
+			return workers, workerBoundaryRequeue(), nil
+		}
+	}
 	if o.agents != nil {
-		if _, err := r.matchAndBindAgents(ctx, co, o.agents, workers, r.workerMACResolver(o)); err != nil {
+		before := append([]v1alpha1.WorkerStatus(nil), workers...)
+		if _, err := r.matchAndBindAgents(ctx, co, o.agents, workers, r.workerMACResolver(o), o); err != nil {
 			return nil, ctrl.Result{}, err
+		}
+		if !workerSlicesEqual(before, workers) {
+			return workers, workerBoundaryRequeue(), nil
 		}
 	}
 	workers = r.checkAgentRegistrationTimeout(ctx, co, workers, time.Now())
@@ -93,6 +131,7 @@ func (r *Reconciler) observeAgentReadiness(
 func (r *Reconciler) matchAndBindAgents(
 	ctx context.Context, co *v1alpha1.ClusterOrder,
 	agents *unstructured.UnstructuredList, workers []v1alpha1.WorkerStatus, macs MACResolver,
+	o *workerObservation,
 ) (int, error) {
 	log := ctrllog.FromContext(ctx)
 	associations := matchUnboundAgents(ctx, co, agents.Items, workers, macs)
@@ -108,6 +147,49 @@ func (r *Reconciler) matchAndBindAgents(
 		}
 		if association.state == agentAmbiguous {
 			log.Info("ambiguous Agent association, skipping bind", "worker", w.Name, "reason", association.reason)
+			continue
+		}
+		if co.Spec.SupportsAutomaticCaaSEndpoints {
+			_, ready := workerManagementPublicationReady(co)
+			if !ready || (r.NetworkingProvisioningEnabled && !workerAPIRecordsPublished(co)) {
+				continue
+			}
+			proof, networkReady, err := r.workerNetworkProof(ctx, co, *w, o)
+			if err != nil {
+				return bound, err
+			}
+			if !networkReady || !proof.bmiReady {
+				continue
+			}
+			if r.NetworkingProvisioningEnabled &&
+				(!proof.bindingReady || !agentMatchesWorkerLease(association.agent, proof.mac, proof.leaseAddress)) {
+				continue
+			}
+			if r.NetworkingProvisioningEnabled && w.RegistryProbePrepared {
+				image := workerRegistryProbeImage(co, w)
+				if image == "" {
+					return bound, fmt.Errorf("ClusterOrder has no ClusterVersion release image for worker %s registry probe", w.Name)
+				}
+				registryReady, err := r.reconcileWorkerRegistryProbeResult(ctx, co, w, image)
+				if err != nil {
+					return bound, err
+				}
+				if !registryReady {
+					continue
+				}
+			}
+		}
+		if co.Spec.SupportsAutomaticCaaSEndpoints && w.Agent == nil {
+			uid := string(association.agent.GetUID())
+			if uid == "" {
+				return bound, fmt.Errorf("agent %s has no UID for durable worker correlation", association.agent.GetName())
+			}
+			w.Agent = &v1alpha1.WorkerAgentReference{Name: association.agent.GetName(), UID: uid}
+			continue
+		}
+		if w.Agent != nil && (w.Agent.Name != association.agent.GetName() || w.Agent.UID != string(association.agent.GetUID())) {
+			log.Info("recorded Agent identity differs from candidate; skipping bind",
+				"worker", w.Name, "recordedAgent", w.Agent.Name, "candidateAgent", association.agent.GetName())
 			continue
 		}
 		if err := r.bindAgent(ctx, co, association.agent, w); err != nil {
@@ -152,8 +234,8 @@ func (r *Reconciler) bindAgent(
 	base := latest.DeepCopy()
 
 	if err := unstructured.SetNestedMap(latest.Object, map[string]interface{}{
-		"name":      co.Name,
-		"namespace": co.Namespace,
+		jsonNameField: co.Name,
+		"namespace":   co.Namespace,
 	}, "spec", "clusterDeploymentName"); err != nil {
 		return fmt.Errorf("setting agent clusterDeploymentName: %w", err)
 	}
@@ -175,7 +257,7 @@ func (r *Reconciler) bindAgent(
 		}
 	}
 	labels[workerNameLabel] = workerName
-	labels[agentBareMetalRoleLabel] = "true"
+	labels[agentBareMetalRoleLabel] = literalTrue
 	labels[clusterOrderLabel] = co.Name
 	labels["osac.openshift.io/clusterorder"] = co.Name
 	latest.SetLabels(labels)
@@ -188,6 +270,9 @@ func (r *Reconciler) bindAgent(
 func verifyAgentBinding(agent *unstructured.Unstructured, co *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus) error {
 	if worker == nil {
 		return fmt.Errorf("agent %s has no eligible worker in the cluster namespace", agent.GetName())
+	}
+	if worker.Agent != nil && (worker.Agent.Name != agent.GetName() || worker.Agent.UID != string(agent.GetUID())) {
+		return fmt.Errorf("agent %s does not match the recorded Agent identity for worker %s", agent.GetName(), worker.Name)
 	}
 	return agentBindingConflict(agent, co, worker.Name)
 }
@@ -208,7 +293,7 @@ func agentBindingConflict(agent *unstructured.Unstructured, co *v1alpha1.Cluster
 	if labels[workerNameLabel] != "" && labels[workerNameLabel] != workerName {
 		return fmt.Errorf("agent %s belongs to another worker", agent.GetName())
 	}
-	name, _, _ := unstructured.NestedString(agent.Object, "spec", "clusterDeploymentName", "name")
+	name, _, _ := unstructured.NestedString(agent.Object, "spec", "clusterDeploymentName", jsonNameField)
 	namespace, _, _ := unstructured.NestedString(agent.Object, "spec", "clusterDeploymentName", "namespace")
 	if (name != "" && name != co.Name) || (namespace != "" && namespace != co.Namespace) {
 		if !isCAPAgentWorkerBinding(agent, co, workerName) {
@@ -232,7 +317,7 @@ func isCAPAgentWorkerBinding(agent *unstructured.Unstructured, co *v1alpha1.Clus
 		(labels[clusterOrderLabel] != co.Name && labels["osac.openshift.io/clusterorder"] != co.Name) {
 		return false
 	}
-	name, _, _ := unstructured.NestedString(agent.Object, "spec", "clusterDeploymentName", "name")
+	name, _, _ := unstructured.NestedString(agent.Object, "spec", "clusterDeploymentName", jsonNameField)
 	namespace, _, _ := unstructured.NestedString(agent.Object, "spec", "clusterDeploymentName", "namespace")
 	return name == ref.HostedClusterName && namespace == ref.Namespace+"-"+ref.HostedClusterName
 }
@@ -249,21 +334,45 @@ func (r *Reconciler) checkAgentRegistrationTimeout(
 
 	for i := range workers {
 		w := &workers[i]
-		if !eligibleForAgentObservation(*w) || w.Phase != workerPhaseWaitingForAgent || w.AttemptStartedAt == nil {
+		if !eligibleForAgentObservation(*w) || w.Phase != workerPhaseWaitingForAgent {
 			continue
 		}
-		if now.Sub(w.AttemptStartedAt.Time) < agentRegistrationTimeout {
+		if co.Spec.SupportsAutomaticCaaSEndpoints {
+			if _, ready := workerManagementPublicationReady(co); !ready ||
+				(r.NetworkingProvisioningEnabled && !workerAPIRecordsPublished(co)) {
+				continue
+			}
+		}
+		var deadline time.Time
+		if co.Spec.SupportsAutomaticCaaSEndpoints {
+			if w.RegistrationDeadline == nil {
+				continue
+			}
+			deadline = w.RegistrationDeadline.Time
+		} else {
+			if w.AttemptStartedAt == nil {
+				continue
+			}
+			deadline = w.AttemptStartedAt.Add(agentRegistrationTimeout)
+		}
+		if now.Before(deadline) {
 			continue
 		}
 		w.Phase = workerPhaseFailed
 		w.LastFailureReason = eventReasonAgentRegistrationTimeout
 		w.LastFailureMessage = fmt.Sprintf("no agent registered within %s", agentRegistrationTimeout)
+		if r.NetworkingProvisioningEnabled && w.RegistryAccessReady != nil && w.RegistryAccessReady.Status == metav1.ConditionFalse &&
+			w.RegistryAccessReady.Reason == "ProbePending" {
+			w.LastFailureReason = eventReasonRegistryAccessTimeout
+			w.LastFailureMessage = fmt.Sprintf("worker registry probe result was unavailable before timeout: %s",
+				w.RegistryAccessReady.Message)
+		}
 		failTime := metav1.NewTime(now)
 		w.LastFailureTime = &failTime
 		observeProvisioningFailure(tenantOf(co), *w)
-		log.Info("agent registration timeout", "worker", w.Name)
-		r.recorder.Eventf(co, nil, corev1.EventTypeWarning, eventReasonAgentRegistrationTimeout, "CheckTimeout",
-			"worker %s: no agent registered within %s", w.Name, agentRegistrationTimeout)
+		log.Info("worker registration gate timed out", "worker", w.Name, "reason", w.LastFailureReason)
+		r.recorder.Eventf(co, nil, corev1.EventTypeWarning, w.LastFailureReason, "CheckTimeout",
+			"worker %s: %s", w.Name, w.LastFailureMessage)
 	}
 	return workers
 }

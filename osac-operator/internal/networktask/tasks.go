@@ -44,11 +44,9 @@ const (
 	DeleteNATGateway        = "delete_nat_gateway"
 	CreateFabricDomain      = "create_fabric_domain"
 	DeleteFabricDomain      = "delete_fabric_domain"
-	ReserveClusterIngressIP = "reserve_cluster_ingress_ip"
-	ReleaseClusterIngressIP = "release_cluster_ingress_ip"
 )
 
-// FabricTasks is the fixed Fabric Manager task set (21 tasks).
+// FabricTasks is the fixed Fabric Manager task set (19 tasks).
 var FabricTasks = map[string]bool{
 	CreateVirtualNetwork: true, DeleteVirtualNetwork: true,
 	CreateSubnet: true, DeleteSubnet: true,
@@ -60,7 +58,6 @@ var FabricTasks = map[string]bool{
 	AttachExternalIP: true, DetachExternalIP: true,
 	CreateNATGateway: true, DeleteNATGateway: true,
 	CreateFabricDomain: true, DeleteFabricDomain: true,
-	ReserveClusterIngressIP: true, ReleaseClusterIngressIP: true,
 }
 
 // KubernetesTasks is the fixed Kubernetes Manager task set (8 tasks).

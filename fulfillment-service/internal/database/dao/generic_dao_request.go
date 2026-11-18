@@ -47,6 +47,36 @@ type request[O Object] struct {
 	}
 }
 
+func (r *request[O]) setLocalVariables(ctx context.Context) error {
+	for _, variable := range r.dao.localVariables {
+		name := "osac." + variable.name
+		value, err := variable.value(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to evaluate local variable %q: %w", name, err)
+		}
+
+		// An empty string clears any previous value in this transaction.
+		var data []byte
+		switch value := value.(type) {
+		case nil:
+		case proto.Message:
+			if value.ProtoReflect().IsValid() {
+				data, err = r.dao.marshalOptions.Marshal(value)
+			}
+		default:
+			data, err = json.Marshal(value)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to encode local variable %q: %w", name, err)
+		}
+		_, err = r.tx.Exec(ctx, "select set_config($1, $2, true)", name, string(data))
+		if err != nil {
+			return fmt.Errorf("failed to set local variable %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
 type archiveArgs struct {
 	id              string
 	creationTs      time.Time

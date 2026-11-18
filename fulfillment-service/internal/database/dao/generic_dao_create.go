@@ -138,6 +138,9 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		deletionTs time.Time
 		version    int32
 	)
+	if err = r.setLocalVariables(ctx); err != nil {
+		return
+	}
 	err = func() (err error) {
 		start := time.Now()
 		row := r.queryRow(

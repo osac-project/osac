@@ -145,6 +145,9 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		creator    string
 		version    int32
 	)
+	if err = r.setLocalVariables(ctx); err != nil {
+		return
+	}
 	err = func() (err error) {
 		row := r.queryRow(ctx, updateOpType, sql, r.sql.params...)
 		start := time.Now()

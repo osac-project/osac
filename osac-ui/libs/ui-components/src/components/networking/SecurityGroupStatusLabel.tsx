@@ -1,9 +1,11 @@
 import { SecurityGroupState } from '@osac/types';
 
+import StatusWithMessage from './StatusWithMessage';
 import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatusLabel';
 
 interface SecurityGroupStatusLabelProps {
   state?: SecurityGroupState;
+  message?: string;
 }
 
 const SECURITY_GROUP_STATUS_MAP: Record<SecurityGroupState, { status: StatusKind; text: string }> =
@@ -22,8 +24,12 @@ const resolveSecurityGroupStatus = (
     ? SECURITY_GROUP_STATUS_MAP[state]
     : SECURITY_GROUP_STATUS_MAP[SecurityGroupState.UNSPECIFIED];
 
-export const SecurityGroupStatusLabel = ({ state }: SecurityGroupStatusLabelProps) => {
+export const SecurityGroupStatusLabel = ({ state, message }: SecurityGroupStatusLabelProps) => {
   const { status, text } = resolveSecurityGroupStatus(state);
 
-  return <ResourceStatusLabel status={status} text={text} />;
+  return (
+    <StatusWithMessage message={message}>
+      <ResourceStatusLabel status={status} text={text} />
+    </StatusWithMessage>
+  );
 };

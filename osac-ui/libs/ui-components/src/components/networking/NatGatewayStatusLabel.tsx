@@ -2,11 +2,13 @@ import type { TFunction } from 'i18next';
 
 import { NATGatewayState } from '@osac/types';
 
+import StatusWithMessage from './StatusWithMessage';
 import { useTranslation } from '../../hooks/useTranslation';
 import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatusLabel';
 
 interface NatGatewayStatusLabelProps {
   state?: NATGatewayState;
+  message?: string;
 }
 
 const NAT_GATEWAY_STATUS_MAP: Record<NATGatewayState, StatusKind> = {
@@ -39,9 +41,13 @@ const resolveNatGatewayStatus = (
   }
 };
 
-export const NatGatewayStatusLabel = ({ state }: NatGatewayStatusLabelProps) => {
+export const NatGatewayStatusLabel = ({ state, message }: NatGatewayStatusLabelProps) => {
   const { t } = useTranslation();
   const { status, text } = resolveNatGatewayStatus(t, state);
 
-  return <ResourceStatusLabel status={status} text={text} />;
+  return (
+    <StatusWithMessage message={message}>
+      <ResourceStatusLabel status={status} text={text} />
+    </StatusWithMessage>
+  );
 };

@@ -1,9 +1,11 @@
 import { SubnetState } from '@osac/types';
 
+import StatusWithMessage from './StatusWithMessage';
 import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatusLabel';
 
 interface SubnetStatusLabelProps {
   state?: SubnetState;
+  message?: string;
 }
 
 const SUBNET_STATUS_MAP: Record<SubnetState, { status: StatusKind; text: string }> = {
@@ -21,8 +23,12 @@ const resolveSubnetStatus = (state?: SubnetState): { status: StatusKind; text: s
   return SUBNET_STATUS_MAP[SubnetState.UNSPECIFIED];
 };
 
-export const SubnetStatusLabel = ({ state }: SubnetStatusLabelProps) => {
+export const SubnetStatusLabel = ({ state, message }: SubnetStatusLabelProps) => {
   const { status, text } = resolveSubnetStatus(state);
 
-  return <ResourceStatusLabel status={status} text={text} />;
+  return (
+    <StatusWithMessage message={message}>
+      <ResourceStatusLabel status={status} text={text} />
+    </StatusWithMessage>
+  );
 };

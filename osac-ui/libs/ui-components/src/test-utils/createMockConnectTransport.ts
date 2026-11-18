@@ -686,6 +686,8 @@ export type MockTransportOverrides = {
     req: NATGatewaysDeleteRequest,
   ) => NATGatewaysDeleteResponse | Promise<NATGatewaysDeleteResponse>;
   onExternalIpList?: (req: ExternalIPsListRequest) => void;
+  /** Called on every VirtualNetworks.Create; throw to make the create fail. */
+  onVirtualNetworkCreate?: (req: unknown) => void | Promise<void>;
   onExternalIpCreate?: (
     req: ExternalIPsCreateRequest,
   ) => ExternalIPsCreateResponse | Promise<ExternalIPsCreateResponse>;
@@ -948,6 +950,10 @@ export const createMockConnectTransport = (
           return {
             object: virtualNetworks.find((i) => i.id === req.id),
           };
+        },
+        create: async (req) => {
+          await overrides.onVirtualNetworkCreate?.(req);
+          return { object: { ...req.object, id: 'vn-created' } as VirtualNetwork };
         },
         delete: async (req) => {
           if (overrides.onVirtualNetworkDelete) {

@@ -1,0 +1,78 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{/*
+Internal (private) routes. Broader than external: REST matches /api and the gRPC
+catch-all is PathPrefix "/" (all services, including the private API). Connect stays
+Exact and all gRPC rules use request:0s (same rationale as the external route).
+*/}}
+{{- if eq .Values.ingress.driver "gatewayapi" }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: fulfillment-internal
+spec:
+  parentRefs:
+  - name: {{ .Values.ingress.gatewayapi.gatewayName }}
+    namespace: {{ .Values.ingress.gatewayapi.gatewayNamespace }}
+    sectionName: internal
+  - name: {{ .Values.ingress.gatewayapi.gatewayName }}
+    namespace: {{ .Values.ingress.gatewayapi.gatewayNamespace }}
+    sectionName: int-svc
+  hostnames:
+  - {{ include "fulfillment-internal-api.hostname" . | quote }}
+  - fulfillment-internal-api
+  rules:
+  # console websocket -> console-proxy (long-lived, uncapped)
+  - matches:
+    - path: { type: Exact, value: /api/fulfillment/v1/console_sessions/connect }
+    backendRefs:
+    - name: fulfillment-console-proxy
+      port: 8090
+    timeouts:
+      request: {{ .Values.ingress.gatewayapi.grpcRequestTimeout | quote }}
+  # jwks -> rest-gateway
+  - matches:
+    - path: { type: Exact, value: /.well-known/jwks.json }
+    backendRefs:
+    - name: fulfillment-rest-gateway
+      port: 8000
+    timeouts:
+      request: {{ .Values.ingress.gatewayapi.jwksRequestTimeout | quote }}
+  # REST (public + private) -> rest-gateway
+  - matches:
+    - path: { type: PathPrefix, value: /api }
+    backendRefs:
+    - name: fulfillment-rest-gateway
+      port: 8000
+    timeouts:
+      request: {{ .Values.ingress.gatewayapi.restRequestTimeout | quote }}
+      backendRequest: {{ .Values.ingress.gatewayapi.restRequestTimeout | quote }}
+  # console Connect -> console-proxy (Exact; beats the broad gRPC rule)
+  - matches:
+    - path: { type: Exact, value: /osac.public.v1.ConsoleProxy/Connect }
+    backendRefs:
+    - name: fulfillment-console-proxy
+      port: 8000
+    timeouts:
+      request: {{ .Values.ingress.gatewayapi.grpcRequestTimeout | quote }}
+  # gRPC catch-all (all services) -> grpc-server
+  - matches:
+    - path: { type: PathPrefix, value: / }
+    backendRefs:
+    - name: fulfillment-grpc-server
+      port: 8000
+    timeouts:
+      request: {{ .Values.ingress.gatewayapi.grpcRequestTimeout | quote }}
+{{- end }}

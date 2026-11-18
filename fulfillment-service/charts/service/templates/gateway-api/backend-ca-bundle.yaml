@@ -1,0 +1,37 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{/*
+BackendTLSPolicy needs a ConfigMap keyed ca.crt. The shared trust bundle
+(certs.caBundle.configMap) is keyed bundle.pem, so re-materialize it under ca.crt via
+a trust-manager Bundle. trust-manager ships with osac-deps. Rendered only when a CA
+bundle source is configured; otherwise provide the ConfigMap named by
+ingress.gatewayapi.backendCaConfigMap out of band.
+*/}}
+{{- if and (eq .Values.ingress.driver "gatewayapi") .Values.certs.caBundle.configMap }}
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: {{ .Values.ingress.gatewayapi.backendCaConfigMap }}
+spec:
+  sources:
+  - configMap:
+      name: {{ .Values.certs.caBundle.configMap }}
+      key: bundle.pem
+  target:
+    configMap:
+      key: ca.crt
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}
+{{- end }}

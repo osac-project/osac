@@ -1,0 +1,40 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{/*
+Bridge the selectorless fulfillment-api / fulfillment-internal-api Services to the
+gateway. Each Service port (8000 / 8001) maps to the gateway's 443 by EndpointSlice
+port name. The gateway address is not known at render time, so this is rendered only
+when ingress.gatewayapi.gatewayAddress is set; otherwise the lifecycle controller/hook
+maintains the EndpointSlices against the current gateway Service ClusterIP.
+*/}}
+{{- if and (eq .Values.ingress.driver "gatewayapi") .Values.ingress.gatewayapi.gatewayAddress }}
+{{- range $b := list (dict "svc" "fulfillment-api" "portName" "external-api") (dict "svc" "fulfillment-internal-api" "portName" "internal-api") }}
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  namespace: {{ $.Release.Namespace }}
+  name: {{ $b.svc }}-gateway
+  labels:
+    kubernetes.io/service-name: {{ $b.svc }}
+addressType: IPv4
+endpoints:
+- addresses:
+  - {{ $.Values.ingress.gatewayapi.gatewayAddress | quote }}
+ports:
+- name: {{ $b.portName }}
+  port: 443
+  protocol: TCP
+{{- end }}
+{{- end }}

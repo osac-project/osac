@@ -70,6 +70,33 @@ externalHostname:
 # additional layer of defense.
 internalHostname:
 
+# Ingress driver: how the public and internal APIs are exposed.
+#   envoy      - bundled fulfillment-ingress-proxy Envoy (default; current behavior)
+#   gatewayapi - OpenShift CIO-managed Gateway API; the bundled Envoy is not deployed
+ingress:
+  driver: envoy
+
+  gatewayapi:
+    # Namespace of the CIO-managed Gateway (where istiod/Envoy run).
+    gatewayNamespace: openshift-ingress
+    # GatewayClass installed as a cluster prerequisite by osac-installer.
+    gatewayClassName: openshift-default
+    gatewayName: osac-gateway
+    # How in-cluster callers reach the gateway:
+    #   service - selectorless Services -> gateway Service ClusterIP (stable; recommended)
+    #   pod     - managed EndpointSlice -> gateway pod IP (needs osac-operator controller)
+    bridge: service
+    # In-cluster reachable address (ClusterIP) of the gateway Service. When empty the
+    # bridge EndpointSlices are not rendered and must be maintained by the lifecycle
+    # controller/hook (the gateway Service ClusterIP is stable across pod replacement).
+    gatewayAddress: ""
+    # Request timeouts. gRPC stream routes MUST be 0s (uncapped); REST stays bounded.
+    grpcRequestTimeout: "0s"
+    restRequestTimeout: "300s"
+    jwksRequestTimeout: "10s"
+    # ConfigMap (keyed ca.crt) for BackendTLSPolicy upstream validation.
+    backendCaConfigMap: osac-backend-ca
+
 # MCP is an opt-in integration endpoint.
 # Custom external ports are supported on Kind; OpenShift Routes use HTTPS port 443.
 mcp:

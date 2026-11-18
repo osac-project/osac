@@ -1,0 +1,39 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{- if eq .Values.ingress.driver "gatewayapi" }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  namespace: {{ .Values.ingress.gatewayapi.gatewayNamespace }}
+  name: {{ .Values.ingress.gatewayapi.gatewayName }}
+spec:
+  gatewayClassName: {{ .Values.ingress.gatewayapi.gatewayClassName }}
+  listeners:
+  {{- range $l := list (dict "name" "external" "hostname" (include "fulfillment-api.hostname" $)) (dict "name" "internal" "hostname" (include "fulfillment-internal-api.hostname" $)) (dict "name" "ext-svc" "hostname" "fulfillment-api") (dict "name" "int-svc" "hostname" "fulfillment-internal-api") }}
+  - name: {{ $l.name }}
+    hostname: {{ $l.hostname | quote }}
+    port: 443
+    protocol: HTTPS
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: fulfillment-api-tls
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+  {{- end }}
+{{- end }}

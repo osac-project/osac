@@ -1,0 +1,39 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{/*
+Upstream TLS validation from the gateway to each backend. The CA ConfigMap must be
+keyed ca.crt (see backend-ca-bundle.yaml); the hostname is the backend serving-cert
+SAN.
+*/}}
+{{- if eq .Values.ingress.driver "gatewayapi" }}
+{{- range $svc := list "grpc-server" "rest-gateway" "console-proxy" }}
+---
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  namespace: {{ $.Release.Namespace }}
+  name: btls-{{ $svc }}
+spec:
+  targetRefs:
+  - group: ""
+    kind: Service
+    name: fulfillment-{{ $svc }}
+  validation:
+    caCertificateRefs:
+    - group: ""
+      kind: ConfigMap
+      name: {{ $.Values.ingress.gatewayapi.backendCaConfigMap }}
+    hostname: fulfillment-{{ $svc }}.{{ $.Release.Namespace }}.svc.cluster.local
+{{- end }}
+{{- end }}

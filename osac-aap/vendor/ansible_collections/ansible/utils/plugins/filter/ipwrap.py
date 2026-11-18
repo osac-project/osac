@@ -71,7 +71,7 @@ DOCUMENTATION = """
 
 EXAMPLES = r"""
 #### examples
-# Ipwrap filter plugin to wrap IPv6 addresses in [ ] brackets.
+# Ipwrap filter plugin o Wrap IPv6 addresses in [ ] brackets.
 - name: Set value as input list
   ansible.builtin.set_fact:
     value:
@@ -83,40 +83,33 @@ EXAMPLES = r"""
       - fe80::100/10
       - 42540766412265424405338506004571095040/64
       - true
-- name: Show input
-  ansible.builtin.debug:
-    msg: "{{ value }}"
+- debug:
+    msg: "{{ value|ansible.utils.ipwrap }}"
 
-- name: Show ipwrap result
-  ansible.builtin.debug:
-    msg: "{{ value | ansible.utils.ipwrap }}"
+- name: |
+        ipwrap() did not filter out non-IP address values, which is usually what you want when for example
+        you are mixing IP addresses with hostnames. If you still want to filter out all non-IP address values,
+        you can chain both filters together.
+  debug:
+    msg: "{{ value|ansible.utils.ipaddr|ansible.utils.ipwrap  }}"
 
-    # ipwrap() did not filter out non-IP address values, which is usually what you want, e.g. when
-    # you are mixing IP addresses with hostnames. If you still want to filter out all non-IP address values,
-    # you can chain both filters together.
-- name: Show combined result of ipaddr and ipwrap
-  ansible.builtin.debug:
-    msg: "{{ value | ansible.utils.ipaddr | ansible.utils.ipwrap  }}"
-
-# PLAY [Ipwrap filter plugin to wrap IPv6 addresses in [ ] brackets.] *************************************************
-# TASK [Set value as input list] **************************************************************************************
-# ok: [localhost]
-
-# TASK [Show input] ***************************************************************************************************
+# PLAY [Ipwrap filter plugin o Wrap IPv6 addresses in [ ] brackets.] ***************************************************
+# TASK [Set value as input list] ***************************************************************************************
+# ok: [localhost] => {"ansible_facts": {"value": ["192.24.2.1", "host.fqdn", "::1", "", "192.168.32.0/24",
+# "fe80::100/10", "42540766412265424405338506004571095040/64", true]}, "changed": false}
+#
+# TASK [debug] ********************************************************************************************************
 # ok: [localhost] => {
 #     "msg": [
 #         "192.24.2.1",
-#         "host.fqdn",
 #         "::1",
-#         "",
 #         "192.168.32.0/24",
 #         "fe80::100/10",
-#         "42540766412265424405338506004571095040/64",
-#         true
+#         "2001:db8:32c:faad::/64"
 #     ]
 # }
-
-# TASK [Show ipwrap result] *******************************************************************************************
+#
+# TASK [debug] ************************************************************************************************
 # ok: [localhost] => {
 #     "msg": [
 #         "192.24.2.1",
@@ -126,11 +119,13 @@ EXAMPLES = r"""
 #         "192.168.32.0/24",
 #         "[fe80::100]/10",
 #         "[2001:db8:32c:faad::]/64",
-#         true
+#         "True"
 #     ]
 # }
-
-# TASK [Show combined result of ipaddr and ipwrap] ********************************************************************
+#
+# TASK [ipwrap() did not filter out non-IP address values, which is usually what you want when for example
+# you are mixing IP addresses with hostnames. If you still want to filter out all non-IP address values,
+# you can chain both filters together.] ***
 # ok: [localhost] => {
 #     "msg": [
 #         "192.24.2.1",

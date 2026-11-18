@@ -1,5 +1,3 @@
-# ec2_transit_gateway_vpc_attachment_info
-
-time=35m
-
 cloud/aws
+time=35m
+# ec2_transit_gateway_vpc_attachment_info

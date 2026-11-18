@@ -1,0 +1,4 @@
+bugfixes:
+  - common - Add remove_duplicates() utility function for list deduplication
+  - purefb_dns - Use remove_duplicates() from common instead of local remove() function
+  - purefb_ntp - Use remove_duplicates() from common instead of local remove() function

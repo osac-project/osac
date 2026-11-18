@@ -166,7 +166,7 @@ EXAMPLES = '''
     name: "{{ sched1 }}"
     state: present
     unified_job_template: "Demo Job Template"
-    rrule: "{{ query('awx.awx.schedule_rrule', 'week', start_date='2019-12-19 13:05:51') | first }}"
+    rrule: "{{ query('awx.awx.schedule_rrule', 'week', start_date='2019-12-19 13:05:51') }}"
   register: result
 
 - name: Build a complex schedule for every day except sunday using the rruleset plugin
@@ -174,14 +174,14 @@ EXAMPLES = '''
     name: "{{ sched1 }}"
     state: present
     unified_job_template: "Demo Job Template"
-    rrule: "{{ query(awx.awx.schedule_rruleset, '2022-04-30 10:30:45', rules=rrules, timezone='UTC' ) | first }}"
+    rrule: "{{ query(awx.awx.schedule_rruleset, '2022-04-30 10:30:45', rules=rrules, timezone='UTC' ) }}"
   vars:
     rrules:
       - frequency: 'day'
-        interval: 1
+        every: 1
       - frequency: 'day'
-        interval: 1
-        byweekday: 'sunday'
+        every: 1
+        on_days: 'sunday'
         include: false
 
 - name: Delete 'my_schedule' schedule for my_workflow

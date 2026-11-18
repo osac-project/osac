@@ -1,11 +1,11 @@
 ---
 - name: Generate a random string for names
-  ansible.builtin.set_fact:
+  set_fact:
     test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
   when: test_id is not defined
 
 - name: Generate random names for test objects
-  ansible.builtin.set_fact:
+  set_fact:
     org_name: "AWX-Collection-tests-organization-org-{{ test_id }}"
     scm_cred_name: "AWX-Collection-tests-workflow_job_template-scm-cred-{{ test_id }}"
     demo_project_name: "AWX-Collection-tests-workflow_job_template-proj-{{ test_id }}"
@@ -28,52 +28,32 @@
     ig2: "AWX-Collection-tests-workflow_job_template-ig2-{{ test_id }}"
     host1: "AWX-Collection-tests-workflow_job_template-h1-{{ test_id }}"
 
-- name: Detect credential types
-  ansible.builtin.set_fact:
-    credentials: "{{ lookup('ansible.controller.controller_api', 'credential_types') }}"
-
-- name: Register Credentials found
-  ansible.builtin.set_fact:
-    github_found: "{{ 'Github Personal Access Token' in credentials | map(attribute='name') | list }}"
-    gitlab_found: "{{ 'GitLab Personal Access Token' in credentials | map(attribute='name') | list }}"
-
-- name: Create initial resources for workflow job template tests
-  block:
+- block:
     - name: "Create a new organization"
-      ansible.controller.organization:
+      organization:
         name: "{{ org_name }}"
         galaxy_credentials:
           - Ansible Galaxy
       register: result
 
-    - name: Create SCM Credential
-      ansible.controller.credential:
-        name: "{{ scm_cred_name }}"
+    - name: Create Credentials
+      credential:
+        name: "{{ item.name }}"
         organization: Default
-        credential_type: Source Control
+        credential_type: "{{ item.type }}"
       register: result
+      loop:
+        - name: "{{ scm_cred_name }}"
+          type: Source Control
+        - name: "{{ github_webhook_credential_name }}"
+          type: GitHub Personal Access Token
 
-    - name: Assert SCM credential created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
-
-    - name: Create Github PAT Credential
-      ansible.controller.credential:
-        name: "{{ github_webhook_credential_name }}"
-        organization: Default
-        credential_type: Github Personal Access Token
-      register: result
-      when: github_found
-
-    - name: Assert Github PAT credential created
-      ansible.builtin.assert:
-        that:
-          - result.changed
-      when: github_found
+          - "result is changed"
 
     - name: Add email notification
-      ansible.controller.notification_template:
+      notification_template:
         name: "{{ email_not }}"
         organization: Default
         notification_type: email
@@ -90,7 +70,7 @@
         state: present
 
     - name: Add webhook notification
-      ansible.controller.notification_template:
+      notification_template:
         name: "{{ webhook_notification }}"
         organization: Default
         notification_type: webhook
@@ -101,8 +81,8 @@
         state: present
       register: result
 
-    - name: Create Labels for WFJT
-      ansible.controller.label:
+    - name: Create Labels
+      label:
         name: "{{ lab1 }}"
         organization: "{{ item }}"
       loop:
@@ -110,7 +90,7 @@
         - "{{ org_name }}"
 
     - name: Create a Demo Project
-      ansible.controller.project:
+      project:
         name: "{{ demo_project_name }}"
         organization: Default
         state: present
@@ -119,13 +99,12 @@
         scm_credential: "{{ scm_cred_name }}"
       register: result
 
-    - name: Assert demo project created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Create a 2nd Demo Project in another org
-      ansible.controller.project:
+      project:
         name: "{{ demo_project_name_2 }}"
         organization: "{{ org_name }}"
         state: present
@@ -134,13 +113,12 @@
         scm_credential: "{{ scm_cred_name }}"
       register: result
 
-    - name: Assert 2nd demo project created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Create a 3rd Demo Project in another org with inventory source name
-      ansible.controller.project:
+      project:
         name: "{{ project_inv_source }}"
         organization: "{{ org_name }}"
         state: present
@@ -149,19 +127,18 @@
         scm_credential: "{{ scm_cred_name }}"
       register: result
 
-    - name: Assert 3rd demo project created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Add an inventory
-      ansible.controller.inventory:
+      inventory:
         description: Test inventory
         organization: Default
         name: "{{ project_inv }}"
 
     - name: Create a source inventory
-      ansible.controller.inventory_source:
+      inventory_source:
         name: "{{ project_inv_source }}"
         description: Source for Test inventory
         inventory: "{{ project_inv }}"
@@ -171,26 +148,24 @@
         source: scm
       register: project_inv_source_result
 
-    - name: Assert inventory source created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - project_inv_source_result.changed
+          - "project_inv_source_result is changed"
 
     - name: Add a node to demo inventory so we can use a slice count properly
-      ansible.controller.host:
+      host:
         name: "{{ host1 }}"
         inventory: Demo Inventory
         variables:
           ansible_connection: local
       register: results
 
-    - name: Assert node added to inventory
-      ansible.builtin.assert:
+    - assert:
         that:
-          - results.changed
+          - "result is changed"
 
     - name: Create a Job Template
-      ansible.controller.job_template:
+      job_template:
         name: "{{ jt1_name }}"
         project: "{{ demo_project_name }}"
         inventory: Demo Inventory
@@ -202,13 +177,12 @@
         state: present
       register: result
 
-    - name: Assert job template created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Create a second Job Template
-      ansible.controller.job_template:
+      job_template:
         name: "{{ jt2_name }}"
         project: "{{ demo_project_name }}"
         inventory: Demo Inventory
@@ -217,13 +191,12 @@
         state: present
       register: result
 
-    - name: Assert second job template created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Create a second Job Template in new org
-      ansible.controller.job_template:
+      job_template:
         name: "{{ jt2_name }}"
         project: "{{ demo_project_name_2 }}"
         inventory: Demo Inventory
@@ -238,13 +211,12 @@
         ask_labels_on_launch: true
       register: jt2_name_result
 
-    - name: Assert second job template in new org created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - jt2_name_result.changed
+          - "jt2_name_result is changed"
 
     - name: Add a Survey to second Job Template
-      ansible.controller.job_template:
+      job_template:
         name: "{{ jt2_name }}"
         organization: Default
         project: "{{ demo_project_name }}"
@@ -253,10 +225,7 @@
         job_type: run
         state: present
         survey_enabled: true
-        survey_spec: >-
-          {"spec": [{"index": 0, "question_name": "my question?", "default": "mydef",
-          "variable": "myvar", "type": "text", "required": false}],
-          "description": "test", "name": "test"}
+        survey_spec: '{"spec": [{"index": 0, "question_name": "my question?", "default": "mydef", "variable": "myvar", "type": "text", "required": false}], "description": "test", "name": "test"}'
         ask_execution_environment_on_launch: true
         ask_forks_on_launch: true
         ask_instance_groups_on_launch: true
@@ -265,13 +234,12 @@
         ask_labels_on_launch: true
       register: result
 
-    - name: Assert survey added to job template
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Create a workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         organization: Default
         inventory: Demo Inventory
@@ -285,13 +253,12 @@
         ask_variables_on_launch: true
       register: result
 
-    - name: Assert workflow job template created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed == true
+          - "result is changed"
 
     - name: Create a workflow job template with exists
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         organization: Default
         inventory: Demo Inventory
@@ -306,13 +273,12 @@
         state: exists
       register: result
 
-    - name: Assert workflow job template with exists did not change
-      ansible.builtin.assert:
+    - assert:
         that:
-          - not result.changed
+          - "result is not changed"
 
     - name: Delete a workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         organization: Default
         inventory: Demo Inventory
@@ -327,17 +293,17 @@
         state: absent
       register: result
 
-    - name: Assert workflow job template deleted
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Create a workflow job template with exists
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         organization: Default
         inventory: Demo Inventory
         extra_vars: {'foo': 'bar', 'another-foo': {'barz': 'bar2'}}
+        # We don't try with the label here because after we delete the first WFJT the label is delete with it because it has no references
         ask_inventory_on_launch: true
         ask_scm_branch_on_launch: true
         ask_limit_on_launch: true
@@ -346,13 +312,12 @@
         state: exists
       register: result
 
-    - name: Assert workflow job template with exists created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Create a workflow job template with bad label
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         organization: Default
         inventory: Demo Inventory
@@ -364,16 +329,16 @@
         ask_limit_on_launch: true
         ask_tags_on_launch: true
         ask_variables_on_launch: true
-      register: results
+      register: bad_label_results
       ignore_errors: true
 
-    - name: Assert creation failed due to bad label
-      ansible.builtin.assert:
+    - assert:
         that:
-          - results.failed
+          - "bad_label_results.msg == 'Could not find label entry with name label_bad'"
 
+    # Turn off ask_ * settings to test that the issue/10057 has been fixed
     - name: Turn ask_* settings OFF
-      ansible.controller.workflow_job_template:
+      tower_workflow_job_template:
         name: "{{ wfjt_name }}"
         ask_inventory_on_launch: false
         ask_scm_branch_on_launch: false
@@ -382,33 +347,33 @@
         ask_variables_on_launch: false
         state: present
 
-    - name: Assert ask settings are off
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
-    - name: Create Labels
-      ansible.controller.label:
+    - name: Create labels
+      label:
         name: "{{ item }}"
-        organization: "Default"
+        organization: "{{ org_name }}"
       loop:
         - "{{ label1 }}"
         - "{{ label2 }}"
 
     - name: Create an execution environment
-      ansible.controller.execution_environment:
+      execution_environment:
         name: "{{ ee1 }}"
         image: "junk"
 
     - name: Create instance groups
-      ansible.controller.instance_group:
+      instance_group:
         name: "{{ item }}"
       loop:
         - "{{ ig1 }}"
         - "{{ ig2 }}"
 
+    # Node actions do what the schema command used to do
     - name: Create leaf node
-      ansible.controller.workflow_job_template_node:
+      workflow_job_template_node:
         identifier: leaf
         unified_job_template: "{{ jt2_name }}"
         lookup_organization: "{{ org_name }}"
@@ -425,13 +390,12 @@
         timeout: 23
       register: results
 
-    - name: Assert leaf node created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - results.changed
+          - "results is changed"
 
     - name: Update prompts on leaf node
-      ansible.controller.workflow_job_template_node:
+      workflow_job_template_node:
         identifier: leaf
         unified_job_template: "{{ jt2_name }}"
         lookup_organization: "{{ org_name }}"
@@ -444,83 +408,55 @@
         timeout: 10
       register: results
 
-    - name: Assert leaf node prompts updated
-      ansible.builtin.assert:
+    - assert:
         that:
-          - results.changed
-
-    - name: Remove a node from a workflow that does not exist.
-      ansible.controller.workflow_job_template_node:
-        identifier: root
-        unified_job_template: "{{ jt1_name }}"
-        workflow: Does not exist
-        state: absent
-      register: results
-
-    - name: Assert non-existent node was not changed
-      ansible.builtin.assert:
-        that:
-          - not results.changed
+          - "results is changed"
 
     - name: Create root node
-      ansible.controller.workflow_job_template_node:
+      workflow_job_template_node:
         identifier: root
         unified_job_template: "{{ jt1_name }}"
         workflow: "{{ wfjt_name }}"
 
     - name: Fail if no name is set for approval
-      ansible.controller.workflow_job_template_node:
+      workflow_job_template_node:
         identifier: approval_test
         approval_node:
           description: "{{ approval_node_name }}"
         workflow: "{{ wfjt_name }}"
       register: no_name_results
-      failed_when: false
       ignore_errors: true
 
-    - name: Assert no name for approval failed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - no_name_results.msg is search('Approval node name is required to create approval node.')
-
+          - "no_name_results.msg == 'Approval node name is required to create approval node.'"
 
     - name: Fail if absent and no identifier set
-      ansible.controller.workflow_job_template_node:
-        identifier: approval_test
+      workflow_job_template_node:
         approval_node:
           description: "{{ approval_node_name }}"
         workflow: "{{ wfjt_name }}"
         state: absent
       register: no_identifier_results
-      failed_when: false
       ignore_errors: true
 
-    - name: Assert no identifier failed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - no_identifier_results is defined
-          - no_identifier_results is not none
+          - "no_identifier_results.msg == 'missing required arguments: identifier'"
 
     - name: Fail if present and no unified job template set
-      ansible.controller.workflow_job_template_node:
+      workflow_job_template_node:
         identifier: approval_test
         workflow: "{{ wfjt_name }}"
       register: no_unified_results
-      failed_when: false
       ignore_errors: true
 
-    - name: Assert no unified job template defined
-      ansible.builtin.assert:
+    - assert:
         that:
-          - no_unified_results is defined
-
-    - name: Assert module failed gracefully
-      ansible.builtin.assert:
-        that:
-          - no_unified_results is defined
+          - "no_unified_results.msg == 'state is present but any of the following are missing: unified_job_template, approval_node, success_nodes, always_nodes, failure_nodes'"
 
     - name: Create approval node
-      ansible.controller.workflow_job_template_node:
+      workflow_job_template_node:
         identifier: approval_test
         approval_node:
           name: "{{ approval_node_name }}"
@@ -528,7 +464,7 @@
         workflow: "{{ wfjt_name }}"
 
     - name: Create link for root node
-      ansible.controller.workflow_job_template_node:
+      workflow_job_template_node:
         identifier: root
         workflow: "{{ wfjt_name }}"
         success_nodes:
@@ -537,7 +473,7 @@
           - leaf
 
     - name: Delete approval node
-      ansible.controller.workflow_job_template_node:
+      workflow_job_template_node:
         identifier: approval_test
         approval_node:
           name: "{{ approval_node_name }}"
@@ -545,86 +481,79 @@
         workflow: "{{ wfjt_name }}"
 
     - name: Add started notifications to workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         notification_templates_started:
           - "{{ email_not }}"
           - "{{ webhook_notification }}"
       register: result
 
-    - name: Assert started notifications added
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Re Add started notifications to workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         notification_templates_started:
           - "{{ email_not }}"
           - "{{ webhook_notification }}"
       register: result
 
-    - name: Assert started notifications not re-added
-      ansible.builtin.assert:
+    - assert:
         that:
-          - not result.changed
+          - "result is not changed"
 
     - name: Add success notifications to workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         notification_templates_success:
           - "{{ email_not }}"
           - "{{ webhook_notification }}"
       register: result
 
-    - name: Assert success notifications added
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Copy a workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "copy_{{ wfjt_name }}"
         copy_from: "{{ wfjt_name }}"
         organization: Default
       register: result
 
-    - name: Assert workflow job template copied
-      ansible.builtin.assert:
+    - assert:
         that:
           - result.copied
 
     - name: Fail Remove "on start" webhook notification from copied workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "copy_{{ wfjt_name }}"
         notification_templates_started:
           - "{{ email_not }}123"
       register: remove_copied_workflow_node
-      failed_when: false
       ignore_errors: true
 
-    - name: Assert remove of non-existent notification failed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - not remove_copied_workflow_node.changed
-          - remove_copied_workflow_node.msg is search('returned 0 items')
-
+          - "remove_copied_workflow_node is failed"
+          - "remove_copied_workflow_node is not changed"
+          - "'returned 0 items' in remove_copied_workflow_node.msg"
 
     - name: Remove "on start" webhook notification from copied workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "copy_{{ wfjt_name }}"
         notification_templates_started:
           - "{{ email_not }}"
       register: result
 
-    - name: Assert "on start" notification removed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Add Survey to Copied workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "copy_{{ wfjt_name }}"
         organization: Default
         ask_inventory_on_launch: true
@@ -679,13 +608,12 @@
               new_question: true
       register: result
 
-    - name: Assert survey added to copied workflow
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Re add survey to workflow job template expected not changed.
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "copy_{{ wfjt_name }}"
         organization: Default
         survey_spec:
@@ -739,74 +667,72 @@
               new_question: true
       register: result
 
-    - name: Assert survey not re-added
-      ansible.builtin.assert:
+    - assert:
         that:
-          - not result.changed
+          - "result is not changed"
 
     - name: Remove "on start" webhook notification from workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         notification_templates_started:
           - "{{ email_not }}"
       register: result
 
-    - name: Assert "on start" webhook notification removed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Delete a workflow job template with an invalid inventory and webook_credential
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         inventory: "Does Not Exist"
         webhook_credential: "Does Not Exist"
         state: absent
       register: result
 
-    - name: Assert workflow job template with invalid inventory deleted
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Check module fails with correct msg
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ wfjt_name }}"
         organization: Non_Existing_Organization
       register: result
-      failed_when: false
       ignore_errors: true
 
-    - name: Assert module failed as expected for non-existent org
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.msg is search('returned 0 items, expected 1')
-          - result.msg is search('Non_Existing_Organization')
+          - "result is failed"
+          - "result is not changed"
+          - "'Non_Existing_Organization' in result.msg"
+          - "result.total_results == 0"
 
     - name: Create a workflow job template with workflow nodes in template
       ansible.controller.workflow_job_template:
         name: "{{ wfjt_name }}"
         inventory: Demo Inventory
-        extra_vars:
-          foo: bar
-          another-foo:
-            barz: bar2
+        extra_vars: {'foo': 'bar', 'another-foo': {'barz': 'bar2'}}
         workflow_nodes:
           - identifier: node101
             unified_job_template:
-              id: "{{ project_inv_source_result.id }}"
-            failure_nodes:
-              - identifier: node201
-
+              name: "{{ project_inv_source_result.id }}"
+              inventory:
+                organization:
+                  name: Default
+              type: inventory_source
+            related:
+              failure_nodes:
+                - identifier: node201
           - identifier: node102
             unified_job_template:
               organization:
                 name: "{{ org_name }}"
               name: "{{ demo_project_name_2 }}"
               type: project
-            success_nodes:
-              - identifier: node201
-
+            related:
+              success_nodes:
+                - identifier: node201
           - identifier: node201
             unified_job_template:
               organization:
@@ -817,22 +743,22 @@
               name: Demo Inventory
               organization:
                 name: Default
-            success_nodes:
-              - identifier: node401
-            failure_nodes:
-              - identifier: node301
-            always_nodes: []
-            credentials:
-              - name: "{{ scm_cred_name }}"
-                organization:
-                  name: Default
-            instance_groups:
-              - name: "{{ ig1 }}"
-            labels:
-              - name: "{{ lab1 }}"
-                organization:
-                  name: "{{ org_name }}"
-
+            related:
+              success_nodes:
+                - identifier: node401
+              failure_nodes:
+                - identifier: node301
+              always_nodes: []
+              credentials:
+                - name: "{{ scm_cred_name }}"
+                  organization:
+                    name: Default
+              instance_groups:
+                - name: "{{ ig1 }}"
+              labels:
+                - name: "{{ lab1 }}"
+                  organization:
+                    name: "{{ org_name }}"
           - all_parents_must_converge: false
             identifier: node301
             unified_job_template:
@@ -840,32 +766,28 @@
               timeout: 900
               type: workflow_approval
               name: "{{ approval_node_name }}"
-            success_nodes:
-              - identifier: node401
-
+            related:
+              success_nodes:
+                - identifier: node401
           - identifier: node401
             unified_job_template:
               name: Cleanup Activity Stream
               type: system_job_template
       register: result
-      failed_when: false
 
-    - name: Assert workflow job template with nodes created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result is not failed
-          - result is defined
+          - "result is changed"
 
     - name: Kick off a workflow and wait for it
-      ansible.controller.workflow_launch:
+      workflow_launch:
         workflow_template: "{{ wfjt_name }}"
+      ignore_errors: true
       register: result
-      failed_when: false
 
-    - name: Assert workflow kicked off and waited
-      ansible.builtin.assert:
+    - assert:
         that:
-          - not result.failed
+          - result is not failed
           - "'id' in result['job_info']"
 
     - name: Destroy previous workflow nodes for one that fails
@@ -880,13 +802,13 @@
               name: "{{ jt1_name }}"
               type: job_template
             credentials: []
-            success_nodes:
-              - identifier: node201
+            related:
+              success_nodes:
+                - identifier: node201
           - identifier: node201
             unified_job_template:
               name: "{{ project_inv_source }}"
               inventory:
-                name: "{{ project_inv }}"
                 organization:
                   name: Default
               type: inventory_source
@@ -896,223 +818,224 @@
               organization:
                 name: Default
               type: workflow_job_template
-            credentials:
-              - name: "{{ scm_cred_name }}"
+              forks: 12
+              job_slice_count: 2
+              timeout: 23
+              execution_environment:
+                name: "{{ ee1 }}"
+              inventory:
+                name: Test inventory
                 organization:
                   name: Default
-            instance_groups:
-              - name: "{{ ig1 }}"
-              - name: "{{ ig2 }}"
-            labels:
-              - name: "{{ label1 }}"
-              - name: "{{ label2 }}"
-                organization:
-                  name: "{{ org_name }}"
+              related:
+                credentials:
+                  - name: "{{ scm_cred_name }}"
+                    organization:
+                      name: Default
+                instance_groups:
+                  - name: "{{ ig1 }}"
+                  - name: "{{ ig2 }}"
+                labels:
+                  - name: "{{ label1 }}"
+                  - name: "{{ label2 }}"
+                    organization:
+                      name: "{{ org_name }}"
       register: result
 
     - name: Delete copied workflow job template
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "copy_{{ wfjt_name }}"
         state: absent
       register: result
 
-    - name: Assert copied workflow job template deleted
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Kick off a workflow and wait for it
-      ansible.controller.workflow_launch:
+      workflow_launch:
         workflow_template: "{{ wfjt_name }}"
+      ignore_errors: true
       register: result
-      failed_when: false
 
-    - name: Assert the workflow failed as expected
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.status == "failed"
-        fail_msg: "Workflow did not fail as expected. Status: {{ result.status }}"
-        success_msg: "Workflow failed as expected."
-
+          - result is failed
 
     - name: Create a workflow job template with a GitLab webhook but a GitHub credential
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ webhook_wfjt_name }}"
         organization: Default
         inventory: Demo Inventory
-        webhook_service: "{{ 'gitlab' if gitlab_found else omit }}"
-        webhook_credential: "{{ github_webhook_credential_name if github_found else omit }}"
+        webhook_service: gitlab
+        webhook_credential: "{{ github_webhook_credential_name }}"
+      ignore_errors: true
       register: result
-      failed_when: false
 
-    - name: Assert GitLab webhook with Github cred failed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.failed
-          - result.msg in search('Must match the selected webhook service')
-      when: github_found and gitlab_found
+          - result is failed
+          - "'Must match the selected webhook service' in result['msg']"
 
     - name: Create a workflow job template with a GitHub webhook and a GitHub credential
-      ansible.controller.workflow_job_template:
+      workflow_job_template:
         name: "{{ webhook_wfjt_name }}"
         organization: Default
         inventory: Demo Inventory
-        webhook_service: "{{ 'github' if github_found else omit }}"
-        webhook_credential: "{{ github_webhook_credential_name if github_found else omit }}"
+        webhook_service: github
+        webhook_credential: "{{ github_webhook_credential_name }}"
       register: result
 
-    - name: Assert Github webhook with Github cred created
-      ansible.builtin.assert:
+    - assert:
         that:
-          - not result.failed
+          - result is not failed
 
   always:
-    - name: Cleanup created resources
-      block:
-        - name: Delete the workflow job template
-          ansible.controller.workflow_job_template:
-            name: "{{ item }}"
-            state: absent
-          failed_when: false
-          loop:
-            - "copy_{{ wfjt_name }}"
-            - "{{ wfjt_name }}"
-            - "{{ webhook_wfjt_name }}"
+    - name: Delete the workflow job template
+      ansible.controller.workflow_job_template:
+        name: "{{ item }}"
+        state: absent
+      ignore_errors: True
+      loop:
+        - "copy_{{ wfjt_name }}"
+        - "{{ wfjt_name }}"
+        - "{{ webhook_wfjt_name }}"
 
-        - name: Delete the Job Template
-          ansible.controller.job_template:
-            name: "{{ jt1_name }}"
-            project: "{{ demo_project_name }}"
-            inventory: Demo Inventory
-            playbook: hello_world.yml
-            job_type: run
-            state: absent
-          failed_when: false
+    - name: Delete the Job Template
+      job_template:
+        name: "{{ jt1_name }}"
+        project: "{{ demo_project_name }}"
+        inventory: Demo Inventory
+        playbook: hello_world.yml
+        job_type: run
+        state: absent
+      ignore_errors: True
 
-        - name: Delete the second Job Template
-          ansible.controller.job_template:
-            name: "{{ jt2_name }}"
-            project: "{{ demo_project_name }}"
-            organization: Default
-            inventory: Demo Inventory
-            playbook: hello_world.yml
-            job_type: run
-            state: absent
-          failed_when: false
+    - name: Delete the second Job Template
+      job_template:
+        name: "{{ jt2_name }}"
+        project: "{{ demo_project_name }}"
+        organization: Default
+        inventory: Demo Inventory
+        playbook: hello_world.yml
+        job_type: run
+        state: absent
+      ignore_errors: True
 
-        - name: Delete the second Job Template
-          ansible.controller.job_template:
-            name: "{{ jt2_name }}"
-            project: "{{ demo_project_name_2 }}"
-            organization: "{{ org_name }}"
-            inventory: Demo Inventory
-            playbook: hello_world.yml
-            job_type: run
-            state: absent
-          failed_when: false
+    - name: Delete the second Job Template
+      job_template:
+        name: "{{ jt2_name }}"
+        project: "{{ demo_project_name_2 }}"
+        organization: "{{ org_name }}"
+        inventory: Demo Inventory
+        playbook: hello_world.yml
+        job_type: run
+        state: absent
+      ignore_errors: True
 
-        - name: Delete the inventory source
-          ansible.controller.inventory_source:
-            name: "{{ project_inv_source }}"
-            inventory: "{{ project_inv }}"
-            source: scm
-            state: absent
-          failed_when: false
+    - name: Delete the inventory source
+      inventory_source:
+        name: "{{ project_inv_source }}"
+        inventory: "{{ project_inv }}"
+        source: scm
+        state: absent
+      ignore_errors: True
 
-        - name: Delete the inventory
-          ansible.controller.inventory:
-            description: Test inventory
-            organization: Default
-            name: "{{ project_inv }}"
-            state: absent
-          failed_when: false
+    - name: Delete the inventory
+      inventory:
+        description: Test inventory
+        organization: Default
+        name: "{{ project_inv }}"
+        state: absent
+      ignore_errors: True
 
-        - name: Delete the Demo Project
-          ansible.controller.project:
-            name: "{{ demo_project_name }}"
-            organization: Default
-            scm_type: git
-            scm_url: https://github.com/ansible/ansible-tower-samples.git
-            scm_credential: "{{ scm_cred_name }}"
-            state: absent
-          failed_when: false
+    - name: Delete the Demo Project
+      project:
+        name: "{{ demo_project_name }}"
+        organization: Default
+        scm_type: git
+        scm_url: https://github.com/ansible/ansible-tower-samples.git
+        scm_credential: "{{ scm_cred_name }}"
+        state: absent
+      ignore_errors: True
 
-        - name: Delete the 2nd Demo Project
-          ansible.controller.project:
-            name: "{{ demo_project_name_2 }}"
-            organization: "{{ org_name }}"
-            scm_type: git
-            scm_url: https://github.com/ansible/ansible-tower-samples.git
-            scm_credential: "{{ scm_cred_name }}"
-            state: absent
-          failed_when: false
+    - name: Delete the 2nd Demo Project
+      project:
+        name: "{{ demo_project_name_2 }}"
+        organization: "{{ org_name }}"
+        scm_type: git
+        scm_url: https://github.com/ansible/ansible-tower-samples.git
+        scm_credential: "{{ scm_cred_name }}"
+        state: absent
+      ignore_errors: True
 
-        - name: Delete the 3rd Demo Project
-          ansible.controller.project:
-            name: "{{ project_inv_source }}"
-            organization: "{{ org_name }}"
-            scm_type: git
-            scm_url: https://github.com/ansible/ansible-tower-samples.git
-            scm_credential: "{{ scm_cred_name }}"
-            state: absent
-          failed_when: false
+    - name: Delete the 3rd Demo Project
+      project:
+        name: "{{ project_inv_source }}"
+        organization: "{{ org_name }}"
+        scm_type: git
+        scm_url: https://github.com/ansible/ansible-tower-samples.git
+        scm_credential: "{{ scm_cred_name }}"
+        state: absent
+      ignore_errors: True
 
-        - name: Delete the SCM Credential
-          ansible.controller.credential:
-            name: "{{ scm_cred_name }}"
-            organization: Default
-            credential_type: Source Control
-            state: absent
-          failed_when: false
+    - name: Delete the SCM Credential
+      credential:
+        name: "{{ scm_cred_name }}"
+        organization: Default
+        credential_type: Source Control
+        state: absent
+      ignore_errors: True
 
-        - name: Delete the GitHub Webhook Credential
-          ansible.controller.credential:
-            name: "{{ github_webhook_credential_name }}"
-            organization: Default
-            credential_type: GitHub Personal Access Token
-            state: absent
-          failed_when: false
-          when: github_found
+    - name: Delete the GitHub Webhook Credential
+      credential:
+        name: "{{ github_webhook_credential_name }}"
+        organization: Default
+        credential_type: GitHub Personal Access Token
+        state: absent
+      ignore_errors: True
 
-        - name: Delete email notification
-          ansible.controller.notification_template:
-            name: "{{ email_not }}"
-            organization: Default
-            state: absent
-          failed_when: false
+    - name: Delete email notification
+      notification_template:
+        name: "{{ email_not }}"
+        organization: Default
+        state: absent
+      ignore_errors: True
 
-        - name: Delete webhook notification
-          ansible.controller.notification_template:
-            name: "{{ webhook_notification }}"
-            organization: Default
-            state: absent
-          failed_when: false
+    - name: Delete webhook notification
+      notification_template:
+        name: "{{ webhook_notification }}"
+        organization: Default
+        state: absent
+      ignore_errors: True
 
-        - name: Delete an execution environment
-          ansible.controller.execution_environment:
-            name: "{{ ee1 }}"
-            image: "junk"
-            state: absent
-          failed_when: false
+    # Labels can not be deleted
 
-        - name: Delete instance groups
-          ansible.controller.instance_group:
-            name: "{{ item }}"
-            state: absent
-          loop:
-            - "{{ ig1 }}"
-            - "{{ ig2 }}"
-          failed_when: false
+    - name: Delete an execution environment
+      execution_environment:
+        name: "{{ ee1 }}"
+        image: "junk"
+        state: absent
+      ignore_errors: True
 
-        - name: "Remove the organization"
-          ansible.controller.organization:
-            name: "{{ org_name }}"
-            state: absent
-          failed_when: false
+    - name: Delete instance groups
+      instance_group:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ig1 }}"
+        - "{{ ig2 }}"
+      ignore_errors: True
 
-        - name: Remove node
-          ansible.controller.host:
-            name: "{{ host1 }}"
-            inventory: Demo Inventory
-            state: absent
-          failed_when: false
+    - name: "Remove the organization"
+      organization:
+        name: "{{ org_name }}"
+        state: absent
+      ignore_errors: True
+
+    - name: Remove node
+      host:
+        name: "{{ host1 }}"
+        inventory: Demo Inventory
+        state: absent
+      ignore_errors: True

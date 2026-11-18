@@ -101,7 +101,7 @@
   amazon.aws.ec2_vpc_subnet:
     state: absent
     vpc_id: "{{ testing_vpc.vpc.id }}"
-    cidr: "{{ subnet_cidr }}"
+    cidr: 10.55.77.0/24
   register: removed
   until: removed is not failed
   ignore_errors: true
@@ -109,7 +109,7 @@
 - name: Remove the VPC
   amazon.aws.ec2_vpc_net:
     name: "{{ resource_prefix }}-vpc"
-    cidr_block: "{{ vpc_cidr }}"
+    cidr_block: 10.55.77.0/24
     state: absent
   register: removed
   until: removed is not failed

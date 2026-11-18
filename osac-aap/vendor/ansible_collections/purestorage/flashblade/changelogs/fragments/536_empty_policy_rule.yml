@@ -1,0 +1,2 @@
+bugfixes:
+ - purefb_policy - Fixed AttributeError with empty policy rules

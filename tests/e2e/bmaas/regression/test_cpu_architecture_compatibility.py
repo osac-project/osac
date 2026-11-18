@@ -8,7 +8,13 @@ import pytest
 
 from tests.e2e.bmaas.conftest import BMI_DISK_IMAGE_SOURCE_REF
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
-from tests.e2e.core.helpers import unique_name, wait_for_bmi_deletion, wait_for_bmi_grpc_removal, wait_for_bmi_running
+from tests.e2e.core.helpers import (
+    HostRef,
+    unique_name,
+    wait_for_bmi_deletion,
+    wait_for_bmi_grpc_removal,
+    wait_for_bmi_running,
+)
 from tests.e2e.core.inventory import InventoryBackend, assert_bmi_lifecycle_on_running
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
@@ -61,7 +67,8 @@ def test_compatible_direct_template_provisions(
         },
     )
     bmi_id = response["object"]["id"]
-    bmi_cr_name = bmh_name = ""
+    bmi_cr_name = ""
+    host: HostRef | None = None
     try:
         wait_for_bmi_running(grpc=jwt_grpc_tenant1, bmi_id=bmi_id)
         spec = jwt_grpc_tenant1.get_baremetal_instance(bmi_id=bmi_id)["object"]["spec"]
@@ -80,7 +87,7 @@ def test_compatible_direct_template_provisions(
         if bmi_cr_name:
             wait_for_bmi_deletion(k8s=k8s_hub_client, name=bmi_cr_name)
         wait_for_bmi_grpc_removal(grpc=jwt_grpc_tenant1, uuid=bmi_id)
-        if bmh_name:
+        if host is not None:
             inventory_backend.wait_for_released(host=host)
 
 

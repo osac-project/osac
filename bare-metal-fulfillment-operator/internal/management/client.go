@@ -9,6 +9,10 @@ import (
 
 var ErrTransitioning = errors.New("power state transition already in progress")
 
+// ErrHostOperational marks a terminal host operational error, as opposed to a
+// transient backend or API failure.
+var ErrHostOperational = errors.New("host operational error")
+
 type PowerState string
 
 const (

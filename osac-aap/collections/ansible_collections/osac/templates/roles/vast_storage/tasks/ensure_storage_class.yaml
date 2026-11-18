@@ -99,8 +99,9 @@
       ansible.builtin.assert:
         that:
           - storage_provider_block_fstype is defined
+          - storage_provider_block_fstype is string
           - storage_provider_block_fstype | length > 0
-        fail_msg: storage_provider_block_fstype must be defined and nonempty for block StorageClasses.
+        fail_msg: storage_provider_block_fstype must be defined and nonempty for block StorageClasses (string required).
       when: _vast_missing_block_tiers | length > 0
 
     - name: Discover cluster name from target cluster infrastructure
@@ -375,6 +376,29 @@
       loop: "{{ _provider_tiers }}"
       loop_control:
         label: "vast-snapshot-{{ tenant_name }}-{{ item.name }}"
+
+    - name: Verify requested block StorageClasses at completion
+      when: _vast_missing_block_tiers | length > 0
+      block:
+        - name: Read tenant StorageClasses after block creation
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            label_selectors:
+              - "osac.openshift.io/tenant={{ tenant_name }}"
+              - "app.kubernetes.io/managed-by=osac-aap"
+          register: _vast_completed_sc_check
+
+        - name: Reject missing requested block StorageClasses
+          vars:
+            _vast_missing_completed_block_names: >-
+              {{ _vast_expected_sc_names | select('match', '^vast-block-')
+                 | difference(_vast_completed_sc_check.resources | map(attribute='metadata.name') | list) }}
+          ansible.builtin.assert:
+            that:
+              - _vast_missing_completed_block_names | length == 0
+            fail_msg: >-
+              VAST block StorageClasses missing at completion: {{ _vast_missing_completed_block_names | join(', ') }}
 
     - name: Set StorageClass names output (list)
       ansible.builtin.set_fact:

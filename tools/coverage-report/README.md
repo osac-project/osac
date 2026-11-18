@@ -87,12 +87,16 @@ anywhere.
 
 A behavior is a `#### TC-...: title` (or `###`) heading. Its priority and
 automation come from the `| ... | Priority | Automation |` table that follows
-it. Its tier comes from the `- **Tier:**` bullet, or the legacy
-`- **Tier / owner:**` bullet whose owner part is ignored: labels starting with
+it. Its tier comes from the `- **Tier:**` or `**Tier/owner:**` line, the
+`Tier`, `Tier / owner`, or `Owner / tier` column of that table, or a matrix
+whose `ID`/`Cases` column names the case. A matrix row naming a range is not
+expanded, so the cases in between stay unassigned. Labels starting with
 `Unit`, `E2E`, or `Component integration` / `Contract` / `Envtest` /
 `UI integration` / `Integration` (including `Contract and component
-integration`) map to those tiers; anything else is tier-unassigned. `manual`
-and `not automatable` cases are excluded with a reason.
+integration`) map to those tiers, in either order (`E2E / [QE]`,
+`[DEV] osac-installer - component integration`); anything else is
+tier-unassigned. `manual` and `not automatable` cases are excluded with a
+reason.
 
 Metric states:
 

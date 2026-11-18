@@ -132,6 +132,12 @@ class TierTests(unittest.TestCase):
         self.assertEqual(normalize_tier("Story 8.05"), NONE)
         self.assertEqual(normalize_tier(""), NONE)
 
+    def test_tier_after_an_owner_prefix(self):
+        self.assertEqual(normalize_tier("[DEV] osac-installer — component integration"),
+                         INTEGRATION)
+        self.assertEqual(normalize_tier("[QE] osac-reporter - e2e"), E2E)
+        self.assertEqual(normalize_tier("Envtest / [DEV]"), INTEGRATION)
+
 
 class PriorityTests(unittest.TestCase):
     def test_normalisation(self):
@@ -215,6 +221,70 @@ class TestplanTests(unittest.TestCase):
             "#### TC-1.2: Legacy form\n\n- **Tier / owner:** Unit / [DEV]\n"
         )
         self.assertEqual([b.tier for b in behaviors], [E2E, UNIT])
+
+    def test_bold_tier_owner_line_without_a_bullet(self):
+        behaviors = self.parse(
+            "#### TC-1.1: Bold form\n\n"
+            "**Tier/owner:** Component integration, fulfillment-service `[DEV]`.\n"
+        )
+        self.assertEqual(behaviors[0].tier, INTEGRATION)
+        self.assertEqual(behaviors[0].tier_label,
+                         "Component integration, fulfillment-service `[DEV]`.")
+
+    def test_tier_from_the_case_table(self):
+        behaviors = self.parse(
+            "#### TC-1.1: Table form\n\n"
+            "| Interface Change | Tier | Owner | Priority | Automation |\n"
+            "|---|---|---|---|---|\n"
+            "| IC-1 | E2E | [QE] | critical | automated |\n"
+        )
+        self.assertEqual(behaviors[0].tier, E2E)
+        self.assertEqual(behaviors[0].priority, "critical")
+
+    def test_bullet_tier_still_wins_over_the_table(self):
+        behaviors = self.parse(
+            "#### TC-1.1: Both\n\n"
+            "| Interface Change | Tier | Priority | Automation |\n"
+            "|---|---|---|---|\n"
+            "| IC-1 | E2E | high | automated |\n\n"
+            "- **Tier:** Unit\n"
+        )
+        self.assertEqual(behaviors[0].tier, UNIT)
+
+    def test_owner_slash_tier_column_in_the_case_table(self):
+        behaviors = self.parse(
+            "#### TC-1.1: Owner form\n\n"
+            "| Interface Change | Priority | Automation | Owner / tier |\n"
+            "|---|---|---|---|\n"
+            "| IC-1 | high | automated | Component integration |\n"
+        )
+        self.assertEqual(behaviors[0].tier, INTEGRATION)
+
+    def test_tier_from_a_case_matrix(self):
+        behaviors = self.parse(
+            "| ID | Scenario | Tier | Priority | Status |\n"
+            "|---|---|---|---|---|\n"
+            "| TC-R1-01 | First | Unit | high | Covered |\n"
+            "| TC-R1-02 | Second | E2E | high | Covered |\n\n"
+            "#### TC-R1-01: First\n\n#### TC-R1-02: Second\n"
+        )
+        self.assertEqual([b.tier for b in behaviors], [UNIT, E2E])
+
+    def test_case_matrix_does_not_expand_ranges(self):
+        behaviors = self.parse(
+            "| Cases | Tier |\n"
+            "|---|---|\n"
+            "| TC-R3-01 to TC-R3-05 | Integration |\n\n"
+            "#### TC-R3-01: A\n\n#### TC-R3-03: B\n\n#### TC-R3-05: C\n"
+        )
+        self.assertEqual([b.tier for b in behaviors], [INTEGRATION, NONE, INTEGRATION])
+
+    def test_bullet_tier_beats_the_matrix(self):
+        behaviors = self.parse(
+            "| ID | Tier |\n|---|---|\n| TC-1.1 | E2E |\n\n"
+            "#### TC-1.1: Case\n\n- **Tier:** Unit\n"
+        )
+        self.assertEqual(behaviors[0].tier, UNIT)
 
     def test_dotted_case_ids_in_headings_and_matrix(self):
         table = "| A | Priority | Automation |\n|---|---|---|\n| x | high | automated |\n"

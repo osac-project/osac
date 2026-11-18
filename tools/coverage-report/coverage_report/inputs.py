@@ -321,6 +321,7 @@ _TC_ID = r"TC-[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?"
 _TC_HEADING_RE = re.compile(r"^(#{3,4})\s+(" + _TC_ID + r")\s*:\s*(.+?)\s*$")
 _HEADING_RE = re.compile(r"^(#{1,6})\s")
 _BULLET_RE = re.compile(r"^-\s+\*\*(?P<name>[^:*]+):\*\*\s*(?P<value>.*)$")
+_BOLD_RE = re.compile(r"^\*\*(?P<name>[^:*]+):\*\*\s*(?P<value>.*)$")
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 _TC_ID_RE = re.compile(r"\b" + _TC_ID + r"\b")
 _TEST_PATH_RE = re.compile(r".+\.(?:go|py|ts|tsx|js)$")
@@ -338,15 +339,33 @@ _PRIORITY_CODE_RE = re.compile(r"\bp([0-3])\b")
 _PRIORITY_LEVELS = {"0": "critical", "1": "high", "2": "medium", "3": "low"}
 
 
-def normalize_tier(value: str) -> str:
-    """Map a test-plan tier label onto ``unit``/``integration``/``e2e``/``none``."""
-    label = " ".join((value or "").replace("_", " ").split()).casefold()
+_TIER_SPLIT_RE = re.compile(r"\s+[-\u2013\u2014]\s+|[\u2013\u2014/|,]")
+
+
+def _tier_prefix(label: str) -> str:
     if label.startswith("unit"):
         return UNIT
     if label.startswith("e2e"):
         return E2E
     if label.startswith(_INTEGRATION_PREFIXES):
         return INTEGRATION
+    return NONE
+
+
+def normalize_tier(value: str) -> str:
+    """Map a test-plan tier label onto ``unit``/``integration``/``e2e``/``none``.
+
+    Accepts the tier in either order, for example ``E2E / [QE]`` or
+    ``[DEV] osac-installer - component integration``.
+    """
+    label = " ".join((value or "").replace("_", " ").split()).casefold()
+    tier = _tier_prefix(label)
+    if tier != NONE:
+        return tier
+    for part in _TIER_SPLIT_RE.split(label):
+        tier = _tier_prefix(part.strip(" []()"))
+        if tier != NONE:
+            return tier
     return NONE
 
 
@@ -392,7 +411,7 @@ def _tables(lines: Sequence[str]) -> List[List[List[str]]]:
 
 
 def _table_fields(lines: Sequence[str]) -> Dict[str, str]:
-    """Return the Priority/Automation cells of the first scoring table."""
+    """Return the scoring cells (priority, automation, tier) of the first table."""
     for rows in _tables(lines):
         if len(rows) < 2:
             continue
@@ -403,9 +422,11 @@ def _table_fields(lines: Sequence[str]) -> Dict[str, str]:
         if data is None:
             continue
         fields = {}
-        for name in ("priority", "automation"):
-            index = header.index(name)
-            fields[name] = data[index] if index < len(data) else ""
+        for name in ("priority", "automation", "tier", "tier / owner", "tier/owner",
+                     "owner / tier", "owner/tier"):
+            if name in header:
+                index = header.index(name)
+                fields[name] = data[index] if index < len(data) else ""
         return fields
     return {}
 
@@ -415,7 +436,7 @@ def _bullet_fields(lines: Sequence[str]) -> Dict[str, str]:
     fields: Dict[str, str] = {}
     index = 0
     while index < len(lines):
-        match = _BULLET_RE.match(lines[index])
+        match = _BULLET_RE.match(lines[index]) or _BOLD_RE.match(lines[index])
         if not match:
             index += 1
             continue
@@ -435,6 +456,40 @@ def _bullet_fields(lines: Sequence[str]) -> Dict[str, str]:
             index += 1
         fields.setdefault(name, " ".join(part for part in parts if part))
     return fields
+
+
+_ID_COLUMNS = ("id", "case", "cases", "case id", "case ids", "test case ids",
+               "test cases")
+
+
+def _tier_matrix(text: str) -> Dict[str, str]:
+    """Return ``case id -> tier cell`` from a case matrix table.
+
+    A matrix row may name several cases; only explicit ids are read. A range
+    such as ``TC-1 to TC-5`` is not expanded, so the cases in between stay
+    unassigned instead of being guessed.
+    """
+    mapping: Dict[str, str] = {}
+    for rows in _tables(text.splitlines()):
+        if len(rows) < 2:
+            continue
+        header = [cell.casefold() for cell in rows[0]]
+        tier_index = next((i for i, name in enumerate(header)
+                           if name in ("tier", "owner / tier", "owner/tier")), None)
+        if tier_index is None:
+            continue
+        id_index = next((i for i, name in enumerate(header) if name in _ID_COLUMNS), None)
+        if id_index is None:
+            continue
+        for row in rows[1:]:
+            if _is_separator(row) or len(row) <= max(tier_index, id_index):
+                continue
+            tier = row[tier_index]
+            if normalize_tier(tier) == NONE:
+                continue
+            for tc_id in _TC_ID_RE.findall(row[id_index]):
+                mapping.setdefault(tc_id, tier)
+    return mapping
 
 
 def _split_cases(text: str) -> List[Tuple[str, str, List[str]]]:
@@ -460,11 +515,23 @@ def _split_cases(text: str) -> List[Tuple[str, str, List[str]]]:
 def parse_testplan(text: str, prefix: str = "") -> List[Behavior]:
     """Parse behaviors from test-plan text, prefixing ids for multi-plan features."""
     behaviors = []
+    matrix_tiers = _tier_matrix(text)
     for tc_id, title, body in _split_cases(text):
         bullets = _bullet_fields(body)
         table = _table_fields(body)
         tier_label = " ".join(
-            (bullets.get("tier") or bullets.get("tier / owner", "")).split()
+            (
+                bullets.get("tier")
+                or bullets.get("tier / owner")
+                or bullets.get("tier/owner")
+                or table.get("tier")
+                or table.get("tier / owner")
+                or table.get("tier/owner")
+                or table.get("owner / tier")
+                or table.get("owner/tier")
+                or matrix_tiers.get(tc_id)
+                or ""
+            ).split()
         )
         automation = " ".join(table.get("automation", "").split()).casefold()
         if "manual" in automation:

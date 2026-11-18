@@ -177,7 +177,7 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=subnets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=networkclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=get;list;watch;delete
-// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=get;list;watch;delete;patch;update
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=pods;secrets,verbs=get;list;watch;create;update;patch;delete
 
@@ -507,6 +507,11 @@ func (r *ClusterOrderReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.mapAutomaticAttachmentToCluster),
 			builder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
 		).
+		Watches(
+			&v1alpha1.ExternalIP{},
+			handler.EnqueueRequestsFromMapFunc(r.mapAutomaticExternalIPToCluster),
+			builder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
+		).
 		Complete(r)
 }
 
@@ -616,6 +621,34 @@ func (r *ClusterOrderReconciler) mapAutomaticAttachmentToCluster(ctx context.Con
 	requests := make([]reconcile.Request, 0, len(orders.Items))
 	for i := range orders.Items {
 		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&orders.Items[i])})
+	}
+	return requests
+}
+
+func (r *ClusterOrderReconciler) mapAutomaticExternalIPToCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	ip, ok := obj.(*v1alpha1.ExternalIP)
+	if !ok || ip.Labels[autoCreatedLabel] != labelValueTrue ||
+		ip.Labels[autoCreatedKindLabel] != autoCreatedKindCluster ||
+		ip.Labels[autoCreatedEndpointLabel] != autoCreatedEndpointIngress {
+		return nil
+	}
+	clusterID := ip.Labels[autoCreatedForLabel]
+	tenant := ip.Annotations[networktask.TenantAnnotation]
+	if clusterID == "" || tenant == "" || ip.Annotations[ownerReferenceAnnotation] != clusterID {
+		return nil
+	}
+	orders := &v1alpha1.ClusterOrderList{}
+	if err := r.List(ctx, orders, client.InNamespace(r.ClusterOrderNamespace),
+		client.MatchingLabels{osacClusterOrderIDLabel: clusterID}); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(orders.Items))
+	for i := range orders.Items {
+		order := &orders.Items[i]
+		if order.Annotations[networktask.TenantAnnotation] != tenant {
+			continue
+		}
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(order)})
 	}
 	return requests
 }

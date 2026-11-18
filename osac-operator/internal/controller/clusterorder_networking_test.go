@@ -457,6 +457,7 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 				autoCreatedForLabel:      clusterID,
 				autoCreatedEndpointLabel: autoCreatedEndpointAPI,
 			},
+			Finalizers: []string{"test.provider/finalizer"},
 		}, Spec: v1alpha1.ExternalIPAttachmentSpec{
 			ExternalIP: "api-eip", Cluster: ptr.To(clusterID),
 			TargetEndpoint: ptr.To(v1alpha1.ExternalIPAttachmentTargetEndpointAPI),
@@ -473,6 +474,177 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		Expect(failure).To(BeEmpty())
 		Expect(ready).To(BeTrue())
 		Expect(address).To(Equal("203.0.113.10"))
+
+		Expect(k8sClient.Delete(ctx, attachment)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(attachment), attachment)).To(Succeed())
+		Expect(attachment.DeletionTimestamp.IsZero()).To(BeFalse())
+		ready, address, failure, err = reconciler.externalEndpointReady(ctx, instance, autoCreatedEndpointAPI)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(failure).To(BeEmpty())
+		Expect(ready).To(BeFalse())
+		Expect(address).To(BeEmpty(), "a deleting attachment must not republish DNS")
+		attachment.Finalizers = nil
+		Expect(k8sClient.Update(ctx, attachment)).To(Succeed())
+	})
+
+	It("publishes ingress bootstrap DNS from the reserved ExternalIP before an attachment exists", func() {
+		h := newNetHarness(true)
+		clusterID := "07d97e19-702b-4daf-ad5c-16e299dce748"
+		instance := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
+			Name:      "ingress-bootstrap-dns",
+			Namespace: h.ns,
+			Labels:    map[string]string{osacClusterOrderIDLabel: clusterID},
+			Annotations: map[string]string{
+				networktask.TenantAnnotation: "tenant-a",
+			},
+		}, Spec: v1alpha1.ClusterOrderSpec{
+			TemplateID:                     standardCaaSTemplateID,
+			NetworkAttachment:              &v1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-id"},
+			SupportsAutomaticCaaSEndpoints: true,
+		}}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+		instance.SetClusterReferenceNamespace("ingress-bootstrap-workload")
+
+		ingressIP := &v1alpha1.ExternalIP{ObjectMeta: metav1.ObjectMeta{
+			Name:      "ingress-bootstrap-eip",
+			Namespace: h.ns,
+			Labels: map[string]string{
+				autoCreatedLabel:         labelValueTrue,
+				autoCreatedForLabel:      clusterID,
+				autoCreatedKindLabel:     autoCreatedKindCluster,
+				autoCreatedEndpointLabel: autoCreatedEndpointIngress,
+			},
+			Annotations: map[string]string{
+				ownerReferenceAnnotation:     clusterID,
+				networktask.TenantAnnotation: "tenant-a",
+			},
+		}, Spec: v1alpha1.ExternalIPSpec{Pool: "ingress-bootstrap-pool"}}
+		Expect(k8sClient.Create(ctx, ingressIP)).To(Succeed())
+		ingressIP.Status = v1alpha1.ExternalIPStatus{
+			Address: "203.0.113.46",
+			Conditions: []metav1.Condition{{
+				Type: v1alpha1.NetworkConditionReady, Status: metav1.ConditionTrue,
+				Reason: v1alpha1.ReasonSucceeded, LastTransitionTime: metav1.Now(),
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, ingressIP)).To(Succeed())
+		hc := &hypershiftv1beta1.HostedCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "ingress-bootstrap-hosted"},
+			Spec:       hypershiftv1beta1.HostedClusterSpec{DNS: hypershiftv1beta1.DNSSpec{BaseDomain: "example.test"}},
+		}
+		reconciler := &ClusterOrderReconciler{
+			Client: k8sClient, Engine: h.engine, NetworkingNamespace: h.ns,
+		}
+
+		ready, reason, _, err := reconciler.publishClusterIngressBootstrapDNS(ctx, instance, hc)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ready).To(BeFalse())
+		Expect(reason).To(Equal(endpointReasonProgressing))
+		storedIP := &v1alpha1.ExternalIP{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(ingressIP), storedIP)).To(Succeed())
+		Expect(storedIP.Finalizers).To(ContainElement(clusterEndpointDNSFinalizer),
+			"the ExternalIP must remain allocated while its bootstrap DNS record exists")
+		Expect(h.aap.latest("publish_public_dns_ingress", "none").vars["external_ip"].(map[string]any)[fieldAddress]).
+			To(Equal("203.0.113.46"))
+		ingressJob := networktask.FindJob(instance.Status.Jobs,
+			"publish_public_dns_ingress", v1alpha1.NetworkJobManagerNone)
+		Expect(ingressJob).NotTo(BeNil())
+		Expect(ingressJob.State).To(Equal(v1alpha1.NetworkJobStateRunning))
+
+		h.aap.succeed("publish_public_dns_ingress", "none")
+		ready, reason, _, err = reconciler.publishClusterIngressBootstrapDNS(ctx, instance, hc)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ready).To(BeTrue())
+		Expect(reason).To(Equal(endpointReasonAsExpected))
+		Expect(instance.Status.IngressDNSHostedClusterName).To(Equal(hc.Name))
+		Expect(instance.Status.ConsoleURL).To(BeEmpty(),
+			"bootstrap DNS does not report the guest console endpoint ready")
+	})
+
+	It("removes bootstrap ingress DNS before releasing the automatic ExternalIP", func() {
+		h := newNetHarness(true)
+		clusterID := "7386946d-7084-4aef-96a4-ff941c5ea789"
+		instance := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
+			Name:      "ingress-bootstrap-cleanup",
+			Namespace: h.ns,
+			Labels:    map[string]string{osacClusterOrderIDLabel: clusterID},
+			Annotations: map[string]string{
+				networktask.TenantAnnotation: "tenant-a",
+			},
+		}, Spec: v1alpha1.ClusterOrderSpec{
+			TemplateID:                     standardCaaSTemplateID,
+			NetworkAttachment:              &v1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-id"},
+			SupportsAutomaticCaaSEndpoints: true,
+		}, Status: v1alpha1.ClusterOrderStatus{
+			APIURL:                      "https://api.ingress-bootstrap-cleanup.example.test:6443",
+			IngressDNSHostedClusterName: "ingress-bootstrap-hosted",
+			Jobs: []v1alpha1.NetworkJobStatus{{
+				Task: "publish_public_dns_ingress", Manager: v1alpha1.NetworkJobManagerNone,
+				State: v1alpha1.NetworkJobStateSucceeded, Attempt: 1, JobID: "5100",
+			}},
+		}}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		instance.Status.APIURL = "https://api.ingress-bootstrap-cleanup.example.test:6443"
+		instance.Status.IngressDNSHostedClusterName = "ingress-bootstrap-hosted"
+		instance.Status.Jobs = []v1alpha1.NetworkJobStatus{{
+			Task: "publish_public_dns_ingress", Manager: v1alpha1.NetworkJobManagerNone,
+			State: v1alpha1.NetworkJobStateSucceeded, Attempt: 1, JobID: "5100",
+		}}
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+		storedOrder := &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), storedOrder)).To(Succeed())
+		Expect(networktask.FindJob(storedOrder.Status.Jobs,
+			"publish_public_dns_ingress", v1alpha1.NetworkJobManagerNone)).NotTo(BeNil())
+		Expect(networktask.FindJob(storedOrder.Status.Jobs,
+			"publish_public_dns_ingress", v1alpha1.NetworkJobManagerNone).State).
+			To(Equal(v1alpha1.NetworkJobStateSucceeded))
+		ingressIP := &v1alpha1.ExternalIP{ObjectMeta: metav1.ObjectMeta{
+			Name:      "ingress-bootstrap-cleanup-eip",
+			Namespace: h.ns,
+			Labels: map[string]string{
+				autoCreatedLabel:         labelValueTrue,
+				autoCreatedForLabel:      clusterID,
+				autoCreatedKindLabel:     autoCreatedKindCluster,
+				autoCreatedEndpointLabel: autoCreatedEndpointIngress,
+			},
+			Annotations: map[string]string{
+				ownerReferenceAnnotation:     clusterID,
+				networktask.TenantAnnotation: "tenant-a",
+			},
+			Finalizers: []string{clusterEndpointDNSFinalizer},
+		}, Spec: v1alpha1.ExternalIPSpec{Pool: "ingress-bootstrap-pool"}}
+		Expect(k8sClient.Create(ctx, ingressIP)).To(Succeed())
+		h.aap.mu.Lock()
+		h.aap.jobs[5100] = &aap.Job{ID: 5100, Status: "successful"}
+		h.aap.mu.Unlock()
+		Expect(k8sClient.Delete(ctx, ingressIP)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(ingressIP), ingressIP)).To(Succeed())
+		Expect(ingressIP.DeletionTimestamp.IsZero()).To(BeFalse())
+
+		reconciler := &ClusterOrderReconciler{
+			Client: k8sClient, Engine: h.engine, NetworkingNamespace: h.ns,
+			StatusPollInterval: time.Second,
+		}
+		handled, result, err := reconciler.reconcileDeletingAutomaticEndpointDNS(ctx, instance)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(handled).To(BeTrue())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(h.aap.tasks(clusterID)).To(Equal([]string{"remove_public_dns_ingress/none"}))
+		Expect(ingressIP.Finalizers).To(ContainElement(clusterEndpointDNSFinalizer),
+			"the ExternalIP remains held while DNS removal is pending")
+
+		h.aap.succeed("remove_public_dns_ingress", "none")
+		handled, _, err = reconciler.reconcileDeletingAutomaticEndpointDNS(ctx, instance)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(handled).To(BeTrue())
+		latestIP := &v1alpha1.ExternalIP{}
+		err = k8sClient.Get(ctx, client.ObjectKeyFromObject(ingressIP), latestIP)
+		if err == nil {
+			Expect(latestIP.Finalizers).NotTo(ContainElement(clusterEndpointDNSFinalizer))
+		} else {
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		}
 	})
 
 	It("publishes the API URL with the HostedCluster API port", func() {

@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networktask"
 )
 
 func TestMapSubnetToClusterSupportsAPIIDsAndLegacyNames(t *testing.T) {
@@ -60,5 +61,63 @@ func TestMapSubnetToClusterSupportsAPIIDsAndLegacyNames(t *testing.T) {
 		if names[i] != want[i] {
 			t.Fatalf("mapped ClusterOrders = %v, want %v", names, want)
 		}
+	}
+}
+
+func TestMapAutomaticIngressExternalIPToCluster(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := v1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("adding OSAC API types to scheme: %v", err)
+	}
+	clusterID := "cluster-api-id"
+	order := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "osac", Name: "caas-order",
+		Labels: map[string]string{osacClusterOrderIDLabel: clusterID},
+		Annotations: map[string]string{
+			networktask.TenantAnnotation: "tenant-a",
+		},
+	}}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(order).Build()
+	reconciler := &ClusterOrderReconciler{
+		Client:                kube,
+		ClusterOrderNamespace: "osac",
+		NetworkingNamespace:   "networking",
+	}
+
+	for _, tc := range []struct {
+		name     string
+		endpoint string
+		owner    string
+		tenant   string
+		want     bool
+	}{
+		{name: "owned ingress ExternalIP", endpoint: autoCreatedEndpointIngress, owner: clusterID, tenant: "tenant-a", want: true},
+		{name: "API ExternalIP", endpoint: autoCreatedEndpointAPI, owner: clusterID, tenant: "tenant-a"},
+		{name: "foreign ExternalIP", endpoint: autoCreatedEndpointIngress, owner: "another-cluster", tenant: "tenant-a"},
+		{name: "foreign tenant ExternalIP", endpoint: autoCreatedEndpointIngress, owner: clusterID, tenant: "tenant-b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := &v1alpha1.ExternalIP{ObjectMeta: metav1.ObjectMeta{
+				Namespace: "networking",
+				Name:      "automatic-eip",
+				Labels: map[string]string{
+					autoCreatedLabel:         labelValueTrue,
+					autoCreatedForLabel:      clusterID,
+					autoCreatedKindLabel:     autoCreatedKindCluster,
+					autoCreatedEndpointLabel: tc.endpoint,
+				},
+				Annotations: map[string]string{
+					ownerReferenceAnnotation:     tc.owner,
+					networktask.TenantAnnotation: tc.tenant,
+				},
+			}}
+			requests := reconciler.mapAutomaticExternalIPToCluster(context.Background(), ip)
+			if got := len(requests); (got == 1) != tc.want {
+				t.Fatalf("mapped request count = %d, want match=%t", got, tc.want)
+			}
+			if tc.want && requests[0].Name != order.Name {
+				t.Fatalf("mapped ClusterOrder = %q, want %q", requests[0].Name, order.Name)
+			}
+		})
 	}
 }

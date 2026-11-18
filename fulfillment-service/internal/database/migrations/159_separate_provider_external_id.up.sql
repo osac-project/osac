@@ -41,10 +41,10 @@ begin
     when 'BILLING_ACCOUNT_STATE_ACTIVE' then 'ACTIVE'
     when 'BILLING_ACCOUNT_STATE_INACTIVE' then 'INACTIVE'
     when 'BILLING_ACCOUNT_STATE_UNKNOWN' then 'UNKNOWN' end;
-  p.status_observed_at := (s->>'state_observation_timestamp')::timestamptz;
+  -- Observation freshness uses the exact nanoseconds in data; this SQL mirror truncates to microseconds.
+  p.status_observed_at := project_billing_timestamp(s->>'state_observation_timestamp', false);
   if p.provider_key = '' or p.provider_account_reference = '' or p.state is null
-    or p.status_observed_at is null or p.status_observed_at < '0001-01-01Z'::timestamptz
-    or p.status_observed_at >= '10000-01-01Z'::timestamptz
+    or p.status_observed_at is null
     or (p.base_currency <> '' and p.base_currency !~ '^[A-Z]{3}$')
   then
     raise exception 'invalid billing account status' using errcode = '23514';

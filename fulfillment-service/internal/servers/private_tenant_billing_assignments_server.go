@@ -292,10 +292,11 @@ func (s *PrivateTenantBillingAssignmentsServer) getAssignment(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	if page.GetTotal() == 0 {
+	items := page.GetItems()
+	if len(items) == 0 {
 		return nil, &dao.ErrNotFound{IDs: []string{id}}
 	}
-	return page.GetItems()[0], nil
+	return items[0], nil
 }
 
 // Create assigns a tenant to a billing account for the first time.
@@ -417,17 +418,17 @@ func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
 		}
 		snapshot.previous = previous.GetObject()
 	}
-	active, err := s.bindings.List().SetFilter(fmt.Sprintf("this.spec.tenant.id == %q && !has(this.status.effective_to_timestamp)", in.TenantID)).SetLimit(1).Do(ctx)
+	active, err := s.activeTenantAssignments(ctx, in.TenantID)
 	if err != nil {
 		return snapshot, err
 	}
-	if closeID == "" && active.GetTotal() != 0 {
+	if closeID == "" && len(active) != 0 {
 		if expected != nil {
 			return snapshot, errAssignChanged
 		}
 		return snapshot, failedPreconditionWithReason(tbaTenantAlreadyBoundReason, "tenant already has an active billing assignment")
 	}
-	if closeID != "" && (active.GetTotal() != 1 || active.GetItems()[0].GetId() != closeID) {
+	if closeID != "" && (len(active) != 1 || active[0].GetId() != closeID) {
 		return snapshot, errAssignChanged
 	}
 	if snapshot.current == nil || snapshot.current.GetSpec().GetBillingAccount().GetId() != accountID {
@@ -558,6 +559,23 @@ func (s *PrivateTenantBillingAssignmentsServer) Signal(ctx context.Context,
 	return &privatev1.TenantBillingAssignmentsSignalResponse{}, nil
 }
 
+// activeTenantAssignments reads the tenant's zero or one active assignment across all scopes.
+func (s *PrivateTenantBillingAssignmentsServer) activeTenantAssignments(ctx context.Context,
+	tenantID string,
+) ([]*privatev1.TenantBillingAssignment, error) {
+	page, err := s.bindings.List().SetLimit(1).SetFilter(fmt.Sprintf(
+		"this.spec.tenant.id == %q && !has(this.status.effective_to_timestamp)", tenantID)).Do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := page.GetItems()
+	// The count and page are separate statements. Do not proceed on conflicting evidence.
+	if int(page.GetTotal()) != len(items) {
+		return nil, errAssignChanged
+	}
+	return items, nil
+}
+
 // rejectIfAccountAlreadyBound fails with ACCOUNT_ALREADY_BOUND when accountID already has an active assignment.
 func (s *PrivateTenantBillingAssignmentsServer) rejectIfAccountAlreadyBound(
 	ctx context.Context, accountID string) error {
@@ -599,19 +617,20 @@ type tenantBillingAssignmentAssignInput struct {
 // token and interval changes, after authoritative locks. ctx is the shared provider child budget.
 func (s *PrivateTenantBillingAssignmentsServer) observeSelectedAccount(
 	ctx context.Context, adapter billing.Adapter, ref billing.AccountRef,
-) (*privatev1.BillingAccountStatus, error) {
+) (billing.Account, *privatev1.BillingAccountStatus, error) {
 	// Match discovery's conservative observation-start timestamp: a delayed response may already be stale when
 	// it arrives, so its completion time must not let it supersede a newer observation that committed meanwhile.
+	// Keep nanoseconds for freshness comparisons; only the SQL projection truncates them.
 	observedAt := time.Now().UTC()
 	observed, err := adapter.GetAccount(ctx, ref)
 	if err != nil {
-		return nil, err
+		return billing.Account{}, nil, err
 	}
 	if observed.Ref != ref {
-		return nil, billing.NewError(billing.ReasonMalformed, "GetAccount", false, 0)
+		return billing.Account{}, nil, billing.NewError(billing.ReasonMalformed, "GetAccount", false, 0)
 	}
-	return privatev1.BillingAccountStatus_builder{State: mapBillingAccountState(string(observed.State)),
-		StateObservationTimestamp: timestamppb.New(observedAt.UTC().Truncate(time.Microsecond)),
+	return observed, privatev1.BillingAccountStatus_builder{State: mapBillingAccountState(string(observed.State)),
+		StateObservationTimestamp: timestamppb.New(observedAt),
 	}.Build(), nil
 }
 
@@ -661,22 +680,18 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 	// or take business locks before correlation I/O. A rejected RPC cannot commit an observation independently.
 	providerCtx, cancel := context.WithTimeout(operationCtx, s.assignProviderDeadline)
 	defer cancel()
-	observed, err := s.observeSelectedAccount(providerCtx, adapter, ref)
+	selected, observed, err := s.observeSelectedAccount(providerCtx, adapter, ref)
 	if err != nil {
 		if providerCtx.Err() != nil && operationCtx.Err() == nil {
 			return nil, billing.NewError(billing.ReasonTimeout, "GetAccount", true, 0)
 		}
 		return row, err
 	}
-	switch observed.GetState() {
-	case privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE:
-	case privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_INACTIVE:
-		return nil, requireActiveBillingAccountState(billing.AccountInactive, accountID)
-	default:
-		return nil, requireActiveBillingAccountState(billing.AccountUnknown, accountID)
+	if err := requireActiveBillingAccountState(selected.State, accountID); err != nil {
+		return nil, err
 	}
 
-	resolution, err := billing.ResolveAccountCorrelationID(providerCtx, billing.AccountCorrelationInput{
+	resolution, carrier, err := billing.ResolveObservedAccountCorrelationID(providerCtx, billing.AccountCorrelationInput{
 		Adapter: adapter, AccountID: account.GetId(), Ref: ref, LocalValue: account.GetStatus().GetExternalBillingAccountId(),
 		LocalDuplicate: func(dupCtx context.Context, value, excludeAccountID string) (bool, error) {
 			page, listErr := s.accounts.List().SetLimit(0).SetFilter(fmt.Sprintf(
@@ -686,12 +701,20 @@ func (s *PrivateTenantBillingAssignmentsServer) assign(
 			}
 			return page.GetTotal() > 0, nil
 		},
-	})
+	}, selected)
 	if err != nil {
 		if providerCtx.Err() != nil && operationCtx.Err() == nil {
 			return nil, billing.NewError(billing.ReasonTimeout, "ResolveAccountCorrelationID", true, 0)
 		}
 		return nil, err
+	}
+	if carrier != nil && carrier.State != "" {
+		// A later explicit state on the exact selected carrier is eligibility evidence, not just a match count.
+		if err := requireActiveBillingAccountState(carrier.State, accountID); err != nil {
+			return nil, err
+		}
+		observed.SetState(mapBillingAccountState(string(carrier.State)))
+		observed.SetStateObservationTimestamp(timestamppb.New(carrier.At))
 	}
 	// Only the selected account's exact, unique provider-side carrier establishes a match. No remote writes occur.
 	matches := resolution.ProviderMatches
@@ -730,12 +753,11 @@ func (s *PrivateTenantBillingAssignmentsServer) finalizeAssignment(txCtx context
 	if err != nil {
 		return row, err
 	}
-	// The stored state can change between the preflight read and this commit, from discovery or another
-	// assignment. A change committed after this request's provider read is news the observation cannot supersede,
-	// so reject the now-known-inactive account instead of opening an interval for it.
 	if !sameBillingAssignmentInputs(snapshot, latest) {
 		return row, errAssignChanged
 	}
+	// Compare observation times, not commit order: the fresh provider evidence cannot supersede a newer durable
+	// observation from discovery or another assignment that committed while provider I/O was in flight.
 	mergedAccount, _ := mergeBillingAccountObservation(latest.account, observed)
 	if err := requireActiveBillingAccountState(assignmentAccountState(mergedAccount), accountID); err != nil {
 		return nil, err
@@ -765,7 +787,16 @@ func (s *PrivateTenantBillingAssignmentsServer) finalizeAssignment(txCtx context
 		}
 		return result.GetObject(), nil
 	}
-	at, err := dao.BillingFinalizationTime(txCtx, latest.floor)
+	// The destination account is already locked, so its closed history cannot advance under us.
+	accountFloor, err := dao.BillingAccountHistoryFloor(txCtx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	floor := latest.floor
+	if accountFloor.After(floor) {
+		floor = accountFloor
+	}
+	at, err := dao.BillingFinalizationTime(txCtx, floor)
 	if err != nil {
 		return nil, err
 	}
@@ -812,10 +843,11 @@ func (s *PrivateTenantBillingAssignmentsServer) canonicalAssignment(ctx context.
 		if err != nil {
 			return nil, err
 		}
-		if page.GetTotal() != 1 {
+		items := page.GetItems()
+		if page.GetTotal() != 1 || len(items) != 1 {
 			return nil, status.Error(codes.InvalidArgument, "spec.tenant does not reference an existing tenant")
 		}
-		id = page.GetItems()[0].GetId()
+		id = items[0].GetId()
 	}
 	if !auth.SubjectFromContext(ctx).Tenants.Contains(id) {
 		return nil, status.Error(codes.PermissionDenied, "tenant is outside the authorized billing assignment scope")

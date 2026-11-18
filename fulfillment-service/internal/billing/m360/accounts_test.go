@@ -260,20 +260,50 @@ var _ = Describe("M360 accounts", func() {
 	})
 
 	Describe("GetAccount and CorrelationValue", func() {
-		It("reads one account by its native id from the external API", func() {
-			var path string
+		It("reads one account by its native id and returns the matching ref", func() {
+			paths := make(chan string, 1)
 			build(func(w http.ResponseWriter, r *http.Request) {
-				path = r.URL.EscapedPath()
+				paths <- r.URL.EscapedPath()
 				_, _ = w.Write([]byte(dataBody(`{"Id":"a/1","ExternalId":"ext-1","Status__r":{"Name":"Inactive"},
 					"ApprovalStatus__r":{"Name":"Approved"}}`)))
 			})
-			acct, err := adapter.GetAccount(context.Background(), billing.NewAccountRef("a/1"))
+			ref := billing.NewAccountRef("a/1")
+			acct, err := adapter.GetAccount(context.Background(), ref)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(path).To(Equal("/api/v1/external/accounts/a%2F1"))
+			Expect(<-paths).To(Equal("/api/v1/external/accounts/a%2F1"))
+			Expect(acct.Ref).To(Equal(ref))
+			Expect(acct.ExternalID).To(Equal("ext-1"))
 			Expect(acct.RawStatus).To(Equal("Inactive"))
 			Expect(acct.ApprovalStatus).To(Equal("Approved"))
 			Expect(acct.State).To(Equal(billing.AccountInactive), "an explicit Inactive status wins over Approved")
 		})
+
+		DescribeTable("rejects an invalid returned identity without exposing account data",
+			func(idField string) {
+				build(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte(dataBody(`{` + idField + `"ExternalId":"foreign-correlation"}`)))
+				})
+				ctx := context.Background()
+				ref := billing.NewAccountRef("requested-native-id")
+
+				acct, err := adapter.GetAccount(ctx, ref)
+				Expect(reasonOf(err)).To(Equal(billing.ReasonMalformed))
+				Expect(err).To(MatchError("billing GetAccount: MALFORMED"))
+				Expect(acct).To(Equal(billing.Account{}))
+
+				value, found, err := adapter.CorrelationValue(ctx, ref)
+				Expect(reasonOf(err)).To(Equal(billing.ReasonMalformed))
+				Expect(err).To(MatchError("billing GetAccount: MALFORMED"))
+				Expect(value).To(BeEmpty())
+				Expect(found).To(BeFalse())
+				Expect(fake.hits.Load()).To(Equal(int32(2)), "one GET per lookup")
+			},
+			Entry("missing Id", ""),
+			Entry("empty Id", `"Id":"",`),
+			Entry("null Id", `"Id":null,`),
+			Entry("non-string Id", `"Id":123,`),
+			Entry("mismatched Id", `"Id":"foreign-native-id",`),
+		)
 
 		It("tells a missing account (NOT_FOUND) apart from other failures", func() {
 			build(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(404) })

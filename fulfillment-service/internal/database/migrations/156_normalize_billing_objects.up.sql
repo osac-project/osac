@@ -117,6 +117,30 @@ alter table tenant_billing_assignments
 create unique index billing_accounts_unique_name on billing_accounts (name);
 create index tenant_billing_assignments_by_name on tenant_billing_assignments (name);
 
+-- Protobuf JSON writers use UTC, uppercase T/Z and 0, 3, 6 or 9 fractional digits. Validate that shape
+-- before PostgreSQL can normalize alternate spellings (including 24:00 and leap seconds).
+create function project_billing_timestamp(value text, require_exact boolean) returns timestamptz as $$
+begin
+  if value collate "C" !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]([.]([0-9]{3}|[0-9]{6}|[0-9]{9}))?Z$'
+    or left(value, 4) = '0000'
+  then
+    raise exception 'invalid protobuf billing timestamp' using errcode = '23514';
+  end if;
+  if length(value) = 30 then
+    if require_exact and substring(value from 27 for 3) <> '000' then
+      raise exception 'billing interval endpoint is not representable at microsecond precision' using errcode = '23514';
+    end if;
+    -- Convert at most six fractional digits, so even the last nanosecond of year 9999 cannot round up.
+    value := left(value, 26) || 'Z';
+  end if;
+  -- The cast checks the calendar date after lexical and precision validation.
+  return value::timestamptz;
+exception
+  when invalid_datetime_format or datetime_field_overflow then
+    raise exception 'invalid protobuf billing timestamp' using errcode = '23514';
+end;
+$$ language plpgsql strict;
+
 create function project_billing_account() returns trigger as $$
 declare
   s jsonb := new.data->'status';
@@ -147,10 +171,10 @@ begin
     when 'BILLING_ACCOUNT_STATE_ACTIVE' then 'ACTIVE'
     when 'BILLING_ACCOUNT_STATE_INACTIVE' then 'INACTIVE'
     when 'BILLING_ACCOUNT_STATE_UNKNOWN' then 'UNKNOWN' end;
-  p.status_observed_at := (s->>'state_observation_timestamp')::timestamptz;
+  -- Observation freshness uses the exact nanoseconds in data; this SQL mirror truncates to microseconds.
+  p.status_observed_at := project_billing_timestamp(s->>'state_observation_timestamp', false);
   if p.provider_key = '' or p.provider_account_reference = '' or p.state is null
-    or p.status_observed_at is null or p.status_observed_at < '0001-01-01Z'::timestamptz
-    or p.status_observed_at >= '10000-01-01Z'::timestamptz
+    or p.status_observed_at is null
     or (p.base_currency <> '' and p.base_currency !~ '^[A-Z]{3}$')
   then
     raise exception 'invalid billing account status' using errcode = '23514';
@@ -237,8 +261,9 @@ begin
   end loop;
   p.tenant_id := spec#>>'{tenant,id}';
   p.billing_account_id := spec#>>'{billing_account,id}';
-  p.effective_from := (s->>'effective_from_timestamp')::timestamptz;
-  p.effective_to := (s->>'effective_to_timestamp')::timestamptz;
+  -- Interval constraints and ordering use these columns, so neither endpoint may lose precision.
+  p.effective_from := project_billing_timestamp(s->>'effective_from_timestamp', true);
+  p.effective_to := project_billing_timestamp(s->>'effective_to_timestamp', true);
   p.message := coalesce(s->>'message', '');
   p.connection_state := case coalesce(s->>'connection_state', 'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_UNSPECIFIED')
     when 'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_UNSPECIFIED' then 'UNSPECIFIED'
@@ -249,8 +274,6 @@ begin
     or spec#>>'{billing_account,name}' is distinct from
       ('ba-' || left(encode(sha256(convert_to(p.billing_account_id, 'UTF8')), 'hex'), 60))
     or p.connection_state is null or p.effective_from is null
-    or p.effective_from < '0001-01-01Z'::timestamptz or p.effective_from >= '10000-01-01Z'::timestamptz
-    or p.effective_to < '0001-01-01Z'::timestamptz or p.effective_to >= '10000-01-01Z'::timestamptz
   then
     raise exception 'inconsistent canonical billing assignment' using errcode = '23514';
   end if;

@@ -112,7 +112,8 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 				Expect(res.Value).To(Equal(expectValue))
 			}
 			Expect(res.ProviderMatches).To(Equal(expectMatches))
-			Expect(fake.Count("CorrelationValue")).To(Equal(1))
+			Expect(fake.Count("GetAccount")).To(Equal(1))
+			Expect(fake.Count("CorrelationValue")).To(BeZero())
 			Expect(fake.Count("ListAccounts")).To(Equal(1))
 			value, _, err := fake.CorrelationValue(ctx, ref)
 			Expect(err).ToNot(HaveOccurred())
@@ -151,7 +152,7 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 			fake := newFake(providerValue)
 			res, err := billing.ResolveAccountCorrelationID(ctx, input(fake, localValue))
 			expectReason(res, err, billing.ReasonBillingCorrelationIDConflict)
-			Expect(fake.Count("CorrelationValue")).To(Equal(1))
+			Expect(fake.Count("GetAccount")).To(Equal(1))
 			Expect(fake.Count("ListAccounts")).To(BeZero())
 			value, _, err := fake.CorrelationValue(ctx, ref)
 			Expect(err).ToNot(HaveOccurred())
@@ -192,7 +193,7 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 			}
 			res, err := billing.ResolveAccountCorrelationID(ctx, account)
 			Expect(candidates).To(HaveLen(min(collisions+1, 5)))
-			Expect(fake.Count("CorrelationValue")).To(Equal(1))
+			Expect(fake.Count("GetAccount")).To(Equal(1))
 			if success {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(res).To(Equal(billing.Resolution{Value: candidates[len(candidates)-1]}))
@@ -225,7 +226,7 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 
 	It("returns the classified provider error and no value when the account read fails", func() {
 		fake := billingfake.New(billingfake.Scenario{Failures: map[string]billingfake.Failure{
-			"CorrelationValue": {Reason: billing.ReasonUnavailable, Retryable: true, Status: 503},
+			"GetAccount": {Reason: billing.ReasonUnavailable, Retryable: true, Status: 503},
 		}})
 		res, err := billing.ResolveAccountCorrelationID(ctx, input(fake, "local"))
 		Expect(res).To(Equal(billing.Resolution{}))
@@ -243,7 +244,7 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 			res, err := billing.ResolveAccountCorrelationID(ctx, input(adapter, localValue))
 			expectReason(res, err, billing.ReasonAccountAmbiguous)
 			Expect(adapter.filters).To(ConsistOf(billing.AccountFilter{ExternalID: "value"}))
-			Expect(adapter.Count("CorrelationValue")).To(Equal(1))
+			Expect(adapter.Count("GetAccount")).To(Equal(1))
 		},
 		Entry("adopt: foreign sole carrier", "", "acct-2", 1),
 		Entry("equal: foreign sole carrier", "value", "acct-2", 1),
@@ -264,7 +265,7 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 			res, err := billing.ResolveAccountCorrelationID(ctx, account)
 			expectReason(res, err, billing.ReasonAccountAmbiguous)
 			Expect(adapter.filters).To(HaveLen(1))
-			Expect(adapter.Count("CorrelationValue")).To(Equal(1))
+			Expect(adapter.Count("GetAccount")).To(Equal(1))
 		},
 		Entry("local-only: foreign sole carrier", "local", "acct-2", 1),
 		Entry("local-only: contradictory selected sole carrier", "local", providerAcctID, 1),
@@ -281,7 +282,7 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(res).To(Equal(billing.Resolution{Value: "value"}))
 			Expect(adapter.filters).To(HaveLen(1))
-			Expect(adapter.Count("CorrelationValue")).To(Equal(1))
+			Expect(adapter.Count("GetAccount")).To(Equal(1))
 		},
 		Entry("adopted", ""),
 		Entry("equal", "value"),
@@ -297,7 +298,7 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 		Expect(res).To(Equal(billing.Resolution{Value: value, ProviderMatches: 1}))
 		Expect(adapter.tokens).To(Equal([]string{"", "second", "third"}))
 		Expect(adapter.filters).To(HaveEach(Equal(billing.AccountFilter{ExternalID: value})))
-		Expect(adapter.Count("CorrelationValue")).To(Equal(1))
+		Expect(adapter.Count("GetAccount")).To(Equal(1))
 	})
 
 	DescribeTable("requires exhaustion within the 50-page budget, even after a carrier was seen",
@@ -313,7 +314,7 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 			adapter := &carrierPagesAdapter{Fake: newFake("value"), pages: pages}
 			res, err := billing.ResolveAccountCorrelationID(ctx, input(adapter, ""))
 			Expect(adapter.filters).To(HaveLen(billing.MaxListPages))
-			Expect(adapter.Count("CorrelationValue")).To(Equal(1))
+			Expect(adapter.Count("GetAccount")).To(Equal(1))
 			if last {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(res).To(Equal(billing.Resolution{Value: "value", ProviderMatches: 1}))
@@ -344,7 +345,7 @@ var _ = Describe("ResolveAccountCorrelationID", func() {
 				Expect(err).To(MatchError(providerErr))
 			}
 			Expect(adapter.filters).To(HaveLen(2))
-			Expect(adapter.Count("CorrelationValue")).To(Equal(1))
+			Expect(adapter.Count("GetAccount")).To(Equal(1))
 		},
 		Entry("late provider error", false),
 		Entry("cancellation", true),

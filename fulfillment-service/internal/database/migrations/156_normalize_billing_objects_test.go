@@ -27,6 +27,21 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+var invalidBillingTimestamps = []string{
+	"2026-02-01 00:00:00.000002Z",
+	"2026-02-01t00:00:00.000002z",
+	"2026-02-01T00:00:00.000002+00:00",
+	"2026-02-01T00:00:00.000002",
+	"2026-02-01T00:00:00.000002Z\n",
+	"2026-02-01T00:00:00.0000020Z",
+	"2026-01-31T24:00:00Z",
+	"2026-01-31T23:59:60Z",
+	"2026-02-29T00:00:00Z",
+	"0000-01-01T00:00:00Z",
+	"10000-01-01T00:00:00Z",
+	"infinity",
+}
+
 var _ = DescribeMigration("Normalize billing objects", func() {
 	accountName := func(id string) string {
 		sum := sha256.Sum256([]byte(id))
@@ -281,6 +296,52 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 			'{status,external_billing_account_id}', 'null') where id = 'absent'`)
 		reject(ctx, "23514", "", `update tenant_billing_assignments set data = jsonb_set(data,
 			'{status,effective_to_timestamp}', 'null') where id = 'current'`)
+	})
+
+	It("rejects noncanonical or inexact interval endpoints on insert and update", func(ctx context.Context) {
+		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		const insert = `insert into tenant_billing_assignments (id, name, tenant, creator, annotations, data)
+			values ('timestamp-check', 'same-name', 'other-tenant', 'request-principal',
+				'{"osac.openshift.io/tenant":"other-tenant"}', jsonb_set($1::jsonb, $2::text[], to_jsonb($3::text)))`
+		const update = `update tenant_billing_assignments set data = jsonb_set(data, $1::text[], to_jsonb($2::text))
+			where id = 'current'`
+		for _, endpoint := range []string{"effective_from_timestamp", "effective_to_timestamp"} {
+			path := []string{"status", endpoint}
+			// If rounding were allowed this timestamp would match the open interval's start on update.
+			reject(ctx, "23514", "", update, path, "2026-02-01T00:00:00.000002001Z")
+			for _, stamp := range invalidBillingTimestamps {
+				By("rejecting " + endpoint + " = " + stamp)
+				reject(ctx, "23514", "", insert, assignmentData("other-tenant", "padded", "9999-12-31T23:59:59.999999Z"), path, stamp)
+				reject(ctx, "23514", "", update, path, stamp)
+			}
+		}
+		// A sub-microsecond inversion would round to a legal zero-length interval.
+		reject(ctx, "23514", "", insert, assignmentData("other-tenant", "padded", "2026-03-01T00:00:00.000005Z"),
+			[]string{"status", "effective_from_timestamp"}, "2026-03-01T00:00:00.000005001Z")
+		reject(ctx, "23514", "", insert, assignmentData("other-tenant", "padded", "2026-03-01T00:00:00.000004999Z"),
+			[]string{"status", "effective_from_timestamp"}, "2026-03-01T00:00:00.000005Z")
+		reject(ctx, "23514", "tenant_billing_assignments_valid_interval", update,
+			[]string{"status", "effective_to_timestamp"}, "2026-02-01T00:00:00.000001Z")
+	})
+
+	It("projects exactly representable interval endpoints without rewriting JSON", func(ctx context.Context) {
+		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		_, err := conn.Exec(ctx, insertAssignment, "exact", "other-tenant", assignmentData("other-tenant", "padded", ""))
+		Expect(err).NotTo(HaveOccurred())
+		var open bool
+		Expect(conn.QueryRow(ctx, `select effective_to is null from tenant_billing_assignments where id = 'exact'`).Scan(&open)).To(Succeed())
+		Expect(open).To(BeTrue())
+		_, err = conn.Exec(ctx, `update tenant_billing_assignments set data = jsonb_set(
+			jsonb_set(data, '{status,effective_from_timestamp}', '"2026-03-01T00:00:00.000005000Z"'),
+			'{status,effective_to_timestamp}', '"2028-02-29T00:00:00.123Z"') where id = 'exact'`)
+		Expect(err).NotTo(HaveOccurred())
+		var matches bool
+		Expect(conn.QueryRow(ctx, `select effective_from = '2026-03-01T00:00:00.000005Z'::timestamptz
+			and effective_to = '2028-02-29T00:00:00.123Z'::timestamptz
+			and data#>>'{status,effective_from_timestamp}' = '2026-03-01T00:00:00.000005000Z'
+			and data#>>'{status,effective_to_timestamp}' = '2028-02-29T00:00:00.123Z'
+			from tenant_billing_assignments where id = 'exact'`).Scan(&matches)).To(Succeed())
+		Expect(matches).To(BeTrue())
 	})
 
 	It("uses lifecycle-active companions including closed history, never interval-currentness", func(ctx context.Context) {

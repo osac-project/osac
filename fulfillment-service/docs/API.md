@@ -536,7 +536,8 @@ Accounts and assignments use the standard `id`, `metadata`, `spec`, `status` env
 - `status.external_billing_account_id` is the optional, locally retained, provider-agnostic
   attribution token, not an M360 account ID, tenant ID or credential. Absence and a present
   empty value are distinct, and stored raw values are not trimmed or rewritten. It can be
-  established locally while an assignment is `PENDING`, before any provider account carries it.
+  established only while assigning an account, including when the assignment is `PENDING`
+  and no provider account carries it yet.
 - `status.provider_external_id` is the raw provider-reported external ID, separate from the
   assignment token. Discovery retains each account by its native identity even if multiple
   accounts report the same external ID. Administrators can inspect the reported values or filter
@@ -552,6 +553,21 @@ Accounts and assignments use the standard `id`, `metadata`, `spec`, `status` env
   ID and `status.effective_from_timestamp`. `status.effective_to_timestamp` is absent for the
   current interval; closed intervals are immutable `[from, to)` history, including zero-length
   intervals. `status.connection_state` and `status.message` report validation/remediation.
+
+For direct gRPC `TenantBillingAssignments.Update`, omit `update_mask` or specify the
+single path `spec.billing_account` to replace the entire reference. A present empty mask
+leaves the assignment unchanged without provider revalidation. Explicit child paths such
+as `spec.billing_account.id` and `spec.billing_account.name` are not writable.
+
+REST `PATCH /api/fulfillment/v1/billing/tenant_billing_assignments/{id}` (or
+`/api/private/v1/billing/tenant_billing_assignments/{id}`) takes the object fields
+directly, for example `{"spec":{"billing_account":{"name":"new-account"}}}`.
+Use `id` instead of `name` to select by ID. The gateway turns inferred reference
+selector paths into one `spec.billing_account` path; other inferred paths still
+reach the server for validation. An explicit `?update_mask=spec.billing_account`
+uses exactly that path; explicit child paths are not normalized. With no body
+or mask query, the gateway infers an empty mask. Neither an empty JSON object
+(`{}`) nor an empty `update_mask` query value requests an empty mask.
 
 Billing filters and ordering use nested descriptor paths, such as `this.status.state == 1`
 (ACTIVE), `this.status.connection_state == 2` (CONNECTED),
@@ -592,16 +608,18 @@ manual provider-side remediation; gated publish/launch remain blocked with
 `BILLING_ACCOUNT_UNAVAILABLE` until successful revalidation. This is not a provider setter
 or write/readback workflow.
 
-Assignment creation, replacement, and same-account revalidation read the selected
-account's normalized state from the provider before resolving correlation. The stored
+Assignment creation, replacement, and same-account revalidation verify the identity of
+the selected provider account and take its state and external ID from that same read. The stored
 state is the last observation and cannot alone decide eligibility at preflight: an
 inactive or unknown account is rejected even if discovery previously stored `ACTIVE`,
 a stale stored `INACTIVE` or `UNKNOWN` does not block an account the provider reports
 active now, and provider-read failure is not permission to fall back to that cache.
 State observations retain their observation time and cannot overwrite a newer stored
 observation; a newer observation already stored, or a stored state change committed
-after the assignment read, still decides the request and can reject it. State, correlation
-and exact-carrier reads share one provider deadline and finish before business locks.
+after the assignment read, can reject the request. A later observation of the selected
+account during the exact-carrier walk can also reject it if that observation is not active.
+The selected read and exact-carrier walk share one provider deadline and finish before
+business locks.
 This is assignment-time validation, not continuous provider monitoring.
 
 Every billing unary RPC uses the ordinary ambient request transaction, including public
@@ -654,7 +672,10 @@ Account keys match OSAC ID or stable metadata name, not display label, private n
 or attribution token. Accounts ignore selected tenant/project filters; assignments retain
 selected tenant scoping but never selected project scoping. Explicit CEL filters still narrow
 results and cannot expand server-authorized visibility. Create/edit use the standard envelope
-and typed references, not the retired scalar flags.
+and typed references, not the retired scalar flags. In `osac edit tenantbillingassignment <key>`,
+replace the entire `spec.billing_account` reference; when selecting by just ID or name, remove
+the other selector rather than leaving it set to the previous account. Leave other fields
+unchanged. Saving without changes sends an empty mask and does not revalidate the account.
 
 All six table layouts (public/private account, assignment and provider status) are generic.
 Accounts show ID, NAME, provider, display label, currency, state, attribution token and observation

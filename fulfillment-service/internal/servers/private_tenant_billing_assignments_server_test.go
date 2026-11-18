@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2"
@@ -43,7 +44,23 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// hangingCorrelationAdapter blocks every CorrelationValue call until its context is done - it reproduces a
+// assignmentListRaceTx simulates a row disappearing between the DAO's real count and page queries.
+// QueryRow sees the seeded row; the first Query returns an empty page.
+type assignmentListRaceTx struct {
+	database.Tx
+	returnedEmptyPage bool
+}
+
+func (t *assignmentListRaceTx) Query(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
+	if !t.returnedEmptyPage {
+		t.returnedEmptyPage = true
+		// The List DAO binds its page limit as the final parameter.
+		args[len(args)-1] = int32(0)
+	}
+	return t.Tx.Query(ctx, query, args...)
+}
+
+// hangingCorrelationAdapter blocks the carrier walk until its context is done - it reproduces a
 // provider that accepts requests but never answers, so the assign deadline is the only way out.
 type hangingCorrelationAdapter struct {
 	*billingfake.Fake
@@ -63,27 +80,23 @@ func (a *writePoisonAdapter) SetCorrelationValue(context.Context, billing.Accoun
 	return errors.New("provider writes are forbidden")
 }
 
-func (a *hangingCorrelationAdapter) CorrelationValue(ctx context.Context, _ billing.AccountRef) (string, bool, error) {
+func (a *hangingCorrelationAdapter) ListAccounts(ctx context.Context, _ billing.AccountFilter, _ billing.Page) (billing.AccountPage, error) {
 	<-ctx.Done()
-	return "", false, billing.NewError(billing.ReasonTimeout, "CorrelationValue", true, 0)
+	return billing.AccountPage{}, billing.NewError(billing.ReasonTimeout, "ListAccounts", true, 0)
 }
 
 // gatedAccountReadAdapter snapshots the selected account before delaying its response, reproducing an older provider
 // observation whose completion races a newer discovery. entered closes only after the result has been sampled.
 type gatedAccountReadAdapter struct {
 	*billingfake.Fake
-	entered   chan struct{}
-	release   chan struct{}
-	once      sync.Once
-	sampledAt time.Time
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
 }
 
 func (a *gatedAccountReadAdapter) GetAccount(ctx context.Context, ref billing.AccountRef) (billing.Account, error) {
 	account, err := a.Fake.GetAccount(ctx, ref)
-	a.once.Do(func() {
-		a.sampledAt = time.Now()
-		close(a.entered)
-	})
+	a.once.Do(func() { close(a.entered) })
 	select {
 	case <-a.release:
 		return account, err
@@ -92,7 +105,7 @@ func (a *gatedAccountReadAdapter) GetAccount(ctx context.Context, ref billing.Ac
 	}
 }
 
-// gatedCorrelationAdapter holds every CorrelationValue call until released or its context ends, reproducing an
+// gatedCorrelationAdapter holds selected-account reads until released or their context ends, reproducing an
 // in-flight assign whose provider call is slow, so a concurrent assign must fail fast.
 type gatedCorrelationAdapter struct {
 	*billingfake.Fake
@@ -102,16 +115,16 @@ type gatedCorrelationAdapter struct {
 	blockedRef string
 }
 
-func (a *gatedCorrelationAdapter) CorrelationValue(ctx context.Context, ref billing.AccountRef) (string, bool, error) {
+func (a *gatedCorrelationAdapter) GetAccount(ctx context.Context, ref billing.AccountRef) (billing.Account, error) {
 	if a.blockedRef != "" && ref != billing.NewAccountRef(a.blockedRef) {
-		return a.Fake.CorrelationValue(ctx, ref)
+		return a.Fake.GetAccount(ctx, ref)
 	}
 	a.once.Do(func() { close(a.entered) })
 	select {
 	case <-a.release:
-		return a.Fake.CorrelationValue(ctx, ref)
+		return a.Fake.GetAccount(ctx, ref)
 	case <-ctx.Done():
-		return "", false, billing.NewError(billing.ReasonTimeout, "CorrelationValue", true, 0)
+		return billing.Account{}, billing.NewError(billing.ReasonTimeout, "GetAccount", true, 0)
 	}
 }
 
@@ -447,6 +460,50 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		Entry("Update rejects an actually equal one-backslash retained token", "Update", true),
 	)
 
+	DescribeTable("handles a row disappearing between count and page without provider I/O", func(method string, code codes.Code) {
+		const assignmentID = "disappearing-assignment"
+		var accounts []billingfake.AccountSpec
+		accountID := newAccount(&accounts, "exact", "exact", "ACTIVE")
+		fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+		server := build(fake.Provider())
+		caller := adminCtx()
+		if method != "Create" {
+			seedHistoryInterval(assignmentID, testTenant, accountID, time.Now().UTC().Truncate(time.Microsecond), nil)
+		}
+		if method == "Get" {
+			caller = auth.ContextWithSubject(caller, &auth.Subject{
+				User: "admin", Tenants: auth.AllTenants.Difference(collections.NewSet(otherTenant)),
+			})
+		}
+		_, err := billingRPC(caller, func(ctx context.Context, _ struct{}) (struct{}, error) {
+			tx, err := database.TxFromContext(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			raceTx := &assignmentListRaceTx{Tx: tx}
+			ctx = database.TxIntoContext(ctx, raceTx)
+			switch method {
+			case "Create":
+				request := createRequest(testTenant, accountID, "disappearing-tenant")
+				request.GetObject().GetSpec().SetTenant(privatev1.TenantReference_builder{Name: testTenant}.Build())
+				_, err = server.Create(ctx, request)
+			case "Signal":
+				_, err = server.Signal(ctx, privatev1.TenantBillingAssignmentsSignalRequest_builder{Id: assignmentID}.Build())
+			case "Get":
+				_, err = server.Get(ctx, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: assignmentID}.Build())
+			}
+			Expect(raceTx.returnedEmptyPage).To(BeTrue())
+			return struct{}{}, err
+		}, struct{}{})
+		Expect(status.Code(err)).To(Equal(code))
+		if method == "Signal" {
+			Expect(reason(err)).To(Equal(billingOperationRetryReason))
+		}
+		Expect(fake.Calls()).To(BeEmpty())
+	},
+		Entry("Create with a by-name tenant", "Create", codes.InvalidArgument),
+		Entry("Signal with an active assignment", "Signal", codes.Aborted),
+		Entry("Get with complementary tenant scope", "Get", codes.NotFound),
+	)
+
 	Describe("Create", func() {
 		It("shares one provider child deadline across state, value and the exact-carrier walk", func() {
 			var accounts []billingfake.AccountSpec
@@ -455,10 +512,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			server := build(billing.NewProvider(billingfake.Key, adapter, nil))
 			_, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, id, "shared-budget"))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(adapter.deadlines).To(HaveLen(3))
+			Expect(adapter.deadlines).To(HaveLen(2))
 			Expect(adapter.deadlines[0]).NotTo(BeZero())
 			Expect(adapter.deadlines[1]).To(Equal(adapter.deadlines[0]))
-			Expect(adapter.deadlines[2]).To(Equal(adapter.deadlines[0]))
 		})
 		DescribeTable("preserves raw token presence and exact bytes through resolution", func(local *string, providerValue string) {
 			var accounts []billingfake.AccountSpec
@@ -731,7 +787,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			account := newAccount(&accounts, "", "", "ACTIVE")
 			fake := billingfake.New(billingfake.Scenario{
 				Accounts: accounts,
-				Failures: map[string]billingfake.Failure{"CorrelationValue": {Reason: billing.ReasonUnavailable}},
+				Failures: map[string]billingfake.Failure{"ListAccounts": {Reason: billing.ReasonUnavailable}},
 			})
 			server := build(fake.Provider())
 
@@ -956,7 +1012,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				var accounts []billingfake.AccountSpec
 				account := newAccount(&accounts, "corr-live", "", "ACTIVE")
 				fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
-				adapter := &gatedAccountReadAdapter{Fake: fake, entered: make(chan struct{}),
+				adapter := &gatedAccountScanAdapter{Fake: fake, entered: make(chan struct{}),
 					release: make(chan struct{})}
 				server := build(billing.NewProvider(billingfake.Key, adapter, nil))
 				result := make(chan error, 1)
@@ -972,13 +1028,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 					}
 				})
 				Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
-				// The ACTIVE response is already sampled. Commit a genuinely later discovery observation while
-				// that response is paused, using the same real clock and upsert boundary as discovery, not a
-				// future timestamp that would mask a completion-time timestamp bug.
-				concurrentNow := time.Now()
-				Expect(concurrentNow.After(adapter.sampledAt)).To(BeTrue())
-				concurrentAt := concurrentNow.UTC().Truncate(time.Microsecond)
-				Expect(concurrentAt).To(BeTemporally(">", adapter.sampledAt.UTC()))
+				// Commit a later discovery observation while the carrier walk is in flight, using the same
+				// real clock and upsert boundary as discovery, not a future timestamp.
+				concurrentAt := time.Now().UTC().Truncate(time.Microsecond)
 				Expect(tm.Run(ctx, func(tx database.Tx) error {
 					c := database.TxIntoContext(ctx, tx)
 					r, err := server.accounts.Get().SetId(account).Do(c)
@@ -1016,7 +1068,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				var count int
 				Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 				if expectedCode != codes.OK {
-					Expect(fake.Count("CorrelationValue")).To(Equal(1), "all provider reads precede authoritative locks")
+					Expect(fake.Count("ListAccounts")).To(Equal(1), "all provider reads precede authoritative locks")
 					Expect(correlation).To(BeEmpty(), "reject before adopting a provider correlation")
 					Expect(count).To(BeZero(), "reject without opening an assignment interval")
 				} else {
@@ -1127,10 +1179,10 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			_, err = testPool.Exec(ctx, `update tenants set deletion_timestamp = now() where name = $1`, testTenant)
 			Expect(err).ToNot(HaveOccurred())
-			reads := fake.Count("CorrelationValue")
+			reads := fake.Count("GetAccount")
 			_, err = billingRPC(adminCtx(), server.Update, updateRequest(created.GetObject().GetId(), testTenant, account))
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-			Expect(fake.Count("CorrelationValue")).To(Equal(reads))
+			Expect(fake.Count("GetAccount")).To(Equal(reads))
 		})
 
 		DescribeTable("fully revalidates a CONNECTED same-account interval",
@@ -1222,12 +1274,12 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			created, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, account, "asg-1"))
 			Expect(err).ToNot(HaveOccurred())
 			connectedID := created.GetObject().GetId()
-			reads := fake.Count("CorrelationValue")
+			reads := fake.Count("GetAccount")
 
 			updated, err := billingRPC(adminCtx(), server.Update, updateRequest(connectedID, testTenant, account))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updated.GetObject().GetId()).To(Equal(connectedID), "no new interval must be created")
-			Expect(fake.Count("CorrelationValue")).To(BeNumerically(">", reads))
+			Expect(fake.Count("GetAccount")).To(Equal(reads + 1))
 			Expect(proto.Equal(updated.GetObject().GetStatus().GetEffectiveFromTimestamp(), created.GetObject().GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
 
 			page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.tenant.id == "` + testTenant + `"`).Do(ctx)
@@ -1421,46 +1473,59 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(err).NotTo(HaveOccurred())
 			adapter := &gatedCorrelationAdapter{Fake: fake, entered: make(chan struct{}), release: make(chan struct{})}
 			server := build(billing.NewProvider(billingfake.Key, adapter, nil))
+			lockCtx, cancelLocks := context.WithTimeout(ctx, 20*time.Second)
+			DeferCleanup(cancelLocks)
+			blocker, err := tm.Begin(lockCtx)
+			if err == nil {
+				DeferCleanup(func() {
+					if blocker != nil {
+						cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						Expect(blocker.End(cleanupCtx)).To(Succeed())
+					}
+				})
+			}
+			Expect(err).NotTo(HaveOccurred())
+
+			requestCtx, cancelRequest := context.WithTimeout(adminCtx(), 20*time.Second)
 			result := make(chan error, 1)
+			done := make(chan struct{})
+			// Cancel and join the request before the blocker or the suite pool is cleaned up.
+			DeferCleanup(func() {
+				cancelRequest()
+				<-done
+			})
 			go func() {
-				_, err := billingRPC(adminCtx(), server.Update, updateRequest(created.GetObject().GetId(), testTenant, second))
+				defer close(done)
+				_, err := billingRPC(requestCtx, server.Update, updateRequest(created.GetObject().GetId(), testTenant, second))
 				result <- err
 			}()
-			DeferCleanup(func() {
-				select {
-				case <-adapter.release:
-				default:
-					close(adapter.release)
-				}
-			})
 			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
-			blocker, err := tm.Begin(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			ended := false
-			DeferCleanup(func() {
-				if !ended {
-					Expect(blocker.End(context.Background())).To(Succeed())
-				}
-			})
-			_, err = blocker.Exec(ctx, `select id from billing_accounts where id = $1 for update`, first)
+			var blockerPID int32
+			Expect(blocker.QueryRow(lockCtx, `select pg_backend_pid()`).Scan(&blockerPID)).To(Succeed())
+			_, err = blocker.Exec(lockCtx, `select id from billing_accounts where id = $1 for update`, first)
 			Expect(err).NotTo(HaveOccurred())
 			close(adapter.release)
-			Eventually(func() bool {
+			probeCtx, cancelProbe := context.WithTimeout(lockCtx, 5*time.Second)
+			defer cancelProbe()
+			Eventually(func() (bool, error) {
 				var waiting bool
-				err := testPool.QueryRow(ctx, `select exists(select 1 from pg_stat_activity
+				err := testPool.QueryRow(probeCtx, `select exists(select 1 from pg_stat_activity
 					where datname = current_database() and wait_event_type = 'Lock'
-					and query like '%from billing_accounts%order by id for update%')`).Scan(&waiting)
-				return err == nil && waiting
+					and query like '%from billing_accounts%order by id for update%'
+					and $1 = any(pg_blocking_pids(pid)))`, blockerPID).Scan(&waiting)
+				return waiting, err
 			}, 5*time.Second).Should(BeTrue(), "finalization must lock the previous account too")
 			Expect(result).NotTo(Receive())
-			Expect(tm.Run(ctx, func(tx database.Tx) error {
-				_, err := tx.Exec(ctx, `select id from tenant_billing_assignments where id = $1 for update nowait`, created.GetObject().GetId())
+			Expect(tm.Run(lockCtx, func(tx database.Tx) error {
+				_, err := tx.Exec(lockCtx, `select id from tenant_billing_assignments where id = $1 for update nowait`, created.GetObject().GetId())
 				return err
 			})).To(Succeed(), "account locks precede interval locks")
 			var afterLockWait time.Time
-			Expect(testPool.QueryRow(ctx, `select clock_timestamp()`).Scan(&afterLockWait)).To(Succeed())
-			Expect(blocker.End(ctx)).To(Succeed())
-			ended = true
+			Expect(testPool.QueryRow(lockCtx, `select clock_timestamp()`).Scan(&afterLockWait)).To(Succeed())
+			err = blocker.End(lockCtx)
+			blocker = nil
+			Expect(err).NotTo(HaveOccurred())
 			var updateErr error
 			Eventually(result, 5*time.Second).Should(Receive(&updateErr))
 			Expect(updateErr).NotTo(HaveOccurred())
@@ -1650,7 +1715,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Eventually(result, 5*time.Second).Should(Receive(&finalErr))
 			Expect(status.Code(finalErr)).To(Equal(codes.InvalidArgument))
 			Expect(status.Convert(finalErr).Message()).To(ContainSubstring("spec.tenant does not reference an existing tenant"))
-			Expect(fake.Count("CorrelationValue")).To(Equal(1), "provider resolution completed after the delete")
+			Expect(fake.Count("ListAccounts")).To(Equal(1), "provider resolution completed after the delete")
 			var count int
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 			Expect(count).To(BeZero())
@@ -1727,7 +1792,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 			Expect(count).To(BeZero())
 			Expect(fake.Count("GetAccount")).To(Equal(1))
-			Expect(fake.Count("CorrelationValue")).To(Equal(1))
+			Expect(fake.Count("CorrelationValue")).To(BeZero())
 			Expect(fake.Count("ListAccounts")).To(Equal(1))
 			Expect(server.assignSem).To(BeEmpty())
 		}, Entry("deadlock SQLSTATE", "40P01"), Entry("serialization SQLSTATE", "40001"))
@@ -1794,7 +1859,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			case "scan":
 				adapter = &gatedAccountScanAdapter{Fake: fake, entered: entered, release: release}
 			default:
-				adapter = &gatedCorrelationAdapter{Fake: fake, entered: entered, release: release}
+				Fail("unknown provider cancellation gate: " + gate)
 			}
 			server := build(billing.NewProvider(billingfake.Key, adapter, nil))
 			if childTimeout {
@@ -1802,7 +1867,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			}
 			var cancelRPC context.CancelFunc
 			if cutoff == "caller" {
-				rpcCtx, cancelRPC = context.WithTimeout(rpcCtx, 250*time.Millisecond)
+				rpcCtx, cancelRPC = context.WithTimeout(rpcCtx, 2*time.Second)
 			} else {
 				rpcCtx, cancelRPC = context.WithCancel(rpcCtx)
 			}
@@ -1855,12 +1920,10 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(err).NotTo(HaveOccurred())
 		},
 			Entry("during the selected-account state read", "state-read", "cancel"),
-			Entry("during the first correlation read", "correlation", "cancel"),
 			Entry("during the exact carrier walk", "scan", "cancel"),
 			Entry("provider-child state timeout", "state-read", "provider"),
-			Entry("provider-child correlation timeout", "correlation", "provider"),
 			Entry("provider-child exact-carrier timeout", "scan", "provider"),
-			Entry("caller deadline, not a provider-child timeout", "correlation", "caller"),
+			Entry("caller deadline, not a provider-child timeout", "scan", "caller"),
 		)
 
 		It("keeps bounded provider admission independent of cross-instance resource contention", func() {

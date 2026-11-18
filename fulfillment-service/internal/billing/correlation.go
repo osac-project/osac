@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	osacuuid "github.com/osac-project/osac/fulfillment-service/internal/uuid"
 )
@@ -86,7 +87,7 @@ type Resolution struct {
 // ResolveAccountCorrelationID applies the correlation-id precedence for one account: generate, adopt, or report a
 // conflict. It performs only provider reads; the caller commits Resolution.Value itself under database uniqueness.
 //
-// Every successful outcome makes one correlation-value read and one complete exact-value carrier walk, bounded by
+// Every successful outcome makes one selected-account read and one complete exact-value carrier walk, bounded by
 // MaxListPages and the caller's context deadline. A provider-present value must have the selected native identity as
 // its sole carrier to count as a match. When the selected account's read was absent, any carrier contradicts that
 // observation and fails with ACCOUNT_AMBIGUOUS. Zero carriers leave the resolved value PENDING for manual remediation.
@@ -94,64 +95,88 @@ type Resolution struct {
 // A nonblank established value is never trimmed or rotated. LocalDuplicate is only a check, not a reservation;
 // final persistence remains the caller's responsibility. Generated local collisions permit at most five attempts.
 func ResolveAccountCorrelationID(ctx context.Context, account AccountCorrelationInput) (Resolution, error) {
-	providerRaw, providerHasValue, err := account.Adapter.CorrelationValue(ctx, account.Ref)
+	selected, err := account.Adapter.GetAccount(ctx, account.Ref)
 	if err != nil {
 		return Resolution{}, err
 	}
+	resolution, _, err := ResolveObservedAccountCorrelationID(ctx, account, selected)
+	return resolution, err
+}
+
+// AccountStateObservation reports the selected carrier's state and when the list walk began. Its timestamp is
+// deliberately conservative: a slow provider walk must not supersede state observed after it began.
+// Keep full precision so observations within the same microsecond can still be ordered.
+type AccountStateObservation struct {
+	State AccountState
+	At    time.Time
+}
+
+// ResolveObservedAccountCorrelationID uses the caller's selected-account read without fetching it again. In addition
+// to the correlation result it returns explicit state from the selected carrier, if found. The caller checks account
+// eligibility using both observations; the absence of a carrier is not a state observation.
+func ResolveObservedAccountCorrelationID(ctx context.Context, account AccountCorrelationInput,
+	selected Account,
+) (Resolution, *AccountStateObservation, error) {
+	if selected.Ref != account.Ref {
+		return Resolution{}, nil, NewError(ReasonMalformed, "GetAccount", false, 0)
+	}
 	// An empty or whitespace-only provider value is treated as absent; a real value is never trimmed.
-	providerPresent := providerHasValue && strings.TrimSpace(providerRaw) != ""
+	providerPresent := strings.TrimSpace(selected.ExternalID) != ""
 	localPresent := strings.TrimSpace(account.LocalValue) != ""
 
+	var candidate string
 	switch {
 	case providerPresent && localPresent:
-		if providerRaw != account.LocalValue {
-			return Resolution{}, &CorrelationResolutionError{Reason: ReasonBillingCorrelationIDConflict}
+		if selected.ExternalID != account.LocalValue {
+			return Resolution{}, nil, &CorrelationResolutionError{Reason: ReasonBillingCorrelationIDConflict}
 		}
-		matches, err := account.providerPresentMatches(ctx, account.LocalValue)
-		if err != nil {
-			return Resolution{}, err
-		}
-		return Resolution{
-			Value: account.LocalValue, ProviderMatches: matches,
-		}, nil
+		candidate = account.LocalValue
 
 	case providerPresent:
-		if err := account.checkLocalDuplicate(ctx, providerRaw); err != nil {
-			return Resolution{}, err
+		candidate = selected.ExternalID
+		if err := account.checkLocalDuplicate(ctx, candidate); err != nil {
+			return Resolution{}, nil, err
 		}
-		matches, err := account.providerPresentMatches(ctx, providerRaw)
-		if err != nil {
-			return Resolution{}, err
-		}
-		return Resolution{
-			Value: providerRaw, ProviderMatches: matches,
-		}, nil
 
 	case localPresent:
-		if err := account.checkLocalDuplicate(ctx, account.LocalValue); err != nil {
-			return Resolution{}, err
+		candidate = account.LocalValue
+		if err := account.checkLocalDuplicate(ctx, candidate); err != nil {
+			return Resolution{}, nil, err
 		}
-		return account.providerAbsentResolution(ctx, account.LocalValue)
 
 	default:
-		return account.generate(ctx)
+		var err error
+		candidate, err = account.generate(ctx)
+		if err != nil {
+			return Resolution{}, nil, err
+		}
 	}
+
+	carriers, selectedCarrier, err := account.scanProviderCarriers(ctx, candidate)
+	if err != nil {
+		return Resolution{}, nil, err
+	}
+	// A foreign sole carrier cannot prove attribution. Even a carrier with the selected identity contradicts
+	// a selected-account read that didn't report the value. No carrier leaves the assignment pending.
+	if carriers > 1 || (carriers == 1 && (!providerPresent || selectedCarrier == nil)) {
+		return Resolution{}, nil, &CorrelationResolutionError{Reason: ReasonAccountAmbiguous}
+	}
+	return Resolution{Value: candidate, ProviderMatches: carriers}, selectedCarrier, nil
 }
 
 // generate produces a new value absent on both sides, retrying on a local collision up to maxGenerateAttempts.
-func (account AccountCorrelationInput) generate(ctx context.Context) (Resolution, error) {
-	var candidate string
+func (account AccountCorrelationInput) generate(ctx context.Context) (string, error) {
 	for attempt := 0; attempt < maxGenerateAttempts; attempt++ {
-		candidate = NewCorrelationValue()
+		candidate := NewCorrelationValue()
 		conflict, err := account.LocalDuplicate(ctx, candidate, account.AccountID)
 		if err != nil {
-			return Resolution{}, err
+			return "", err
 		}
 		if !conflict {
-			return account.providerAbsentResolution(ctx, candidate)
+			return candidate, nil
 		}
 	}
-	return Resolution{}, &CorrelationResolutionError{Reason: ReasonAccountCorrelationConflict}
+	return "", &CorrelationResolutionError{Reason: ReasonAccountCorrelationConflict}
 }
 
 // checkLocalDuplicate fails with ACCOUNT_CORRELATION_CONFLICT when value is stored on a different local row.
@@ -168,53 +193,26 @@ func (account AccountCorrelationInput) checkLocalDuplicate(ctx context.Context, 
 }
 
 // scanProviderCarriers runs one bounded exact-value provider scan, reporting how many accounts carry value and
-// whether the selected account is one of them. The adapter's q parameter only narrows candidates; the adapter's own
+// the state observation of the selected carrier, if present. The adapter's q parameter only narrows candidates; its
 // equality filter decides each match, and the walk stays bounded by MaxListPages, so a provider that never ends the
 // match list is MALFORMED rather than merely ambiguous.
 //
 // The carrier identity is the point of the scan: the selected account's own read and the match list are two provider
 // observations, and a provider that reports the value on the account but only ever lists a different carrier makes
 // them disagree. Counting alone would report that foreign account as this account's match.
-func (account AccountCorrelationInput) scanProviderCarriers(ctx context.Context, value string) (int, bool, error) {
+func (account AccountCorrelationInput) scanProviderCarriers(ctx context.Context, value string) (int, *AccountStateObservation, error) {
+	observedAt := time.Now().UTC()
 	carriers := 0
-	selected := false
+	var selected *AccountStateObservation
 	err := ForEachAccount(ctx, account.Adapter, AccountFilter{ExternalID: value}, Page{}, func(carrier Account) error {
 		carriers++
-		if carrier.Ref.ID() == account.Ref.ID() {
-			selected = true
+		if carrier.Ref == account.Ref {
+			selected = &AccountStateObservation{State: carrier.State, At: observedAt}
 		}
 		return nil
 	})
 	if err != nil {
-		return 0, false, err
+		return 0, nil, err
 	}
 	return carriers, selected, nil
-}
-
-// providerPresentMatches validates a branch whose selected account already reports value in its own provider read.
-// The scan must find value on exactly that account: more than one carrier is ACCOUNT_AMBIGUOUS, and so is a single
-// carrier that is a different account, because adopting it would attribute the link to another provider account. No
-// carrier leaves the count at zero, so the caller stays PENDING rather than claiming a match the scan did not show.
-func (account AccountCorrelationInput) providerPresentMatches(ctx context.Context, value string) (int, error) {
-	carriers, selected, err := account.scanProviderCarriers(ctx, value)
-	if err != nil {
-		return 0, err
-	}
-	if carriers > 1 || (carriers == 1 && !selected) {
-		return 0, &CorrelationResolutionError{Reason: ReasonAccountAmbiguous}
-	}
-	return carriers, nil
-}
-
-// providerAbsentResolution retains a local or generated value only if no provider account carries it. Even a
-// sole listed carrier claiming the selected identity contradicts its absent account read, so cannot prove a match.
-func (account AccountCorrelationInput) providerAbsentResolution(ctx context.Context, candidate string) (Resolution, error) {
-	carriers, _, err := account.scanProviderCarriers(ctx, candidate)
-	if err != nil {
-		return Resolution{}, err
-	}
-	if carriers > 0 {
-		return Resolution{}, &CorrelationResolutionError{Reason: ReasonAccountAmbiguous}
-	}
-	return Resolution{Value: candidate}, nil
 }

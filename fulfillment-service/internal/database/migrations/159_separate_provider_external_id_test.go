@@ -15,7 +15,9 @@ package migrations
 
 import (
 	"context"
+	"errors"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 )
@@ -52,5 +54,53 @@ var _ = DescribeMigration("Separate provider external ID", func() {
 		Expect(err).NotTo(HaveOccurred(), "the same observation is allowed on distinct provider accounts")
 		_, err = conn.Exec(ctx, `update billing_accounts set data = data #- '{status,external_billing_account_id}' where id = 'assigned'`)
 		Expect(err).To(HaveOccurred(), "migration keeps committed assignment tokens immutable")
+	})
+
+	It("validates observation timestamps while preserving nanoseconds in JSON", func(ctx context.Context) {
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
+		const insert = `insert into billing_accounts (id, name, tenant, data)
+			values ($1, 'ba-' || left(encode(sha256(convert_to($1, 'UTF8')), 'hex'), 60), 'system',
+				jsonb_build_object('status', jsonb_build_object('provider_key', 'm360', 'provider_account_reference', $1,
+					'state_observation_timestamp', $2::text)))`
+		const update = `update billing_accounts set data = jsonb_set(data, '{status,state_observation_timestamp}', to_jsonb($1::text))
+			where id = 'observation'`
+		check := func(stamp, projected string) {
+			GinkgoHelper()
+			var stored string
+			var matches bool
+			Expect(conn.QueryRow(ctx, `select data#>>'{status,state_observation_timestamp}', status_observed_at = $1::text::timestamptz
+				from billing_accounts where id = 'observation'`, projected).Scan(&stored, &matches)).To(Succeed())
+			Expect(stored).To(Equal(stamp))
+			Expect(matches).To(BeTrue(), "expected mirror %s for %s", projected, stamp)
+		}
+		rejectTimestamp := func(err error) {
+			GinkgoHelper()
+			var pgErr *pgconn.PgError
+			Expect(errors.As(err, &pgErr)).To(BeTrue(), "expected PostgreSQL rejection: %v", err)
+			Expect(pgErr.Code).To(Equal("23514"))
+			Expect(pgErr.Message).To(Equal("invalid protobuf billing timestamp"))
+		}
+		_, err := conn.Exec(ctx, insert, "observation", "0001-01-01T00:00:00Z")
+		Expect(err).NotTo(HaveOccurred())
+		check("0001-01-01T00:00:00Z", "0001-01-01T00:00:00Z")
+		for _, stamp := range invalidBillingTimestamps {
+			By("rejecting observation " + stamp)
+			_, err = conn.Exec(ctx, insert, "invalid", stamp)
+			rejectTimestamp(err)
+			_, err = conn.Exec(ctx, update, stamp)
+			rejectTimestamp(err)
+		}
+		check("0001-01-01T00:00:00Z", "0001-01-01T00:00:00Z")
+		for _, stamp := range []string{"2028-02-29T00:00:00.012Z", "2028-02-29T00:00:00.012345Z"} {
+			_, err = conn.Exec(ctx, update, stamp)
+			Expect(err).NotTo(HaveOccurred())
+			check(stamp, stamp)
+		}
+		// Two observations 50 ns apart keep their distinct JSON values and the same SQL mirror.
+		for _, stamp := range []string{"9999-12-31T23:59:59.999999949Z", "9999-12-31T23:59:59.999999999Z"} {
+			_, err = conn.Exec(ctx, update, stamp)
+			Expect(err).NotTo(HaveOccurred())
+			check(stamp, "9999-12-31T23:59:59.999999Z")
+		}
 	})
 })

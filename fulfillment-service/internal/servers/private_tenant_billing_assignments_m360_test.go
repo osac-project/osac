@@ -67,19 +67,23 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 		}
 	}
 
-	// startStub serves the scenario and rebuilds the server over the real adapter.
-	startStub := func(scenario billingfake.Scenario) {
-		stub = billingstub.New(scenario)
-		Expect(stub.Start("127.0.0.1:0")).To(Succeed())
-		DeferCleanup(stub.Close)
+	buildServer := func(endpoint string) {
 		adapter, err := m360.New(billing.Config{
-			BaseURL: stub.URL() + "/api/v1/external", Credential: credential, RetryCount: 0,
+			BaseURL: endpoint + "/api/v1/external", Credential: credential, RetryCount: 0,
 			BreakerThreshold: 5, BreakerWindow: time.Minute, BreakerOpen: time.Minute,
 		}).SetLogger(logger).Build()
 		Expect(err).ToNot(HaveOccurred())
 		server, err = NewPrivateTenantBillingAssignmentsServer().SetLogger(logger).
 			SetProvider(billing.NewProvider(billing.KeyM360, adapter, nil)).Build()
 		Expect(err).ToNot(HaveOccurred())
+	}
+
+	// startStub serves the scenario and rebuilds the server over the real adapter.
+	startStub := func(scenario billingfake.Scenario) {
+		stub = billingstub.New(scenario)
+		Expect(stub.Start("127.0.0.1:0")).To(Succeed())
+		DeferCleanup(stub.Close)
+		buildServer(stub.URL())
 	}
 
 	// seedAccount stores the local ACTIVE row discovered earlier, so only the provider changes in these specs. It
@@ -347,6 +351,90 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 		Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 		Expect(count).To(BeZero(), "no assignment history may be created")
 		Expect(server.assignSem).To(BeEmpty())
+	})
+
+	DescribeTable("rejects a later ineligible state on the selected exact carrier without changing stored rows",
+		func(rawState, approval, wantReason string) {
+			seededAt = seedAccount(accountID, nativeOne, "")
+			active := activeAccount(nativeOne, "Acme", "corr-one")
+			selected := billingstub.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{active}})
+			active.RawStatus, active.ApprovalStatus = rawState, approval
+			scan := billingstub.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{active}})
+			endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/external/accounts/"+nativeOne {
+					selected.ServeHTTP(w, r)
+					return
+				}
+				scan.ServeHTTP(w, r)
+			}))
+			DeferCleanup(endpoint.Close)
+			buildServer(endpoint.URL)
+
+			_, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, accountID, "later-state"))
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(reason(err)).To(Equal(wantReason))
+			Expect(selected.Count("GetAccount")).To(Equal(1), "reuse the verified selected read for the token")
+			Expect(scan.Count("ListAccounts")).To(Equal(1))
+			Expect(selected.Writes()).To(BeEmpty())
+			Expect(scan.Writes()).To(BeEmpty())
+			state, observedAt := storedObservation(accountID)
+			Expect(state).To(Equal("ACTIVE"))
+			Expect(observedAt).To(BeTemporally("==", seededAt))
+			var retained *string
+			Expect(testPool.QueryRow(ctx, `select external_billing_account_id from billing_accounts where id = $1`, accountID).
+				Scan(&retained)).To(Succeed())
+			Expect(retained).To(BeNil())
+			var count int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+		},
+		Entry("INACTIVE carrier", "Inactive", "Approved", "ACCOUNT_INACTIVE"),
+		Entry("UNKNOWN carrier", "Active", "", "ACCOUNT_STATE_UNKNOWN"),
+	)
+
+	It("adopts only the verified corrected token after an ambiguous assignment attempt", func() {
+		scenario := billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			activeAccount(nativeOne, "Acme", "duplicate"), activeAccount(nativeTwo, "Beta", "duplicate"),
+		}}
+		startStub(scenario)
+		discovery, err := NewPrivateBillingAccountsServer().SetLogger(logger).SetProvider(server.provider).Build()
+		Expect(err).NotTo(HaveOccurred())
+		old := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Hour)
+		Expect(billingStore(adminCtx(), discovery, []billing.Account{
+			{Ref: billing.NewAccountRef(nativeOne), ExternalID: "duplicate", State: billing.AccountActive},
+			{Ref: billing.NewAccountRef(nativeTwo), ExternalID: "duplicate", State: billing.AccountActive},
+		}, old)).To(Succeed())
+		storedTokens := func() (observed string, retained *string) {
+			Expect(testPool.QueryRow(ctx, `select id, data->'status'->>'provider_external_id', external_billing_account_id
+				from billing_accounts where provider_account_reference = $1`, nativeOne).
+				Scan(&accountID, &observed, &retained)).To(Succeed())
+			return observed, retained
+		}
+		observed, retained := storedTokens()
+		Expect(observed).To(Equal("duplicate"))
+		Expect(retained).To(BeNil())
+		request := createRequest(testTenant, accountID, "corrected-token")
+		_, err = billingRPC(adminCtx(), server.Create, request)
+		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+		Expect(reason(err)).To(Equal(billing.ReasonAccountAmbiguous))
+		_, retained = storedTokens()
+		Expect(retained).To(BeNil())
+		var count int
+		Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+		Expect(count).To(BeZero())
+
+		// Only the provider changes. The last discovered token must neither conflict nor be silently adopted.
+		scenario.Accounts[0].ExternalID = " corrected "
+		stub.SetScenario(scenario)
+		before := stub.Count("GetAccount")
+		created, err := billingRPC(adminCtx(), server.Create, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(created.GetObject().GetStatus().GetConnectionState()).To(Equal(mapTenantBillingAssignmentConnectionState(tbaStateConnected)))
+		observed, retained = storedTokens()
+		Expect(observed).To(Equal("duplicate"), "assignment does not rewrite the discovery token")
+		Expect(retained).To(Equal(proto.String(" corrected ")))
+		Expect(stub.Count("GetAccount") - before).To(Equal(1))
+		Expect(stub.Writes()).To(BeEmpty())
 	})
 
 	It("persists no assignment and no observation when the real adapter read fails", func() {

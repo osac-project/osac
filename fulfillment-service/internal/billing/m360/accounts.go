@@ -145,7 +145,14 @@ func (a *adapter) GetAccount(ctx context.Context, ref billing.AccountRef) (billi
 	if err := a.client.getDiscovery(ctx, op, "/accounts/"+url.PathEscape(ref.ID()), nil, &resp); err != nil {
 		return billing.Account{}, notFoundOn404(op, err)
 	}
-	return resp.Data.normalize(op)
+	acct, err := resp.Data.normalize(op)
+	if err != nil {
+		return billing.Account{}, err
+	}
+	if acct.Ref != ref {
+		return billing.Account{}, &billing.Error{Reason: billing.ReasonMalformed, Op: op}
+	}
+	return acct, nil
 }
 
 // CorrelationValue implements billing.Adapter.

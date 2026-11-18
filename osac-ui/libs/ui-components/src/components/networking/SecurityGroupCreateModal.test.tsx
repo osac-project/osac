@@ -6,14 +6,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualNetworkState } from '@osac/types';
 
 import { SecurityGroupCreateModal } from './SecurityGroupCreateModal';
+import * as resourceApi from '../../api/use-resource';
 import * as networkingApi from '../../api/v1/networking';
 
 vi.mock('../../api/v1/networking', async (importOriginal) => {
   const actual = await importOriginal<typeof networkingApi>();
   return {
     ...actual,
-    useVirtualNetworks: vi.fn(),
     useCreateSecurityGroup: vi.fn(),
+  };
+});
+
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof resourceApi>();
+  return {
+    ...actual,
+    useListResource: vi.fn(),
   };
 });
 
@@ -37,11 +45,15 @@ describe('SecurityGroupCreateModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(networkingApi.useVirtualNetworks).mockReturnValue({
-      data: mockVirtualNetworks,
+    vi.mocked(resourceApi.useListResource).mockReturnValue({
+      data: {
+        items: mockVirtualNetworks,
+        size: mockVirtualNetworks.length,
+        total: mockVirtualNetworks.length,
+      },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof networkingApi.useVirtualNetworks>);
+    } as unknown as ReturnType<typeof resourceApi.useListResource>);
 
     vi.mocked(networkingApi.useCreateSecurityGroup).mockReturnValue({
       mutateAsync,

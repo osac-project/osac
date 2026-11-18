@@ -93,6 +93,44 @@ describe('SecurityGroupDetailPage', () => {
     expect(screen.getByRole('heading', { name: 'sg-web' })).toBeInTheDocument();
   });
 
+  it('disables Delete while the security group is loading', () => {
+    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+    } as unknown as ReturnType<typeof networkingApi.useSecurityGroup>);
+
+    renderPage();
+
+    expect(screen.getByRole('button', { name: /^Delete$/ })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
+  it('disables Delete for a default security group', async () => {
+    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+      data: {
+        ...mockSecurityGroup,
+        metadata: {
+          ...mockSecurityGroup.metadata,
+          labels: { 'osac.openshift.io/default': 'true' },
+        },
+      },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof networkingApi.useSecurityGroup>);
+
+    const user = userEvent.setup();
+    renderPage();
+
+    const deleteButton = screen.getByRole('button', { name: /^Delete$/ });
+    expect(deleteButton).toHaveAttribute('aria-disabled', 'true');
+
+    await user.click(deleteButton);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   it('renders three tabs: Inbound Rules, Outbound Rules, Details', () => {
     renderPage();
 

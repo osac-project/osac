@@ -2,6 +2,9 @@ import type { TFunction } from 'i18next';
 
 import { type ExternalIP, ExternalIPState } from '@osac/types';
 import type { ExternalIpAttachedTargetKind } from '@osac/ui-components/api/v1/external-ip-data';
+import { isDefaultNetworkingResource } from '@osac/ui-components/api/v1/networking';
+
+import { defaultResourceDeleteReason } from '../../utils/networking';
 
 export const attachedTargetKindLabel = (
   t: TFunction,
@@ -20,6 +23,9 @@ export const attachedTargetKindLabel = (
 };
 
 export const deleteDisabledReason = (externalIp: ExternalIP, t: TFunction): string | undefined => {
+  if (isDefaultNetworkingResource(externalIp)) {
+    return defaultResourceDeleteReason(t);
+  }
   if (externalIp.status?.state === ExternalIPState.EXTERNAL_IP_STATE_DELETING) {
     return t('This external IP is being deleted.');
   }

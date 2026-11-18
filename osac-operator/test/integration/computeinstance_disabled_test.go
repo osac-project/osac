@@ -31,7 +31,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -89,20 +88,6 @@ type aapCapture struct {
 type aapCaptures struct {
 	Jobs       []aapCapture `json:"jobs"`
 	Unexpected []string     `json:"unexpected"`
-}
-
-// applyObjects serializes typed Kubernetes objects into one v1.List for
-// kubectl apply, so the fixture schema stays type-checked.
-func applyObjects(objects ...any) string {
-	list := &corev1.List{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "List"}}
-	for _, object := range objects {
-		raw, err := json.Marshal(object)
-		Expect(err).NotTo(HaveOccurred(), "serialize the AAP recorder object")
-		list.Items = append(list.Items, runtime.RawExtension{Raw: raw})
-	}
-	manifest, err := json.Marshal(list)
-	Expect(err).NotTo(HaveOccurred(), "serialize the AAP recorder list")
-	return string(manifest)
 }
 
 // installAAPRecorder deploys the capture-only AAP server the operator points
@@ -184,8 +169,12 @@ func installAAPRecorder() {
 		},
 	}
 
-	_, err := runRecorderKubectl(applyObjects(objects...), "apply", "-f", "-")
-	Expect(err).NotTo(HaveOccurred(), "apply the AAP recorder fixture")
+	for _, object := range objects {
+		manifest, err := json.Marshal(object)
+		Expect(err).NotTo(HaveOccurred(), "serialize the AAP recorder object")
+		_, err = runRecorderKubectl(string(manifest), "apply", "-f", "-")
+		Expect(err).NotTo(HaveOccurred(), "apply the AAP recorder fixture")
+	}
 
 	Eventually(func(g Gomega) {
 		output, err := runRecorderKubectl("", "get", "pod", aapRecorderName, "-n", operatorNamespace,
@@ -259,24 +248,32 @@ func captureSummary(jobs []aapCapture) string {
 	return strings.Join(summaries, ", ")
 }
 
-// waitForAAPLaunch waits until exactly one launch of template carries the
-// ComputeInstance API ID that the operator put in the job's resource labels.
-func waitForAAPLaunch(template, id string) aapCapture {
+// waitForAAPCapture waits until the recorder contains exactly one matching job.
+func waitForAAPCapture(matches func(aapCapture) bool, unexpectedMessage string) aapCapture {
 	var found aapCapture
 	Eventually(func(g Gomega) {
 		captures, err := readAAPCaptures()
 		g.Expect(err).NotTo(HaveOccurred(), "read the AAP recorder captures")
-		g.Expect(captures.Unexpected).To(BeEmpty(), "the operator must launch no other AAP operation")
-		var matches []aapCapture
+		g.Expect(captures.Unexpected).To(BeEmpty(), unexpectedMessage)
+		var matchingJobs []aapCapture
 		for _, job := range captures.Jobs {
-			if job.Template == template && job.Payload.ExtraVars.JobVars.Resource.Metadata.Labels[computeInstanceIDLabel] == id {
-				matches = append(matches, job)
+			if matches(job) {
+				matchingJobs = append(matchingJobs, job)
 			}
 		}
-		g.Expect(matches).To(HaveLen(1), "captured jobs: %s", captureSummary(captures.Jobs))
-		found = matches[0]
+		g.Expect(matchingJobs).To(HaveLen(1), "captured jobs: %s", captureSummary(captures.Jobs))
+		found = matchingJobs[0]
 	}, aapLaunchTimeout, time.Second).Should(Succeed())
 	return found
+}
+
+// waitForAAPLaunch waits until exactly one launch of template carries the
+// ComputeInstance API ID that the operator put in the job's resource labels.
+func waitForAAPLaunch(template, id string) aapCapture {
+	return waitForAAPCapture(func(job aapCapture) bool {
+		resourceID := job.Payload.ExtraVars.JobVars.Resource.Metadata.Labels[computeInstanceIDLabel]
+		return job.Template == template && resourceID == id
+	}, "the operator must launch no other AAP operation")
 }
 
 // createTenantStorageClass creates a StorageClass labeled for the Tenant and

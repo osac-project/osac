@@ -11,7 +11,15 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-TEMPLATES = {1: "osac-create-compute-instance", 2: "osac-delete-compute-instance"}
+TEMPLATES = {
+    1: "osac-create-compute-instance",
+    2: "osac-delete-compute-instance",
+    3: "osac-apply-network-attachment",
+    4: "osac-query-dhcp-lease",
+    5: "osac-delete-network-attachment",
+    6: "osac-create-bare-metal-instance",
+    7: "osac-delete-bare-metal-instance",
+}
 
 
 class RecorderServer(ThreadingHTTPServer):
@@ -51,7 +59,7 @@ class RecorderHandler(BaseHTTPRequestHandler):
             "id": job["id"],
             "status": job["status"],
             "extra_vars": json.dumps(job["payload"]["extra_vars"]),
-            "artifacts": {},
+            "artifacts": job.get("artifacts", {}),
         }
 
     def do_GET(self):
@@ -134,13 +142,21 @@ class RecorderHandler(BaseHTTPRequestHandler):
                 if job is None or state not in ("successful", "failed", "canceled"):
                     self.reply(400, {"detail": "invalid completion"})
                     return
+                artifacts = payload.get("artifacts", {})
+                if not isinstance(artifacts, dict):
+                    self.reply(400, {"detail": "artifacts must be an object"})
+                    return
                 job["status"] = state
+                job["artifacts"] = artifacts
                 self.reply(200, {})
             elif (
                 len(parts) == 5
                 and parts[:3] == ["api", "v2", "job_templates"]
                 and parts[4] == "launch"
-                and parts[3] in ("1", "2", *TEMPLATES.values())
+                and (
+                    (parts[3].isdigit() and int(parts[3]) in TEMPLATES)
+                    or parts[3] in TEMPLATES.values()
+                )
             ):
                 if not isinstance(payload.get("extra_vars"), dict):
                     self.reply(400, {"detail": "extra_vars must be an object"})
@@ -152,6 +168,7 @@ class RecorderHandler(BaseHTTPRequestHandler):
                     "template": TEMPLATES[int(parts[3])] if parts[3].isdigit() else parts[3],
                     "status": "running",
                     "payload": payload,
+                    "artifacts": {},
                 }
                 self.reply(201, {"id": job_id})
             elif (

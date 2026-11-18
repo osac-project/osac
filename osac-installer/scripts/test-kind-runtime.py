@@ -1240,6 +1240,26 @@ printf 'new Kind credentials and unrelated context\\n'
         self.assertIn("--label-filter 'compute-storage'", result.stdout)
         self.assertNotIn("service.enabled=false", result.stdout)
 
+    def test_bmf_phase_runs_combined_controllers_with_controlled_aap(self):
+        self.write_command("kubectl", 'printf "kubectl %s\\n" "$*" >> "$MOCK_LOG"')
+        self.write_command("ginkgo", 'echo "application test stub" >> "$MOCK_LOG"')
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=bmf", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        self.assertIn("localhost/osac-operator:it", result.stdout)
+        self.assertIn("localhost/bmf-operator:it", result.stdout)
+        self.assertIn("osac-aap-api-token", result.stdout)
+        self.assertIn("osac-aap-recorder.osac.svc.cluster.local:8080/api", result.stdout)
+        self.assertIn("global.networking.provisioningEnabled=true", result.stdout)
+        self.assertIn("global.networking.provisioningEnabled=false", result.stdout)
+        self.assertIn("--label-filter 'bmaas-networking'", result.stdout)
+        self.assertIn("--label-filter 'bmaas-networking-disabled'", result.stdout)
+        self.assertEqual(result.stdout.count("IT_TEST_SUITE=bmf ginkgo run"), 2)
+        self.assertIn("secrets.token_urlsafe(32)", result.stdout)
+
     def test_operator_phase_uses_the_aap_recorder(self):
         result = subprocess.run(
             ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",

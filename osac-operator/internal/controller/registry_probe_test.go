@@ -79,6 +79,8 @@ var _ = Describe("CaaS management registry probe", func() {
 		Expect(pod.Spec.Containers).To(HaveLen(1))
 		Expect(pod.Spec.Containers[0].Image).To(Equal(order.Spec.ReleaseImage))
 		Expect(pod.Spec.Containers[0].ImagePullPolicy).To(Equal(corev1.PullAlways))
+		Expect(pod.Spec.Containers[0].Command).To(BeEmpty())
+		Expect(pod.Spec.Containers[0].Args).To(BeEmpty())
 		Expect(pod.Spec.ImagePullSecrets).To(ConsistOf(corev1.LocalObjectReference{
 			Name: managementRegistryProbePullSecretName(order),
 		}))

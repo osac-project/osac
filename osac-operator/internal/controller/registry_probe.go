@@ -274,11 +274,11 @@ func managementRegistryProbePod(order *v1alpha1.ClusterOrder, name, image string
 			RestartPolicy:                 corev1.RestartPolicyNever,
 			AutomountServiceAccountToken:  ptr.To(false),
 			TerminationGracePeriodSeconds: ptr.To[int64](0),
+			// Keep Command unset so the pulled release image uses its own entrypoint.
 			Containers: []corev1.Container{{
 				Name:            "registry-image-pull",
 				Image:           image,
 				ImagePullPolicy: corev1.PullAlways,
-				Command:         []string{"/osac-registry-probe-image-pulled"},
 				SecurityContext: &corev1.SecurityContext{
 					AllowPrivilegeEscalation: ptr.To(false),
 					ReadOnlyRootFilesystem:   ptr.To(true),

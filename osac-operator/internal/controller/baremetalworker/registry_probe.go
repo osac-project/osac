@@ -108,6 +108,10 @@ func (r hostedClusterRegistryProbeResolver) Resolve(
 	if err != nil {
 		return registryProbeGuestAPI{}, fmt.Errorf("build HostedControlPlane registry probe client config: %w", err)
 	}
+	// The HostedControlPlane kubeconfig uses the short kube-apiserver service
+	// name, which resolves only from its own namespace. The management operator
+	// reaches the same guest API through the published, certificate-valid URL.
+	restConfig.Host = strings.TrimRight(order.Status.APIURL, "/")
 	restConfig.Timeout = 15 * time.Second
 	guest, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {

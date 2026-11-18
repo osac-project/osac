@@ -20,18 +20,23 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
+	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
@@ -77,6 +82,59 @@ var _ = Describe("CaaS worker registry probe", func() {
 			Name: "worker-0", NodeSet: "compute", AttemptCount: 1, Phase: workerPhaseProvisioning,
 		}
 	}
+
+	It("uses the published API URL to reach the guest API from the management namespace", func() {
+		order := newOrder()
+		requestReceived := make(chan string, 1)
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestReceived <- r.Host + r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"NamespaceList","metadata":{},"items":[]}`))
+		}))
+		defer server.Close()
+		order.Status.APIURL = server.URL
+
+		caData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+		kubeconfig, err := json.Marshal(map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Config",
+			"clusters": []any{map[string]any{
+				"name": "hosted-cluster",
+				"cluster": map[string]any{
+					"server":                     "https://kube-apiserver:6443",
+					"certificate-authority-data": base64.StdEncoding.EncodeToString(caData),
+				},
+			}},
+			"contexts": []any{map[string]any{
+				"name": "hosted-context",
+				"context": map[string]any{
+					"cluster": "hosted-cluster",
+					"user":    "probe",
+				},
+			}},
+			"current-context": "hosted-context",
+			"users": []any{map[string]any{
+				"name": "probe",
+				"user": map[string]any{"token": "test-token"},
+			}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		management := clientfake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "caas-cluster", Name: workerRegistryProbeKubeconfigSecret,
+			},
+			Data: map[string][]byte{"kubeconfig": kubeconfig},
+		}).Build()
+		guest, err := (hostedClusterRegistryProbeResolver{management: management}).Resolve(ctx, order)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = guest.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(<-requestReceived).To(Equal(strings.TrimPrefix(server.URL, "https://") + "/api/v1/namespaces"))
+	})
 
 	It("limits the guest token to one worker ConfigMap and preserves probe results", func() {
 		order := newOrder()

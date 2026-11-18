@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import json
 import pathlib
 import secrets
@@ -977,6 +978,22 @@ def live_cycle(namespace: str, device_id: int, name: str, token_secret: str) -> 
     assert live_exists("secret", "fulfillment-controller-credentials", namespace)
 
 
+def live_failure_details(namespace: str) -> str:
+    sections = []
+    for label, command in (
+        ("resources", ["kubectl", "get", "pods,baremetalinstances,baremetalhosts", "-n", namespace, "-o", "wide"]),
+        ("controller logs", ["kubectl", "logs", "deployment/bmf-netbox-it-controller-manager", "-n", namespace,
+                             "--tail=80"]),
+        ("events", ["kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp"]),
+    ):
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.stdout:
+            sections.append(f"{label}:\n" + "\n".join(result.stdout.splitlines()[-80:]))
+    with contextlib.suppress(RuntimeError, ValueError):
+        sections.append("mock state:\n" + json.dumps(live_mock_state(namespace), sort_keys=True))
+    return "\n\n".join(sections)
+
+
 def check_bmf_live_install(device_id: int) -> None:
     """Install BMF in Kind with a private mock NetBox API."""
     namespace = f"osac-netbox-it-{uuid.uuid4().hex[:6]}"
@@ -989,6 +1006,7 @@ def check_bmf_live_install(device_id: int) -> None:
         assert helm_result("bmf-netbox-it", BMF_CHART, "--namespace", namespace,
                            "--values", str(values_path)).returncode == 0
 
+        phase = "starting mock NetBox"
         try:
             live_kubectl("create", "namespace", namespace)
             live_kubectl("annotate", "namespace", namespace,
@@ -999,6 +1017,7 @@ def check_bmf_live_install(device_id: int) -> None:
             live_apply(live_mock_resources(namespace, device_id, first, second))
             live_kubectl("rollout", "status", "deployment/netbox-mock", "-n", namespace, "--timeout=3m")
 
+            phase = "installing BMF"
             live_helm_install(namespace, values_path)
             live_check_rbac(namespace)
             inventory = yaml.safe_load(base64.b64decode(
@@ -1009,17 +1028,22 @@ def check_bmf_live_install(device_id: int) -> None:
             ))
             assert inventory["type"] == "netbox" and inventory["hostClass"] == "metal3"
             assert management["type"] == "metal3"
+            phase = "initial allocation and release"
             live_cycle(namespace, device_id, "netbox-it-first", "osac-netbox-token")
 
             # A Helm-owned token Secret keeps its current data on upgrade.
             # Point the release at a new Secret to rotate through Helm.
+            phase = "rotating the NetBox token"
             live_write_values(values_path, live_values(namespace, second, "osac-netbox-token-rotated"))
             live_helm_install(namespace, values_path)
             live_kubectl("rollout", "restart", "deployment/bmf-netbox-it-controller-manager", "-n", namespace)
             live_kubectl("rollout", "status", "deployment/bmf-netbox-it-controller-manager",
                          "-n", namespace, "--timeout=3m")
+            phase = "allocation and release after token rotation"
             live_cycle(namespace, device_id, "netbox-it-after-rotation", "osac-netbox-token-rotated")
             assert live_mock_state(namespace)["requests"][1] > 0, "operator did not use the rotated token"
+        except Exception as error:
+            raise AssertionError(f"{phase} failed: {error}\n{live_failure_details(namespace)}") from error
         finally:
             subprocess.run(["helm", "uninstall", "bmf-netbox-it", "-n", namespace],
                            capture_output=True, text=True, check=False)

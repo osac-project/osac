@@ -21,6 +21,7 @@ PW_BROWSER="${PW_BROWSER:-chromium}"
 LOCAL_PREFIX="${LOCAL_PREFIX:-$HOME/.local}"
 KUBECONFIG_PATH="${KUBECONFIG:-}"
 DO_CLONE=false
+SKIP_OSAC_CLI=false
 
 for arg in "$@"; do
   case "$arg" in
@@ -31,6 +32,7 @@ for arg in "$@"; do
     --extravars=*)      OSAC_EXTRAVARS="${arg#*=}" ;;
     --osac-cli=*)       OSAC_CLI_PATH="${arg#*=}" ;;
     --osac-cli-version=*) FULFILLMENT_SERVICE_VERSION="${arg#*=}" ;;
+    --skip-osac-cli)    SKIP_OSAC_CLI=true ;;
     --browser=*)        PW_BROWSER="${arg#*=}" ;;
     --kubeconfig=*)     KUBECONFIG_PATH="${arg#*=}" ;;
     --ignore-tls|--run-smoke|--admin-user=*|--admin-password=*|--admin-password-file=*|--test=*|--project=*|--grep=*|--headed|--mode=*|--tag=*|--allow-root-e2e|--list|--no-deps|--all)
@@ -54,6 +56,7 @@ Preparation options:
   --extravars=PATH     validate a VMaaS extravars.yaml at PATH
   --osac-cli=PATH      use an existing osac CLI binary
   --osac-cli-version=V download the stable CLI for fulfillment-service V
+  --skip-osac-cli      defer CLI selection until the test run
   --browser=BROWSER    browser to install (default: chromium)
   --kubeconfig=PATH    kubeconfig used to verify the deployed OSAC UI route
   --help, -h           print this help
@@ -437,7 +440,11 @@ OSAC_EXTRAVARS="${OSAC_EXTRAVARS:-${OSAC_UI_DIR}/apps/e2e-tests/extravars.yaml}"
 [[ -f "$OSAC_EXTRAVARS" ]] ||
   fail "Missing VMaaS extravars: ${OSAC_EXTRAVARS}. Provide --extravars=PATH."
 OSAC_EXTRAVARS="$(cd "$(dirname "$OSAC_EXTRAVARS")" && pwd)/$(basename "$OSAC_EXTRAVARS")"
-install_osac_cli
+if [[ "$SKIP_OSAC_CLI" == true ]]; then
+  info "OSAC CLI selection deferred until the test run."
+else
+  install_osac_cli
+fi
 pushd "$OSAC_UI_DIR" >/dev/null
 ok "Using osac-ui at ${OSAC_UI_DIR}"
 
@@ -497,11 +504,11 @@ cat <<EOF
   Playwright        : $(cd apps/playwright && npx playwright --version 2>/dev/null)
   Browser           : ${PW_BROWSER}
   Kubeconfig        : ${KUBECONFIG_PATH:-not verified}
-  OSAC CLI          : ${OSAC_CLI_PATH}
+  OSAC CLI          : ${OSAC_CLI_PATH:-provided at runtime}
   VMaaS extravars   : ${OSAC_EXTRAVARS}
 
 Run a flow separately, for example:
-  OSAC_CLI_PATH=${OSAC_CLI_PATH} \
+  OSAC_CLI_PATH=${OSAC_CLI_PATH:-/path/to/osac} \
     bash ${OSAC_UI_DIR}/apps/e2e-tests/run_scripts/run-ui-e2e.sh \
     --osac-ui-dir=${OSAC_UI_DIR} --extravars=${OSAC_EXTRAVARS} --tag=create_disk_image
 

@@ -38,19 +38,19 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Last observed normalized state of a billing account. ACTIVE accounts can be linked for new priced publish and
-// launch; INACTIVE accounts cannot be newly linked, though existing resources keep running and usage submission
-// continues. UNKNOWN means OSAC could not classify the provider's native values.
 type BillingAccountState int32
 
 const (
 	// Unset. Never reported by the server.
 	BillingAccountState_BILLING_ACCOUNT_STATE_UNSPECIFIED BillingAccountState = 0
-	// The provider reports an active account eligible for a new assignment.
+	// The last observed state is active: the provider reports an account eligible for a new assignment, and it can be
+	// linked for new priced publish and launch.
 	BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE BillingAccountState = 1
-	// The provider reports an inactive account; new assignments are not permitted.
+	// The last observed state is inactive: the account cannot be newly linked and new assignments are not permitted,
+	// though existing resources keep running and usage submission continues.
 	BillingAccountState_BILLING_ACCOUNT_STATE_INACTIVE BillingAccountState = 2
-	// OSAC could not classify the provider's native state, or a complete inventory did not observe the account.
+	// The last observed state could not be classified: OSAC did not recognize the provider's native value, or a complete
+	// inventory did not observe the account.
 	BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN BillingAccountState = 3
 )
 

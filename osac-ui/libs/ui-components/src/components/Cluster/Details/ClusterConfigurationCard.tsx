@@ -56,9 +56,7 @@ export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardPr
           <StackItem>
             <DescriptionList isCompact aria-label={t('Cluster version')}>
               <DescriptionListGroup>
-                <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
-                  {t('Current')}
-                </DescriptionListTerm>
+                <DescriptionListTerm>{t('Current')}</DescriptionListTerm>
                 <DescriptionListDescription>
                   <ClusterVersionControls cluster={cluster} />
                 </DescriptionListDescription>

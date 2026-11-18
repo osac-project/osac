@@ -53,6 +53,12 @@ describe('ClusterConfigurationCard', () => {
     expect(container.querySelectorAll('hr')).toHaveLength(3);
     const body = container.querySelector('.pf-v6-c-card__body');
     expect(body?.querySelectorAll('hr')).toHaveLength(2);
+    const version = screen.getByLabelText('Cluster version', { selector: 'dl' });
+    expect(version).toHaveClass('pf-v6-c-description-list', 'pf-m-compact');
+    expect(within(version).getByRole('term')).toHaveTextContent('Current');
+    expect(
+      version.querySelector('[class*="pf-v6-u-font"], [class*="text-color"], strong, small'),
+    ).toBeNull();
     for (const name of ['Node sets', 'Settings']) {
       const heading = screen.getByRole('heading', { name });
       expect(body).toContainElement(heading);

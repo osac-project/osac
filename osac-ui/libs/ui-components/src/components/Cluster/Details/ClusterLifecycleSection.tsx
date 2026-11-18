@@ -26,9 +26,7 @@ const ClusterLifecycleSection = ({ cluster }: { cluster: Cluster }) => {
       <StackItem>
         <DescriptionList isCompact aria-label={t('Cluster lifecycle')}>
           <DescriptionListGroup>
-            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
-              {t('Created')}
-            </DescriptionListTerm>
+            <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
             <DescriptionListDescription>
               <Timestamp value={cluster.metadata?.creationTimestamp} />
             </DescriptionListDescription>

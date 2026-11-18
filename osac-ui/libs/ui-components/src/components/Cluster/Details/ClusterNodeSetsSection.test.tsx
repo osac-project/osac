@@ -8,7 +8,7 @@ import ClusterNodeSetsSection from './ClusterNodeSetsSection';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 describe('ClusterNodeSetsSection', () => {
-  it('shows bold names and subtle summaries using only the matching observed node set version', () => {
+  it('uses compact description groups with each node set name and its own observed version', () => {
     renderWithProviders(
       <ClusterNodeSetsSection
         cluster={create(ClusterSchema, {
@@ -33,22 +33,25 @@ describe('ClusterNodeSetsSection', () => {
       />,
     );
 
-    const list = screen.getByRole('list', { name: 'Cluster node sets' });
-    expect(list).toHaveClass('pf-v6-c-list', 'pf-m-plain');
+    const list = screen.getByLabelText('Cluster node sets');
+    expect(list.tagName).toBe('DL');
+    expect(list).toHaveClass('pf-v6-c-description-list', 'pf-m-compact');
     expect(list).not.toHaveClass('pf-m-bordered');
-    const rows = within(list).getAllByRole('listitem');
-    expect(within(rows[0]).getByText('workers').tagName).toBe('STRONG');
-    expect(within(rows[1]).getByText('gpu').tagName).toBe('STRONG');
-    expect(within(rows[0]).getByText('standard-host-3 Nodes-4.17.2')).toHaveClass(
-      'pf-v6-u-text-color-subtle',
-      'pf-v6-u-font-size-sm',
+    const rows = list.querySelectorAll<HTMLDivElement>('.pf-v6-c-description-list__group');
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByRole('term')).toHaveTextContent('workers');
+    expect(within(rows[1]).getByRole('term')).toHaveTextContent('gpu');
+    expect(within(rows[0]).getByRole('definition')).toHaveTextContent(
+      'standard-host-3 Nodes-4.17.2',
     );
     expect(within(rows[1]).getByText('accelerated-host-2 Nodes-4.18.1')).toBeInTheDocument();
     expect(screen.queryByText(/global-version|desired-version|desired-id/)).not.toBeInTheDocument();
     for (const label of ['Name', 'Host type', 'Size']) {
       expect(screen.queryByText(label)).not.toBeInTheDocument();
     }
-    expect(screen.queryByRole('term')).not.toBeInTheDocument();
+    expect(
+      list.querySelector('strong, small, hr, [class*="pf-v6-u-font"], [class*="text-color"]'),
+    ).toBeNull();
     expect(screen.queryByRole('columnheader')).not.toBeInTheDocument();
   });
 
@@ -68,8 +71,8 @@ describe('ClusterNodeSetsSection', () => {
       />,
     );
 
-    const list = screen.getByRole('list', { name: 'Cluster node sets' });
-    const rows = within(list).getAllByRole('listitem');
+    const list = screen.getByLabelText('Cluster node sets');
+    const rows = list.querySelectorAll<HTMLDivElement>('.pf-v6-c-description-list__group');
     expect(within(rows[0]).getByText('—-0 Nodes-—')).toBeInTheDocument();
     expect(within(rows[1]).getByText('—-— Nodes-—')).toBeInTheDocument();
     expect(screen.queryByText(/4.18.0/)).not.toBeInTheDocument();
@@ -82,6 +85,6 @@ describe('ClusterNodeSetsSection', () => {
   it('keeps the empty fallback without an empty list', () => {
     renderWithProviders(<ClusterNodeSetsSection cluster={create(ClusterSchema)} />);
     expect(screen.getByText('No node sets configured.')).toBeInTheDocument();
-    expect(screen.queryByRole('list', { name: 'Cluster node sets' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Cluster node sets')).not.toBeInTheDocument();
   });
 });

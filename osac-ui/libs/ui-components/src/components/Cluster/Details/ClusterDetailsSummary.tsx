@@ -38,17 +38,13 @@ const ClusterDetailsSummary = ({ cluster }: ClusterDetailsSummaryProps) => {
           className="pf-v6-u-text-break-word"
         >
           <DescriptionListGroup>
-            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
-              {t('Status')}
-            </DescriptionListTerm>
+            <DescriptionListTerm>{t('Status')}</DescriptionListTerm>
             <DescriptionListDescription>
               <ClusterStatusLabel state={cluster.status?.state} />
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
-              {t('Catalog item')}
-            </DescriptionListTerm>
+            <DescriptionListTerm>{t('Catalog item')}</DescriptionListTerm>
             <DescriptionListDescription>
               {catalogItem?.id?.trim() ? (
                 <ResourceLink
@@ -62,25 +58,19 @@ const ClusterDetailsSummary = ({ cluster }: ClusterDetailsSummaryProps) => {
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
-              {t('Project')}
-            </DescriptionListTerm>
+            <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
             <DescriptionListDescription>
               {project === '' ? t('Root') : displayValue(project)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
-              {t('API URL')}
-            </DescriptionListTerm>
+            <DescriptionListTerm>{t('API URL')}</DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(cluster.status?.apiUrl)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
-              {t('Console URL')}
-            </DescriptionListTerm>
+            <DescriptionListTerm>{t('Console URL')}</DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(cluster.status?.consoleUrl)}
             </DescriptionListDescription>

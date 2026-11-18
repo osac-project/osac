@@ -32,28 +32,22 @@ const ClusterSettingsSection = ({ cluster }: { cluster: Cluster }) => {
           className="pf-v6-u-text-break-word"
         >
           <DescriptionListGroup>
-            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
-              {t('SSH public key')}
-            </DescriptionListTerm>
+            <DescriptionListTerm>{t('SSH public key')}</DescriptionListTerm>
             <DescriptionListDescription
-              className="cluster-details__ssh-key pf-v6-u-font-size-sm"
+              className="cluster-details__ssh-key"
               tabIndex={cluster.spec?.sshPublicKey?.trim() ? 0 : undefined}
             >
               {displayValue(cluster.spec?.sshPublicKey)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
-              {t('Pod CIDR')}
-            </DescriptionListTerm>
+            <DescriptionListTerm>{t('Pod CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(cluster.spec?.network?.podCidr)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm className="pf-v6-u-text-color-subtle pf-v6-u-font-weight-normal">
-              {t('Service CIDR')}
-            </DescriptionListTerm>
+            <DescriptionListTerm>{t('Service CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(cluster.spec?.network?.serviceCidr)}
             </DescriptionListDescription>

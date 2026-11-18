@@ -191,11 +191,11 @@ describe('ClusterDetailsPageContent', () => {
     expect(within(networking).getByRole('cell', { name: 'tenant-security' })).toBeInTheDocument();
     expect(screen.getByText('10.128.0.0/14')).toBeInTheDocument();
     expect(screen.getByText('172.30.0.0/16')).toBeInTheDocument();
-    const nodeSets = screen.getByRole('list', { name: 'Cluster node sets' });
+    const nodeSets = screen.getByLabelText('Cluster node sets');
     expect(
-      within(nodeSets)
-        .getAllByRole('listitem')
-        .map((row) => row.textContent),
+      Array.from(nodeSets.querySelectorAll('.pf-v6-c-description-list__group')).map(
+        (row) => row.textContent,
+      ),
     ).toEqual(['computestandard-host-3 Nodes-—', 'gpuaccelerated-host-2 Nodes-—']);
     expect(nodeSets.closest('.pf-v6-l-grid__item')).toBeNull();
     expect(cards[0]).toContainElement(nodeSets);

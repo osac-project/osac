@@ -9,8 +9,7 @@ This is **[DEV] Unit** coverage: the Python unittest suites under
 `.github/scripts/` run the umbrella-release helpers and the workflow's actual
 notification Bash against synthetic Helm archives, with GitHub CLI and Slack
 requests captured by local fakes. For the invocation and its prerequisites,
-see the [release-safety](../../.github/AGENTS.md#release-safety) touched-area
-map.
+see the [validation commands](../../.github/AGENTS.md#validation).
 
 Cases cover package-inventory and release-note edge cases, failed publication,
 nightly/skip/cancellation conditions, stable Latest selection, and the

@@ -6,6 +6,8 @@ React/PatternFly browser applications, shared UI packages and a Go API proxy.
 
 ## Critical Rules
 
+- Align new dependencies with the existing stack and license policy; prefer
+  patterns already present in the target package.
 - Use PatternFly 6 components, tokens and utilities; avoid routine custom CSS
   and inline styles except values that cannot be expressed in CSS.
 - TypeScript is strict: no enums; use string unions/const maps and interfaces

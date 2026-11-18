@@ -1082,6 +1082,33 @@ func TestPrefixChangeKeepsFoldedRows(t *testing.T) {
 	}
 }
 
+// TestProgressReadErrorKeepsTheTenant checks that a failed progress read does not
+// count toward deletion. Three misses delete the tenant, and a read error is not
+// proof that the tenant is gone.
+func TestProgressReadErrorKeepsTheTenant(t *testing.T) {
+	tenant := strings.ToLower(t.Name())
+	s := newTestService(t)
+	ctx := context.Background()
+	createEventTopic(t, tenant)
+	s.syncTenants(ctx, []string{tenant})
+	waitUntil(t, func() bool {
+		progress, err := s.cfg.Store.GetTenantProgress(ctx, tenant)
+		return err == nil && progress.EventTopic == topics.Events(tenant)
+	}, "the fold must record the event topic before the database read fails")
+
+	s.cfg.Store.Pool().Close()
+	for range DeletionPasses {
+		s.stopGone(map[string]bool{})
+	}
+
+	s.lock.Lock()
+	_, running := s.tenants[tenant]
+	s.lock.Unlock()
+	if !running {
+		t.Fatal("a failed progress read must not delete the tenant")
+	}
+}
+
 // TestRunDiscoversACustomPrefix checks that Run itself passes the configured prefix
 // to discovery. A test that calls syncTenants directly would miss a regression there.
 func TestRunDiscoversACustomPrefix(t *testing.T) {

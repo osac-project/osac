@@ -556,10 +556,17 @@ func (s *Service) stopGone(live map[string]bool) {
 // from the one the current prefix names. Discovery lists only the current prefix, so
 // after a prefix change the tenant is missing from the list while its rows still
 // belong to the previous topic. An empty stored topic was written before topics were
-// recorded, so it is not a rename.
+// recorded, so it is not a rename. A failed read is not proof of deletion either:
+// the tenant is kept until a later pass can read the row.
 func (s *Service) topicRenamed(tenant string) bool {
 	progress, err := s.cfg.Store.GetTenantProgress(context.Background(), tenant)
-	if err != nil || progress.EventTopic == "" {
+	if err != nil {
+		// A failed read is not proof the tenant was deleted. Counting it would
+		// erase the billing rows once the database answers again.
+		s.cfg.Logger.Error(err, "reading the stored event topic; keeping the tenant")
+		return true
+	}
+	if progress.EventTopic == "" {
 		return false
 	}
 	return progress.EventTopic != topics.EventTopic(s.cfg.EventTopicPrefix, tenant)

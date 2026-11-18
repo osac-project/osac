@@ -88,13 +88,13 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 	fmt.Fprintf(&r.sql.filter, ` id = $%d`, len(r.sql.params))
 	deletionValue := "now()"
 	var identity database.DeletedTenantIdentity
-	var closeAt time.Time
 	if r.dao.table == "tenants" {
 		identity, err = r.lockTenantLifecycle(ctx, r.args.id)
 		if err != nil {
 			return
 		}
-		closeAt, err = tenantDeletionTime(ctx, identity)
+		var acceptedAt time.Time
+		acceptedAt, err = tenantDeletionTime(ctx, identity)
 		if err != nil {
 			return
 		}
@@ -104,7 +104,7 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 				identity.DeletedBy = &actor
 			}
 		}
-		r.sql.params = append(r.sql.params, closeAt)
+		r.sql.params = append(r.sql.params, acceptedAt)
 		deletionValue = fmt.Sprintf("$%d", len(r.sql.params))
 	}
 
@@ -188,7 +188,7 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		identity.TenantName = name
 		identity.TenantCreatedAt = creationTs
 		identity.DeletionTimestamp = deletionTs
-		if err = captureTenantDeletion(ctx, identity, closeAt); err != nil {
+		if err = captureTenantDeletion(ctx, identity); err != nil {
 			return
 		}
 	}

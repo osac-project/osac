@@ -16,11 +16,16 @@ package migrations
 import (
 	"context"
 	"errors"
+	"net/url"
+	"time"
 
+	migratedb "github.com/golang-migrate/migrate/v4/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 var _ = DescribeMigration("Release finalized tenant domains", func() {
@@ -69,6 +74,57 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 		Expect(tool.Migrate(ctx, 154)).To(Succeed())
 		Expect(owners(ctx)).To(Equal([]string{"live.example.com:live", "pending.example.com:pending"}))
 		Expect(history(ctx)).To(Equal(before))
+	})
+
+	It("times out behind a tenant writer without changing reservations, history, or the trigger", func(ctx context.Context) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		beforeFunction, beforeOwners, beforeHistory := function(ctx), owners(ctx), history(ctx)
+
+		// Tool.Migrate opens its own connection and the driver doesn't use the caller's context.
+		// Bound it independently so a regression fails while the writer still holds its lock.
+		migrationURL, err := url.Parse(tool.URL())
+		Expect(err).NotTo(HaveOccurred())
+		params := migrationURL.Query()
+		params.Set("connect_timeout", "5")
+		params.Set("statement_timeout", "15000")
+		params.Set("x-statement-timeout", "20000")
+		migrationURL.RawQuery = params.Encode()
+		boundedTool, err := database.NewTool().SetLogger(logger).SetURL(migrationURL.String()).Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		writer, err := conn.Begin(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := writer.Rollback(ctx); !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+		// A successful UPDATE already holds ROW EXCLUSIVE until rollback; no polling or waiter is needed.
+		tag, err := writer.Exec(ctx, `update tenants set data = data where id = 'live'`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tag.RowsAffected()).To(Equal(int64(1)))
+
+		err = boundedTool.Migrate(ctx, 154)
+		var migrationErr migratedb.Error
+		Expect(errors.As(err, &migrationErr)).To(BeTrue(), "expected a PostgreSQL migration error, got %v", err)
+		var pgErr *pgconn.PgError
+		Expect(errors.As(migrationErr.OrigErr, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("55P03"))
+		Expect(pgErr.Message).To(ContainSubstring("Drain tenant writers"))
+		Expect(pgErr.Detail).To(ContainSubstring("reset the dirty migration version"))
+		Expect(writer.Rollback(ctx)).To(Succeed())
+
+		var version int
+		var dirty bool
+		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
+		Expect(version).To(Equal(154))
+		Expect(dirty).To(BeTrue())
+		Expect(function(ctx)).To(Equal(beforeFunction))
+		Expect(owners(ctx)).To(Equal(beforeOwners))
+		Expect(history(ctx)).To(Equal(beforeHistory))
 	})
 
 	It("holds reservations through cleanup, rolls back release, and never re-reserves a completed tombstone", func(ctx context.Context) {

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -184,6 +185,9 @@ var binaryOps = map[string]binaryOpInfo{
 	operators.LogicalOr:     {"or", filterTranslatorOrPrecedence, false},
 }
 
+// time.Parse accepts extra forms, including a one-digit hour, comma fractions and out-of-range offsets.
+var filterTimestampSyntax = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$`)
+
 // NewFilterTranslator creates a object that knows how to translate filter expressions into SQL where statements.
 func NewFilterTranslator() *FilterTranslatorBuilder {
 	return &FilterTranslatorBuilder{}
@@ -282,6 +286,13 @@ func (t *FilterTranslator) Translate(ctx context.Context, filter string) (sql st
 	if t.isPublic && ContainsReservedMetadataReference(expr) {
 		err = errors.New("filter references reserved metadata key")
 		return
+	}
+	// Check the CEL type rather than the translator's SQL kind. Leave dynamically typed
+	// expressions to the existing lowering rules.
+	switch tree.OutputType().Kind() {
+	case cel.BoolKind, cel.DynKind, cel.AnyKind:
+	default:
+		return "", &ErrValidation{Reason: fmt.Sprintf("filter must return a Boolean, got %s", tree.OutputType())}
 	}
 	result, err := t.translate(expr)
 	if err != nil {
@@ -432,7 +443,7 @@ func (t *FilterTranslator) translateCall(expr ast.CallExpr) (result filterTransl
 			return result, &ErrValidation{Reason: "timestamp requires exactly one literal RFC3339 string"}
 		}
 		instant, parseErr := time.Parse(time.RFC3339Nano, text)
-		if parseErr != nil || timestamppb.New(instant).CheckValid() != nil {
+		if parseErr != nil || !filterTimestampSyntax.MatchString(text) || timestamppb.New(instant).CheckValid() != nil {
 			return result, &ErrValidation{Reason: "timestamp requires a valid RFC3339 instant in the protobuf Timestamp range"}
 		}
 		// Normalize before lowering so PostgreSQL need not interpret the caller's date syntax. Reuse literal
@@ -1071,6 +1082,10 @@ func (t *FilterTranslator) translateSelectField(expr ast.SelectExpr) (result fil
 		result, err = t.translateSelectThisMdField(fieldName, testOnly)
 	case filterTranslatorJsonKind:
 		result, err = t.translateSelectJsonField(operandTr.sql, operandTr.desc, fieldName, testOnly)
+		if err == nil && testOnly {
+			// A missing parent yields SQL NULL rather than false from the JSONB existence test.
+			result.sql = "coalesce(" + result.sql + ", false)"
+		}
 	default:
 		err = fmt.Errorf("select of field '%s' of kind '%s' isn't supported", fieldName, operandTr.kind)
 		return

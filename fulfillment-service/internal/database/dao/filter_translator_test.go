@@ -56,6 +56,32 @@ var _ = Describe("Filter translator", func() {
 			Entry("version membership", `this.metadata.version in [0, 1]`, `version in (0, 1)`),
 		)
 
+		DescribeTable("Rejects statically non-Boolean filters",
+			func(ctx context.Context, filter string) {
+				actual, err := translator.Translate(ctx, filter)
+				Expect(err).To(BeAssignableToTypeOf(&ErrValidation{}))
+				Expect(err.Error()).To(ContainSubstring("filter must return a Boolean"))
+				Expect(actual).To(BeEmpty())
+			},
+			Entry("string that PostgreSQL could parse as true", `"true"`),
+			Entry("string field", `this.id`),
+			Entry("arithmetic", `this.my_int32 + 1`),
+			Entry("array length", `this.my_string_list.size()`),
+			Entry("timestamp", `now`),
+			Entry("map entry", `this.metadata.labels['team']`),
+			Entry("message", `this.status`),
+			Entry("null", `null`),
+		)
+
+		It("Allows Boolean filters with a dynamically typed operand", func(ctx context.Context) {
+			tr, err := NewFilterTranslator().SetLogger(logger).
+				SetDescriptor((*privatev1.Cluster)(nil).ProtoReflect().Descriptor()).Build()
+			Expect(err).NotTo(HaveOccurred())
+			actual, err := tr.Translate(ctx, `this.spec.template_parameters['key'] != null`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(actual).To(Equal(`data->'spec'->'template_parameters'->>'key' is not null`))
+		})
+
 		It("Rejects finalizer filters even for private descriptors", func(ctx context.Context) {
 			for _, desc := range []protoreflect.MessageDescriptor{
 				(*privatev1.Cluster)(nil).ProtoReflect().Descriptor(),
@@ -182,6 +208,10 @@ var _ = Describe("Filter translator", func() {
 			Entry("empty", `timestamp("")`),
 			Entry("date only", `timestamp("2026-01-01")`),
 			Entry("no timezone", `timestamp("2026-01-01T00:00:00")`),
+			Entry("single-digit hour", `timestamp("2026-01-01T0:00:00Z")`),
+			Entry("comma fraction", `timestamp("2026-01-01T00:00:00,123Z")`),
+			Entry("out-of-range offset hour", `timestamp("2026-01-01T00:00:00+24:00")`),
+			Entry("out-of-range offset minute", `timestamp("2026-01-01T00:00:00-00:60")`),
 			Entry("invalid calendar date", `timestamp("2026-02-30T00:00:00Z")`),
 			Entry("before protobuf range", `timestamp("0000-01-01T00:00:00Z")`),
 			Entry("offset outside protobuf range", `timestamp("0001-01-01T00:00:00+01:00")`),
@@ -228,16 +258,20 @@ var _ = Describe("Filter translator", func() {
 				{`this.metadata.creation_timestamp == timestamp("1970-01-01T00:00:00.000001Z")`, []string{"fractional-epoch"}},
 				{`this.metadata.creation_timestamp != timestamp("2026-01-01T00:00:00.123456Z")`, []string{"after", "before", "fractional-epoch"}},
 				{`this.status.status_timestamp != timestamp("2026-01-01T00:00:00.123456Z")`, []string{"after", "before", "epoch", "fractional-epoch"}},
-				{`!has(this.metadata.creation_timestamp)`, []string{"absent", "epoch"}},
-				{`!has(this.status.status_timestamp)`, []string{"absent"}},
+				{`!has(this.metadata.creation_timestamp)`, []string{"empty-status", "epoch", "missing-status"}},
+				{`has(this.status)`, []string{"after", "before", "empty-status", "epoch", "fractional-epoch", "match"}},
+				{`!has(this.status)`, []string{"missing-status"}},
+				{`has(this.status.status_timestamp)`, []string{"after", "before", "epoch", "fractional-epoch", "match"}},
+				{`!has(this.status.status_timestamp)`, []string{"empty-status", "missing-status"}},
 			} {
 				translated, err := translator.Translate(ctx, tc.filter)
 				Expect(err).NotTo(HaveOccurred(), tc.filter)
 				rows, err := pool.Query(ctx, `select id from (
 					select id, at::timestamptz as creation_timestamp,
-					case when id = 'absent' then '{"status":{}}'::jsonb
+					case id when 'empty-status' then '{"status":{}}'::jsonb
+					when 'missing-status' then '{}'::jsonb
 					else jsonb_build_object('status', jsonb_build_object('status_timestamp', at)) end as data
-					from (values ('absent', $1::text), ('epoch', $1), ('fractional-epoch', $2),
+					from (values ('empty-status', $1::text), ('missing-status', $1), ('epoch', $1), ('fractional-epoch', $2),
 					('before', $3), ('match', $4), ('after', $5)) as fixture(id, at)
 				) as objects where `+translated+` order by id`,
 					"1970-01-01T00:00:00Z", "1970-01-01T00:00:00.000001Z", "2025-01-01T00:00:00Z",
@@ -509,7 +543,7 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Check presence of nested boolean field",
 				`has(this.spec.spec_bool)`,
-				`data->'spec' ? 'spec_bool'`,
+				`coalesce(data->'spec' ? 'spec_bool', false)`,
 			),
 			Entry(
 				"String starts with",

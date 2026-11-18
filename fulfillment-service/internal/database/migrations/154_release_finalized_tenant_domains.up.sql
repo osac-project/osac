@@ -17,7 +17,17 @@
 -- (OSAC-3784, 051ac691925218d5fb8ae745918c7099a4a7e81e) or organization design (OSAC-1030).
 -- Serialize the trigger replacement/backfill against tenant writes for the duration of this migration.
 begin;
-lock table tenants in share row exclusive mode;
+set local lock_timeout = '5s';
+do $$
+begin
+  lock table tenants in share row exclusive mode;
+exception when lock_not_available then
+  raise exception using
+    errcode = '55P03',
+    message = 'Timed out waiting for the tenants table lock. Drain tenant writers before retrying the upgrade.',
+    detail = 'After confirming rollback, reset the dirty migration version to the last applied version before retrying.';
+end;
+$$;
 
 create or replace function materialize_tenant_domains() returns trigger as $$
 declare

@@ -16,6 +16,7 @@ package dao
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"time"
 
@@ -86,7 +87,7 @@ var _ = Describe("Billing history canonical persistence", func() {
 		Expect(err).NotTo(HaveOccurred())
 		return response.GetObject()
 	}
-	newInterval := func(id string, from time.Time, to *time.Time) *privatev1.TenantBillingAssignment {
+	newIntervalFor := func(tenant, id string, from time.Time, to *time.Time) *privatev1.TenantBillingAssignment {
 		account := newAccount("account-" + id)
 		s := privatev1.TenantBillingAssignmentStatus_builder{
 			ConnectionState:        privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING,
@@ -106,6 +107,9 @@ var _ = Describe("Billing history canonical persistence", func() {
 		}.Build()).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		return response.GetObject()
+	}
+	newInterval := func(id string, from time.Time, to *time.Time) *privatev1.TenantBillingAssignment {
+		return newIntervalFor(tenant, id, from, to)
 	}
 	get := func(id string) *privatev1.TenantBillingAssignment {
 		response, err := assignments.Get().SetId(id).Do(ctx)
@@ -229,15 +233,21 @@ var _ = Describe("Billing history canonical persistence", func() {
 		_, err := LockTenantBillingAssignmentForDeletion(ctx, tenant)
 		Expect(err).NotTo(HaveOccurred())
 		at := time.Time{}
-		if kind == "below floor" {
+		if kind == "before start" {
 			at = from.Add(-time.Microsecond)
 		}
 		err = tx.Savepoint(ctx, func(spCtx context.Context) error {
 			return CloseTenantBillingAssignmentOnDeletion(spCtx, tenant, at)
 		})
-		Expect(status.Code(err)).To(Equal(codes.Aborted))
+		if kind == "before start" {
+			var inUse *ErrInUse
+			Expect(errors.As(err, &inUse)).To(BeTrue())
+			Expect(inUse.Error()).To(ContainSubstring("repair the billing history"))
+		} else {
+			Expect(status.Code(err)).To(Equal(codes.Aborted))
+		}
 		Expect(proto.Equal(get(current.GetId()), current)).To(BeTrue())
-	}, Entry("zero", "zero"), Entry("below floor", "below floor"))
+	}, Entry("zero", "zero"), Entry("before start", "before start"))
 
 	It("returns an empty floor and permits idempotent deletion without any history", func() {
 		floor, err := LockTenantBillingAssignmentForDeletion(ctx, tenant)
@@ -256,6 +266,23 @@ var _ = Describe("Billing history canonical persistence", func() {
 		Expect(CloseTenantBillingAssignmentOnDeletion(ctx, tenant, floor)).To(Succeed())
 		closed := get(current.GetId())
 		Expect(proto.Equal(closed.GetStatus().GetEffectiveFromTimestamp(), closed.GetStatus().GetEffectiveToTimestamp())).To(BeTrue())
+	})
+
+	It("ignores unrelated open intervals even when their start is later than the accepted deletion", func() {
+		const other = "other-billing-tenant"
+		_, err := tenants.Create().SetObject(privatev1.Tenant_builder{Id: other,
+			Metadata: privatev1.Metadata_builder{Name: other, Tenant: other}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		at := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+		unrelated := newIntervalFor(other, "unrelated-current", at.Add(time.Hour), nil)
+		current := newInterval("delete-current", at.Add(-time.Hour), nil)
+		floor, err := LockTenantBillingAssignmentForDeletion(ctx, tenant)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(floor).To(BeTemporally("==", at.Add(-time.Hour)))
+		Expect(CloseTenantBillingAssignmentOnDeletion(ctx, tenant, at)).To(Succeed())
+		Expect(get(current.GetId()).GetStatus().GetEffectiveToTimestamp().AsTime()).To(BeTemporally("==", at))
+		Expect(proto.Equal(get(unrelated.GetId()), unrelated)).To(BeTrue())
 	})
 })
 
@@ -284,11 +311,8 @@ var _ = Describe("Billing history helper guards", func() {
 		at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 		gomock.InOrder(
 			tx.EXPECT().QueryRow(ctx, gomock.Any(), "tenant").Return(billingHistoryRow(func(dest ...any) error {
-				*dest[0].(**time.Time) = &at
-				return nil
-			})),
-			tx.EXPECT().QueryRow(ctx, gomock.Any(), "tenant").Return(billingHistoryRow(func(dest ...any) error {
 				*dest[0].(*string) = "expected-current"
+				*dest[1].(*time.Time) = at
 				return nil
 			})),
 			tx.EXPECT().Exec(ctx, gomock.Any(), "expected-current", "tenant", at,

@@ -16,8 +16,10 @@ package dao
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -39,6 +41,26 @@ func TenantBillingHistoryFloor(ctx context.Context, tenantID string) (floor time
 	var stored *time.Time
 	err = tx.QueryRow(ctx, `select max(greatest(effective_from, effective_to))
 		from tenant_billing_assignments where tenant_id = $1`, tenantID).Scan(&stored)
+	if err == nil && stored != nil {
+		floor = stored.UTC()
+	}
+	return
+}
+
+// BillingAccountHistoryFloor returns the latest interval boundary across tenants. The caller must
+// hold the billing account row lock; a zero result means no history.
+func BillingAccountHistoryFloor(ctx context.Context, accountID string) (floor time.Time, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.ReportError(&err)
+	if accountID == "" {
+		return floor, errors.New("billing account is mandatory for billing history")
+	}
+	var stored *time.Time
+	err = tx.QueryRow(ctx, `select max(greatest(effective_from, effective_to))
+		from tenant_billing_assignments where billing_account_id = $1`, accountID).Scan(&stored)
 	if err == nil && stored != nil {
 		floor = stored.UTC()
 	}
@@ -115,7 +137,7 @@ func BillingFinalizationTime(ctx context.Context, historyFloor time.Time) (at ti
 }
 
 // CloseTenantBillingAssignmentOnDeletion closes only the current interval using canonical JSON.
-// The caller holds the locks acquired above and supplies its one authoritative finalization time.
+// The caller holds the locks acquired above and supplies the accepted tenant deletion time.
 // An absent current interval is idempotent; closed history and original creation metadata are immutable.
 func CloseTenantBillingAssignmentOnDeletion(ctx context.Context, tenantID string, effectiveAt time.Time) (err error) {
 	tx, err := database.TxFromContext(ctx)
@@ -123,20 +145,27 @@ func CloseTenantBillingAssignmentOnDeletion(ctx context.Context, tenantID string
 		return
 	}
 	defer tx.ReportError(&err)
-	floor, err := TenantBillingHistoryFloor(ctx, tenantID)
+	if tenantID == "" {
+		return errors.New("tenant is mandatory for billing history")
+	}
+	var currentID string
+	var currentStart time.Time
+	err = tx.QueryRow(ctx, `select id, effective_from from tenant_billing_assignments
+		where tenant_id = $1 and effective_to is null`, tenantID).Scan(&currentID, &currentStart)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return
 	}
-	if effectiveAt.IsZero() || timestamppb.New(effectiveAt).CheckValid() != nil || effectiveAt.Before(floor) ||
-		effectiveAt.Nanosecond()%1000 != 0 {
+	if effectiveAt.IsZero() || timestamppb.New(effectiveAt).CheckValid() != nil || effectiveAt.Nanosecond()%1000 != 0 {
 		return status.Error(codes.Aborted, "invalid billing interval finalization time; retry")
 	}
-	var currentID string
-	// Absence is normal: don't let a Get/ErrNoRows mark an otherwise successful deletion for rollback.
-	err = tx.QueryRow(ctx, `select coalesce((select id from tenant_billing_assignments
-		where tenant_id = $1 and effective_to is null), '')`, tenantID).Scan(&currentID)
-	if err != nil || currentID == "" {
-		return
+	if effectiveAt.Before(currentStart) {
+		return &ErrInUse{Reason: fmt.Sprintf(
+			"tenant %q deletion predates the start of open billing interval %q; repair the billing history before retrying deletion",
+			tenantID, currentID,
+		)}
 	}
 	tag, err := tx.Exec(ctx, `update tenant_billing_assignments
 		set data = jsonb_set(data, '{status}', data->'status' || jsonb_build_object(

@@ -121,12 +121,15 @@ func (r *request[O]) lockTenantLifecycle(ctx context.Context, id string) (databa
 	return identity, err
 }
 
-// tenantDeletionTime locks the complete affected account set before interval rows. The single
-// post-lock clock sample is used unchanged for first acceptance and the current interval close.
+// tenantDeletionTime locks the complete affected account set before interval rows. Only first
+// acceptance samples the clock; retries must not move the stored billing close boundary.
 func tenantDeletionTime(ctx context.Context, identity database.DeletedTenantIdentity) (time.Time, error) {
 	floor, err := LockTenantBillingAssignmentForDeletion(ctx, identity.TenantName)
 	if err != nil {
 		return time.Time{}, err
+	}
+	if !identity.DeletionTimestamp.Equal(time.Unix(0, 0)) {
+		return identity.DeletionTimestamp, nil
 	}
 	floor = tenantLifecycleFloor(identity, floor)
 	return BillingFinalizationTime(ctx, floor)
@@ -142,8 +145,8 @@ func tenantLifecycleFloor(identity database.DeletedTenantIdentity, floor time.Ti
 	return floor
 }
 
-func captureTenantDeletion(ctx context.Context, identity database.DeletedTenantIdentity, at time.Time) error {
-	if err := CloseTenantBillingAssignmentOnDeletion(ctx, identity.TenantName, at); err != nil {
+func captureTenantDeletion(ctx context.Context, identity database.DeletedTenantIdentity) error {
+	if err := CloseTenantBillingAssignmentOnDeletion(ctx, identity.TenantName, identity.DeletionTimestamp); err != nil {
 		return err
 	}
 	tx, err := database.TxFromContext(ctx)
@@ -174,12 +177,11 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 			TenantName: args.name, TenantCreatedAt: args.creationTs, DeletionTimestamp: args.deletionTs,
 		}
 		if !args.tenantDeletionCaptured {
-			at, err := tenantDeletionTime(ctx, identity)
-			if err != nil {
+			if _, err := LockTenantBillingAssignmentForDeletion(ctx, identity.TenantName); err != nil {
 				return err
 			}
 			// A legacy deleting row without a marker has no provable original actor.
-			if err = captureTenantDeletion(ctx, identity, at); err != nil {
+			if err := captureTenantDeletion(ctx, identity); err != nil {
 				return err
 			}
 		}
@@ -194,6 +196,33 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 		r.tx = spTx
 		defer func() { r.tx = outerTx }()
 
+		remove := func() error {
+			deleteSQL := fmt.Sprintf(`delete from %s where id = $1`, r.dao.table)
+			tag, err := r.exec(spCtx, deleteOpType, deleteSQL, args.id)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return errors.New("archive did not remove exactly one object")
+			}
+			return nil
+		}
+		if r.dao.table == "tenants" {
+			if err := remove(); err != nil {
+				return err
+			}
+			floor, err := TenantBillingHistoryFloor(spCtx, args.name)
+			if err != nil {
+				return err
+			}
+			at, err := BillingFinalizationTime(spCtx, tenantLifecycleFloor(identity, floor))
+			if err != nil {
+				return err
+			}
+			// Persist the same post-delete time in both the archive and the identity marker.
+			identity.FinalizedAt = &at
+		}
+
 		insertSQL := fmt.Sprintf(
 			`
 			insert into archived_%s (
@@ -201,6 +230,7 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 				name,
 				creation_timestamp,
 				deletion_timestamp,
+				archival_timestamp,
 				creator,
 				tenant,
 				project,
@@ -213,6 +243,7 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 				$2,
 				$3,
 				$4,
+				coalesce($12::timestamptz, clock_timestamp()),
 				$5,
 				$6,
 				$7,
@@ -239,33 +270,15 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 			args.annotationsData,
 			args.version,
 			args.data,
+			identity.FinalizedAt,
 		); err != nil {
 			return err
 		}
-		deleteSQL := fmt.Sprintf(`delete from %s where id = $1`, r.dao.table)
-		tag, err := r.exec(spCtx, deleteOpType, deleteSQL, args.id)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() != 1 {
-			return errors.New("archive did not remove exactly one object")
-		}
 		if r.dao.table == "tenants" {
-			floor, err := TenantBillingHistoryFloor(spCtx, args.name)
-			if err != nil {
-				return err
-			}
-			at, err := BillingFinalizationTime(spCtx, tenantLifecycleFloor(identity, floor))
-			if err != nil {
-				return err
-			}
-			identity.FinalizedAt = &at
 			// spCtx is essential: ambient helpers must use the same savepoint as r.tx.
-			if err = database.CaptureDeletedTenantIdentity(spCtx, identity); err != nil {
-				return err
-			}
+			return database.CaptureDeletedTenantIdentity(spCtx, identity)
 		}
-		return nil
+		return remove()
 	})
 	if err == nil {
 		return nil

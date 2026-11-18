@@ -1173,6 +1173,7 @@ var _ = Describe("Generic DAO", func() {
 			Expect(creationTs).To(BeTemporally("==", metadata.GetCreationTimestamp().AsTime()))
 			Expect(deletionTs).To(BeTemporally("~", now, time.Second))
 			Expect(archivalTs).To(BeTemporally("~", now, time.Second))
+			Expect(archivalTs).To(BeTemporally(">", deletionTs), "the archive is stamped when written, not at transaction start")
 			Expect(data).To(MatchJSON(`{
 				"my_string": "my value",
 				"my_bool": true,

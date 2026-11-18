@@ -206,14 +206,15 @@ var _ = Describe("Tenant identity lifecycle", func() {
 			Expect(final.deleted).To(Equal(accepted.deleted))
 			Expect(final.finalized).NotTo(BeNil())
 			Expect(*final.finalized).To(BeTemporally(">=", floor))
-			var live, archived, billingChanges, tenantChanges, version int
+			var live, billingChanges, tenantChanges, version int
+			var archivedAt time.Time
 			Expect(tx.QueryRow(c, `select count(*) from tenants where name = 'billed'`).Scan(&live)).To(Succeed())
-			Expect(tx.QueryRow(c, `select count(*) from archived_tenants where name = 'billed'`).Scan(&archived)).To(Succeed())
+			Expect(tx.QueryRow(c, `select archival_timestamp from archived_tenants where name = 'billed'`).Scan(&archivedAt)).To(Succeed())
 			Expect(tx.QueryRow(c, `select count(*) from changes where "table" in ('billing_accounts', 'tenant_billing_assignments')`).Scan(&billingChanges)).To(Succeed())
 			Expect(tx.QueryRow(c, `select count(*) from changes where "table" = 'tenants' and data->>'id' = 'billed'`).Scan(&tenantChanges)).To(Succeed())
 			Expect(tx.QueryRow(c, `select version from tenant_billing_assignments where id = 'lifecycle-interval'`).Scan(&version)).To(Succeed())
 			Expect(live).To(BeZero())
-			Expect(archived).To(Equal(1))
+			Expect(archivedAt).To(BeTemporally("==", *final.finalized))
 			Expect(billingChanges).To(BeZero(), "committed deletion closure is also nonpublishing")
 			Expect(tenantChanges).To(BeNumerically(">", 0), "existing nonbilling enqueue remains enabled")
 			Expect(version).To(Equal(1), "repeated deletion/finalization cannot rewrite a closed interval")
@@ -226,39 +227,91 @@ var _ = Describe("Tenant identity lifecycle", func() {
 		Expect(errors.Is(err, database.ErrTenantIdentityRetained)).To(BeTrue())
 	}, Entry("immediate Delete", false), Entry("last-finalizer Update", true))
 
-	It("captures a legacy deleting tenant and closes its later current interval through direct finalizer Update", func() {
-		floor := time.Date(2043, 1, 1, 0, 0, 0, 0, time.UTC)
+	DescribeTable("uses the accepted deletion boundary for legacy history", func(finalizer bool, startOffset time.Duration, closedOnly bool) {
+		const name = "legacy-delete"
+		const interval = "lifecycle-interval"
+		var storedDeletion time.Time
+		var originalEnd *time.Time
+		var originalVersion int32
 		Expect(inTx("", func(c context.Context, tx database.Tx) error {
-			if _, err := create(c, object("legacy-finalizer", "controller")); err != nil {
-				return err
-			}
-			if err := seedBilling(c, "legacy-finalizer", floor); err != nil {
-				return err
-			}
-			_, err := tx.Exec(c, `update tenants set deletion_timestamp = creation_timestamp where id = 'legacy-finalizer'`)
-			return err
-		})).To(Succeed())
-		Expect(inTx("not-the-original-deleter", func(c context.Context, tx database.Tx) error {
-			current, err := tenants.Get().SetId("legacy-finalizer").Do(c)
+			created, err := create(c, object(name, "controller"))
 			if err != nil {
 				return err
 			}
-			storedDeletion := current.GetObject().GetMetadata().GetDeletionTimestamp().AsTime()
-			current.GetObject().GetMetadata().SetFinalizers(nil)
-			if _, err = tenants.Update().SetObject(current.GetObject()).Do(c); err != nil {
+			storedDeletion = created.GetObject().GetMetadata().GetCreationTimestamp().AsTime()
+			if err := seedBilling(c, name, storedDeletion.Add(startOffset)); err != nil {
 				return err
 			}
-			marker := readIdentity(c, tx, "legacy-finalizer")
-			Expect(marker.actor).To(BeNil())
-			Expect(marker.deleted).To(BeTemporally("==", storedDeletion))
-			Expect(marker.finalized).NotTo(BeNil())
-			Expect(*marker.finalized).To(BeTemporally(">=", floor))
-			var closed time.Time
-			Expect(tx.QueryRow(c, `select effective_to from tenant_billing_assignments where id = 'lifecycle-interval'`).Scan(&closed)).To(Succeed())
-			Expect(closed).To(BeTemporally("==", floor), "legacy current closure may be later than original deletion")
+			if closedOnly {
+				// Already closed, even though its end is later than the accepted deletion.
+				Expect(CloseTenantBillingAssignmentOnDeletion(c, name, storedDeletion.Add(time.Second))).To(Succeed())
+			}
+			Expect(tx.QueryRow(c, `select effective_to, version from tenant_billing_assignments where id = $1`, interval).
+				Scan(&originalEnd, &originalVersion)).To(Succeed())
+			_, err = tx.Exec(c, `update tenants set deletion_timestamp = $1 where id = $2`, storedDeletion, name)
+			return err
+		})).To(Succeed())
+		err := inTx("not-the-original-deleter", func(c context.Context, _ database.Tx) error {
+			if !finalizer {
+				_, err := tenants.Delete().SetId(name).Do(c)
+				return err
+			}
+			current, err := tenants.Get().SetId(name).Do(c)
+			if err != nil {
+				return err
+			}
+			current.GetObject().GetMetadata().SetFinalizers(nil)
+			_, err = tenants.Update().SetObject(current.GetObject()).Do(c)
+			return err
+		})
+		blocked := !closedOnly && startOffset > 0
+		if blocked {
+			var inUse *ErrInUse
+			Expect(errors.As(err, &inUse)).To(BeTrue())
+			Expect(inUse.Error()).To(ContainSubstring("repair the billing history"))
+		} else {
+			Expect(err).NotTo(HaveOccurred())
+		}
+		Expect(inTx("", func(c context.Context, tx database.Tx) error {
+			var from time.Time
+			var to *time.Time
+			var version int32
+			Expect(tx.QueryRow(c, `select effective_from, effective_to, version from tenant_billing_assignments where id = $1`, interval).
+				Scan(&from, &to, &version)).To(Succeed())
+			Expect(from).To(BeTemporally("==", storedDeletion.Add(startOffset)))
+			if blocked || closedOnly {
+				Expect(to).To(Equal(originalEnd))
+				Expect(version).To(Equal(originalVersion))
+			} else {
+				Expect(to).NotTo(BeNil())
+				Expect(*to).To(BeTemporally("==", storedDeletion))
+				Expect(version).To(Equal(originalVersion + 1))
+			}
+			if blocked {
+				current, err := tenants.Get().SetId(name).Do(c)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(current.GetObject().GetMetadata().GetDeletionTimestamp().AsTime()).To(BeTemporally("==", storedDeletion))
+				Expect(current.GetObject().GetMetadata().GetFinalizers()).To(Equal([]string{"controller"}))
+				var marker, archive bool
+				Expect(tx.QueryRow(c, `select exists(select from deleted_tenant_identities where tenant_name = $1),
+					exists(select from archived_tenants where id = $1)`, name).Scan(&marker, &archive)).To(Succeed())
+				Expect(marker).To(BeFalse())
+				Expect(archive).To(BeFalse())
+			} else {
+				marker := readIdentity(c, tx, name)
+				Expect(marker.actor).To(BeNil())
+				Expect(marker.deleted).To(BeTemporally("==", storedDeletion))
+				Expect(marker.finalized != nil).To(Equal(finalizer))
+			}
 			return nil
 		})).To(Succeed())
-	})
+	}, Entry("Delete retry", false, -time.Second, false),
+		Entry("last finalizer", true, -time.Second, false),
+		Entry("equal start and deletion", true, time.Duration(0), false),
+		Entry("conflicting retry rolls back", false, time.Microsecond, false),
+		Entry("conflicting finalizer rolls back", true, time.Microsecond, false),
+		Entry("later closed interval does not block retry", false, time.Microsecond, true),
+		Entry("later closed interval does not block finalization", true, time.Microsecond, true))
 
 	It("captures first acceptance and preserves its actor and timestamp through repeated Delete and finalization", func() {
 		var accepted identity
@@ -576,10 +629,14 @@ var _ = Describe("Tenant identity lifecycle", func() {
 				}
 			}
 			marker := readIdentity(c, tx, "post-delete")
-			var physicallyDeletedAt time.Time
+			var physicallyDeletedAt, archivedAt, started time.Time
 			Expect(tx.QueryRow(c, `select at from deletion_boundary`).Scan(&physicallyDeletedAt)).To(Succeed())
+			Expect(tx.QueryRow(c, `select archival_timestamp, transaction_timestamp() from archived_tenants where id = 'post-delete'`).
+				Scan(&archivedAt, &started)).To(Succeed())
 			Expect(marker.finalized).NotTo(BeNil())
 			Expect(*marker.finalized).To(BeTemporally(">=", physicallyDeletedAt))
+			Expect(marker.deleted).To(BeTemporally(">", started))
+			Expect(archivedAt).To(BeTemporally("==", *marker.finalized))
 			return nil
 		})).To(Succeed())
 	}, Entry("immediate Delete", false), Entry("last-finalizer Update", true))

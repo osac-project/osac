@@ -87,3 +87,14 @@ type Tx interface {
 	// savepoint is rolled back. A panic in one is logged and doesn't stop the others.
 	OnCommit(fn func())
 }
+
+// OnTxFinish registers a callback for the final outcome, after commit hooks on success. A released
+// savepoint defers the callback until its enclosing transaction finishes; a failed savepoint reports
+// false after attempting rollback. It returns false if the transaction does not support finish callbacks.
+func OnTxFinish(tx Tx, fn func(committed bool)) bool {
+	finisher, ok := tx.(interface{ OnFinish(func(bool)) })
+	if ok {
+		finisher.OnFinish(fn)
+	}
+	return ok
+}

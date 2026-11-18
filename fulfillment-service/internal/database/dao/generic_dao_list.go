@@ -38,6 +38,23 @@ func (r *ListRequest[O]) SetFilter(value string) *ListRequest[O] {
 	return r
 }
 
+// ValidateFilter checks the configured filter using the same translation as Do, without executing any SQL.
+func (r *ListRequest[O]) ValidateFilter(ctx context.Context) error {
+	_, err := r.translateFilter(ctx)
+	return err
+}
+
+func (r *ListRequest[O]) translateFilter(ctx context.Context) (string, error) {
+	if r.filter == "" {
+		return "", nil
+	}
+	filter, err := r.dao.filterTranslator.Translate(ctx, r.filter)
+	if err != nil {
+		return "", &ErrInvalidFilter{Reason: err.Error()}
+	}
+	return filter, nil
+}
+
 // SetOrder sets comma-separated canonical field paths with optional asc or desc directions.
 // Only descriptor-validated scalar and Timestamp leaves can be ordered.
 func (r *ListRequest[O]) SetOrder(value string) *ListRequest[O] {
@@ -92,9 +109,8 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 	// Calculate the requested filter:
 	if r.filter != "" {
 		var filter string
-		filter, err = r.dao.filterTranslator.Translate(ctx, r.filter)
+		filter, err = r.translateFilter(ctx)
 		if err != nil {
-			err = &ErrInvalidFilter{Reason: err.Error()}
 			return
 		}
 		if r.sql.filter.Len() > 0 {

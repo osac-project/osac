@@ -21,7 +21,7 @@ const VmCatalogLaunchPage = () => {
   const navigate = useNavigate();
   const { id = '' } = useParams<{ id: string }>();
   const query = useGetResource(ComputeInstanceCatalogItems, { id }, wizardPreloadQueryOptions);
-  const catalogItemName = query.data?.object?.metadata?.name || id;
+  const catalogItemName = query.data?.object?.metadata?.name || '';
 
   return (
     <ResourceDetailsPage

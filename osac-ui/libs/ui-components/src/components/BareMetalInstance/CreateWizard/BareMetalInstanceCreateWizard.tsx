@@ -31,14 +31,15 @@ const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateBareMetalInstance();
-  // Freeze the item this wizard was opened with: a later cache update must
-  // not reset an in-progress form through enableReinitialize.
-  const [launchItem] = useState(catalogItem);
-  const includeCatalogStep = !launchItem;
+  // The item the form is built from: the launch page's snapshot in the
+  // catalog-origin flow, or the item picked in the Catalog step in the
+  // list-origin flow. Frozen at mount so a later cache update cannot reset
+  // an in-progress form through enableReinitialize.
+  const [selectedCatalogItem, setSelectedCatalogItem] = useState(catalogItem);
+  const includeCatalogStep = !catalogItem;
   const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>(
     includeCatalogStep ? 'catalog' : 'general',
   );
-  const [selectedCatalogItem, setSelectedCatalogItem] = useState<BareMetalInstanceCatalogItem>();
   const steps: BareMetalWizardStepId[] = [
     ...(includeCatalogStep ? (['catalog'] as const) : []),
     'general',
@@ -60,7 +61,7 @@ const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
     async (values: BareMetalInstanceWizardValues) => {
       try {
         const created = await provision.mutateAsync(
-          buildBareMetalInstanceCreatePayload(values, selectedCatalogItem ?? launchItem),
+          buildBareMetalInstanceCreatePayload(values, selectedCatalogItem),
         );
         if (created?.id) {
           navigate(`/bare-metal/${created.id}`);
@@ -69,10 +70,13 @@ const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
         // Surfaced via provision.error in the footer; nothing further to do here.
       }
     },
-    [launchItem, navigate, provision, selectedCatalogItem],
+    [navigate, provision, selectedCatalogItem],
   );
 
-  const initialValues = useMemo(() => getBareMetalInstanceInitialValues(launchItem), [launchItem]);
+  const initialValues = useMemo(
+    () => getBareMetalInstanceInitialValues(selectedCatalogItem),
+    [selectedCatalogItem],
+  );
   const schema = useMemo(() => buildBareMetalInstanceStepSchema(activeStep, t), [activeStep, t]);
   const stepHasErrors = useCallback(
     (_stepId: string, errors: Record<string, unknown>) => {

@@ -29,10 +29,12 @@ const ClusterCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateResource(Clusters);
-  // Freeze the item this wizard was opened with: a later cache update must
-  // not reset an in-progress form through enableReinitialize.
-  const [launchItem] = useState(catalogItem);
-  const includeCatalogStep = !launchItem;
+  // The item the form is built from: the launch page's snapshot in the
+  // catalog-origin flow, or the item picked in the Catalog step in the
+  // list-origin flow. Frozen at mount so a later cache update cannot reset
+  // an in-progress form through enableReinitialize.
+  const [selectedCatalogItem, setSelectedCatalogItem] = useState(catalogItem);
+  const includeCatalogStep = !catalogItem;
   const [activeStep, setActiveStep] = useState<ClusterWizardStepId>(
     includeCatalogStep ? 'catalog' : 'general',
   );
@@ -66,7 +68,10 @@ const ClusterCreateWizard = ({ catalogItem, onClosed }: Props) => {
     [navigate, provision],
   );
 
-  const initialValues = useMemo(() => getInitialFormValues(launchItem), [launchItem]);
+  const initialValues = useMemo(
+    () => getInitialFormValues(selectedCatalogItem),
+    [selectedCatalogItem],
+  );
 
   const schema = useMemo(() => buildClusterStepSchema(activeStep, t), [activeStep, t]);
   const stepHasErrors = useCallback(
@@ -106,6 +111,7 @@ const ClusterCreateWizard = ({ catalogItem, onClosed }: Props) => {
                   <CatalogStep<ClusterCatalogItem, ClusterWizardValues>
                     catalogService={ClusterCatalogItems}
                     getInitialFormValues={getInitialFormValues}
+                    onCatalogItemSelected={setSelectedCatalogItem}
                   />
                 )}
                 {step === 'general' && <ClusterGeneralStep />}

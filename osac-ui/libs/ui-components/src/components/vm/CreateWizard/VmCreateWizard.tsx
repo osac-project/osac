@@ -36,15 +36,16 @@ const VmCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateResource(ComputeInstances);
-  // Freeze the item this wizard was opened with: a later cache update must
-  // not reset an in-progress form through enableReinitialize.
-  const [launchItem] = useState(catalogItem);
-  const includeCatalogStep = !launchItem;
+  // The item the form is built from: the launch page's snapshot in the
+  // catalog-origin flow, or the item picked in the Catalog step in the
+  // list-origin flow. Frozen at mount so a later cache update cannot reset
+  // an in-progress form through enableReinitialize.
+  const [selectedCatalogItem, setSelectedCatalogItem] = useState(catalogItem);
+  const includeCatalogStep = !catalogItem;
   const [activeStep, setActiveStep] = useState<VmWizardStepId>(
     includeCatalogStep ? 'catalog' : 'general',
   );
   const [validationAlert, setValidationAlert] = useState(false);
-  const [selectedCatalogItem, setSelectedCatalogItem] = useState<ComputeInstanceCatalogItem>();
   const steps: VmWizardStepId[] = [
     ...(includeCatalogStep ? (['catalog'] as const) : []),
     'general',
@@ -71,7 +72,7 @@ const VmCreateWizard = ({ catalogItem, onClosed }: Props) => {
       }
       try {
         const created = await provision.mutateAsync({
-          object: buildComputeInstanceCreatePayload(values, selectedCatalogItem ?? launchItem),
+          object: buildComputeInstanceCreatePayload(values, selectedCatalogItem),
         });
         if (created?.object?.id) {
           navigate(`/vms/${created.object.id}`);
@@ -80,10 +81,13 @@ const VmCreateWizard = ({ catalogItem, onClosed }: Props) => {
         // Surfaced via provision.error in the footer; nothing further to do here.
       }
     },
-    [launchItem, navigate, provision, selectedCatalogItem],
+    [navigate, provision, selectedCatalogItem],
   );
 
-  const initialValues = useMemo(() => getComputeInstanceInitialValues(launchItem), [launchItem]);
+  const initialValues = useMemo(
+    () => getComputeInstanceInitialValues(selectedCatalogItem),
+    [selectedCatalogItem],
+  );
   const schema = useMemo(() => buildComputeInstanceStepSchema(activeStep, t), [activeStep, t]);
   const stepHasErrors = useCallback(
     (_stepId: string, errors: Record<string, unknown>) => {

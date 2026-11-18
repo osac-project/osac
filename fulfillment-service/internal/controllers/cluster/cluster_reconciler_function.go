@@ -661,6 +661,18 @@ func (t *task) delete(ctx context.Context) (err error) {
 		return
 	}
 
+	// Fulfillment owns automatic ExternalIPAttachment and ExternalIP records.
+	// Delete them before the ClusterOrder so its controller can remove DNS holds
+	// while the order still exists. The automatic Cluster SecurityGroup remains
+	// for the post-ClusterOrder cleanup below.
+	externalAccessComplete, cleanupErr := t.r.networkingCleanup.CleanupExternalAccess(ctx, t.cluster.GetId())
+	if cleanupErr != nil {
+		return cleanupErr
+	}
+	if !externalAccessComplete {
+		return nil
+	}
+
 	// Delete the K8S object:
 	object, err := t.getKubeObject(ctx)
 	if err != nil {

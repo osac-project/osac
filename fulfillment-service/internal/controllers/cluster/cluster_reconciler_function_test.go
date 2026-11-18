@@ -1887,7 +1887,7 @@ func newTaskForDelete(clusterID, hubID string, hubCache controllers.HubCache) *t
 	f := &function{
 		logger:            logger,
 		hubCache:          hubCache,
-		networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true},
+		networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true, externalAccessComplete: true},
 	}
 
 	return &task{
@@ -1897,10 +1897,18 @@ func newTaskForDelete(clusterID, hubID string, hubCache controllers.HubCache) *t
 }
 
 type fakeWorkloadNetworkingCleanup struct {
-	complete   bool
-	calls      int
-	workloadID string
-	err        error
+	complete               bool
+	externalAccessComplete bool
+	calls                  int
+	externalAccessCalls    int
+	workloadID             string
+	err                    error
+}
+
+func (f *fakeWorkloadNetworkingCleanup) CleanupExternalAccess(_ context.Context, workloadID string) (bool, error) {
+	f.externalAccessCalls++
+	f.workloadID = workloadID
+	return f.externalAccessComplete, f.err
 }
 
 func (f *fakeWorkloadNetworkingCleanup) Cleanup(_ context.Context, workloadID string) (bool, error) {
@@ -2056,11 +2064,12 @@ var _ = Describe("delete", func() {
 			Namespace: "test-ns", Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
 		}, nil)
 		t := newTaskForDelete(clusterID, hubID, hubCache)
-		cleanup := &fakeWorkloadNetworkingCleanup{}
+		cleanup := &fakeWorkloadNetworkingCleanup{externalAccessComplete: false}
 		t.r.networkingCleanup = cleanup
 
-		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("automatic workload networking resources are still terminating")))
-		Expect(cleanup.calls).To(Equal(1))
+		Expect(t.delete(ctx)).To(Succeed())
+		Expect(cleanup.externalAccessCalls).To(Equal(1))
+		Expect(cleanup.calls).To(Equal(0), "the ClusterOrder must remain until external access is gone")
 		Expect(cleanup.workloadID).To(Equal(clusterID))
 		Expect(hasFinalizer(t.cluster)).To(BeTrue())
 	})

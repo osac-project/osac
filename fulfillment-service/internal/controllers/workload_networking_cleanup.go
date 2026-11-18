@@ -39,10 +39,12 @@ const (
 	workloadSystemCreator           = "system"
 )
 
-// WorkloadNetworkingCleanup removes automatic ExternalIPAttachments before their
-// automatic ExternalIPs. For Clusters, it removes the automatic SecurityGroup
-// after the ClusterOrder and its workers have completed teardown.
+// WorkloadNetworkingCleanup removes Fulfillment-owned automatic networking
+// resources. External access is cleaned before deleting the workload's hub CR;
+// for Clusters, the automatic SecurityGroup is cleaned after the ClusterOrder
+// and its workers have completed teardown.
 type WorkloadNetworkingCleanup interface {
+	CleanupExternalAccess(ctx context.Context, workloadID string) (complete bool, err error)
 	Cleanup(ctx context.Context, workloadID string) (complete bool, err error)
 }
 
@@ -82,7 +84,24 @@ func (c *workloadNetworkingCleanup) Cleanup(ctx context.Context, workloadID stri
 	if workloadID == "" {
 		return false, errors.New("workload identifier is mandatory for networking cleanup")
 	}
-	if c.attachments == nil || c.externalIPs == nil || c.securityGroups == nil {
+	if c.securityGroups == nil {
+		return false, errors.New("networking cleanup clients are not configured")
+	}
+	complete, err := c.CleanupExternalAccess(ctx, workloadID)
+	if err != nil || !complete {
+		return complete, err
+	}
+	return c.cleanupAutomaticClusterSecurityGroups(ctx, workloadID)
+}
+
+// CleanupExternalAccess removes automatic ExternalIPAttachments and
+// ExternalIPs before the workload's hub CR is deleted. For a Cluster, the
+// ClusterOrder still exists to remove public DNS holds from its attachments.
+func (c *workloadNetworkingCleanup) CleanupExternalAccess(ctx context.Context, workloadID string) (bool, error) {
+	if workloadID == "" {
+		return false, errors.New("workload identifier is mandatory for networking cleanup")
+	}
+	if c.attachments == nil || c.externalIPs == nil {
 		return false, errors.New("networking cleanup clients are not configured")
 	}
 	filter := automaticWorkloadNetworkFilter(workloadID)
@@ -114,7 +133,7 @@ func (c *workloadNetworkingCleanup) Cleanup(ctx context.Context, workloadID stri
 	if err != nil || !complete {
 		return complete, err
 	}
-	return c.cleanupAutomaticClusterSecurityGroups(ctx, workloadID)
+	return true, nil
 }
 
 func (c *workloadNetworkingCleanup) cleanupExternalIPs(ctx context.Context, workloadID, filter string) (bool, error) {

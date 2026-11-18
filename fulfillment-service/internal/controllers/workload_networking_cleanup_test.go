@@ -365,6 +365,34 @@ func TestWorkloadNetworkingCleanupWaitsForAutomaticClusterSecurityGroup(t *testi
 	}
 }
 
+func TestWorkloadNetworkingExternalAccessCleanupLeavesClusterSecurityGroup(t *testing.T) {
+	group := privatev1.SecurityGroup_builder{
+		Id: "auto-sg-1",
+		Metadata: privatev1.Metadata_builder{
+			Creator: workloadSystemCreator,
+			Labels: map[string]string{
+				workloadAutoCreatedLabel:     "true",
+				workloadAutoCreatedForLabel:  "network-owner",
+				workloadAutoCreatedKindLabel: "cluster",
+			},
+		}.Build(),
+	}.Build()
+	groups := &fakeSecurityGroupsCleanupClient{items: []*privatev1.SecurityGroup{group}}
+	cleanup := &workloadNetworkingCleanup{
+		attachments:    &fakeExternalIPAttachmentsCleanupClient{},
+		externalIPs:    &fakeExternalIPsCleanupClient{},
+		securityGroups: groups,
+	}
+
+	complete, err := cleanup.CleanupExternalAccess(context.Background(), "network-owner")
+	if err != nil || !complete {
+		t.Fatalf("external access cleanup = (%t, %v), want complete", complete, err)
+	}
+	if len(groups.deleteCalls) != 0 || len(groups.items) != 1 {
+		t.Fatalf("external access cleanup must leave the Cluster SecurityGroup intact")
+	}
+}
+
 func TestWorkloadNetworkingCleanupRetriesDeleteFailuresBeforeAcceptance(t *testing.T) {
 	attachment := privatev1.ExternalIPAttachment_builder{
 		Id: "attachment-transient-failure",

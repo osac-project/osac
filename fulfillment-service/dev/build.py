@@ -14,6 +14,7 @@
 #
 
 import glob
+import json
 import logging
 import os
 import pathlib
@@ -91,7 +92,6 @@ def _sync_cleanapi_version() -> None:
     """
     Updates buf.yaml and buf.gen.yaml to use the cleanapi version from tools.PROTOC_GEN_CLEANAPI.
     This ensures the version is only maintained in one place (dev/tools.py).
-    Always runs `buf dep update` to sync buf.lock, regardless of whether YAML files changed.
     """
     cleanapi_version = f"v{tools.PROTOC_GEN_CLEANAPI.version}"
     # Buf config now lives in the top-level proto/ module, not here.
@@ -117,10 +117,6 @@ def _sync_cleanapi_version() -> None:
         if content != updated_content:
             file_path.write_text(updated_content)
             logging.info(f"Updated cleanapi version to {cleanapi_version} in {file_path.name}")
-
-    # Always run buf dep update to ensure buf.lock is in sync
-    # This handles fresh checkouts and failed prior updates
-    commands.run(args=["buf", "dep", "update"], cwd=proto_dir, check=True)
 
 
 @build.command()
@@ -200,20 +196,20 @@ def protos() -> None:
 
     # Export buf dependencies to a local directory for protoc to use
     deps_dir = proto_dir / ".buf" / "deps"
+    if deps_dir.exists():
+        shutil.rmtree(deps_dir)
     deps_dir.mkdir(parents=True, exist_ok=True)
 
-    # Export each dependency
-    # cleanapi version comes from tools.PROTOC_GEN_CLEANAPI
-    cleanapi_version = f"v{tools.PROTOC_GEN_CLEANAPI.version}"
-    for dep in ["buf.build/bufbuild/protovalidate",
-        "buf.build/googleapis/googleapis",
-        "buf.build/grpc-ecosystem/grpc-gateway",
-        f"buf.build/cleanapi/cleanapi:{cleanapi_version}"]:
-        dep_name = dep.split("/")[-1].split(":")[0]
-        dep_path = deps_dir / dep_name
-        if not dep_path.exists():
-            logging.info(f"Exporting {dep}")
-            commands.run(args=["buf", "export", dep, "--output", str(dep_path)], cwd=proto_dir, check=True)
+    graph = commands.run(
+        args=["buf", "dep", "graph", "--format", "json"], cwd=proto_dir, check=True, capture_output=True,
+    )
+    for dep in json.loads(graph.stdout):
+        if dep.get("local"):
+            continue
+        ref = f"{dep['name']}:{dep['commit']}"
+        dep_path = deps_dir / dep["name"].rsplit("/", 1)[-1]
+        logging.info(f"Exporting {ref}")
+        commands.run(args=["buf", "export", ref, "--output", str(dep_path)], cwd=proto_dir, check=True)
 
     # Get all private proto files (use absolute paths then convert to relative)
     proto_pattern = proto_dir / "private" / "osac" / "private" / "v1" / "*.proto"

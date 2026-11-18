@@ -112,3 +112,24 @@ func validateSecretType(secret *privatev1.Secret, identifier, field string, expe
 	}
 	return nil
 }
+
+// validateSecretTypeOneOf accepts a Secret whose type is any of the listed
+// types. Callers state the permitted types explicitly; an empty list matches
+// nothing, so an omitted type policy can never widen acceptance by accident.
+func validateSecretTypeOneOf(
+	secret *privatev1.Secret,
+	identifier, field string,
+	allowed []privatev1.SecretType,
+) error {
+	for _, expected := range allowed {
+		if secret.GetType() == expected {
+			return nil
+		}
+	}
+	if len(allowed) == 1 {
+		return validateSecretType(secret, identifier, field, allowed[0])
+	}
+	return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		"secret '%s' referenced by %s has type %s; expected one of %v",
+		identifier, field, secret.GetType(), allowed)
+}

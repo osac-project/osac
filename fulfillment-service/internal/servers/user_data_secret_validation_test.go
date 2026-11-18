@@ -215,6 +215,18 @@ var _ = Describe("User data secret validation", func() {
 		Expect(err.Error()).To(ContainSubstring("expected SECRET_TYPE_USER_DATA"))
 	})
 
+	DescribeTable("rejects a Secret when the permitted type set is empty",
+		func(allowed []privatev1.SecretType) {
+			secret := createSecret(map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")})
+			_, err := validateUserDataSecretOfTypes(ctx, logger, secretsDao, nil,
+				privatev1.SecretLocalReference_builder{Id: secret.GetId()}.Build(), allowed)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("expected one of []"))
+		},
+		Entry("nil", nil),
+		Entry("empty", []privatev1.SecretType{}),
+	)
+
 	It("rejects a Secret without a non-empty userdata entry", func() {
 		secret := createSecret(map[string][]byte{"other": []byte("value")})
 		_, err := validateUserDataSecret(ctx, logger, secretsDao, nil,
@@ -348,7 +360,8 @@ var _ = Describe("User data secret validation", func() {
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data_source"}},
 		}.Build()
-		Expect(server.validateAndResolveUserDataSecret(ctx, request.GetObject().GetSpec(), false)).To(Succeed())
+		Expect(server.validateAndResolveUserDataSecret(ctx, request.GetObject().GetSpec(), false,
+			[]privatev1.SecretType{privatev1.SecretType_SECRET_TYPE_USER_DATA})).To(Succeed())
 		candidate := proto.Clone(created.GetObject()).(*privatev1.ComputeInstance)
 		candidate.GetSpec().SetUserDataSource(privatev1.UserDataSource_builder{Secret: request.GetObject().GetSpec().GetUserDataSource().GetSecret()}.Build())
 		Expect(validateComputeInstanceImmutability(

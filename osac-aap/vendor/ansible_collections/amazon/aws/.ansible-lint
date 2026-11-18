@@ -1,0 +1,14 @@
+---
+profile: production
+
+exclude_paths:
+  - changelogs
+  - docs
+  - tests/integration
+  - tests/sanity/ignore-*.txt # Ignore violations related to deprecated keys.
+  - tests/unit
+  - .ansible
+  - .github
+
+warn_list:
+  - no-log-password

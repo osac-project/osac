@@ -1,3 +1,0 @@
-minor_changes:
- - purefb_ds - Update test state to allow specific tests to be run
- - purefb_ds - Allow directory services to be modified for internal NFS servers

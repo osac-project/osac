@@ -215,7 +215,6 @@ message ClusterSpec {
     (google.api.field_behavior) = IMMUTABLE,
     (buf.validate.field).repeated.max_items = 32
   ];
-
 }
 
 // The per-operator status contains the installation state of one add-on operator.
@@ -293,7 +292,7 @@ message ClusterStatus {
   // is in progress, or if the system can't apply the changes requested by the user.
   //
   // The key of the map is the unique identifier of the node set for this cluster.
-  map<string, ClusterNodeSet> node_sets = 5 [(buf.validate.field).map.keys.string = {
+  map<string, ClusterNodeSetStatus> node_sets = 5 [(buf.validate.field).map.keys.string = {
     min_len: 1,
     max_len: 63,
     pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
@@ -342,7 +341,7 @@ message ClusterStatus {
   reserved 14;
   reserved "upgrade";
 
-  // Component upgrade attempts, newest first. Earlier entries retain their place as their state changes.
+  // Per-component upgrade history, newest first. Earlier entries retain their place as their state changes.
   repeated ClusterUpgradeHistoryEntry upgrade_history = 15 [(google.api.field_behavior) = OUTPUT_ONLY];
 
   // Records when fulfillment accepted a change to spec.version. This is the authoritative
@@ -354,7 +353,7 @@ message ClusterStatus {
   optional google.protobuf.Timestamp version_transition_time = 16 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
-// State of a component upgrade attempt, independent of the cluster's readiness state.
+// State of one component in a cluster upgrade attempt, independent of the cluster's readiness state.
 enum ClusterUpgradeState {
   // No upgrade state has been reported. Accepted attempts start in PENDING.
   CLUSTER_UPGRADE_STATE_UNSPECIFIED = 0;
@@ -375,8 +374,8 @@ enum ClusterUpgradeState {
   // HyperShift reported a terminal error and stopped working toward the requested version.
   CLUSTER_UPGRADE_STATE_FAILED = 5;
 
-  // The node set was removed and its NodePool deleted while this attempt was Pending or Progressing.
-  // An attempt already marked TimedOut retains that outcome after removal.
+  // The node set was removed and its NodePool deleted while this component was Pending or Progressing.
+  // A component already marked TimedOut retains that outcome after removal.
   CLUSTER_UPGRADE_STATE_NODE_SET_REMOVED = 6;
 }
 
@@ -393,24 +392,24 @@ message ClusterUpgradeComponent {
   }
 }
 
-// State and progress of one component upgrade attempt.
+// State and progress of one component in a cluster upgrade attempt.
 message ClusterUpgradeHistoryEntry {
-  // Control plane or node set selected for this attempt.
+  // Control plane or node set selected for this component.
   ClusterUpgradeComponent component = 1 [(buf.validate.field).required = true];
 
-  // OpenShift version observed on the selected component when the attempt was accepted, as a semver string.
+  // OpenShift version observed on the selected component when it was accepted into the shared cluster attempt, as a semver string.
   string source_version = 2;
 
   // OpenShift version requested for the selected component, as a semver string.
   string target_version = 3;
 
-  // Time OSAC accepted the attempt.
+  // Time OSAC accepted this component into the shared cluster attempt.
   google.protobuf.Timestamp accepted_time = 4;
 
-  // Time this attempt entered its current state, including a later update after TIMED_OUT.
+  // Time this component entered its current state, including a later update after TIMED_OUT.
   google.protobuf.Timestamp state_transition_time = 5;
 
-  // Current outcome or progress state of this attempt.
+  // Current outcome or progress state of this component.
   ClusterUpgradeState state = 6;
 
   // Human-readable explanation of the state, including any failure or timeout reason.
@@ -515,10 +514,21 @@ message ClusterNodeSet {
   // Immutable after creation.
   BareMetalInstanceTypeReference baremetal_instance_type = 4 [(google.api.field_behavior) = IMMUTABLE];
 
-  // Desired OpenShift version of this node set.
-  ClusterVersionReference version = 5;
+  // Reserved field number and name for the removed node-set version field.
+  // The selected reference now lives in ClusterNodeSetStatus.version.
+  reserved 5;
+  reserved "version";
+}
 
-  // OpenShift version observed on this node set. Populated only in Cluster status.
+// Records the server-owned state of one cluster node set.
+message ClusterNodeSetStatus {
+  // Number of nodes most recently observed for this set.
+  optional int32 size = 2 [(buf.validate.field).int32.gt = 0];
+
+  // BareMetalInstanceType most recently observed for this set.
+  BareMetalInstanceTypeReference baremetal_instance_type = 4;
+
+  // OpenShift version observed on this node set.
   string observed_version = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 

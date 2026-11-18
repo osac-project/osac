@@ -12,12 +12,9 @@ import {
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
-import { Projects } from '@osac/types';
+import { ClusterVersions, Projects } from '@osac/types';
 import { useListResource } from '@osac/ui-components/api/use-resource';
-import {
-  CLUSTER_VERSION_ACTIVE_LIST_FILTER,
-  useClusterVersions,
-} from '@osac/ui-components/api/v1/cluster-versions';
+import { CLUSTER_VERSION_ACTIVE_LIST_FILTER } from '@osac/ui-components/api/v1/cluster-versions';
 import {
   fullProjectPathToQueryFilter,
   getProjectName,
@@ -46,9 +43,10 @@ export const ClusterReviewStep = () => {
   const { t } = useTranslation();
   const { values } = useFormikContext<ClusterWizardValues>();
 
-  const { data: versions = [] } = useClusterVersions({
+  const { data: versionReply } = useListResource(ClusterVersions, {
     filter: CLUSTER_VERSION_ACTIVE_LIST_FILTER,
   });
+  const versions = versionReply?.items ?? [];
 
   const {
     data: projects,

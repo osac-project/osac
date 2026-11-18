@@ -84,7 +84,7 @@ describe('buildComputeCatalogItemCreatePayload', () => {
 
   it('encodes a locked boot disk size as a number', () => {
     const values = emptyComputeCatalogItemValues();
-    values.bootDiskSizeGib = { value: '40', locked: true };
+    values.bootDiskSizeGib = { value: 40, locked: true };
 
     const payload = buildComputeCatalogItemCreatePayload(values);
 
@@ -178,7 +178,7 @@ describe('buildComputeCatalogItemCreatePayload', () => {
   it('writes a locked additional-disks list and omits an empty editable one', () => {
     const lockedValues = emptyComputeCatalogItemValues();
     lockedValues.additionalDisks = {
-      value: [{ sizeGib: '20', storageTier: { id: 'tier-1', name: 'fast' } }],
+      value: [{ sizeGib: 20, storageTier: { id: 'tier-1', name: 'fast' } }],
       locked: true,
     };
     expect(buildComputeCatalogItemCreatePayload(lockedValues).fields?.additionalDisks).toEqual({

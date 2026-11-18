@@ -161,7 +161,6 @@ var _ = Describe("Private bare metal instances server", func() {
 
 			createDiskImageWithLifecycle("default-bmi-disk-image",
 				privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, nil)
-			seedTenantDefaultNetworking(testTenant, "", new("netris"))
 
 			// Create a published catalog item for use in tests.
 			Expect(seedBareMetalCatalogItemTemplate(ctx, testTenant, "", "test-template", bareMetalInstanceTypeReference("default-type"))).To(Succeed())
@@ -2115,7 +2114,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
 		})
 
-		It("skips automatic ExternalIPs and pool reservations when provider networking is disabled", func() {
+		It("skips automatic ExternalIPs when provider networking is disabled", func() {
 			server.settings.ProvisioningEnabled = false
 
 			pools, err := server.externalIPPoolDao.List().Do(ctx)
@@ -2168,6 +2167,14 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
 			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+
+			// With no pool at all, disabled networking still permits BMI creation.
+			_, err = server.externalIPPoolDao.Delete().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			createWithoutExternalIP(fmt.Sprintf("disabled-auto-eip-%s", uuid.NewString()[:8]))
+			pools, err = server.externalIPPoolDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pools.GetItems()).To(BeEmpty())
 		})
 
 		It("auto_external_ip_attachment leaves attachment creation to the ready BareMetalInstance reconciler", func() {
@@ -2196,7 +2203,12 @@ var _ = Describe("Private bare metal instances server", func() {
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
+			Expect(eipList.GetItems()[0].GetMetadata().GetName()).To(Equal(automaticExternalIPPrefix + bmiID))
+			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedForLabel]).To(Equal(bmiID))
 			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("bare_metal_instance"))
+			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
+			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()[tenantAnnotation]).To(Equal(testTenant))
 
 			attDao, err := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
 				SetLogger(logger).SetTenancyLogic(tenancy).Build()
@@ -2353,6 +2365,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			catIDNoType   string
 			subnetID1     string
 			subnetID2     string
+			subnetName1   string
 		)
 
 		boolPtr := func(v bool) *bool { return &v }
@@ -2498,6 +2511,9 @@ var _ = Describe("Private bare metal instances server", func() {
 				}.Build()).Do(ctx)
 				Expect(createErr).ToNot(HaveOccurred())
 				*idPtr = resp.GetObject().GetId()
+				if i == 0 {
+					subnetName1 = resp.GetObject().GetMetadata().GetName()
+				}
 			}
 
 			// Create catalog items referencing the templates.
@@ -2551,6 +2567,32 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(attachments).To(HaveLen(1))
 			Expect(attachments[0].HasPrimary()).To(BeTrue())
 			Expect(attachments[0].GetPrimary()).To(BeTrue())
+		})
+
+		It("resolves a name-only reference to the tenant default Subnet from another project", func() {
+			seedTenantProject(testTenant, "other-project")
+			resp, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+				Object: privatev1.BareMetalInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:    fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Project: "other-project",
+					}.Build(),
+					Spec: privatev1.BareMetalInstanceSpec_builder{
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
+							privatev1.BareMetalNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Name: subnetName1}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			attachments := resp.GetObject().GetSpec().GetNetworkAttachments()
+			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetSubnet().GetId()).To(Equal(subnetID1))
 		})
 
 		It("Accepts single attachment with valid interface and primary true", func() {

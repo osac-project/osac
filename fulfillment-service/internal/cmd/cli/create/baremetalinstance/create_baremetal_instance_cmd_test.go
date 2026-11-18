@@ -336,12 +336,12 @@ var _ = Describe("buildSpec", func() {
 
 	It("should apply an instance type reference through the set flag", func() {
 		c := &runnerContext{}
-		c.args.setFields = []string{"instance_type.name=bare-metal.large", "instance_type.shared=true"}
+		c.args.setFields = []string{"instance_type.name=bare-metal.large", "instance_type.tenant=shared"}
 
 		spec, err := c.buildSpec("catalog-item-id", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetInstanceType().GetName()).To(Equal("bare-metal.large"))
-		Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
+		Expect(spec.GetInstanceType().GetTenant()).To(Equal("shared"))
 	})
 
 	It("should set instance_type from the instance-type flag", func() {
@@ -351,6 +351,8 @@ var _ = Describe("buildSpec", func() {
 		spec, err := c.buildSpec("catalog-item-id", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetInstanceType().GetName()).To(Equal("standard-bm"))
+		Expect(spec.GetInstanceType().GetTenant()).To(Equal("shared"))
+		Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
 	})
 
 	It("should leave instance_type unset when the instance-type flag is empty", func() {

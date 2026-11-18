@@ -1,6 +1,8 @@
 import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
 
+import { intSchema } from '@osac/ui-components/validation/number';
+
 import { cidrsOverlap } from '../../validation/cidr-validation';
 import { resourceNameSchema } from '../../validation/resource-name';
 interface CidrNetworkValues {
@@ -20,12 +22,7 @@ export const clusterNodeSetRowSchema = (t: TFunction) =>
       id: Yup.string().required(t('Host type is required')),
       name: Yup.string(),
     }),
-    size: Yup.string()
-      .required(t('Pool size is required'))
-      .test('pool-size-positive', t('Pool size must be greater than zero'), (value) => {
-        const parsed = Number(value?.trim());
-        return Number.isInteger(parsed) && parsed > 0;
-      }),
+    size: intSchema(t).required(t('Pool size is required')),
   });
 
 export const clusterNetworkDoNotOverlapTest = (

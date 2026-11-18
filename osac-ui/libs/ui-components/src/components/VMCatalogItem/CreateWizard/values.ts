@@ -31,19 +31,16 @@ export interface ComputeCatalogItemValues extends CatalogGeneralValues {
   instanceType: ProvisioningFieldValue<ResourceSelectValue>;
   userData: ProvisioningFieldValue<string>;
   userDataSecret: ProvisioningFieldValue<string>;
-  bootDiskSizeGib: ProvisioningFieldValue<string>;
+  bootDiskSizeGib: ProvisioningFieldValue<number | undefined>;
   bootDiskStorageTier: ProvisioningFieldValue<ResourceSelectValue>;
   additionalDisks: ProvisioningFieldValue<ComputeInstanceDiskValues[]>;
 }
-
-const readStringValue = (value: string | number | undefined): string =>
-  value === undefined ? '' : String(value);
 
 const readDiskListValue = (
   value: ComputeInstanceDiskList | undefined,
 ): ComputeInstanceDiskValues[] =>
   (value?.items ?? []).map((disk) => ({
-    sizeGib: disk.sizeGib === undefined ? '' : String(disk.sizeGib),
+    sizeGib: disk.sizeGib,
     storageTier: resourceSelectValueFromReference(disk.storageTier),
   }));
 
@@ -54,7 +51,7 @@ export const emptyComputeCatalogItemValues = (): ComputeCatalogItemValues => ({
   instanceType: provisioningFieldValue(emptyResourceSelectValue()),
   userData: provisioningFieldValue(''),
   userDataSecret: provisioningFieldValue(''),
-  bootDiskSizeGib: provisioningFieldValue(''),
+  bootDiskSizeGib: provisioningFieldValue(undefined),
   bootDiskStorageTier: provisioningFieldValue(emptyResourceSelectValue()),
   additionalDisks: provisioningFieldValue([]),
 });
@@ -100,10 +97,7 @@ export const getComputeCatalogItemInitialValues = (
       instanceType.locked,
     ),
     ...catalogUserDataValuesFromPolicy(fields?.userDataSource),
-    bootDiskSizeGib: provisioningFieldValue(
-      readStringValue(bootDiskSizeGib.value),
-      bootDiskSizeGib.locked,
-    ),
+    bootDiskSizeGib: provisioningFieldValue(bootDiskSizeGib.value, bootDiskSizeGib.locked),
     bootDiskStorageTier: provisioningFieldValue(
       resourceSelectValueFromReference(bootDiskStorageTier.value),
       bootDiskStorageTier.locked,

@@ -1,11 +1,14 @@
 import { screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { Role, RoleBinding, User } from '@osac/types';
 import { RoleBindingState } from '@osac/types';
+import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 
 import RoleBindingsPage from './RoleBindingsPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
+
+const VIEW_PREF_KEY = getViewTypePrefKey('role-bindings-list');
 
 const makeRole = (id: string, title: string, description = ''): Role =>
   ({
@@ -77,6 +80,14 @@ const renderPage = ({
   });
 
 describe('RoleBindingsPage', () => {
+  beforeEach(() => {
+    localStorage.setItem(VIEW_PREF_KEY, 'list');
+  });
+
+  afterEach(() => {
+    localStorage.removeItem(VIEW_PREF_KEY);
+  });
+
   it('renders the page title', async () => {
     renderPage();
 
@@ -117,8 +128,9 @@ describe('RoleBindingsPage', () => {
     renderPage({ roleBindings: [] });
 
     await waitFor(() => {
-      expect(screen.getByText('No role bindings available.')).toBeInTheDocument();
+      expect(screen.getByText('No role bindings found')).toBeInTheDocument();
     });
+    expect(screen.getByText('No role bindings are available yet.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
@@ -127,6 +139,16 @@ describe('RoleBindingsPage', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('link', { name: 'Create role binding' })).toBeInTheDocument();
+    });
+  });
+
+  it('renders role filter in the toolbar', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: 'Filter role bindings by role' }),
+      ).toHaveTextContent('All roles');
     });
   });
 

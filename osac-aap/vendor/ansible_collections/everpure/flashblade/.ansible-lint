@@ -1,0 +1,17 @@
+---
+# Red Hat Ansible Collection Certification .ansible-lint file
+# Based on:
+# https://docs.ansible.com/projects/partner-certification-requirements/static-analysis/
+profile: production
+
+exclude_paths:
+  - tests/integration
+  - tests/unit
+  - extensions/molecule
+  - changelogs
+  - docs
+  - .ansible
+  - .github
+
+warn_list:
+  - no-log-password

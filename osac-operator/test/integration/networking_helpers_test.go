@@ -17,6 +17,7 @@ limitations under the License.
 package integration
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -74,6 +75,7 @@ var networkingResources = map[string]string{
 	"NATGateway":           "natgateways.osac.openshift.io",
 	"FabricDomain":         "fabricdomains.osac.openshift.io",
 	"ComputeInstance":      "computeinstances.osac.openshift.io",
+	"Tenant":               "tenants.osac.openshift.io",
 	"ClusterOrder":         "clusterorders.osac.openshift.io",
 	"BareMetalInstance":    "baremetalinstances.osac.openshift.io",
 	"ConfigMap":            "configmaps",
@@ -165,7 +167,22 @@ func createAs(identity string, obj *unstructured.Unstructured, extra ...string) 
 	if identity != "" {
 		args = append(args, "--as="+identity)
 	}
-	return kubectl(toJSON(obj), args...)
+
+	ctx, cancel := context.WithTimeout(context.Background(), networkingCommandWait)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	cmd.Stdin = strings.NewReader(toJSON(obj))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	_, _ = fmt.Fprintf(GinkgoWriter, "$ kubectl %s\n%s%s\n", strings.Join(args, " "), stdout.String(), stderr.String())
+	if err != nil {
+		return stdout.String() + stderr.String(), fmt.Errorf(
+			"kubectl %s: %w: %s", strings.Join(args, " "), err, stderr.String())
+	}
+	// Warnings on stderr must not contaminate the JSON returned on success.
+	return stdout.String(), nil
 }
 
 // mustCreate creates obj and registers a cleanup that deletes it (clearing

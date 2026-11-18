@@ -809,18 +809,10 @@ func (t *Tool) createKeycloakTestUsers(ctx context.Context) error {
 // keycloakEnsureUserReady updates a Keycloak user to have email, emailVerified, and resets
 // their password. Needed because POST /users with 409 Conflict doesn't update attributes.
 func (t *Tool) keycloakEnsureUserReady(ctx context.Context, username string) (string, error) {
-	query := url.Values{}
-	query.Set("username", username)
-	query.Set("exact", "true")
-	_, body, err := t.KeycloakAdminRequest(ctx, http.MethodGet, "/users?"+query.Encode(), nil)
+	userId, err := t.keycloakUserID(ctx, username)
 	if err != nil {
-		return "", fmt.Errorf("failed to get user '%s': %w", username, err)
+		return "", err
 	}
-	var usersResult []map[string]any
-	if err := json.Unmarshal(body, &usersResult); err != nil || len(usersResult) == 0 {
-		return "", fmt.Errorf("user '%s' not found after creation", username)
-	}
-	userId := usersResult[0]["id"].(string)
 
 	updatePayload := map[string]any{
 		"email":         fmt.Sprintf("%s@test.local", username),
@@ -850,6 +842,28 @@ func (t *Tool) keycloakEnsureUserReady(ctx context.Context, username string) (st
 		return "", fmt.Errorf("failed to reset password for '%s': status=%d body=%s", username, code, string(body))
 	}
 
+	return userId, nil
+}
+
+func (t *Tool) keycloakUserID(ctx context.Context, username string) (string, error) {
+	query := url.Values{}
+	query.Set("username", username)
+	query.Set("exact", "true")
+	code, body, err := t.KeycloakAdminRequest(ctx, http.MethodGet, "/users?"+query.Encode(), nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get user '%s': %w", username, err)
+	}
+	if code != http.StatusOK {
+		return "", fmt.Errorf("failed to get user '%s': status=%d body=%s", username, code, string(body))
+	}
+	var usersResult []map[string]any
+	if err := json.Unmarshal(body, &usersResult); err != nil || len(usersResult) != 1 {
+		return "", fmt.Errorf("user '%s' not found after creation", username)
+	}
+	userId, ok := usersResult[0]["id"].(string)
+	if !ok || userId == "" {
+		return "", fmt.Errorf("user '%s' has no Keycloak ID", username)
+	}
 	return userId, nil
 }
 
@@ -895,18 +909,10 @@ func (t *Tool) ensureUserInOrg(ctx context.Context, username, orgName string) er
 	}
 	orgId := orgs[0]["id"].(string)
 
-	query = url.Values{}
-	query.Set("username", username)
-	query.Set("exact", "true")
-	_, body, err = t.KeycloakAdminRequest(ctx, http.MethodGet, "/users?"+query.Encode(), nil)
+	userId, err := t.keycloakUserID(ctx, username)
 	if err != nil {
-		return fmt.Errorf("failed to get user '%s': %w", username, err)
+		return err
 	}
-	var users []map[string]any
-	if err := json.Unmarshal(body, &users); err != nil || len(users) == 0 {
-		return fmt.Errorf("user '%s' not found", username)
-	}
-	userId := users[0]["id"].(string)
 
 	code, _, err = t.KeycloakAdminRequest(ctx, http.MethodPost,
 		fmt.Sprintf("/organizations/%s/members", orgId), userId)
@@ -1966,30 +1972,3 @@ const (
 	usersGroup                 = "users"
 	sshKeyProjectOwnerUsername = "ssh-key-project-owner"
 )
-
-// ExtractOrganizationNames extracts organization names from a JWT organization claim.
-// The claim can be in two formats:
-// - Array format: ["org1", "org2"]
-// - Object format with groups: {"org1": {"groups": [...]}, "org2": {"groups": [...]}}
-func ExtractOrganizationNames(orgClaim any) ([]string, error) {
-	switch v := orgClaim.(type) {
-	case []any:
-		// Simple array format: ["org-name"]
-		var orgNames []string
-		for _, o := range v {
-			if s, ok := o.(string); ok {
-				orgNames = append(orgNames, s)
-			}
-		}
-		return orgNames, nil
-	case map[string]any:
-		// Object format with groups: {"org-name": {"groups": [...]}}
-		var orgNames []string
-		for orgName := range v {
-			orgNames = append(orgNames, orgName)
-		}
-		return orgNames, nil
-	default:
-		return nil, fmt.Errorf("organization claim should be an array or object, got %T", orgClaim)
-	}
-}

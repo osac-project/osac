@@ -63,6 +63,11 @@ eligible HostedCluster and provider networking enabled, the controller may
 still discover or reserve ingress, create automatic attachments, and publish
 DNS. Control the controller lifecycle separately in those tests.
 
+Leaving `install_step_external_access_override` unset keeps the template no-op
+and is the pattern used by `targets/caas_core_lifecycle` (OSAC-5998,
+GATE-CAAS-04) to prove core install/delete run with no provider networking
+role.
+
 ### Delete Flow (tasks/delete.yaml)
 
 **4 overrideable steps**.
@@ -80,19 +85,21 @@ override replaces only the AAP step; it does not disable the ClusterOrder
 controller's endpoint lifecycle. If a test runs the controller with an
 eligible HostedCluster and provider networking enabled, the controller may
 still remove automatic attachments and DNS. Control the controller lifecycle
-separately in those tests.
+separately in those tests. Leaving `delete_step_external_access_override` unset
+is the disabled-mode delete pattern used by `targets/caas_core_lifecycle`.
 
 ## CI Cluster Template: osac.templates.ocp_ci_small
 
-The CI CaaS template uses the service's dedicated DNS discovery and record
-tasks instead of the controller-owned endpoint lifecycle used by `ocp_small`.
+The CI CaaS template uses `ci.steps.external_access` with the provider-reserved
+`CI_GUEST_INGRESS_IP_RANGE`. Production `ocp_small` keeps its controller-owned
+endpoint lifecycle.
 
 ### Install and Delete Flows
 
 | Step Name | Default Role | Override Variable | Description |
 |-----------|-------------|-------------------|-------------|
-| **Configure External Access** | osac.service.external_access (`caas_create.yaml`) | `install_step_external_access_override` | Discovers the CI cluster API IP from the `kube-apiserver` Service and the ingress IP from ClusterOrder-labeled Agent inventory, creates DNS records, and publishes endpoints |
-| **Remove External Access** | osac.service.external_access (`caas_delete.yaml`) | `delete_step_external_access_override` | Deletes the CI cluster DNS records and clears endpoint annotations |
+| **Configure External Access** | ci.steps.external_access (`create.yaml`) | `install_step_external_access_override` | Publishes hosted API DNS, reserves a CI ingress VIP, publishes wildcard DNS, then configures guest MetalLB and publishes endpoints after Service/backend readiness |
+| **Remove External Access** | ci.steps.external_access (`delete.yaml`) | `delete_step_external_access_override` | Removes CI DNS and endpoint annotations, then releases the VIP after verified guest teardown |
 
 ### Post-Install Flow (tasks/post_install.yaml)
 

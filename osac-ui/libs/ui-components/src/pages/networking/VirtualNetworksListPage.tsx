@@ -81,7 +81,7 @@ export const VirtualNetworksListPage = () => {
   }, [data?.items, error, isLoading]);
 
   const {
-    data: allSubnets = [],
+    data: subnetReply,
     isLoading: subnetsIsLoading,
     error: subnetsError,
     isPlaceholderData: subnetsPlaceholderData,
@@ -89,7 +89,7 @@ export const VirtualNetworksListPage = () => {
   const subnetsLoading = subnetsIsLoading || subnetsPlaceholderData;
 
   const {
-    data: allSecurityGroups = [],
+    data: securityGroupReply,
     isLoading: securityGroupsIsLoading,
     error: securityGroupsError,
     isPlaceholderData: securityGroupsPlaceholderData,
@@ -104,7 +104,7 @@ export const VirtualNetworksListPage = () => {
 
   const subnetCountByVN = useMemo(
     () =>
-      allSubnets.reduce(
+      (subnetReply?.items ?? []).reduce(
         (acc, subnet) => {
           const vnId = subnet.spec?.virtualNetwork?.id;
           if (vnId) {
@@ -114,12 +114,12 @@ export const VirtualNetworksListPage = () => {
         },
         {} as Record<string, number>,
       ),
-    [allSubnets],
+    [subnetReply],
   );
 
   const securityGroupCountByVN = useMemo(
     () =>
-      allSecurityGroups.reduce(
+      (securityGroupReply?.items ?? []).reduce(
         (acc, securityGroup) => {
           const vnId = securityGroup.spec?.virtualNetwork?.id;
           if (vnId) {
@@ -129,7 +129,7 @@ export const VirtualNetworksListPage = () => {
         },
         {} as Record<string, number>,
       ),
-    [allSecurityGroups],
+    [securityGroupReply],
   );
 
   const items = data?.items ?? [];

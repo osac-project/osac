@@ -1,5 +1,6 @@
+import IntegerField from '@osac/ui-components/components/Form/base/IntegerField';
+
 import { useTranslation } from '../../../../hooks/useTranslation';
-import { InputField } from '../../../Form/InputField';
 import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 
 interface BootDiskSizeFieldProps extends ProvisioningFieldControlProps {
@@ -16,11 +17,10 @@ const BootDiskSizeField = ({
   const { t } = useTranslation();
 
   return (
-    <InputField
+    <IntegerField
       name={name}
       label={t('Boot disk size')}
       fieldId={fieldId}
-      type="number"
       isRequired={isRequired}
       isDisabled={isDisabled}
       labelInfo={labelInfo}

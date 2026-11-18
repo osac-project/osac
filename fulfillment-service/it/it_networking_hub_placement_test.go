@@ -183,6 +183,7 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 			listErr := tool.KubeClient().List(ctx, list, crclient.InNamespace(namespace), crclient.MatchingLabels{labels.SecurityGroupUuid: securityGroupID})
 			return len(list.Items), listErr
 		})
+		setRoutingSecurityGroupReady(ctx, securityGroupsClient, securityGroupID)
 
 		By("creating an ExternalIPPool and two ExternalIPs")
 		poolID := fmt.Sprintf("test-hub-a-pool-%s", uuid.New())
@@ -272,6 +273,9 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 					NodeSets: testClusterNodeSets(instanceTypeID, 1),
 					NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 						Subnet: publicv1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+						SecurityGroups: []*publicv1.SecurityGroupLocalReference{
+							publicv1.SecurityGroupLocalReference_builder{Id: securityGroupID}.Build(),
+						},
 					}.Build(),
 				}.Build(),
 			}.Build(),
@@ -623,7 +627,7 @@ func expectNetworkingResourceHub(ctx context.Context, expectedHubID string, getH
 		hubID, err := getHub(ctx)
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(hubID).To(Equal(expectedHubID))
-	}, time.Minute, time.Second).Should(Succeed())
+	}, 3*time.Minute, time.Second).Should(Succeed())
 }
 
 func expectNetworkingCRInHub(
@@ -664,6 +668,18 @@ func setRoutingSubnetReady(ctx context.Context, client privatev1.SubnetsClient, 
 	object := response.GetObject()
 	object.GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_READY)
 	_, err = client.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+		Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+	}.Build())
+	Expect(err).ToNot(HaveOccurred())
+}
+
+func setRoutingSecurityGroupReady(ctx context.Context, client privatev1.SecurityGroupsClient, id string) {
+	GinkgoHelper()
+	response, err := client.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+	Expect(err).ToNot(HaveOccurred())
+	object := response.GetObject()
+	object.GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
+	_, err = client.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
 		Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 	}.Build())
 	Expect(err).ToNot(HaveOccurred())

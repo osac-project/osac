@@ -8,6 +8,7 @@ import {
   ExternalIPPoolState,
   IPFamily,
 } from '@osac/types/private';
+import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 
 import { ExternalIpPoolsListPage } from './ExternalIpPoolsListPage';
 import { renderWithProviders } from '../../test-utils/TestProviders';
@@ -66,11 +67,18 @@ const defaultPools = [
   ),
 ];
 
-const renderPage = (privateExternalIpPools: ExternalIPPool[] = defaultPools) =>
-  renderWithProviders(<ExternalIpPoolsListPage />, { apiFixtures: { privateExternalIpPools } });
+const renderPage = (
+  privateExternalIpPools: ExternalIPPool[] = defaultPools,
+  routerEntries?: string[],
+) =>
+  renderWithProviders(<ExternalIpPoolsListPage />, {
+    apiFixtures: { privateExternalIpPools },
+    routerEntries,
+  });
 
 describe('ExternalIpPoolsListPage', () => {
   beforeEach(() => {
+    localStorage.clear();
     mockNavigate.mockReset();
   });
 
@@ -84,6 +92,7 @@ describe('ExternalIpPoolsListPage', () => {
   });
 
   it('renders column headers', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ip-pools'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -92,11 +101,12 @@ describe('ExternalIpPoolsListPage', () => {
     expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'IP family' })).not.toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'CIDRs' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Available' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Total' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Tenant' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Capacity' })).toBeInTheDocument();
   });
 
-  it('renders a row per pool with name, CIDRs, available, and total', async () => {
+  it('renders a row per pool with name, CIDRs, and capacity', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ip-pools'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -104,14 +114,15 @@ describe('ExternalIpPoolsListPage', () => {
     });
     expect(screen.queryByText('IPv4')).not.toBeInTheDocument();
     expect(screen.getByText('192.168.1.0/24')).toBeInTheDocument();
-    expect(screen.getByText('200')).toBeInTheDocument();
-    expect(screen.getByText('256')).toBeInTheDocument();
+    expect(screen.getByText('200 of 256 available')).toBeInTheDocument();
     expect(screen.getByText('dev-v6')).toBeInTheDocument();
     expect(screen.queryByText('IPv6')).not.toBeInTheDocument();
     expect(screen.getByText('2001:db8::/64')).toBeInTheDocument();
+    expect(screen.getByText('2 external IP pools')).toBeInTheDocument();
   });
 
   it('shows a single CIDR inline and summarizes multiple CIDRs by count', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ip-pools'), 'list');
     renderPage([
       makePool('p-1', 'prod-v4', IPFamily.IP_FAMILY_IPV4, ['192.168.1.0/24']),
       makePool('p-3', 'multi', IPFamily.IP_FAMILY_IPV4, [
@@ -129,6 +140,7 @@ describe('ExternalIpPoolsListPage', () => {
   });
 
   it('renders status labels for each pool', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ip-pools'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -142,10 +154,52 @@ describe('ExternalIpPoolsListPage', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('No external IP pools yet. Create one to get started.'),
+        screen.getByRole('heading', { name: 'No external IP pools found', level: 2 }),
       ).toBeInTheDocument();
     });
+    expect(screen.getByText('No external IP pools are available yet.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('shows a filter-specific empty state when a search filter has no results', async () => {
+    renderPage([], ['/admin/infrastructure/external-ip-pools?search=missing']);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', {
+          name: 'No external IP pools match your filters',
+          level: 2,
+        }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByText('Try a different state, or search term.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+    expect(screen.queryByText('No external IP pools are available yet.')).not.toBeInTheDocument();
+  });
+
+  it('renders the search input', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search external IP pools')).toBeInTheDocument();
+    });
+  });
+
+  it('renders the status filter toggle', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'All states' })).toBeInTheDocument();
+    });
+  });
+
+  it('renders the list and card view switcher', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Card view' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'List view' })).toBeInTheDocument();
+    });
   });
 
   it('links Create pool to the create route', () => {
@@ -158,6 +212,7 @@ describe('ExternalIpPoolsListPage', () => {
   });
 
   it('navigates to the details route when View details is clicked', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ip-pools'), 'list');
     const { user } = renderPage();
 
     await waitFor(() => {
@@ -171,6 +226,7 @@ describe('ExternalIpPoolsListPage', () => {
   });
 
   it('opens the delete confirmation dialog when Delete is clicked', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ip-pools'), 'list');
     const { user } = renderPage();
 
     await waitFor(() => {
@@ -185,6 +241,7 @@ describe('ExternalIpPoolsListPage', () => {
   });
 
   it('removes the row from the table after a successful delete', async () => {
+    localStorage.setItem(getViewTypePrefKey('external-ip-pools'), 'list');
     const { user } = renderPage();
 
     await waitFor(() => {

@@ -63,6 +63,31 @@ describe('ResourceStatusLabel', () => {
       expect(getLabel('Paused')?.querySelector('.pf-v6-c-label__icon')).not.toBeNull();
     });
 
+    it('renders plain status text and icon without a label', () => {
+      render(<ResourceStatusLabel status="failed" text="Failed" noIcon={false} isPlain />);
+
+      const plainStatus = screen.getByText('Failed');
+      expect(plainStatus.closest('.pf-v6-c-label')).toBeNull();
+      expect(plainStatus.querySelector('.pf-v6-c-icon .pf-m-danger')).toBeInTheDocument();
+    });
+
+    it('supports a warning icon for a plain status', () => {
+      render(
+        <ResourceStatusLabel
+          status="unspecified"
+          text="Timed out"
+          icon={PauseIcon}
+          iconStatus="warning"
+          noIcon={false}
+          isPlain
+        />,
+      );
+
+      expect(
+        screen.getByText('Timed out').querySelector('.pf-v6-c-icon .pf-m-warning'),
+      ).toBeInTheDocument();
+    });
+
     it('renders a non-compact label when isCompact is false', () => {
       render(<ResourceStatusLabel status="ready" text="Running" isCompact={false} />);
 

@@ -243,19 +243,22 @@ func (s *PrivateIdentityProvidersServer) Update(ctx context.Context,
 	}
 	// Only reset phase when the client is changing spec fields (user-initiated intent change).
 	// Do NOT reset when the reconciler is writing status back (would cause infinite reconcile loop).
-	if hasSpecUpdate {
-		obj := request.GetObject()
-		if !obj.HasStatus() {
-			obj.SetStatus(&privatev1.IdentityProviderStatus{})
-		}
-		obj.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN)
-		// generic.Update strictly honours the update mask: only masked paths are
-		// copied from the request object to the stored clone. Without this, the
-		// phase reset above would be silently dropped.
-		mask := request.GetUpdateMask()
-		mask.Paths = append(mask.GetPaths(), "status.phase")
-	}
-	err = s.generic.Update(ctx, request, &response)
+	// Apply the reset to the merged candidate so it is persisted with the spec update without
+	// adding a controller-managed status field to the caller's update mask.
+	err = s.generic.UpdateWithCandidatePreparation(
+		ctx,
+		request,
+		&response,
+		func(_ context.Context, _, candidate *privatev1.IdentityProvider) error {
+			if hasSpecUpdate {
+				if !candidate.HasStatus() {
+					candidate.SetStatus(&privatev1.IdentityProviderStatus{})
+				}
+				candidate.GetStatus().SetPhase(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_UNKNOWN)
+			}
+			return nil
+		},
+	)
 	return
 }
 

@@ -12,7 +12,7 @@ export const buildVolumeCreatePayload = (
   },
   spec: {
     storageTier: values.spec.storageTier.name,
-    sizeGib: BigInt(values.spec.sizeGib),
+    sizeGib: values.spec.sizeGib,
     accessMode: values.spec.accessMode,
   },
 });

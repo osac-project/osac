@@ -14,6 +14,85 @@
               "description": "Installation-time provider-networking setting shared by OSAC components. Fulfillment stores the first effective value and rejects later changes."
             }
           }
+        },
+        "billing": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": ["object", "null"],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "enum": ["m360"]
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "description": "Provider base URL including the whole path to the provider API. No query, fragment, URL credentials or percent escapes in the host; well-formed percent escapes are allowed in the path. HTTPS for any host, HTTP only for a loopback host.",
+                  "anyOf": [
+                    {
+                      "pattern": "^https://(\\[[0-9a-fA-F:.]+\\]|[^/?#\\s@:%\\[\\]\\\\|\\x00-\\x1F\\x7F]+)(:[0-9]+)?(/([^%?#\\s\\x00-\\x1F\\x7F]|%[0-9a-fA-F]{2})*)?$"
+                    },
+                    {
+                      "pattern": "^http://(localhost|127(\\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}|\\[::1\\])(:[0-9]+)?(/([^%?#\\s\\x00-\\x1F\\x7F]|%[0-9a-fA-F]{2})*)?$"
+                    }
+                  ]
+                },
+                "credentialSecret": {
+                  "type": "object",
+                  "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "key": {"type": "string", "minLength": 1}
+                  },
+                  "required": ["name", "key"],
+                  "additionalProperties": false
+                },
+                "caSecret": {
+                  "type": "object",
+                  "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "key": {"type": "string", "minLength": 1}
+                  },
+                  "required": ["name", "key"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["key", "baseUrl", "credentialSecret"],
+              "additionalProperties": false
+            },
+            "tuning": {
+              "type": "object",
+              "properties": {
+                "retryCount": {
+                  "type": "integer",
+                  "description": "Provider retries after the first attempt",
+                  "minimum": 0
+                },
+                "pricingBreaker": {
+                  "type": "object",
+                  "properties": {
+                    "failureThreshold": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "failureWindowSeconds": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9223372036
+                    },
+                    "openSeconds": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9223372036
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
         }
       }
     }

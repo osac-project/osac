@@ -10,8 +10,8 @@ import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-i
 import { FieldArray, useFormikContext } from 'formik';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
-import { InputField } from '../../../Form/InputField';
-import NumberField from '../../../Form/NumberField';
+import IntegerField from '../../../Form/base/IntegerField';
+import TextField from '../../../Form/base/TextField';
 import { type BareMetalInstanceTypeFormValues, emptyAcceleratorValue } from '../values';
 
 const BareMetalAcceleratorsField = () => {
@@ -44,32 +44,30 @@ const BareMetalAcceleratorsField = () => {
                   />
                 }
               >
-                <InputField
+                <TextField
                   name={`spec.accelerators.${index}.type`}
                   label={t('Type')}
                   fieldId={`baremetal-accelerator-${index}-type`}
                   isRequired
                   placeholder={t('e.g. GPU, FPGA, TPU')}
                 />
-                <InputField
+                <TextField
                   name={`spec.accelerators.${index}.model`}
                   label={t('Model')}
                   fieldId={`baremetal-accelerator-${index}-model`}
                   isRequired
                   placeholder={t('e.g. A100, H100')}
                 />
-                <InputField
+                <TextField
                   name={`spec.accelerators.${index}.vendor`}
                   label={t('Vendor')}
                   fieldId={`baremetal-accelerator-${index}-vendor`}
                   placeholder={t('e.g. NVIDIA, AMD, Intel')}
                 />
-                <NumberField
+                <IntegerField
                   name={`spec.accelerators.${index}.memoryGb`}
                   label={t('Memory (GiB)')}
                   fieldId={`baremetal-accelerator-${index}-memory`}
-                  min={1}
-                  step={1}
                 />
               </FormFieldGroup>
             </StackItem>

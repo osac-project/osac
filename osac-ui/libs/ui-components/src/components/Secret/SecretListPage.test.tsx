@@ -26,6 +26,7 @@ const pullSecret = create(SecretSchema, {
 
 const createTransport = (items = [pullSecret]) => {
   let listFilter: string | undefined;
+  let totalsFilter: string | undefined;
 
   const transport = wrapWithAuthInterceptor(
     createRouterTransport((router) => {
@@ -33,6 +34,7 @@ const createTransport = (items = [pullSecret]) => {
         list: (req) => {
           const limit = Number(req.limit);
           if (limit === 0) {
+            totalsFilter = req.filter;
             return { items: [], total: items.length };
           }
           listFilter = req.filter;
@@ -50,7 +52,11 @@ const createTransport = (items = [pullSecret]) => {
     }),
   );
 
-  return { transport, getListFilter: () => listFilter };
+  return {
+    transport,
+    getListFilter: () => listFilter,
+    getTotalsFilter: () => totalsFilter,
+  };
 };
 
 describe('SecretListPage', () => {
@@ -60,7 +66,7 @@ describe('SecretListPage', () => {
 
   it('renders secrets from the list API', async () => {
     const { transport } = createTransport();
-    renderWithProviders(<SecretListPage />, { transport });
+    renderWithProviders(<SecretListPage />, { transport, session: { role: 'tenant-admin' } });
 
     await waitFor(() => {
       expect(screen.getByRole('link', { name: 'pull-creds' })).toBeInTheDocument();
@@ -70,7 +76,7 @@ describe('SecretListPage', () => {
 
   it('shows the type filter toggle', async () => {
     const { transport } = createTransport();
-    renderWithProviders(<SecretListPage />, { transport });
+    renderWithProviders(<SecretListPage />, { transport, session: { role: 'tenant-admin' } });
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'All types' })).toBeInTheDocument();
@@ -79,7 +85,7 @@ describe('SecretListPage', () => {
 
   it('shows an empty state when no secrets are returned', async () => {
     const { transport } = createTransport([]);
-    renderWithProviders(<SecretListPage />, { transport });
+    renderWithProviders(<SecretListPage />, { transport, session: { role: 'tenant-admin' } });
 
     await waitFor(() => {
       expect(
@@ -93,6 +99,7 @@ describe('SecretListPage', () => {
     const { transport } = createTransport();
     renderWithProviders(<SecretListPage />, {
       transport,
+      session: { role: 'tenant-admin' },
       routerEntries: ['/?search=no-such-secret'],
     });
 
@@ -109,6 +116,7 @@ describe('SecretListPage', () => {
     const { transport, getListFilter } = createTransport();
     const { user } = renderWithProviders(<SecretListPage />, {
       transport,
+      session: { role: 'tenant-admin' },
       routerEntries: ['/?project=my-project&search=no-such-secret'],
     });
 
@@ -128,5 +136,17 @@ describe('SecretListPage', () => {
     });
 
     expect(screen.getByRole('button', { name: /Project:\s*All projects/ })).toBeInTheDocument();
+  });
+
+  it('limits administrators to shared and system tenants and hides the project filter', async () => {
+    const { transport, getListFilter, getTotalsFilter } = createTransport();
+    renderWithProviders(<SecretListPage />, { transport, session: { role: 'admin' } });
+
+    await waitFor(() => {
+      expect(getListFilter()).toBe('this.metadata.tenant in ["shared", "system"]');
+      expect(getTotalsFilter()).toBe('this.metadata.tenant in ["shared", "system"]');
+    });
+
+    expect(screen.queryByRole('button', { name: /Project:/ })).not.toBeInTheDocument();
   });
 });

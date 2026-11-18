@@ -7,13 +7,16 @@ on the object, so a failed wait leaves something for the fixture finalizer to cl
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import re
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, TypeVar
 
 import pytest
@@ -41,11 +44,11 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import poll_until
+from tests.e2e.core.runner import poll_until, run
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.cidrs import TENANT_SECOND_OCTETS, tenant_vn_cidr
 from tests.e2e.networking.teardown import teardown_sg, teardown_subnets, teardown_vnet, wait_owned_gone
-from tests.e2e.networking.vmaas import guest_ssh
+from tests.e2e.networking.vmaas import guest_ssh, ssh_helper
 
 T = TypeVar("T")
 
@@ -161,11 +164,15 @@ def poll_or_fail(
     kind: Kind | None = None,
     ids: dict[str, str] | None = None,
     refine_kind: Callable[[Kind], tuple[Kind, str]] | None = None,
+    retry_on_error: bool = True,
 ) -> T:
     """`poll_until`, with a timeout turned into a failure that carries a diagnosis.
 
     `kind` names what the timeout means (for example traffic-blocked) and `ids` the objects involved; without
     a kind the failure is a plain `pytest.fail`, which still classifies as stuck-state.
+
+    A failed or timed-out API or kubectl read is retried by default: on a live lab one blip must not fail a
+    wait, and a timeout still names the last error.
     """
     try:
         return poll_until(
@@ -174,6 +181,7 @@ def poll_or_fail(
             retries=retries,
             delay=delay,
             description=description,
+            retry_on_error=retry_on_error,
             resource_kind=resource_kind,
             resource_id=resource_id,
         )
@@ -225,10 +233,73 @@ def register_guest_snapshot(name: str, instances: list[dict[str, str]], identity
         return [(vm["name"], runner_for(vm)) for vm in list(instances) if vm.get("vm_namespace") and vm.get("cr")]
 
     failure_snapshot.SOURCES.register(name, failure_snapshot.guest_source(guests), kinds=failure_snapshot.GUEST_KINDS)
+    failure_snapshot.SOURCES.register(f"{name}-kubevirt", kubevirt_source(instances))
 
 
 def unregister_guest_snapshot(name: str) -> None:
     failure_snapshot.SOURCES.unregister(name)
+    failure_snapshot.SOURCES.unregister(f"{name}-kubevirt")
+
+
+# Local cap; queued sources also honor the snapshot's remaining budget.
+KUBEVIRT_SOURCE_BUDGET_S = 40
+
+
+def kubevirt_source(instances: list[dict[str, str]]) -> failure_snapshot.SourceFn:
+    """VMs, VMIs, events and virt-launcher logs of each VM namespace on the VM cluster.
+
+    The suite's teardown deletes these namespaces before the job collects logs, so a failure is the only moment
+    they can be read. The list is read at failure time.
+    """
+
+    def source(directory: Path, window: failure_snapshot.Window) -> None:
+        since = window.log_start.isoformat().replace("+00:00", "Z")
+        namespaces = sorted({vm["vm_namespace"] for vm in list(instances) if vm.get("vm_namespace")})
+        # Finish inside the snapshot budget: a source still running after it would write past the scrub.
+        deadline = time.monotonic() + KUBEVIRT_SOURCE_BUDGET_S
+        if window.deadline is not None:
+            deadline = min(deadline, window.deadline)
+        for namespace in namespaces:
+            reads = {
+                f"kubevirt-{namespace}-vms.json": ("get", "vm,vmi", "-n", namespace, "-o", "json"),
+                f"kubevirt-{namespace}-events.json": ("get", "events", "-n", namespace, "-o", "json"),
+                f"kubevirt-{namespace}-virt-launcher.txt": (
+                    "logs",
+                    "-n",
+                    namespace,
+                    "-l",
+                    "kubevirt.io=virt-launcher",
+                    "--all-containers",
+                    "--timestamps",
+                    f"--since-time={since}",
+                    "--tail=2000",
+                    "--prefix",
+                ),
+            }
+            for file_name, args in reads.items():
+                remaining = int(deadline - time.monotonic())
+                if remaining < 2:
+                    failure_snapshot.record_error(
+                        directory, f"kubevirt:{namespace}:{args[0]}", "skipped: budget used up"
+                    )
+                    continue
+                try:
+                    output = run(
+                        *ssh_helper.vm_cluster_args(),
+                        *args,
+                        timeout=min(failure_snapshot.SOURCE_COMMAND_TIMEOUT_S, remaining),
+                    )
+                    if file_name.endswith(".json"):
+                        # write_json drops user data, SSH key and password fields before writing.
+                        failure_snapshot.write_json(directory, file_name, json.loads(output))
+                    else:
+                        failure_snapshot.write_text(directory, file_name, output)
+                except Exception as exc:
+                    failure_snapshot.record_error(
+                        directory, f"kubevirt:{namespace}:{args[0]}", f"{type(exc).__name__}: {exc}"
+                    )
+
+    return source
 
 
 def create_network(

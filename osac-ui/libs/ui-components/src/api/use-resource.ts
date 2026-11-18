@@ -33,13 +33,6 @@ type PaginatedListResponse = {
   total: number;
 };
 
-type PaginatedListItems<Output extends DescMessage> =
-  MessageShape<Output> extends {
-    items: infer Items;
-  }
-    ? Items
-    : never;
-
 type PaginatedListService<Input extends DescMessage, Output extends DescMessage> = ResourceService<
   'list',
   Input,
@@ -107,7 +100,6 @@ export const useListResource = <
   service: ResourceService<'list', Input, Output>,
   request: MessageInitShape<Input> = create(service.method.list.input),
   options: ResourceQueryOptions<Output, SelectedData> = {},
-  select?: (data: MessageShape<Output>) => SelectedData,
 ) => {
   const client = useApiFetch(service);
   const listRequest = create(service.method.list.input, request);
@@ -116,25 +108,20 @@ export const useListResource = <
     ...options,
     queryKey: [service.typeName, 'list', request],
     queryFn: () => client.list(listRequest),
-    select,
     placeholderData: keepPreviousData,
   });
 };
 
 /** Loads every item matching the filter, managing offset and limit internally. */
-export const useListAllResources = <
-  Input extends DescMessage,
-  Output extends DescMessage,
-  SelectedData = MessageShape<Output>,
->(
+export const useListAllResources = <Input extends DescMessage, Output extends DescMessage>(
   service: PaginatedListService<Input, Output>,
   filter?: string,
-  options: ResourceQueryOptions<Output, SelectedData> = {},
+  options: ResourceQueryOptions<Output> = {},
 ) => {
   const client = useApiFetch<ResourceService<'list', Input, Output>>(service);
   const listRequest = create(service.method.list.input);
 
-  return useQuery<MessageShape<Output>, unknown, PaginatedListItems<Output>>({
+  return useQuery<MessageShape<Output>, unknown>({
     ...options,
     queryKey: [service.typeName, 'list', { filter }, 'all'],
     queryFn: async ({ signal }) => {
@@ -149,10 +136,8 @@ export const useListAllResources = <
         page = await listPage(items.length);
         items.push(...page.items);
       }
-      return { ...page, items, size: items.length };
+      return { ...page, items, size: items.length } as MessageShape<Output>;
     },
-    select: (response) =>
-      (response as MessageShape<Output> & { items: PaginatedListItems<Output> }).items,
     placeholderData: keepPreviousData,
   });
 };

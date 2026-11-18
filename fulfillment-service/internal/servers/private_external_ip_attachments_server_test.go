@@ -891,6 +891,63 @@ var _ = Describe("Private external IP attachments server", func() {
 			Expect(response.GetObject().GetSpec().GetBaremetalInstance().GetId()).To(Equal(bmi.GetId()))
 		})
 
+		It("Rejects non-ready BareMetalInstance targets without persisting attachments", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+
+			for _, tc := range []struct {
+				name string
+				edit func(*privatev1.BareMetalInstance)
+			}{
+				{
+					name: "not running",
+					edit: func(instance *privatev1.BareMetalInstance) {
+						instance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING)
+					},
+				},
+				{
+					name: "no network address",
+					edit: func(instance *privatev1.BareMetalInstance) {
+						instance.GetStatus().SetNetworkAttachmentStatuses(nil)
+					},
+				},
+				{
+					name: "deleting",
+					edit: func(instance *privatev1.BareMetalInstance) {
+						instance.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+					},
+				},
+			} {
+				By(tc.name)
+				bmi := createBareMetalInstanceInState(ctx, bareMetalInstanceDao)
+				tc.edit(bmi)
+				bmi.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now().Add(time.Minute)))
+				_, err := bareMetalInstanceDao.Update().SetObject(bmi).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				if tc.name == "deleting" {
+					_, err = bareMetalInstanceDao.Delete().SetId(bmi.GetId()).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+				}
+
+				_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+					Object: privatev1.ExternalIPAttachment_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("bmi-readiness-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.ExternalIPAttachmentSpec_builder{
+							ExternalIp:        privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+							BaremetalInstance: privatev1.BareMetalInstanceLocalReference_builder{Id: bmi.GetId()}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition), tc.name)
+
+				attachments, listErr := server.lifecycle.externalIPAttachmentDao.List().Do(ctx)
+				Expect(listErr).ToNot(HaveOccurred())
+				Expect(attachments.GetItems()).To(BeEmpty(), tc.name)
+			}
+		})
+
 		It("Lists external IP attachments", func() {
 			eip1 := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
 				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)

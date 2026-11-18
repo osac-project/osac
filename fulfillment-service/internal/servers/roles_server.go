@@ -24,6 +24,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -34,6 +35,7 @@ type RolesServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
+	permissionCatalog *catalog.Catalog
 }
 
 var _ publicv1.RolesServer = (*RolesServer)(nil)
@@ -78,6 +80,13 @@ func (b *RolesServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *
 	return b
 }
 
+// SetPermissionCatalog sets the permission catalog used to validate the permission rules of
+// roles. This is mandatory.
+func (b *RolesServerBuilder) SetPermissionCatalog(value *catalog.Catalog) *RolesServerBuilder {
+	b.permissionCatalog = value
+	return b
+}
+
 // Build creates the public roles server from the builder configuration.
 func (b *RolesServerBuilder) Build() (result *RolesServer, err error) {
 	if b.logger == nil {
@@ -110,6 +119,7 @@ func (b *RolesServerBuilder) Build() (result *RolesServer, err error) {
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc((*publicv1.Role)(nil).ProtoReflect().Descriptor()).
+		SetPermissionCatalog(b.permissionCatalog).
 		Build()
 	if err != nil {
 		return

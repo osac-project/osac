@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import {
+  Button,
   Card,
   CardBody,
   CardTitle,
@@ -8,71 +10,75 @@ import {
   DescriptionListTerm,
   Flex,
   FlexItem,
-  Skeleton,
 } from '@patternfly/react-core';
 
 import type { Cluster } from '@osac/types';
 
-import { useClusterVersion } from '../../../api/v1/cluster-versions';
+import ClusterUpgradeHistoryModal from './ClusterUpgradeHistoryModal';
+import ClusterVersionControls from './ClusterVersionControls';
+import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
 import { Timestamp } from '../../Primitives/Timestamp';
-import ClusterVersionLifecycleLabel from '../ClusterVersionLifecycleLabel';
+import { getControlPlaneUpgradeHistory } from '../ListPage/clusterDisplay';
 
 interface ClusterConfigurationCardProps {
   cluster: Cluster;
 }
 
 export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardProps) => {
+  const { t } = useTranslation();
+  const [clusterHistoryOpen, setClusterHistoryOpen] = useState(false);
   const catalogItem = cluster.spec?.catalogItem;
-  const { data: clusterVersion, isLoading: isVersionLoading } = useClusterVersion(
-    cluster.spec?.version?.id,
-  );
+  const upgradeHistory = getControlPlaneUpgradeHistory(cluster);
+
   return (
     <Card isFullHeight>
-      <CardTitle>Cluster configuration</CardTitle>
+      <CardTitle>{t('Cluster configuration')}</CardTitle>
       <CardBody>
         <DescriptionList isCompact>
           <DescriptionListGroup>
-            <DescriptionListTerm>Catalog item</DescriptionListTerm>
+            <DescriptionListTerm>
+              <Flex spaceItems={{ default: 'spaceItemsXs' }}>
+                <FlexItem>{t('Current version')}</FlexItem>
+                {upgradeHistory.length > 0 && (
+                  <FlexItem>
+                    <Button variant="link" isInline onClick={() => setClusterHistoryOpen(true)}>
+                      {t('Upgrade history')}
+                    </Button>
+                  </FlexItem>
+                )}
+              </Flex>
+            </DescriptionListTerm>
+            <DescriptionListDescription>
+              <ClusterVersionControls cluster={cluster} />
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Catalog item')}</DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(catalogItem?.name || catalogItem?.id)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>Version</DescriptionListTerm>
-            <DescriptionListDescription>
-              {isVersionLoading ? (
-                <Skeleton width="150px" />
-              ) : clusterVersion ? (
-                <Flex
-                  spaceItems={{ default: 'spaceItemsSm' }}
-                  alignItems={{ default: 'alignItemsCenter' }}
-                >
-                  <FlexItem>{displayValue(clusterVersion.spec?.version)}</FlexItem>
-                  <FlexItem>
-                    <ClusterVersionLifecycleLabel clusterVersion={clusterVersion} />
-                  </FlexItem>
-                </Flex>
-              ) : (
-                displayValue(cluster.spec?.version?.name)
-              )}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-
-          <DescriptionListGroup>
-            <DescriptionListTerm>Created</DescriptionListTerm>
+            <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
             <DescriptionListDescription>
               <Timestamp value={cluster.metadata?.creationTimestamp} />
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
-            <DescriptionListTerm>Creator</DescriptionListTerm>
+            <DescriptionListTerm>{t('Creator')}</DescriptionListTerm>
             <DescriptionListDescription>
               {displayValue(cluster.metadata?.creator)}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
       </CardBody>
+      {clusterHistoryOpen && upgradeHistory.length > 0 && (
+        <ClusterUpgradeHistoryModal
+          attempts={upgradeHistory}
+          onClose={() => setClusterHistoryOpen(false)}
+        />
+      )}
     </Card>
   );
 };

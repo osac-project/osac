@@ -13,14 +13,16 @@ export const InstanceTypesMainPage = {
   pageTitle: ['heading', { name: 'Instance types', exact: true }],
   createInstanceType: ['link', { name: 'Create instance type', exact: true }],
   instanceTypesTable: ['grid', { name: 'Instance types', exact: true }],
+  listView: ['#list-view'],
   instanceTypeRows: ['tbody tr'],
   instanceTypeNameCell: ['td[data-label="Name"]'],
+  instanceTypeNameLink: ['td[data-label="Name"] a'],
   instanceTypeLifecycleCell: ['td[data-label="Lifecycle state"]'],
   instanceTypeVcpusCell: ['td[data-label="vCPUs"]'],
   instanceTypeMemoryGibCell: ['td[data-label="Memory (GiB)"]'],
   instanceTypeGpusCell: ['td[data-label="GPUs"]'],
   instanceTypeActionsToggle: ['button[aria-label^="Actions for "]'],
-  emptyStateTitle: ['heading', { name: 'No instance types yet.', exact: true }],
+  emptyStateTitle: ['heading', { name: 'No instance types found', exact: true }],
 } as const satisfies Record<string, InstanceTypesLocator>;
 
 export const InstanceTypesActionsMenu = {
@@ -36,17 +38,8 @@ export const InstanceTypesCreatePage = {
   name: id(instanceTypeFieldIds.name),
   description: id(instanceTypeFieldIds.description),
   vcpus: id(instanceTypeFieldIds.vcpus),
-  vcpusPlus: [
-    `.pf-v6-c-number-input:has(#${instanceTypeFieldIds.vcpus}) button[aria-label="Plus"]`,
-  ],
   memoryGib: id(instanceTypeFieldIds.memoryGib),
-  memoryGibPlus: [
-    `.pf-v6-c-number-input:has(#${instanceTypeFieldIds.memoryGib}) button[aria-label="Plus"]`,
-  ],
   gpuCount: id(instanceTypeFieldIds.gpuCount),
-  gpuCountPlus: [
-    `.pf-v6-c-number-input:has(#${instanceTypeFieldIds.gpuCount}) button[aria-label="Plus"]`,
-  ],
   gpuResourceName: id(instanceTypeFieldIds.gpuResourceName),
   gpuPciDeviceSelector: id(instanceTypeFieldIds.gpuPciDeviceSelector),
   create: ['button', { name: 'Create', exact: true }],

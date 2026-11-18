@@ -250,7 +250,7 @@ def _safe_delete_subnet(grpc: GRPCClient, k8s: K8sClient, *, subnet_id: str, sub
         if not re.search(r"Code:\s*NotFound", combined):
             logger.warning("Subnet %s teardown failed: %s", subnet_id, combined.strip())
             return
-    if k8s.is_present(resource="subnet", name=subnet_cr_name):
+    if k8s.is_present(resource="subnets.osac.openshift.io", name=subnet_cr_name):
         wait_for_subnet_deletion(k8s=k8s, name=subnet_cr_name)
 
 
@@ -267,5 +267,5 @@ def _safe_delete_sg(grpc: GRPCClient, k8s: K8sClient, *, sg_id: str, sg_cr_name:
         if not re.search(r"Code:\s*NotFound", combined):
             logger.warning("SG %s teardown failed: %s", sg_id, combined.strip())
             return
-    if k8s.is_present(resource="securitygroup", name=sg_cr_name):
+    if k8s.is_present(resource="securitygroups.osac.openshift.io", name=sg_cr_name):
         wait_for_security_group_deletion(k8s=k8s, name=sg_cr_name)

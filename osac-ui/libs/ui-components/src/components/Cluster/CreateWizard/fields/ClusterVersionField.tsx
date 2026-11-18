@@ -2,10 +2,10 @@ import { useMemo } from 'react';
 import { Alert, Button, Stack, StackItem } from '@patternfly/react-core';
 import { useField } from 'formik';
 
-import {
-  CLUSTER_VERSION_ACTIVE_LIST_FILTER,
-  useClusterVersions,
-} from '../../../../api/v1/cluster-versions';
+import { ClusterVersions } from '@osac/types';
+
+import { useListResource } from '../../../../api/use-resource';
+import { CLUSTER_VERSION_ACTIVE_LIST_FILTER } from '../../../../api/v1/cluster-versions';
 import { useTranslation } from '../../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../../utils/error';
 import { SelectField } from '../../../Form/SelectField';
@@ -27,18 +27,19 @@ const ClusterVersionField = ({
 }: ClusterVersionFieldProps) => {
   const { t } = useTranslation();
   const {
-    data: versions = [],
+    data: versionReply,
     isLoading: versionsLoading,
     error: versionsError,
     refetch: refetchVersions,
-  } = useClusterVersions({ filter: CLUSTER_VERSION_ACTIVE_LIST_FILTER });
+  } = useListResource(ClusterVersions, { filter: CLUSTER_VERSION_ACTIVE_LIST_FILTER });
+  const versions = versionReply?.items ?? [];
 
   const [versionField] = useField<string>(name);
   const isSelectedDeprecated = isDeprecatedVersion(findVersionByName(versions, versionField.value));
 
   const versionOptions = useMemo(
     () =>
-      versions.map((version) => {
+      (versionReply?.items ?? []).map((version) => {
         const versionName = version.metadata?.name ?? '';
         const label = versionDisplayName(version, versionName);
         return {
@@ -48,7 +49,7 @@ const ClusterVersionField = ({
             : label,
         };
       }),
-    [versions, t],
+    [versionReply, t],
   );
 
   return (

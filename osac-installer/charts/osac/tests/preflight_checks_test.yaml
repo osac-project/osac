@@ -650,6 +650,24 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'kubevirt-crds: CustomResourceDefinition kubevirts\.kubevirt\.io not found'
+  - it: "kubevirt-crds: remote VMaaS does not require virtualization on management"
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*ns_kube, *ns_osac, *node_ok, *sc_default, *crd_certmgr, *crd_mce, *crd_aap, *cv_ok, *issuer_ok, *cm_cabundle, *kafka_ok, *eps_postgres, *sec_ctrl, *sec_vault, *sec_license]
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+        - config.openshift.io/v1/ClusterVersion
+        - cert-manager.io/v1/ClusterIssuer
+        - kafka.strimzi.io/v1/Kafka
+        - metal3.io/v1alpha1/Provisioning
+    set:
+      operator.remoteClusterKubeconfigSecretName: osac-remote-kubeconfig
+    asserts:
+      - notFailedTemplate: {}
+      - matchRegex:
+          path: 'data["render.json"]'
+          pattern: '"id":"kubevirt-crds","message":"VMaaS targets a remote cluster".*"status":"skipped"'
   - it: "mce-or-acm-crds: either multicluster engine or RHACM satisfies CaaS"
     kubernetesProvider:
       scheme: *scheme

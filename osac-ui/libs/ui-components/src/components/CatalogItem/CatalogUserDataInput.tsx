@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 import { useTranslation } from '../../hooks/useTranslation';
-import { InputField } from '../Form/InputField';
+import TextAreaField from '../Form/base/TextAreaField';
 
 interface CatalogUserDataInputProps {
   valueName: string;
@@ -20,11 +20,10 @@ const CatalogUserDataInput = ({
 
   // Secret-backed values remain hidden while the authoring UI offers an optional inline override.
   return (
-    <InputField
+    <TextAreaField
       name={valueName}
       label={t('User data')}
       fieldId="catalog-user-data"
-      multiline
       helperText={t('Optional cloud-init user data (max 64 KB).')}
       isDisabled={isDisabled}
       isRequired={isRequired}

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -100,6 +101,37 @@ func safeMissingPrerequisiteError(kind, id string) error {
 	return envelope
 }
 
+// safeMissingSecretReferenceError returns guidance for a missing Secret.
+func safeMissingSecretReferenceError(reference string) error {
+	envelope := newToolError(
+		"not_found",
+		"NotFound",
+		"A required Secret is missing. Create it in the existing OSAC UI at /secrets/create and repair the owning configuration before retrying.",
+		false,
+	)
+	envelope.Details = []string{fmt.Sprintf("Secret reference %s is missing", reference)}
+	return envelope
+}
+
+// missingSecretReferenceFromAPIError extracts a missing Secret reference.
+func missingSecretReferenceFromAPIError(err error) (string, bool) {
+	if status.Code(err) != codes.InvalidArgument {
+		return "", false
+	}
+	const prefix = "there is no secret with identifier or name '"
+	const suffix = "'"
+	message := status.Convert(err).Message()
+	if !strings.HasPrefix(message, prefix) || !strings.HasSuffix(message, suffix) ||
+		len(message) <= len(prefix)+len(suffix) {
+		return "", false
+	}
+	reference := message[len(prefix) : len(message)-len(suffix)]
+	if reference == "" {
+		return "", false
+	}
+	return reference, true
+}
+
 func safeUnauthorizedPrerequisiteError(kind, id string) error {
 	envelope := newToolError(
 		"authorization",
@@ -120,6 +152,17 @@ func safeStaleVersionError() error {
 		"The resource version is stale. Retrieve the current version and retry.",
 		false,
 	)
+}
+
+func safeUnknownOutcomeError(kind, id string) error {
+	envelope := newToolError(
+		"unknown_outcome",
+		"Unknown",
+		"The Create result could not be confirmed. Check the resource before retrying.",
+		false,
+	)
+	envelope.Details = []string{fmt.Sprintf("%s ID %s may exist; use get_resource to check it.", kind, id)}
+	return envelope
 }
 
 func safePrerequisiteError(kind, id string, err error) error {
@@ -145,6 +188,8 @@ func safePublicAPIError(err error) error {
 		return newToolError("not_found", "NotFound", "The requested OSAC resource was not found.", false)
 	case codes.AlreadyExists:
 		return newToolError("conflict", "AlreadyExists", "The resource already exists or conflicts with current state. Resolve the conflict and retry.", false)
+	case codes.Aborted:
+		return newToolError("conflict", "Aborted", "The operation conflicted with current OSAC state. Review the resource before retrying.", false)
 	case codes.FailedPrecondition:
 		return newToolError("protocol_incompatible", "FailedPrecondition", "The request is incompatible with the current OSAC service. Update the client and retry.", false)
 	case codes.ResourceExhausted:

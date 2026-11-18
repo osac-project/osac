@@ -42,7 +42,7 @@ describe('AppShell', () => {
 
     expect(await screen.findByRole('heading', { name: 'Instance types' })).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText('No instance types yet.')).toBeInTheDocument();
+      expect(screen.getByText('No instance types found')).toBeInTheDocument();
     });
   });
 

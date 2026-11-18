@@ -183,7 +183,7 @@ describe('buildClusterStepSchema', () => {
         pullSecretSecret: provisioningFieldValue('foo'),
         versionName: provisioningFieldValue(''),
         nodeSetRows: provisioningFieldValue([
-          { ...row, name: 'workers', hostType: { id: 'acme_1tb', name: 'acme_1tb' }, size: '3' },
+          { ...row, name: 'workers', hostType: { id: 'acme_1tb', name: 'acme_1tb' }, size: 3 },
         ]),
       },
     });
@@ -224,14 +224,14 @@ describe('buildClusterStepSchema', () => {
             ...row,
             name: 'workers',
             hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-            size: '0',
+            size: 0,
           },
         ]),
       },
     });
     expect(errors).toEqual({
       spec: {
-        nodeSetRows: { 'value[0]': { size: 'Pool size must be greater than zero' } },
+        nodeSetRows: { 'value[0]': { size: 'Must be greater than zero' } },
       },
     });
   });
@@ -251,14 +251,14 @@ describe('buildClusterStepSchema', () => {
             ...row,
             name: 'workers',
             hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-            size: '1.5',
+            size: 1.5,
           },
         ]),
       },
     });
     expect(errors).toEqual({
       spec: {
-        nodeSetRows: { 'value[0]': { size: 'Pool size must be greater than zero' } },
+        nodeSetRows: { 'value[0]': { size: 'Must be a whole number' } },
       },
     });
   });
@@ -279,14 +279,14 @@ describe('buildClusterStepSchema', () => {
             rowId: 'row-1',
             name: 'production',
             hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-            size: '3',
+            size: 3,
           },
           {
             ...row,
             rowId: 'row-2',
             name: 'development',
             hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-            size: '2',
+            size: 2,
           },
         ]),
       },
@@ -310,14 +310,14 @@ describe('buildClusterStepSchema', () => {
             rowId: 'row-1',
             name: 'production',
             hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-            size: '3',
+            size: 3,
           },
           {
             ...row,
             rowId: 'row-2',
             name: 'production',
             hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-            size: '2',
+            size: 2,
           },
         ]),
       },
@@ -345,7 +345,7 @@ describe('buildClusterStepSchema', () => {
             ...row,
             name: '',
             hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-            size: '3',
+            size: 3,
           },
         ]),
       },
@@ -373,7 +373,7 @@ describe('buildClusterStepSchema', () => {
             ...row,
             name: 'Workers_1',
             hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-            size: '3',
+            size: 3,
           },
         ]),
       },

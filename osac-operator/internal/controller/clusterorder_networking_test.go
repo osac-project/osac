@@ -46,6 +46,7 @@ import (
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/networktask"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type failDNSHoldReleaseOnceClient struct {
@@ -151,6 +152,115 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
 		Expect(condition.Reason).To(Equal(endpointReasonProvisioningDisabled))
 		Expect(h.aap.tasks("")).To(BeEmpty())
+	})
+
+	It("reaches Ready in disabled mode without the endpoint gate or a networking job", func() {
+		h := newNetHarness(false)
+		const clusterID = "disabled-continuity-cluster"
+		instance := &v1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      crdTestName("disabled-continuity"),
+				Namespace: h.ns,
+				Labels:    map[string]string{osacClusterOrderIDLabel: clusterID},
+			},
+			Spec: v1alpha1.ClusterOrderSpec{
+				TemplateID:                     standardCaaSTemplateID,
+				SupportsAutomaticCaaSEndpoints: true,
+				NodeRequests: []v1alpha1.NodeRequest{{
+					NodeSet:       "worker",
+					NumberOfNodes: 1,
+					BareMetal:     &v1alpha1.BareMetalNodeSpec{InstanceType: "worker"},
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, instance) })
+		// Status subresources are dropped on Create; persist the ready worker
+		// summary and the succeeded provisioning job that precede this reconcile.
+		instance.Status = v1alpha1.ClusterOrderStatus{
+			Phase:          v1alpha1.ClusterOrderPhaseProgressing,
+			DesiredWorkers: ptr.To(int32(1)),
+			CurrentWorkers: ptr.To(int32(1)),
+			ReadyWorkers:   ptr.To(int32(1)),
+			ProvisioningJobs: []v1alpha1.JobStatus{{
+				Type:      v1alpha1.JobTypeProvision,
+				State:     v1alpha1.JobStateSucceeded,
+				Timestamp: metav1.Now(),
+			}},
+		}
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
+		nodePool := readyClusterOrderNodePool("worker", 1)
+		nodePool.ObjectMeta = metav1.ObjectMeta{
+			Name:      crdTestName("disabled-continuity-worker"),
+			Namespace: h.ns,
+			Labels: map[string]string{
+				agentNodeSetLabel:         "worker",
+				agentInstanceTypeLabel:    "worker",
+				osacClusterOrderNameLabel: instance.Name,
+			},
+		}
+		Expect(k8sClient.Create(ctx, &nodePool)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, &nodePool) })
+		status := nodePool.DeepCopy()
+		status.Status = readyClusterOrderNodePool("worker", 1).Status
+		Expect(k8sClient.Status().Update(ctx, status)).To(Succeed())
+
+		// A ready HostedCluster without a published controlPlaneEndpoint: the
+		// disabled endpoint lifecycle must not wait for management publication.
+		hc := &hypershiftv1beta1.HostedCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "disabled-continuity-hosted", Namespace: h.ns},
+			Status: hypershiftv1beta1.HostedClusterStatus{Conditions: []metav1.Condition{
+				{Type: string(hypershiftv1beta1.KubeAPIServerAvailable), Status: metav1.ConditionTrue},
+				{Type: string(hypershiftv1beta1.HostedClusterAvailable), Status: metav1.ConditionTrue},
+				{Type: string(hypershiftv1beta1.HostedClusterDegraded), Status: metav1.ConditionFalse},
+				{Type: string(hypershiftv1beta1.ClusterVersionSucceeding), Status: metav1.ConditionTrue},
+			}},
+		}
+		reconciler := &ClusterOrderReconciler{
+			Client:                        k8sClient,
+			apiReader:                     k8sClient,
+			Engine:                        h.engine,
+			NetworkingProvisioningEnabled: false,
+			ClustersClient: &mockClustersClient{
+				getResponse: privatev1.ClustersGetResponse_builder{
+					Object: privatev1.Cluster_builder{
+						Id: clusterID,
+						Spec: privatev1.ClusterSpec_builder{
+							AutoExternalIpAttachment: ptr.To(true),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			},
+			ProvisioningProvider: noopProvisioningProvider{},
+			MaxJobHistory:        10,
+			StatusPollInterval:   time.Second,
+		}
+
+		Expect(reconciler.handleHostedClusterWithClusterLookup(ctx, instance, hc, nil)).To(Succeed())
+		Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+		Expect(instance.IsStatusConditionTrue(v1alpha1.ConditionClusterAvailable)).To(BeTrue())
+		endpoints := apimeta.FindStatusCondition(instance.Status.Conditions,
+			string(v1alpha1.ClusterOrderConditionEndpointsReady))
+		Expect(endpoints).NotTo(BeNil())
+		Expect(endpoints.Status).To(Equal(metav1.ConditionTrue))
+		Expect(endpoints.Reason).To(Equal(endpointReasonProvisioningDisabled))
+		publication := apimeta.FindStatusCondition(instance.Status.Conditions,
+			string(v1alpha1.ClusterOrderConditionManagementPublicationReady))
+		Expect(publication).NotTo(BeNil())
+		Expect(publication.Status).To(Equal(metav1.ConditionFalse),
+			"disabled readiness must not depend on management publication")
+		Expect(instance.Status.Jobs).To(BeEmpty())
+		Expect(h.aap.tasks("")).To(BeEmpty(), "disabled mode must launch no networking job")
+
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+		stored := &v1alpha1.ClusterOrder{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), stored)).To(Succeed())
+		Expect(stored.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseReady))
+		storedEndpoints := apimeta.FindStatusCondition(stored.Status.Conditions,
+			string(v1alpha1.ClusterOrderConditionEndpointsReady))
+		Expect(storedEndpoints).NotTo(BeNil())
+		Expect(storedEndpoints.Reason).To(Equal(endpointReasonProvisioningDisabled))
 	})
 
 	It("waits for the HostedCluster before checking required automatic access", func() {
@@ -1202,4 +1312,114 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 			"release_cluster_ingress_ip/fabric",
 		}))
 	})
+
+	It("completes a disabled delete without provider cleanup or a removal claim", func() {
+		recordedJobs := []v1alpha1.NetworkJobStatus{
+			{Task: networktask.ReserveClusterIngressIP, Manager: v1alpha1.NetworkJobManagerFabric,
+				State: v1alpha1.NetworkJobStateSucceeded},
+			{Task: "publish_public_dns_api", Manager: v1alpha1.NetworkJobManagerNone,
+				State: v1alpha1.NetworkJobStateSucceeded},
+			{Task: "publish_public_dns_ingress", Manager: v1alpha1.NetworkJobManagerNone,
+				State: v1alpha1.NetworkJobStateSucceeded},
+		}
+		fixture := newDisabledEndpointDeleteFixture(recordedJobs)
+		recordedInput := string(fixture.order.Status.TaskInput.Raw)
+
+		result, err := fixture.reconciler.handleDelete(ctx, reconcile.Request{}, fixture.order)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+		Expect(fixture.aap.tasks(fixture.clusterID)).To(BeEmpty(),
+			"disabled delete must not launch reserve, release, DNS or remove tasks")
+		Expect(fixture.aap.cancelledJobs()).To(BeEmpty(),
+			"terminal recorded jobs need no cancellation")
+
+		Expect(fixture.order.Status.Jobs).To(Equal(recordedJobs),
+			"recorded provider jobs must stay untouched")
+		Expect(networktask.FindJob(fixture.order.Status.Jobs, networktask.ReleaseClusterIngressIP,
+			v1alpha1.NetworkJobManagerFabric)).To(BeNil())
+		Expect(networktask.FindJob(fixture.order.Status.Jobs, "remove_public_dns_api",
+			v1alpha1.NetworkJobManagerNone)).To(BeNil())
+		Expect(networktask.FindJob(fixture.order.Status.Jobs, "remove_public_dns_ingress",
+			v1alpha1.NetworkJobManagerNone)).To(BeNil())
+		Expect(fixture.order.Status.APIDNSHostedClusterName).To(Equal("recorded-api-hosted"))
+		Expect(fixture.order.Status.IngressDNSHostedClusterName).To(Equal("recorded-ingress-hosted"))
+		Expect(string(fixture.order.Status.TaskInput.Raw)).To(Equal(recordedInput),
+			"disabled delete must not rewrite the recorded manager input")
+
+		latest := &v1alpha1.ClusterOrder{}
+		Expect(fixture.client.Get(ctx, client.ObjectKeyFromObject(fixture.order), latest)).To(Succeed())
+		Expect(latest.Finalizers).NotTo(ContainElement(osacFinalizer),
+			"disabled delete still completes core ClusterOrder teardown")
+	})
 })
+
+type disabledEndpointDeleteFixture struct {
+	client     client.Client
+	order      *v1alpha1.ClusterOrder
+	aap        *netFakeAAP
+	reconciler *ClusterOrderReconciler
+	clusterID  string
+}
+
+// newDisabledEndpointDeleteFixture records provider networking work on a
+// ClusterOrder and builds the reconciler and in-memory AAP with provider
+// networking disabled. Recorded provider jobs cannot arise on a single
+// disabled installation: global.networking.provisioningEnabled is fixed at
+// installation and the services refuse to start when it changes. The fixture
+// models persisted state from before that guard (restored, migrated, legacy or
+// manually edited status) so the delete path has defined behavior for it.
+func newDisabledEndpointDeleteFixture(jobs []v1alpha1.NetworkJobStatus) disabledEndpointDeleteFixture {
+	name := crdTestName("disabled-delete")
+	clusterID := "disabled-delete-" + name
+	input, err := json.Marshal(map[string]any{
+		"fabric_manager": map[string]any{"name": "tenant-fabric", "ansible_role": "acme.network.fabric"},
+		"cluster_id":     clusterID,
+		"resource":       map[string]any{"id": clusterID, "kind": kindClusterOrder},
+	})
+	Expect(err).NotTo(HaveOccurred())
+	order := &v1alpha1.ClusterOrder{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: crdTestName("orders"), UID: "disabled-delete-uid",
+			Finalizers: []string{osacFinalizer},
+			Labels: map[string]string{
+				osacClusterOrderIDLabel:   clusterID,
+				osacClusterOrderNameLabel: name,
+			},
+		},
+		Status: v1alpha1.ClusterOrderStatus{
+			APIURL:                      "https://api.cluster.example.test:6443",
+			ConsoleURL:                  "https://console-openshift-console.apps.cluster.example.test",
+			APIDNSHostedClusterName:     "recorded-api-hosted",
+			IngressDNSHostedClusterName: "recorded-ingress-hosted",
+			TaskInput:                   &runtime.RawExtension{Raw: input},
+			Jobs:                        append([]v1alpha1.NetworkJobStatus(nil), jobs...),
+		},
+	}
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(k8sClient.Scheme()).
+		WithStatusSubresource(order).
+		WithIndex(&v1alpha1.ExternalIPAttachment{}, autoExternalIPAttachmentOwnerIndexField,
+			func(obj client.Object) []string {
+				attachment, ok := obj.(*v1alpha1.ExternalIPAttachment)
+				if !ok {
+					return nil
+				}
+				return autoExternalIPAttachmentOwnerIndexValues(attachment)
+			}).
+		WithObjects(order).
+		Build()
+	Expect(fakeClient.Status().Update(ctx, order)).To(Succeed())
+	aapServer := newNetFakeAAP()
+	engine := networktask.New(fakeClient, fakeClient, aapServer, networktask.Config{
+		TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: false,
+	})
+	return disabledEndpointDeleteFixture{
+		client: fakeClient,
+		order:  order,
+		aap:    aapServer,
+		reconciler: &ClusterOrderReconciler{
+			Client: fakeClient, Engine: engine, StatusPollInterval: time.Second,
+		},
+		clusterID: clusterID,
+	}
+}

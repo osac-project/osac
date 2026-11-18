@@ -4,9 +4,19 @@ const id = (value: string): readonly [string] => [`[id="${value}"]`];
 
 type VmsLocator =
   | readonly [
-      role: 'button' | 'checkbox' | 'grid' | 'heading' | 'link' | 'radio' | 'switch' | 'textbox',
+      role:
+        | 'button'
+        | 'checkbox'
+        | 'grid'
+        | 'heading'
+        | 'link'
+        | 'radio'
+        | 'switch'
+        | 'term'
+        | 'textbox',
       options: { name: string; exact: true },
     ]
+  | readonly [role: 'term']
   | readonly [label: string]
   | readonly [selector: string];
 
@@ -16,19 +26,29 @@ export const VmsMainPage = {
   vmRows: ['tbody tr'],
   vmNameCell: ['td[data-label="Name"]'],
   vmStatusCell: ['td[data-label="Status"]'],
-  emptyState: ['No virtual machines yet. Create one to get started.'],
-  filteredEmptyState: ['Choose one or more statuses above to filter virtual machines.'],
-  noMatchingState: ['No virtual machines match your filters.'],
+  listView: id('list-view'),
+  emptyState: ['No virtual machines found'],
+  filteredEmptyState: ['No virtual machines are available yet.'],
+  noMatchingState: ['No virtual machines match your filters'],
   errorState: ['heading', { name: 'An error occurred', exact: true }],
 } as const satisfies Record<string, VmsLocator>;
 
 export const VmDetailsPage = {
   pageTitle: ['h1.pf-v6-c-title'],
+  statusTerm: ['term'],
   statusLabel: ['.pf-v6-c-label'],
+  instanceTypeEditButton: ['button', { name: 'Edit instance type', exact: true }],
+  conditionsTable: ['grid', { name: 'Virtual machine conditions', exact: true }],
   deleteButton: ['button', { name: 'Delete', exact: true }],
   deleteDialog: [`[role="dialog"][aria-labelledby="${deleteResourceModalIds.title}"]`],
   deleteTitle: [`#${deleteResourceModalIds.title}`],
   deleteWarning: ['This permanently deletes the compute instance. This action cannot be undone.'],
+} as const satisfies Record<string, VmsLocator>;
+
+export const VmDetailsActionButtons = {
+  start: ['button', { name: 'Start', exact: true }],
+  stop: ['button', { name: 'Stop', exact: true }],
+  restart: ['button', { name: 'Restart', exact: true }],
 } as const satisfies Record<string, VmsLocator>;
 
 export const VmCreatePage = {
@@ -51,4 +71,5 @@ export const VmCreatePage = {
   create: ['button', { name: 'Create', exact: true }],
   configurationHeading: ['heading', { name: 'Configuration', exact: true }],
   storageHeading: ['heading', { name: 'Storage', exact: true }],
+  userDataProvided: ['Provided (hidden)'],
 } as const satisfies Record<string, VmsLocator>;

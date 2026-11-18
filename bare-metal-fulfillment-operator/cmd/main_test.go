@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	osacv1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
@@ -59,7 +60,7 @@ type startupTestManager struct {
 }
 
 func (m *startupTestManager) GetClient() client.Client {
-	return nil
+	return fake.NewClientBuilder().WithScheme(m.scheme).Build()
 }
 
 func (m *startupTestManager) GetConfig() *rest.Config {
@@ -258,7 +259,8 @@ var _ = Describe("createInventoryClient", func() {
 
 	It("constructs a NetBox backend with Metal3 startup configuration", func() {
 		tokenFile := filepath.Join(GinkgoT().TempDir(), "netbox-token")
-		Expect(os.WriteFile(tokenFile, []byte("test-token\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(tokenFile, []byte(
+			"nbt_aaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"), 0o600)).To(Succeed())
 		clientIDFile := filepath.Join(GinkgoT().TempDir(), "secret-api-client-id")
 		Expect(os.WriteFile(clientIDFile, []byte("osac-controller\n"), 0o600)).To(Succeed())
 		clientSecretFile := filepath.Join(GinkgoT().TempDir(), "secret-api-client-secret")

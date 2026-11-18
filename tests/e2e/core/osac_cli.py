@@ -355,7 +355,7 @@ class OsacCLI:
     ) -> tuple[str, list[str]]:
         args: list[str] = ["create", "baremetalinstance", "--name", name, "--catalog-item", catalog_item]
         if instance_type is not None:
-            args.extend(["--set", f"instance_type.name={instance_type}", "--set", "instance_type.shared=true"])
+            args.extend(["--set", f"instance_type.name={instance_type}", "--set", "instance_type.tenant=shared"])
         if ssh_key is not None:
             args.extend(["--ssh-key", ssh_key])
         if disk_image is not None:

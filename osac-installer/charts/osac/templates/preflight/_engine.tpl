@@ -208,7 +208,8 @@ certificate follows the fullname.
     {{- $msg = printf "%s is not set" $firstOff -}}
   {{- else if and $c.unless (include "osac.preflight.truthy" (dict "root" $root "path" $c.unless)) -}}
     {{- $state = "skipped" -}}
-    {{- $msg = printf "%s is set, so this release creates the resource itself" $c.unless -}}
+    {{- $msg = $c.unlessReason | default
+      (printf "%s is set, so this release creates the resource itself" $c.unless) -}}
   {{- end -}}
 {{- end -}}
 {{- if not $state -}}

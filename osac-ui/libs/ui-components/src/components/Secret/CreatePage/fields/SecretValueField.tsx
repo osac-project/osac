@@ -14,11 +14,11 @@ import DownloadIcon from '@patternfly/react-icons/dist/esm/icons/download-icon';
 import MinusCircleIcon from '@patternfly/react-icons/dist/esm/icons/minus-circle-icon';
 import { useField, useFormikContext } from 'formik';
 
+import TextField from '@osac/ui-components/components/Form/base/TextField';
 import {
   FormFieldHelper,
   getFormFieldHelperDescribedBy,
 } from '@osac/ui-components/components/Form/FormFieldHelper';
-import { InputField } from '@osac/ui-components/components/Form/InputField';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
 import { getVisibleFieldError } from '../../../Form/fieldError';
@@ -115,7 +115,7 @@ const SecretValueField = ({
   return (
     <Stack hasGutter>
       <StackItem>
-        <InputField
+        <TextField
           label={keyEditable ? t('Key') : t('Required key')}
           fieldId={keyFieldId}
           isRequired

@@ -1,2 +1,0 @@
-bugfixes:
- - purefb_subnet - Ensured prefix is required for subnet creation or update

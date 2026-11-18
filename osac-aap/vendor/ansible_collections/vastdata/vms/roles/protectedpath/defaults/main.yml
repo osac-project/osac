@@ -1,0 +1,11 @@
+---
+protectedpath_manage_vippools: true
+protectedpath_manage_replicationpeers: true
+protectedpath_manage_protectionpolicies: true
+protectedpath_manage_protectedpaths: true
+
+vms: {}
+vippools: []
+replicationpeers: []
+protectionpolicies: []
+protectedpaths: []

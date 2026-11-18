@@ -1,5 +1,5 @@
 import { useTranslation } from '../../../../hooks/useTranslation';
-import { InputField } from '../../../Form/InputField';
+import TextField from '../../../Form/base/TextField';
 import type { ProvisioningFieldControlProps } from '../../../ProvisioningWizard/fields/provisioningFieldValue';
 
 interface ClusterPodCidrFieldProps extends ProvisioningFieldControlProps {
@@ -16,7 +16,7 @@ const ClusterPodCidrField = ({
   const { t } = useTranslation();
 
   return (
-    <InputField
+    <TextField
       name={name}
       label={t('Pod CIDR')}
       fieldId={fieldId}

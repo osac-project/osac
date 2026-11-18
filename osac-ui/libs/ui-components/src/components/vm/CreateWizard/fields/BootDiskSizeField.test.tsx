@@ -8,7 +8,7 @@ import { renderWithProviders } from '../../../../test-utils/TestProviders';
 describe('BootDiskSizeField', () => {
   it('updates the Formik boot disk size', async () => {
     renderWithProviders(
-      <Formik initialValues={{ spec: { bootDisk: { sizeGib: '40' } } }} onSubmit={() => undefined}>
+      <Formik initialValues={{ spec: { bootDisk: { sizeGib: 40 } } }} onSubmit={() => undefined}>
         {({ values }) => (
           <>
             <BootDiskSizeField name="spec.bootDisk.sizeGib" />

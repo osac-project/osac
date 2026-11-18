@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -138,14 +139,33 @@ func handleCreateComputeInstance(
 			metadata.Tenant = project.GetMetadata().GetTenant()
 			metadata.Project = project.GetMetadata().GetName()
 		}
+		createID := uuid.NewString()
 		response, err := clients.instances.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 			Object: publicv1.ComputeInstance_builder{
+				Id:       createID,
 				Metadata: metadata.Build(),
 				Spec:     spec,
 			}.Build(),
 		}.Build())
 		if err != nil {
-			return nil, CreateComputeInstanceOutput{}, safePublicAPIError(err)
+			if !isDefiniteComputeInstanceCreateError(err) {
+				verificationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), toolCallTimeout)
+				defer cancel()
+				verified, getErr := clients.instances.Get(verificationCtx,
+					publicv1.ComputeInstancesGetRequest_builder{Id: createID}.Build(),
+				)
+				if getErr == nil && verified != nil && verified.GetObject() != nil &&
+					verified.GetObject().GetId() == createID {
+					created := verified.GetObject()
+					return nil, CreateComputeInstanceOutput{
+						ID:      created.GetId(),
+						Version: created.GetMetadata().GetVersion(),
+						State:   created.GetStatus().GetState().String(),
+					}, nil
+				}
+				return nil, CreateComputeInstanceOutput{}, safeUnknownOutcomeError("ComputeInstance", createID)
+			}
+			return nil, CreateComputeInstanceOutput{}, safeComputeInstanceWriteAPIError(err)
 		}
 		created := response.GetObject()
 		return nil, CreateComputeInstanceOutput{
@@ -153,6 +173,24 @@ func handleCreateComputeInstance(
 			Version: created.GetMetadata().GetVersion(),
 			State:   created.GetStatus().GetState().String(),
 		}, nil
+	}
+}
+
+func isDefiniteComputeInstanceCreateError(err error) bool {
+	// ResourceExhausted can follow a committed Create when its response exceeds
+	// the client receive limit, so Create must verify that outcome by ID.
+	switch status.Code(err) {
+	case codes.InvalidArgument,
+		codes.Unauthenticated,
+		codes.PermissionDenied,
+		codes.NotFound,
+		codes.AlreadyExists,
+		codes.Aborted,
+		codes.FailedPrecondition,
+		codes.Unimplemented:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -468,11 +506,15 @@ func handleUpdateComputeInstance(
 			if status.Code(err) == codes.FailedPrecondition {
 				return nil, UpdateComputeInstanceOutput{}, safeUpdatePreconditionError()
 			}
-			return nil, UpdateComputeInstanceOutput{}, safePublicAPIError(err)
+			return nil, UpdateComputeInstanceOutput{}, safeComputeInstanceWriteAPIError(err)
 		}
 		updated := response.GetObject()
+		updatedID := updated.GetId()
+		if updatedID == "" {
+			updatedID = input.ID
+		}
 		return nil, UpdateComputeInstanceOutput{
-			ID:       input.ID,
+			ID:       updatedID,
 			Version:  updated.GetMetadata().GetVersion(),
 			State:    updated.GetStatus().GetState().String(),
 			Warnings: response.GetWarnings(),
@@ -562,8 +604,16 @@ func handleDeleteComputeInstance(
 		}
 		_, err = client.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: input.ID}.Build())
 		if err != nil {
-			return nil, DeleteComputeInstanceOutput{}, safePublicAPIError(err)
+			return nil, DeleteComputeInstanceOutput{}, safeComputeInstanceWriteAPIError(err)
 		}
 		return nil, DeleteComputeInstanceOutput(input), nil
 	}
+}
+
+// safeComputeInstanceWriteAPIError maps write errors to safe MCP envelopes.
+func safeComputeInstanceWriteAPIError(err error) error {
+	if reference, ok := missingSecretReferenceFromAPIError(err); ok {
+		return safeMissingSecretReferenceError(reference)
+	}
+	return safePublicAPIError(err)
 }

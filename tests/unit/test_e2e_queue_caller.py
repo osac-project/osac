@@ -105,11 +105,22 @@ def test_every_suite_carries_the_pull_request_number_and_runs_one_capture() -> N
         assert "ci-observe" not in job["with"], (
             "the suite workflows capture unconditionally and no longer declare the input"
         )
-        assert job["secrets"] == {"CI_OBSERVE_OTLP_PASSWORD": "${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}"}
+        # The telemetry password, and the CI app that publishes the suite's logs artifact to the private repository
+        # instead of the public run. Passed one by one, never `secrets: inherit`.
+        assert job["secrets"] == {
+            "CI_OBSERVE_OTLP_PASSWORD": "${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}",
+            "OSAC_CI_APP_ID": "${{ secrets.OSAC_CI_APP_ID }}",
+            "OSAC_CI_APP_PRIVATE_KEY": "${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}",
+        }
 
         path = WORKFLOWS / job["uses"].removeprefix("./.github/workflows/")
         called = yaml.safe_load(path.read_text())
         workflow_call = called.get("on") or called[True]
-        assert "CI_OBSERVE_OTLP_PASSWORD" in workflow_call["workflow_call"]["secrets"], (
-            f"{path.name} must declare the secret the queue passes it"
-        )
+        for secret in job["secrets"]:
+            assert secret in workflow_call["workflow_call"]["secrets"], (
+                f"{path.name} must declare the secret {secret}, which the queue passes it"
+            )
+        # ... and pass the app on to the shared workflow, which publishes the artifact only when it gets both.
+        passed = called["jobs"][next(iter(called["jobs"]))]["secrets"]
+        assert passed["osac-ci-app-id"] == "${{ secrets.OSAC_CI_APP_ID }}"
+        assert passed["osac-ci-app-private-key"] == "${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}"

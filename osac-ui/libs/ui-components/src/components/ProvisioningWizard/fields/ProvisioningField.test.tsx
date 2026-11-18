@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import ProvisioningField from './ProvisioningField';
 import { provisioningFieldValue } from './provisioningFieldValue';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
-import { InputField } from '../../Form/InputField';
+import TextField from '../../Form/base/TextField';
 
 describe('ProvisioningField', () => {
   it('binds the child to the nested value path and disables it when locked', () => {
@@ -16,7 +16,7 @@ describe('ProvisioningField', () => {
       >
         <ProvisioningField name="spec.userData">
           {({ valueName, isDisabled }) => (
-            <InputField
+            <TextField
               name={valueName}
               label="User data"
               fieldId="user-data"
@@ -40,7 +40,7 @@ describe('ProvisioningField', () => {
       >
         <ProvisioningField name="spec.userData">
           {({ valueName, isDisabled }) => (
-            <InputField
+            <TextField
               name={valueName}
               label="User data"
               fieldId="user-data"

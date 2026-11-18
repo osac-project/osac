@@ -25,7 +25,7 @@
         bmh_namespace: "test-ns"
         bmh_info:
           spec: {}
-        fallback_root_disk: ""
+        fallback_root_device_hints: {}
 
     - name: Build BMH patch using actual role code
       ansible.builtin.include_role:
@@ -71,11 +71,12 @@
           metadata:
             resourceVersion: "123"
           spec: {}
-        fallback_root_disk: >-
-          {{ [] | osac.templates.smallest_root_disk(
+        fallback_root_device_hints: >-
+          {{ [] | osac.templates.root_device_hints(
             {'status': {'hardware': {'storage': [
-              {'name': '/dev/vda', 'sizeBytes': 17179869184}
-            ]}}}, 4) }}
+              {'name': '/dev/vda', 'sizeBytes': 17179869184,
+               'serialNumber': 'SER-42', 'wwn': '0x5000c50015ea71ad'}
+            ]}}}) }}
 
     - name: Build BMH patch using actual role code
       ansible.builtin.include_role:
@@ -88,8 +89,8 @@
           - bmh_patch.spec.image.url == "https://example.com/image.qcow2"
           - bmh_patch.spec.image.checksum == "deadbeef1234"
           - bmh_patch.spec.image.checksumType == "md5"
-          - bmh_patch.spec.rootDeviceHints.deviceName == "/dev/vda"
-          - bmh_patch.metadata.annotations['osac.openshift.io/fallback-root-device'] == "/dev/vda"
+          - "bmh_patch.spec.rootDeviceHints == {'serialNumber': 'SER-42'}"
+          - bmh_patch.metadata.annotations['osac.openshift.io/fallback-root-device'] == fallback_root_device_hints | to_json
           - bmh_patch.metadata.resourceVersion == "123"
         fail_msg: "Non-OCI image BMH patch must contain checksum and checksumType"
 

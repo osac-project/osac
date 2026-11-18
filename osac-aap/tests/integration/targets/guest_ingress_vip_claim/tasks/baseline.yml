@@ -1,0 +1,173 @@
+---
+# Concurrent claims and explicit release against a real Kubernetes API server.
+- name: Verify guest ingress VIP claims against a real API server
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    fixture_id: >-
+      {{ lookup('env', 'POD_UID') | default('local', true)
+      | regex_replace('[^a-z0-9]', '') | truncate(8, true, '') }}
+    fixture_namespace: "osac-vip-{{ fixture_id }}"
+    main_range: "198.51.100.10-198.51.100.11"
+    main_registry: guest-ingress-vip-main
+
+  tasks:
+    - name: Exercise the claim registry
+      block:
+        - name: Create the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: present
+
+        - name: Start two claims at the same time
+          ci.steps.ingress_vip_claim:
+            state: present
+            ip_range: "{{ main_range }}"
+            registry_namespace: "{{ fixture_namespace }}"
+            registry_name: "{{ main_registry }}"
+            owner_uid: "{{ item }}"
+            owner_namespace: "{{ fixture_namespace }}"
+            owner_name: "{{ item }}"
+          loop: [concurrent-a, concurrent-b]
+          async: 300
+          poll: 0
+          register: vip_concurrent_jobs
+
+        - name: Wait for both concurrent claims
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+          loop: "{{ vip_concurrent_jobs.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          register: vip_concurrent_status
+          until: vip_concurrent_status.finished
+          retries: 120
+          delay: 2
+
+        - name: Save the concurrent claim results in loop order
+          ansible.builtin.set_fact:
+            vip_concurrent: "{{ vip_concurrent_status.results }}"
+
+        - name: Both concurrent claims took distinct addresses
+          ansible.builtin.assert:
+            that:
+              - vip_concurrent | rejectattr('failed') | list | length == 2
+              - vip_concurrent | map(attribute='address') | unique | list | length == 2
+              - >-
+                vip_concurrent | map(attribute='address') | sort
+                == ['198.51.100.10', '198.51.100.11']
+            fail_msg: >-
+              Concurrent claims must take distinct addresses from the reserved
+              range, got {{ vip_concurrent }}.
+
+        - name: Read the registry after the concurrent claims
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ main_registry }}"
+          register: vip_registry_after_claim
+
+        - name: The registry holds one record per ClusterOrder
+          ansible.builtin.assert:
+            that:
+              - vip_registry_after_claim.resources | length == 1
+              - vip_registry_after_claim.resources[0].data | length == 2
+              - >-
+                vip_registry_after_claim.resources[0].metadata.labels[
+                'osac.openshift.io/guest-ingress-vip-claim'] == 'true'
+            fail_msg: >-
+              The registry must key one record per ClusterOrder UID, got
+              {{ vip_registry_after_claim.resources | default([]) }}.
+
+        - name: Describe the remaining claim and release steps
+          ansible.builtin.set_fact:
+            vip_steps:
+              - label: retried claim of the first owner
+                state: present
+                owner: concurrent-a
+                expect_failed: false
+                expect_changed: false
+                expect_address: "{{ vip_concurrent[0].address }}"
+              - label: third claim of a two-address range
+                state: present
+                owner: third-owner
+                expect_failed: true
+                expect_message: exhausted
+              - label: release of the first owner
+                state: absent
+                owner: concurrent-a
+                expect_failed: false
+                expect_changed: true
+              - label: repeated release of the first owner
+                state: absent
+                owner: concurrent-a
+                expect_failed: false
+                expect_changed: false
+              - label: claim after the release
+                state: present
+                owner: reclaimer
+                expect_failed: false
+                expect_address: "{{ vip_concurrent[0].address }}"
+              - label: unreleased owners retain the remaining capacity
+                state: present
+                owner: another-owner
+                expect_failed: true
+                expect_message: exhausted
+
+        - name: Run the remaining claim and release steps
+          ci.steps.ingress_vip_claim:
+            state: "{{ item.state }}"
+            ip_range: "{{ main_range }}"
+            registry_namespace: "{{ fixture_namespace }}"
+            registry_name: "{{ main_registry }}"
+            owner_uid: "{{ item.owner }}"
+            owner_namespace: "{{ fixture_namespace }}"
+            owner_name: "{{ item.owner }}"
+          loop: "{{ vip_steps }}"
+          loop_control:
+            label: "{{ item.label }}"
+          register: vip_step_results
+          ignore_errors: true
+
+        - name: Each step behaved as a real job would observe it
+          ansible.builtin.assert:
+            that:
+              - (item is failed) == item.item.expect_failed
+              - >-
+                item.item.expect_changed is not defined
+                or item.changed == item.item.expect_changed
+              - >-
+                item.item.expect_address is not defined
+                or item.address == item.item.expect_address
+              - >-
+                item.item.expect_message is not defined
+                or item.item.expect_message in item.msg
+            fail_msg: >-
+              {{ item.item.label }} did not behave as expected: {{ item }}
+            quiet: true
+          loop: "{{ vip_step_results.results }}"
+          loop_control:
+            label: "{{ item.item.label }}"
+
+      always:
+        - name: Remove the asynchronous claim results
+          ansible.builtin.async_status:
+            jid: "{{ item.ansible_job_id }}"
+            mode: cleanup
+          loop: >-
+            {{ vip_concurrent_jobs.results | default([])
+               | selectattr('ansible_job_id', 'defined') | list }}
+          loop_control:
+            label: "{{ item.item }}"
+          failed_when: false
+
+        - name: Remove the fixture namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ fixture_namespace }}"
+            state: absent

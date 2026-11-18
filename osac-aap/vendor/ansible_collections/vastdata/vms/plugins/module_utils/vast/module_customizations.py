@@ -35,4 +35,116 @@ CUSTOMIZED_MODULES = {
             "UserKey.run = _user_key_run",
         ],
     },
+    "nonlocal_user_key": {
+        "description": (
+            "NonlocalUserKey-specific run/update/get_current_key overrides: "
+            "the /users/non_local_keys/ endpoint has no GET, so current key "
+            "state is fetched via /users/query/ to drive idempotent PATCH "
+            "and DELETE. Also forwards the request body on DELETE (the "
+            "framework's default delete() sends none), and dispatches to "
+            "PATCH when access_key is given (the framework's default "
+            "_run_action always POSTs when CREATE+UPDATE are both declared)."
+        ),
+        "markers": [
+            "_apply_nonlocal_user_key_customizations()",
+            "NonlocalUserKey.run = _nonlocal_user_key_run",
+        ],
+    },
+    "activedirectory": {
+        "description": (
+            "ActiveDirectory-specific update override: includes admin_username and admin_passwd "
+            "even though they're normally ephemeral fields. The API requires these credentials "
+            "for join/leave operations."
+        ),
+        "markers": [
+            "_apply_activedirectory_customizations()",
+            "ActivedirectoryResource.update = _activedirectory_update",
+        ],
+    },
+    "apitoken_revoke": {
+        "description": (
+            "ApitokenRevoke-specific run override: the /apitokens/{id}/revoke/ "
+            "endpoint has no read-side state, but the parent apitoken GET "
+            "returns a `revoked` flag. The override uses it to make revoke "
+            "idempotent (no-op with changed=false when already revoked)."
+        ),
+        "markers": [
+            "_apply_apitoken_revoke_customizations()",
+            "ApitokenRevoke.run = _apitoken_revoke_run",
+        ],
+    },
+    "iam_role_credentials": {
+        "description": "Forwards required access_key query param on GET /iamroles/{id}/credentials/.",
+        "markers": [
+            "_apply_iam_role_credentials_customizations()",
+            "IamRoleCredentials.get = _iam_role_credentials_get",
+        ],
+    },
+    "protectedpath_streams": {
+        "description": (
+            "ProtectedpathStreams-specific run override: stream membership spans "
+            "the add_stream/remove_stream/modify_member endpoints with no GET of "
+            "their own, so current state is read from the parent protected path "
+            "object to drive idempotent add/modify/remove."
+        ),
+        "markers": [
+            "_apply_protectedpath_streams_customizations()",
+            "ProtectedpathStreams.run = _run",
+        ],
+    },
+    "tenant_metric_labels": {
+        "description": (
+            "TenantMetricLabels keyed-collection CRUD: full create/delete on "
+            "/tenants/metric_labels/ with idempotent lookup by ``key``."
+        ),
+        "markers": [
+            "_apply_tenant_metric_labels_customizations()",
+            "TenantMetricLabels.run = _keyed_collection_run",
+        ],
+    },
+    "tenant_metric_label_values": {
+        "description": (
+            "TenantMetricLabelValues keyed-collection CRUD: create/update/delete "
+            "on /tenants/{id}/metric_label_values/ with idempotent lookup by "
+            "``label_id``."
+        ),
+        "markers": [
+            "_apply_tenant_metric_label_values_customizations()",
+            "TenantMetricLabelValues.run = _keyed_collection_run",
+        ],
+    },
+    "tenant_metric_label_values_bulk": {
+        "description": (
+            "TenantMetricLabelValuesBulk whole-map read/replace: idempotent "
+            "compare on GET vs ``values``; omit ``values`` for a pure read."
+        ),
+        "markers": [
+            "_apply_tenant_metric_label_values_bulk_customizations()",
+            "TenantMetricLabelValuesBulk.run = _run",
+        ],
+    },
+    "vms_saml_config": {
+        "description": (
+            "SamlConfig-specific run/get/delete overrides: /vms/{id}/saml_config/ "
+            "requires idp_name as a query parameter on every verb. POST creates or "
+            "modifies settings; PATCH (remove_signed_certs) is a separate action; "
+            "the default SubEndpointResource read-update path incorrectly routes "
+            "create/modify through PATCH."
+        ),
+        "markers": [
+            "_apply_saml_config_customizations()",
+            "VmsSamlConfig.run = _saml_config_run",
+        ],
+    },
+    "vms_saml_config_info": {
+        "description": (
+            "SamlConfigInfo-specific get override: forwards required idp_name "
+            "query parameter on GET /vms/{id}/saml_config/ and treats "
+            "'no saml config' as an empty result."
+        ),
+        "markers": [
+            "_apply_saml_config_info_customizations()",
+            "VmsSamlConfigInfo._query = _saml_config_info_query",
+        ],
+    },
 }

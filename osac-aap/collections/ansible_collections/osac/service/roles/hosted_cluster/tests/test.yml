@@ -10,7 +10,6 @@
     hosted_cluster_namespace: test-work
     hosted_cluster_default_cluster_order_label:
       osac.openshift.io/clusterorder: test
-    ocp_release_image: example.test/control-plane:4.17
     hosted_cluster_node_requests:
       - nodeSet: compute
         numberOfNodes: 2
@@ -50,7 +49,6 @@
     - name: Reset definitions before independently scaling compute
       ansible.builtin.set_fact:
         nodepool_definitions: []
-        ocp_release_image: example.test/control-plane:4.18
         hosted_cluster_node_requests:
           - nodeSet: compute
             numberOfNodes: 4
@@ -79,47 +77,47 @@
           - nodepool_definitions[0].spec.release.image == 'example.test/compute:4.16'
           - nodepool_definitions[1].spec.release.image == 'example.test/batch:4.15'
 
-    - name: Reset definitions for older node requests
-      ansible.builtin.set_fact:
-        nodepool_definitions: []
-        hosted_cluster_node_requests:
-          - nodeSet: compute
-            numberOfNodes: 4
-            bareMetal:
-              instanceType: bm.large
-          - nodeSet: batch
-            numberOfNodes: 3
-            releaseImage: ""
-            bareMetal:
-              instanceType: bm.large
-
-    - name: Build NodePools without recorded node images
-      ansible.builtin.include_role:
-        name: osac.service.hosted_cluster
-        tasks_from: build_nodepools.yaml
-
-    - name: Verify absent and empty node images use the control-plane image
-      ansible.builtin.assert:
-        that:
-          - nodepool_definitions | length == 2
-          - nodepool_definitions[0].spec.release.image == 'example.test/control-plane:4.18'
-          - nodepool_definitions[1].spec.release.image == 'example.test/control-plane:4.18'
-
-    - name: Set independent upgrade attempts for node sets
+    - name: Set one shared upgrade attempt
       ansible.builtin.set_fact:
         nodepool_definitions: []
         cluster_order:
           metadata:
             annotations:
-              osac.openshift.io/upgrade-attempt-ids: '{"controlPlane":"control-plane-id","nodeSets":{"compute":"compute-id","batch":"batch-id"}}'
+              osac.openshift.io/upgrade-attempt-id: cluster-id
 
-    - name: Build NodePools with their own attempt IDs
+    - name: Build NodePools with the shared attempt ID
       ansible.builtin.include_role:
         name: osac.service.hosted_cluster
         tasks_from: build_nodepools.yaml
 
-    - name: Verify each NodePool retains its own ID
+    - name: Verify each NodePool retains the shared ID
       ansible.builtin.assert:
         that:
-          - nodepool_definitions[0].metadata.annotations['osac.openshift.io/upgrade-attempt-id'] == 'compute-id'
-          - nodepool_definitions[1].metadata.annotations['osac.openshift.io/upgrade-attempt-id'] == 'batch-id'
+          - nodepool_definitions[0].metadata.annotations['osac.openshift.io/upgrade-attempt-id'] == 'cluster-id'
+          - nodepool_definitions[1].metadata.annotations['osac.openshift.io/upgrade-attempt-id'] == 'cluster-id'
+
+    - name: Verify a missing node release image is rejected
+      block:
+        - name: Reset definitions before rejecting a missing release image
+          ansible.builtin.set_fact:
+            nodepool_definitions: []
+            hosted_cluster_node_requests:
+              - nodeSet: missing-image
+                numberOfNodes: 1
+                bareMetal:
+                  instanceType: bm.large
+
+        - name: Build NodePools with a missing release image
+          ansible.builtin.include_role:
+            name: osac.service.hosted_cluster
+            tasks_from: build_nodepools.yaml
+
+        - name: Fail if the missing release image was accepted
+          ansible.builtin.fail:
+            msg: The missing node release image should have been rejected.
+
+      rescue:
+        - name: Verify the missing release image was rejected
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require an explicit release image for every requested NodeSet'

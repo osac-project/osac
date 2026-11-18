@@ -229,6 +229,12 @@ class K8sClient:
             return True
         raise subprocess.CalledProcessError(rc, [*self._base(), *args], output=output, stderr=output)
 
+    def is_absent_by_label(self, *, resource: str, label: str) -> bool:
+        """True only when a successful list matches nothing. A kubectl failure raises, so it is never read as gone."""
+        jsonpath = "jsonpath={.items[*].metadata.name}"
+        output: str = run(*self._base(), "get", resource, "-n", self.namespace, "-l", label, "-o", jsonpath)
+        return not output.strip()
+
     def count_by_label_all_namespaces(self, *, resource: str, label: str) -> int:
         output: str = run(*self._base(), "get", resource, "-A", "-l", label, "--no-headers")
         if not output:
@@ -335,7 +341,7 @@ class K8sClient:
     def get_subnet_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",
-            "subnet",
+            "subnets.osac.openshift.io",
             "-n",
             self.namespace,
             "-l",
@@ -715,7 +721,7 @@ class K8sClient:
     def get_security_group_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(
             "get",
-            "securitygroup",
+            "securitygroups.osac.openshift.io",
             "-n",
             self.namespace,
             "-l",

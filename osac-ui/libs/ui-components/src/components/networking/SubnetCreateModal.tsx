@@ -15,7 +15,6 @@ import * as Yup from 'yup';
 import type { Subnet, VirtualNetwork } from '@osac/types';
 import { useCreateSubnet } from '@osac/ui-components/api/v1/networking';
 
-import { InputField } from '../../components/Form/InputField';
 import OsacForm from '../../components/Form/OsacForm';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
@@ -24,6 +23,7 @@ import {
   hasSubnetOverlap,
   isSubnetWithinVN,
 } from '../../validation/cidr-validation';
+import TextField from '../Form/base/TextField';
 import NameField from '../Form/NameField';
 
 interface SubnetCreateModalProps {
@@ -124,7 +124,7 @@ export const SubnetCreateModal = ({
                   </p>
                   <NameField />
                   {hasIPv4 && (
-                    <InputField
+                    <TextField
                       name="ipv4Cidr"
                       label={t('IPv4 CIDR')}
                       fieldId="subnet-ipv4-cidr"

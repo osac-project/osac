@@ -10,7 +10,7 @@ import PlusCircleIcon from '@patternfly/react-icons/dist/esm/icons/plus-circle-i
 import { FieldArray, useFormikContext } from 'formik';
 
 import { useTranslation } from '../../../../hooks/useTranslation';
-import { InputField } from '../../../Form/InputField';
+import TextField from '../../../Form/base/TextField';
 import { type BareMetalInstanceTypeFormValues, emptyNetworkPortValue } from '../values';
 
 const BareMetalNetworkPortsField = () => {
@@ -43,28 +43,28 @@ const BareMetalNetworkPortsField = () => {
                   />
                 }
               >
-                <InputField
+                <TextField
                   name={`spec.networkPorts.${index}.name`}
                   label={t('Name')}
                   fieldId={`baremetal-network-port-${index}-name`}
                   isRequired
                   placeholder={t('e.g. data-0, mgmt-0')}
                 />
-                <InputField
+                <TextField
                   name={`spec.networkPorts.${index}.role`}
                   label={t('Role')}
                   fieldId={`baremetal-network-port-${index}-role`}
                   isRequired
                   placeholder={t('e.g. fabric, management, storage, lifecycle')}
                 />
-                <InputField
+                <TextField
                   name={`spec.networkPorts.${index}.type`}
                   label={t('Type')}
                   fieldId={`baremetal-network-port-${index}-type`}
                   isRequired
                   placeholder={t('e.g. Ethernet, InfiniBand')}
                 />
-                <InputField
+                <TextField
                   name={`spec.networkPorts.${index}.speed`}
                   label={t('Speed')}
                   fieldId={`baremetal-network-port-${index}-speed`}

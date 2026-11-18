@@ -1,5 +1,3 @@
-import { Content } from '@patternfly/react-core';
-
 import type { NatGatewayWithAddress } from '@osac/ui-components/api/v1/networking';
 
 interface VirtualNetworkNatGatewayCellProps {
@@ -10,19 +8,17 @@ const VirtualNetworkNatGatewayCell = ({
   natGatewayWithAddress,
 }: VirtualNetworkNatGatewayCellProps) => {
   const natGateway = natGatewayWithAddress?.natGateway;
-  const address = natGatewayWithAddress?.address;
-
   if (!natGateway) {
-    return <Content component="p">—</Content>;
+    return <>—</>;
   }
 
+  const name = natGateway.metadata?.name ?? natGateway.id;
+  const address = natGatewayWithAddress?.address;
   return (
-    <>
-      <Content component="p">{natGateway.metadata?.name ?? natGateway.id}</Content>
-      <Content component="p">
-        <code>{address ?? '—'}</code>
-      </Content>
-    </>
+    <span className="pf-v6-u-text-nowrap">
+      {name}
+      {address ? ` (${address})` : null}
+    </span>
   );
 };
 

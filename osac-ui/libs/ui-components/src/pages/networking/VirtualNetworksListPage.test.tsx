@@ -105,7 +105,10 @@ describe('VirtualNetworksListPage', () => {
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'Virtual networks' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create virtual network' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Create virtual network' })).toHaveAttribute(
+      'href',
+      '/networking/virtual-networks/create',
+    );
     await screen.findByRole('link', { name: 'vn-prod' });
     expect(await screen.findByText('2 virtual networks')).toBeInTheDocument();
   });
@@ -119,14 +122,16 @@ describe('VirtualNetworksListPage', () => {
     );
   });
 
-  it('offers only View details in the action menu', async () => {
+  it('offers View details and Delete, never Edit, in the action menu', async () => {
     const { user } = renderPage();
     await screen.findByRole('link', { name: 'vn-prod' });
 
     await user.click(screen.getByRole('button', { name: 'Actions for vn-prod' }));
 
-    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+    expect(screen.getAllByRole('menuitem')).toHaveLength(2);
     expect(screen.getByRole('menuitem', { name: 'View details' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /^Delete/ })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /^(Edit|Update)/ })).not.toBeInTheDocument();
   });
 
   it('shows an empty state when no virtual networks exist', async () => {
@@ -176,8 +181,8 @@ describe('VirtualNetworksListPage', () => {
     localStorage.setItem(getViewTypePrefKey('virtual-networks'), 'list');
     renderPage();
 
-    expect(await screen.findByText('nat-egress')).toBeInTheDocument();
-    expect(screen.getByText('203.0.113.10')).toBeInTheDocument();
+    expect(await screen.findByText(/nat-egress/)).toBeInTheDocument();
+    expect(screen.getByText(/203\.0\.113\.10/)).toBeInTheDocument();
     const table = screen.getByRole('grid');
     const rows = within(table).getAllByRole('row');
     const prodRow = rows.find((row) => within(row).queryByRole('link', { name: 'vn-prod' }));
@@ -186,8 +191,7 @@ describe('VirtualNetworksListPage', () => {
     expect(devRow).toBeDefined();
 
     const prodNatCell = getTableCellByLabel(prodRow as HTMLElement, 'NAT gateway');
-    expect(within(prodNatCell).getByText('nat-egress')).toBeInTheDocument();
-    expect(within(prodNatCell).getByText('203.0.113.10')).toBeInTheDocument();
+    expect(within(prodNatCell).getByText(/nat-egress \(203\.0\.113\.10\)/)).toBeInTheDocument();
     expect(within(prodNatCell).queryByText('Ready')).not.toBeInTheDocument();
     const devNatCell = getTableCellByLabel(devRow as HTMLElement, 'NAT gateway');
     expect(devNatCell).toHaveTextContent('—');

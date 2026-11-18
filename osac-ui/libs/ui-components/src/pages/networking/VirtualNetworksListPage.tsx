@@ -14,7 +14,7 @@ import {
   ToolbarItem,
 } from '@patternfly/react-core';
 
-import { SecurityGroups, Subnets, VirtualNetworks } from '@osac/types';
+import { SecurityGroups, Subnets, type VirtualNetwork, VirtualNetworks } from '@osac/types';
 import { useListAllResources, useListResource } from '@osac/ui-components/api/use-resource';
 import { useNatGateways, virtualNetworksScopeFilter } from '@osac/ui-components/api/v1/networking';
 import {
@@ -30,6 +30,7 @@ import VirtualNetworkTable from '@osac/ui-components/components/networking/Virtu
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
 import ListPageToolbar from '@osac/ui-components/components/Page/ListPageToolbar';
+import ProjectFilter from '@osac/ui-components/components/Page/ProjectFilter';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 import DebounceSearchInput from '@osac/ui-components/components/Primitives/DebounceSearchInput';
 import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
@@ -38,10 +39,10 @@ import {
   useArrayPageFilter,
   usePageFilter,
 } from '@osac/ui-components/hooks/use-page-filter.ts';
+import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
+import { PROJECT_FILTER_PARAM, useSession } from '@osac/ui-components/hooks/use-session';
 import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
-
-import { VirtualNetworkCreateModal } from '../../components/networking/VirtualNetworkCreateModal';
 
 const VIRTUAL_NETWORKS_VIEW_KEY = 'virtual-networks';
 
@@ -55,7 +56,8 @@ export const VirtualNetworksListPage = () => {
     isVirtualNetworkStateFilterValue,
   );
   const [viewType] = useViewType(VIRTUAL_NETWORKS_VIEW_KEY);
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const { projects, setProjects } = useSession();
+  const projectFilter = useProjectFilterQuery<VirtualNetwork>();
 
   const stateEnumValues = useMemo(
     () => stateFilters.map((value) => VIRTUAL_NETWORK_STATE_FILTER_TO_ENUM[value]),
@@ -63,8 +65,8 @@ export const VirtualNetworksListPage = () => {
   );
 
   const filter = useMemo(
-    () => buildVirtualNetworkListFilter(stateEnumValues, search.trim()),
-    [stateEnumValues, search],
+    () => buildVirtualNetworkListFilter(stateEnumValues, search.trim(), projectFilter),
+    [stateEnumValues, search, projectFilter],
   );
 
   const { data, isLoading, error } = useListResource(VirtualNetworks, { filter });
@@ -136,16 +138,18 @@ export const VirtualNetworksListPage = () => {
   const totalItems = totalsData?.total ?? 0;
   const hasTotals = totalsData !== undefined && !totalsError;
 
-  const isFiltered = Boolean(search.trim() || stateEnumValues.length);
+  const isFiltered = Boolean(search.trim() || stateEnumValues.length || projects.length);
   const showEmptyState = !isLoading && !error && items.length === 0;
 
   const clearAllFilters = () => {
     setSearchResetKey((key) => key + 1);
+    setProjects([]);
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete(SEARCH_PARAM);
         next.delete(STATE_FILTER_PARAM);
+        next.delete(PROJECT_FILTER_PARAM);
         return next;
       },
       { replace: true },
@@ -184,7 +188,7 @@ export const VirtualNetworksListPage = () => {
         description={t('Virtual networks your tenant uses for workloads and catalog networking.')}
         error={error}
         actions={
-          <CreateButton service={VirtualNetworks} onClick={() => setIsCreateModalOpen(true)}>
+          <CreateButton service={VirtualNetworks} to="/networking/virtual-networks/create">
             {t('Create virtual network')}
           </CreateButton>
         }
@@ -199,6 +203,9 @@ export const VirtualNetworksListPage = () => {
               <Toolbar>
                 <ToolbarContent>
                   <ToolbarGroup>
+                    <ToolbarItem>
+                      <ProjectFilter />
+                    </ToolbarItem>
                     <VirtualNetworkStateFilter
                       stateFilters={stateFilters}
                       onToggle={toggleStateFilter}
@@ -263,10 +270,6 @@ export const VirtualNetworksListPage = () => {
           </StackItem>
         </Stack>
       </ListPage>
-
-      {isCreateModalOpen && (
-        <VirtualNetworkCreateModal onClose={() => setIsCreateModalOpen(false)} />
-      )}
     </>
   );
 };

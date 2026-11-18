@@ -39,9 +39,11 @@ export const getVirtualNetworkStateFilterLabels = (
 export const buildVirtualNetworkListFilter = (
   stateFilters: VirtualNetworkState[],
   nameSearch: string,
+  projectFilter?: CelFilter<VirtualNetwork>,
 ): CelFilter<VirtualNetwork> | undefined =>
   cel<VirtualNetwork>((b) =>
     b.and(
+      projectFilter,
       stateFilters.length > 0 ? b.field('status.state').isIn(stateFilters) : undefined,
       nameSearch ? b.field('metadata.name').contains(nameSearch) : undefined,
     ),

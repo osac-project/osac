@@ -87,6 +87,19 @@
   overflow-wrap: anywhere;
 }
 
+.cluster-details__conditions .pf-v6-c-table__thead {
+  --pf-v6-c-table--cell--MaxWidth: none;
+  --pf-v6-c-table--cell--TextOverflow: clip;
+  --pf-v6-c-table--cell--WhiteSpace: normal;
+}
+
+.cluster-details__conditions td[data-label='Reason'] {
+  --pf-v6-c-table--cell--MaxWidth: 20ch;
+  --pf-v6-c-table--cell--MinWidth: 12ch;
+
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 992px) {
   .cluster-details__grid {
     grid-template-columns: minmax(0, 1fr);

@@ -18,7 +18,7 @@ on:  # yamllint disable-line rule:truthy
         default: ""
       kind:
         description: >-
-          Which tests: go-unit, caas-unit, ui-unit, metering-contract, it-caas, it-fulfillment-service, it-osac-operator,
+          Which tests: python-unit, go-unit, caas-unit, ui-unit, metering-contract, it-caas, it-fulfillment-service, it-osac-operator,
           it-bare-metal-fulfillment-operator, it-osac-aap, it-osac-installer, helm-unit or
           it-osac-installer-preflight-helm3/-helm322/-helm4
         required: true
@@ -56,6 +56,15 @@ jobs:
     env:
       KIND_EXPERIMENTAL_PROVIDER: docker
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'python-unit'
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        if: inputs.kind == 'python-unit'
+      - if: inputs.kind == 'python-unit'
+        run: uv run --locked pytest -n 0 tests/unit
       # --- unit tests of a Go module (fulfillment-service, osac-metering/...)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'go-unit'

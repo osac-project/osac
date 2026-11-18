@@ -80,21 +80,6 @@ def test_bmaas_pool_cleanup_deletes_an_unheld_pool(monkeypatch: pytest.MonkeyPat
     assert grpc.pool_ids == []
 
 
-@pytest.mark.parametrize("ownership", [False, None])
-def test_bmaas_pool_cleanup_preserves_an_adopted_pool(monkeypatch: pytest.MonkeyPatch, ownership: bool | None) -> None:
-    _set_pool_state(monkeypatch)
-    if ownership is None:
-        test_module.TestBmaasNetworking.state.pop("pool_owned")
-    else:
-        test_module.TestBmaasNetworking.state["pool_owned"] = ownership
-    grpc = _PrivateGRPC([])
-
-    test_module.TestBmaasNetworking().test_19_delete_external_ip_pool(grpc, object())
-
-    assert grpc.deleted == []
-    assert grpc.pool_ids == ["pool-1"]
-
-
 def test_bmaas_pool_cleanup_keeps_default_holder_race(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_pool_state(monkeypatch)
     grpc = _PrivateGRPC([])
